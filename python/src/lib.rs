@@ -18,14 +18,17 @@ use deltalake::arrow::compute::concat_batches;
 use deltalake::arrow::record_batch::RecordBatch;
 use deltalake::arrow::{self, datatypes::Schema as ArrowSchema};
 use deltalake::checkpoints::create_checkpoint;
-use deltalake::datafusion::prelude::SessionContext;
+use deltalake::datafusion::prelude::{Column, SessionContext};
 use deltalake::delta_datafusion::DeltaDataChecker;
 use deltalake::errors::DeltaTableError;
 use deltalake::operations::optimize::{OptimizeBuilder, OptimizeType};
 use deltalake::operations::restore::RestoreBuilder;
 use deltalake::operations::transaction::commit;
 use deltalake::operations::vacuum::VacuumBuilder;
+use deltalake::operations::update::UpdateBuilder;
+use deltalake::operations::datafusion_utils::Expression;
 use deltalake::partitions::PartitionFilter;
+use deltalake::parquet::file::properties::WriterProperties;
 use deltalake::protocol::{
     self, Action, ColumnCountStat, ColumnValueStat, DeltaOperation, SaveMode, Stats,
 };
@@ -273,6 +276,64 @@ impl RawDeltaTable {
         Ok(metrics.files_deleted)
     }
 
+    /// Run the UPDATE command on the Delta Table
+    #[pyo3(signature = (updates, predicate=None, writer_properties=None))]
+    pub fn update(
+        &mut self,
+        updates: HashMap<String, String>,
+        predicate: Option<String>,
+        writer_properties: Option<HashMap<String, usize>>,
+    ) -> PyResult<Vec<String>> {
+        let mut cmd = UpdateBuilder::new(self._table.object_store(), self._table.state.clone());
+
+        if let Some(writer_props) = writer_properties {
+            let mut properties = WriterProperties::builder();
+            let data_page_size_limit = writer_props.get("data_page_size_limit");
+            let dictionary_page_size_limit = writer_props.get("dictionary_page_size_limit");
+            let data_page_row_count_limit = writer_props.get("data_page_row_count_limit");
+            let write_batch_size = writer_props.get("write_batch_size");
+            let max_row_group_size = writer_props.get("max_row_group_size");
+
+            if let Some(data_page_size) = data_page_size_limit {
+                properties = properties.set_data_page_size_limit(*data_page_size);
+            }
+            if let Some(dictionary_page_size) = dictionary_page_size_limit {
+                properties = properties.set_dictionary_page_size_limit(*dictionary_page_size);
+            }
+            if let Some(data_page_row_count) = data_page_row_count_limit {
+                properties = properties.set_data_page_row_count_limit(*data_page_row_count);
+            }
+            if let Some(batch_size) = write_batch_size {
+                properties = properties.set_write_batch_size(*batch_size);
+            }
+            if let Some(row_group_size) = max_row_group_size {
+                properties = properties.set_max_row_group_size(*row_group_size);
+            }
+            cmd = cmd.with_writer_properties(properties.build());
+        }
+
+        let mut updates_mapping: HashMap<Column, Expression> = HashMap::new();
+
+        for (col_name, expression) in &updates {
+            updates_mapping.insert(
+                Column::from_name(col_name),
+                Expression::String(expression.clone()),
+            );
+        }
+        cmd = cmd.with_update_multiple(updates_mapping);
+
+        if let Some(update_predicate) = predicate {
+            cmd = cmd.with_predicate(Expression::String(update_predicate));
+        }
+
+        let (table, metrics) = rt()?
+            .block_on(cmd.into_future())
+            .map_err(PythonError::from)?;
+        self._table.state = table.state;
+        Ok(serde_json::to_string(&metrics).unwrap())
+    }
+
+
     /// Run the optimize command on the Delta Table: merge small files into a large file by bin-packing.
     #[pyo3(signature = (partition_filters = None, target_size = None, max_concurrent_tasks = None, min_commit_interval = None))]
     pub fn compact_optimize(
@@ -298,6 +359,7 @@ impl RawDeltaTable {
             .block_on(cmd.into_future())
             .map_err(PythonError::from)?;
         self._table.state = table.state;
+        
         Ok(serde_json::to_string(&metrics).unwrap())
     }
 

@@ -456,6 +456,22 @@ given filters.
             enforce_retention_duration,
         )
 
+    def update(self,
+               update: str,
+               predicate: Optional[str] = None,
+               writer_properties: Optional[dict[str,int]] = None
+               ) -> Dict[str, Any]:
+        """ Updates records in the Delta Table.
+        
+        :param predicate: a logical expression, defaults to None
+        :param update: what values to update
+        :return: the metrics from delete
+        """
+        
+        metrics = self._table.update(update,predicate,writer_properties)
+        return json.loads(metrics)
+    
+    
     @property
     def optimize(
         self,

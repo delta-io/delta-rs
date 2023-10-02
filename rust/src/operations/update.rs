@@ -41,6 +41,7 @@ use datafusion_physical_expr::{
 use futures::future::BoxFuture;
 use parquet::file::properties::WriterProperties;
 use serde_json::{Map, Value};
+use serde::Serialize;
 
 use crate::{
     delta_datafusion::{find_files, parquet_scan_from_actions, register_store},
@@ -78,7 +79,7 @@ pub struct UpdateBuilder {
     safe_cast: bool,
 }
 
-#[derive(Default)]
+#[derive(Default, Serialize)]
 /// Metrics collected during the Update operation
 pub struct UpdateMetrics {
     /// Number of files added.
@@ -123,6 +124,15 @@ impl UpdateBuilder {
         expression: E,
     ) -> Self {
         self.updates.insert(column.into(), expression.into());
+        self
+    }
+
+    /// Update multiple at ones
+    pub fn with_update_multiple<M: Into<HashMap<Column, Expression>>>(
+        mut self,
+        mapping: M,
+    ) -> Self {
+        self.updates = mapping.into();
         self
     }
 
