@@ -21,6 +21,7 @@ use deltalake::checkpoints::create_checkpoint;
 use deltalake::datafusion::prelude::SessionContext;
 use deltalake::delta_datafusion::DeltaDataChecker;
 use deltalake::errors::DeltaTableError;
+use deltalake::operations::delete::DeleteBuilder;
 use deltalake::operations::optimize::{OptimizeBuilder, OptimizeType};
 use deltalake::operations::restore::RestoreBuilder;
 use deltalake::operations::transaction::commit;
@@ -593,6 +594,20 @@ impl RawDeltaTable {
                 .add_actions_table(flatten)
                 .map_err(PythonError::from)?,
         ))
+    }
+
+    /// Run the delete command on the delta table: delete records following a predicate and return the delete metrics.
+    #[pyo3(signature = (predicate = None))]
+    pub fn delete(&mut self, predicate: Option<String>) -> PyResult<String> {
+        let mut cmd = DeleteBuilder::new(self._table.object_store(), self._table.state.clone());
+        if let Some(predicate) = predicate {
+            cmd = cmd.with_predicate(predicate);
+        }
+        let (table, metrics) = rt()?
+            .block_on(cmd.into_future())
+            .map_err(PythonError::from)?;
+        self._table.state = table.state;
+        Ok(serde_json::to_string(&metrics).unwrap())
     }
 }
 
