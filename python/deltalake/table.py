@@ -950,7 +950,7 @@ class TableMerger:
         >>> import pyarrow as pa
         >>> data = pa.table({"x": [1, 2, 3], "y": [4, 5, 6]})
         >>> dt = DeltaTable("tmp")
-        >>> dt.merge(source=data, source_alias='source', predicate='x == source.x') \
+        >>> dt.merge(source=data, source_alias='source', predicate='x = source.x') \
         ...     .when_not_matched_by_source_update(
         ...         predicate = "y > 3"
         ...         updates = {

@@ -337,30 +337,30 @@ impl RawDeltaTable {
         Ok(serde_json::to_string(&metrics).unwrap())
     }
 
+    #[allow(clippy::too_many_arguments)]
     #[pyo3(signature = (source,
         predicate,
         source_alias,
-        strict_cast,
-        writer_properties,
-        matched_update_updates,
-        matched_update_predicate,
+        strict_cast = true,
+        writer_properties = None,
+        matched_update_updates = None,
+        matched_update_predicate = None,
         // matched_update_all,
-        matched_delete_predicate,
-        matched_delete_all,
-        not_matched_insert_updates,
-        not_matched_insert_predicate,
+        matched_delete_predicate = None,
+        matched_delete_all = None,
+        not_matched_insert_updates = None,
+        not_matched_insert_predicate = None,
         // not_matched_insert_all,
-        not_matched_by_source_update_updates,
-        not_matched_by_source_update_predicate,
-        not_matched_by_source_delete_predicate,
-        not_matched_by_source_delete_all,
+        not_matched_by_source_update_updates = None,
+        not_matched_by_source_update_predicate = None,
+        not_matched_by_source_delete_predicate = None,
+        not_matched_by_source_delete_all = None,
     ))]
-    #[allow(clippy::too_many_arguments)]
     pub fn merge_execute(
         &mut self,
         source: PyArrowType<RecordBatch>,
         predicate: String,
-        source_alias: &str,
+        source_alias: String,
         strict_cast: bool,
         writer_properties: Option<HashMap<String, usize>>,
         matched_update_updates: Option<HashMap<String, String>>,
@@ -457,7 +457,7 @@ impl RawDeltaTable {
             if let Some(mu_predicate) = matched_update_predicate {
                 cmd = cmd
                     .when_matched_update(|update| {
-                        update // Add  iteration over the updates col(key), Expression::String
+                        update
                             .predicate(Expression::String(mu_predicate))
                             .update_multiple(mu_updates_mapping)
                     })
