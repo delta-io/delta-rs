@@ -462,11 +462,37 @@ given filters.
     ) -> "TableOptimizer":
         return TableOptimizer(self)
 
-    @property
     def merge(
         self,
+        source: Union[pyarrow.Table, pyarrow.RecordBatch],
+        source_alias: str,
+        predicate: str,
+        strict_cast: bool = True,
     ) -> "TableMerger":
-        return TableMerger(self)
+        """Pass the source data which you want to merge on the target delta table, providing a
+        predicate in SQL query format. You can also specify on what to do when underlying data types do not
+        match the underlying table.
+
+        Args:
+            source (pyarrow.Table | pyarrow.RecordBatch): source data
+            source_alias (str): Alias for the source dataframe
+            predicate (str): SQL like predicate on how to merge
+            strict_cast (bool): specify if data types need to be casted strictly or not :default = False
+
+
+        Returns:
+            TableMerger: TableMerger Object
+        """
+        if isinstance(source, pyarrow.Table):
+            source = source.to_batches()[0]
+
+        return TableMerger(
+            self,
+            source=source,
+            predicate=predicate,
+            source_alias=source_alias,
+            strict_cast=not strict_cast,
+        )
 
     def pyarrow_schema(self) -> pyarrow.Schema:
         """
@@ -676,8 +702,12 @@ given filters.
 class TableMerger:
     """API for various table MERGE commands."""
 
-    def __init__(self, table: DeltaTable):
+    def __init__(self, table: DeltaTable, source, source_alias, predicate, strict_cast):
         self.table = table
+        self.source = source
+        self.source_alias = source_alias
+        self.predicate = predicate
+        self.strict_cast = strict_cast
         self.writer_properties: Optional[Dict[str, Optional[int]]] = None
         self.matched_update_updates: Optional[Dict[str, str]] = None
         self.matched_update_predicate: Optional[str] = None
@@ -691,36 +721,6 @@ class TableMerger:
         self.not_matched_by_source_update_predicate: Optional[str] = None
         self.not_matched_by_source_delete_predicate: Optional[str] = None
         self.not_matched_by_source_delete_all: Optional[bool] = None
-
-    def __call__(
-        self,
-        source: Union[pyarrow.Table, pyarrow.RecordBatch],
-        source_alias: str,
-        predicate: str,
-        strict_cast: bool = True,
-    ) -> "TableMerger":
-        """Pass the source data which you want to merge on the target delta table, providing a
-        predicate in SQL query format. You can also specify on what to do when underlying data types do not
-        match the underlying table.
-
-        Args:
-            source (pyarrow.Table | pyarrow.RecordBatch): source data
-            source_alias (str): Alias for the source dataframe
-            predicate (str): SQL like predicate on how to merge
-            strict_cast (bool): specify if data types need to be casted strictly or not :default = False
-
-
-        Returns:
-            TableMerger: TableMerger Object
-        """
-        if isinstance(source, pyarrow.Table):
-            source = source.to_batches()[0]
-        self.source = source
-        self.predicate = predicate
-        self.strict_cast = strict_cast
-        self.source_alias = source_alias
-
-        return self
 
     def with_writer_properties(
         self,
