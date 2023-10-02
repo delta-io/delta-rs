@@ -678,27 +678,23 @@ class TableMerger:
 
     def __init__(self, table: DeltaTable):
         self.table = table
-        self.source = None
-        self.predicate = None
-        self.source_alias = None
-        self.strict_cast = False
-        self.writer_properties = None
-        self.matched_update_updates = None
-        self.matched_update_predicate = None
-        self.matched_update_all = None
-        self.matched_delete_predicate = None
-        self.matched_delete_all = None
-        self.not_matched_insert_updates = None
-        self.not_matched_insert_predicate = None
-        self.not_matched_insert_all = None
-        self.not_matched_by_source_update_updates = None
-        self.not_matched_by_source_update_predicate = None
-        self.not_matched_by_source_delete_predicate = None
-        self.not_matched_by_source_delete_all = None
+        self.writer_properties: Optional[Dict[str, Optional[int]]] = None
+        self.matched_update_updates: Optional[Dict[str, str]] = None
+        self.matched_update_predicate: Optional[str] = None
+        self.matched_update_all: Optional[bool] = None
+        self.matched_delete_predicate: Optional[str] = None
+        self.matched_delete_all: Optional[bool] = None
+        self.not_matched_insert_updates: Optional[Dict[str, str]] = None
+        self.not_matched_insert_predicate: Optional[str] = None
+        self.not_matched_insert_all: Optional[bool] = None
+        self.not_matched_by_source_update_updates: Optional[Dict[str, str]] = None
+        self.not_matched_by_source_update_predicate: Optional[str] = None
+        self.not_matched_by_source_delete_predicate: Optional[str] = None
+        self.not_matched_by_source_delete_all: Optional[bool] = None
 
     def __call__(
         self,
-        source: pyarrow.Table | pyarrow.RecordBatch,
+        source: Union[pyarrow.Table, pyarrow.RecordBatch],
         source_alias: str,
         predicate: str,
         strict_cast: bool = True,
@@ -728,11 +724,11 @@ class TableMerger:
 
     def with_writer_properties(
         self,
-        data_page_size_limit: int | None = None,
-        dictionary_page_size_limit: int | None = None,
-        data_page_row_count_limit: int | None = None,
-        write_batch_size: int | None = None,
-        max_row_group_size: int | None = None,
+        data_page_size_limit: Optional[int] = None,
+        dictionary_page_size_limit: Optional[int] = None,
+        data_page_row_count_limit: Optional[int] = None,
+        write_batch_size: Optional[int] = None,
+        max_row_group_size: Optional[int] = None,
     ) -> "TableMerger":
         """Pass writer properties to the Rust parquet writer, see options https://arrow.apache.org/rust/parquet/file/properties/struct.WriterProperties.html:
 
@@ -757,7 +753,7 @@ class TableMerger:
         return self
 
     def when_matched_update(
-        self, updates: dict, predicate: str | None = None
+        self, updates: dict[str, str], predicate: Optional[str] = None
     ) -> "TableMerger":
         """Update a matched table row based on the rules defined by ``updates``.
         If a ``predicate`` is specified, then it must evaluate to true for the row to be updated.
@@ -794,7 +790,7 @@ class TableMerger:
             self.matched_update_predicate = predicate
         return self
 
-    def when_matched_update_all(self, predicate: str | None = None) -> "TableMerger":
+    def when_matched_update_all(self, predicate: Optional[str] = None) -> "TableMerger":
         """Update a matched table row based on the rules defined by ``updates``.
         If a ``predicate`` is specified, then it must evaluate to true for the row to be updated.
 
@@ -829,7 +825,7 @@ class TableMerger:
             self.matched_update_predicate = predicate
         return self
 
-    def when_matched_delete(self, predicate: str | None = None) -> "TableMerger":
+    def when_matched_delete(self, predicate: Optional[str] = None) -> "TableMerger":
         """Delete a matched row from the table only if the given ``predicate`` (if specified) is
         true for the matched row. If not specified it deletes all matches.
 
@@ -869,7 +865,7 @@ class TableMerger:
         return self
 
     def when_not_matched_insert(
-        self, updates: dict, predicate: str | None = None
+        self, updates: dict[str, str], predicate: Optional[str] = None
     ) -> "TableMerger":
         """Insert a new row to the target table based on the rules defined by ``updates``. If a
         ``predicate`` is specified, then it must evaluate to true for the new row to be inserted.
@@ -907,7 +903,7 @@ class TableMerger:
         return self
 
     def when_not_matched_insert_all(
-        self, predicate: str | None = None
+        self, predicate: Optional[str] = None
     ) -> "TableMerger":
         """Insert a new row to the target table based on the rules defined by ``updates``. If a
         ``predicate`` is specified, then it must evaluate to true for the new row to be inserted.
@@ -938,7 +934,7 @@ class TableMerger:
         return self
 
     def when_not_matched_by_source_update(
-        self, updates: dict, predicate: str | None = None
+        self, updates: dict[str, str], predicate: Optional[str] = None
     ) -> "TableMerger":
         """Update a target row that has no matches in the source based on the rules defined by ``updates``.
         If a ``predicate`` is specified, then it must evaluate to true for the row to be updated.
@@ -967,7 +963,7 @@ class TableMerger:
         return self
 
     def when_not_matched_by_source_delete(
-        self, predicate: str | None = None
+        self, predicate: Optional[str] = None
     ) -> "TableMerger":
         """Delete a target row that has no matches in the source from the table only if the given
         ``predicate`` (if specified) is true for the target row.
