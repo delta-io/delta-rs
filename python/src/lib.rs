@@ -355,6 +355,7 @@ impl RawDeltaTable {
         not_matched_by_source_delete_predicate,
         not_matched_by_source_delete_all,
     ))]
+    #[allow(clippy::too_many_arguments)]
     pub fn merge_execute(
         &mut self,
         source: PyArrowType<RecordBatch>,
@@ -396,20 +397,19 @@ impl RawDeltaTable {
             let max_row_group_size = writer_props.get("max_row_group_size");
 
             if let Some(data_page_size) = data_page_size_limit {
-                properties = properties.set_data_page_size_limit(data_page_size.clone());
+                properties = properties.set_data_page_size_limit(*data_page_size);
             }
             if let Some(dictionary_page_size) = dictionary_page_size_limit {
-                properties =
-                    properties.set_dictionary_page_size_limit(dictionary_page_size.clone());
+                properties = properties.set_dictionary_page_size_limit(*dictionary_page_size);
             }
             if let Some(data_page_row_count) = data_page_row_count_limit {
-                properties = properties.set_data_page_row_count_limit(data_page_row_count.clone());
+                properties = properties.set_data_page_row_count_limit(*data_page_row_count);
             }
             if let Some(batch_size) = write_batch_size {
-                properties = properties.set_write_batch_size(batch_size.clone());
+                properties = properties.set_write_batch_size(*batch_size);
             }
             if let Some(row_group_size) = max_row_group_size {
-                properties = properties.set_max_row_group_size(row_group_size.clone());
+                properties = properties.set_max_row_group_size(*row_group_size);
             }
             cmd = cmd.with_writer_properties(properties.build());
         }
@@ -473,14 +473,10 @@ impl RawDeltaTable {
             cmd = cmd
                 .when_matched_delete(|delete| delete)
                 .map_err(PythonError::from)?;
-        } else {
-            if let Some(md_predicate) = matched_delete_predicate {
-                cmd = cmd
-                    .when_matched_delete(|delete| {
-                        delete.predicate(Expression::String(md_predicate))
-                    })
-                    .map_err(PythonError::from)?;
-            }
+        } else if let Some(md_predicate) = matched_delete_predicate {
+            cmd = cmd
+                .when_matched_delete(|delete| delete.predicate(Expression::String(md_predicate)))
+                .map_err(PythonError::from)?;
         }
 
         if let Some(nmi_updates) = not_matched_insert_updates {
@@ -539,14 +535,12 @@ impl RawDeltaTable {
             cmd = cmd
                 .when_not_matched_by_source_delete(|delete| delete)
                 .map_err(PythonError::from)?;
-        } else {
-            if let Some(nmbs_predicate) = not_matched_by_source_delete_predicate {
-                cmd = cmd
-                    .when_not_matched_by_source_delete(|delete| {
-                        delete.predicate(Expression::String(nmbs_predicate))
-                    })
-                    .map_err(PythonError::from)?;
-            }
+        } else if let Some(nmbs_predicate) = not_matched_by_source_delete_predicate {
+            cmd = cmd
+                .when_not_matched_by_source_delete(|delete| {
+                    delete.predicate(Expression::String(nmbs_predicate))
+                })
+                .map_err(PythonError::from)?;
         }
 
         let (table, metrics) = rt()?
