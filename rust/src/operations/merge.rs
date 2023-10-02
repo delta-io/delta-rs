@@ -171,6 +171,7 @@ impl MergeBuilder {
         let builder = builder(UpdateBuilder::default());
         let op = MergeOperation::try_new(
             &self.snapshot,
+            &self.state.as_ref(),
             builder.predicate,
             builder.updates,
             OperationType::Update,
@@ -204,6 +205,7 @@ impl MergeBuilder {
         let builder = builder(DeleteBuilder::default());
         let op = MergeOperation::try_new(
             &self.snapshot,
+            &self.state.as_ref(),
             builder.predicate,
             HashMap::default(),
             OperationType::Delete,
@@ -240,6 +242,7 @@ impl MergeBuilder {
         let builder = builder(InsertBuilder::default());
         let op = MergeOperation::try_new(
             &self.snapshot,
+            &self.state.as_ref(),
             builder.predicate,
             builder.set,
             OperationType::Insert,
@@ -278,6 +281,7 @@ impl MergeBuilder {
         let builder = builder(UpdateBuilder::default());
         let op = MergeOperation::try_new(
             &self.snapshot,
+            &self.state.as_ref(),
             builder.predicate,
             builder.updates,
             OperationType::Update,
@@ -311,6 +315,7 @@ impl MergeBuilder {
         let builder = builder(DeleteBuilder::default());
         let op = MergeOperation::try_new(
             &self.snapshot,
+            &self.state.as_ref(),
             builder.predicate,
             HashMap::default(),
             OperationType::Delete,
@@ -448,15 +453,21 @@ struct MergeOperation {
 impl MergeOperation {
     pub fn try_new(
         snapshot: &DeltaTableState,
+        state: &Option<&SessionState>,
         predicate: Option<Expression>,
         operations: HashMap<Column, Expression>,
         r#type: OperationType,
     ) -> DeltaResult<Self> {
-        let predicate = maybe_into_expr(predicate, snapshot)?;
+        let context = SessionContext::new();
+        let mut s = &context.state();
+        if let Some(df_state) = state {
+            s = df_state;
+        }
+        let predicate = maybe_into_expr(predicate, snapshot, s)?;
         let mut _operations = HashMap::new();
 
         for (column, expr) in operations {
-            _operations.insert(column, into_expr(expr, snapshot)?);
+            _operations.insert(column, into_expr(expr, snapshot, s)?);
         }
 
         Ok(MergeOperation {
@@ -518,7 +529,7 @@ async fn execute(
 
     let predicate = match predicate {
         Expression::DataFusion(expr) => expr,
-        Expression::String(s) => snapshot.parse_predicate_expression(s)?,
+        Expression::String(s) => snapshot.parse_predicate_expression(s, &state)?,
     };
 
     let schema = snapshot.input_schema()?;

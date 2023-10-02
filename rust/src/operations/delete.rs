@@ -298,7 +298,9 @@ impl std::future::IntoFuture for DeleteBuilder {
             let predicate = match this.predicate {
                 Some(predicate) => match predicate {
                     Expression::DataFusion(expr) => Some(expr),
-                    Expression::String(s) => Some(this.snapshot.parse_predicate_expression(s)?),
+                    Expression::String(s) => {
+                        Some(this.snapshot.parse_predicate_expression(s, &state)?)
+                    }
                 },
                 None => None,
             };

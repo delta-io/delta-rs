@@ -194,7 +194,7 @@ async fn execute(
     let predicate = match predicate {
         Some(predicate) => match predicate {
             Expression::DataFusion(expr) => Some(expr),
-            Expression::String(s) => Some(snapshot.parse_predicate_expression(s)?),
+            Expression::String(s) => Some(snapshot.parse_predicate_expression(s, &state)?),
         },
         None => None,
     };
@@ -203,7 +203,9 @@ async fn execute(
         .into_iter()
         .map(|(key, expr)| match expr {
             Expression::DataFusion(e) => Ok((key, e)),
-            Expression::String(s) => snapshot.parse_predicate_expression(s).map(|e| (key, e)),
+            Expression::String(s) => snapshot
+                .parse_predicate_expression(s, &state)
+                .map(|e| (key, e)),
         })
         .collect::<Result<HashMap<Column, Expr>, _>>()?;
 
