@@ -10,6 +10,8 @@ use datafusion_expr::{
 };
 use sqlparser::ast::escape_quoted_string;
 
+use crate::DeltaTableError;
+
 struct SqlFormat<'a> {
     expr: &'a Expr,
 }
@@ -65,18 +67,18 @@ impl<'a> Display for SqlFormat<'a> {
             Expr::Case(case) => {
                 write!(f, "CASE ")?;
                 if let Some(e) = &case.expr {
-                    write!(f, "{} ", SqlFormat { expr: e })?;
+                    write!(f, "{} ", SqlFormat { expr: &e })?;
                 }
                 for (w, t) in &case.when_then_expr {
                     write!(
                         f,
                         "WHEN {} THEN {} ",
-                        SqlFormat { expr: w },
-                        SqlFormat { expr: t }
+                        SqlFormat { expr: &w },
+                        SqlFormat { expr: &t }
                     )?;
                 }
                 if let Some(e) = &case.else_expr {
-                    write!(f, "ELSE {} ", SqlFormat { expr: e })?;
+                    write!(f, "ELSE {} ", SqlFormat { expr: &e })?;
                 }
                 write!(f, "END")
             }
@@ -97,12 +99,8 @@ impl<'a> Display for SqlFormat<'a> {
             Expr::IsNotFalse(expr) => write!(f, "{} IS NOT FALSE", SqlFormat { expr }),
             Expr::IsNotUnknown(expr) => write!(f, "{} IS NOT UNKNOWN", SqlFormat { expr }),
             Expr::BinaryExpr(expr) => write!(f, "{}", BinaryExprFormat { expr }),
-            Expr::ScalarFunction(func) => {
-                fmt_function(f, &func.fun.to_string(), false, &func.args, true)
-            }
-            Expr::ScalarUDF(ScalarUDF { fun, args }) => {
-                fmt_function(f, &fun.name, false, args, true)
-            }
+            Expr::ScalarFunction(func) => fmt_function(f, &func.fun.to_string(), false, &func.args),
+            Expr::ScalarUDF(ScalarUDF { fun, args }) => fmt_function(f, &fun.name, false, args),
             Expr::Between(Between {
                 expr,
                 negated,
@@ -113,7 +111,7 @@ impl<'a> Display for SqlFormat<'a> {
                     write!(
                         f,
                         "{} NOT BETWEEN {} AND {}",
-                        SqlFormat { expr },
+                        SqlFormat { expr: expr },
                         SqlFormat { expr: low },
                         SqlFormat { expr: high }
                     )
@@ -121,7 +119,7 @@ impl<'a> Display for SqlFormat<'a> {
                     write!(
                         f,
                         "{} BETWEEN {} AND {}",
-                        SqlFormat { expr },
+                        SqlFormat { expr: expr },
                         SqlFormat { expr: low },
                         SqlFormat { expr: high }
                     )
@@ -183,28 +181,20 @@ impl<'a> Display for SqlFormat<'a> {
 }
 
 /// Format an `Expr` to a parsable SQL expression
-pub fn fmt_expr_to_sql(expr: &Expr) -> Result<String, std::fmt::Error> {
+pub fn fmt_expr_to_sql(expr: &Expr) -> Result<String, DeltaTableError> {
     let mut s = String::new();
-    write!(&mut s, "{}", SqlFormat { expr })?;
+    write!(&mut s, "{}", SqlFormat { expr }).map_err(|_| {
+        DeltaTableError::Generic("Unable to convert expression to string".to_owned())
+    })?;
     Ok(s)
 }
 
-fn fmt_function(
-    f: &mut fmt::Formatter,
-    fun: &str,
-    distinct: bool,
-    args: &[Expr],
-    display: bool,
-) -> fmt::Result {
-    let args: Vec<String> = match display {
-        true => args
-            .iter()
-            .map(|arg| format!("{}", SqlFormat { expr: arg }))
-            .collect(),
-        false => todo!("fmt function"),
-    };
+fn fmt_function(f: &mut fmt::Formatter, fun: &str, distinct: bool, args: &[Expr]) -> fmt::Result {
+    let args: Vec<String> = args
+        .iter()
+        .map(|arg| format!("{}", SqlFormat { expr: &arg }))
+        .collect();
 
-    // let args: Vec<String> = args.iter().map(|arg| format!("{:?}", arg)).collect();
     let distinct_str = match distinct {
         true => "DISTINCT ",
         false => "",
@@ -257,7 +247,7 @@ impl<'a> fmt::Display for ScalarValueFormat<'a> {
                 None => write!(f, "NULL")?,
             },
             ScalarValue::Null => write!(f, "NULL")?,
-            _ => return Err(fmt::Error)
+            _ => return Err(fmt::Error),
         };
         Ok(())
     }
@@ -364,8 +354,7 @@ mod test {
 
         // String expression that we output must be parsable for conflict resolution.
         let tests = vec![
-            // TODO: sql parser will default to i64 by default where just lit(3) is be a i32
-            simple!(col("value").eq(lit(3_i64)), "value = 3".to_string()),
+            simple!(col("value").eq(lit(3 as i64)), "value = 3".to_string()),
             simple!(col("active").is_true(), "active IS TRUE".to_string()),
             simple!(col("active"), "active".to_string()),
             simple!(col("active").eq(lit(true)), "active = true".to_string()),
@@ -385,11 +374,11 @@ mod test {
                 override_expected_expr: Some(col("_binary").eq(decode(lit("aa00ff"), lit("hex")))),
             },
             simple!(
-                col("value").between(lit(20_i64), lit(30_i64)),
+                col("value").between(lit(20 as i64), lit(30 as i64)),
                 "value BETWEEN 20 AND 30".to_string()
             ),
             simple!(
-                col("value").not_between(lit(20_i64), lit(30_i64)),
+                col("value").not_between(lit(20 as i64), lit(30 as i64)),
                 "value NOT BETWEEN 20 AND 30".to_string()
             ),
             simple!(
@@ -401,8 +390,8 @@ mod test {
                 "modified NOT LIKE 'abc%'".to_string()
             ),
             simple!(
-                (((col("value") * lit(2_i64) + col("value2")) / lit(3_i64)) - col("value"))
-                    .gt(lit(0_i64)),
+                (((col("value") * lit(2 as i64) + col("value2")) / lit(3 as i64)) - col("value"))
+                    .gt(lit(0 as i64)),
                 "(value * 2 + value2) / 3 - value > 0".to_string()
             ),
             simple!(
@@ -417,27 +406,27 @@ mod test {
             simple!(
                 col("modified")
                     .eq(lit("value"))
-                    .and(col("value").eq(lit(1_i64)))
+                    .and(col("value").eq(lit(1 as i64)))
                     .or(col("modified")
                         .eq(lit("value2"))
-                        .and(col("value").gt(lit(1_i64)))),
+                        .and(col("value").gt(lit(1 as i64)))),
                 "modified = 'value' AND value = 1 OR modified = 'value2' AND value > 1".to_string()
             ),
             simple!(
                 col("modified")
                     .eq(lit("value"))
-                    .or(col("value").eq(lit(1_i64)))
+                    .or(col("value").eq(lit(1 as i64)))
                     .and(
                         col("modified")
                             .eq(lit("value2"))
-                            .or(col("value").gt(lit(1_i64))),
+                            .or(col("value").gt(lit(1 as i64))),
                     ),
                 "(modified = 'value' OR value = 1) AND (modified = 'value2' OR value > 1)"
                     .to_string()
             ),
-            // TODO: Need to refactor parse_predicate for this...
+            // Validate functions are correctly parsed
             simple!(
-                substring(col("modified"), lit(0_i64), lit(4_i64)).eq(lit("2021")),
+                substring(col("modified"), lit(0 as i64), lit(4 as i64)).eq(lit("2021")),
                 "substr(modified, 0, 4) = '2021'".to_string()
             ),
         ];
@@ -455,23 +444,25 @@ mod test {
 
             match test.override_expected_expr {
                 None => assert_eq!(test.expr, actual_expr),
-                Some(expr) => assert_eq!(expr, actual_expr)
+                Some(expr) => assert_eq!(expr, actual_expr),
             }
         }
 
-
-        let unsupported_types = vec! [
-            /* TODO: Determine proper way to display decimal, date, and datetime values in an sql expression*/
-            simple! (
+        let unsupported_types = vec![
+            /* TODO: Determine proper way to display decimal values in an sql expression*/
+            simple!(
                 col("money").gt(lit(ScalarValue::Decimal128(Some(100), 12, 2))),
                 "money > 0.1".to_string()
             ),
-            simple! (
+            simple!(
                 col("_timestamp").gt(lit(ScalarValue::TimestampMillisecond(Some(100), None))),
                 "".to_string()
             ),
-            simple! (
-                col("_timestamp").gt(lit(ScalarValue::TimestampMillisecond(Some(100), Some("UTC".into())))),
+            simple!(
+                col("_timestamp").gt(lit(ScalarValue::TimestampMillisecond(
+                    Some(100),
+                    Some("UTC".into())
+                ))),
                 "".to_string()
             ),
         ];

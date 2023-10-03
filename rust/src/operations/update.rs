@@ -43,7 +43,9 @@ use parquet::file::properties::WriterProperties;
 use serde_json::{Map, Value};
 
 use crate::{
-    delta_datafusion::{find_files, parquet_scan_from_actions, register_store},
+    delta_datafusion::{
+        expr::fmt_expr_to_sql, find_files, parquet_scan_from_actions, register_store,
+    },
     protocol::{Action, DeltaOperation, Remove},
     storage::{DeltaObjectStore, ObjectStoreRef},
     table::state::DeltaTableState,
@@ -418,7 +420,7 @@ async fn execute(
     metrics.execution_time_ms = Instant::now().duration_since(exec_start).as_millis() as u64;
 
     let operation = DeltaOperation::Update {
-        predicate: Some(predicate.canonical_name()),
+        predicate: Some(fmt_expr_to_sql(&predicate)?),
     };
     version = commit(
         object_store.as_ref(),
@@ -483,6 +485,7 @@ mod tests {
     use arrow_array::Int32Array;
     use datafusion::assert_batches_sorted_eq;
     use datafusion::prelude::*;
+    use serde_json::json;
     use std::sync::Arc;
 
     async fn setup_table(partitions: Option<Vec<&str>>) -> DeltaTable {
@@ -605,7 +608,7 @@ mod tests {
         assert_eq!(table.version(), 1);
         assert_eq!(table.get_file_uris().count(), 1);
 
-        let (table, metrics) = DeltaOps(table)
+        let (mut table, metrics) = DeltaOps(table)
             .update()
             .with_predicate(col("modified").eq(lit("2021-02-03")))
             .with_update("modified", lit("2023-05-14"))
@@ -618,6 +621,11 @@ mod tests {
         assert_eq!(metrics.num_removed_files, 1);
         assert_eq!(metrics.num_updated_rows, 2);
         assert_eq!(metrics.num_copied_rows, 2);
+
+        let commit_info = table.history(None).await.unwrap();
+        let last_commit = &commit_info[commit_info.len() - 1];
+        let parameters = last_commit.operation_parameters.clone().unwrap();
+        assert_eq!(parameters["predicate"], json!("modified = '2021-02-03'"));
 
         let expected = vec![
             "+----+-------+------------+",

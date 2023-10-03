@@ -62,6 +62,7 @@ use serde_json::{Map, Value};
 
 use super::datafusion_utils::{into_expr, maybe_into_expr, Expression};
 use super::transaction::commit;
+use crate::delta_datafusion::expr::fmt_expr_to_sql;
 use crate::delta_datafusion::{parquet_scan_from_actions, register_store};
 use crate::operations::datafusion_utils::MetricObserverExec;
 use crate::operations::write::write_execution_plan;
@@ -686,7 +687,10 @@ async fn execute(
             };
 
             let action_type = action_type.to_string();
-            let predicate = op.predicate.map(|expr| expr.display_name().unwrap());
+            let predicate = op
+                .predicate
+                .map(|expr| fmt_expr_to_sql(&expr))
+                .transpose()?;
 
             predicates.push(MergePredicate {
                 action_type,
@@ -1046,7 +1050,7 @@ async fn execute(
     // Do not make a commit when there are zero updates to the state
     if !actions.is_empty() {
         let operation = DeltaOperation::Merge {
-            predicate: Some(predicate.canonical_name()),
+            predicate: Some(fmt_expr_to_sql(&predicate)?),
             matched_predicates: match_operations,
             not_matched_predicates: not_match_target_operations,
             not_matched_by_source_predicates: not_match_source_operations,
@@ -1236,7 +1240,7 @@ mod tests {
         // Todo: Expected this predicate to actually be 'value = 1'. Predicate should contain a valid sql expression
         assert_eq!(
             parameters["notMatchedBySourcePredicates"],
-            json!(r#"[{"actionType":"update","predicate":"value = Int32(1)"}]"#)
+            json!(r#"[{"actionType":"update","predicate":"value = 1"}]"#)
         );
 
         let expected = vec![
@@ -1458,7 +1462,7 @@ mod tests {
         assert_eq!(parameters["predicate"], json!("id = source.id"));
         assert_eq!(
             parameters["matchedPredicates"],
-            json!(r#"[{"actionType":"delete","predicate":"source.value <= Int32(10)"}]"#)
+            json!(r#"[{"actionType":"delete","predicate":"source.value <= 10"}]"#)
         );
 
         let expected = vec![
@@ -1590,7 +1594,7 @@ mod tests {
         assert_eq!(parameters["predicate"], json!("id = source.id"));
         assert_eq!(
             parameters["notMatchedBySourcePredicates"],
-            json!(r#"[{"actionType":"delete","predicate":"modified > Utf8(\"2021-02-01\")"}]"#)
+            json!(r#"[{"actionType":"delete","predicate":"modified > '2021-02-01'"}]"#)
         );
 
         let expected = vec![
