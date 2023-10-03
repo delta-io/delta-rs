@@ -463,7 +463,7 @@ given filters.
         writer_properties: Optional[Dict[str, int]] = None,
         strict_cast: bool = True,
     ) -> Dict[str, Any]:
-        """Updates records in the Delta Table.
+        """UPDATE records in the Delta Table that matches an optional predicate.
 
         :param updates: what values to update
         :param predicate: a logical expression, defaults to None
@@ -473,7 +473,7 @@ given filters.
         """
 
         metrics = self._table.update(
-            updates, predicate, writer_properties, strict_cast=not strict_cast
+            updates, predicate, writer_properties, safe_cast=not strict_cast
         )
         return json.loads(metrics)
 
