@@ -1,10 +1,10 @@
 use std::sync::Arc;
 
 use arrow_array::{types::UInt8Type, Array, DictionaryArray, RecordBatch, StringArray};
-use arrow_cast::pretty::pretty_format_batches;
 use arrow_schema::{DataType as ArrowDataType, Field as ArrowField, Schema as ArrowSchema};
 use deltalake::DeltaOps;
 use futures::StreamExt;
+use tempdir::TempDir;
 
 #[tokio::test]
 async fn test_read_write_dictionary() {
@@ -14,28 +14,31 @@ async fn test_read_write_dictionary() {
     ]);
     let schema = Arc::new(schema);
 
-    let delta_schema: deltalake::Schema = schema.try_into().unwrap();
-    println!("{:?}", delta_schema);
+    let delta_schema = deltalake::Schema::try_from(schema.clone()).unwrap();
 
-    DeltaOps::try_from_uri("./data/test.delta")
+    let temp_dir = TempDir::new("read_write_dictionary").unwrap();
+    let table_path = format!(
+        "{}/read_write_dictionary.delta",
+        temp_dir.path().to_str().unwrap()
+    );
+
+    DeltaOps::try_from_uri(table_path.clone())
         .await
         .unwrap()
         .create()
         .with_columns(delta_schema.get_fields().clone())
-        .with_partition_columns(vec!["id"])
         .await
         .unwrap();
 
-    DeltaOps::try_from_uri("./data/test.delta")
+    DeltaOps::try_from_uri(table_path.clone())
         .await
         .unwrap()
         .write(vec![batch()])
-        .with_partition_columns(vec!["id"])
-        .with_save_mode(deltalake::action::SaveMode::Append)
+        .with_save_mode(deltalake::protocol::SaveMode::Append)
         .await
         .unwrap();
 
-    let (_, mut stream) = DeltaOps::try_from_uri("./data/test.delta")
+    let (_, mut stream) = DeltaOps::try_from_uri(table_path)
         .await
         .unwrap()
         .load()
@@ -43,9 +46,7 @@ async fn test_read_write_dictionary() {
         .unwrap();
     while let Some(batch) = stream.next().await {
         let batch = batch.unwrap();
-        println!("{:?}", batch.schema());
-        let display = pretty_format_batches(&vec![batch]).unwrap();
-        println!("{}", display);
+        assert_eq!(batch.schema(), schema);
     }
 }
 
