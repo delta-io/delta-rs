@@ -235,3 +235,16 @@ def existing_table(tmp_path: pathlib.Path, sample_data: pa.Table):
     path = str(tmp_path)
     write_deltalake(path, sample_data)
     return DeltaTable(path)
+
+
+@pytest.fixture()
+def sample_table():
+    nrows = 5
+    return pa.table(
+        {
+            "id": pa.array(["1", "2", "3", "4", "5"]),
+            "price": pa.array(list(range(nrows)), pa.int64()),
+            "sold": pa.array(list(range(nrows)), pa.int32()),
+            "deleted": pa.array([False] * nrows),
+        }
+    )

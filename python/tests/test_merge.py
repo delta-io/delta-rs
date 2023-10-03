@@ -6,19 +6,6 @@ import pytest
 from deltalake import DeltaTable, write_deltalake
 
 
-@pytest.fixture()
-def sample_table():
-    nrows = 5
-    return pa.table(
-        {
-            "id": pa.array(["1", "2", "3", "4", "5"]),
-            "price": pa.array(list(range(nrows)), pa.int64()),
-            "sold": pa.array(list(range(nrows)), pa.int32()),
-            "deleted": pa.array([False] * nrows),
-        }
-    )
-
-
 def test_merge_when_matched_delete_wo_predicate(
     tmp_path: pathlib.Path, sample_table: pa.Table
 ):
