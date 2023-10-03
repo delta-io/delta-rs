@@ -18,10 +18,9 @@ use deltalake::arrow::compute::concat_batches;
 use deltalake::arrow::record_batch::RecordBatch;
 use deltalake::arrow::{self, datatypes::Schema as ArrowSchema};
 use deltalake::checkpoints::create_checkpoint;
-use deltalake::datafusion::prelude::{Column, SessionContext};
+use deltalake::datafusion::prelude::SessionContext;
 use deltalake::delta_datafusion::DeltaDataChecker;
 use deltalake::errors::DeltaTableError;
-use deltalake::operations::datafusion_utils::Expression;
 use deltalake::operations::merge::MergeBuilder;
 use deltalake::operations::optimize::{OptimizeBuilder, OptimizeType};
 use deltalake::operations::restore::RestoreBuilder;
@@ -445,26 +444,23 @@ impl RawDeltaTable {
         // }
 
         if let Some(mu_updates) = matched_update_updates {
-            let mut mu_updates_mapping: HashMap<Column, Expression> = HashMap::new();
-
-            for (col_name, expression) in &mu_updates {
-                mu_updates_mapping.insert(
-                    Column::from_name(col_name),
-                    Expression::String(expression.clone()),
-                );
-            }
-
             if let Some(mu_predicate) = matched_update_predicate {
                 cmd = cmd
-                    .when_matched_update(|update| {
-                        update
-                            .predicate(mu_predicate)
-                            .update_multiple(mu_updates_mapping)
+                    .when_matched_update(|mut update| {
+                        for (col_name, expression) in mu_updates {
+                            update = update.update(col_name.clone(), expression.clone());
+                        }
+                        update.predicate(mu_predicate)
                     })
                     .map_err(PythonError::from)?;
             } else {
                 cmd = cmd
-                    .when_matched_update(|update| update.update_multiple(mu_updates_mapping))
+                    .when_matched_update(|mut update| {
+                        for (col_name, expression) in mu_updates {
+                            update = update.update(col_name.clone(), expression.clone());
+                        }
+                        update
+                    })
                     .map_err(PythonError::from)?;
             }
         }
@@ -480,52 +476,44 @@ impl RawDeltaTable {
         }
 
         if let Some(nmi_updates) = not_matched_insert_updates {
-            let mut nmi_updates_mapping: HashMap<Column, Expression> = HashMap::new();
-
-            for (col_name, expression) in &nmi_updates {
-                nmi_updates_mapping.insert(
-                    Column::from_name(col_name),
-                    Expression::String(expression.clone()),
-                );
-            }
-
             if let Some(nmi_predicate) = not_matched_insert_predicate {
                 cmd = cmd
-                    .when_not_matched_insert(|insert| {
-                        insert
-                            .predicate(nmi_predicate)
-                            .set_multiple(nmi_updates_mapping)
+                    .when_not_matched_insert(|mut insert| {
+                        for (col_name, expression) in nmi_updates {
+                            insert = insert.set(col_name.clone(), expression.clone());
+                        }
+                        insert.predicate(nmi_predicate)
                     })
                     .map_err(PythonError::from)?;
             } else {
                 cmd = cmd
-                    .when_not_matched_insert(|insert| insert.set_multiple(nmi_updates_mapping))
+                    .when_not_matched_insert(|mut insert| {
+                        for (col_name, expression) in nmi_updates {
+                            insert = insert.set(col_name.clone(), expression.clone());
+                        }
+                        insert
+                    })
                     .map_err(PythonError::from)?;
             }
         }
 
         if let Some(nmbsu_updates) = not_matched_by_source_update_updates {
-            let mut nmbsu_updates_mapping: HashMap<Column, Expression> = HashMap::new();
-
-            for (col_name, expression) in &nmbsu_updates {
-                nmbsu_updates_mapping.insert(
-                    Column::from_name(col_name),
-                    Expression::String(expression.clone()),
-                );
-            }
-
             if let Some(nmbsu_predicate) = not_matched_by_source_update_predicate {
                 cmd = cmd
-                    .when_not_matched_by_source_update(|update| {
-                        update
-                            .predicate(nmbsu_predicate)
-                            .update_multiple(nmbsu_updates_mapping)
+                    .when_not_matched_by_source_update(|mut update| {
+                        for (col_name, expression) in nmbsu_updates {
+                            update = update.update(col_name.clone(), expression.clone());
+                        }
+                        update.predicate(nmbsu_predicate)
                     })
                     .map_err(PythonError::from)?;
             } else {
                 cmd = cmd
-                    .when_not_matched_by_source_update(|update| {
-                        update.update_multiple(nmbsu_updates_mapping)
+                    .when_not_matched_by_source_update(|mut update| {
+                        for (col_name, expression) in nmbsu_updates {
+                            update = update.update(col_name.clone(), expression.clone());
+                        }
+                        update
                     })
                     .map_err(PythonError::from)?;
             }
@@ -537,9 +525,7 @@ impl RawDeltaTable {
                 .map_err(PythonError::from)?;
         } else if let Some(nmbs_predicate) = not_matched_by_source_delete_predicate {
             cmd = cmd
-                .when_not_matched_by_source_delete(|delete| {
-                    delete.predicate(nmbs_predicate)
-                })
+                .when_not_matched_by_source_delete(|delete| delete.predicate(nmbs_predicate))
                 .map_err(PythonError::from)?;
         }
 

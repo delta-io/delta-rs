@@ -396,15 +396,6 @@ impl UpdateBuilder {
         self.updates.insert(column.into(), expression.into());
         self
     }
-
-    /// Update multiple at ones
-    pub fn update_multiple<M: Into<HashMap<Column, Expression>>>(
-        mut self,
-        mapping: M,
-    ) -> Self {
-        self.updates = mapping.into();
-        self
-    }
 }
 
 /// Builder for insert clauses
@@ -427,15 +418,6 @@ impl InsertBuilder {
     /// specified then null is inserted.
     pub fn set<C: Into<Column>, E: Into<Expression>>(mut self, column: C, expression: E) -> Self {
         self.set.insert(column.into(), expression.into());
-        self
-    }
-
-    /// Set multiple at ones
-    pub fn set_multiple<M: Into<HashMap<Column, Expression>>>(
-        mut self,
-        mapping: M,
-    ) -> Self {
-        self.set = mapping.into();
         self
     }
 }
