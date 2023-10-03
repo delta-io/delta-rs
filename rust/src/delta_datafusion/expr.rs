@@ -1,12 +1,28 @@
+// Licensed to the Apache Software Foundation (ASF) under one
+// or more contributor license agreements.  See the NOTICE file
+// distributed with this work for additional information
+// regarding copyright ownership.  The ASF licenses this file
+// to you under the Apache License, Version 2.0 (the
+// "License"); you may not use this file except in compliance
+// with the License.  You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing,
+// software distributed under the License is distributed on an
+// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+// KIND, either express or implied.  See the License for the
+// specific language governing permissions and limitations
+// under the License.
+
 //! Utility functions for Datafusion's Expressions
-//!
 
 use std::fmt::{self, Display, Formatter, Write};
 
 use datafusion_common::ScalarValue;
 use datafusion_expr::{
     expr::{InList, ScalarUDF},
-    Between, BinaryExpr, Cast, Expr, Like, TryCast,
+    Between, BinaryExpr, Expr, Like,
 };
 use sqlparser::ast::escape_quoted_string;
 
@@ -81,12 +97,6 @@ impl<'a> Display for SqlFormat<'a> {
                     write!(f, "ELSE {} ", SqlFormat { expr: e })?;
                 }
                 write!(f, "END")
-            }
-            Expr::Cast(Cast { expr, data_type }) => {
-                write!(f, "CAST({} AS {data_type:?})", SqlFormat { expr })
-            }
-            Expr::TryCast(TryCast { expr, data_type }) => {
-                write!(f, "TRY_CAST({expr} AS {data_type:?})")
             }
             Expr::Not(expr) => write!(f, "NOT {}", SqlFormat { expr }),
             Expr::Negative(expr) => write!(f, "(- {})", SqlFormat { expr }),
@@ -258,8 +268,8 @@ mod test {
     use std::collections::HashMap;
 
     use datafusion::prelude::SessionContext;
-    use datafusion_common::ScalarValue;
-    use datafusion_expr::{col, decode, lit, substring, Expr};
+    use datafusion_common::{DFSchema, ScalarValue};
+    use datafusion_expr::{col, decode, lit, substring, Expr, ExprSchemable};
 
     use crate::{DeltaOps, DeltaTable, Schema, SchemaDataType, SchemaField};
 
@@ -464,6 +474,23 @@ mod test {
                     Some("UTC".into())
                 ))),
                 "".to_string()
+            ),
+            simple!(
+                col("value")
+                    .cast_to::<DFSchema>(
+                        &arrow_schema::DataType::Utf8,
+                        &table
+                            .state
+                            .input_schema()
+                            .unwrap()
+                            .as_ref()
+                            .to_owned()
+                            .try_into()
+                            .unwrap()
+                    )
+                    .unwrap()
+                    .eq(lit("1")),
+                "CAST(value as STRING) = '1'".to_string()
             ),
         ];
 
