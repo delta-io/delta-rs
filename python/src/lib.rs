@@ -18,10 +18,9 @@ use deltalake::arrow::compute::concat_batches;
 use deltalake::arrow::record_batch::RecordBatch;
 use deltalake::arrow::{self, datatypes::Schema as ArrowSchema};
 use deltalake::checkpoints::create_checkpoint;
-use deltalake::datafusion::prelude::{Column, SessionContext};
+use deltalake::datafusion::prelude::SessionContext;
 use deltalake::delta_datafusion::DeltaDataChecker;
 use deltalake::errors::DeltaTableError;
-use deltalake::operations::datafusion_utils::Expression;
 use deltalake::operations::optimize::{OptimizeBuilder, OptimizeType};
 use deltalake::operations::restore::RestoreBuilder;
 use deltalake::operations::transaction::commit;
@@ -314,18 +313,12 @@ impl RawDeltaTable {
             cmd = cmd.with_writer_properties(properties.build());
         }
 
-        let mut updates_mapping: HashMap<Column, Expression> = HashMap::new();
-
         for (col_name, expression) in &updates {
-            updates_mapping.insert(
-                Column::from_name(col_name.clone()),
-                Expression::String(expression.clone()),
-            );
+            cmd = cmd.with_update(col_name.clone(), expression.clone());
         }
-        cmd = cmd.with_update_multiple(updates_mapping);
 
         if let Some(update_predicate) = predicate {
-            cmd = cmd.with_predicate(Expression::String(update_predicate));
+            cmd = cmd.with_predicate(update_predicate);
         }
 
         let (table, metrics) = rt()?

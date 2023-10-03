@@ -129,15 +129,6 @@ impl UpdateBuilder {
         self
     }
 
-    /// Update multiple at ones
-    pub fn with_update_multiple<M: Into<HashMap<Column, Expression>>>(
-        mut self,
-        mapping: M,
-    ) -> Self {
-        self.updates = mapping.into();
-        self
-    }
-
     /// The Datafusion session state to use
     pub fn with_session_state(mut self, state: SessionState) -> Self {
         self.state = Some(state);
