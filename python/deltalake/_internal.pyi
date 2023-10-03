@@ -13,11 +13,9 @@ from deltalake.writer import AddAction
 
 __version__: str
 
-class RawDeltaTable:
-    ...
+class RawDeltaTable: ...
 
 def rust_core_version() -> str: ...
-
 def write_new_deltalake(
     table_uri: str,
     schema: pa.Schema,
@@ -29,7 +27,6 @@ def write_new_deltalake(
     configuration: Optional[Mapping[str, Optional[str]]],
     storage_options: Optional[Dict[str, str]],
 ): ...
-
 def batch_distinct(batch: pa.RecordBatch) -> pa.RecordBatch: ...
 
 # Can't implement inheritance (see note in src/schema.rs), so this is next
@@ -99,12 +96,9 @@ class Field:
     metadata: Dict[str, Any]
 
     def to_json(self) -> str: ...
-
     @staticmethod
     def from_json(json: str) -> "Field": ...
-
     def to_pyarrow(self) -> pa.Field: ...
-
     @staticmethod
     def from_pyarrow(type: pa.Field) -> "Field": ...
 
@@ -126,11 +120,9 @@ class Schema:
     invariants: List[Tuple[str, str]]
 
     def to_json(self) -> str: ...
-
     @staticmethod
     def from_json(json: str) -> "Schema": ...
     def to_pyarrow(self, as_large_types: bool = False) -> pa.Schema: ...
-
     @staticmethod
     def from_pyarrow(type: pa.Schema) -> "Schema": ...
 
