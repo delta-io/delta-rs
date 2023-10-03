@@ -116,12 +116,13 @@ pub struct MergeBuilder {
 
 impl MergeBuilder {
     /// Create a new [`MergeBuilder`]
-    pub fn new(
+    pub fn new<E: Into<Expression>>(
         object_store: ObjectStoreRef,
         snapshot: DeltaTableState,
-        predicate: Expression,
+        predicate: E,
         source: DataFrame,
     ) -> Self {
+        let predicate = predicate.into();
         Self {
             predicate,
             source,

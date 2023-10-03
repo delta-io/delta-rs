@@ -999,7 +999,7 @@ class TableMerger:
             source=self.source,
             predicate=self.predicate,
             source_alias=self.source_alias,
-            strict_cast=self.strict_cast,
+            safe_cast=self.strict_cast,
             writer_properties=self.writer_properties,
             matched_update_updates=self.matched_update_updates,
             matched_update_predicate=self.matched_update_predicate,

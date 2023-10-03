@@ -341,7 +341,7 @@ impl RawDeltaTable {
     #[pyo3(signature = (source,
         predicate,
         source_alias,
-        strict_cast = true,
+        safe_cast = false,
         writer_properties = None,
         matched_update_updates = None,
         matched_update_predicate = None,
@@ -361,7 +361,7 @@ impl RawDeltaTable {
         source: PyArrowType<RecordBatch>,
         predicate: String,
         source_alias: String,
-        strict_cast: bool,
+        safe_cast: bool,
         writer_properties: Option<HashMap<String, usize>>,
         matched_update_updates: Option<HashMap<String, String>>,
         matched_update_predicate: Option<String>,
@@ -382,11 +382,11 @@ impl RawDeltaTable {
         let mut cmd = MergeBuilder::new(
             self._table.object_store(),
             self._table.state.clone(),
-            Expression::String(predicate),
+            predicate,
             source_df,
         )
         .with_source_alias(source_alias)
-        .with_safe_cast(strict_cast);
+        .with_safe_cast(safe_cast);
 
         if let Some(writer_props) = writer_properties {
             let mut properties = WriterProperties::builder();
@@ -419,7 +419,7 @@ impl RawDeltaTable {
         //     if let Some(mu_predicate) = matched_update_predicate {
         //         cmd = cmd.when_matched_update(|update| {
         //                     update
-        //                         .predicate(Expression::String(mu_predicate))
+        //                         .predicate(mu_predicate)
         //         }).map_err(PythonError::from)?;
         //     }
         //     else {
@@ -431,7 +431,7 @@ impl RawDeltaTable {
         //         if let Some(mu_predicate) = matched_update_predicate {
         //             cmd = cmd.when_matched_update(|update| {
         //                         update
-        //                             .predicate(Expression::String(mu_predicate))
+        //                             .predicate(mu_predicate)
         //                             .update(mu_updates)
         //             }).map_err(PythonError::from)?;
         //         }
@@ -458,7 +458,7 @@ impl RawDeltaTable {
                 cmd = cmd
                     .when_matched_update(|update| {
                         update
-                            .predicate(Expression::String(mu_predicate))
+                            .predicate(mu_predicate)
                             .update_multiple(mu_updates_mapping)
                     })
                     .map_err(PythonError::from)?;
@@ -475,7 +475,7 @@ impl RawDeltaTable {
                 .map_err(PythonError::from)?;
         } else if let Some(md_predicate) = matched_delete_predicate {
             cmd = cmd
-                .when_matched_delete(|delete| delete.predicate(Expression::String(md_predicate)))
+                .when_matched_delete(|delete| delete.predicate(md_predicate))
                 .map_err(PythonError::from)?;
         }
 
@@ -493,7 +493,7 @@ impl RawDeltaTable {
                 cmd = cmd
                     .when_not_matched_insert(|insert| {
                         insert
-                            .predicate(Expression::String(nmi_predicate))
+                            .predicate(nmi_predicate)
                             .set_multiple(nmi_updates_mapping)
                     })
                     .map_err(PythonError::from)?;
@@ -518,7 +518,7 @@ impl RawDeltaTable {
                 cmd = cmd
                     .when_not_matched_by_source_update(|update| {
                         update
-                            .predicate(Expression::String(nmbsu_predicate))
+                            .predicate(nmbsu_predicate)
                             .update_multiple(nmbsu_updates_mapping)
                     })
                     .map_err(PythonError::from)?;
@@ -538,7 +538,7 @@ impl RawDeltaTable {
         } else if let Some(nmbs_predicate) = not_matched_by_source_delete_predicate {
             cmd = cmd
                 .when_not_matched_by_source_delete(|delete| {
-                    delete.predicate(Expression::String(nmbs_predicate))
+                    delete.predicate(nmbs_predicate)
                 })
                 .map_err(PythonError::from)?;
         }
