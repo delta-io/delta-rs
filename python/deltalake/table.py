@@ -674,8 +674,8 @@ given filters.
         that contain records that satisfy the predicate. Once files are determined
         they are rewritten without the records.
 
-        :param predicate: a logical expression, defaults to None
-        :return: the metrics from delete
+        :param predicate: a SQL where clause. If not passed, will delete all rows.
+        :return: the metrics from delete.
         """
         metrics = self._table.delete(predicate)
         return json.loads(metrics)
