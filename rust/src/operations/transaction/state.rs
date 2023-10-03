@@ -5,6 +5,7 @@ use arrow::datatypes::{
     DataType, Field as ArrowField, Schema as ArrowSchema, SchemaRef as ArrowSchemaRef,
 };
 use datafusion::datasource::physical_plan::wrap_partition_type_in_dict;
+use datafusion::execution::context::SessionState;
 use datafusion::optimizer::utils::conjunction;
 use datafusion::physical_optimizer::pruning::{PruningPredicate, PruningStatistics};
 use datafusion_common::config::ConfigOptions;
@@ -104,7 +105,11 @@ impl DeltaTableState {
     }
 
     /// Parse an expression string into a datafusion [`Expr`]
-    pub fn parse_predicate_expression(&self, expr: impl AsRef<str>) -> DeltaResult<Expr> {
+    pub fn parse_predicate_expression(
+        &self,
+        expr: impl AsRef<str>,
+        df_state: &SessionState,
+    ) -> DeltaResult<Expr> {
         let dialect = &GenericDialect {};
         let mut tokenizer = Tokenizer::new(dialect, expr.as_ref());
         let tokens = tokenizer
@@ -121,7 +126,7 @@ impl DeltaTableState {
 
         // TODO should we add the table name as qualifier when available?
         let df_schema = DFSchema::try_from_qualified_schema("", self.arrow_schema()?.as_ref())?;
-        let context_provider = DummyContextProvider::default();
+        let context_provider = DeltaContextProvider { state: df_state };
         let sql_to_rel = SqlToRel::new(&context_provider);
 
         Ok(sql_to_rel.sql_to_expr(sql, &df_schema, &mut Default::default())?)
@@ -342,34 +347,33 @@ impl PruningStatistics for DeltaTableState {
     }
 }
 
-#[derive(Default)]
-struct DummyContextProvider {
-    options: ConfigOptions,
+pub(crate) struct DeltaContextProvider<'a> {
+    state: &'a SessionState,
 }
 
-impl ContextProvider for DummyContextProvider {
+impl<'a> ContextProvider for DeltaContextProvider<'a> {
     fn get_table_provider(&self, _name: TableReference) -> DFResult<Arc<dyn TableSource>> {
         unimplemented!()
     }
 
-    fn get_function_meta(&self, _name: &str) -> Option<Arc<ScalarUDF>> {
-        unimplemented!()
+    fn get_function_meta(&self, name: &str) -> Option<Arc<ScalarUDF>> {
+        self.state.scalar_functions().get(name).cloned()
     }
 
-    fn get_aggregate_meta(&self, _name: &str) -> Option<Arc<AggregateUDF>> {
-        unimplemented!()
+    fn get_aggregate_meta(&self, name: &str) -> Option<Arc<AggregateUDF>> {
+        self.state.aggregate_functions().get(name).cloned()
     }
 
-    fn get_variable_type(&self, _: &[String]) -> Option<DataType> {
+    fn get_variable_type(&self, _var: &[String]) -> Option<DataType> {
         unimplemented!()
     }
 
     fn options(&self) -> &ConfigOptions {
-        &self.options
+        self.state.config_options()
     }
 
-    fn get_window_meta(&self, _name: &str) -> Option<Arc<datafusion_expr::WindowUDF>> {
-        unimplemented!()
+    fn get_window_meta(&self, name: &str) -> Option<Arc<datafusion_expr::WindowUDF>> {
+        self.state.window_functions().get(name).cloned()
     }
 }
 
@@ -377,24 +381,29 @@ impl ContextProvider for DummyContextProvider {
 mod tests {
     use super::*;
     use crate::operations::transaction::test_utils::{create_add_action, init_table_actions};
+    use datafusion::prelude::SessionContext;
     use datafusion_expr::{col, lit};
 
     #[test]
     fn test_parse_predicate_expression() {
-        let state = DeltaTableState::from_actions(init_table_actions(), 0).unwrap();
+        let snapshot = DeltaTableState::from_actions(init_table_actions(), 0).unwrap();
+        let session = SessionContext::new();
+        let state = session.state();
 
         // parses simple expression
-        let parsed = state.parse_predicate_expression("value > 10").unwrap();
+        let parsed = snapshot
+            .parse_predicate_expression("value > 10", &state)
+            .unwrap();
         let expected = col("value").gt(lit::<i64>(10));
         assert_eq!(parsed, expected);
 
         // fails for unknown column
-        let parsed = state.parse_predicate_expression("non_existent > 10");
+        let parsed = snapshot.parse_predicate_expression("non_existent > 10", &state);
         assert!(parsed.is_err());
 
         // parses complex expression
-        let parsed = state
-            .parse_predicate_expression("value > 10 OR value <= 0")
+        let parsed = snapshot
+            .parse_predicate_expression("value > 10 OR value <= 0", &state)
             .unwrap();
         let expected = col("value")
             .gt(lit::<i64>(10))
