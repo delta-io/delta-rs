@@ -1237,7 +1237,6 @@ mod tests {
             parameters["notMatchedPredicates"],
             json!(r#"[{"actionType":"insert"}]"#)
         );
-        // Todo: Expected this predicate to actually be 'value = 1'. Predicate should contain a valid sql expression
         assert_eq!(
             parameters["notMatchedBySourcePredicates"],
             json!(r#"[{"actionType":"update","predicate":"value = 1"}]"#)

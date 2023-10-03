@@ -14,6 +14,10 @@
 // KIND, either express or implied.  See the License for the
 // specific language governing permissions and limitations
 // under the License.
+//
+// This product includes software from the Datafusion project (Apache 2.0)
+// https://github.com/apache/arrow-datafusion
+// Display functions and required macros were pulled from https://github.com/apache/arrow-datafusion/blob/ddb95497e2792015d5a5998eec79aac8d37df1eb/datafusion/expr/src/expr.rs
 
 //! Utility functions for Datafusion's Expressions
 
