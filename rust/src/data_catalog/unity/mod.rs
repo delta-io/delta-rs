@@ -84,7 +84,11 @@ pub enum UnityCatalogConfigKey {
     /// - `unity_workspace_url`
     /// - `databricks_workspace_url`
     /// - `workspace_url`
+    #[deprecated(since = "0.17.0", note = "Please use the DATABRICKS_HOST env variable")]
     WorkspaceUrl,
+
+    /// Host of the Databricks workspace
+    Host,
 
     /// Access token to authorize API requests
     ///
@@ -92,7 +96,14 @@ pub enum UnityCatalogConfigKey {
     /// - `unity_access_token`
     /// - `databricks_access_token`
     /// - `access_token`
+    #[deprecated(
+        since = "0.17.0",
+        note = "Please use the DATABRICKS_TOKEN env variable"
+    )]
     AccessToken,
+
+    /// Token to use for Databricks Unity
+    Token,
 
     /// Service principal client id for authorizing requests
     ///
@@ -167,6 +178,7 @@ pub enum UnityCatalogConfigKey {
 impl FromStr for UnityCatalogConfigKey {
     type Err = DataCatalogError;
 
+    #[allow(deprecated)]
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
             "access_token" | "unity_access_token" | "databricks_access_token" => {
@@ -187,6 +199,7 @@ impl FromStr for UnityCatalogConfigKey {
             "federated_token_file"
             | "unity_federated_token_file"
             | "databricks_federated_token_file" => Ok(UnityCatalogConfigKey::FederatedTokenFile),
+            "host" => Ok(UnityCatalogConfigKey::Host),
             "msi_endpoint" | "unity_msi_endpoint" | "databricks_msi_endpoint" => {
                 Ok(UnityCatalogConfigKey::MsiEndpoint)
             }
@@ -196,6 +209,7 @@ impl FromStr for UnityCatalogConfigKey {
             "object_id" | "unity_object_id" | "databricks_object_id" => {
                 Ok(UnityCatalogConfigKey::ObjectId)
             }
+            "token" => Ok(UnityCatalogConfigKey::Token),
             "use_azure_cli" | "unity_use_azure_cli" | "databricks_use_azure_cli" => {
                 Ok(UnityCatalogConfigKey::UseAzureCli)
             }
@@ -207,6 +221,7 @@ impl FromStr for UnityCatalogConfigKey {
     }
 }
 
+#[allow(deprecated)]
 impl AsRef<str> for UnityCatalogConfigKey {
     fn as_ref(&self) -> &str {
         match self {
@@ -216,10 +231,12 @@ impl AsRef<str> for UnityCatalogConfigKey {
             UnityCatalogConfigKey::ClientId => "unity_client_id",
             UnityCatalogConfigKey::ClientSecret => "unity_client_secret",
             UnityCatalogConfigKey::FederatedTokenFile => "unity_federated_token_file",
+            UnityCatalogConfigKey::Host => "databricks_host",
             UnityCatalogConfigKey::MsiEndpoint => "unity_msi_endpoint",
             UnityCatalogConfigKey::MsiResourceId => "unity_msi_resource_id",
             UnityCatalogConfigKey::ObjectId => "unity_object_id",
             UnityCatalogConfigKey::UseAzureCli => "unity_use_azure_cli",
+            UnityCatalogConfigKey::Token => "databricks_token",
             UnityCatalogConfigKey::WorkspaceUrl => "unity_workspace_url",
         }
     }
@@ -268,6 +285,7 @@ pub struct UnityCatalogBuilder {
     client_options: super::client::ClientOptions,
 }
 
+#[allow(deprecated)]
 impl UnityCatalogBuilder {
     /// Create a new [`UnityCatalogBuilder`] with default values.
     pub fn new() -> Self {
@@ -281,19 +299,21 @@ impl UnityCatalogBuilder {
         value: impl Into<String>,
     ) -> DataCatalogResult<Self> {
         match UnityCatalogConfigKey::from_str(key.as_ref())? {
-            UnityCatalogConfigKey::WorkspaceUrl => self.workspace_url = Some(value.into()),
             UnityCatalogConfigKey::AccessToken => self.bearer_token = Some(value.into()),
             UnityCatalogConfigKey::ClientId => self.client_id = Some(value.into()),
             UnityCatalogConfigKey::ClientSecret => self.client_secret = Some(value.into()),
             UnityCatalogConfigKey::AuthorityId => self.authority_id = Some(value.into()),
             UnityCatalogConfigKey::AuthorityHost => self.authority_host = Some(value.into()),
+            UnityCatalogConfigKey::Host => self.workspace_url = Some(value.into()),
             UnityCatalogConfigKey::MsiEndpoint => self.msi_endpoint = Some(value.into()),
             UnityCatalogConfigKey::ObjectId => self.object_id = Some(value.into()),
             UnityCatalogConfigKey::MsiResourceId => self.msi_resource_id = Some(value.into()),
             UnityCatalogConfigKey::FederatedTokenFile => {
                 self.federated_token_file = Some(value.into())
             }
+            UnityCatalogConfigKey::Token => self.bearer_token = Some(value.into()),
             UnityCatalogConfigKey::UseAzureCli => self.use_azure_cli = str_is_truthy(&value.into()),
+            UnityCatalogConfigKey::WorkspaceUrl => self.workspace_url = Some(value.into()),
         };
         Ok(self)
     }
