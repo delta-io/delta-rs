@@ -13,7 +13,9 @@ readme = "README.md"
 edition = "2021"
 
 [package.metadata.docs.rs]
-all-features = true
+# We cannot use all_features because TLS features are mutually exclusive.
+# We cannot use hdfs feature because it requires Java to be installed.
+features = ["azure", "datafusion", "gcs", "glue", "hdfs", "json", "python", "s3", "unity-experimental"]
 
 [dependencies]
 # arrow
