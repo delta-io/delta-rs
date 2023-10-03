@@ -1,5 +1,5 @@
 import sys
-from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple, Union
+from typing import Any, Dict, List, Mapping, Optional, Tuple, Union
 
 if sys.version_info >= (3, 8):
     from typing import Literal
