@@ -57,7 +57,7 @@ API that lets you query, inspect, and operate your Delta Lake with ease.
 
 - [Quick Start](#quick-start)
 - [Get Involved](#get-involved)
-- [Integartions](#integrations)
+- [Integrations](#integrations)
 - [Features](#features)
 
 ## Quick Start
