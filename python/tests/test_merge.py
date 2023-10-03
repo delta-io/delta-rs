@@ -1,7 +1,6 @@
 import pathlib
 
 import pyarrow as pa
-import pytest
 
 from deltalake import DeltaTable, write_deltalake
 
