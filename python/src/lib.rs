@@ -21,14 +21,14 @@ use deltalake::checkpoints::create_checkpoint;
 use deltalake::datafusion::prelude::{Column, SessionContext};
 use deltalake::delta_datafusion::DeltaDataChecker;
 use deltalake::errors::DeltaTableError;
+use deltalake::operations::datafusion_utils::Expression;
 use deltalake::operations::optimize::{OptimizeBuilder, OptimizeType};
 use deltalake::operations::restore::RestoreBuilder;
 use deltalake::operations::transaction::commit;
-use deltalake::operations::vacuum::VacuumBuilder;
 use deltalake::operations::update::UpdateBuilder;
-use deltalake::operations::datafusion_utils::Expression;
-use deltalake::partitions::PartitionFilter;
+use deltalake::operations::vacuum::VacuumBuilder;
 use deltalake::parquet::file::properties::WriterProperties;
+use deltalake::partitions::PartitionFilter;
 use deltalake::protocol::{
     self, Action, ColumnCountStat, ColumnValueStat, DeltaOperation, SaveMode, Stats,
 };
@@ -333,7 +333,6 @@ impl RawDeltaTable {
         Ok(serde_json::to_string(&metrics).unwrap())
     }
 
-
     /// Run the optimize command on the Delta Table: merge small files into a large file by bin-packing.
     #[pyo3(signature = (partition_filters = None, target_size = None, max_concurrent_tasks = None, min_commit_interval = None))]
     pub fn compact_optimize(
@@ -359,7 +358,7 @@ impl RawDeltaTable {
             .block_on(cmd.into_future())
             .map_err(PythonError::from)?;
         self._table.state = table.state;
-        
+
         Ok(serde_json::to_string(&metrics).unwrap())
     }
 
