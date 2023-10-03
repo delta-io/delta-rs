@@ -34,7 +34,7 @@ def test_update_with_predicate(tmp_path: pathlib.Path, sample_table: pa.Table):
         }
     )
 
-    dt.update(updates={"deleted": "True"}, predicate="price > 4")
+    dt.update(updates={"deleted": "True"}, predicate="price > 3")
 
     result = dt.to_pyarrow_table()
     last_action = dt.history(1)[0]
