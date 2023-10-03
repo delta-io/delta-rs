@@ -458,18 +458,23 @@ given filters.
 
     def update(
         self,
-        update: str,
+        updates: Dict[str, str],
         predicate: Optional[str] = None,
-        writer_properties: Optional[dict[str, int]] = None,
+        writer_properties: Optional[Dict[str, int]] = None,
+        strict_cast: bool = True,
     ) -> Dict[str, Any]:
         """Updates records in the Delta Table.
 
+        :param updates: what values to update
         :param predicate: a logical expression, defaults to None
-        :param update: what values to update
+        :writer_properties: Pass writer properties to the Rust parquet writer, see options https://arrow.apache.org/rust/parquet/file/properties/struct.WriterProperties.html
+        :strict_cast: specify if data types need to be casted strictly or not :default = True
         :return: the metrics from delete
         """
 
-        metrics = self._table.update(update, predicate, writer_properties)
+        metrics = self._table.update(
+            updates, predicate, writer_properties, strict_cast=not strict_cast
+        )
         return json.loads(metrics)
 
     @property

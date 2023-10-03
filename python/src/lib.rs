@@ -277,14 +277,16 @@ impl RawDeltaTable {
     }
 
     /// Run the UPDATE command on the Delta Table
-    #[pyo3(signature = (updates, predicate=None, writer_properties=None))]
+    #[pyo3(signature = (updates, predicate=None, writer_properties=None, strict_cast = true))]
     pub fn update(
         &mut self,
         updates: HashMap<String, String>,
         predicate: Option<String>,
         writer_properties: Option<HashMap<String, usize>>,
-    ) -> PyResult<Vec<String>> {
-        let mut cmd = UpdateBuilder::new(self._table.object_store(), self._table.state.clone());
+        strict_cast: bool,
+    ) -> PyResult<String> {
+        let mut cmd = UpdateBuilder::new(self._table.object_store(), self._table.state.clone())
+            .with_safe_cast(strict_cast);
 
         if let Some(writer_props) = writer_properties {
             let mut properties = WriterProperties::builder();
@@ -316,7 +318,7 @@ impl RawDeltaTable {
 
         for (col_name, expression) in &updates {
             updates_mapping.insert(
-                Column::from_name(col_name),
+                Column::from_name(col_name.clone()),
                 Expression::String(expression.clone()),
             );
         }
