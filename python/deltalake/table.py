@@ -702,7 +702,14 @@ given filters.
 class TableMerger:
     """API for various table MERGE commands."""
 
-    def __init__(self, table: DeltaTable, source, source_alias, predicate, strict_cast):
+    def __init__(
+        self,
+        table: DeltaTable,
+        source: Union[pyarrow.Table, pyarrow.RecordBatch],
+        source_alias: str,
+        predicate: str,
+        strict_cast: bool = True,
+    ):
         self.table = table
         self.source = source
         self.source_alias = source_alias
