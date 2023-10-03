@@ -114,8 +114,11 @@ impl<'a> TransactionInfo<'a> {
         actions: &'a Vec<Action>,
         read_whole_table: bool,
     ) -> DeltaResult<Self> {
+        use datafusion::prelude::SessionContext;
+
+        let session = SessionContext::new();
         let read_predicates = read_predicates
-            .map(|pred| read_snapshot.parse_predicate_expression(pred))
+            .map(|pred| read_snapshot.parse_predicate_expression(pred, &session.state()))
             .transpose()?;
         Ok(Self {
             txn_id: "".into(),

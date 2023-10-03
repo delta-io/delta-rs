@@ -20,6 +20,7 @@
 use std::sync::Arc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
+use crate::delta_datafusion::expr::fmt_expr_to_sql;
 use crate::protocol::{Action, Add, Remove};
 use datafusion::execution::context::{SessionContext, SessionState};
 use datafusion::physical_expr::create_physical_expr;
@@ -264,7 +265,7 @@ async fn execute(
     // Do not make a commit when there are zero updates to the state
     if !actions.is_empty() {
         let operation = DeltaOperation::Delete {
-            predicate: Some(predicate.canonical_name()),
+            predicate: Some(fmt_expr_to_sql(&predicate)?),
         };
         version = commit(
             object_store.as_ref(),
@@ -299,7 +300,9 @@ impl std::future::IntoFuture for DeleteBuilder {
             let predicate = match this.predicate {
                 Some(predicate) => match predicate {
                     Expression::DataFusion(expr) => Some(expr),
-                    Expression::String(s) => Some(this.snapshot.parse_predicate_expression(s)?),
+                    Expression::String(s) => {
+                        Some(this.snapshot.parse_predicate_expression(s, &state)?)
+                    }
                 },
                 None => None,
             };
@@ -336,6 +339,7 @@ mod tests {
     use arrow::record_batch::RecordBatch;
     use datafusion::assert_batches_sorted_eq;
     use datafusion::prelude::*;
+    use serde_json::json;
     use std::sync::Arc;
 
     async fn setup_table(partitions: Option<Vec<&str>>) -> DeltaTable {
@@ -457,7 +461,7 @@ mod tests {
         assert_eq!(table.version(), 2);
         assert_eq!(table.get_file_uris().count(), 2);
 
-        let (table, metrics) = DeltaOps(table)
+        let (mut table, metrics) = DeltaOps(table)
             .delete()
             .with_predicate(col("value").eq(lit(1)))
             .await
@@ -470,6 +474,11 @@ mod tests {
         assert!(metrics.scan_time_ms > 0);
         assert_eq!(metrics.num_deleted_rows, Some(1));
         assert_eq!(metrics.num_copied_rows, Some(3));
+
+        let commit_info = table.history(None).await.unwrap();
+        let last_commit = &commit_info[commit_info.len() - 1];
+        let parameters = last_commit.operation_parameters.clone().unwrap();
+        assert_eq!(parameters["predicate"], json!("value = 1"));
 
         let expected = vec![
             "+----+-------+------------+",
