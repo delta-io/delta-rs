@@ -67,18 +67,18 @@ impl<'a> Display for SqlFormat<'a> {
             Expr::Case(case) => {
                 write!(f, "CASE ")?;
                 if let Some(e) = &case.expr {
-                    write!(f, "{} ", SqlFormat { expr: &e })?;
+                    write!(f, "{} ", SqlFormat { expr: e })?;
                 }
                 for (w, t) in &case.when_then_expr {
                     write!(
                         f,
                         "WHEN {} THEN {} ",
-                        SqlFormat { expr: &w },
-                        SqlFormat { expr: &t }
+                        SqlFormat { expr: w },
+                        SqlFormat { expr: t }
                     )?;
                 }
                 if let Some(e) = &case.else_expr {
-                    write!(f, "ELSE {} ", SqlFormat { expr: &e })?;
+                    write!(f, "ELSE {} ", SqlFormat { expr: e })?;
                 }
                 write!(f, "END")
             }
@@ -111,7 +111,7 @@ impl<'a> Display for SqlFormat<'a> {
                     write!(
                         f,
                         "{} NOT BETWEEN {} AND {}",
-                        SqlFormat { expr: expr },
+                        SqlFormat { expr },
                         SqlFormat { expr: low },
                         SqlFormat { expr: high }
                     )
@@ -119,7 +119,7 @@ impl<'a> Display for SqlFormat<'a> {
                     write!(
                         f,
                         "{} BETWEEN {} AND {}",
-                        SqlFormat { expr: expr },
+                        SqlFormat { expr },
                         SqlFormat { expr: low },
                         SqlFormat { expr: high }
                     )
@@ -192,7 +192,7 @@ pub fn fmt_expr_to_sql(expr: &Expr) -> Result<String, DeltaTableError> {
 fn fmt_function(f: &mut fmt::Formatter, fun: &str, distinct: bool, args: &[Expr]) -> fmt::Result {
     let args: Vec<String> = args
         .iter()
-        .map(|arg| format!("{}", SqlFormat { expr: &arg }))
+        .map(|arg| format!("{}", SqlFormat { expr: arg }))
         .collect();
 
     let distinct_str = match distinct {
@@ -354,7 +354,7 @@ mod test {
 
         // String expression that we output must be parsable for conflict resolution.
         let tests = vec![
-            simple!(col("value").eq(lit(3 as i64)), "value = 3".to_string()),
+            simple!(col("value").eq(lit(3_i64)), "value = 3".to_string()),
             simple!(col("active").is_true(), "active IS TRUE".to_string()),
             simple!(col("active"), "active".to_string()),
             simple!(col("active").eq(lit(true)), "active = true".to_string()),
@@ -374,11 +374,11 @@ mod test {
                 override_expected_expr: Some(col("_binary").eq(decode(lit("aa00ff"), lit("hex")))),
             },
             simple!(
-                col("value").between(lit(20 as i64), lit(30 as i64)),
+                col("value").between(lit(20_i64), lit(30_i64)),
                 "value BETWEEN 20 AND 30".to_string()
             ),
             simple!(
-                col("value").not_between(lit(20 as i64), lit(30 as i64)),
+                col("value").not_between(lit(20_i64), lit(30_i64)),
                 "value NOT BETWEEN 20 AND 30".to_string()
             ),
             simple!(
@@ -390,8 +390,8 @@ mod test {
                 "modified NOT LIKE 'abc%'".to_string()
             ),
             simple!(
-                (((col("value") * lit(2 as i64) + col("value2")) / lit(3 as i64)) - col("value"))
-                    .gt(lit(0 as i64)),
+                (((col("value") * lit(2_i64) + col("value2")) / lit(3_i64)) - col("value"))
+                    .gt(lit(0_i64)),
                 "(value * 2 + value2) / 3 - value > 0".to_string()
             ),
             simple!(
@@ -406,27 +406,27 @@ mod test {
             simple!(
                 col("modified")
                     .eq(lit("value"))
-                    .and(col("value").eq(lit(1 as i64)))
+                    .and(col("value").eq(lit(1_i64)))
                     .or(col("modified")
                         .eq(lit("value2"))
-                        .and(col("value").gt(lit(1 as i64)))),
+                        .and(col("value").gt(lit(1_i64)))),
                 "modified = 'value' AND value = 1 OR modified = 'value2' AND value > 1".to_string()
             ),
             simple!(
                 col("modified")
                     .eq(lit("value"))
-                    .or(col("value").eq(lit(1 as i64)))
+                    .or(col("value").eq(lit(1_i64)))
                     .and(
                         col("modified")
                             .eq(lit("value2"))
-                            .or(col("value").gt(lit(1 as i64))),
+                            .or(col("value").gt(lit(1_i64))),
                     ),
                 "(modified = 'value' OR value = 1) AND (modified = 'value2' OR value > 1)"
                     .to_string()
             ),
             // Validate functions are correctly parsed
             simple!(
-                substring(col("modified"), lit(0 as i64), lit(4 as i64)).eq(lit("2021")),
+                substring(col("modified"), lit(0_i64), lit(4_i64)).eq(lit("2021")),
                 "substr(modified, 0, 4) = '2021'".to_string()
             ),
         ];
