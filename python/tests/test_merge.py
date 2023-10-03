@@ -277,7 +277,7 @@ def test_merge_when_not_matched_by_source_update_wo_predicate(
         {
             "id": pa.array(["1", "2", "3", "4", "5"]),
             "price": pa.array([1, 2, 3, 4, 5], pa.int64()),
-            "sold": pa.array([10,10,10,10,10], pa.int32()),
+            "sold": pa.array([10, 10, 10, 10, 10], pa.int32()),
             "deleted": pa.array([False] * 5),
         }
     )
@@ -286,7 +286,8 @@ def test_merge_when_not_matched_by_source_update_wo_predicate(
 
     assert last_action["operation"] == "MERGE"
     assert result == expected
-    
+
+
 def test_merge_when_not_matched_by_source_update_with_predicate(
     tmp_path: pathlib.Path, sample_table: pa.Table
 ):
@@ -309,14 +310,14 @@ def test_merge_when_not_matched_by_source_update_with_predicate(
         updates={
             "sold": "10",
         },
-        predicate="price > 3"
+        predicate="price > 3",
     ).execute()
 
     expected = pa.table(
         {
             "id": pa.array(["1", "2", "3", "4", "5"]),
             "price": pa.array([1, 2, 3, 4, 5], pa.int64()),
-            "sold": pa.array([1,2,3,10,10], pa.int32()),
+            "sold": pa.array([1, 2, 3, 10, 10], pa.int32()),
             "deleted": pa.array([False] * 5),
         }
     )
@@ -325,8 +326,8 @@ def test_merge_when_not_matched_by_source_update_with_predicate(
 
     assert last_action["operation"] == "MERGE"
     assert result == expected
-    
-    
+
+
 def test_merge_when_not_matched_by_source_delete_with_predicate(
     tmp_path: pathlib.Path, sample_table: pa.Table
 ):
@@ -345,15 +346,20 @@ def test_merge_when_not_matched_by_source_delete_with_predicate(
 
     dt.merge(
         source=source_table, source_alias="source", predicate="id = source.id"
-    ).when_not_matched_by_source_delete(
-        predicate="price > 3"
-    ).execute()
+    ).when_not_matched_by_source_delete(predicate="price > 3").execute()
 
     expected = pa.table(
         {
             "id": pa.array(["1", "2", "3"]),
-            "price": pa.array([1, 2, 3,], pa.int64()),
-            "sold": pa.array([1,2,3], pa.int32()),
+            "price": pa.array(
+                [
+                    1,
+                    2,
+                    3,
+                ],
+                pa.int64(),
+            ),
+            "sold": pa.array([1, 2, 3], pa.int32()),
             "deleted": pa.array([False] * 3),
         }
     )
@@ -362,5 +368,6 @@ def test_merge_when_not_matched_by_source_delete_with_predicate(
 
     assert last_action["operation"] == "MERGE"
     assert result == expected
-    
+
+
 ## Add when_not_matched_by_source_delete_wo_predicate ?

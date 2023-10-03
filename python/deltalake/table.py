@@ -753,7 +753,7 @@ class TableMerger:
         return self
 
     def when_matched_update(
-        self, updates: dict[str, str], predicate: Optional[str] = None
+        self, updates: Dict[str, str], predicate: Optional[str] = None
     ) -> "TableMerger":
         """Update a matched table row based on the rules defined by ``updates``.
         If a ``predicate`` is specified, then it must evaluate to true for the row to be updated.
@@ -865,7 +865,7 @@ class TableMerger:
         return self
 
     def when_not_matched_insert(
-        self, updates: dict[str, str], predicate: Optional[str] = None
+        self, updates: Dict[str, str], predicate: Optional[str] = None
     ) -> "TableMerger":
         """Insert a new row to the target table based on the rules defined by ``updates``. If a
         ``predicate`` is specified, then it must evaluate to true for the new row to be inserted.
@@ -934,7 +934,7 @@ class TableMerger:
         return self
 
     def when_not_matched_by_source_update(
-        self, updates: dict[str, str], predicate: Optional[str] = None
+        self, updates: Dict[str, str], predicate: Optional[str] = None
     ) -> "TableMerger":
         """Update a target row that has no matches in the source based on the rules defined by ``updates``.
         If a ``predicate`` is specified, then it must evaluate to true for the row to be updated.
