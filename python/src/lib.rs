@@ -296,20 +296,20 @@ impl RawDeltaTable {
             let max_row_group_size = writer_props.get("max_row_group_size");
 
             if let Some(data_page_size) = data_page_size_limit {
-                properties = properties.set_data_page_size_limit(data_page_size.clone());
+                properties = properties.set_data_page_size_limit(*data_page_size);
             }
             if let Some(dictionary_page_size) = dictionary_page_size_limit {
                 properties =
-                    properties.set_dictionary_page_size_limit(dictionary_page_size.clone());
+                    properties.set_dictionary_page_size_limit(*dictionary_page_size);
             }
             if let Some(data_page_row_count) = data_page_row_count_limit {
-                properties = properties.set_data_page_row_count_limit(data_page_row_count.clone());
+                properties = properties.set_data_page_row_count_limit(*data_page_row_count);
             }
             if let Some(batch_size) = write_batch_size {
-                properties = properties.set_write_batch_size(batch_size.clone());
+                properties = properties.set_write_batch_size(*batch_size);
             }
             if let Some(row_group_size) = max_row_group_size {
-                properties = properties.set_max_row_group_size(row_group_size.clone());
+                properties = properties.set_max_row_group_size(*row_group_size);
             }
             cmd = cmd.with_writer_properties(properties.build());
         }
