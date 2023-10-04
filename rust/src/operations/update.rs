@@ -40,8 +40,8 @@ use datafusion_physical_expr::{
 };
 use futures::future::BoxFuture;
 use parquet::file::properties::WriterProperties;
-use serde_json::{Map, Value};
 use serde::Serialize;
+use serde_json::{Map, Value};
 
 use crate::{
     delta_datafusion::{
