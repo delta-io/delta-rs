@@ -1,3 +1,5 @@
+#![cfg(all(feature = "arrow", feature = "parquet"))]
+
 use std::sync::Arc;
 
 use arrow_array::{types::UInt8Type, Array, DictionaryArray, RecordBatch, StringArray};
