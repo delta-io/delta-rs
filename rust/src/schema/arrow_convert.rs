@@ -1136,6 +1136,37 @@ mod tests {
     }
 
     #[test]
+    fn try_from_arrow_with_metadata_roundtrip_complex() {
+        let arrow_schema = ArrowSchema::new(vec![ArrowField::new_list(
+            "list",
+            ArrowField::new_struct(
+                "item",
+                vec![
+                    ArrowField::new_dictionary(
+                        "dict",
+                        ArrowDataType::UInt16,
+                        ArrowDataType::Utf8,
+                        false,
+                    ),
+                    ArrowField::new_list(
+                        "list2",
+                        ArrowField::new("item", ArrowDataType::Int32, false),
+                        false,
+                    ),
+                ],
+                true,
+            ),
+            true,
+        )]);
+
+        let delta_schema = &schema::Schema::try_from_arrow_with_metadata(&arrow_schema).unwrap();
+
+        let roundtrip: ArrowSchema = delta_schema.try_into().unwrap();
+
+        assert_eq!(roundtrip, arrow_schema);
+    }
+
+    #[test]
     fn try_from_arrow_with_metadata_adds_metadata() {
         let field = ArrowField::new(
             "dict",
