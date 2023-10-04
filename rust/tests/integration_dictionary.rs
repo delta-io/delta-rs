@@ -2,7 +2,10 @@
 
 use std::sync::Arc;
 
-use arrow_array::{types::{UInt8Type, UInt16Type}, Array, DictionaryArray, RecordBatch, StringArray, UInt16Array};
+use arrow_array::{
+    types::{UInt16Type, UInt8Type},
+    Array, DictionaryArray, RecordBatch, StringArray, UInt16Array,
+};
 use arrow_schema::{DataType as ArrowDataType, Field as ArrowField, Schema as ArrowSchema};
 use deltalake::DeltaOps;
 use futures::StreamExt;
@@ -76,7 +79,11 @@ fn batch() -> RecordBatch {
     RecordBatch::try_from_iter(vec![("id", id_array), ("str", str_array)]).unwrap()
 }
 
-fn dict_field(name: impl Into<String>, key_type: ArrowDataType, value_type: ArrowDataType) -> ArrowField {
+fn dict_field(
+    name: impl Into<String>,
+    key_type: ArrowDataType,
+    value_type: ArrowDataType,
+) -> ArrowField {
     ArrowField::new(
         name,
         ArrowDataType::Dictionary(Box::new(key_type), Box::new(value_type)),
