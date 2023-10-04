@@ -218,17 +218,15 @@ impl schema::Schema {
 impl TryFrom<&ArrowField> for schema::SchemaField {
     type Error = ArrowError;
     fn try_from(arrow_field: &ArrowField) -> Result<Self, ArrowError> {
-        let metadata: HashMap<String, serde_json::Value> = arrow_field
-            .metadata()
-            .iter()
-            .map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone())))
-            .collect();
-
         Ok(schema::SchemaField::new(
             arrow_field.name().clone(),
             arrow_field.data_type().try_into()?,
             arrow_field.is_nullable(),
-            metadata,
+            arrow_field
+                .metadata()
+                .iter()
+                .map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone())))
+                .collect(),
         ))
     }
 }
