@@ -202,30 +202,49 @@ impl TryFrom<ArrowSchemaRef> for schema::Schema {
     }
 }
 
+impl schema::Schema {
+    /// Creates Delta Lake schema from Arrow schema encoding Arrow type information in Delta field
+    /// metadata
+    pub fn try_from_arrow_with_metadata(arrow_schema: &ArrowSchema) -> Result<Self, ArrowError> {
+        let new_fields: Result<Vec<schema::SchemaField>, _> = arrow_schema
+            .fields()
+            .iter()
+            .map(|field| schema::SchemaField::try_from_arrow_with_metadata(field))
+            .collect();
+        Ok(schema::Schema::new(new_fields?))
+    }
+}
+
 impl TryFrom<&ArrowField> for schema::SchemaField {
     type Error = ArrowError;
     fn try_from(arrow_field: &ArrowField) -> Result<Self, ArrowError> {
-        let arrow_type = arrow_field.data_type();
-        let arrow_type_metadata = serde_json::to_value(arrow_type).map_err(|e| {
-            ArrowError::JsonError(format!("Could not serialize Arrow type: {:?}", e))
-        })?;
-
         let metadata: HashMap<String, serde_json::Value> = arrow_field
             .metadata()
             .iter()
             .map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone())))
-            .chain(std::iter::once((
-                ARROW_TYPE_METADATA_KEY.to_string(),
-                arrow_type_metadata,
-            )))
             .collect();
 
         Ok(schema::SchemaField::new(
             arrow_field.name().clone(),
-            arrow_type.try_into()?,
+            arrow_field.data_type().try_into()?,
             arrow_field.is_nullable(),
             metadata,
         ))
+    }
+}
+
+impl schema::SchemaField {
+    fn try_from_arrow_with_metadata(arrow_field: &ArrowField) -> Result<Self, ArrowError> {
+        let mut delta_field = schema::SchemaField::try_from(arrow_field)?;
+        let arrow_type = arrow_field.data_type();
+        let arrow_type_metadata = serde_json::to_value(arrow_type).map_err(|e| {
+            ArrowError::JsonError(format!("Could not serialize Arrow type: {:?}", e))
+        })?;
+        delta_field
+            .metadata
+            .insert(ARROW_TYPE_METADATA_KEY.to_string(), arrow_type_metadata);
+
+        Ok(delta_field)
     }
 }
 
@@ -1119,16 +1138,17 @@ mod tests {
     }
 
     #[test]
-    fn tryfrom_arrowfield_adds_metadata() {
-        let field = &ArrowField::new(
+    fn try_from_arrow_with_metadata_adds_metadata() {
+        let field = ArrowField::new(
             "dict",
             ArrowDataType::Dictionary(Box::new(ArrowDataType::Int8), Box::new(ArrowDataType::Utf8)),
             false,
         );
+        let expected_arrow_type = field.data_type().clone();
+        let arrow_schema = ArrowSchema::new(vec![field]);
+        let delta_schema = schema::Schema::try_from_arrow_with_metadata(&arrow_schema).unwrap();
 
-        let converted: schema::SchemaField = field.try_into().unwrap();
-
-        let arrow_type_metadata = converted
+        let arrow_type_metadata = delta_schema.get_fields()[0]
             .get_metadata()
             .iter()
             .find(|(k, _)| *k == ARROW_TYPE_METADATA_KEY);
@@ -1137,7 +1157,7 @@ mod tests {
         let actual_arrow_type =
             serde_json::from_value::<ArrowDataType>(arrow_type_metadata.clone()).unwrap();
 
-        assert_eq!(actual_arrow_type, field.data_type().clone());
+        assert_eq!(actual_arrow_type, expected_arrow_type);
     }
 
     #[test]
