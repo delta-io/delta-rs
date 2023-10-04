@@ -18,6 +18,7 @@ def test_delete_no_predicates(existing_table: DeltaTable):
 
     dataset = existing_table.to_pyarrow_dataset()
     assert dataset.count_rows() == 0
+    assert len(existing_table.files()) == 0
 
 
 def test_delete_a_partition(tmp_path: pathlib.Path, sample_data: pa.Table):
