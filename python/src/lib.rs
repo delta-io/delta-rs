@@ -299,8 +299,7 @@ impl RawDeltaTable {
                 properties = properties.set_data_page_size_limit(*data_page_size);
             }
             if let Some(dictionary_page_size) = dictionary_page_size_limit {
-                properties =
-                    properties.set_dictionary_page_size_limit(*dictionary_page_size);
+                properties = properties.set_dictionary_page_size_limit(*dictionary_page_size);
             }
             if let Some(data_page_row_count) = data_page_row_count_limit {
                 properties = properties.set_data_page_row_count_limit(*data_page_row_count);
