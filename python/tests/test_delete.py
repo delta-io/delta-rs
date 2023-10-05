@@ -44,8 +44,9 @@ def test_delete_a_partition(tmp_path: pathlib.Path, sample_data: pa.Table):
 def test_delete_some_rows(existing_table: DeltaTable):
     old_version = existing_table.version()
 
-    expr = ~pc.field("utf8").isin(["0", "1"])
-    expected_table = existing_table.to_pyarrow_table().filter(expr)
+    existing = existing_table.to_pyarrow_table()
+    mask = pc.invert(pc.is_in(existing["utf8"], pa.array(["0", "1"])))
+    expected_table = existing.filter(mask)
 
     existing_table.delete(predicate="utf8 in ('0', '1')")
 
