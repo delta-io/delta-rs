@@ -31,6 +31,7 @@ use datafusion_common::scalar::ScalarValue;
 use datafusion_common::DFSchema;
 use futures::future::BoxFuture;
 use parquet::file::properties::WriterProperties;
+use serde::Serialize;
 use serde_json::Map;
 use serde_json::Value;
 
@@ -63,7 +64,7 @@ pub struct DeleteBuilder {
     app_metadata: Option<Map<String, serde_json::Value>>,
 }
 
-#[derive(Default, Debug)]
+#[derive(Default, Debug, Serialize)]
 /// Metrics for the Delete Operation
 pub struct DeleteMetrics {
     /// Number of files added
@@ -116,7 +117,7 @@ impl DeleteBuilder {
         self
     }
 
-    /// Writer properties passed to parquet writer for when fiiles are rewritten
+    /// Writer properties passed to parquet writer for when files are rewritten
     pub fn with_writer_properties(mut self, writer_properties: WriterProperties) -> Self {
         self.writer_properties = Some(writer_properties);
         self
