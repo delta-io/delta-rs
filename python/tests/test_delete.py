@@ -27,8 +27,8 @@ def test_delete_a_partition(tmp_path: pathlib.Path, sample_data: pa.Table):
     dt = DeltaTable(tmp_path)
     old_version = dt.version()
 
-    mask = pc.equal(sample_data['bool'], False)
-    expected_table = sample_data.filter(make)
+    mask = pc.equal(sample_data["bool"], False)
+    expected_table = sample_data.filter(mask)
 
     dt.delete(predicate="bool = true")
 
