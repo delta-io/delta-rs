@@ -292,7 +292,7 @@ impl std::future::IntoFuture for CreateBuilder {
         Box::pin(async move {
             let mode = this.mode.clone();
             let (mut table, actions, operation) = this.into_table_and_actions()?;
-            if table.object_store().is_delta_table_location().await? {
+            let table_state = if table.object_store().is_delta_table_location().await? {
                 match mode {
                     SaveMode::ErrorIfExists => return Err(CreateError::TableAlreadyExists.into()),
                     SaveMode::Append => return Err(CreateError::AppendNotAllowed.into()),
@@ -301,15 +301,19 @@ impl std::future::IntoFuture for CreateBuilder {
                         return Ok(table);
                     }
                     SaveMode::Overwrite => {
-                        todo!("Overwriting on create not yet implemented. Use 'write' operation instead.")
+                        table.load().await?;
+                        &table.state
                     }
                 }
-            }
+            } else {
+                &table.state
+            };
+
             let version = commit(
                 table.object_store().as_ref(),
                 &actions,
                 operation,
-                &table.state,
+                table_state,
                 None,
             )
             .await?;
@@ -456,12 +460,12 @@ mod tests {
         assert_eq!(table.get_metadata().unwrap().id, first_id);
 
         // Check table is overwritten
-        // let table = CreateBuilder::new()
-        //     .with_object_store(object_store.clone())
-        //     .with_columns(schema.get_fields().clone())
-        //     .with_save_mode(SaveMode::Overwrite)
-        //     .await
-        //     .unwrap();
-        // assert_ne!(table.get_metadata().unwrap().id, first_id)
+        let table = CreateBuilder::new()
+            .with_object_store(object_store.clone())
+            .with_columns(schema.get_fields().clone())
+            .with_save_mode(SaveMode::Overwrite)
+            .await
+            .unwrap();
+        assert_ne!(table.get_metadata().unwrap().id, first_id)
     }
 }
