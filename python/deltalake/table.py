@@ -465,7 +465,7 @@ given filters.
     ) -> Dict[str, Any]:
         """UPDATE records in the Delta Table that matches an optional predicate.
 
-        :param updates: what values to update
+        :param updates: a mapping of column name to update SQL expression.
         :param predicate: a logical expression, defaults to None
         :writer_properties: Pass writer properties to the Rust parquet writer, see options https://arrow.apache.org/rust/parquet/file/properties/struct.WriterProperties.html
         :strict_cast: specify if data types need to be casted strictly or not :default = True
