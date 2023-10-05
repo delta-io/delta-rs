@@ -484,6 +484,53 @@ the data passed to it differs from the existing table's schema. If you wish to
 alter the schema as part of an overwrite pass in ``overwrite_schema=True``.
 
 
+Updating Delta Tables
+---------------------
+
+.. py:currentmodule:: deltalake.table
+
+Row values in an existing delta table can be updated with the :meth:`DeltaTable.update` command. A update
+dictionary has to be passed, where they key is the column you wish to update, and the value is a
+Expression in string format.
+
+Update all the rows for the column "deleted" to the value True.
+
+.. code-block:: python
+
+    >>> from deltalake import write_deltalake, DeltaTable
+    >>> df = pd.DataFrame({'x': [1, 2, 3], 'deleted': [False, False, False]})
+    >>> write_deltalake('path/to/table', df)
+    >>> dt = DeltaTable('path/to/table')
+    >>> dt.update({"deleted": "True"})
+    >>> dt.to_pandas()
+    >>>     x       deleted
+    0       1       True
+    1       2       True
+    2       3       True
+.. note::
+    :meth:`DeltaTable.update` predicates and updates are all in string format. The predicates and expressions,
+    are parsed into Apache Datafusion expressions, for the available expressions check the 
+    Datafusion docs https://arrow.apache.org/datafusion/user-guide/expressions.html.
+
+Update all the rows for the column "deleted" to the value True where x = 3
+
+.. code-block:: python
+
+    >>> from deltalake import write_deltalake, DeltaTable
+    >>> df = pd.DataFrame({'x': [1, 2, 3], 'deleted': [False, False, False]})
+    >>> write_deltalake('path/to/table', df)
+    >>> dt = DeltaTable('path/to/table')
+    >>> dt.update(
+    ...    updates={"deleted": "True"},
+    ...    predicate= 'x = 3',
+    ... )
+    >>> dt.to_pandas()
+    >>>     x       deleted
+    0       1       False
+    1       2       False
+    2       3       True
+
+
 Overwriting a partition
 ~~~~~~~~~~~~~~~~~~~~~~~
 
