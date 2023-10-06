@@ -84,6 +84,7 @@ compile_error!(
 
 pub mod data_catalog;
 pub mod errors;
+pub mod logstore;
 pub mod operations;
 pub mod protocol;
 pub mod schema;
