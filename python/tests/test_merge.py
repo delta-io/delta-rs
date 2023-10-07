@@ -22,7 +22,7 @@ def test_merge_when_matched_delete_wo_predicate(
     )
 
     dt.merge(
-        source=source_table, source_alias="source", predicate="id = source.id"
+        source=source_table, predicate="t.id = s.id", source_alias="s", target_alias='t',
     ).when_matched_delete().execute()
 
     nrows = 4
@@ -34,7 +34,7 @@ def test_merge_when_matched_delete_wo_predicate(
             "deleted": pa.array([False] * nrows),
         }
     )
-    result = dt.to_pyarrow_table()
+    result = dt.to_pyarrow_table().sort_by([('id','ascending')])
     last_action = dt.history(1)[0]
 
     assert last_action["operation"] == "MERGE"
@@ -58,8 +58,8 @@ def test_merge_when_matched_delete_with_predicate(
     )
 
     dt.merge(
-        source=source_table, source_alias="source", predicate="id = source.id"
-    ).when_matched_delete("source.deleted = True").execute()
+        source=source_table, predicate="t.id = s.id", source_alias="s", target_alias='t',
+    ).when_matched_delete("s.deleted = True").execute()
 
     nrows = 4
     expected = pa.table(
@@ -70,7 +70,7 @@ def test_merge_when_matched_delete_with_predicate(
             "deleted": pa.array([False] * nrows),
         }
     )
-    result = dt.to_pyarrow_table()
+    result = dt.to_pyarrow_table().sort_by([('id','ascending')])
     last_action = dt.history(1)[0]
 
     assert last_action["operation"] == "MERGE"
@@ -94,18 +94,18 @@ def test_merge_when_matched_update_wo_predicate(
     )
 
     dt.merge(
-        source=source_table, source_alias="source", predicate="id = source.id"
-    ).when_matched_update({"price": "source.price", "sold": "source.sold"}).execute()
+        source=source_table, predicate="t.id = s.id", source_alias="s", target_alias='t',
+    ).when_matched_update({"price": "s.price", "sold": "s.sold"}).execute()
 
     expected = pa.table(
         {
             "id": pa.array(["1", "2", "3", "4", "5"]),
-            "price": pa.array([1, 2, 3, 10, 100], pa.int64()),
-            "sold": pa.array([1, 2, 3, 10, 20], pa.int32()),
+            "price": pa.array([0, 1, 2, 10, 100], pa.int64()),
+            "sold": pa.array([0, 1, 2, 10, 20], pa.int32()),
             "deleted": pa.array([False] * 5),
         }
     )
-    result = dt.to_pyarrow_table()
+    result = dt.to_pyarrow_table().sort_by([('id','ascending')])
     last_action = dt.history(1)[0]
 
     assert last_action["operation"] == "MERGE"
@@ -129,7 +129,7 @@ def test_merge_when_matched_update_with_predicate(
     )
 
     dt.merge(
-        source=source_table, source_alias="source", predicate="id = source.id"
+        source=source_table,  source_alias="source", target_alias='target', predicate="id = source.id",
     ).when_matched_update(
         updates={"price": "source.price", "sold": "source.sold"},
         predicate="source.deleted = False",
@@ -138,12 +138,12 @@ def test_merge_when_matched_update_with_predicate(
     expected = pa.table(
         {
             "id": pa.array(["1", "2", "3", "4", "5"]),
-            "price": pa.array([1, 2, 3, 10, 5], pa.int64()),
-            "sold": pa.array([1, 2, 3, 10, 5], pa.int32()),
+            "price": pa.array([0, 1, 2, 10, 4], pa.int64()),
+            "sold": pa.array([0, 1, 2, 10, 4], pa.int32()),
             "deleted": pa.array([False] * 5),
         }
     )
-    result = dt.to_pyarrow_table()
+    result = dt.to_pyarrow_table().sort_by([('id','ascending')])
     last_action = dt.history(1)[0]
 
     assert last_action["operation"] == "MERGE"
@@ -167,7 +167,7 @@ def test_merge_when_not_matched_insert_wo_predicate(
     )
 
     dt.merge(
-        source=source_table, source_alias="source", predicate="id = source.id"
+        source=source_table, source_alias="source", target_alias='target', predicate="id = source.id"
     ).when_not_matched_insert(
         updates={
             "id": "source.id",
@@ -180,12 +180,12 @@ def test_merge_when_not_matched_insert_wo_predicate(
     expected = pa.table(
         {
             "id": pa.array(["1", "2", "3", "4", "5", "10"]),
-            "price": pa.array([1, 2, 3, 4, 5, 100], pa.int64()),
-            "sold": pa.array([1, 2, 3, 4, 5, 20], pa.int32()),
+            "price": pa.array([0, 1, 2, 3, 4, 100], pa.int64()),
+            "sold": pa.array([0, 1, 2, 3, 4, 20], pa.int32()),
             "deleted": pa.array([False] * 6),
         }
     )
-    result = dt.to_pyarrow_table()
+    result = dt.to_pyarrow_table().sort_by([('id','ascending')])
     last_action = dt.history(1)[0]
 
     assert last_action["operation"] == "MERGE"
@@ -217,18 +217,18 @@ def test_merge_when_not_matched_insert_with_predicate(
             "sold": "source.sold",
             "deleted": "False",
         },
-        predicate="source.price < 50",
+        predicate="source.price < bigint'50'",
     ).execute()
 
     expected = pa.table(
         {
             "id": pa.array(["1", "2", "3", "4", "5", "6"]),
-            "price": pa.array([1, 2, 3, 4, 5, 10], pa.int64()),
-            "sold": pa.array([1, 2, 3, 4, 5, 10], pa.int32()),
+            "price": pa.array([0, 1, 2, 3, 4, 10], pa.int64()),
+            "sold": pa.array([0, 1, 2, 3, 4, 10], pa.int32()),
             "deleted": pa.array([False] * 6),
         }
     )
-    result = dt.to_pyarrow_table()
+    result = dt.to_pyarrow_table().sort_by([('id','ascending')])
     last_action = dt.history(1)[0]
 
     assert last_action["operation"] == "MERGE"
@@ -252,22 +252,22 @@ def test_merge_when_not_matched_by_source_update_wo_predicate(
     )
 
     dt.merge(
-        source=source_table, source_alias="source", predicate="id = source.id"
+        source=source_table, source_alias="source", target_alias='target', predicate="id = source.id"
     ).when_not_matched_by_source_update(
         updates={
-            "sold": "10",
+            "sold": "int'10'",
         }
     ).execute()
 
     expected = pa.table(
         {
             "id": pa.array(["1", "2", "3", "4", "5"]),
-            "price": pa.array([1, 2, 3, 4, 5], pa.int64()),
+            "price": pa.array([0, 1, 2, 3, 4], pa.int64()),
             "sold": pa.array([10, 10, 10, 10, 10], pa.int32()),
             "deleted": pa.array([False] * 5),
         }
     )
-    result = dt.to_pyarrow_table()
+    result = dt.to_pyarrow_table().sort_by([('id','ascending')])
     last_action = dt.history(1)[0]
 
     assert last_action["operation"] == "MERGE"
@@ -291,12 +291,12 @@ def test_merge_when_not_matched_by_source_update_with_predicate(
     )
 
     dt.merge(
-        source=source_table, source_alias="source", predicate="id = source.id"
+        source=source_table, source_alias="source", target_alias='target', predicate="id = source.id"
     ).when_not_matched_by_source_update(
         updates={
-            "sold": "10",
+            "sold": "int'10'",
         },
-        predicate="price > 3",
+        predicate="price > bigint'3'",
     ).execute()
 
     expected = pa.table(
@@ -307,7 +307,7 @@ def test_merge_when_not_matched_by_source_update_with_predicate(
             "deleted": pa.array([False] * 5),
         }
     )
-    result = dt.to_pyarrow_table()
+    result = dt.to_pyarrow_table().sort_by([('id','ascending')])
     last_action = dt.history(1)[0]
 
     assert last_action["operation"] == "MERGE"
@@ -331,29 +331,30 @@ def test_merge_when_not_matched_by_source_delete_with_predicate(
     )
 
     dt.merge(
-        source=source_table, source_alias="source", predicate="id = source.id"
-    ).when_not_matched_by_source_delete(predicate="price > 3").execute()
+        source=source_table, source_alias="source", target_alias='target', predicate="id = source.id"
+    ).when_not_matched_by_source_delete(predicate="price > bigint'3'").execute()
 
     expected = pa.table(
         {
-            "id": pa.array(["1", "2", "3"]),
+            "id": pa.array(["1", "2", "3", "4"]),
             "price": pa.array(
                 [
+                    0,
                     1,
                     2,
-                    3,
+                    3
                 ],
                 pa.int64(),
             ),
-            "sold": pa.array([1, 2, 3], pa.int32()),
-            "deleted": pa.array([False] * 3),
+            "sold": pa.array([0, 1, 2, 3], pa.int32()),
+            "deleted": pa.array([False] * 4),
         }
     )
-    result = dt.to_pyarrow_table()
+    result = dt.to_pyarrow_table().sort_by([('id','ascending')])
     last_action = dt.history(1)[0]
 
     assert last_action["operation"] == "MERGE"
     assert result == expected
 
 
-## Add when_not_matched_by_source_delete_wo_predicate ?
+# ## Add when_not_matched_by_source_delete_wo_predicate ?

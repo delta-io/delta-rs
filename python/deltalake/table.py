@@ -465,8 +465,9 @@ given filters.
     def merge(
         self,
         source: Union[pyarrow.Table, pyarrow.RecordBatch],
-        source_alias: str,
         predicate: str,
+        source_alias: str = 'source',
+        target_alias: str = 'target',
         strict_cast: bool = True,
     ) -> "TableMerger":
         """Pass the source data which you want to merge on the target delta table, providing a
@@ -475,8 +476,9 @@ given filters.
 
         Args:
             source (pyarrow.Table | pyarrow.RecordBatch): source data
-            source_alias (str): Alias for the source dataframe
             predicate (str): SQL like predicate on how to merge
+            source_alias (str): Alias for the source table
+            target_alias (str): Alias for the target table
             strict_cast (bool): specify if data types need to be casted strictly or not :default = False
 
 
@@ -491,6 +493,7 @@ given filters.
             source=source,
             predicate=predicate,
             source_alias=source_alias,
+            target_alias=target_alias,
             strict_cast=not strict_cast,
         )
 
@@ -720,14 +723,16 @@ class TableMerger:
         self,
         table: DeltaTable,
         source: Union[pyarrow.Table, pyarrow.RecordBatch],
-        source_alias: str,
         predicate: str,
+        source_alias: str,
+        target_alias: str,
         strict_cast: bool = True,
     ):
         self.table = table
         self.source = source
-        self.source_alias = source_alias
         self.predicate = predicate
+        self.source_alias = source_alias
+        self.target_alias = target_alias
         self.strict_cast = strict_cast
         self.writer_properties: Optional[Dict[str, Optional[int]]] = None
         self.matched_update_updates: Optional[Dict[str, str]] = None
@@ -794,7 +799,7 @@ class TableMerger:
         >>> import pyarrow as pa
         >>> data = pa.table({"x": [1, 2, 3], "y": [4, 5, 6]})
         >>> dt = DeltaTable("tmp")
-        >>> dt.merge(source=data, source_alias='source', predicate='x = source.x') \
+        >>> dt.merge(source=data, predicate='target.x = source.x', source_alias='source', target_alias='target') \
         ...     .when_matched_update(
         ...         updates = {
         ...             "x": "source.x",
@@ -828,7 +833,7 @@ class TableMerger:
         >>> import pyarrow as pa
         >>> data = pa.table({"x": [1, 2, 3], "y": [4, 5, 6]})
         >>> dt = DeltaTable("tmp")
-        >>> dt.merge(source=data, source_alias='source', predicate='x = source.x') \
+        >>> dt.merge(source=data, predicate='target.x = source.x', source_alias='source', target_alias='target')  \
         ...     .when_matched_update(
         ...         updates = {
         ...             "x": "source.x",
@@ -864,7 +869,7 @@ class TableMerger:
         >>> import pyarrow as pa
         >>> data = pa.table({"x": [1, 2, 3], "y": [4, 5, 6]})
         >>> dt = DeltaTable("tmp")
-        >>> dt.merge(source=data, source_alias='source', predicate='x = source.x') \
+        >>> dt.merge(source=data, predicate='target.x = source.x', source_alias='source', target_alias='target') \
         ...     .when_matched_delete(predicate = "source.deleted = true")
         ...     .execute()
         
@@ -874,7 +879,7 @@ class TableMerger:
         >>> import pyarrow as pa
         >>> data = pa.table({"x": [1, 2, 3], "y": [4, 5, 6]})
         >>> dt = DeltaTable("tmp")
-        >>> dt.merge(source=data, source_alias='source', predicate='x = source.x') \
+        >>> dt.merge(source=data, predicate='target.x = source.x', source_alias='source', target_alias='target')  \
         ...     .when_matched_delete()
         ...     .execute()
         """
@@ -904,7 +909,7 @@ class TableMerger:
         >>> import pyarrow as pa
         >>> data = pa.table({"x": [1, 2, 3], "y": [4, 5, 6]})
         >>> dt = DeltaTable("tmp")
-        >>> dt.merge(source=data, source_alias='source', predicate='x = source.x') \
+        >>> dt.merge(source=data, predicate='target.x = source.x', source_alias='source', target_alias='target')  \
         ...     .when_not_matched_insert(
         ...         updates = {
         ...             "x": "source.x",
@@ -942,7 +947,7 @@ class TableMerger:
         >>> import pyarrow as pa
         >>> data = pa.table({"x": [1, 2, 3], "y": [4, 5, 6]})
         >>> dt = DeltaTable("tmp")
-        >>> dt.merge(source=data, source_alias='source', predicate='x = source.x') \
+        >>> dt.merge(source=data, predicate='target.x = source.x', source_alias='source', target_alias='target')  \
         ...     .when_not_matched_insert_all().execute()
         """
         if self.not_matched_insert_updates is not None:
@@ -971,7 +976,7 @@ class TableMerger:
         >>> import pyarrow as pa
         >>> data = pa.table({"x": [1, 2, 3], "y": [4, 5, 6]})
         >>> dt = DeltaTable("tmp")
-        >>> dt.merge(source=data, source_alias='source', predicate='x = source.x') \
+        >>> dt.merge(source=data, predicate='target.x = source.x', source_alias='source', target_alias='target') \
         ...     .when_not_matched_by_source_update(
         ...         predicate = "y > 3"
         ...         updates = {
@@ -1013,6 +1018,7 @@ class TableMerger:
             source=self.source,
             predicate=self.predicate,
             source_alias=self.source_alias,
+            target_alias=self.target_alias,
             safe_cast=self.strict_cast,
             writer_properties=self.writer_properties,
             matched_update_updates=self.matched_update_updates,
