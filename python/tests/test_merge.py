@@ -129,7 +129,7 @@ def test_merge_when_matched_update_with_predicate(
     )
 
     dt.merge(
-        source=source_table,  source_alias="source", target_alias='target', predicate="id = source.id",
+        source=source_table,  source_alias="source", target_alias='target', predicate="target.id = source.id",
     ).when_matched_update(
         updates={"price": "source.price", "sold": "source.sold"},
         predicate="source.deleted = False",
@@ -159,7 +159,7 @@ def test_merge_when_not_matched_insert_wo_predicate(
 
     source_table = pa.table(
         {
-            "id": pa.array(["4", "10"]),
+            "id": pa.array(["4", "6"]),
             "price": pa.array([10, 100], pa.int64()),
             "sold": pa.array([10, 20], pa.int32()),
             "deleted": pa.array([False, False]),
@@ -167,7 +167,7 @@ def test_merge_when_not_matched_insert_wo_predicate(
     )
 
     dt.merge(
-        source=source_table, source_alias="source", target_alias='target', predicate="id = source.id"
+        source=source_table, source_alias="source", target_alias='target', predicate="target.id = source.id"
     ).when_not_matched_insert(
         updates={
             "id": "source.id",
@@ -179,7 +179,7 @@ def test_merge_when_not_matched_insert_wo_predicate(
 
     expected = pa.table(
         {
-            "id": pa.array(["1", "2", "3", "4", "5", "10"]),
+            "id": pa.array(["1", "2", "3", "4", "5", "6"]),
             "price": pa.array([0, 1, 2, 3, 4, 100], pa.int64()),
             "sold": pa.array([0, 1, 2, 3, 4, 20], pa.int32()),
             "deleted": pa.array([False] * 6),
@@ -209,7 +209,7 @@ def test_merge_when_not_matched_insert_with_predicate(
     )
 
     dt.merge(
-        source=source_table, source_alias="source", predicate="id = source.id"
+        source=source_table, source_alias="source", target_alias='target', predicate="target.id = source.id"
     ).when_not_matched_insert(
         updates={
             "id": "source.id",
@@ -252,7 +252,7 @@ def test_merge_when_not_matched_by_source_update_wo_predicate(
     )
 
     dt.merge(
-        source=source_table, source_alias="source", target_alias='target', predicate="id = source.id"
+        source=source_table, source_alias="source", target_alias='target', predicate="target.id = source.id"
     ).when_not_matched_by_source_update(
         updates={
             "sold": "int'10'",
@@ -291,19 +291,19 @@ def test_merge_when_not_matched_by_source_update_with_predicate(
     )
 
     dt.merge(
-        source=source_table, source_alias="source", target_alias='target', predicate="id = source.id"
+        source=source_table, source_alias="source", target_alias='target', predicate="target.id = source.id"
     ).when_not_matched_by_source_update(
         updates={
             "sold": "int'10'",
         },
-        predicate="price > bigint'3'",
+        predicate="target.price > bigint'3'",
     ).execute()
 
     expected = pa.table(
         {
             "id": pa.array(["1", "2", "3", "4", "5"]),
-            "price": pa.array([1, 2, 3, 4, 5], pa.int64()),
-            "sold": pa.array([1, 2, 3, 10, 10], pa.int32()),
+            "price": pa.array([0, 1, 2, 3, 4], pa.int64()),
+            "sold": pa.array([0, 1, 2, 3, 10], pa.int32()),
             "deleted": pa.array([False] * 5),
         }
     )
@@ -331,8 +331,8 @@ def test_merge_when_not_matched_by_source_delete_with_predicate(
     )
 
     dt.merge(
-        source=source_table, source_alias="source", target_alias='target', predicate="id = source.id"
-    ).when_not_matched_by_source_delete(predicate="price > bigint'3'").execute()
+        source=source_table, source_alias="source", target_alias='target', predicate="target.id = source.id"
+    ).when_not_matched_by_source_delete(predicate="target.price > bigint'3'").execute()
 
     expected = pa.table(
         {
@@ -357,4 +357,4 @@ def test_merge_when_not_matched_by_source_delete_with_predicate(
     assert result == expected
 
 
-# ## Add when_not_matched_by_source_delete_wo_predicate ?
+# # ## Add when_not_matched_by_source_delete_wo_predicate ?
