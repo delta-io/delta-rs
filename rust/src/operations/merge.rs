@@ -461,10 +461,47 @@ impl MergeOperation {
         config: MergeOperationConfig,
         schema: &DFSchema,
         state: &SessionState,
+        target_alias: &Option<String>,
     ) -> DeltaResult<MergeOperation> {
         let mut ops = HashMap::with_capacity(config.operations.capacity());
 
         for (column, expression) in config.operations.into_iter() {
+            // Normalize the column name to contain the target alias. If a table reference was provided ensure it's the target.
+            let column = match target_alias {
+                Some(alias) => {
+                    let r = TableReference::bare(alias.to_owned());
+                    match column {
+                        Column {
+                            relation: None,
+                            name,
+                        } => Column {
+                            relation: Some(r),
+                            name,
+                        },
+                        Column {
+                            relation: Some(TableReference::Bare { table }),
+                            name,
+                        } => {
+                            if table.eq(alias) {
+                                Column {
+                                    relation: Some(r),
+                                    name,
+                                }
+                            } else {
+                                return Err(DeltaTableError::Generic(
+                                    "Column must reference column in Delta table".into(),
+                                ));
+                            }
+                        }
+                        _ => {
+                            return Err(DeltaTableError::Generic(
+                                "Column must reference column in Delta table".into(),
+                            ))
+                        }
+                    }
+                }
+                None => column,
+            };
             ops.insert(column, into_expr(expression, schema, state)?);
         }
 
@@ -635,17 +672,17 @@ async fn execute(
 
     let match_operations: Vec<MergeOperation> = match_operations
         .into_iter()
-        .map(|op| MergeOperation::try_from(op, &join_schema_df, &state))
+        .map(|op| MergeOperation::try_from(op, &join_schema_df, &state, &target_alias))
         .collect::<Result<Vec<MergeOperation>, DeltaTableError>>()?;
 
     let not_match_target_operations: Vec<MergeOperation> = not_match_target_operations
         .into_iter()
-        .map(|op| MergeOperation::try_from(op, &join_schema_df, &state))
+        .map(|op| MergeOperation::try_from(op, &join_schema_df, &state, &target_alias))
         .collect::<Result<Vec<MergeOperation>, DeltaTableError>>()?;
 
     let not_match_source_operations: Vec<MergeOperation> = not_match_source_operations
         .into_iter()
-        .map(|op| MergeOperation::try_from(op, &join_schema_df, &state))
+        .map(|op| MergeOperation::try_from(op, &join_schema_df, &state, &target_alias))
         .collect::<Result<Vec<MergeOperation>, DeltaTableError>>()?;
 
     let predicate_expr = create_physical_expr(
@@ -808,7 +845,7 @@ async fn execute(
     let mut projection_map = HashMap::new();
     let mut f = project_schema_df.fields().clone();
 
-    for field in snapshot.schema().unwrap().get_fields() {
+    for delta_field in snapshot.schema().unwrap().get_fields() {
         let mut when_expr = Vec::with_capacity(operations_size);
         let mut then_expr = Vec::with_capacity(operations_size);
 
@@ -818,13 +855,15 @@ async fn execute(
             }),
             None => TableReference::none(),
         };
-        let column = project_schema_df.field_with_name(qualifier.as_ref(), field.get_name())?;
+        let name = delta_field.get_name();
+        let column = Column::new(qualifier.clone(), name);
+        let field = project_schema_df.field_with_name(qualifier.as_ref(), name)?;
 
         for (idx, (operations, _)) in ops.iter().enumerate() {
             let op = operations
-                .get(&field.get_name().to_owned().into())
+                .get(&column)
                 .map(|expr| expr.to_owned())
-                .unwrap_or_else(|| col(Column::new(qualifier.clone(), field.get_name())));
+                .unwrap_or_else(|| col(column.clone()));
 
             when_expr.push(lit(idx as i32));
             then_expr.push(op);
@@ -845,12 +884,12 @@ async fn execute(
             state.execution_props(),
         )?;
 
-        projection_map.insert(field.get_name(), expressions.len());
-        let name = "__delta_rs_c_".to_owned() + field.get_name();
+        projection_map.insert(delta_field.get_name(), expressions.len());
+        let name = "__delta_rs_c_".to_owned() + delta_field.get_name();
 
         f.push(DFField::new_unqualified(
             &name,
-            column.data_type().clone(),
+            field.data_type().clone(),
             true,
         ));
         expressions.push((case, name));
@@ -1218,13 +1257,13 @@ mod tests {
     use arrow::datatypes::Schema as ArrowSchema;
     use arrow::record_batch::RecordBatch;
     use datafusion::assert_batches_sorted_eq;
+    use datafusion::prelude::DataFrame;
     use datafusion::prelude::SessionContext;
     use datafusion_expr::col;
     use datafusion_expr::lit;
     use serde_json::json;
     use std::sync::Arc;
 
-    use super::MergeBuilder;
     use super::MergeMetrics;
 
     async fn setup_table(partitions: Option<Vec<&str>>) -> DeltaTable {
@@ -1263,7 +1302,7 @@ mod tests {
             .unwrap()
     }
 
-    async fn setup_op() -> MergeBuilder {
+    async fn setup() -> (DeltaTable, DataFrame) {
         let schema = get_arrow_schema(&None);
         let table = setup_table(None).await;
 
@@ -1286,10 +1325,7 @@ mod tests {
         )
         .unwrap();
         let source = ctx.read_batch(batch).unwrap();
-        DeltaOps(table)
-            .merge(source, col("target.id").eq(col("source.id")))
-            .with_source_alias("source")
-            .with_target_alias("target")
+        (table, source)
     }
 
     async fn assert_merge(table: DeltaTable, metrics: MergeMetrics) {
@@ -1321,8 +1357,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_merge() {
-        let (mut table, metrics) = setup_op()
-            .await
+        let (table, source) = setup().await;
+
+        let (mut table, metrics) = DeltaOps(table)
+            .merge(source, col("target.id").eq(col("source.id")))
+            .with_source_alias("source")
+            .with_target_alias("target")
             .when_matched_update(|update| {
                 update
                     .update("value", col("source.value"))
@@ -1368,11 +1408,16 @@ mod tests {
     #[tokio::test]
     async fn test_merge_str() {
         // Validate that users can use string predicates
-        let (mut table, metrics) = setup_op()
-            .await
+        // Also validates that update and set operations can contain the target alias
+        let (table, source) = setup().await;
+
+        let (mut table, metrics) = DeltaOps(table)
+            .merge(source, "target.id = source.id")
+            .with_source_alias("source")
+            .with_target_alias("target")
             .when_matched_update(|update| {
                 update
-                    .update("value", "source.value")
+                    .update("target.value", "source.value")
                     .update("modified", "source.modified")
             })
             .unwrap()
@@ -1384,7 +1429,7 @@ mod tests {
             .unwrap()
             .when_not_matched_insert(|insert| {
                 insert
-                    .set("id", "source.id")
+                    .set("target.id", "source.id")
                     .set("value", "source.value")
                     .set("modified", "source.modified")
             })
@@ -1412,6 +1457,79 @@ mod tests {
         );
 
         assert_merge(table, metrics).await;
+    }
+
+    #[tokio::test]
+    async fn test_merge_no_alias() {
+        // Validate merge can be used without specifying an alias
+        let (table, source) = setup().await;
+
+        let source = source
+            .with_column_renamed("id", "source_id")
+            .unwrap()
+            .with_column_renamed("value", "source_value")
+            .unwrap()
+            .with_column_renamed("modified", "source_modified")
+            .unwrap();
+
+        let (table, metrics) = DeltaOps(table)
+            .merge(source, "id = source_id")
+            .when_matched_update(|update| {
+                update
+                    .update("value", "source_value")
+                    .update("modified", "source_modified")
+            })
+            .unwrap()
+            .when_not_matched_by_source_update(|update| {
+                update
+                    .predicate("value = arrow_cast(1, 'Int32')")
+                    .update("value", "value + cast(1 as int)")
+            })
+            .unwrap()
+            .when_not_matched_insert(|insert| {
+                insert
+                    .set("id", "source_id")
+                    .set("value", "source_value")
+                    .set("modified", "source_modified")
+            })
+            .unwrap()
+            .await
+            .unwrap();
+
+        assert_merge(table, metrics).await;
+    }
+
+    #[tokio::test]
+    async fn test_merge_failures() {
+        // Validate target columns cannot be from the source
+        let (table, source) = setup().await;
+        let res = DeltaOps(table)
+            .merge(source, col("target.id").eq(col("source.id")))
+            .with_source_alias("source")
+            .with_target_alias("target")
+            .when_matched_update(|update| {
+                update
+                    .update("source.value", "source.value")
+                    .update("modified", "source.modified")
+            })
+            .unwrap()
+            .await;
+        assert!(res.is_err());
+
+        // Validate failure when aliases are the same
+        let (table, source) = setup().await;
+        let res = DeltaOps(table)
+            .merge(source, col("target.id").eq(col("source.id")))
+            .with_source_alias("source")
+            .with_target_alias("source")
+            .when_matched_update(|update| {
+                update
+                    .update("target.value", "source.value")
+                    .update("modified", "source.modified")
+            })
+            .unwrap()
+            .await;
+        assert!(res.is_err())
     }
 
     #[tokio::test]
