@@ -876,10 +876,7 @@ fn build_compaction_plan(
 
         let part = PartitionTuples::from_hashmap(partition_keys, &add.partition_values);
 
-        partition_files
-            .entry(part)
-            .or_insert_with(Vec::new)
-            .push(object_meta);
+        partition_files.entry(part).or_default().push(object_meta);
     }
 
     for file in partition_files.values_mut() {
