@@ -1,5 +1,5 @@
 import sys
-from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple, Union
+from typing import Any, Dict, List, Mapping, Optional, Tuple, Union
 
 if sys.version_info >= (3, 8):
     from typing import Literal
@@ -13,24 +13,104 @@ from deltalake.writer import AddAction
 
 __version__: str
 
-RawDeltaTable: Any
-rust_core_version: Callable[[], str]
+class RawDeltaTableMetaData:
+    id: int
+    name: str
+    description: str
+    partition_columns: List[str]
+    created_time: int
+    configuration: Dict[str, str]
 
-write_new_deltalake: Callable[
-    [
-        str,
-        pa.Schema,
-        List[AddAction],
-        str,
-        List[str],
-        Optional[str],
-        Optional[str],
-        Optional[Mapping[str, Optional[str]]],
-        Optional[Dict[str, str]],
-    ],
-    None,
-]
+class RawDeltaTable:
+    schema: Any
 
+    def __init__(
+        self,
+        table_uri: str,
+        version: Optional[int],
+        storage_options: Optional[Dict[str, str]],
+        without_files: bool,
+        log_buffer_size: Optional[int],
+    ) -> None: ...
+    @staticmethod
+    def get_table_uri_from_data_catalog(
+        data_catalog: str,
+        database_name: str,
+        table_name: str,
+        data_catalog_id: Optional[str] = None,
+        catalog_options: Optional[Dict[str, str]] = None,
+    ) -> str: ...
+    def table_uri(self) -> str: ...
+    def version(self) -> int: ...
+    def metadata(self) -> RawDeltaTableMetaData: ...
+    def protocol_versions(self) -> List[int]: ...
+    def load_version(self, version: int) -> None: ...
+    def load_with_datetime(self, ds: str) -> None: ...
+    def files_by_partitions(
+        self, partitions_filters: Optional[FilterType]
+    ) -> List[str]: ...
+    def files(self, partition_filters: Optional[FilterType]) -> List[str]: ...
+    def file_uris(self, partition_filters: Optional[FilterType]) -> List[str]: ...
+    def vacuum(
+        self,
+        dry_run: bool,
+        retention_hours: Optional[int],
+        enforce_retention_duration: bool,
+    ) -> List[str]: ...
+    def compact_optimize(
+        self,
+        partition_filters: Optional[FilterType],
+        target_size: Optional[int],
+        max_concurrent_tasks: Optional[int],
+        min_commit_interval: Optional[int],
+    ) -> str: ...
+    def z_order_optimize(
+        self,
+        z_order_columns: List[str],
+        partition_filters: Optional[FilterType],
+        target_size: Optional[int],
+        max_concurrent_tasks: Optional[int],
+        max_spill_size: Optional[int],
+        min_commit_interval: Optional[int],
+    ) -> str: ...
+    def restore(
+        self,
+        target: Optional[Any],
+        ignore_missing_files: bool,
+        protocol_downgrade_allowed: bool,
+    ) -> str: ...
+    def history(self, limit: Optional[int]) -> List[str]: ...
+    def update_incremental(self) -> None: ...
+    def dataset_partitions(
+        self, schema: pa.Schema, partition_filters: Optional[FilterType]
+    ) -> List[Any]: ...
+    def create_checkpoint(self) -> None: ...
+    def get_add_actions(self, flatten: bool) -> pa.RecordBatch: ...
+    def delete(self, predicate: Optional[str]) -> str: ...
+    def get_active_partitions(
+        self, partitions_filters: Optional[FilterType] = None
+    ) -> Any: ...
+    def create_write_transaction(
+        self,
+        add_actions: List[AddAction],
+        mode: str,
+        partition_by: List[str],
+        schema: pa.Schema,
+        partitions_filters: Optional[FilterType],
+    ) -> None: ...
+
+def rust_core_version() -> str: ...
+def write_new_deltalake(
+    table_uri: str,
+    schema: pa.Schema,
+    add_actions: List[AddAction],
+    _mode: str,
+    partition_by: List[str],
+    name: Optional[str],
+    description: Optional[str],
+    configuration: Optional[Mapping[str, Optional[str]]],
+    storage_options: Optional[Dict[str, str]],
+) -> None: ...
 def batch_distinct(batch: pa.RecordBatch) -> pa.RecordBatch: ...
 
 # Can't implement inheritance (see note in src/schema.rs), so this is next
@@ -93,34 +173,18 @@ class Field:
         *,
         nullable: bool = True,
         metadata: Optional[Dict[str, Any]] = None,
-    ) -> None:
-        """A named field, with a data type, nullability, and optional metadata."""
+    ) -> None: ...
     name: str
-    """The field name."""
     type: DataType
-    """The field data type."""
     nullable: bool
-    """The field nullability."""
     metadata: Dict[str, Any]
-    """The field metadata."""
 
-    def to_json(self) -> str:
-        """Get the JSON representation of the Field.
-
-        :rtype: str
-        """
+    def to_json(self) -> str: ...
     @staticmethod
-    def from_json(json: str) -> "Field":
-        """Create a new Field from a JSON string.
-
-        :param json: A json string representing the Field.
-        :rtype: Field
-        """
-    def to_pyarrow(self) -> pa.Field:
-        """Convert field to a pyarrow.Field."""
+    def from_json(json: str) -> "Field": ...
+    def to_pyarrow(self) -> pa.Field: ...
     @staticmethod
-    def from_pyarrow(type: pa.Field) -> "Field":
-        """Create a new field from pyarrow.Field."""
+    def from_pyarrow(type: pa.Field) -> "Field": ...
 
 class StructType:
     def __init__(self, fields: List[Field]) -> None: ...
@@ -138,41 +202,13 @@ class Schema:
     def __init__(self, fields: List[Field]) -> None: ...
     fields: List[Field]
     invariants: List[Tuple[str, str]]
-    """The list of invariants defined on the table.
-    
-    The first string in each tuple is the field path, the second is the SQL of the invariant.
-    """
 
-    def to_json(self) -> str:
-        """Get the JSON representation of the schema.
-
-        :rtype: str
-        """
+    def to_json(self) -> str: ...
     @staticmethod
-    def from_json(json: str) -> "Schema":
-        """Create a new Schema from a JSON string.
-
-        :param schema_json: a JSON string
-        :rtype: Schema
-        """
-    def to_pyarrow(self, as_large_types: bool = False) -> pa.Schema:
-        """Return equivalent PyArrow schema.
-
-        Note: this conversion is lossy as the Invariants are not stored in pyarrow.Schema.
-
-        :param as_large_types: get schema with all variable size types (list,
-            binary, string) as large variants (with int64 indices). This is for
-            compatibility with systems like Polars that only support the large
-            versions of Arrow types.
-        :rtype: pyarrow.Schema
-        """
+    def from_json(json: str) -> "Schema": ...
+    def to_pyarrow(self, as_large_types: bool = False) -> pa.Schema: ...
     @staticmethod
-    def from_pyarrow(type: pa.Schema) -> "Schema":
-        """Create a new Schema from a pyarrow.Schema.
-
-        :param data_type: a PyArrow schema
-        :rtype: Schema
-        """
+    def from_pyarrow(type: pa.Schema) -> "Schema": ...
 
 class ObjectInputFile:
     @property
@@ -289,3 +325,8 @@ class DeltaProtocolError(DeltaError):
     """Raised when a violation with the Delta protocol specs ocurred."""
 
     pass
+
+FilterLiteralType = Tuple[str, str, Any]
+FilterConjunctionType = List[FilterLiteralType]
+FilterDNFType = List[FilterConjunctionType]
+FilterType = Union[FilterConjunctionType, FilterDNFType]
