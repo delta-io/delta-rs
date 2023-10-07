@@ -16,8 +16,9 @@
 //! ```rust ignore
 //! let table = open_table("../path/to/table")?;
 //! let (table, metrics) = DeltaOps(table)
-//!     .merge(source, col("id").eq(col("source.id")))
+//!     .merge(source, col("target.id").eq(col("source.id")))
 //!     .with_source_alias("source")
+//!     .with_target_alias("target")
 //!     .when_matched_update(|update| {
 //!         update
 //!             .update("value", col("source.value") + lit(1))
@@ -154,8 +155,9 @@ impl MergeBuilder {
     /// ```rust ignore
     /// let table = open_table("../path/to/table")?;
     /// let (table, metrics) = DeltaOps(table)
-    ///     .merge(source, col("id").eq(col("source.id")))
+    ///     .merge(source, col("target.id").eq(col("source.id")))
     ///     .with_source_alias("source")
+    ///     .with_target_alias("target")
     ///     .when_matched_update(|update| {
     ///         update
     ///             .predicate(col("source.value").lt(lit(0)))
@@ -191,8 +193,9 @@ impl MergeBuilder {
     /// ```rust ignore
     /// let table = open_table("../path/to/table")?;
     /// let (table, metrics) = DeltaOps(table)
-    ///     .merge(source, col("id").eq(col("source.id")))
+    ///     .merge(source, col("target.id").eq(col("source.id")))
     ///     .with_source_alias("source")
+    ///     .with_target_alias("target")
     ///     .when_matched_delete(|delete| {
     ///         delete.predicate(col("source.delete"))
     ///     })?
@@ -223,8 +226,9 @@ impl MergeBuilder {
     /// ```rust ignore
     /// let table = open_table("../path/to/table")?;
     /// let (table, metrics) = DeltaOps(table)
-    ///     .merge(source, col("id").eq(col("source.id")))
+    ///     .merge(source, col("target.id").eq(col("source.id")))
     ///     .with_source_alias("source")
+    ///     .with_target_alias("target")
     ///     .when_not_matched_insert(|insert| {
     ///         insert
     ///             .set("id", col("source.id"))
@@ -257,8 +261,9 @@ impl MergeBuilder {
     /// ```rust ignore
     /// let table = open_table("../path/to/table")?;
     /// let (table, metrics) = DeltaOps(table)
-    ///     .merge(source, col("id").eq(col("source.id")))
+    ///     .merge(source, col("target.id").eq(col("source.id")))
     ///     .with_source_alias("source")
+    ///     .with_target_alias("target")
     ///     .when_not_matched_by_source_update(|update| {
     ///         update
     ///             .update("active", lit(false))
@@ -288,8 +293,9 @@ impl MergeBuilder {
     /// ```rust ignore
     /// let table = open_table("../path/to/table")?;
     /// let (table, metrics) = DeltaOps(table)
-    ///     .merge(source, col("id").eq(col("source.id")))
+    ///     .merge(source, col("target.id").eq(col("source.id")))
     ///     .with_source_alias("source")
+    ///     .with_target_alias("target")
     ///     .when_not_matched_by_source_delete(|delete| {
     ///         delete
     ///     })?
