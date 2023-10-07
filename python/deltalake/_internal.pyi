@@ -13,7 +13,91 @@ from deltalake.writer import AddAction
 
 __version__: str
 
-class RawDeltaTable: ...
+class RawDeltaTableMetaData:
+    id: int
+    name: str
+    description: str
+    partition_columns: List[str]
+    created_time: int
+    configuration: Dict[str, str]
+
+class RawDeltaTable:
+    schema: Any
+
+    def __init__(
+        self,
+        table_uri: str,
+        version: Optional[int],
+        storage_options: Optional[Dict[str, str]],
+        without_files: bool,
+        log_buffer_size: Optional[int],
+    ) -> None: ...
+    @staticmethod
+    def get_table_uri_from_data_catalog(
+        data_catalog: str,
+        database_name: str,
+        table_name: str,
+        data_catalog_id: Optional[str] = None,
+        catalog_options: Optional[Dict[str, str]] = None,
+    ) -> str: ...
+    def table_uri(self) -> str: ...
+    def version(self) -> int: ...
+    def metadata(self) -> RawDeltaTableMetaData: ...
+    def protocol_versions(self) -> List[int]: ...
+    def load_version(self, version: int) -> None: ...
+    def load_with_datetime(self, ds: str) -> None: ...
+    def files_by_partitions(
+        self, partitions_filters: Optional[FilterType]
+    ) -> List[str]: ...
+    def files(self, partition_filters: Optional[FilterType]) -> List[str]: ...
+    def file_uris(self, partition_filters: Optional[FilterType]) -> List[str]: ...
+    def vacuum(
+        self,
+        dry_run: bool,
+        retention_hours: Optional[int],
+        enforce_retention_duration: bool,
+    ) -> List[str]: ...
+    def compact_optimize(
+        self,
+        partition_filters: Optional[FilterType],
+        target_size: Optional[int],
+        max_concurrent_tasks: Optional[int],
+        min_commit_interval: Optional[int],
+    ) -> str: ...
+    def z_order_optimize(
+        self,
+        z_order_columns: List[str],
+        partition_filters: Optional[FilterType],
+        target_size: Optional[int],
+        max_concurrent_tasks: Optional[int],
+        max_spill_size: Optional[int],
+        min_commit_interval: Optional[int],
+    ) -> str: ...
+    def restore(
+        self,
+        target: Optional[Any],
+        ignore_missing_files: bool,
+        protocol_downgrade_allowed: bool,
+    ) -> str: ...
+    def history(self, limit: Optional[int]) -> List[str]: ...
+    def update_incremental(self) -> None: ...
+    def dataset_partitions(
+        self, schema: pa.Schema, partition_filters: Optional[FilterType]
+    ) -> List[Any]: ...
+    def create_checkpoint(self) -> None: ...
+    def get_add_actions(self, flatten: bool) -> pa.RecordBatch: ...
+    def delete(self, predicate: Optional[str]) -> str: ...
+    def get_active_partitions(
+        self, partitions_filters: Optional[FilterType] = None
+    ) -> Any: ...
+    def create_write_transaction(
+        self,
+        add_actions: List[AddAction],
+        mode: str,
+        partition_by: List[str],
+        schema: pa.Schema,
+        partitions_filters: Optional[FilterType],
+    ) -> None: ...
 
 def rust_core_version() -> str: ...
 def write_new_deltalake(
@@ -26,7 +110,7 @@ def write_new_deltalake(
     description: Optional[str],
     configuration: Optional[Mapping[str, Optional[str]]],
     storage_options: Optional[Dict[str, str]],
-): ...
+) -> None: ...
 def batch_distinct(batch: pa.RecordBatch) -> pa.RecordBatch: ...
 
 # Can't implement inheritance (see note in src/schema.rs), so this is next
@@ -241,3 +325,8 @@ class DeltaProtocolError(DeltaError):
     """Raised when a violation with the Delta protocol specs ocurred."""
 
     pass
+
+FilterLiteralType = Tuple[str, str, Any]
+FilterConjunctionType = List[FilterLiteralType]
+FilterDNFType = List[FilterConjunctionType]
+FilterType = Union[FilterConjunctionType, FilterDNFType]
