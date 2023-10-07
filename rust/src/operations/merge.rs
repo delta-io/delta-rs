@@ -1500,6 +1500,48 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_merge_with_alias_mix() {
+        // Validate merge can be used with an alias and unambiguous column references
+        // I.E users should be able to specify an alias and still reference columns without using that alias when there is no ambiguity
+        let (table, source) = setup().await;
+
+        let source = source
+            .with_column_renamed("id", "source_id")
+            .unwrap()
+            .with_column_renamed("value", "source_value")
+            .unwrap()
+            .with_column_renamed("modified", "source_modified")
+            .unwrap();
+
+        let (table, metrics) = DeltaOps(table)
+            .merge(source, "id = source_id")
+            .with_target_alias("target")
+            .when_matched_update(|update| {
+                update
+                    .update("value", "source_value")
+                    .update("modified", "source_modified")
+            })
+            .unwrap()
+            .when_not_matched_by_source_update(|update| {
+                update
+                    .predicate("value = arrow_cast(1, 'Int32')")
+                    .update("value", "target.value + cast(1 as int)")
+            })
+            .unwrap()
+            .when_not_matched_insert(|insert| {
+                insert
+                    .set("id", "source_id")
+                    .set("target.value", "source_value")
+                    .set("modified", "source_modified")
+            })
+            .unwrap()
+            .await
+            .unwrap();
+
+        assert_merge(table, metrics).await;
+    }
+
+    #[tokio::test]
     async fn test_merge_failures() {
         // Validate target columns cannot be from the source
         let (table, source) = setup().await;
