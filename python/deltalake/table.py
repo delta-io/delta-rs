@@ -466,8 +466,8 @@ given filters.
         self,
         source: Union[pyarrow.Table, pyarrow.RecordBatch],
         predicate: str,
-        source_alias: str = 'source',
-        target_alias: str = 'target',
+        source_alias: str = "source",
+        target_alias: str = "target",
         strict_cast: bool = True,
     ) -> "TableMerger":
         """Pass the source data which you want to merge on the target delta table, providing a
