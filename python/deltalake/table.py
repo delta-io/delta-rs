@@ -468,7 +468,7 @@ given filters.
         predicate: str,
         source_alias: str = "source",
         target_alias: str = "target",
-        strict_cast: bool = True,
+        error_on_type_mismatch: bool = True,
     ) -> "TableMerger":
         """Pass the source data which you want to merge on the target delta table, providing a
         predicate in SQL query format. You can also specify on what to do when underlying data types do not
@@ -479,7 +479,7 @@ given filters.
             predicate (str): SQL like predicate on how to merge
             source_alias (str): Alias for the source table
             target_alias (str): Alias for the target table
-            strict_cast (bool): specify if data types need to be casted strictly or not :default = False
+            error_on_type_mismatch (bool): specify if merge will return error if data types are mismatching :default = True
 
 
         Returns:
@@ -494,7 +494,7 @@ given filters.
             predicate=predicate,
             source_alias=source_alias,
             target_alias=target_alias,
-            strict_cast=not strict_cast,
+            safe_cast=not error_on_type_mismatch,
         )
 
     def pyarrow_schema(self) -> pyarrow.Schema:
@@ -726,14 +726,14 @@ class TableMerger:
         predicate: str,
         source_alias: str,
         target_alias: str,
-        strict_cast: bool = True,
+        safe_cast: bool = True,
     ):
         self.table = table
         self.source = source
         self.predicate = predicate
         self.source_alias = source_alias
         self.target_alias = target_alias
-        self.strict_cast = strict_cast
+        self.safe_cast = safe_cast
         self.writer_properties: Optional[Dict[str, Optional[int]]] = None
         self.matched_update_updates: Optional[Dict[str, str]] = None
         self.matched_update_predicate: Optional[str] = None
@@ -1019,7 +1019,7 @@ class TableMerger:
             predicate=self.predicate,
             source_alias=self.source_alias,
             target_alias=self.target_alias,
-            safe_cast=self.strict_cast,
+            safe_cast=self.safe_cast,
             writer_properties=self.writer_properties,
             matched_update_updates=self.matched_update_updates,
             matched_update_predicate=self.matched_update_predicate,
