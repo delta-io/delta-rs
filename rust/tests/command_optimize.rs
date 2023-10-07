@@ -1,17 +1,16 @@
 #![cfg(all(feature = "arrow", feature = "parquet"))]
 
-use std::time::SystemTime;
-use std::time::UNIX_EPOCH;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use std::{collections::HashMap, error::Error, sync::Arc};
 
 use arrow_array::{Int32Array, RecordBatch, StringArray};
 use arrow_schema::{DataType, Field, Schema as ArrowSchema};
 use arrow_select::concat::concat_batches;
-use deltalake::action::{Action, DeltaOperation, Remove};
 use deltalake::errors::DeltaTableError;
 use deltalake::operations::optimize::{create_merge_plan, MetricDetails, Metrics, OptimizeType};
 use deltalake::operations::transaction::commit;
 use deltalake::operations::DeltaOps;
+use deltalake::protocol::{Action, DeltaOperation, Remove};
 use deltalake::storage::ObjectStoreRef;
 use deltalake::writer::{DeltaWriter, RecordBatchWriter};
 use deltalake::{DeltaTable, PartitionFilter, Path, SchemaDataType, SchemaField};
@@ -274,8 +273,6 @@ async fn test_conflict_for_remove_actions() -> Result<(), Box<dyn Error>> {
         &filter,
         None,
         WriterProperties::builder().build(),
-        1,
-        20,
     )?;
 
     let uri = context.tmp_dir.path().to_str().to_owned().unwrap();
@@ -307,7 +304,10 @@ async fn test_conflict_for_remove_actions() -> Result<(), Box<dyn Error>> {
     )
     .await?;
 
-    let maybe_metrics = plan.execute(dt.object_store(), &dt.state).await;
+    let maybe_metrics = plan
+        .execute(dt.object_store(), &dt.state, 1, 20, None)
+        .await;
+
     assert!(maybe_metrics.is_err());
     assert_eq!(dt.version(), version + 1);
     Ok(())
@@ -336,7 +336,6 @@ async fn test_no_conflict_for_append_actions() -> Result<(), Box<dyn Error>> {
 
     let version = dt.version();
 
-    //create the merge plan, remove a file, and execute the plan.
     let filter = vec![PartitionFilter::try_from(("date", "=", "2022-05-22"))?];
     let plan = create_merge_plan(
         OptimizeType::Compact,
@@ -344,8 +343,6 @@ async fn test_no_conflict_for_append_actions() -> Result<(), Box<dyn Error>> {
         &filter,
         None,
         WriterProperties::builder().build(),
-        1,
-        20,
     )?;
 
     let uri = context.tmp_dir.path().to_str().to_owned().unwrap();
@@ -358,9 +355,57 @@ async fn test_no_conflict_for_append_actions() -> Result<(), Box<dyn Error>> {
     )
     .await?;
 
-    let metrics = plan.execute(dt.object_store(), &dt.state).await?;
+    let metrics = plan
+        .execute(dt.object_store(), &dt.state, 1, 20, None)
+        .await?;
     assert_eq!(metrics.num_files_added, 1);
     assert_eq!(metrics.num_files_removed, 2);
+
+    dt.update().await.unwrap();
+    assert_eq!(dt.version(), version + 2);
+    Ok(())
+}
+
+#[tokio::test]
+/// Validate that optimize creates multiple commits when min_commin_interval is set
+async fn test_commit_interval() -> Result<(), Box<dyn Error>> {
+    let context = setup_test(true).await?;
+    let mut dt = context.table;
+    let mut writer = RecordBatchWriter::for_table(&dt)?;
+
+    // expect it to perform 2 merges, one in each partition
+    for partition in ["2022-05-22", "2022-05-23"] {
+        for _i in 0..2 {
+            write(
+                &mut writer,
+                &mut dt,
+                tuples_to_batch(vec![(1, 2), (1, 3), (1, 4)], partition)?,
+            )
+            .await?;
+        }
+    }
+
+    let version = dt.version();
+
+    let plan = create_merge_plan(
+        OptimizeType::Compact,
+        &dt.state,
+        &[],
+        None,
+        WriterProperties::builder().build(),
+    )?;
+
+    let metrics = plan
+        .execute(
+            dt.object_store(),
+            &dt.state,
+            1,
+            20,
+            Some(Duration::from_secs(0)), // this will cause as many commits as num_files_added
+        )
+        .await?;
+    assert_eq!(metrics.num_files_added, 2);
+    assert_eq!(metrics.num_files_removed, 4);
 
     dt.update().await.unwrap();
     assert_eq!(dt.version(), version + 2);

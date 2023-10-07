@@ -74,7 +74,7 @@ impl DeltaObjectStore {
     ///
     /// # Arguments
     ///
-    /// * `storage` - A shared reference to an [`ObjectStore`](object_store::ObjectStore) with "/" pointing at delta table root (i.e. where `_delta_log` is located).
+    /// * `storage` - A shared reference to an [`object_store::ObjectStore`] with "/" pointing at delta table root (i.e. where `_delta_log` is located).
     /// * `location` - A url corresponding to the storage location of `storage`.
     pub fn new(storage: Arc<DynObjectStore>, location: Url) -> Self {
         Self {
@@ -89,10 +89,10 @@ impl DeltaObjectStore {
     /// # Arguments
     ///
     /// * `location` - A url pointing to the root of the delta table.
-    /// * `options` - Options passed to underlying builders. See [`with_storage_options`](crate::builder::DeltaTableBuilder::with_storage_options)
+    /// * `options` - Options passed to underlying builders. See [`with_storage_options`](crate::table::builder::DeltaTableBuilder::with_storage_options)
     pub fn try_new(location: Url, options: impl Into<StorageOptions> + Clone) -> DeltaResult<Self> {
-        let options = options.into();
-        let storage = config::configure_store(&location, &options)?;
+        let mut options = options.into();
+        let storage = config::configure_store(&location, &mut options)?;
         Ok(Self {
             storage,
             location,
@@ -213,7 +213,7 @@ impl ObjectStore for DeltaObjectStore {
 
     /// Perform a get request with options
     ///
-    /// Note: options.range will be ignored if [`GetResult::File`]
+    /// Note: options.range will be ignored if [`object_store::GetResultPayload::File`]
     async fn get_opts(&self, location: &Path, options: GetOptions) -> ObjectStoreResult<GetResult> {
         self.storage.get_opts(location, options).await
     }

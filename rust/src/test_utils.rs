@@ -5,6 +5,7 @@ use chrono::Utc;
 use fs_extra::dir::{copy, CopyOptions};
 use object_store::DynObjectStore;
 use serde_json::json;
+use std::env;
 use std::sync::Arc;
 use tempdir::TempDir;
 
@@ -33,8 +34,29 @@ impl IntegrationContext {
         // create a fresh bucket in every context. THis is done via CLI...
         let bucket = match integration {
             StorageIntegration::Local => tmp_dir.as_ref().to_str().unwrap().to_owned(),
+            StorageIntegration::Onelake => {
+                let account_name =
+                    env::var("AZURE_STORAGE_ACCOUNT_NAME").unwrap_or(String::from("onelake"));
+                let container_name =
+                    env::var("AZURE_STORAGE_CONTAINER_NAME").unwrap_or(String::from("delta-rs"));
+                format!(
+                    "{0}.dfs.fabric.microsoft.com/{1}",
+                    account_name, container_name
+                )
+            }
+            StorageIntegration::OnelakeAbfs => {
+                let account_name =
+                    env::var("AZURE_STORAGE_ACCOUNT_NAME").unwrap_or(String::from("onelake"));
+                let container_name =
+                    env::var("AZURE_STORAGE_CONTAINER_NAME").unwrap_or(String::from("delta-rs"));
+                format!(
+                    "{0}@{1}.dfs.fabric.microsoft.com",
+                    container_name, account_name
+                )
+            }
             _ => format!("test-delta-table-{}", Utc::now().timestamp()),
         };
+
         if let StorageIntegration::Google = integration {
             gs_cli::prepare_env();
             let base_url = std::env::var("GOOGLE_BASE_URL")?;
@@ -46,10 +68,13 @@ impl IntegrationContext {
                 account_path.as_path().to_str().unwrap(),
             );
         }
+
         integration.create_bucket(&bucket)?;
         let store_uri = match integration {
             StorageIntegration::Amazon => format!("s3://{}", &bucket),
             StorageIntegration::Microsoft => format!("az://{}", &bucket),
+            StorageIntegration::Onelake => format!("https://{}", &bucket),
+            StorageIntegration::OnelakeAbfs => format!("abfss://{}", &bucket),
             StorageIntegration::Google => format!("gs://{}", &bucket),
             StorageIntegration::Local => format!("file://{}", &bucket),
             StorageIntegration::Hdfs => format!("hdfs://localhost:9000/{}", &bucket),
@@ -84,6 +109,8 @@ impl IntegrationContext {
         match self.integration {
             StorageIntegration::Amazon => format!("s3://{}", &self.bucket),
             StorageIntegration::Microsoft => format!("az://{}", &self.bucket),
+            StorageIntegration::Onelake => format!("https://{}", &self.bucket),
+            StorageIntegration::OnelakeAbfs => format!("abfss://{}", &self.bucket),
             StorageIntegration::Google => format!("gs://{}", &self.bucket),
             StorageIntegration::Local => format!("file://{}", &self.bucket),
             StorageIntegration::Hdfs => format!("hdfs://localhost:9000/{}", &self.bucket),
@@ -149,6 +176,8 @@ impl Drop for IntegrationContext {
             StorageIntegration::Google => {
                 gs_cli::delete_bucket(&self.bucket).unwrap();
             }
+            StorageIntegration::Onelake => (),
+            StorageIntegration::OnelakeAbfs => (),
             StorageIntegration::Local => (),
             StorageIntegration::Hdfs => {
                 hdfs_cli::delete_dir(&self.bucket).unwrap();
@@ -161,17 +190,21 @@ impl Drop for IntegrationContext {
 pub enum StorageIntegration {
     Amazon,
     Microsoft,
+    Onelake,
     Google,
     Local,
     Hdfs,
+    OnelakeAbfs,
 }
 
 impl StorageIntegration {
     fn prepare_env(&self) {
         match self {
             Self::Microsoft => az_cli::prepare_env(),
+            Self::Onelake => onelake_cli::prepare_env(),
             Self::Amazon => s3_cli::prepare_env(),
             Self::Google => gs_cli::prepare_env(),
+            Self::OnelakeAbfs => onelake_cli::prepare_env(),
             Self::Local => (),
             Self::Hdfs => (),
         }
@@ -183,6 +216,8 @@ impl StorageIntegration {
                 az_cli::create_container(name)?;
                 Ok(())
             }
+            Self::Onelake => Ok(()),
+            Self::OnelakeAbfs => Ok(()),
             Self::Amazon => {
                 s3_cli::create_bucket(format!("s3://{}", name.as_ref()))?;
                 set_env_if_not_set(
@@ -264,6 +299,22 @@ pub fn set_env_if_not_set(key: impl AsRef<str>, value: impl AsRef<str>) {
     };
 }
 
+//cli for onelake
+pub mod onelake_cli {
+    use super::set_env_if_not_set;
+    /// prepare_env
+    pub fn prepare_env() {
+        let token = "jwt-token";
+        set_env_if_not_set("AZURE_STORAGE_USE_EMULATOR", "0");
+        set_env_if_not_set("AZURE_STORAGE_ACCOUNT_NAME", "daily-onelake");
+        set_env_if_not_set(
+            "AZURE_STORAGE_CONTAINER_NAME",
+            "86bc63cf-5086-42e0-b16d-6bc580d1dc87",
+        );
+        set_env_if_not_set("AZURE_STORAGE_TOKEN", token);
+    }
+}
+
 /// small wrapper around az cli
 pub mod az_cli {
     use super::set_env_if_not_set;
@@ -334,7 +385,7 @@ pub mod az_cli {
 /// small wrapper around s3 cli
 pub mod s3_cli {
     use super::set_env_if_not_set;
-    use crate::builder::s3_storage_options;
+    use crate::table::builder::s3_storage_options;
     use std::process::{Command, ExitStatus, Stdio};
 
     /// Create a new bucket

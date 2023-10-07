@@ -4,7 +4,7 @@
   </a>
 </p>
 <p align="center">
-  A native Rust library for Delta Lake, with bindings into Python
+  A native Rust library for Delta Lake, with bindings to Python
   <br>
   <a href="https://delta-io.github.io/delta-rs/python/">Python docs</a>
   ·
@@ -32,13 +32,13 @@
   <a href="https://pypi.python.org/pypi/deltalake">
     <img alt="Deltalake" src="https://img.shields.io/pypi/pyversions/deltalake.svg?style=flat-square&color=00ADD4&logo=python">
   </a>
-  <a target="_blank" href="https://go.delta.io/slack">
+  <a target="_blank" href="https://join.slack.com/t/delta-users/shared_invite/zt-23h0xwez7-wDTm43ZVEW2ZcbKn6Bc8Fg">
     <img alt="#delta-rs in the Delta Lake Slack workspace" src="https://img.shields.io/badge/slack-delta-blue.svg?logo=slack&style=flat-square&color=F75101">
   </a>
 </p>
 
 The Delta Lake project aims to unlock the power of the Deltalake for as many users and projects as possible
-by providing native low level APIs aimed at developers and integrators, as well as a high level operations
+by providing native low-level APIs aimed at developers and integrators, as well as a high-level operations
 API that lets you query, inspect, and operate your Delta Lake with ease.
 
 | Source                | Downloads                         | Installation Command    | Docs            |
@@ -57,31 +57,30 @@ API that lets you query, inspect, and operate your Delta Lake with ease.
 
 - [Quick Start](#quick-start)
 - [Get Involved](#get-involved)
-- [Integartions](#integrations)
+- [Integrations](#integrations)
 - [Features](#features)
 
 ## Quick Start
 
-The `deltalake` library aim to adopt familiar patterns from other libraries in data processing,
-so getting started should look famililiar.
+The `deltalake` library aims to adopt patterns from other libraries in data processing,
+so getting started should look familiar.
 
 ```py3
-from deltalake import DeltaTable
-from deltalake.write import write_deltalake
+from deltalake import DeltaTable, write_deltalake
 import pandas as pd
 
 # write some data into a delta table
 df = pd.DataFrame({"id": [1, 2], "value": ["foo", "boo"]})
 write_deltalake("./data/delta", df)
 
-# load data from delta table
+# Load data from the delta table
 dt = DeltaTable("./data/delta")
 df2 = dt.to_pandas()
 
 assert df == df2
 ```
 
-The same table written can also be loaded using the core Rust crate:
+The same table can also be loaded using the core Rust crate:
 
 ```rs
 use deltalake::{open_table, DeltaTableError};
@@ -99,18 +98,20 @@ async fn main() -> Result<(), DeltaTableError> {
 }
 ```
 
+You can also try Delta Lake docker at [DockerHub](https://go.delta.io/dockerhub) | [Docker Repo](https://go.delta.io/docker)
+
 ## Get Involved
 
 We encourage you to reach out, and are [commited](https://github.com/delta-io/delta-rs/blob/main/CODE_OF_CONDUCT.md)
 to provide a welcoming community.
 
-- [Join us in our Slack workspace](https://go.delta.io/slack)
+- [Join us in our Slack workspace](https://join.slack.com/t/delta-users/shared_invite/zt-23h0xwez7-wDTm43ZVEW2ZcbKn6Bc8Fg)
 - [Report an issue](https://github.com/delta-io/delta-rs/issues/new?template=bug_report.md)
 - Looking to contribute? See our [good first issues](https://github.com/delta-io/delta-rs/contribute).
 
 ## Integrations
 
-Libraries and framewors that interoperate with delta-rs - in alphabetical order.
+Libraries and frameworks that interoperate with delta-rs - in alphabetical order.
 
 - [AWS SDK for Pandas](https://github.com/aws/aws-sdk-pandas)
 - [ballista][ballista]
@@ -123,7 +124,7 @@ Libraries and framewors that interoperate with delta-rs - in alphabetical order.
 
 ## Features
 
-The following section outline some core features like supported [storage backends](#cloud-integrations)
+The following section outlines some core features like supported [storage backends](#cloud-integrations)
 and [operations](#supported-operations) that can be performed against tables. The state of implementation
 of features outlined in the Delta [protocol][protocol] is also [tracked](#protocol-support-level).
 
@@ -137,7 +138,7 @@ of features outlined in the Delta [protocol][protocol] is also [tracked](#protoc
 | S3 - R2              |        ![done]        |        ![done]        | requires lock for concurrent writes |
 | Azure Blob           |        ![done]        |        ![done]        |                                     |
 | Azure ADLS Gen2      |        ![done]        |        ![done]        |                                     |
-| Micorosft OneLake    | [![open]][onelake-rs] | [![open]][onelake-rs] |                                     |
+| Microsoft OneLake    | ![done] | ![done] |                                     |
 | Google Cloud Storage |        ![done]        |        ![done]        |                                     |
 
 ### Supported Operations
@@ -151,7 +152,7 @@ of features outlined in the Delta [protocol][protocol] is also [tracked](#protoc
 | Delete - predicates   |       ![done]       |                     | Delete data based on a predicate      |
 | Optimize - compaction |       ![done]       |       ![done]       | Harmonize the size of data file       |
 | Optimize - Z-order    |       ![done]       |       ![done]       | Place similar data into the same file |
-| Merge                 | [![open]][merge-rs] | [![open]][merge-py] |                                       |
+| Merge                 | [![semi-done]][merge-rs]| [![open]][merge-py] |    Merge two tables (limited to full re-write)                                   |
 | FS check              |       ![done]       |                     | Remove corrupted files from table     |
 
 ### Protocol Support Level
@@ -171,14 +172,15 @@ of features outlined in the Delta [protocol][protocol] is also [tracked](#protoc
 
 | Reader Version | Requirement                         | Status |
 | -------------- | ----------------------------------- | ------ |
-| Version 2      | Collumn Mapping                     |        |
+| Version 2      | Column Mapping                     |        |
 | Version 3      | Table Features (requires reader V7) |        |
 
 [datafusion]: https://github.com/apache/arrow-datafusion
 [ballista]: https://github.com/apache/arrow-ballista
 [polars]: https://github.com/pola-rs/polars
-[open]: https://cdn.jsdelivr.net/gh/Readme-Workflows/Readme-Icons@main/icons/octicons/IssueOpened.svg
-[done]: https://cdn.jsdelivr.net/gh/Readme-Workflows/Readme-Icons@main/icons/octicons/IssueClosed.svg
+[open]: https://cdn.jsdelivr.net/gh/Readme-Workflows/Readme-Icons@main/icons/octicons/IssueNeutral.svg
+[semi-done]: https://cdn.jsdelivr.net/gh/Readme-Workflows/Readme-Icons@main/icons/octicons/ApprovedChangesGrey.svg
+[done]: https://cdn.jsdelivr.net/gh/Readme-Workflows/Readme-Icons@main/icons/octicons/ApprovedChanges.svg
 [roadmap]: https://github.com/delta-io/delta-rs/issues/1128
 [merge-py]: https://github.com/delta-io/delta-rs/issues/1357
 [merge-rs]: https://github.com/delta-io/delta-rs/issues/850

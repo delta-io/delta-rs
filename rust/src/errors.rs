@@ -1,8 +1,8 @@
 //! Exceptions for the deltalake crate
 use object_store::Error as ObjectStoreError;
 
-use crate::action::ProtocolError;
 use crate::operations::transaction::TransactionError;
+use crate::protocol::ProtocolError;
 
 /// A result returned by delta-rs
 pub type DeltaResult<T> = Result<T, DeltaTableError>;

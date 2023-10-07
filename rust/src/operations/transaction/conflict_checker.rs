@@ -5,11 +5,11 @@ use std::io::{BufRead, BufReader, Cursor};
 use object_store::ObjectStore;
 
 use super::CommitInfo;
-use crate::action::{Action, Add, DeltaOperation, MetaData, Protocol, Remove};
-use crate::delta_config::IsolationLevel;
 use crate::errors::{DeltaResult, DeltaTableError};
+use crate::protocol::{Action, Add, DeltaOperation, MetaData, Protocol, Remove};
 use crate::storage::commit_uri_from_version;
-use crate::table_state::DeltaTableState;
+use crate::table::config::IsolationLevel;
+use crate::table::state::DeltaTableState;
 
 #[cfg(feature = "datafusion")]
 use super::state::AddContainer;
@@ -53,8 +53,8 @@ pub enum CommitConflictError {
     ///   you may need to upgrade your Delta Lake version.
     /// - When multiple writers are creating or replacing a table at the same time.
     /// - When multiple writers are writing to an empty path at the same time.
-    #[error("Protocol changed since last commit.")]
-    ProtocolChanged,
+    #[error("Protocol changed since last commit: {0}")]
+    ProtocolChanged(String),
 
     /// Error returned when the table requires an unsupported writer version
     #[error("Delta-rs does not support writer version {0}")]
@@ -114,8 +114,11 @@ impl<'a> TransactionInfo<'a> {
         actions: &'a Vec<Action>,
         read_whole_table: bool,
     ) -> DeltaResult<Self> {
+        use datafusion::prelude::SessionContext;
+
+        let session = SessionContext::new();
         let read_predicates = read_predicates
-            .map(|pred| read_snapshot.parse_predicate_expression(pred))
+            .map(|pred| read_snapshot.parse_predicate_expression(pred, &session.state()))
             .transpose()?;
         Ok(Self {
             txn_id: "".into(),
@@ -392,10 +395,18 @@ impl<'a> ConflictChecker<'a> {
     /// to read and write against the protocol set by the committed transaction.
     fn check_protocol_compatibility(&self) -> Result<(), CommitConflictError> {
         for p in self.winning_commit_summary.protocol() {
-            if self.txn_info.read_snapshot.min_reader_version() < p.min_reader_version
-                || self.txn_info.read_snapshot.min_writer_version() < p.min_writer_version
-            {
-                return Err(CommitConflictError::ProtocolChanged);
+            let (win_read, curr_read) = (
+                p.min_reader_version,
+                self.txn_info.read_snapshot.min_reader_version(),
+            );
+            let (win_write, curr_write) = (
+                p.min_writer_version,
+                self.txn_info.read_snapshot.min_writer_version(),
+            );
+            if curr_read < win_read || win_write < curr_write {
+                return Err(CommitConflictError::ProtocolChanged(
+                    format!("reqired read/write {win_read}/{win_write}, current read/write {curr_read}/{curr_write}"),
+                ));
             };
         }
         if !self.winning_commit_summary.protocol().is_empty()
@@ -405,7 +416,9 @@ impl<'a> ConflictChecker<'a> {
                 .iter()
                 .any(|a| matches!(a, Action::protocol(_)))
         {
-            return Err(CommitConflictError::ProtocolChanged);
+            return Err(CommitConflictError::ProtocolChanged(
+                "protocol changed".into(),
+            ));
         };
         Ok(())
     }
@@ -631,7 +644,7 @@ mod tests {
     use super::super::test_utils as tu;
     use super::super::test_utils::init_table_actions;
     use super::*;
-    use crate::action::Action;
+    use crate::protocol::Action;
     #[cfg(feature = "datafusion")]
     use datafusion_expr::{col, lit};
     use serde_json::json;
@@ -818,7 +831,10 @@ mod tests {
             vec![tu::create_protocol_action(None, None)],
             false,
         );
-        assert!(matches!(result, Err(CommitConflictError::ProtocolChanged)));
+        assert!(matches!(
+            result,
+            Err(CommitConflictError::ProtocolChanged(_))
+        ));
 
         // taint whole table
         // `read_whole_table` should disallow any concurrent change, even if the change

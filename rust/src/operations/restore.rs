@@ -30,11 +30,11 @@ use object_store::path::Path;
 use object_store::ObjectStore;
 use serde::Serialize;
 
-use crate::action::{Action, Add, DeltaOperation, Remove};
 use crate::operations::transaction::{prepare_commit, try_commit_transaction, TransactionError};
+use crate::protocol::{Action, Add, DeltaOperation, Protocol, Remove};
 use crate::storage::ObjectStoreRef;
-use crate::table_state::DeltaTableState;
-use crate::{action, DeltaResult, DeltaTable, DeltaTableConfig, DeltaTableError, ObjectStoreError};
+use crate::table::state::DeltaTableState;
+use crate::{DeltaResult, DeltaTable, DeltaTableConfig, DeltaTableError, ObjectStoreError};
 
 /// Errors that can occur during restore
 #[derive(thiserror::Error, Debug)]
@@ -202,12 +202,12 @@ async fn execute(
 
     let mut actions = vec![];
     let protocol = if protocol_downgrade_allowed {
-        action::Protocol {
+        Protocol {
             min_reader_version: table.get_min_reader_version(),
             min_writer_version: table.get_min_writer_version(),
         }
     } else {
-        action::Protocol {
+        Protocol {
             min_reader_version: max(
                 table.get_min_reader_version(),
                 snapshot.min_reader_version(),
@@ -249,10 +249,10 @@ async fn execute(
 
 async fn check_files_available(
     object_store: &dyn ObjectStore,
-    files: &Vec<action::Add>,
+    files: &Vec<Add>,
 ) -> DeltaResult<()> {
     for file in files {
-        let file_path = Path::from(file.path.clone());
+        let file_path = Path::parse(file.path.clone())?;
         match object_store.head(&file_path).await {
             Ok(_) => {}
             Err(ObjectStoreError::NotFound { .. }) => {

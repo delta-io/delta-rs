@@ -9,13 +9,14 @@ use serde_json::{Map, Value};
 
 use super::transaction::commit;
 use super::{MAX_SUPPORTED_READER_VERSION, MAX_SUPPORTED_WRITER_VERSION};
-use crate::action::{Action, DeltaOperation, MetaData, Protocol, SaveMode};
-use crate::builder::ensure_table_uri;
-use crate::delta_config::DeltaConfigKey;
 use crate::errors::{DeltaResult, DeltaTableError};
+use crate::protocol::{Action, DeltaOperation, MetaData, Protocol, SaveMode};
 use crate::schema::{SchemaDataType, SchemaField, SchemaTypeStruct};
 use crate::storage::DeltaObjectStore;
-use crate::{DeltaTable, DeltaTableBuilder, DeltaTableMetaData};
+use crate::table::builder::ensure_table_uri;
+use crate::table::config::DeltaConfigKey;
+use crate::table::DeltaTableMetaData;
+use crate::{DeltaTable, DeltaTableBuilder};
 
 #[derive(thiserror::Error, Debug)]
 enum CreateError {
@@ -148,7 +149,7 @@ impl CreateBuilder {
     ///
     /// Options may be passed in the HashMap or set as environment variables.
     ///
-    /// [crate::builder::s3_storage_options] describes the available options for the AWS or S3-compliant backend.
+    /// [crate::table::builder::s3_storage_options] describes the available options for the AWS or S3-compliant backend.
     /// [dynamodb_lock::DynamoDbLockClient] describes additional options for the AWS atomic rename client.
     ///
     /// If an object store is also passed using `with_object_store()` these options will be ignored.
@@ -291,7 +292,7 @@ impl std::future::IntoFuture for CreateBuilder {
         Box::pin(async move {
             let mode = this.mode.clone();
             let (mut table, actions, operation) = this.into_table_and_actions()?;
-            if table.object_store().is_delta_table_location().await? {
+            let table_state = if table.object_store().is_delta_table_location().await? {
                 match mode {
                     SaveMode::ErrorIfExists => return Err(CreateError::TableAlreadyExists.into()),
                     SaveMode::Append => return Err(CreateError::AppendNotAllowed.into()),
@@ -300,15 +301,19 @@ impl std::future::IntoFuture for CreateBuilder {
                         return Ok(table);
                     }
                     SaveMode::Overwrite => {
-                        todo!("Overwriting on create not yet implemented. Use 'write' operation instead.")
+                        table.load().await?;
+                        &table.state
                     }
                 }
-            }
+            } else {
+                &table.state
+            };
+
             let version = commit(
                 table.object_store().as_ref(),
                 &actions,
                 operation,
-                &table.state,
+                table_state,
                 None,
             )
             .await?;
@@ -322,8 +327,8 @@ impl std::future::IntoFuture for CreateBuilder {
 #[cfg(all(test, feature = "parquet"))]
 mod tests {
     use super::*;
-    use crate::delta_config::DeltaConfigKey;
     use crate::operations::DeltaOps;
+    use crate::table::config::DeltaConfigKey;
     use crate::writer::test_utils::get_delta_schema;
     use tempdir::TempDir;
 
@@ -455,12 +460,12 @@ mod tests {
         assert_eq!(table.get_metadata().unwrap().id, first_id);
 
         // Check table is overwritten
-        // let table = CreateBuilder::new()
-        //     .with_object_store(object_store.clone())
-        //     .with_columns(schema.get_fields().clone())
-        //     .with_save_mode(SaveMode::Overwrite)
-        //     .await
-        //     .unwrap();
-        // assert_ne!(table.get_metadata().unwrap().id, first_id)
+        let table = CreateBuilder::new()
+            .with_object_store(object_store.clone())
+            .with_columns(schema.get_fields().clone())
+            .with_save_mode(SaveMode::Overwrite)
+            .await
+            .unwrap();
+        assert_ne!(table.get_metadata().unwrap().id, first_id)
     }
 }

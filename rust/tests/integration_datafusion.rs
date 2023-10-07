@@ -31,9 +31,9 @@ use datafusion_proto::bytes::{
 };
 use url::Url;
 
-use deltalake::action::SaveMode;
 use deltalake::delta_datafusion::{DeltaPhysicalCodec, DeltaScan};
 use deltalake::operations::create::CreateBuilder;
+use deltalake::protocol::SaveMode;
 use deltalake::storage::DeltaObjectStore;
 use deltalake::writer::{DeltaWriter, RecordBatchWriter};
 use deltalake::{
@@ -51,7 +51,7 @@ mod local {
     #[tokio::test]
     #[serial]
     async fn test_datafusion_local() -> TestResult {
-        Ok(test_datafusion(StorageIntegration::Local).await?)
+        test_datafusion(StorageIntegration::Local).await
     }
 
     fn get_scanned_files(node: &dyn ExecutionPlan) -> HashSet<Label> {
@@ -202,7 +202,7 @@ mod local {
 
         // Create target Delta Table
         let target_table = CreateBuilder::new()
-            .with_location("memory://target")
+            .with_location("memory:///target")
             .with_columns(fields)
             .with_table_name("target")
             .await?;
@@ -243,7 +243,7 @@ mod local {
 
         // Check results
         let batches = ctx.sql("SELECT * FROM target").await?.collect().await?;
-        let expected = vec![
+        let expected = [
             "+------------+-----------+",
             "| date       | dayOfYear |",
             "+------------+-----------+",
@@ -959,7 +959,7 @@ mod local {
         let mut table = deltalake::open_table("./tests/data/issue-1619").await?;
 
         let mut writer = JsonWriter::for_table(&table).unwrap();
-        let _ = writer
+        writer
             .write(vec![
                 serde_json::json!({"metadata": {"hello": "world", "something": null}}),
             ])
@@ -992,7 +992,7 @@ mod s3 {
     #[tokio::test]
     #[serial]
     async fn test_datafusion_aws() -> TestResult {
-        Ok(test_datafusion(StorageIntegration::Amazon).await?)
+        test_datafusion(StorageIntegration::Amazon).await
     }
 }
 
@@ -1002,7 +1002,7 @@ mod azure {
     #[tokio::test]
     #[serial]
     async fn test_datafusion_azure() -> TestResult {
-        Ok(test_datafusion(StorageIntegration::Microsoft).await?)
+        test_datafusion(StorageIntegration::Microsoft).await
     }
 }
 
@@ -1012,7 +1012,7 @@ mod gcs {
     #[tokio::test]
     #[serial]
     async fn test_datafusion_gcp() -> TestResult {
-        Ok(test_datafusion(StorageIntegration::Google).await?)
+        test_datafusion(StorageIntegration::Google).await
     }
 }
 
@@ -1040,7 +1040,7 @@ async fn simple_query(context: &IntegrationContext) -> TestResult {
 
     let dynamo_lock_option = "'DYNAMO_LOCK_OWNER_NAME' 's3::deltars/simple'".to_string();
     let options = match context.integration {
-        StorageIntegration::Amazon => format!("'AWS_STORAGE_ALLOW_HTTP' '1', {dynamo_lock_option}"),
+        StorageIntegration::Amazon => format!("'AWS_ALLOW_HTTP' '1', {dynamo_lock_option}"),
         StorageIntegration::Microsoft => {
             format!("'AZURE_STORAGE_ALLOW_HTTP' '1', {dynamo_lock_option}")
         }

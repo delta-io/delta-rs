@@ -1,6 +1,6 @@
 [workspace]
-members = ["rust", "python"]
-exclude = ["proofs", "delta-inspect"]
+members = ["delta-inspect", "rust", "python"]
+exclude = ["proofs"]
 resolver = "2"
 
 [profile.release-with-debug]
@@ -15,23 +15,23 @@ debug = "line-tables-only"
 
 [workspace.dependencies]
 # arrow
-arrow = { version = "45" }
-arrow-array = { version = "45" }
-arrow-buffer = { version = "45" }
-arrow-cast = { version = "45" }
-arrow-ord = { version = "45" }
-arrow-row = { version = "45" }
-arrow-schema = { version = "45" }
-arrow-select = { version = "45" }
-parquet = { version = "45" }
+arrow = { version = "46" }
+arrow-array = { version = "46" }
+arrow-buffer = { version = "46" }
+arrow-cast = { version = "46" }
+arrow-ord = { version = "46" }
+arrow-row = { version = "46" }
+arrow-schema = { version = "46" }
+arrow-select = { version = "46" }
+parquet = { version = "46" }
 
 # datafusion
-datafusion = { version = "30" }
-datafusion-expr = { version = "30" }
-datafusion-common = { version = "30" }
-datafusion-proto = { version = "30" }
-datafusion-sql = { version = "30" }
-datafusion-physical-expr = { version = "30" }
+datafusion = { version = "31" }
+datafusion-expr = { version = "31" }
+datafusion-common = { version = "31" }
+datafusion-proto = { version = "31" }
+datafusion-sql = { version = "31" }
+datafusion-physical-expr = { version = "31" }
 
 # serde
 serde = { version = "1", features = ["derive"] }
@@ -39,7 +39,7 @@ serde_json = "1"
 
 # "stdlib"
 bytes = { version = "1" }
-chrono = { version = "0.4", default-features = false, features = ["clock"] }
+chrono = { version = "0.4.31", default-features = false, features = ["clock"] }
 regex = { version = "1" }
 thiserror = { version = "1" }
 url = { version = "2" }
