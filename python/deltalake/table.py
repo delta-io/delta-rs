@@ -469,7 +469,7 @@ given filters.
         :param predicate: a logical expression, defaults to None
         :writer_properties: Pass writer properties to the Rust parquet writer, see options https://arrow.apache.org/rust/parquet/file/properties/struct.WriterProperties.html,
             only the fields: data_page_size_limit, dictionary_page_size_limit, data_page_row_count_limit, write_batch_size, max_row_group_size are supported.
-        :strict_cast: specify if data types need to be casted strictly or not :default = True
+        :error_on_type_mismatch: specify if merge will return error if data types are mismatching :default = True
         :return: the metrics from delete
 
         Examples:
