@@ -36,7 +36,7 @@ async fn main() -> Result<(), DeltaTableError> {
     })?;
     info!("Using the location of: {:?}", table_uri);
 
-    let table_path = Path::from(table_uri.as_ref());
+    let table_path = Path::parse(&table_uri)?;
 
     let maybe_table = deltalake::open_table(&table_path).await;
     let mut table = match maybe_table {
@@ -45,7 +45,7 @@ async fn main() -> Result<(), DeltaTableError> {
             info!("It doesn't look like our delta table has been created");
             create_initialized_table(&table_path).await
         }
-        Err(err) => Err(err).unwrap(),
+        Err(err) => panic!("{:?}", err),
     };
 
     let writer_properties = WriterProperties::builder()

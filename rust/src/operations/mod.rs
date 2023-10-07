@@ -10,8 +10,8 @@
 use self::create::CreateBuilder;
 use self::filesystem_check::FileSystemCheckBuilder;
 use self::vacuum::VacuumBuilder;
-use crate::builder::DeltaTableBuilder;
 use crate::errors::{DeltaResult, DeltaTableError};
+use crate::table::builder::DeltaTableBuilder;
 use crate::DeltaTable;
 
 pub mod create;
@@ -202,9 +202,10 @@ impl AsRef<DeltaTable> for DeltaOps {
 mod datafusion_utils {
     use std::sync::Arc;
 
-    use arrow_array::RecordBatch;
     use arrow_schema::SchemaRef;
+    use datafusion::arrow::record_batch::RecordBatch;
     use datafusion::error::Result as DataFusionResult;
+    use datafusion::execution::context::SessionState;
     use datafusion::physical_plan::DisplayAs;
     use datafusion::physical_plan::{
         metrics::{ExecutionPlanMetricsSet, MetricsSet},
@@ -213,7 +214,7 @@ mod datafusion_utils {
     use datafusion_expr::Expr;
     use futures::{Stream, StreamExt};
 
-    use crate::{table_state::DeltaTableState, DeltaResult};
+    use crate::{table::state::DeltaTableState, DeltaResult};
 
     /// Used to represent user input of either a Datafusion expression or string expression
     pub enum Expression {
@@ -240,19 +241,24 @@ mod datafusion_utils {
         }
     }
 
-    pub(crate) fn into_expr(expr: Expression, snapshot: &DeltaTableState) -> DeltaResult<Expr> {
+    pub(crate) fn into_expr(
+        expr: Expression,
+        snapshot: &DeltaTableState,
+        df_state: &SessionState,
+    ) -> DeltaResult<Expr> {
         match expr {
             Expression::DataFusion(expr) => Ok(expr),
-            Expression::String(s) => snapshot.parse_predicate_expression(s),
+            Expression::String(s) => snapshot.parse_predicate_expression(s, df_state),
         }
     }
 
     pub(crate) fn maybe_into_expr(
         expr: Option<Expression>,
         snapshot: &DeltaTableState,
+        df_state: &SessionState,
     ) -> DeltaResult<Option<Expr>> {
         Ok(match expr {
-            Some(predicate) => Some(into_expr(predicate, snapshot)?),
+            Some(predicate) => Some(into_expr(predicate, snapshot, df_state)?),
             None => None,
         })
     }

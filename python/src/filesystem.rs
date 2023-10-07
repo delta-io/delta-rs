@@ -25,6 +25,7 @@ pub struct DeltaFileSystemHandler {
     pub(crate) inner: Arc<DynObjectStore>,
     pub(crate) rt: Arc<Runtime>,
     pub(crate) config: FsConfig,
+    pub(crate) known_sizes: Option<HashMap<String, i64>>,
 }
 
 impl DeltaFileSystemHandler {
@@ -41,8 +42,12 @@ impl DeltaFileSystemHandler {
 #[pymethods]
 impl DeltaFileSystemHandler {
     #[new]
-    #[pyo3(signature = (table_uri, options = None))]
-    fn new(table_uri: &str, options: Option<HashMap<String, String>>) -> PyResult<Self> {
+    #[pyo3(signature = (table_uri, options = None, known_sizes = None))]
+    fn new(
+        table_uri: &str,
+        options: Option<HashMap<String, String>>,
+        known_sizes: Option<HashMap<String, i64>>,
+    ) -> PyResult<Self> {
         let storage = DeltaTableBuilder::from_uri(table_uri)
             .with_storage_options(options.clone().unwrap_or_default())
             .build_storage()
@@ -54,6 +59,7 @@ impl DeltaFileSystemHandler {
                 root_url: table_uri.into(),
                 options: options.unwrap_or_default(),
             },
+            known_sizes,
         })
     }
 
@@ -125,7 +131,12 @@ impl DeltaFileSystemHandler {
                     Ok(meta) => {
                         let kwargs = HashMap::from([
                             ("size", meta.size as i64),
-                            ("mtime_ns", meta.last_modified.timestamp_nanos()),
+                            (
+                                "mtime_ns",
+                                meta.last_modified.timestamp_nanos_opt().ok_or(
+                                    PyValueError::new_err("last modified datetime out of range"),
+                                )?,
+                            ),
                         ]);
                         infos.push(to_file_info(
                             meta.location.as_ref(),
@@ -212,7 +223,12 @@ impl DeltaFileSystemHandler {
                 .map(|meta| {
                     let kwargs = HashMap::from([
                         ("size", meta.size as i64),
-                        ("mtime_ns", meta.last_modified.timestamp_nanos()),
+                        (
+                            "mtime_ns",
+                            meta.last_modified.timestamp_nanos_opt().ok_or(
+                                PyValueError::new_err("last modified datetime out of range"),
+                            )?,
+                        ),
                     ]);
                     to_file_info(
                         meta.location.to_string(),
@@ -237,6 +253,11 @@ impl DeltaFileSystemHandler {
     }
 
     fn open_input_file(&self, path: String) -> PyResult<ObjectInputFile> {
+        let size = match &self.known_sizes {
+            Some(sz) => sz.get(&path),
+            None => None,
+        };
+
         let path = Self::parse_path(&path);
         let file = self
             .rt
@@ -244,6 +265,7 @@ impl DeltaFileSystemHandler {
                 Arc::clone(&self.rt),
                 self.inner.clone(),
                 path,
+                size.copied(),
             ))
             .map_err(PythonError::from)?;
         Ok(file)
@@ -296,11 +318,18 @@ impl ObjectInputFile {
         rt: Arc<Runtime>,
         store: Arc<DynObjectStore>,
         path: Path,
+        size: Option<i64>,
     ) -> Result<Self, ObjectStoreError> {
-        // Issue a HEAD Object to get the content-length and ensure any
+        // If file size is not given, issue a HEAD Object to get the content-length and ensure any
         // errors (e.g. file not found) don't wait until the first read() call.
-        let meta = store.head(&path).await?;
-        let content_length = meta.size as i64;
+        let content_length = match size {
+            Some(s) => s,
+            None => {
+                let meta = store.head(&path).await?;
+                meta.size as i64
+            }
+        };
+
         // TODO make sure content length is valid
         // https://github.com/apache/arrow/blob/f184255cbb9bf911ea2a04910f711e1a924b12b8/cpp/src/arrow/filesystem/s3fs.cc#L1083
         Ok(Self {

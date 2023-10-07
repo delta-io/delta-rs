@@ -33,7 +33,7 @@ use object_store::{path::Path, ObjectStore};
 
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::storage::DeltaObjectStore;
-use crate::table_state::DeltaTableState;
+use crate::table::state::DeltaTableState;
 use crate::DeltaTable;
 
 /// Errors that can occur during vacuum

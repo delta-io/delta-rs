@@ -168,6 +168,7 @@ def test_roundtrip_metadata(tmp_path: pathlib.Path, sample_data: pa.Table):
         "bool",
         "binary",
         "date32",
+        "timestamp",
     ],
 )
 def test_roundtrip_partitioned(
@@ -840,6 +841,25 @@ def test_large_arrow_types(tmp_path: pathlib.Path):
     assert table.schema == dt.schema().to_pyarrow(as_large_types=True)
 
 
+def test_partition_large_arrow_types(tmp_path: pathlib.Path):
+    table = pa.table(
+        {
+            "foo": pa.array(["1", "1", "2", "2"], pa.large_string()),
+            "bar": pa.array([1, 2, 1, 2], pa.int64()),
+            "baz": pa.array([1, 1, 1, 1], pa.int64()),
+        }
+    )
+
+    write_deltalake(tmp_path, table, partition_by=["foo"])
+
+    dt = DeltaTable(tmp_path)
+    files = dt.files()
+    expected = ["foo=1", "foo=2"]
+
+    result = sorted([file.split("/")[0] for file in files])
+    assert expected == result
+
+
 def test_uint_arrow_types(tmp_path: pathlib.Path):
     pylist = [
         {"num1": 3, "num2": 3, "num3": 3, "num4": 5},
@@ -888,3 +908,19 @@ def test_concurrency(existing_table: DeltaTable, sample_data: pa.Table):
         "a concurrent transaction deleted the same data your transaction deletes"
         in str(exception)
     )
+
+
+def test_issue_1651_roundtrip_timestamp(tmp_path: pathlib.Path):
+    data = pa.table(
+        {
+            "id": pa.array([425], type=pa.int32()),
+            "data": pa.array(["python-module-test-write"]),
+            "t": pa.array([datetime(2023, 9, 15)]),
+        }
+    )
+
+    write_deltalake(table_or_uri=tmp_path, mode="append", data=data, partition_by=["t"])
+    dt = DeltaTable(table_uri=tmp_path)
+    dataset = dt.to_pyarrow_dataset()
+
+    assert dataset.count_rows() == 1

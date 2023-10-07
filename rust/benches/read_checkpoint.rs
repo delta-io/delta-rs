@@ -1,6 +1,6 @@
 use criterion::{criterion_group, criterion_main, Criterion};
-use deltalake::delta::DeltaTableConfig;
-use deltalake::table_state::DeltaTableState;
+use deltalake::table::state::DeltaTableState;
+use deltalake::DeltaTableConfig;
 use std::fs::File;
 use std::io::Read;
 

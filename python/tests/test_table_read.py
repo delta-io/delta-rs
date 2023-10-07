@@ -2,6 +2,7 @@ import os
 from datetime import datetime
 from pathlib import Path
 from threading import Barrier, Thread
+from types import SimpleNamespace
 from unittest.mock import Mock
 
 from packaging import version
@@ -102,6 +103,25 @@ def test_read_simple_table_update_incremental():
     assert dt.to_pyarrow_dataset().to_table().to_pydict() == {"id": [0, 1, 2, 3, 4]}
     dt.update_incremental()
     assert dt.to_pyarrow_dataset().to_table().to_pydict() == {"id": [5, 7, 9]}
+
+
+def test_read_simple_table_file_sizes_failure():
+    table_path = "../rust/tests/data/simple_table"
+    dt = DeltaTable(table_path)
+    add_actions = dt.get_add_actions().to_pydict()
+
+    # set all sizes to -1, the idea is to break the reading, to check
+    # that input file sizes are actually used
+    add_actions_modified = {
+        x: [-1 for item in x] if x == "size_bytes" else y
+        for x, y in add_actions.items()
+    }
+    dt.get_add_actions = lambda: SimpleNamespace(
+        to_pydict=lambda: add_actions_modified
+    )  # type:ignore
+
+    with pytest.raises(OSError, match="Cannot seek past end of file."):
+        dt.to_pyarrow_dataset().to_table().to_pydict()
 
 
 def test_read_partitioned_table_to_dict():
@@ -628,3 +648,49 @@ def test_filter_nulls(tmp_path: Path):
     assert_num_fragments(table, predicate, 2)
     expected = pa.table({"part": ["a", "a", "b", "b"], "value": [1, 1, None, None]})
     assert_scan_equals(table, predicate, expected)
+
+
+def test_issue_1653_filter_bool_partition(tmp_path: Path):
+    ta = pa.Table.from_pydict(
+        {
+            "bool_col": [True, False, True, False],
+            "int_col": [0, 1, 2, 3],
+            "str_col": ["a", "b", "c", "d"],
+        }
+    )
+    write_deltalake(
+        tmp_path, ta, partition_by=["bool_col", "int_col"], mode="overwrite"
+    )
+    dt = DeltaTable(tmp_path)
+
+    assert (
+        dt.to_pyarrow_table(
+            filters=[
+                ("int_col", "=", 0),
+                ("bool_col", "=", True),
+            ]
+        ).num_rows
+        == 1
+    )
+    assert (
+        len(
+            dt.file_uris(
+                partition_filters=[
+                    ("int_col", "=", 0),
+                    ("bool_col", "=", "true"),
+                ]
+            )
+        )
+        == 1
+    )
+    assert (
+        len(
+            dt.file_uris(
+                partition_filters=[
+                    ("int_col", "=", 0),
+                    ("bool_col", "=", True),
+                ]
+            )
+        )
+        == 1
+    )

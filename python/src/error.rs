@@ -1,5 +1,5 @@
 use arrow_schema::ArrowError;
-use deltalake::action::ProtocolError;
+use deltalake::protocol::ProtocolError;
 use deltalake::{errors::DeltaTableError, ObjectStoreError};
 use pyo3::exceptions::{
     PyException, PyFileNotFoundError, PyIOError, PyNotImplementedError, PyValueError,
