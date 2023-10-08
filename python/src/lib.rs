@@ -21,6 +21,7 @@ use deltalake::checkpoints::create_checkpoint;
 use deltalake::datafusion::prelude::SessionContext;
 use deltalake::delta_datafusion::DeltaDataChecker;
 use deltalake::errors::DeltaTableError;
+use deltalake::operations::delete::DeleteBuilder;
 use deltalake::operations::optimize::{OptimizeBuilder, OptimizeType};
 use deltalake::operations::restore::RestoreBuilder;
 use deltalake::operations::transaction::commit;
@@ -51,7 +52,7 @@ enum PartitionFilterValue<'a> {
     Multiple(Vec<&'a str>),
 }
 
-#[pyclass]
+#[pyclass(module = "deltalake._internal")]
 struct RawDeltaTable {
     _table: deltalake::DeltaTable,
     // storing the config additionally on the table helps us make pickling work.
@@ -594,6 +595,20 @@ impl RawDeltaTable {
                 .map_err(PythonError::from)?,
         ))
     }
+
+    /// Run the delete command on the delta table: delete records following a predicate and return the delete metrics.
+    #[pyo3(signature = (predicate = None))]
+    pub fn delete(&mut self, predicate: Option<String>) -> PyResult<String> {
+        let mut cmd = DeleteBuilder::new(self._table.object_store(), self._table.state.clone());
+        if let Some(predicate) = predicate {
+            cmd = cmd.with_predicate(predicate);
+        }
+        let (table, metrics) = rt()?
+            .block_on(cmd.into_future())
+            .map_err(PythonError::from)?;
+        self._table.state = table.state;
+        Ok(serde_json::to_string(&metrics).unwrap())
+    }
 }
 
 fn convert_partition_filters<'a>(
@@ -857,7 +872,7 @@ fn write_new_deltalake(
     Ok(())
 }
 
-#[pyclass(name = "DeltaDataChecker")]
+#[pyclass(name = "DeltaDataChecker", module = "deltalake._internal")]
 struct PyDeltaDataChecker {
     inner: DeltaDataChecker,
     rt: tokio::runtime::Runtime,

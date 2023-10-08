@@ -61,18 +61,17 @@ use parquet::file::properties::WriterProperties;
 use serde_json::{Map, Value};
 
 use crate::delta_datafusion::DeltaScanBuilder;
+use super::datafusion_utils::{into_expr, maybe_into_expr, Expression};
+use super::transaction::commit;
+use crate::delta_datafusion::expr::fmt_expr_to_sql;
+use crate::delta_datafusion::register_store;
 use crate::operations::datafusion_utils::MetricObserverExec;
 use crate::{
-    delta_datafusion::register_store,
     operations::write::write_execution_plan,
     storage::{DeltaObjectStore, ObjectStoreRef},
     DeltaResult, DeltaTable, DeltaTableError,
 };
 
-use super::{
-    datafusion_utils::{into_expr, maybe_into_expr, Expression},
-    transaction::commit,
-};
 use crate::protocol::{Action, DeltaOperation, MergePredicate, Remove};
 use crate::table::state::DeltaTableState;
 
@@ -177,6 +176,7 @@ impl MergeBuilder {
         let builder = builder(UpdateBuilder::default());
         let op = MergeOperation::try_new(
             &self.snapshot,
+            &self.state.as_ref(),
             builder.predicate,
             builder.updates,
             OperationType::Update,
@@ -210,6 +210,7 @@ impl MergeBuilder {
         let builder = builder(DeleteBuilder::default());
         let op = MergeOperation::try_new(
             &self.snapshot,
+            &self.state.as_ref(),
             builder.predicate,
             HashMap::default(),
             OperationType::Delete,
@@ -246,6 +247,7 @@ impl MergeBuilder {
         let builder = builder(InsertBuilder::default());
         let op = MergeOperation::try_new(
             &self.snapshot,
+            &self.state.as_ref(),
             builder.predicate,
             builder.set,
             OperationType::Insert,
@@ -284,6 +286,7 @@ impl MergeBuilder {
         let builder = builder(UpdateBuilder::default());
         let op = MergeOperation::try_new(
             &self.snapshot,
+            &self.state.as_ref(),
             builder.predicate,
             builder.updates,
             OperationType::Update,
@@ -317,6 +320,7 @@ impl MergeBuilder {
         let builder = builder(DeleteBuilder::default());
         let op = MergeOperation::try_new(
             &self.snapshot,
+            &self.state.as_ref(),
             builder.predicate,
             HashMap::default(),
             OperationType::Delete,
@@ -454,15 +458,21 @@ struct MergeOperation {
 impl MergeOperation {
     pub fn try_new(
         snapshot: &DeltaTableState,
+        state: &Option<&SessionState>,
         predicate: Option<Expression>,
         operations: HashMap<Column, Expression>,
         r#type: OperationType,
     ) -> DeltaResult<Self> {
-        let predicate = maybe_into_expr(predicate, snapshot)?;
+        let context = SessionContext::new();
+        let mut s = &context.state();
+        if let Some(df_state) = state {
+            s = df_state;
+        }
+        let predicate = maybe_into_expr(predicate, snapshot, s)?;
         let mut _operations = HashMap::new();
 
         for (column, expr) in operations {
-            _operations.insert(column, into_expr(expr, snapshot)?);
+            _operations.insert(column, into_expr(expr, snapshot, s)?);
         }
 
         Ok(MergeOperation {
@@ -524,7 +534,7 @@ async fn execute(
 
     let predicate = match predicate {
         Expression::DataFusion(expr) => expr,
-        Expression::String(s) => snapshot.parse_predicate_expression(s)?,
+        Expression::String(s) => snapshot.parse_predicate_expression(s, &state)?,
     };
 
     // TODO: Given the join predicate, remove any expression that involve the
@@ -674,7 +684,10 @@ async fn execute(
             };
 
             let action_type = action_type.to_string();
-            let predicate = op.predicate.map(|expr| expr.display_name().unwrap());
+            let predicate = op
+                .predicate
+                .map(|expr| fmt_expr_to_sql(&expr))
+                .transpose()?;
 
             predicates.push(MergePredicate {
                 action_type,
@@ -1034,7 +1047,7 @@ async fn execute(
     // Do not make a commit when there are zero updates to the state
     if !actions.is_empty() {
         let operation = DeltaOperation::Merge {
-            predicate: Some(predicate.canonical_name()),
+            predicate: Some(fmt_expr_to_sql(&predicate)?),
             matched_predicates: match_operations,
             not_matched_predicates: not_match_target_operations,
             not_matched_by_source_predicates: not_match_source_operations,
@@ -1221,10 +1234,9 @@ mod tests {
             parameters["notMatchedPredicates"],
             json!(r#"[{"actionType":"insert"}]"#)
         );
-        // Todo: Expected this predicate to actually be 'value = 1'. Predicate should contain a valid sql expression
         assert_eq!(
             parameters["notMatchedBySourcePredicates"],
-            json!(r#"[{"actionType":"update","predicate":"value = Int32(1)"}]"#)
+            json!(r#"[{"actionType":"update","predicate":"value = 1"}]"#)
         );
 
         let expected = vec![
@@ -1446,7 +1458,7 @@ mod tests {
         assert_eq!(parameters["predicate"], json!("id = source.id"));
         assert_eq!(
             parameters["matchedPredicates"],
-            json!(r#"[{"actionType":"delete","predicate":"source.value <= Int32(10)"}]"#)
+            json!(r#"[{"actionType":"delete","predicate":"source.value <= 10"}]"#)
         );
 
         let expected = vec![
@@ -1578,7 +1590,7 @@ mod tests {
         assert_eq!(parameters["predicate"], json!("id = source.id"));
         assert_eq!(
             parameters["notMatchedBySourcePredicates"],
-            json!(r#"[{"actionType":"delete","predicate":"modified > Utf8(\"2021-02-01\")"}]"#)
+            json!(r#"[{"actionType":"delete","predicate":"modified > '2021-02-01'"}]"#)
         );
 
         let expected = vec![

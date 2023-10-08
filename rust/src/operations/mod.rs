@@ -205,6 +205,7 @@ mod datafusion_utils {
     use arrow_schema::SchemaRef;
     use datafusion::arrow::record_batch::RecordBatch;
     use datafusion::error::Result as DataFusionResult;
+    use datafusion::execution::context::SessionState;
     use datafusion::physical_plan::DisplayAs;
     use datafusion::physical_plan::{
         metrics::{ExecutionPlanMetricsSet, MetricsSet},
@@ -240,19 +241,24 @@ mod datafusion_utils {
         }
     }
 
-    pub(crate) fn into_expr(expr: Expression, snapshot: &DeltaTableState) -> DeltaResult<Expr> {
+    pub(crate) fn into_expr(
+        expr: Expression,
+        snapshot: &DeltaTableState,
+        df_state: &SessionState,
+    ) -> DeltaResult<Expr> {
         match expr {
             Expression::DataFusion(expr) => Ok(expr),
-            Expression::String(s) => snapshot.parse_predicate_expression(s),
+            Expression::String(s) => snapshot.parse_predicate_expression(s, df_state),
         }
     }
 
     pub(crate) fn maybe_into_expr(
         expr: Option<Expression>,
         snapshot: &DeltaTableState,
+        df_state: &SessionState,
     ) -> DeltaResult<Option<Expr>> {
         Ok(match expr {
-            Some(predicate) => Some(into_expr(predicate, snapshot)?),
+            Some(predicate) => Some(into_expr(predicate, snapshot, df_state)?),
             None => None,
         })
     }
