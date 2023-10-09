@@ -24,6 +24,7 @@ from pyarrow.dataset import (
     Expression,
     FileSystemDataset,
     ParquetFileFormat,
+    ParquetFragmentScanOptions,
     ParquetReadOptions,
 )
 
@@ -538,7 +539,10 @@ given filters.
                 )
             )
 
-        format = ParquetFileFormat(read_options=parquet_read_options)
+        format = ParquetFileFormat(
+            read_options=parquet_read_options,
+            default_fragment_scan_options=ParquetFragmentScanOptions(pre_buffer=True),
+        )
 
         fragments = [
             format.make_fragment(
