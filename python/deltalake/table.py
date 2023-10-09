@@ -427,10 +427,19 @@ given filters.
         :param limit: the commit info limit to return
         :return: list of the commit infos registered in the transaction log
         """
-        return [
-            json.loads(commit_info_raw)
-            for commit_info_raw in self._table.history(limit)
-        ]
+        if (limit is None) or (self.version() + 1 <= limit):
+            start = 0
+        else:
+            start = self.version() + 1 - limit
+
+        history = []
+        for version, commit_info_raw in enumerate(
+            self._table.history(limit), start=start
+        ):
+            commit = json.loads(commit_info_raw)
+            commit["version"] = version
+            history.append(commit)
+        return history
 
     def vacuum(
         self,
