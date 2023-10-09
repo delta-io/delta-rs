@@ -24,6 +24,7 @@ from pyarrow.dataset import (
     Expression,
     FileSystemDataset,
     ParquetFileFormat,
+    ParquetFragmentScanOptions,
     ParquetReadOptions,
 )
 
@@ -199,9 +200,9 @@ _DNF_filter_doc = """
 Predicates are expressed in disjunctive normal form (DNF), like [("x", "=", "a"), ...].
 DNF allows arbitrary boolean logical combinations of single partition predicates.
 The innermost tuples each describe a single partition predicate. The list of inner
-predicates is interpreted as a conjunction (AND), forming a more selective and 
-multiple partition predicates. Each tuple has format: (key, op, value) and compares 
-the key with the value. The supported op are: `=`, `!=`, `in`, and `not in`. If 
+predicates is interpreted as a conjunction (AND), forming a more selective and
+multiple partition predicates. Each tuple has format: (key, op, value) and compares
+the key with the value. The supported op are: `=`, `!=`, `in`, and `not in`. If
 the op is in or not in, the value must be a collection such as a list, a set or a tuple.
 The supported type for value is str. Use empty string `''` for Null partition value.
 
@@ -302,13 +303,13 @@ class DeltaTable:
 
     files.__doc__ = f"""
 Get the .parquet files of the DeltaTable.
-    
+
 The paths are as they are saved in the delta log, which may either be
 relative to the table root or absolute URIs.
 
-:param partition_filters: the partition filters that will be used for 
+:param partition_filters: the partition filters that will be used for
     getting the matched files
-:return: list of the .parquet files referenced for the current version 
+:return: list of the .parquet files referenced for the current version
     of the DeltaTable
 {_DNF_filter_doc}
     """
@@ -538,7 +539,10 @@ given filters.
                 )
             )
 
-        format = ParquetFileFormat(read_options=parquet_read_options)
+        format = ParquetFileFormat(
+            read_options=parquet_read_options,
+            default_fragment_scan_options=ParquetFragmentScanOptions(pre_buffer=True),
+        )
 
         fragments = [
             format.make_fragment(
@@ -665,6 +669,20 @@ given filters.
         2  x=1/0-91820cbf-f698-45fb-886d-5d5f5669530b-0.p...         565 1970-01-20 08:40:08.071         True            1            1             0      4      4
         """
         return self._table.get_add_actions(flatten)
+
+    def delete(self, predicate: Optional[str] = None) -> Dict[str, Any]:
+        """Delete records from a Delta Table that statisfy a predicate.
+
+        When a predicate is not provided then all records are deleted from the Delta
+        Table. Otherwise a scan of the Delta table is performed to mark any files
+        that contain records that satisfy the predicate. Once files are determined
+        they are rewritten without the records.
+
+        :param predicate: a SQL where clause. If not passed, will delete all rows.
+        :return: the metrics from delete.
+        """
+        metrics = self._table.delete(predicate)
+        return json.loads(metrics)
 
 
 class TableOptimizer:
