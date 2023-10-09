@@ -366,58 +366,102 @@ pub(crate) fn register_store(store: ObjectStoreRef, env: Arc<RuntimeEnv>) {
 
 pub(crate) fn logical_schema(
     snapshot: &DeltaTableState,
-    scan_config: &mut DeltaScanConfig,
+    scan_config: &DeltaScanConfig,
 ) -> DeltaResult<SchemaRef> {
     let input_schema = snapshot.input_schema()?;
     let mut fields = Vec::new();
-    let mut column_names: HashSet<&String> = HashSet::new();
     for field in input_schema.fields.iter() {
         fields.push(field.to_owned());
-        column_names.insert(field.name());
     }
 
-    if scan_config.include_file_column {
-        match &scan_config.file_column_name {
-            Some(name) => {
-                if column_names.contains(name) {
-                    return Err(DeltaTableError::Generic(format!(
-                        "Unable to add file path column since column with name {} exits",
-                        name
-                    )));
-                }
-            }
-            None => {
-                let prefix = PATH_COLUMN;
-                let mut idx = 0;
-                let mut name = prefix.to_owned();
-
-                while column_names.contains(&name) {
-                    idx += 1;
-                    name = format!("{}_{}", prefix, idx);
-                }
-
-                scan_config.file_column_name = Some(name);
-            }
-        }
-
+    if let Some(file_column_name) = &scan_config.file_column_name {
         fields.push(Arc::new(Field::new(
-            scan_config.file_column_name.as_ref().unwrap(),
+            file_column_name,
             arrow_schema::DataType::Utf8,
             true,
         )));
     }
+
     Ok(Arc::new(ArrowSchema::new(fields)))
+}
+
+#[derive(Debug, Clone, Default)]
+/// Used to specify it additonal metadat columns are exposed to the user
+pub struct DeltaScanConfigBuilder {
+    /// Include the source path for each record. The name of this column is determine by `file_column_name`
+    include_file_column: bool,
+    /// Column name that contains the source path.
+    ///
+    /// If include_file_column is true and the name is None then it will be auto-generated
+    /// Otherwise the user provided name will be used
+    file_column_name: Option<String>,
+}
+
+impl DeltaScanConfigBuilder {
+    /// Construct a new instance of `DeltaScanConfigBuilder`
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Indicate that a column containing a records file path is included.
+    /// Column name is randomly generated and can be determined once this Config is built
+    pub fn with_file_column(mut self, include: bool) -> Self {
+        self.include_file_column = include;
+        self.file_column_name = None;
+        self
+    }
+
+    /// Indicate that a column containing a records file path is included and column name is user defined.
+    pub fn with_file_column_name<S: ToString>(mut self, name: &S) -> Self {
+        self.file_column_name = Some(name.to_string());
+        self.include_file_column = true;
+        self
+    }
+
+    /// Build a DeltaScanConfig and ensure no column name conflicts occur during downstream processing
+    pub fn build(&self, snapshot: &DeltaTableState) -> DeltaResult<DeltaScanConfig> {
+        let input_schema = snapshot.input_schema()?;
+        let mut file_column_name = None;
+        let mut column_names: HashSet<&String> = HashSet::new();
+        for field in input_schema.fields.iter() {
+            column_names.insert(field.name());
+        }
+
+        if self.include_file_column {
+            match &self.file_column_name {
+                Some(name) => {
+                    if column_names.contains(name) {
+                        return Err(DeltaTableError::Generic(format!(
+                            "Unable to add file path column since column with name {} exits",
+                            name
+                        )));
+                    }
+
+                    file_column_name = Some(name.to_owned())
+                }
+                None => {
+                    let prefix = PATH_COLUMN;
+                    let mut idx = 0;
+                    let mut name = prefix.to_owned();
+
+                    while column_names.contains(&name) {
+                        idx += 1;
+                        name = format!("{}_{}", prefix, idx);
+                    }
+
+                    file_column_name = Some(name);
+                }
+            }
+        }
+
+        Ok(DeltaScanConfig { file_column_name })
+    }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 /// Include additonal metadata columns during a [`DeltaScan`]
 pub struct DeltaScanConfig {
-    /// Include the source path for each record. The name of this column is determine by `file_column_name`
-    pub include_file_column: bool,
-    /// Column name that contains the source path.
-    ///
-    /// If include_file_column is true and the name is None then it will be auto-generated
-    /// Otherwise the user provided name will be used
+    /// Include the source path for each record
     pub file_column_name: Option<String>,
 }
 
@@ -484,7 +528,7 @@ impl<'a> DeltaScanBuilder<'a> {
     }
 
     pub async fn build(self) -> DeltaResult<DeltaScan> {
-        let mut config = self.config;
+        let config = self.config;
         let schema = match self.schema {
             Some(schema) => schema,
             None => {
@@ -493,7 +537,7 @@ impl<'a> DeltaScanBuilder<'a> {
                     .await?
             }
         };
-        let logical_schema = logical_schema(self.snapshot, &mut config)?;
+        let logical_schema = logical_schema(self.snapshot, &config)?;
 
         let logical_schema = if let Some(used_columns) = self.projection {
             let mut fields = vec![];
@@ -545,7 +589,7 @@ impl<'a> DeltaScanBuilder<'a> {
         for action in files.iter() {
             let mut part = partitioned_file_from_action(action, &schema);
 
-            if config.include_file_column {
+            if config.file_column_name.is_some() {
                 part.partition_values
                     .push(wrap_partition_value_in_dict(ScalarValue::Utf8(Some(
                         action.path.clone(),
@@ -666,6 +710,85 @@ impl TableProvider for DeltaTable {
 
     fn statistics(&self) -> Option<Statistics> {
         Some(self.state.datafusion_table_statistics())
+    }
+}
+
+/// A Delta table provider that enables additonal metadata columns to be included during the scan
+pub struct DeltaTableProvider {
+    snapshot: DeltaTableState,
+    store: ObjectStoreRef,
+    config: DeltaScanConfig,
+    schema: Arc<ArrowSchema>,
+}
+
+impl DeltaTableProvider {
+    /// Build a DeltaTableProvider
+    pub fn try_new(
+        snapshot: DeltaTableState,
+        store: ObjectStoreRef,
+        config: DeltaScanConfig,
+    ) -> DeltaResult<Self> {
+        Ok(DeltaTableProvider {
+            schema: logical_schema(&snapshot, &config)?,
+            snapshot,
+            store,
+            config,
+        })
+    }
+}
+
+#[async_trait]
+impl TableProvider for DeltaTableProvider {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn schema(&self) -> Arc<ArrowSchema> {
+        self.schema.clone()
+    }
+
+    fn table_type(&self) -> TableType {
+        TableType::Base
+    }
+
+    fn get_table_definition(&self) -> Option<&str> {
+        None
+    }
+
+    fn get_logical_plan(&self) -> Option<&LogicalPlan> {
+        None
+    }
+
+    async fn scan(
+        &self,
+        session: &SessionState,
+        projection: Option<&Vec<usize>>,
+        filters: &[Expr],
+        limit: Option<usize>,
+    ) -> DataFusionResult<Arc<dyn ExecutionPlan>> {
+        register_store(self.store.clone(), session.runtime_env().clone());
+        let filter_expr = conjunction(filters.iter().cloned());
+
+        let scan = DeltaScanBuilder::new(&self.snapshot, self.store.clone(), session)
+            .with_projection(projection)
+            .with_limit(limit)
+            .with_filter(filter_expr)
+            .with_scan_config(self.config.clone())
+            .build()
+            .await?;
+
+        Ok(Arc::new(scan))
+    }
+
+    fn supports_filter_pushdown(
+        &self,
+        _filter: &Expr,
+    ) -> DataFusionResult<TableProviderFilterPushDown> {
+        Ok(TableProviderFilterPushDown::Inexact)
+    }
+
+    fn statistics(&self) -> Option<Statistics> {
+        Some(self.snapshot.datafusion_table_statistics())
     }
 }
 
@@ -1341,12 +1464,13 @@ pub(crate) async fn find_files_scan<'a>(
         .map(|add| (add.path.clone(), add.to_owned()))
         .collect();
 
-    let mut scan_config = DeltaScanConfig {
+    let scan_config = DeltaScanConfigBuilder {
         include_file_column: true,
         ..Default::default()
-    };
+    }
+    .build(snapshot)?;
 
-    let logical_schema = logical_schema(snapshot, &mut scan_config)?;
+    let logical_schema = logical_schema(snapshot, &scan_config)?;
 
     // Identify which columns we need to project
     let mut used_columns = expression
@@ -1497,6 +1621,7 @@ mod tests {
     use arrow::array::StructArray;
     use arrow::datatypes::{DataType, Field, Schema};
     use chrono::{TimeZone, Utc};
+    use datafusion::assert_batches_sorted_eq;
     use datafusion::physical_plan::empty::EmptyExec;
     use datafusion_proto::physical_plan::AsExecutionPlan;
     use datafusion_proto::protobuf;
@@ -1775,5 +1900,33 @@ mod tests {
             .try_into_physical_plan(&ctx, runtime.deref(), &codec)
             .expect("from proto");
         assert_eq!(format!("{exec_plan:?}"), format!("{result_exec_plan:?}"));
+    }
+
+    #[tokio::test]
+    async fn delta_table_provider_with_config() {
+        let table = crate::open_table("tests/data/delta-2.2.0-partitioned-types")
+            .await
+            .unwrap();
+        let config = DeltaScanConfigBuilder::new()
+            .with_file_column_name(&"file_source")
+            .build(&table.state)
+            .unwrap();
+
+        let provider = DeltaTableProvider::try_new(table.state, table.storage, config).unwrap();
+        let ctx = SessionContext::new();
+        ctx.register_table("test", Arc::new(provider)).unwrap();
+
+        let df = ctx.sql("select * from test").await.unwrap();
+        let actual = df.collect().await.unwrap();
+        let expected = vec! [
+                "+----+----+----+-------------------------------------------------------------------------------+",
+                "| c3 | c1 | c2 | file_source                                                                   |",
+                "+----+----+----+-------------------------------------------------------------------------------+",
+                "| 4  | 6  | a  | c1=6/c2=a/part-00011-10619b10-b691-4fd0-acc4-2a9608499d7c.c000.snappy.parquet |",
+                "| 5  | 4  | c  | c1=4/c2=c/part-00003-f525f459-34f9-46f5-82d6-d42121d883fd.c000.snappy.parquet |",
+                "| 6  | 5  | b  | c1=5/c2=b/part-00007-4e73fa3b-2c88-424a-8051-f8b54328ffdb.c000.snappy.parquet |",
+                "+----+----+----+-------------------------------------------------------------------------------+",
+            ];
+        assert_batches_sorted_eq!(&expected, &actual);
     }
 }

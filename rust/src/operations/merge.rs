@@ -60,11 +60,11 @@ use futures::future::BoxFuture;
 use parquet::file::properties::WriterProperties;
 use serde_json::{Map, Value};
 
-use crate::delta_datafusion::DeltaScanBuilder;
 use super::datafusion_utils::{into_expr, maybe_into_expr, Expression};
 use super::transaction::commit;
 use crate::delta_datafusion::expr::fmt_expr_to_sql;
 use crate::delta_datafusion::register_store;
+use crate::delta_datafusion::DeltaScanBuilder;
 use crate::operations::datafusion_utils::MetricObserverExec;
 use crate::{
     operations::write::write_execution_plan,

@@ -43,9 +43,7 @@ use parquet::file::properties::WriterProperties;
 use serde_json::{Map, Value};
 
 use crate::{
-    delta_datafusion::{
-        expr::fmt_expr_to_sql, find_files, register_store, DeltaScanBuilder,
-    },
+    delta_datafusion::{expr::fmt_expr_to_sql, find_files, register_store, DeltaScanBuilder},
     protocol::{Action, DeltaOperation, Remove},
     storage::{DeltaObjectStore, ObjectStoreRef},
     table::state::DeltaTableState,
