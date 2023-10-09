@@ -14,15 +14,13 @@
 //!
 //! In combination with `Overwrite`, a `replaceWhere` option can be used to transactionally
 //! replace data that matches a predicate.
-//! 
+//!
 //! # Example
-//! 
 //! ```rust ignore
 //! let id_field = arrow::datatypes::Field::new("id", arrow::datatypes::DataType::Int32, false);
 //! let schema = Arc::new(arrow::datatypes::Schema::new(vec![id_field]));
 //! let ids = arrow::array::Int32Array::from(vec![1, 2, 3, 4, 5]);
 //! let batch = RecordBatch::try_new(schema, vec![Arc::new(ids)])?;
-//! 
 //! let ops = DeltaOps::try_from_uri("../path/to/empty/dir").await?;
 //! let table = ops.write(vec![batch]).await?;
 //! ````
