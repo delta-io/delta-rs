@@ -6,6 +6,7 @@ Expression: Any
 field: Any
 partitioning: Any
 FileSystemDataset: Any
+ParquetFragmentScanOptions: Any
 ParquetFileFormat: Any
 ParquetReadOptions: Any
 ParquetFileWriteOptions: Any
