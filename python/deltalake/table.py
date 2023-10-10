@@ -428,14 +428,18 @@ given filters.
         :param limit: the commit info limit to return
         :return: list of the commit infos registered in the transaction log
         """
-        if (limit is None) or (self.version() + 1 <= limit):
-            start = 0
-        else:
-            start = self.version() + 1 - limit
+
+        def _backwards_enumerate(iterable, start_end):
+            n = start_end
+            for elem in iterable:
+                yield n, elem
+                n -= 1
+
+        commits = reversed(self._table.history(limit))
 
         history = []
-        for version, commit_info_raw in enumerate(
-            self._table.history(limit), start=start
+        for version, commit_info_raw in _backwards_enumerate(
+            commits, start_end=self._table.version()
         ):
             commit = json.loads(commit_info_raw)
             commit["version"] = version
