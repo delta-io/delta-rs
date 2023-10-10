@@ -493,7 +493,7 @@ Row values in an existing delta table can be updated with the :meth:`DeltaTable.
 dictionary has to be passed, where they key is the column you wish to update, and the value is a
 Expression in string format.
 
-Update all the rows for the column "deleted" to the value True.
+Update all the rows for the column "processed" to the value True.
 
 .. code-block:: python
 
@@ -501,18 +501,18 @@ Update all the rows for the column "deleted" to the value True.
     >>> df = pd.DataFrame({'x': [1, 2, 3], 'deleted': [False, False, False]})
     >>> write_deltalake('path/to/table', df)
     >>> dt = DeltaTable('path/to/table')
-    >>> dt.update({"deleted": "True"})
+    >>> dt.update({"preprocessed": "True"})
     >>> dt.to_pandas()
-    >>>     x       deleted
+    >>>     x       preprocessed
     0       1       True
     1       2       True
     2       3       True
 .. note::
     :meth:`DeltaTable.update` predicates and updates are all in string format. The predicates and expressions,
-    are parsed into Apache Datafusion expressions, for the available expressions check the 
-    Datafusion docs https://arrow.apache.org/datafusion/user-guide/expressions.html.
+    are parsed into Apache Datafusion expressions.
 
-Update all the rows for the column "deleted" to the value True where x = 3
+Apply a soft deletion based on a predicate, so update all the rows for the column "deleted" to the value 
+True where x = 3
 
 .. code-block:: python
 
