@@ -474,7 +474,8 @@ given filters.
 
         Examples:
 
-        Update some row values with SQL predicate
+        Update some row values with SQL predicate. This is equivalent to
+        ``UPDATE table SET deleted = true WHERE id = '5'``
 
         >>> from deltalake import DeltaTable
         >>> dt = DeltaTable("tmp")
