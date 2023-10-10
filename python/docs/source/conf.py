@@ -61,7 +61,7 @@ nitpick_ignore = [
     ("py:class", "pyarrow._fs.FileInfo"),
     ("py:class", "pyarrow._fs.FileSelector"),
     ("py:class", "pyarrow._fs.FileSystemHandler"),
-    ("py:class", "RawDeltaTable"),
+    ("py:class", "deltalake._internal.RawDeltaTable"),
     ("py:class", "pandas.DataFrame"),
     ("py:class", "pyarrow._dataset_parquet.ParquetFileWriteOptions"),
     ("py:class", "pathlib.Path"),

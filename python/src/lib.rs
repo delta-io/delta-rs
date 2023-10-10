@@ -54,7 +54,7 @@ enum PartitionFilterValue<'a> {
     Multiple(Vec<&'a str>),
 }
 
-#[pyclass]
+#[pyclass(module = "deltalake._internal")]
 struct RawDeltaTable {
     _table: deltalake::DeltaTable,
     // storing the config additionally on the table helps us make pickling work.
@@ -927,7 +927,7 @@ fn write_new_deltalake(
     Ok(())
 }
 
-#[pyclass(name = "DeltaDataChecker")]
+#[pyclass(name = "DeltaDataChecker", module = "deltalake._internal")]
 struct PyDeltaDataChecker {
     inner: DeltaDataChecker,
     rt: tokio::runtime::Runtime,
