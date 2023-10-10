@@ -485,7 +485,8 @@ given filters.
         ...             }
         ...         )
 
-        Update all row values
+        Update all row values. This is equivalent to
+        ``UPDATE table SET id = concat(id, '_old')``.
         >>> from deltalake import DeltaTable
         >>> dt = DeltaTable("tmp")
         >>> dt.update(updates = {
