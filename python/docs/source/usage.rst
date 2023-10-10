@@ -501,9 +501,9 @@ Update all the rows for the column "processed" to the value True.
     >>> df = pd.DataFrame({'x': [1, 2, 3], 'deleted': [False, False, False]})
     >>> write_deltalake('path/to/table', df)
     >>> dt = DeltaTable('path/to/table')
-    >>> dt.update({"preprocessed": "True"})
+    >>> dt.update({"processed": "True"})
     >>> dt.to_pandas()
-    >>>     x       preprocessed
+    >>>     x       processed
     0       1       True
     1       2       True
     2       3       True
