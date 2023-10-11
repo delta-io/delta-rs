@@ -171,6 +171,12 @@ impl RawDeltaTable {
             .map_err(PythonError::from)?)
     }
 
+    pub fn get_latest_version(&mut self) -> PyResult<i64> {
+        Ok(rt()?
+            .block_on(self._table.get_latest_version())
+            .map_err(PythonError::from)?)
+    }
+
     pub fn load_with_datetime(&mut self, ds: &str) -> PyResult<()> {
         let datetime =
             DateTime::<Utc>::from(DateTime::<FixedOffset>::parse_from_rfc3339(ds).map_err(
