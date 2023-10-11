@@ -415,8 +415,8 @@ impl DeltaTable {
 
         Ok(())
     }
-
-    async fn get_latest_version(&mut self) -> Result<i64, DeltaTableError> {
+    /// returns the latest available version of the table
+    pub async fn get_latest_version(&mut self) -> Result<i64, DeltaTableError> {
         let version_start = match get_last_checkpoint(&self.storage).await {
             Ok(last_check_point) => last_check_point.version,
             Err(ProtocolError::CheckpointNotFound) => {

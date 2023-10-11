@@ -9,6 +9,7 @@ from typing import (
     TYPE_CHECKING,
     Any,
     Dict,
+    Generator,
     Iterable,
     List,
     NamedTuple,
@@ -428,10 +429,25 @@ given filters.
         :param limit: the commit info limit to return
         :return: list of the commit infos registered in the transaction log
         """
-        return [
-            json.loads(commit_info_raw)
-            for commit_info_raw in self._table.history(limit)
-        ]
+
+        def _backwards_enumerate(
+            iterable: List[str], start_end: int
+        ) -> Generator[Tuple[int, str], None, None]:
+            n = start_end
+            for elem in iterable:
+                yield n, elem
+                n -= 1
+
+        commits = list(reversed(self._table.history(limit)))
+
+        history = []
+        for version, commit_info_raw in _backwards_enumerate(
+            commits, start_end=self._table.get_latest_version()
+        ):
+            commit = json.loads(commit_info_raw)
+            commit["version"] = version
+            history.append(commit)
+        return history
 
     def vacuum(
         self,
