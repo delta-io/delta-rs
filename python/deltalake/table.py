@@ -473,6 +473,52 @@ given filters.
             enforce_retention_duration,
         )
 
+    def update(
+        self,
+        updates: Dict[str, str],
+        predicate: Optional[str] = None,
+        writer_properties: Optional[Dict[str, int]] = None,
+        error_on_type_mismatch: bool = True,
+    ) -> Dict[str, Any]:
+        """UPDATE records in the Delta Table that matches an optional predicate.
+
+        :param updates: a mapping of column name to update SQL expression.
+        :param predicate: a logical expression, defaults to None
+        :writer_properties: Pass writer properties to the Rust parquet writer, see options https://arrow.apache.org/rust/parquet/file/properties/struct.WriterProperties.html,
+            only the fields: data_page_size_limit, dictionary_page_size_limit, data_page_row_count_limit, write_batch_size, max_row_group_size are supported.
+        :error_on_type_mismatch: specify if merge will return error if data types are mismatching :default = True
+        :return: the metrics from delete
+
+        Examples:
+
+        Update some row values with SQL predicate. This is equivalent to
+        ``UPDATE table SET deleted = true WHERE id = '5'``
+
+        >>> from deltalake import DeltaTable
+        >>> dt = DeltaTable("tmp")
+        >>> dt.update(predicate="id = '5'",
+        ...           updates = {
+        ...             "deleted": True,
+        ...             }
+        ...         )
+
+        Update all row values. This is equivalent to
+        ``UPDATE table SET id = concat(id, '_old')``.
+        >>> from deltalake import DeltaTable
+        >>> dt = DeltaTable("tmp")
+        >>> dt.update(updates = {
+        ...             "deleted": True,
+        ...             "id": "concat(id, '_old')"
+        ...             }
+        ...         )
+
+        """
+
+        metrics = self._table.update(
+            updates, predicate, writer_properties, safe_cast=not error_on_type_mismatch
+        )
+        return json.loads(metrics)
+
     @property
     def optimize(
         self,
