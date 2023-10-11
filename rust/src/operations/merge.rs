@@ -489,7 +489,7 @@ impl MergeOperation {
                                 }
                             } else {
                                 return Err(DeltaTableError::Generic(
-                                    "Column must reference column in Delta table".into(),
+                                    format!("Table alias '{table}' in column reference '{table}.{name}' unknown. Hint: You must reference the Delta Table with alias '{alias}'.")
                                 ));
                             }
                         }
