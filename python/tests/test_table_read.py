@@ -299,6 +299,7 @@ def test_history_partitioned_table_metadata():
             "numOutputBytes": "2477",
             "numOutputRows": "7",
         },
+        "version": 0,
     }
 
 
