@@ -8,18 +8,14 @@ use datafusion::datasource::physical_plan::wrap_partition_type_in_dict;
 use datafusion::execution::context::SessionState;
 use datafusion::optimizer::utils::conjunction;
 use datafusion::physical_optimizer::pruning::{PruningPredicate, PruningStatistics};
-use datafusion_common::config::ConfigOptions;
 use datafusion_common::scalar::ScalarValue;
-use datafusion_common::{Column, DFSchema, Result as DFResult, TableReference};
-use datafusion_expr::{AggregateUDF, Expr, ScalarUDF, TableSource};
-use datafusion_sql::planner::{ContextProvider, SqlToRel};
+use datafusion_common::{Column, DFSchema};
+use datafusion_expr::Expr;
 use itertools::Either;
 use object_store::ObjectStore;
 use parquet::arrow::async_reader::{ParquetObjectReader, ParquetRecordBatchStreamBuilder};
-use sqlparser::dialect::GenericDialect;
-use sqlparser::parser::Parser;
-use sqlparser::tokenizer::Tokenizer;
 
+use crate::delta_datafusion::expr::parse_predicate_expression;
 use crate::delta_datafusion::{
     get_null_of_arrow_type, logical_expr_to_physical_expr, to_correct_scalar_value,
 };
@@ -110,26 +106,8 @@ impl DeltaTableState {
         expr: impl AsRef<str>,
         df_state: &SessionState,
     ) -> DeltaResult<Expr> {
-        let dialect = &GenericDialect {};
-        let mut tokenizer = Tokenizer::new(dialect, expr.as_ref());
-        let tokens = tokenizer
-            .tokenize()
-            .map_err(|err| DeltaTableError::GenericError {
-                source: Box::new(err),
-            })?;
-        let sql = Parser::new(dialect)
-            .with_tokens(tokens)
-            .parse_expr()
-            .map_err(|err| DeltaTableError::GenericError {
-                source: Box::new(err),
-            })?;
-
-        // TODO should we add the table name as qualifier when available?
-        let df_schema = DFSchema::try_from_qualified_schema("", self.arrow_schema()?.as_ref())?;
-        let context_provider = DeltaContextProvider { state: df_state };
-        let sql_to_rel = SqlToRel::new(&context_provider);
-
-        Ok(sql_to_rel.sql_to_expr(sql, &df_schema, &mut Default::default())?)
+        let schema = DFSchema::try_from(self.arrow_schema()?.as_ref().to_owned())?;
+        parse_predicate_expression(&schema, expr, df_state)
     }
 
     /// Get the physical table schema.
@@ -344,36 +322,6 @@ impl PruningStatistics for DeltaTableState {
         let container =
             AddContainer::new(self.files(), partition_columns, self.arrow_schema().ok()?);
         container.null_counts(column)
-    }
-}
-
-pub(crate) struct DeltaContextProvider<'a> {
-    state: &'a SessionState,
-}
-
-impl<'a> ContextProvider for DeltaContextProvider<'a> {
-    fn get_table_provider(&self, _name: TableReference) -> DFResult<Arc<dyn TableSource>> {
-        unimplemented!()
-    }
-
-    fn get_function_meta(&self, name: &str) -> Option<Arc<ScalarUDF>> {
-        self.state.scalar_functions().get(name).cloned()
-    }
-
-    fn get_aggregate_meta(&self, name: &str) -> Option<Arc<AggregateUDF>> {
-        self.state.aggregate_functions().get(name).cloned()
-    }
-
-    fn get_variable_type(&self, _var: &[String]) -> Option<DataType> {
-        unimplemented!()
-    }
-
-    fn options(&self) -> &ConfigOptions {
-        self.state.config_options()
-    }
-
-    fn get_window_meta(&self, name: &str) -> Option<Arc<datafusion_expr::WindowUDF>> {
-        self.state.window_functions().get(name).cloned()
     }
 }
 
