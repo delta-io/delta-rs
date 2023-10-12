@@ -400,8 +400,8 @@ impl RawDeltaTable {
     #[allow(clippy::too_many_arguments)]
     #[pyo3(signature = (source,
         predicate,
-        source_alias,
-        target_alias,
+        source_alias = None,
+        target_alias = None,
         safe_cast = false,
         writer_properties = None,
         matched_update_updates = None,
@@ -421,8 +421,8 @@ impl RawDeltaTable {
         &mut self,
         source: PyArrowType<RecordBatch>,
         predicate: String,
-        source_alias: String,
-        target_alias: String,
+        source_alias: Option<String>,
+        target_alias: Option<String>,
         safe_cast: bool,
         writer_properties: Option<HashMap<String, usize>>,
         matched_update_updates: Option<HashMap<String, String>>,
@@ -447,9 +447,15 @@ impl RawDeltaTable {
             predicate,
             source_df,
         )
-        .with_source_alias(source_alias)
-        .with_target_alias(target_alias)
         .with_safe_cast(safe_cast);
+
+        if let Some(src_alias) = source_alias {
+            cmd = cmd.with_source_alias(src_alias);
+        }
+
+        if let Some(trgt_alias) = target_alias {
+            cmd = cmd.with_target_alias(trgt_alias);
+        }
 
         if let Some(writer_props) = writer_properties {
             let mut properties = WriterProperties::builder();
@@ -476,36 +482,6 @@ impl RawDeltaTable {
             }
             cmd = cmd.with_writer_properties(properties.build());
         }
-
-        // MATCHED UPDATE  ALL OPTION
-        // if let Some(mu_update_all) = matched_update_all {
-        //     if let Some(mu_predicate) = matched_update_predicate {
-        //         cmd = cmd.when_matched_update(|update| {
-        //                     update
-        //                         .predicate(mu_predicate)
-        //         }).map_err(PythonError::from)?;
-        //     }
-        //     else {
-        //         cmd = cmd.when_matched_update(|update| update).map_err(PythonError::from)?;
-        //     }
-        // }
-        // else {
-        //     if let Some(mu_updates) = matched_update_updates {
-        //         if let Some(mu_predicate) = matched_update_predicate {
-        //             cmd = cmd.when_matched_update(|update| {
-        //                         update
-        //                             .predicate(mu_predicate)
-        //                             .update(mu_updates)
-        //             }).map_err(PythonError::from)?;
-        //         }
-        //         else {
-        //             cmd = cmd.when_matched_update(|update| {
-        //                         update
-        //                             .update(mu_updates)
-        //             }).map_err(PythonError::from)?;
-        //         }
-        //     }
-        // }
 
         if let Some(mu_updates) = matched_update_updates {
             if let Some(mu_predicate) = matched_update_predicate {
