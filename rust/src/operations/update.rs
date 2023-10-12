@@ -40,6 +40,7 @@ use datafusion_physical_expr::{
 };
 use futures::future::BoxFuture;
 use parquet::file::properties::WriterProperties;
+use serde::Serialize;
 use serde_json::{Map, Value};
 
 use crate::{
@@ -80,7 +81,7 @@ pub struct UpdateBuilder {
     safe_cast: bool,
 }
 
-#[derive(Default)]
+#[derive(Default, Serialize)]
 /// Metrics collected during the Update operation
 pub struct UpdateMetrics {
     /// Number of files added.
