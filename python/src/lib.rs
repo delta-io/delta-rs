@@ -26,6 +26,7 @@ use deltalake::operations::merge::MergeBuilder;
 use deltalake::operations::optimize::{OptimizeBuilder, OptimizeType};
 use deltalake::operations::restore::RestoreBuilder;
 use deltalake::operations::transaction::commit;
+use deltalake::operations::update::UpdateBuilder;
 use deltalake::operations::vacuum::VacuumBuilder;
 use deltalake::parquet::file::properties::WriterProperties;
 use deltalake::partitions::PartitionFilter;
@@ -173,6 +174,12 @@ impl RawDeltaTable {
             .map_err(PythonError::from)?)
     }
 
+    pub fn get_latest_version(&mut self) -> PyResult<i64> {
+        Ok(rt()?
+            .block_on(self._table.get_latest_version())
+            .map_err(PythonError::from)?)
+    }
+
     pub fn load_with_datetime(&mut self, ds: &str) -> PyResult<()> {
         let datetime =
             DateTime::<Utc>::from(DateTime::<FixedOffset>::parse_from_rfc3339(ds).map_err(
@@ -274,6 +281,59 @@ impl RawDeltaTable {
             .map_err(PythonError::from)?;
         self._table.state = table.state;
         Ok(metrics.files_deleted)
+    }
+
+    /// Run the UPDATE command on the Delta Table
+    #[pyo3(signature = (updates, predicate=None, writer_properties=None, safe_cast = false))]
+    pub fn update(
+        &mut self,
+        updates: HashMap<String, String>,
+        predicate: Option<String>,
+        writer_properties: Option<HashMap<String, usize>>,
+        safe_cast: bool,
+    ) -> PyResult<String> {
+        let mut cmd = UpdateBuilder::new(self._table.object_store(), self._table.state.clone())
+            .with_safe_cast(safe_cast);
+
+        if let Some(writer_props) = writer_properties {
+            let mut properties = WriterProperties::builder();
+            let data_page_size_limit = writer_props.get("data_page_size_limit");
+            let dictionary_page_size_limit = writer_props.get("dictionary_page_size_limit");
+            let data_page_row_count_limit = writer_props.get("data_page_row_count_limit");
+            let write_batch_size = writer_props.get("write_batch_size");
+            let max_row_group_size = writer_props.get("max_row_group_size");
+
+            if let Some(data_page_size) = data_page_size_limit {
+                properties = properties.set_data_page_size_limit(*data_page_size);
+            }
+            if let Some(dictionary_page_size) = dictionary_page_size_limit {
+                properties = properties.set_dictionary_page_size_limit(*dictionary_page_size);
+            }
+            if let Some(data_page_row_count) = data_page_row_count_limit {
+                properties = properties.set_data_page_row_count_limit(*data_page_row_count);
+            }
+            if let Some(batch_size) = write_batch_size {
+                properties = properties.set_write_batch_size(*batch_size);
+            }
+            if let Some(row_group_size) = max_row_group_size {
+                properties = properties.set_max_row_group_size(*row_group_size);
+            }
+            cmd = cmd.with_writer_properties(properties.build());
+        }
+
+        for (col_name, expression) in updates {
+            cmd = cmd.with_update(col_name.clone(), expression.clone());
+        }
+
+        if let Some(update_predicate) = predicate {
+            cmd = cmd.with_predicate(update_predicate);
+        }
+
+        let (table, metrics) = rt()?
+            .block_on(cmd.into_future())
+            .map_err(PythonError::from)?;
+        self._table.state = table.state;
+        Ok(serde_json::to_string(&metrics).unwrap())
     }
 
     /// Run the optimize command on the Delta Table: merge small files into a large file by bin-packing.
