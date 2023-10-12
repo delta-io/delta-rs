@@ -836,9 +836,10 @@ impl DeltaOperation {
     pub fn name(&self) -> &str {
         // operation names taken from https://learn.microsoft.com/en-us/azure/databricks/delta/history#--operation-metrics-keys
         match &self {
-            DeltaOperation::Create { mode, .. } if matches!(mode, SaveMode::Overwrite) => {
-                "CREATE OR REPLACE TABLE"
-            }
+            DeltaOperation::Create {
+                mode: SaveMode::Overwrite,
+                ..
+            } => "CREATE OR REPLACE TABLE",
             DeltaOperation::Create { .. } => "CREATE TABLE",
             DeltaOperation::Write { .. } => "WRITE",
             DeltaOperation::Delete { .. } => "DELETE",
