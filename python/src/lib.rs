@@ -401,6 +401,7 @@ impl RawDeltaTable {
     #[pyo3(signature = (source,
         predicate,
         source_alias,
+        target_alias,
         safe_cast = false,
         writer_properties = None,
         matched_update_updates = None,
@@ -421,6 +422,7 @@ impl RawDeltaTable {
         source: PyArrowType<RecordBatch>,
         predicate: String,
         source_alias: String,
+        target_alias: String,
         safe_cast: bool,
         writer_properties: Option<HashMap<String, usize>>,
         matched_update_updates: Option<HashMap<String, String>>,
@@ -446,6 +448,7 @@ impl RawDeltaTable {
             source_df,
         )
         .with_source_alias(source_alias)
+        .with_target_alias(target_alias)
         .with_safe_cast(safe_cast);
 
         if let Some(writer_props) = writer_properties {
