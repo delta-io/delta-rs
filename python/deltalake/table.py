@@ -534,7 +534,7 @@ given filters.
         error_on_type_mismatch: bool = True,
     ) -> "TableMerger":
         """Pass the source data which you want to merge on the target delta table, providing a
-        predicate in SQL query format. You can also specify on what to do when underlying data types do not
+        predicate in SQL query like format. You can also specify on what to do when the underlying data types do not
         match the underlying table.
 
         Args:
@@ -543,7 +543,6 @@ given filters.
             source_alias (str): Alias for the source table
             target_alias (str): Alias for the target table
             error_on_type_mismatch (bool): specify if merge will return error if data types are mismatching :default = True
-
 
         Returns:
             TableMerger: TableMerger Object
@@ -848,14 +847,12 @@ class TableMerger:
         """Update a matched table row based on the rules defined by ``updates``.
         If a ``predicate`` is specified, then it must evaluate to true for the row to be updated.
 
-
         Args:
-            updates (dict): column mapping (source to target) which to update
+            updates (dict): a mapping of column name to update SQL expression.
             predicate (str | None, optional):  SQL like predicate on when to update. Defaults to None.
 
         Returns:
             TableMerger: TableMerger Object
-            
             
         Examples:
 
@@ -876,7 +873,7 @@ class TableMerger:
         return self
 
     def when_matched_update_all(self, predicate: Optional[str] = None) -> "TableMerger":
-        """Updating all source fields to target field. Source and target need to share the same field names for this to work. 
+        """Updating all source fields to target fields, source and target are required to have the same field names. 
         If a ``predicate`` is specified, then it must evaluate to true for the row to be updated.
 
         Args:
@@ -952,7 +949,7 @@ class TableMerger:
         ``predicate`` is specified, then it must evaluate to true for the new row to be inserted.
 
         Args:
-            updates (dict):  column mapping (source to target) which to insert
+            updates (dict):  a mapping of column name to insert SQL expression.
             predicate (str | None, optional): SQL like predicate on when to insert. Defaults to None.
 
         Returns:
@@ -981,9 +978,9 @@ class TableMerger:
     def when_not_matched_insert_all(
         self, predicate: Optional[str] = None
     ) -> "TableMerger":
-        """Insert a new row to the target table, updating all source fields to target field. Source and target 
-        need to share the same field names for this to work. If a ``predicate`` is specified, then it must 
-        evaluate to true for the new row to be inserted.
+        """Insert a new row to the target table, updating all source fields to target fields. Source and target are 
+        required to have the same field names. If a ``predicate`` is specified, then it must evaluate to true for 
+        the new row to be inserted.
 
         Args:
             predicate (str | None, optional): SQL like predicate on when to insert. Defaults to None.
@@ -1017,7 +1014,7 @@ class TableMerger:
         If a ``predicate`` is specified, then it must evaluate to true for the row to be updated.
 
         Args:
-            updates (dict):  column mapping (source to target) which to update
+            updates (dict): a mapping of column name to update SQL expression.
             predicate (str | None, optional): SQL like predicate on when to update. Defaults to None.
 
         Returns:
@@ -1046,8 +1043,8 @@ class TableMerger:
         ``predicate`` (if specified) is true for the target row.
 
         Args:
-            updates (dict): column mapping (source to target) which to update
-            predicate (str | None, optional):  SQL like predicate on when to deleted when not matched by source. Defaults to None.
+            updates (dict): a mapping of column name to update SQL expression.
+            predicate (str | None, optional):  SQL like predicate on when to delete when not matched by source. Defaults to None.
 
         Returns:
             TableMerger: TableMerger Object
@@ -1074,12 +1071,10 @@ class TableMerger:
             writer_properties=self.writer_properties,
             matched_update_updates=self.matched_update_updates,
             matched_update_predicate=self.matched_update_predicate,
-            # matched_update_all=self.matched_update_all,
             matched_delete_predicate=self.matched_delete_predicate,
             matched_delete_all=self.matched_delete_all,
             not_matched_insert_updates=self.not_matched_insert_updates,
             not_matched_insert_predicate=self.not_matched_insert_predicate,
-            # not_matched_insert_all = self.not_matched_insert_all,
             not_matched_by_source_update_updates=self.not_matched_by_source_update_updates,
             not_matched_by_source_update_predicate=self.not_matched_by_source_update_predicate,
             not_matched_by_source_delete_predicate=self.not_matched_by_source_delete_predicate,

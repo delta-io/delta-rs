@@ -331,7 +331,6 @@ def test_merge_when_not_matched_insert_all_with_predicate(
     assert result == expected
 
 
-
 def test_merge_when_not_matched_by_source_update_wo_predicate(
     tmp_path: pathlib.Path, sample_table: pa.Table
 ):

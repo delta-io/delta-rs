@@ -60,8 +60,8 @@ use datafusion_expr::{col, conditional_expressions::CaseBuilder, lit, when, Expr
 use datafusion_physical_expr::{create_physical_expr, expressions, PhysicalExpr};
 use futures::future::BoxFuture;
 use parquet::file::properties::WriterProperties;
+use serde::Serialize;
 use serde_json::{Map, Value};
-use serde::{Serialize};
 
 use super::datafusion_utils::{into_expr, maybe_into_expr, Expression};
 use super::transaction::commit;
