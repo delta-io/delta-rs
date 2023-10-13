@@ -28,7 +28,6 @@ pub trait LogStore {
         &self,
         version: i64,
         actions: Vec<Action>,
-        overwrite: bool,
     ) -> DeltaResult<()>;
 
     /// Find latest version currently stored in the delta log.
