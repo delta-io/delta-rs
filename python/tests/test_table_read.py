@@ -481,6 +481,79 @@ def test_delta_table_with_filters():
     )
 
 
+def test_pyarrow_dataset_partitions():
+    table_path = "../rust/tests/data/delta-0.8.0-partitioned"
+    dt = DeltaTable(table_path)
+
+    single_partition = [("day", "=", "1")]
+    dataset_filtered = dt.to_pyarrow_dataset(partitions=single_partition)
+    data_filtered = dataset_filtered.to_table()
+    dataset = dt.to_pyarrow_dataset()
+    filter_expr = ds.field("day") == "1"
+    data = dataset.to_table(filter=filter_expr)
+    assert data_filtered.num_rows == data.num_rows
+
+    single_partition_multiple_columns = [("month", "=", "2"), ("day", "=", "5")]
+    dataset_filtered = dt.to_pyarrow_dataset(
+        partitions=single_partition_multiple_columns
+    )
+    data_filtered = dataset_filtered.to_table()
+    dataset = dt.to_pyarrow_dataset()
+    filter_expr = (ds.field("month") == "2") & (ds.field("day") == "5")
+    data = dataset.to_table(filter=filter_expr)
+    assert data_filtered.num_rows == data.num_rows
+
+    multiple_partitions_single_column = [[("month", "=", "2")], [("month", "=", "4")]]
+    dataset_filtered = dt.to_pyarrow_dataset(
+        partitions=multiple_partitions_single_column
+    )
+    data_filtered = dataset_filtered.to_table()
+    dataset = dt.to_pyarrow_dataset()
+    filter_expr = (ds.field("month") == "2") | (ds.field("month") == "4")
+    data = dataset.to_table(filter=filter_expr)
+    assert data_filtered.num_rows == data.num_rows
+
+    multiple_partitions_multiple_columns = [
+        [("year", "=", "2020"), ("month", "=", "2"), ("day", "=", "5")],
+        [("year", "=", "2021"), ("month", "=", "4"), ("day", "=", "5")],
+        [("year", "=", "2021"), ("month", "=", "3"), ("day", "=", "1")],
+    ]
+    dataset_filtered = dt.to_pyarrow_dataset(
+        partitions=multiple_partitions_multiple_columns
+    )
+    data_filtered = dataset_filtered.to_table()
+    dataset = dt.to_pyarrow_dataset()
+    filter_expr = (
+        (
+            (ds.field("year") == "2020")
+            & (ds.field("month") == "2")
+            & (ds.field("day") == "5")
+        )
+        | (
+            (ds.field("year") == "2021")
+            & (ds.field("month") == "4")
+            & (ds.field("day") == "5")
+        )
+        | (
+            (ds.field("year") == "2021")
+            & (ds.field("month") == "3")
+            & (ds.field("day") == "1")
+        )
+    )
+    data = dataset.to_table(filter=filter_expr)
+    assert data_filtered.num_rows == data.num_rows
+
+    single_partition_single_column_list = [[("year", "=", "2020")]]
+    dataset_filtered = dt.to_pyarrow_dataset(
+        partitions=single_partition_single_column_list
+    )
+    data_filtered = dataset_filtered.to_table()
+    dataset = dt.to_pyarrow_dataset()
+    filter_expr = ds.field("year") == "2020"
+    data = dataset.to_table(filter=filter_expr)
+    assert data_filtered.num_rows == data.num_rows
+
+
 def test_writer_fails_on_protocol():
     table_path = "../rust/tests/data/simple_table"
     dt = DeltaTable(table_path)
