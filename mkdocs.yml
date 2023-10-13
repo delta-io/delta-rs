@@ -1,6 +1,8 @@
 site_name: Python Delta Lake Documentation
 theme:
   name: readthedocs
+  navigation_depth: 2
+  hljs_style: nord
 nav:
   - Home: index.md
   - Installation: installation.md
@@ -14,22 +16,30 @@ nav:
   - API Reference: python_api.md
 
 plugins:
-- autorefs
-- mkdocstrings:
-    handlers:
-      python:
-        path: [../python]
-        rendering:
-          heading_level: 4
-          show_source: false
-          show_symbol_type_in_heading: true
-          show_signature_annotations: true
-          show_root_heading: true
-          members_order: source
-        import:
-          # for cross references
-          - https://arrow.apache.org/docs/objects.inv
-          - https://pandas.pydata.org/docs/objects.inv
+  - autorefs
+  - mkdocstrings:
+      handlers:
+        python:
+          path: [../python]
+          options:
+            # docstring_style: sphinx
+            docstring_section_style: table
+            ocstring_section_style: litabst
+            filters: ["!^_", "^__init__$"]
+            heading_level: 3
+            show_source: false
+            show_symbol_type_in_heading: true
+            show_signature_annotations: true
+            show_root_heading: false
+            show_root_full_path: true
+            separate_signature: false
+            docstring_options:
+              ignore_init_summary: false
+            merge_init_into_class: true
+          import:
+            # for cross references
+            - https://arrow.apache.org/docs/objects.inv
+            - https://pandas.pydata.org/docs/objects.inv
 
 markdown_extensions:
   - admonition

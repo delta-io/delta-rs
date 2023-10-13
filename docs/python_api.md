@@ -1,6 +1,6 @@
 # Python API Reference
 
-## DeltaTable
+## Delta Table
 
 ::: deltalake.table
 

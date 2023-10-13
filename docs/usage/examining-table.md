@@ -14,7 +14,7 @@ The delta log maintains basic metadata about a table, including:
     to have data deleted from it.
 
 Get metadata from a table with the
-[DeltaTable.metadata()][] method:
+[DeltaTable.metadata()][deltalake.table.DeltaTable.metadata] method:
 
 ``` python
 >>> from deltalake import DeltaTable
@@ -27,12 +27,12 @@ Metadata(id: 5fba94ed-9794-4965-ba6e-6ee3c0d22af9, name: None, description: None
 
 The schema for the table is also saved in the transaction log. It can
 either be retrieved in the Delta Lake form as
-[deltalake.schema.Schema][] or as a
+[Schema][deltalake.schema.Schema] or as a
 PyArrow schema. The first allows you to introspect any column-level
 metadata stored in the schema, while the latter represents the schema
 the table will be loaded into.
 
-Use [DeltaTable.schema][] to retrieve the delta lake schema:
+Use [DeltaTable.schema][deltalake.table.DeltaTable.schema] to retrieve the delta lake schema:
 
 ``` python
 >>> from deltalake import DeltaTable
@@ -43,14 +43,14 @@ Schema([Field(id, PrimitiveType("long"), nullable=True)])
 
 These schemas have a JSON representation that can be retrieved. To
 reconstruct from json, use
-[deltalake.schema.Schema.from_json()][].
+[DeltaTable.schema.json()][deltalake.schema.Schema.json].
 
 ``` python
 >>> dt.schema().json()
 '{"type":"struct","fields":[{"name":"id","type":"long","nullable":true,"metadata":{}}]}'
 ```
 
-Use [deltalake.schema.Schema.to_pyarrow()][] to retrieve the PyArrow schema:
+Use [DeltaTable.schema.to_pyarrow()][deltalake.schema.Schema.to_pyarrow] to retrieve the PyArrow schema:
 
 ``` python
 >>> dt.schema().to_pyarrow()

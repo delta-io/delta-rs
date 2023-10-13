@@ -748,11 +748,10 @@ impl Field {
     }
 
     /// Create a Field from a PyArrow field
-    ///
+    ///  /// --: type : pyarrow . Field
     /// Note: This currently doesn't preserve field metadata.
     ///
     /// :param field: a field
-    /// :type: pyarrow.Field
     /// :rtype: Field
     #[staticmethod]
     #[pyo3(text_signature = "(field)")]
@@ -975,7 +974,6 @@ impl PySchema {
         Ok(format!("Schema([{}])", inner_data.join(", ")))
     }
 
-    /// DEPRECATED: Convert to JSON dictionary representation
     fn json(self_: PyRef<'_, Self>, py: Python) -> PyResult<PyObject> {
         let warnings_warn = PyModule::import(py, "warnings")?.getattr("warn")?;
         let deprecation_warning = PyModule::import(py, "builtins")?
@@ -998,14 +996,6 @@ impl PySchema {
             .map(|obj| obj.to_object(py))
     }
 
-    /// Return equivalent PyArrow schema
-    ///
-    /// :param as_large_types: get schema with all variable size types (list,
-    ///   binary, string) as large variants (with int64 indices). This is for
-    ///   compatibility with systems like Polars that only support the large
-    ///   versions of Arrow types.
-    ///
-    /// :rtype: pyarrow.Schema
     #[pyo3(signature = (as_large_types = false))]
     fn to_pyarrow(
         self_: PyRef<'_, Self>,

@@ -28,3 +28,5 @@ Cargo.lock
 !/proofs/Cargo.lock
 
 justfile
+**/local*
+site

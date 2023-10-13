@@ -16,7 +16,7 @@ class DeltaStorageHandler(DeltaFileSystemHandler, FileSystemHandler):
         """
         Open an input file for random access reading.
 
-        :param source: The source to open for reading.
+        :param path: The source to open for reading.
         :return:  NativeFile
         """
         return pa.PythonFile(DeltaFileSystemHandler.open_input_file(self, path))
@@ -25,7 +25,7 @@ class DeltaStorageHandler(DeltaFileSystemHandler, FileSystemHandler):
         """
         Open an input stream for sequential reading.
 
-        :param source: The source to open for reading.
+        :param path: The source to open for reading.
         :return:  NativeFile
         """
         return pa.PythonFile(DeltaFileSystemHandler.open_input_file(self, path))
