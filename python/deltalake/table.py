@@ -606,16 +606,48 @@ given filters.
             default_fragment_scan_options=ParquetFragmentScanOptions(pre_buffer=True),
         )
 
-        fragments = [
-            format.make_fragment(
-                file,
-                filesystem=filesystem,
-                partition_expression=part_expression,
-            )
-            for file, part_expression in self._table.dataset_partitions(
-                self.schema().to_pyarrow(), partitions
-            )
-        ]
+        fragments = []
+        if partitions is None:
+            partition_filters = None
+        else:
+            if isinstance(partitions, list):
+                partition_count = len(partitions)
+                partition_type = type(partitions[0])
+
+                if partition_count == 1 and partition_type is list:
+                    partition_filters = partitions
+                elif partition_count == 1 and partition_type is tuple:
+                    partition_filters = [partitions]
+                elif all(isinstance(x, tuple) for x in partitions):
+                    partition_filters = [partitions]
+                elif all(isinstance(x, list) for x in partitions):
+                    partition_filters = partitions
+                else:
+                    partition_filters = None
+            else:
+                raise ValueError(
+                    "Partitions must be a list of tuples, or a lists of lists of tuples"
+                )
+
+        if partition_filters is not None:
+            for partition in partition_filters:
+                for file, partition_expression in self._table.dataset_partitions(
+                    schema=self.schema().to_pyarrow(), partition_filters=partition
+                ):
+                    fragments.append(
+                        format.make_fragment(file, filesystem, partition_expression)
+                    )
+        else:
+            fragments = [
+                format.make_fragment(
+                    file,
+                    filesystem=filesystem,
+                    partition_expression=part_expression,
+                )
+                for file, part_expression in self._table.dataset_partitions(
+                    self.schema().to_pyarrow(), partitions
+                )
+            ]
 
         schema = self.schema().to_pyarrow()
 
