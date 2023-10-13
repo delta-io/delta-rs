@@ -64,9 +64,8 @@ use serde_json::{Map, Value};
 
 use super::datafusion_utils::{into_expr, maybe_into_expr, Expression};
 use super::transaction::commit;
-use crate::delta_datafusion::DeltaScanBuilder;
 use crate::delta_datafusion::expr::{fmt_expr_to_sql, parse_predicate_expression};
-use crate::delta_datafusion::register_store;
+use crate::delta_datafusion::{register_store, DeltaScanBuilder};
 use crate::operations::datafusion_utils::MetricObserverExec;
 use crate::{
     operations::write::write_execution_plan,
@@ -493,7 +492,7 @@ impl MergeOperation {
                                 }
                             } else {
                                 return Err(DeltaTableError::Generic(
-                                    "Column must reference column in Delta table".into(),
+                                    format!("Table alias '{table}' in column reference '{table}.{name}' unknown. Hint: You must reference the Delta Table with alias '{alias}'.")
                                 ));
                             }
                         }
