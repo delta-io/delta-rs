@@ -833,17 +833,19 @@ pub enum DeltaOperation {
     #[serde(rename_all = "camelCase")]
     /// Represents the start of `Vacuum` operation
     VacuumStart {
-        /// Period of stale files allowed.
+        /// Whether the retention check is enforced
         retention_check_enabled: bool,
+        /// The specified retetion period in milliseconds
         specified_retention_millis: Option<i64>,
+        /// The default delta table retention milliseconds policy
         default_retention_millis: i64,
     },
 
     /// Represents the end of `Vacuum` operation
     VacuumEnd {
-        /// Period of stale files allowed.
-        status: String
-    }
+        /// The status of the operation
+        status: String,
+    },
 }
 
 impl DeltaOperation {
@@ -901,9 +903,7 @@ impl DeltaOperation {
     /// Denotes if the operation changes the data contained in the table
     pub fn changes_data(&self) -> bool {
         match self {
-            Self::Optimize { .. }
-            | Self::VacuumStart { .. }
-            | Self::VacuumEnd { .. }  => false,
+            Self::Optimize { .. } | Self::VacuumStart { .. } | Self::VacuumEnd { .. } => false,
             Self::Create { .. }
             | Self::FileSystemCheck {}
             | Self::StreamingUpdate { .. }
