@@ -55,7 +55,7 @@ def test_merge_when_matched_delete_with_predicate(
             "weight": pa.array([1, 2], pa.int64()),
             "sold": pa.array([1, 2], pa.int32()),
             "deleted": pa.array([True, False]),
-            "customer": pa.array(['Adam', 'Patrick'])
+            "customer": pa.array(["Adam", "Patrick"]),
         }
     )
 
@@ -132,7 +132,7 @@ def test_merge_when_matched_update_all_wo_predicate(
             "price": pa.array([10, 100], pa.int64()),
             "sold": pa.array([10, 20], pa.int32()),
             "deleted": pa.array([True, True]),
-            "weight": pa.array([10,15], pa.int64()),
+            "weight": pa.array([10, 15], pa.int64()),
         }
     )
 
@@ -456,4 +456,37 @@ def test_merge_when_not_matched_by_source_delete_with_predicate(
     assert result == expected
 
 
-# # ## Add when_not_matched_by_source_delete_wo_predicate ?
+def test_merge_when_not_matched_by_source_delete_wo_predicate(
+    tmp_path: pathlib.Path, sample_table: pa.Table
+):
+    write_deltalake(tmp_path, sample_table, mode="append")
+
+    dt = DeltaTable(tmp_path)
+
+    source_table = pa.table(
+        {"id": pa.array(["4", "5"]), "weight": pa.array([1.5, 1.6], pa.float64())}
+    )
+
+    dt.merge(
+        source=source_table,
+        source_alias="source",
+        target_alias="target",
+        predicate="target.id = source.id",
+    ).when_not_matched_by_source_delete().execute()
+
+    expected = pa.table(
+        {
+            "id": pa.array(["4", "5"]),
+            "price": pa.array(
+                [3, 4],
+                pa.int64(),
+            ),
+            "sold": pa.array([3, 4], pa.int32()),
+            "deleted": pa.array([False] * 2),
+        }
+    )
+    result = dt.to_pyarrow_table().sort_by([("id", "ascending")])
+    last_action = dt.history(1)[0]
+
+    assert last_action["operation"] == "MERGE"
+    assert result == expected
