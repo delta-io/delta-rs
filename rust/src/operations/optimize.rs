@@ -157,7 +157,7 @@ pub struct OptimizeBuilder<'a> {
     /// Delta object store for handling data files
     store: ObjectStoreRef,
     /// Filters to select specific table partitions to be optimized
-    filters: &'a [PartitionFilter<'a, &'a str>],
+    filters: &'a [PartitionFilter],
     /// Desired file size after bin-packing files
     target_size: Option<i64>,
     /// Properties passed to underlying parquet writer
@@ -200,7 +200,7 @@ impl<'a> OptimizeBuilder<'a> {
     }
 
     /// Only optimize files that return true for the specified partition filter
-    pub fn with_filters(mut self, filters: &'a [PartitionFilter<'a, &'a str>]) -> Self {
+    pub fn with_filters(mut self, filters: &'a [PartitionFilter]) -> Self {
         self.filters = filters;
         self
     }
@@ -769,7 +769,7 @@ impl PartitionTuples {
 pub fn create_merge_plan(
     optimize_type: OptimizeType,
     snapshot: &DeltaTableState,
-    filters: &[PartitionFilter<'_, &str>],
+    filters: &[PartitionFilter],
     target_size: Option<i64>,
     writer_properties: WriterProperties,
 ) -> Result<MergePlan, DeltaTableError> {
@@ -860,7 +860,7 @@ impl IntoIterator for MergeBin {
 fn build_compaction_plan(
     snapshot: &DeltaTableState,
     partition_keys: &[String],
-    filters: &[PartitionFilter<'_, &str>],
+    filters: &[PartitionFilter],
     target_size: i64,
 ) -> Result<(OptimizeOperations, Metrics), DeltaTableError> {
     let mut metrics = Metrics::default();
@@ -923,7 +923,7 @@ fn build_zorder_plan(
     zorder_columns: Vec<String>,
     snapshot: &DeltaTableState,
     partition_keys: &[String],
-    filters: &[PartitionFilter<'_, &str>],
+    filters: &[PartitionFilter],
 ) -> Result<(OptimizeOperations, Metrics), DeltaTableError> {
     if zorder_columns.is_empty() {
         return Err(DeltaTableError::Generic(
