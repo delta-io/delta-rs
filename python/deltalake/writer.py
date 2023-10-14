@@ -66,6 +66,43 @@ class AddAction:
     stats: str
 
 
+def _match_filter(
+    filter_: List[Tuple[str, str, Any]], partition_values: Mapping[str, Optional[str]]
+):
+    """Matches a filter against a partition value from AddAction instance.
+
+    This ensures that create_write_transaction is called with a valid partition filter.
+
+    :param filter_: A list of tuple(s) in DNF format (column, operator, value)
+    :param partition_values: A mapping of partition values
+
+    Examples:
+        >>> _match_filter([("a", "=", 1)], {"a": 1})
+        >>> _match_filter([("a", "=", 1), ("b", "=", 2)], {"a": 1, "b": 2})
+    """
+    column, op, value = filter_
+    actual_value = partition_values.get(column)
+
+    if op == "=" or op == "==":
+        return actual_value == value
+    elif op == "!=":
+        return actual_value != value
+    elif op == "<":
+        return actual_value < value
+    elif op == ">":
+        return actual_value > value
+    elif op == "<=":
+        return actual_value <= value
+    elif op == ">=":
+        return actual_value >= value
+    elif op == "in":
+        return actual_value in value
+    elif op == "not in":
+        return actual_value not in value
+    else:
+        raise ValueError(f'"{filter_}" is not a valid operator in predicates.')
+
+
 def write_deltalake(
     table_or_uri: Union[str, Path, DeltaTable],
     data: Union[
@@ -268,12 +305,47 @@ def write_deltalake(
         ) -> None:
             if table is None:
                 return
+
+            if partition_filters is None:
+                filters = None
+            else:
+                if isinstance(partition_filters, list):
+                    partition_count = len(partition_filters)
+
+                    partition_type = type(partition_filters[0])
+
+                    if partition_count == 1 and partition_type is list:
+                        filters = partition_filters
+                    elif partition_count == 1 and partition_type is tuple:
+                        filters = [partition_filters]
+                    elif all(isinstance(x, tuple) for x in partition_filters):
+                        filters = [partition_filters]
+                    elif all(isinstance(x, list) for x in partition_filters):
+                        filters = partition_filters
+                    else:
+                        filters = None
+                else:
+                    raise ValueError(
+                        "Partitions must be a list of tuples, or a lists of lists of tuples"
+                    )
+
+            allowed_partitions = set()
+            if filters is not None:
+                for filter_ in filters:
+                    if isinstance(filter_, list):
+                        allowed_partitions.update(
+                            table._table.get_active_partitions(filter_)
+                        )
+                    else:
+                        allowed_partitions.update(
+                            table._table.get_active_partitions(filter_)
+                        )
+            else:
+                allowed_partitions = table._table.get_active_partitions()
+
             existed_partitions: FrozenSet[
                 FrozenSet[Tuple[str, Optional[str]]]
             ] = table._table.get_active_partitions()
-            allowed_partitions: FrozenSet[
-                FrozenSet[Tuple[str, Optional[str]]]
-            ] = table._table.get_active_partitions(partition_filters)
             partition_values = pa.RecordBatch.from_arrays(
                 [
                     batch.column(column_name)
@@ -356,14 +428,48 @@ def write_deltalake(
             storage_options,
         )
     else:
-        table._table.create_write_transaction(
-            add_actions,
-            mode,
-            partition_by or [],
-            schema,
-            partition_filters,
-        )
-        table.update_incremental()
+        if table is not None:
+            if partition_filters is None:
+                table._table.create_write_transaction(
+                    add_actions,
+                    mode,
+                    partition_by or [],
+                    schema,
+                    partition_filters,
+                )
+                table.update_incremental()
+            elif isinstance(partition_filters, list):
+                if all(isinstance(x, list) for x in partition_filters):
+                    original_add_actions = add_actions.copy()
+
+                    for partition_filter in partition_filters:
+                        filtered_add_actions = [
+                            action
+                            for action in original_add_actions
+                            if all(
+                                _match_filter(filter_, action.partition_values)
+                                for filter_ in partition_filter
+                            )
+                        ]
+                        table._table.create_write_transaction(
+                            filtered_add_actions,
+                            mode,
+                            partition_by or [],
+                            schema,
+                            partition_filter,
+                        )
+                        table.update_incremental()
+                elif all(isinstance(x, tuple) for x in partition_filters):
+                    table._table.create_write_transaction(
+                        add_actions,
+                        mode,
+                        partition_by or [],
+                        schema,
+                        partition_filters,
+                    )
+                    table.update_incremental()
+                else:
+                    raise ValueError("Invalid format for partition_filters")
 
 
 def __enforce_append_only(
