@@ -30,7 +30,11 @@ use futures::future::BoxFuture;
 use futures::{StreamExt, TryStreamExt};
 use object_store::Error;
 use object_store::{path::Path, ObjectStore};
+use serde::{Serialize};
+use serde_json::Map;
 
+use super::transaction::commit;
+use crate::protocol::{DeltaOperation, Action, Txn}; //Action
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::storage::DeltaObjectStore;
 use crate::table::state::DeltaTableState;
@@ -94,6 +98,14 @@ pub struct VacuumMetrics {
     pub dry_run: bool,
     /// Files deleted successfully
     pub files_deleted: Vec<String>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VacuumOperationMetrics {
+    pub num_deleted_files: i64,
+    pub num_vacuumed_directories: i64, 
+    pub num_files_to_delete: i64,
 }
 
 /// Methods to specify various vacuum options and to execute the operation
@@ -178,7 +190,12 @@ impl VacuumBuilder {
             files_to_delete.push(obj_meta.location);
         }
 
-        Ok(VacuumPlan { files_to_delete })
+        Ok(VacuumPlan { 
+            files_to_delete,
+            retention_check_enabled: enforce_retention_duration, 
+            default_retention_millis: min_retention.num_milliseconds(), 
+            specified_retention_millis: Some(retention_period.num_milliseconds()),
+        })
     }
 }
 
@@ -201,7 +218,7 @@ impl std::future::IntoFuture for VacuumBuilder {
                 ));
             }
 
-            let metrics = plan.execute(&this.store).await?;
+            let metrics = plan.execute(&this.store, &this.snapshot).await?;
             Ok((
                 DeltaTable::new_with_state(this.store, this.snapshot),
                 metrics,
@@ -214,18 +231,54 @@ impl std::future::IntoFuture for VacuumBuilder {
 struct VacuumPlan {
     /// What files are to be deleted
     pub files_to_delete: Vec<Path>,
+    /// If retention check is enabled
+    pub retention_check_enabled: bool,
+    /// Default retention in milliseconds
+    pub default_retention_millis:  i64,
+    /// Overrided retention in milliseconds
+    pub specified_retention_millis: Option<i64>,
 }
 
 impl VacuumPlan {
     /// Execute the vacuum plan and delete files from underlying storage
-    pub async fn execute(self, store: &DeltaObjectStore) -> Result<VacuumMetrics, DeltaTableError> {
+    pub async fn execute(self, 
+        store: &DeltaObjectStore, 
+        snapshot: &DeltaTableState, 
+    ) -> Result<VacuumMetrics, DeltaTableError> {
         if self.files_to_delete.is_empty() {
             return Ok(VacuumMetrics {
                 dry_run: false,
                 files_deleted: Vec::new(),
             });
         }
+        // Create start vacuum operation
+        let start_operation = DeltaOperation::VacuumStart {
+            retention_check_enabled: self.retention_check_enabled,
+            specified_retention_millis: self.specified_retention_millis,
+            default_retention_millis: self.default_retention_millis,
+        };
 
+        // Create Start metadata
+        let start_vacuum_metrics = VacuumOperationMetrics {
+            num_deleted_files: 0,
+            num_vacuumed_directories: 0, 
+            num_files_to_delete: self.files_to_delete.len() as i64
+        };
+        let start_metrics = serde_json::to_value(start_vacuum_metrics);
+        let mut start_metadata = Map::new();
+        if let Ok(map) = start_metrics {
+            start_metadata.insert("operationMetrics".to_owned(), map);
+        }
+
+        // WRITE VACUUM START COMMIT HERE (figure out what to do with these actions ..)
+        commit(
+            store,
+            &actions,
+            start_operation,
+            snapshot,
+            Some(start_metadata),
+        ).await?;
+        
         let locations = futures::stream::iter(self.files_to_delete)
             .map(Result::Ok)
             .boxed();
@@ -239,6 +292,33 @@ impl VacuumPlan {
             })
             .try_collect::<Vec<_>>()
             .await?;
+
+
+        // Create end vacuum operation
+        let end_operation = DeltaOperation::VacuumEnd {
+            status: String::from("COMPLETED")
+        };
+        // Create end metadata
+        let end_vacuum_metrics = VacuumOperationMetrics {
+            num_deleted_files: files_deleted.len() as i64,
+            num_vacuumed_directories: 0, // Figure out how to count the dirs
+            num_files_to_delete: self.files_to_delete.len() as i64 // Or 0 since they are deleted now, confusing documentation
+        };
+        let end_metrics = serde_json::to_value(end_vacuum_metrics);
+        let mut end_metadata = Map::new();
+        if let Ok(map) = end_metrics {
+            end_metadata.insert("operationMetrics".to_owned(), map);
+        }
+        
+
+        // WRITE VACUUM END COMMIT HERE (figure out what to do with these actions ..)
+        commit(
+            store,
+            &actions,
+            end_operation,
+            snapshot,
+            Some(end_metadata),
+        ).await?;
 
         Ok(VacuumMetrics {
             files_deleted,
