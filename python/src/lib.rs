@@ -198,18 +198,17 @@ impl RawDeltaTable {
         &self,
         partitions_filters: Vec<(&str, &str, PartitionFilterValue)>,
     ) -> PyResult<Vec<String>> {
-        let partition_filters: Result<Vec<PartitionFilter<&str>>, DeltaTableError> =
-            partitions_filters
-                .into_iter()
-                .map(|filter| match filter {
-                    (key, op, PartitionFilterValue::Single(v)) => {
-                        PartitionFilter::try_from((key, op, v))
-                    }
-                    (key, op, PartitionFilterValue::Multiple(v)) => {
-                        PartitionFilter::try_from((key, op, v))
-                    }
-                })
-                .collect();
+        let partition_filters: Result<Vec<PartitionFilter>, DeltaTableError> = partitions_filters
+            .into_iter()
+            .map(|filter| match filter {
+                (key, op, PartitionFilterValue::Single(v)) => {
+                    PartitionFilter::try_from((key, op, v))
+                }
+                (key, op, PartitionFilterValue::Multiple(v)) => {
+                    PartitionFilter::try_from((key, op, v.as_slice()))
+                }
+            })
+            .collect();
         match partition_filters {
             Ok(filters) => Ok(self
                 ._table
@@ -861,13 +860,15 @@ impl RawDeltaTable {
 }
 
 fn convert_partition_filters<'a>(
-    partitions_filters: Vec<(&'a str, &'a str, PartitionFilterValue<'a>)>,
-) -> Result<Vec<PartitionFilter<&'a str>>, DeltaTableError> {
+    partitions_filters: Vec<(&'a str, &'a str, PartitionFilterValue)>,
+) -> Result<Vec<PartitionFilter>, DeltaTableError> {
     partitions_filters
         .into_iter()
         .map(|filter| match filter {
             (key, op, PartitionFilterValue::Single(v)) => PartitionFilter::try_from((key, op, v)),
-            (key, op, PartitionFilterValue::Multiple(v)) => PartitionFilter::try_from((key, op, v)),
+            (key, op, PartitionFilterValue::Multiple(v)) => {
+                PartitionFilter::try_from((key, op, v.as_slice()))
+            }
         })
         .collect()
 }

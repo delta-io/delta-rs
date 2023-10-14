@@ -370,13 +370,13 @@ impl DeltaTableState {
     /// Obtain Add actions for files that match the filter
     pub fn get_active_add_actions_by_partitions<'a>(
         &'a self,
-        filters: &'a [PartitionFilter<'a, &'a str>],
-    ) -> Result<impl Iterator<Item = &'a Add> + '_, DeltaTableError> {
+        filters: &'a [PartitionFilter],
+    ) -> Result<impl Iterator<Item = &Add> + '_, DeltaTableError> {
         let current_metadata = self.current_metadata().ok_or(DeltaTableError::NoMetadata)?;
 
         let nonpartitioned_columns: Vec<String> = filters
             .iter()
-            .filter(|f| !current_metadata.partition_columns.contains(&f.key.into()))
+            .filter(|f| !current_metadata.partition_columns.contains(&f.key))
             .map(|f| f.key.to_string())
             .collect();
 
@@ -395,7 +395,7 @@ impl DeltaTableState {
             let partitions = add
                 .partition_values
                 .iter()
-                .map(|p| DeltaTablePartition::from_partition_value(p, ""))
+                .map(|p| DeltaTablePartition::from_partition_value((p.0, p.1), ""))
                 .collect::<Vec<DeltaTablePartition>>();
             filters
                 .iter()
