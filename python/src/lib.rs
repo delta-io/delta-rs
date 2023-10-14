@@ -439,11 +439,7 @@ impl RawDeltaTable {
     ) -> PyResult<String> {
         let ctx = SessionContext::new();
         let schema = source.0.schema();
-        let batches = vec![source
-            .0
-            .into_iter()
-            .map(|batch| batch.unwrap())
-            .collect::<Vec<_>>()];
+        let batches = vec![source.0.map(|batch| batch.unwrap()).collect::<Vec<_>>()];
         let table_provider: Arc<dyn TableProvider> =
             Arc::new(MemTable::try_new(schema, batches).unwrap());
         let source_df = ctx.read_table(table_provider).unwrap();
