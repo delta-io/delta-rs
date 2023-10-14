@@ -610,7 +610,7 @@ given filters.
         if partitions is None:
             partition_filters = None
         else:
-            if isinstance(partitions, list):
+            if partitions and isinstance(partitions, list):
                 partition_count = len(partitions)
                 partition_type = type(partitions[0])
 
