@@ -17,8 +17,8 @@
 //! async {
 //!   let table = deltalake::open_table_with_version("./tests/data/simple_table", 0).await.unwrap();
 //!   let files = table.get_files_by_partitions(&[deltalake::PartitionFilter {
-//!       key: "month",
-//!       value: deltalake::PartitionValue::Equal("12"),
+//!       key: "month".to_string(),
+//!       value: deltalake::PartitionValue::Equal("12".to_string()),
 //!   }]);
 //! };
 //! ```
@@ -348,12 +348,12 @@ mod tests {
 
         let filters = vec![
             crate::PartitionFilter {
-                key: "month",
-                value: crate::PartitionValue::Equal("2"),
+                key: "month".to_string(),
+                value: crate::PartitionValue::Equal("2".to_string()),
             },
             crate::PartitionFilter {
-                key: "year",
-                value: crate::PartitionValue::Equal("2020"),
+                key: "year".to_string(),
+                value: crate::PartitionValue::Equal("2020".to_string()),
             },
         ];
 
@@ -383,8 +383,8 @@ mod tests {
     );
 
         let filters = vec![crate::PartitionFilter {
-            key: "month",
-            value: crate::PartitionValue::NotEqual("2"),
+            key: "month".to_string(),
+            value: crate::PartitionValue::NotEqual("2".to_string()),
         }];
         assert_eq!(
         table.get_files_by_partitions(&filters).unwrap(),
@@ -397,8 +397,8 @@ mod tests {
     );
 
         let filters = vec![crate::PartitionFilter {
-            key: "month",
-            value: crate::PartitionValue::In(vec!["2", "12"]),
+            key: "month".to_string(),
+            value: crate::PartitionValue::In(vec!["2".to_string(), "12".to_string()]),
         }];
         assert_eq!(
         table.get_files_by_partitions(&filters).unwrap(),
@@ -411,8 +411,8 @@ mod tests {
     );
 
         let filters = vec![crate::PartitionFilter {
-            key: "month",
-            value: crate::PartitionValue::NotIn(vec!["2", "12"]),
+            key: "month".to_string(),
+            value: crate::PartitionValue::NotIn(vec!["2".to_string(), "12".to_string()]),
         }];
         assert_eq!(
         table.get_files_by_partitions(&filters).unwrap(),
@@ -430,8 +430,8 @@ mod tests {
             .unwrap();
 
         let filters = vec![crate::PartitionFilter {
-            key: "k",
-            value: crate::PartitionValue::Equal("A"),
+            key: "k".to_string(),
+            value: crate::PartitionValue::Equal("A".to_string()),
         }];
         assert_eq!(
             table.get_files_by_partitions(&filters).unwrap(),
@@ -441,8 +441,8 @@ mod tests {
         );
 
         let filters = vec![crate::PartitionFilter {
-            key: "k",
-            value: crate::PartitionValue::Equal(""),
+            key: "k".to_string(),
+            value: crate::PartitionValue::Equal("".to_string()),
         }];
         assert_eq!(
         table.get_files_by_partitions(&filters).unwrap(),
@@ -473,8 +473,8 @@ mod tests {
         );
 
         let filters = vec![crate::PartitionFilter {
-            key: "x",
-            value: crate::PartitionValue::Equal("A/A"),
+            key: "x".to_string(),
+            value: crate::PartitionValue::Equal("A/A".to_string()),
         }];
         assert_eq!(
             table.get_files_by_partitions(&filters).unwrap(),
@@ -492,8 +492,8 @@ mod tests {
             .unwrap();
 
         let filters = vec![crate::PartitionFilter {
-            key: "x",
-            value: crate::PartitionValue::LessThanOrEqual("9"),
+            key: "x".to_string(),
+            value: crate::PartitionValue::LessThanOrEqual("9".to_string()),
         }];
         assert_eq!(
             table.get_files_by_partitions(&filters).unwrap(),
@@ -503,8 +503,8 @@ mod tests {
         );
 
         let filters = vec![crate::PartitionFilter {
-            key: "y",
-            value: crate::PartitionValue::LessThan("10.0"),
+            key: "y".to_string(),
+            value: crate::PartitionValue::LessThan("10.0".to_string()),
         }];
         assert_eq!(
             table.get_files_by_partitions(&filters).unwrap(),
