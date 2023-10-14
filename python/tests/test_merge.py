@@ -15,9 +15,7 @@ def test_merge_when_matched_delete_wo_predicate(
     source_table = pa.table(
         {
             "id": pa.array(["5"]),
-            "price": pa.array([1], pa.int64()),
-            "sold": pa.array([1], pa.int32()),
-            "deleted": pa.array([False]),
+            "weight": pa.array([105], pa.int32()),
         }
     )
 
@@ -54,9 +52,10 @@ def test_merge_when_matched_delete_with_predicate(
     source_table = pa.table(
         {
             "id": pa.array(["5", "4"]),
-            "price": pa.array([1, 2], pa.int64()),
+            "weight": pa.array([1, 2], pa.int64()),
             "sold": pa.array([1, 2], pa.int32()),
             "deleted": pa.array([True, False]),
+            "customer": pa.array(['Adam', 'Patrick'])
         }
     )
 
@@ -95,7 +94,6 @@ def test_merge_when_matched_update_wo_predicate(
             "id": pa.array(["4", "5"]),
             "price": pa.array([10, 100], pa.int64()),
             "sold": pa.array([10, 20], pa.int32()),
-            "deleted": pa.array([False, False]),
         }
     )
 
@@ -134,6 +132,7 @@ def test_merge_when_matched_update_all_wo_predicate(
             "price": pa.array([10, 100], pa.int64()),
             "sold": pa.array([10, 20], pa.int32()),
             "deleted": pa.array([True, True]),
+            "weight": pa.array([10,15], pa.int64()),
         }
     )
 
