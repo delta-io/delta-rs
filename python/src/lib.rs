@@ -15,9 +15,13 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use arrow::pyarrow::PyArrowType;
 use chrono::{DateTime, Duration, FixedOffset, Utc};
 use deltalake::arrow::compute::concat_batches;
+use deltalake::arrow::ffi_stream::ArrowArrayStreamReader;
 use deltalake::arrow::record_batch::RecordBatch;
+use deltalake::arrow::record_batch::RecordBatchReader;
 use deltalake::arrow::{self, datatypes::Schema as ArrowSchema};
 use deltalake::checkpoints::create_checkpoint;
+use deltalake::datafusion::datasource::memory::MemTable;
+use deltalake::datafusion::datasource::provider::TableProvider;
 use deltalake::datafusion::prelude::SessionContext;
 use deltalake::delta_datafusion::DeltaDataChecker;
 use deltalake::errors::DeltaTableError;
@@ -406,12 +410,10 @@ impl RawDeltaTable {
         writer_properties = None,
         matched_update_updates = None,
         matched_update_predicate = None,
-        // matched_update_all,
         matched_delete_predicate = None,
         matched_delete_all = None,
         not_matched_insert_updates = None,
         not_matched_insert_predicate = None,
-        // not_matched_insert_all,
         not_matched_by_source_update_updates = None,
         not_matched_by_source_update_predicate = None,
         not_matched_by_source_delete_predicate = None,
@@ -419,7 +421,7 @@ impl RawDeltaTable {
     ))]
     pub fn merge_execute(
         &mut self,
-        source: PyArrowType<RecordBatch>,
+        source: PyArrowType<ArrowArrayStreamReader>,
         predicate: String,
         source_alias: Option<String>,
         target_alias: Option<String>,
@@ -427,19 +429,25 @@ impl RawDeltaTable {
         writer_properties: Option<HashMap<String, usize>>,
         matched_update_updates: Option<HashMap<String, String>>,
         matched_update_predicate: Option<String>,
-        // matched_update_all: Option<bool>,
         matched_delete_predicate: Option<String>,
         matched_delete_all: Option<bool>,
         not_matched_insert_updates: Option<HashMap<String, String>>,
         not_matched_insert_predicate: Option<String>,
-        // not_matched_insert_all: Option<bool>,
         not_matched_by_source_update_updates: Option<HashMap<String, String>>,
         not_matched_by_source_update_predicate: Option<String>,
         not_matched_by_source_delete_predicate: Option<String>,
         not_matched_by_source_delete_all: Option<bool>,
     ) -> PyResult<String> {
         let ctx = SessionContext::new();
-        let source_df = ctx.read_batch(source.0).unwrap();
+        let schema = source.0.schema();
+        let batches = vec![source
+            .0
+            .into_iter()
+            .map(|batch| batch.unwrap())
+            .collect::<Vec<_>>()];
+        let table_provider: Arc<dyn TableProvider> =
+            Arc::new(MemTable::try_new(schema, batches).unwrap());
+        let source_df = ctx.read_table(table_provider).unwrap();
 
         let mut cmd = MergeBuilder::new(
             self._table.object_store(),

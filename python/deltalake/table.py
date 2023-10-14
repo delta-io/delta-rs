@@ -32,6 +32,7 @@ from pyarrow.dataset import (
 if TYPE_CHECKING:
     import pandas
 
+from ._internal import DeltaDataChecker as _DeltaDataChecker
 from ._internal import RawDeltaTable
 from ._util import encode_partition_value
 from .data_catalog import DataCatalog
@@ -527,7 +528,7 @@ given filters.
 
     def merge(
         self,
-        source: Union[pyarrow.Table, pyarrow.RecordBatch],
+        source: Union[pyarrow.Table, pyarrow.RecordBatch, pyarrow.RecordBatchReader],
         predicate: str,
         source_alias: Optional[str] = None,
         target_alias: Optional[str] = None,
@@ -547,12 +548,34 @@ given filters.
         Returns:
             TableMerger: TableMerger Object
         """
-        if isinstance(source, pyarrow.Table):
-            source = source.to_batches()[0]
+        invariants = self.schema().invariants
+        checker = _DeltaDataChecker(invariants)
+
+        if isinstance(source, pyarrow.RecordBatchReader):
+            schema = source.schema
+        else:
+            schema = source.schema
+
+        if isinstance(source, pyarrow.RecordBatchReader):
+            batch_iter = source
+        elif isinstance(source, pyarrow.RecordBatch):
+            batch_iter = [source]
+        elif isinstance(source, pyarrow.Table):
+            batch_iter = source.to_batches()
+        else:
+            batch_iter = source
+
+        def validate_batch(batch: pyarrow.RecordBatch) -> pyarrow.RecordBatch:
+            checker.check_batch(batch)
+            return batch
+
+        data = pyarrow.RecordBatchReader.from_batches(
+            schema, (validate_batch(batch) for batch in batch_iter)
+        )
 
         return TableMerger(
             self,
-            source=source,
+            source=data,
             predicate=predicate,
             source_alias=source_alias,
             target_alias=target_alias,
@@ -787,7 +810,7 @@ class TableMerger:
     def __init__(
         self,
         table: DeltaTable,
-        source: Union[pyarrow.Table, pyarrow.RecordBatch],
+        source: pyarrow.RecordBatchReader,
         predicate: str,
         source_alias: Optional[str] = None,
         target_alias: Optional[str] = None,

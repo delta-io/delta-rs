@@ -97,7 +97,7 @@ class RawDeltaTable:
     ) -> str: ...
     def merge_execute(
         self,
-        source: pa.RecordBatch,
+        source: pa.RecordBatchReader,
         predicate: str,
         source_alias: Optional[str],
         target_alias: Optional[str],
