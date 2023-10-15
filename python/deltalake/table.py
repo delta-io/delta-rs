@@ -539,7 +539,7 @@ given filters.
         match the underlying table.
 
         Args:
-            source (pyarrow.Table | pyarrow.RecordBatch): source data
+            source (pyarrow.Table | pyarrow.RecordBatch | pyarrow.RecordBatchReader ): source data
             predicate (str): SQL like predicate on how to merge
             source_alias (str): Alias for the source table
             target_alias (str): Alias for the target table
@@ -553,29 +553,28 @@ given filters.
 
         if isinstance(source, pyarrow.RecordBatchReader):
             schema = source.schema
-        else:
-            schema = source.schema
-
-        if isinstance(source, pyarrow.RecordBatchReader):
-            batch_iter = source
         elif isinstance(source, pyarrow.RecordBatch):
-            batch_iter = [source]
+            schema = source.schema
+            source = [source]
         elif isinstance(source, pyarrow.Table):
-            batch_iter = source.to_batches()
+            schema = source.schema
+            source = source.to_reader()
         else:
-            batch_iter = source
+            raise TypeError(
+                f"{type(source).__name__} is not a valid input. Only PyArrow RecordBatchReader, RecordBatch or Table are valid inputs for source."
+            )
 
         def validate_batch(batch: pyarrow.RecordBatch) -> pyarrow.RecordBatch:
             checker.check_batch(batch)
             return batch
 
-        data = pyarrow.RecordBatchReader.from_batches(
-            schema, (validate_batch(batch) for batch in batch_iter)
+        source = pyarrow.RecordBatchReader.from_batches(
+            schema, (validate_batch(batch) for batch in source)
         )
 
         return TableMerger(
             self,
-            source=data,
+            source=source,
             predicate=predicate,
             source_alias=source_alias,
             target_alias=target_alias,
