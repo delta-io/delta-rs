@@ -921,7 +921,6 @@ class TableMerger:
             f"{trgt_alias}{col.name}": f"{src_alias}{col.name}"
             for col in self.source.schema
         }
-        print(self.matched_update_updates)
         self.matched_update_predicate = predicate
         return self
 
