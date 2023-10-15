@@ -746,6 +746,31 @@ given filters.
         metrics = self._table.delete(predicate)
         return json.loads(metrics)
 
+    def repair(self, dry_run: bool = True) -> Dict[str, Any]:
+        """It repairs the Delta Table by auditting active files that do not exist in the underlying
+        filesystem and removes them. This can be useful when there are accidental deletions or corrupted files.
+
+        Active files are ones that have an add action in the log, but no corresponding remove action.
+        This operation creates a new FSCK transaction containing a remove action for each of the missing
+        or corrupted files.
+
+        Params:
+            dry_run(bool): when activated, list only the files, delete otherwise. Defaults to True.
+        Returns:
+            The metrics from repair (FSCK) action.
+
+        Examples:
+
+        >>> from deltalake import DeltaTable
+        >>> dt = DeltaTable('TEST')
+        >>> dt.repair(dry_run=True)
+        {'dry_run': True,
+        'files_removed': ['6-0d084325-6885-4847-b008-82c1cf30674c-0.parquet',
+        '5-4fba1d3e-3e20-4de1-933d-a8e13ac59f53-0.parquet']}
+        """
+        metrics = self._table.repair(dry_run)
+        return json.loads(metrics)
+
 
 class TableOptimizer:
     """API for various table optimization commands."""

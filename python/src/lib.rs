@@ -22,6 +22,7 @@ use deltalake::datafusion::prelude::SessionContext;
 use deltalake::delta_datafusion::DeltaDataChecker;
 use deltalake::errors::DeltaTableError;
 use deltalake::operations::delete::DeleteBuilder;
+use deltalake::operations::filesystem_check::FileSystemCheckBuilder;
 use deltalake::operations::optimize::{OptimizeBuilder, OptimizeType};
 use deltalake::operations::restore::RestoreBuilder;
 use deltalake::operations::transaction::commit;
@@ -663,6 +664,21 @@ impl RawDeltaTable {
         if let Some(predicate) = predicate {
             cmd = cmd.with_predicate(predicate);
         }
+        let (table, metrics) = rt()?
+            .block_on(cmd.into_future())
+            .map_err(PythonError::from)?;
+        self._table.state = table.state;
+        Ok(serde_json::to_string(&metrics).unwrap())
+    }
+
+    /// Execute the File System Check command (FSCK) on the delta table: removes old reference to files that
+    /// have been deleted or are malformed
+    #[pyo3(signature = (dry_run = true))]
+    pub fn repair(&mut self, dry_run: bool) -> PyResult<String> {
+        let cmd =
+            FileSystemCheckBuilder::new(self._table.object_store(), self._table.state.clone())
+                .with_dry_run(dry_run);
+
         let (table, metrics) = rt()?
             .block_on(cmd.into_future())
             .map_err(PythonError::from)?;
