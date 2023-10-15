@@ -107,6 +107,8 @@ pub struct VacuumMetrics {
 pub struct VacuumStartOperationMetrics {
     /// The number of files that will be deleted
     pub num_files_to_delete: i64,
+    /// Size of the data to be deleted in bytes
+    pub size_of_data_to_delete: i64,
 }
 
 /// Details for the Vacuum End operation for the transaction log
@@ -263,21 +265,63 @@ impl VacuumPlan {
                 files_deleted: Vec::new(),
             });
         }
-        let num_files_to_delete = self.files_to_delete.len() as i64;
 
-        // Start with VACUUM START commit
         let start_operation = DeltaOperation::VacuumStart {
             retention_check_enabled: self.retention_check_enabled,
             specified_retention_millis: self.specified_retention_millis,
             default_retention_millis: self.default_retention_millis,
         };
 
+        let end_operation = DeltaOperation::VacuumEnd {
+            status: String::from("COMPLETED"),
+        };
+
+        // let mut total_size = 0;
+        // for file in self.files_to_delete.clone() {
+        //     println!("{:?}", file);
+        //     let list_stream = store.list(Some(&file)).await.unwrap();
+
+        //     let meta_objects = list_stream.map(|x|x.unwrap().clone()).collect::<Vec<_>>().await;
+
+        //     let object_sizes = meta_objects.iter()
+        //         .map(|meta| meta.clone().size as i64)
+        //         .collect::<Vec<_>>();
+
+        //     let size: i64 = object_sizes.iter().sum();
+        //     println!("{:?}", object_sizes.len());
+        //     println!("{:?}", total_size);
+        //     total_size = total_size + size;
+        // }
+
+        // let mut total_size = 0;
+
+        // for file in &self.files_to_delete {
+        //     let list_stream = store.list(Some(file)).await.expect("Error listing files");
+        
+        //     let meta_objects: Vec<_> = list_stream
+        //         .map(|result| result.expect("Error listing files"))
+        //         .collect()
+        //         .await;
+        
+        //     let object_sizes: Vec<i64> = meta_objects.iter()
+        //         .map(|meta| meta.size as i64)
+        //         .collect();
+        
+        //     let size: i64 = object_sizes.iter().sum();
+        //     println!("{:?}", meta_objects.len());
+        //     println!("{:?}", total_size);
+        //     total_size += size;
+            
+        // }
+
+
+
         let start_metrics = serde_json::to_value(VacuumStartOperationMetrics {
-            // num_deleted_files: 0,
-            // num_vacuumed_directories: 0,
-            num_files_to_delete,
+            num_files_to_delete: self.files_to_delete.len() as i64,
+            size_of_data_to_delete: total_size,
         });
 
+        // Begin VACUUM START COMMIT
         let mut commit_info = start_operation.get_commit_info();
         let mut extra_info = Map::<String, Value>::new();
 
@@ -294,6 +338,7 @@ impl VacuumPlan {
         let start_actions = vec![Action::commitInfo(commit_info)];
 
         commit(store, &start_actions, start_operation, snapshot, None).await?;
+        // Finish VACUUM START COMMIT
 
         let locations = futures::stream::iter(self.files_to_delete)
             .map(Result::Ok)
@@ -309,17 +354,13 @@ impl VacuumPlan {
             .try_collect::<Vec<_>>()
             .await?;
 
-        // Create end vacuum operation
-        let end_operation = DeltaOperation::VacuumEnd {
-            status: String::from("COMPLETED"),
-        };
         // Create end metadata
         let end_metrics = serde_json::to_value(VacuumEndOperationMetrics {
             num_deleted_files: files_deleted.len() as i64,
-            num_vacuumed_directories: 0, // Figure out how to count the dirs
-                                         // num_files_to_delete,         // Or 0 since they are deleted now, confusing documentation
+            num_vacuumed_directories: 0, // Set to zero since we only remove files not dirs
         });
 
+        // Begin VACUUM END COMMIT
         let mut commit_info = end_operation.get_commit_info();
         let mut extra_info = Map::<String, Value>::new();
 
@@ -336,6 +377,7 @@ impl VacuumPlan {
         let end_actions = vec![Action::commitInfo(commit_info)];
 
         commit(store, &end_actions, end_operation, snapshot, None).await?;
+        // Finish VACUUM END COMMIT
 
         Ok(VacuumMetrics {
             files_deleted,
