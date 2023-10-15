@@ -104,45 +104,46 @@ def write_deltalake(
 
     Note that this function does NOT register this table in a data catalog.
 
-    :param table_or_uri: URI of a table or a DeltaTable object.
-    :param data: Data to write. If passing iterable, the schema must also be given.
-    :param schema: Optional schema to write.
-    :param partition_by: List of columns to partition the table by. Only required
-        when creating a new table.
-    :param filesystem: Optional filesystem to pass to PyArrow. If not provided will
-        be inferred from uri. The file system has to be rooted in the table root.
-        Use the pyarrow.fs.SubTreeFileSystem, to adopt the root of pyarrow file systems.
-    :param mode: How to handle existing data. Default is to error if table already exists.
-        If 'append', will add new data.
-        If 'overwrite', will replace table with new data.
-        If 'ignore', will not write anything if table already exists.
-    :param file_options: Optional write options for Parquet (ParquetFileWriteOptions).
-        Can be provided with defaults using ParquetFileWriteOptions().make_write_options().
-        Please refer to https://github.com/apache/arrow/blob/master/python/pyarrow/_dataset_parquet.pyx#L492-L533
-        for the list of available options
-    :param max_partitions: the maximum number of partitions that will be used.
-    :param max_open_files: Limits the maximum number of
-        files that can be left open while writing. If an attempt is made to open
-        too many files then the least recently used file will be closed.
-        If this setting is set too low you may end up fragmenting your
-        data into many small files.
-    :param max_rows_per_file: Maximum number of rows per file.
-        If greater than 0 then this will limit how many rows are placed in any single file.
-        Otherwise there will be no limit and one file will be created in each output directory
-        unless files need to be closed to respect max_open_files
-    :param min_rows_per_group: Minimum number of rows per group. When the value is set,
-        the dataset writer will batch incoming data and only write the row groups to the disk
-        when sufficient rows have accumulated.
-    :param max_rows_per_group: Maximum number of rows per group.
-        If the value is set, then the dataset writer may split up large incoming batches into multiple row groups.
-        If this value is set, then min_rows_per_group should also be set.
-    :param name: User-provided identifier for this table.
-    :param description: User-provided description for this table.
-    :param configuration: A map containing configuration options for the metadata action.
-    :param overwrite_schema: If True, allows updating the schema of the table.
-    :param storage_options: options passed to the native delta filesystem. Unused if 'filesystem' is defined.
-    :param partition_filters: the partition filters that will be used for partition overwrite.
-    :param large_dtypes: If True, the table schema is checked against large_dtypes
+    Args:
+        table_or_uri: URI of a table or a DeltaTable object.
+        data: Data to write. If passing iterable, the schema must also be given.
+        schema: Optional schema to write.
+        partition_by: List of columns to partition the table by. Only required
+            when creating a new table.
+        filesystem: Optional filesystem to pass to PyArrow. If not provided will
+            be inferred from uri. The file system has to be rooted in the table root.
+            Use the pyarrow.fs.SubTreeFileSystem, to adopt the root of pyarrow file systems.
+        mode: How to handle existing data. Default is to error if table already exists.
+            If 'append', will add new data.
+            If 'overwrite', will replace table with new data.
+            If 'ignore', will not write anything if table already exists.
+        file_options: Optional write options for Parquet (ParquetFileWriteOptions).
+            Can be provided with defaults using ParquetFileWriteOptions().make_write_options().
+            Please refer to https://github.com/apache/arrow/blob/master/python/pyarrow/_dataset_parquet.pyx#L492-L533
+            for the list of available options
+        max_partitions: the maximum number of partitions that will be used.
+        max_open_files: Limits the maximum number of
+            files that can be left open while writing. If an attempt is made to open
+            too many files then the least recently used file will be closed.
+            If this setting is set too low you may end up fragmenting your
+            data into many small files.
+        max_rows_per_file: Maximum number of rows per file.
+            If greater than 0 then this will limit how many rows are placed in any single file.
+            Otherwise there will be no limit and one file will be created in each output directory
+            unless files need to be closed to respect max_open_files
+            min_rows_per_group: Minimum number of rows per group. When the value is set,
+            the dataset writer will batch incoming data and only write the row groups to the disk
+            when sufficient rows have accumulated.
+        max_rows_per_group: Maximum number of rows per group.
+            If the value is set, then the dataset writer may split up large incoming batches into multiple row groups.
+            If this value is set, then min_rows_per_group should also be set.
+        name: User-provided identifier for this table.
+        description: User-provided description for this table.
+        configuration: A map containing configuration options for the metadata action.
+        overwrite_schema: If True, allows updating the schema of the table.
+        storage_options: options passed to the native delta filesystem. Unused if 'filesystem' is defined.
+        partition_filters: the partition filters that will be used for partition overwrite.
+        large_dtypes: If True, the table schema is checked against large_dtypes
     """
     if _has_pandas and isinstance(data, pd.DataFrame):
         if schema is not None:
@@ -403,12 +404,14 @@ def try_get_table_and_table_uri(
     storage_options: Optional[Dict[str, str]] = None,
 ) -> Tuple[Optional[DeltaTable], str]:
     """Parses the `table_or_uri`.
+    Raises [ValueError] If `table_or_uri` is not of type str, Path or DeltaTable.
 
-    :param table_or_uri: URI of a table or a DeltaTable object.
-    :param storage_options: Options passed to the native delta filesystem.
-    :raises ValueError: If `table_or_uri` is not of type str, Path or DeltaTable.
-    :returns table: DeltaTable object
-    :return table_uri: URI of the table
+    Args:
+        table_or_uri: URI of a table or a DeltaTable object.
+        storage_options: Options passed to the native delta filesystem.
+
+    Returns:
+        (DeltaTable object, URI of the table)
     """
     if not isinstance(table_or_uri, (str, Path, DeltaTable)):
         raise ValueError("table_or_uri must be a str, Path or DeltaTable")
