@@ -1,9 +1,7 @@
 import json
-import operator
 import warnings
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from functools import reduce
 from pathlib import Path
 from typing import (
     TYPE_CHECKING,
@@ -22,18 +20,19 @@ from typing import (
 import pyarrow
 import pyarrow.fs as pa_fs
 from pyarrow.dataset import (
-    Expression,
     FileSystemDataset,
+    Fragment,
     ParquetFileFormat,
     ParquetFragmentScanOptions,
     ParquetReadOptions,
 )
+from pyarrow.parquet import filters_to_expression
 
 if TYPE_CHECKING:
     import pandas
 
 from ._internal import RawDeltaTable
-from ._util import encode_partition_value
+from ._util import stringify_partition_values, validate_filters
 from .data_catalog import DataCatalog
 from .exceptions import DeltaProtocolError
 from .fs import DeltaStorageHandler
@@ -105,96 +104,6 @@ FilterDNFType = List[FilterConjunctionType]
 
 
 FilterType = Union[FilterConjunctionType, FilterDNFType]
-
-
-def _check_contains_null(value: Any) -> bool:
-    """
-    Check if target contains nullish value.
-    """
-    if isinstance(value, bytes):
-        for byte in value:
-            if isinstance(byte, bytes):
-                compare_to = chr(0)
-            else:
-                compare_to = 0
-            if byte == compare_to:
-                return True
-    elif isinstance(value, str):
-        return "\x00" in value
-    return False
-
-
-def _check_dnf(
-    dnf: FilterDNFType,
-    check_null_strings: bool = True,
-) -> FilterDNFType:
-    """
-    Check if DNF are well-formed.
-    """
-    if len(dnf) == 0 or any(len(c) == 0 for c in dnf):
-        raise ValueError("Malformed DNF")
-    if check_null_strings:
-        for conjunction in dnf:
-            for col, op, val in conjunction:
-                if (
-                    isinstance(val, list)
-                    and all(_check_contains_null(v) for v in val)
-                    or _check_contains_null(val)
-                ):
-                    raise NotImplementedError(
-                        "Null-terminated binary strings are not supported "
-                        "as filter values."
-                    )
-    return dnf
-
-
-def _convert_single_predicate(column: str, op: str, value: Any) -> Expression:
-    """
-    Convert given `tuple` to `pyarrow.dataset.Expression`.
-    """
-    import pyarrow.dataset as ds
-
-    field = ds.field(column)
-    if op == "=" or op == "==":
-        return field == value
-    elif op == "!=":
-        return field != value
-    elif op == "<":
-        return field < value
-    elif op == ">":
-        return field > value
-    elif op == "<=":
-        return field <= value
-    elif op == ">=":
-        return field >= value
-    elif op == "in":
-        return field.isin(value)
-    elif op == "not in":
-        return ~field.isin(value)
-    else:
-        raise ValueError(
-            f'"{(column, op, value)}" is not a valid operator in predicates.'
-        )
-
-
-def _filters_to_expression(filters: FilterType) -> Expression:
-    """
-    Check if filters are well-formed and convert to an ``pyarrow.dataset.Expression``.
-    """
-    if isinstance(filters[0][0], str):
-        # We have encountered the situation where we have one nesting level too few:
-        #   We have [(,,), ..] instead of [[(,,), ..]]
-        dnf = cast(FilterDNFType, [filters])
-    else:
-        dnf = cast(FilterDNFType, filters)
-    dnf = _check_dnf(dnf, check_null_strings=False)
-    disjunction_members = []
-    for conjunction in dnf:
-        conjunction_members = [
-            _convert_single_predicate(col, op, val) for col, op, val in conjunction
-        ]
-        disjunction_members.append(reduce(operator.and_, conjunction_members))
-    return reduce(operator.or_, disjunction_members)
 
 
 _DNF_filter_doc = """
@@ -300,7 +209,7 @@ class DeltaTable:
     def files(
         self, partition_filters: Optional[List[Tuple[str, str, Any]]] = None
     ) -> List[str]:
-        return self._table.files(self.__stringify_partition_values(partition_filters))
+        return self._table.files(stringify_partition_values(partition_filters))
 
     files.__doc__ = f"""
 Get the .parquet files of the DeltaTable.
@@ -353,9 +262,7 @@ relative to the table root or absolute URIs.
     def file_uris(
         self, partition_filters: Optional[List[Tuple[str, str, Any]]] = None
     ) -> List[str]:
-        return self._table.file_uris(
-            self.__stringify_partition_values(partition_filters)
-        )
+        return self._table.file_uris(stringify_partition_values(partition_filters))
 
     file_uris.__doc__ = f"""
 Get the list of files as absolute URIs, including the scheme (e.g. "s3://").
@@ -569,9 +476,48 @@ given filters.
             )
         return json.loads(metrics)
 
+    def _create_fragments(
+        self,
+        partitions: Optional[FilterType],
+        format: ParquetFileFormat,
+        filesystem: pa_fs.FileSystem,
+    ) -> List[Fragment]:
+        """Create Parquet fragments for the given partitions
+
+        :param partitions: A list of partition filters
+        :param format: The ParquetFileFormat to use
+        :param filesystem: The PyArrow FileSystem to use
+        """
+
+        partition_filters: Optional[FilterType] = validate_filters(partitions)
+        partition_filters = stringify_partition_values(partition_filters)
+
+        fragments = []
+        if partition_filters is not None:
+            for partition in partition_filters:
+                partition = cast(FilterConjunctionType, partition)
+                for file, partition_expression in self._table.dataset_partitions(
+                    schema=self.schema().to_pyarrow(), partition_filters=partition
+                ):
+                    fragments.append(
+                        format.make_fragment(file, filesystem, partition_expression)
+                    )
+        else:
+            for file, part_expression in self._table.dataset_partitions(
+                schema=self.schema().to_pyarrow(), partition_filters=partitions
+            ):
+                fragments.append(
+                    format.make_fragment(
+                        file,
+                        filesystem=filesystem,
+                        partition_expression=part_expression,
+                    )
+                )
+        return fragments
+
     def to_pyarrow_dataset(
         self,
-        partitions: Optional[List[Tuple[str, str, Any]]] = None,
+        partitions: Optional[FilterType] = None,
         filesystem: Optional[Union[str, pa_fs.FileSystem]] = None,
         parquet_read_options: Optional[ParquetReadOptions] = None,
     ) -> pyarrow.dataset.Dataset:
@@ -606,49 +552,6 @@ given filters.
             default_fragment_scan_options=ParquetFragmentScanOptions(pre_buffer=True),
         )
 
-        fragments = []
-        if partitions is None:
-            partition_filters = None
-        else:
-            if partitions and isinstance(partitions, list):
-                partition_count = len(partitions)
-                partition_type = type(partitions[0])
-
-                if partition_count == 1 and partition_type is list:
-                    partition_filters = partitions
-                elif partition_count == 1 and partition_type is tuple:
-                    partition_filters = [partitions]
-                elif all(isinstance(x, tuple) for x in partitions):
-                    partition_filters = [partitions]
-                elif all(isinstance(x, list) for x in partitions):
-                    partition_filters = partitions
-                else:
-                    partition_filters = None
-            else:
-                raise ValueError(
-                    "Partitions must be a list of tuples, or a lists of lists of tuples"
-                )
-
-        if partition_filters is not None:
-            for partition in partition_filters:
-                for file, partition_expression in self._table.dataset_partitions(
-                    schema=self.schema().to_pyarrow(), partition_filters=partition
-                ):
-                    fragments.append(
-                        format.make_fragment(file, filesystem, partition_expression)
-                    )
-        else:
-            fragments = [
-                format.make_fragment(
-                    file,
-                    filesystem=filesystem,
-                    partition_expression=part_expression,
-                )
-                for file, part_expression in self._table.dataset_partitions(
-                    self.schema().to_pyarrow(), partitions
-                )
-            ]
-
         schema = self.schema().to_pyarrow()
 
         dictionary_columns = format.read_options.dictionary_columns or set()
@@ -660,11 +563,13 @@ given filters.
                     )
                     schema = schema.set(index, dict_field)
 
+        fragments = self._create_fragments(partitions, format, filesystem)
+
         return FileSystemDataset(fragments, schema, format, filesystem)
 
     def to_pyarrow_table(
         self,
-        partitions: Optional[List[Tuple[str, str, Any]]] = None,
+        partitions: Optional[FilterType] = None,
         columns: Optional[List[str]] = None,
         filesystem: Optional[Union[str, pa_fs.FileSystem]] = None,
         filters: Optional[FilterType] = None,
@@ -678,14 +583,15 @@ given filters.
         :param filters: A disjunctive normal form (DNF) predicate for filtering rows. If you pass a filter you do not need to pass ``partitions``
         """
         if filters is not None:
-            filters = _filters_to_expression(filters)
+            filters = validate_filters(filters)
+            filters = filters_to_expression(filters)
         return self.to_pyarrow_dataset(
             partitions=partitions, filesystem=filesystem
         ).to_table(columns=columns, filter=filters)
 
     def to_pandas(
         self,
-        partitions: Optional[List[Tuple[str, str, Any]]] = None,
+        partitions: Optional[FilterType] = None,
         columns: Optional[List[str]] = None,
         filesystem: Optional[Union[str, pa_fs.FileSystem]] = None,
         filters: Optional[FilterType] = None,
@@ -714,21 +620,6 @@ given filters.
 
     def create_checkpoint(self) -> None:
         self._table.create_checkpoint()
-
-    def __stringify_partition_values(
-        self, partition_filters: Optional[List[Tuple[str, str, Any]]]
-    ) -> Optional[List[Tuple[str, str, Union[str, List[str]]]]]:
-        if partition_filters is None:
-            return partition_filters
-        out = []
-        for field, op, value in partition_filters:
-            str_value: Union[str, List[str]]
-            if isinstance(value, (list, tuple)):
-                str_value = [encode_partition_value(val) for val in value]
-            else:
-                str_value = encode_partition_value(value)
-            out.append((field, op, str_value))
-        return out
 
     def get_add_actions(self, flatten: bool = False) -> pyarrow.RecordBatch:
         """
