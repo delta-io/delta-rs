@@ -697,6 +697,8 @@ def test_issue_1653_filter_bool_partition(tmp_path: Path):
         )
         == 1
     )
+
+
 @pytest.mark.parametrize(
     "input_value, expected",
     [
