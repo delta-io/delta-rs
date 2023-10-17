@@ -159,7 +159,7 @@ of features outlined in the Delta [protocol][protocol] is also [tracked](#protoc
 
 | Writer Version | Requirement                                   |        Status        |
 | -------------- | --------------------------------------------- | :------------------: |
-| Version 2      | Append Only Tables                            |  [![open]][roadmap]  |
+| Version 2      | Append Only Tables                            |       ![done]  
 | Version 2      | Column Invariants                             |       ![done]        |
 | Version 3      | Enforce `delta.checkpoint.writeStatsAsJson`   | [![open]][writer-rs] |
 | Version 3      | Enforce `delta.checkpoint.writeStatsAsStruct` | [![open]][writer-rs] |
