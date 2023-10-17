@@ -852,6 +852,7 @@ def test_filters_to_expression(filters: FilterType, expected: ds.Expression) -> 
             [[("a", "=", 1)], [("b", "=", 2)], [("c", "=", 3)]],
             [[("a", "=", 1)], [("b", "=", 2)], [("c", "=", 3)]],
         ),
+        ([("a", "=", 1)], [[("a", "=", 1)]]),
     ],
 )
 def test_validate_filters(filters: FilterType, expected: FilterType) -> None:
