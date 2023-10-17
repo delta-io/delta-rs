@@ -24,8 +24,7 @@ def encode_partition_value(val: Any) -> str:
 
 
 def validate_filters(filters: Optional["FilterType"]) -> Optional["FilterType"]:
-    """Ensures that the filters are in the correct DNF format which is a list of
-    tuples or a list of list of tuples
+    """Ensures that the filters are a list of list of tuples in DNF format.
 
     :param filters: Filters to be validated
 
