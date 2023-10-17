@@ -796,6 +796,7 @@ def sample_data_for_overwrite_partitions(
     return pa.Table.from_pydict(data)
 
 
+@pytest.mark.pandas
 @pytest.mark.parametrize(
     "id_values, account_values, created_date_values, updated_at_values, value_values, partition_by, partition_filters",
     [
