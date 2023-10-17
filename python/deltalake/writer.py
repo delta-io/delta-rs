@@ -16,12 +16,13 @@ from typing import (
     Optional,
     Tuple,
     Union,
+    cast,
 )
 from urllib.parse import unquote
 
 from deltalake.fs import DeltaStorageHandler
 
-from ._util import encode_partition_value
+from ._util import encode_partition_value, validate_filters
 
 if TYPE_CHECKING:
     import pandas as pd
@@ -44,7 +45,13 @@ from ._internal import DeltaDataChecker as _DeltaDataChecker
 from ._internal import batch_distinct
 from ._internal import write_new_deltalake as _write_new_deltalake
 from .exceptions import DeltaProtocolError, TableNotFoundError
-from .table import MAX_SUPPORTED_WRITER_VERSION, DeltaTable
+from .table import (
+    MAX_SUPPORTED_WRITER_VERSION,
+    DeltaTable,
+    FilterConjunctionType,
+    FilterLiteralType,
+    FilterType,
+)
 
 try:
     import pandas as pd  # noqa: F811
@@ -64,6 +71,43 @@ class AddAction:
     modification_time: int
     data_change: bool
     stats: str
+
+
+def _match_filter(
+    filter_: FilterLiteralType, partition_values: Mapping[str, Optional[str]]
+) -> bool:
+    """Matches a filter against a partition value from AddAction instance.
+
+    This ensures that create_write_transaction is called with a valid partition filter.
+
+    :param filter_: A list of tuple(s) in DNF format (column, operator, value)
+    :param partition_values: A mapping of partition values
+
+    Examples:
+        >>> _match_filter([("a", "=", 1)], {"a": 1})
+        >>> _match_filter([("a", "=", 1), ("b", "=", 2)], {"a": 1, "b": 2})
+    """
+    column, op, value = filter_
+    actual_value = partition_values.get(column)
+
+    if op == "=" or op == "==":
+        return actual_value == value
+    elif op == "!=":
+        return actual_value != value
+    elif op == "<":
+        return actual_value < value
+    elif op == ">":
+        return actual_value > value
+    elif op == "<=":
+        return actual_value <= value
+    elif op == ">=":
+        return actual_value >= value
+    elif op == "in":
+        return actual_value in value
+    elif op == "not in":
+        return actual_value not in value
+    else:
+        raise ValueError(f'"{filter_}" is not a valid operator in predicates.')
 
 
 def write_deltalake(
@@ -91,7 +135,7 @@ def write_deltalake(
     configuration: Optional[Mapping[str, Optional[str]]] = None,
     overwrite_schema: bool = False,
     storage_options: Optional[Dict[str, str]] = None,
-    partition_filters: Optional[List[Tuple[str, str, Any]]] = None,
+    partition_filters: Optional[FilterType] = None,
     large_dtypes: bool = False,
 ) -> None:
     """Write to a Delta Lake table
@@ -172,6 +216,8 @@ def write_deltalake(
         storage_options.update(storage_options or {})
 
     filesystem = pa_fs.PyFileSystem(DeltaStorageHandler(table_uri, storage_options))
+
+    validated_filters = validate_filters(partition_filters)
 
     __enforce_append_only(table=table, configuration=configuration, mode=mode)
 
@@ -268,12 +314,22 @@ def write_deltalake(
         ) -> None:
             if table is None:
                 return
-            existed_partitions: FrozenSet[
+
+            allowed_partitions = set()
+            if validated_filters is not None:
+                # get_active_partitions() on the Rust side does not handle a list of
+                # of list of tuples, so we need to call it multiple times
+                for single_filter in validated_filters:
+                    single_filter = cast(FilterConjunctionType, single_filter)
+                    allowed_partitions.update(
+                        table._table.get_active_partitions(single_filter)
+                    )
+            else:
+                allowed_partitions = table._table.get_active_partitions()
+
+            existing_partitions: FrozenSet[
                 FrozenSet[Tuple[str, Optional[str]]]
             ] = table._table.get_active_partitions()
-            allowed_partitions: FrozenSet[
-                FrozenSet[Tuple[str, Optional[str]]]
-            ] = table._table.get_active_partitions(partition_filters)
             partition_values = pa.RecordBatch.from_arrays(
                 [
                     batch.column(column_name)
@@ -293,7 +349,7 @@ def write_deltalake(
                 partition = frozenset(partition_map.items())
                 if (
                     partition not in allowed_partitions
-                    and partition in existed_partitions
+                    and partition in existing_partitions
                 ):
                     partition_repr = " ".join(
                         f"{key}={value}" for key, value in partition_map.items()
@@ -356,14 +412,54 @@ def write_deltalake(
             storage_options,
         )
     else:
-        table._table.create_write_transaction(
-            add_actions,
-            mode,
-            partition_by or [],
-            schema,
-            partition_filters,
-        )
-        table.update_incremental()
+        if table is not None:
+            if validated_filters is None:
+                table._table.create_write_transaction(
+                    add_actions,
+                    mode,
+                    partition_by or [],
+                    schema,
+                    validated_filters,
+                )
+                table.update_incremental()
+            elif isinstance(validated_filters, list):
+                if len(validated_filters) == 1:
+                    single_filter = validated_filters[0]
+                    if isinstance(single_filter, list):
+                        table._table.create_write_transaction(
+                            add_actions,
+                            mode,
+                            partition_by or [],
+                            schema,
+                            single_filter,
+                        )
+                        table.update_incremental()
+                elif all(isinstance(x, list) for x in validated_filters):
+                    original_add_actions = add_actions.copy()
+                    for filter_conjunction in validated_filters:
+                        filter_conjunction = cast(
+                            FilterConjunctionType, filter_conjunction
+                        )
+                        filtered_add_actions = [
+                            action
+                            for action in original_add_actions
+                            if all(
+                                _match_filter(filter_, action.partition_values)
+                                for filter_ in filter_conjunction
+                            )
+                        ]
+                        # create_write_transaction() only accepts a list of tuples
+                        # and not a list of list of tuples (OR conjunction)
+                        table._table.create_write_transaction(
+                            filtered_add_actions,
+                            mode,
+                            partition_by or [],
+                            schema,
+                            filter_conjunction,
+                        )
+                        table.update_incremental()
+                else:
+                    raise ValueError("Invalid format for validated_filters")
 
 
 def __enforce_append_only(

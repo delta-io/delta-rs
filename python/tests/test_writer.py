@@ -746,6 +746,187 @@ def test_partition_overwrite_with_non_partitioned_data(
         )
 
 
+@pytest.fixture()
+def sample_data_for_multiple_partitions() -> pa.Table:
+    data = {
+        "id": [1, 2, 3, 4, 5],
+        "account": [
+            "account_a",
+            "account_b",
+            "account_a",
+            "account_c",
+            "account_b",
+        ],
+        "created_date": [
+            date(2023, 8, 25),
+            date(2023, 9, 5),
+            date(2023, 9, 7),
+            date(2023, 9, 21),
+            date(2023, 10, 2),
+        ],
+        "updated_at": [
+            datetime(2023, 8, 25, 0, 0, 0),
+            datetime(2023, 9, 5, 0, 0, 0),
+            datetime(2023, 9, 7, 0, 0, 0),
+            datetime(2023, 9, 21, 0, 0, 0),
+            datetime(2023, 10, 2, 0, 0, 0),
+        ],
+        "value": [10.5, 20.5, 30.5, 40.5, 50.5],
+    }
+
+    return pa.Table.from_pydict(data)
+
+
+@pytest.fixture()
+def sample_data_for_overwrite_partitions(
+    id_values: list[int],
+    account_values: list[str],
+    created_date_values: list[date],
+    updated_at_values: list[datetime],
+    value_values: list[float],
+) -> pa.Table:
+    data = {
+        "id": id_values,
+        "account": account_values,
+        "created_date": created_date_values,
+        "updated_at": updated_at_values,
+        "value": value_values,
+    }
+
+    return pa.Table.from_pydict(data)
+
+
+@pytest.mark.pandas
+@pytest.mark.parametrize(
+    "id_values, account_values, created_date_values, updated_at_values, value_values, partition_by, partition_filters",
+    [
+        # Test filtering for multiple dates (OR condition)
+        (
+            [1, 3, 4],
+            ["account_a", "account_b", "account_a"],
+            [date(2023, 8, 25), date(2023, 9, 7), date(2023, 9, 21)],
+            [datetime.utcnow(), datetime.utcnow(), datetime.utcnow()],
+            [44.5, 68, 11.5],
+            ["created_date"],
+            [
+                [("created_date", "=", "2023-08-25")],
+                [("created_date", "=", "2023-09-07")],
+                [("created_date", "=", "2023-09-21")],
+            ],
+        ),
+        # Test filtering for date or account (OR condition)
+        (
+            [3, 4, 5],
+            ["account_a", "account_c", "account_b"],
+            [date(2023, 9, 7), date(2023, 9, 21), date(2023, 10, 2)],
+            [datetime.utcnow(), datetime.utcnow(), datetime.utcnow()],
+            [0.1, 5.2, 100],
+            ["created_date", "account"],
+            [
+                [("created_date", "=", "2023-09-21")],
+                [("account", "in", ["account_a", "account_b"])],
+            ],
+        ),
+        # Test date range (AND condition) or account (OR condition)
+        (
+            [1, 2, 3, 4, 5],
+            ["account_a", "account_b", "account_a", "account_c", "account_b"],
+            [
+                date(2023, 8, 25),
+                date(2023, 9, 5),
+                date(2023, 9, 7),
+                date(2023, 9, 21),
+                date(2023, 10, 2),
+            ],
+            [
+                datetime.utcnow(),
+                datetime.utcnow(),
+                datetime.utcnow(),
+                datetime.utcnow(),
+                datetime.utcnow(),
+            ],
+            [0.1, 0.2, 0.3, 0.4, 0.5],
+            ["created_date", "account"],
+            [
+                [
+                    ("created_date", ">", "2023-08-01"),
+                    ("created_date", "<", "2023-12-31"),
+                ],
+                [("account", "=", "account_b")],
+            ],
+        ),
+        # Test date and account (AND condition))
+        (
+            [4],
+            ["account_c"],
+            [date(2023, 9, 21)],
+            [datetime.utcnow()],
+            [352.5],
+            ["created_date", "account"],
+            [
+                [
+                    ("created_date", "=", "2023-09-21"),
+                    ("account", "=", "account_c"),
+                ],
+            ],
+        ),
+    ],
+)
+def test_overwriting_multiple_partitions(
+    tmp_path: pathlib.Path,
+    sample_data_for_multiple_partitions: pa.Table,
+    sample_data_for_overwrite_partitions: pa.Table,
+    partition_by: list[str],
+    partition_filters: list[list[tuple[str, str, Any]]],
+    id_values: list[int],
+    value_values: list[float],
+):
+    # Write initial data
+    write_deltalake(
+        tmp_path,
+        sample_data_for_multiple_partitions,
+        mode="overwrite",
+        partition_by=partition_by,
+    )
+
+    # Append new data
+    write_deltalake(
+        tmp_path,
+        sample_data_for_overwrite_partitions,
+        mode="append",
+        partition_by=partition_by,
+    )
+
+    # Filter data using partition filters
+    delta_table = DeltaTable(tmp_path)
+    filtered_table = delta_table.to_pyarrow_table(partitions=partition_filters)
+
+    # Sort data by id and updated_at, find latest record for each id
+    combined_df = filtered_table.to_pandas().sort_values(by=["id", "updated_at"])
+    deduplicated_df = combined_df.drop_duplicates(subset=["id"], keep="last")
+    deduplicated_data = pa.table(deduplicated_df, schema=filtered_table.schema)
+
+    # Overwrite data using partition filters
+    write_deltalake(
+        tmp_path,
+        deduplicated_data,
+        mode="overwrite",
+        partition_by=partition_by,
+        partition_filters=partition_filters,
+    )
+
+    delta_table = DeltaTable(tmp_path)
+    actual_data = delta_table.to_pyarrow_table().sort_by([("id", "ascending")])
+
+    for id_val, value_val in zip(id_values, value_values):
+        id_condition = pa.compute.equal(actual_data["id"], id_val)
+        value_condition = pa.compute.equal(actual_data["value"], value_val)
+        combined_condition = pa.compute.and_(id_condition, value_condition)
+        combined_list = combined_condition.to_pylist()
+        assert True in combined_list
+        assert set(actual_data["id"].to_pylist()) == set([1, 2, 3, 4, 5])
+
+
 def test_partition_overwrite_with_wrong_partition(
     tmp_path: pathlib.Path, sample_data_for_partitioning: pa.Table
 ):

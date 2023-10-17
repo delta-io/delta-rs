@@ -1,14 +1,21 @@
 import os
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 from threading import Barrier, Thread
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import Mock
 
 from packaging import version
+from pyarrow.parquet import filters_to_expression
 
+from deltalake._util import (
+    encode_partition_value,
+    stringify_partition_values,
+    validate_filters,
+)
 from deltalake.exceptions import DeltaProtocolError
-from deltalake.table import ProtocolVersions
+from deltalake.table import FilterType, ProtocolVersions
 from deltalake.writer import write_deltalake
 
 try:
@@ -481,6 +488,79 @@ def test_delta_table_with_filters():
     )
 
 
+def test_pyarrow_dataset_partitions():
+    table_path = "../rust/tests/data/delta-0.8.0-partitioned"
+    dt = DeltaTable(table_path)
+
+    single_partition = [("day", "=", "1")]
+    dataset_filtered = dt.to_pyarrow_dataset(partitions=single_partition)
+    data_filtered = dataset_filtered.to_table()
+    dataset = dt.to_pyarrow_dataset()
+    filter_expr = ds.field("day") == "1"
+    data = dataset.to_table(filter=filter_expr)
+    assert data_filtered.num_rows == data.num_rows
+
+    single_partition_multiple_columns = [("month", "=", "2"), ("day", "=", "5")]
+    dataset_filtered = dt.to_pyarrow_dataset(
+        partitions=single_partition_multiple_columns
+    )
+    data_filtered = dataset_filtered.to_table()
+    dataset = dt.to_pyarrow_dataset()
+    filter_expr = (ds.field("month") == "2") & (ds.field("day") == "5")
+    data = dataset.to_table(filter=filter_expr)
+    assert data_filtered.num_rows == data.num_rows
+
+    multiple_partitions_single_column = [[("month", "=", "2")], [("month", "=", "4")]]
+    dataset_filtered = dt.to_pyarrow_dataset(
+        partitions=multiple_partitions_single_column
+    )
+    data_filtered = dataset_filtered.to_table()
+    dataset = dt.to_pyarrow_dataset()
+    filter_expr = (ds.field("month") == "2") | (ds.field("month") == "4")
+    data = dataset.to_table(filter=filter_expr)
+    assert data_filtered.num_rows == data.num_rows
+
+    multiple_partitions_multiple_columns = [
+        [("year", "=", "2020"), ("month", "=", "2"), ("day", "=", "5")],
+        [("year", "=", "2021"), ("month", "=", "4"), ("day", "=", "5")],
+        [("year", "=", "2021"), ("month", "=", "3"), ("day", "=", "1")],
+    ]
+    dataset_filtered = dt.to_pyarrow_dataset(
+        partitions=multiple_partitions_multiple_columns
+    )
+    data_filtered = dataset_filtered.to_table()
+    dataset = dt.to_pyarrow_dataset()
+    filter_expr = (
+        (
+            (ds.field("year") == "2020")
+            & (ds.field("month") == "2")
+            & (ds.field("day") == "5")
+        )
+        | (
+            (ds.field("year") == "2021")
+            & (ds.field("month") == "4")
+            & (ds.field("day") == "5")
+        )
+        | (
+            (ds.field("year") == "2021")
+            & (ds.field("month") == "3")
+            & (ds.field("day") == "1")
+        )
+    )
+    data = dataset.to_table(filter=filter_expr)
+    assert data_filtered.num_rows == data.num_rows
+
+    single_partition_single_column_list = [[("year", "=", "2020")]]
+    dataset_filtered = dt.to_pyarrow_dataset(
+        partitions=single_partition_single_column_list
+    )
+    data_filtered = dataset_filtered.to_table()
+    dataset = dt.to_pyarrow_dataset()
+    filter_expr = ds.field("year") == "2020"
+    data = dataset.to_table(filter=filter_expr)
+    assert data_filtered.num_rows == data.num_rows
+
+
 def test_writer_fails_on_protocol():
     table_path = "../rust/tests/data/simple_table"
     dt = DeltaTable(table_path)
@@ -695,3 +775,140 @@ def test_issue_1653_filter_bool_partition(tmp_path: Path):
         )
         == 1
     )
+
+
+@pytest.mark.parametrize(
+    "input_value, expected",
+    [
+        (True, "true"),
+        (False, "false"),
+        (1, "1"),
+        (1.5, "1.5"),
+        ("string", "string"),
+        (date(2023, 10, 17), "2023-10-17"),
+        (datetime(2023, 10, 17, 12, 34, 56), "2023-10-17 12:34:56"),
+        (b"bytes", "bytes"),
+        ([True, False], ["true", "false"]),
+        ([1, 2], ["1", "2"]),
+        ([1.5, 2.5], ["1.5", "2.5"]),
+        (["a", "b"], ["a", "b"]),
+        ([date(2023, 10, 17), date(2023, 10, 18)], ["2023-10-17", "2023-10-18"]),
+        (
+            [datetime(2023, 10, 17, 12, 34, 56), datetime(2023, 10, 18, 12, 34, 56)],
+            ["2023-10-17 12:34:56", "2023-10-18 12:34:56"],
+        ),
+        ([b"bytes", b"testbytes"], ["bytes", "testbytes"]),
+    ],
+)
+def test_encode_partition_value(input_value: Any, expected: str) -> None:
+    if isinstance(input_value, list):
+        assert [encode_partition_value(val) for val in input_value] == expected
+    else:
+        assert encode_partition_value(input_value) == expected
+
+
+@pytest.mark.parametrize(
+    "filters, expected",
+    [
+        (
+            [("date", "=", "2023-08-25"), ("date", "=", "2023-09-05")],
+            (ds.field("date") == "2023-08-25") & (ds.field("date") == "2023-09-05"),
+        ),
+        (
+            [[("date", "=", "2023-08-25")], [("date", "=", "2023-09-05")]],
+            (ds.field("date") == "2023-08-25") | (ds.field("date") == "2023-09-05"),
+        ),
+        (
+            [
+                ("date", ">=", "2023-08-25"),
+                ("date", "<", "2023-09-05"),
+                ("date", "not in", ["2023-09-01", "2023-09-02"]),
+            ],
+            (ds.field("date") >= "2023-08-25")
+            & (ds.field("date") < "2023-09-05")
+            & ~ds.field("date").isin(["2023-09-01", "2023-09-02"]),
+        ),
+        ([["date", "=", "2023-08-25"]], ds.field("date") == "2023-08-25"),
+        ([("date", "=", "2023-08-25")], ds.field("date") == "2023-08-25"),
+        ([("date", "=", None)], (ds.field("date") == ds.scalar(None))),
+    ],
+)
+def test_filters_to_expression(filters: FilterType, expected: ds.Expression) -> None:
+    result = filters_to_expression(filters)
+    assert result.equals(expected)
+
+
+@pytest.mark.parametrize(
+    "filters, expected",
+    [
+        ([("a", "=", 1)], [[("a", "=", 1)]]),
+        ([("a", "=", 1), ("b", "=", 2)], [[("a", "=", 1), ("b", "=", 2)]]),
+        (
+            [[("a", "=", 1), ("b", "=", 2)], [("c", "=", 3)]],
+            [[("a", "=", 1), ("b", "=", 2)], [("c", "=", 3)]],
+        ),
+        ([[("a", "=", 1)]], [[("a", "=", 1)]]),
+        (
+            [[("a", "=", 1)], [("b", "=", 2)], [("c", "=", 3)]],
+            [[("a", "=", 1)], [("b", "=", 2)], [("c", "=", 3)]],
+        ),
+        ([("a", "=", 1)], [[("a", "=", 1)]]),
+    ],
+)
+def test_validate_filters(filters: FilterType, expected: FilterType) -> None:
+    result = validate_filters(filters)
+    assert result == expected
+
+
+# Test cases with invalid filters
+@pytest.mark.parametrize(
+    "filters",
+    [
+        [],
+        [[]],
+        [()],
+        [("a", "=", 1), []],
+        [[("a", "=", 1)], ()],
+    ],
+)
+def test_validate_filters_invalid(filters: FilterType) -> None:
+    with pytest.raises(ValueError):
+        validate_filters(filters)
+
+
+@pytest.mark.parametrize(
+    "input_filters, expected",
+    [
+        ([("a", "=", 1)], [("a", "=", "1")]),
+        ([[("a", "=", 1), ("b", "!=", 2)]], [[("a", "=", "1"), ("b", "!=", "2")]]),
+        ([("a", "in", [1, 2])], [("a", "in", ["1", "2"])]),
+        (
+            [[("a", "in", [1, 2]), ("b", "not in", [3, 4])]],
+            [[("a", "in", ["1", "2"]), ("b", "not in", ["3", "4"])]],
+        ),
+        ([("date_col", "=", date(2022, 1, 1))], [("date_col", "=", "2022-01-01")]),
+        (
+            [("datetime_col", "=", datetime(2022, 1, 1, 12, 34, 56))],
+            [("datetime_col", "=", "2022-01-01 12:34:56")],
+        ),
+        (
+            [
+                [
+                    ("date_col", "=", date(2022, 1, 1)),
+                    ("datetime_col", "=", datetime(2022, 1, 1, 12, 34, 56)),
+                ]
+            ],
+            [
+                [
+                    ("date_col", "=", "2022-01-01"),
+                    ("datetime_col", "=", "2022-01-01 12:34:56"),
+                ]
+            ],
+        ),
+    ],
+)
+def test_stringify_partition_values(
+    input_filters: FilterType, expected: FilterType
+) -> None:
+    result = stringify_partition_values(input_filters)
+    assert result == expected
