@@ -13,10 +13,10 @@ def encode_partition_value(val: Any) -> str:
         return val
     elif isinstance(val, (int, float)):
         return str(val)
-    elif isinstance(val, date):
-        return val.isoformat()
     elif isinstance(val, datetime):
         return val.isoformat(sep=" ")
+    elif isinstance(val, date):
+        return val.isoformat()
     elif isinstance(val, bytes):
         return val.decode("unicode_escape", "backslashreplace")
     else:

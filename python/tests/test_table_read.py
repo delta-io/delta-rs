@@ -778,6 +778,36 @@ def test_issue_1653_filter_bool_partition(tmp_path: Path):
 
 
 @pytest.mark.parametrize(
+    "input_value, expected",
+    [
+        (True, "true"),
+        (False, "false"),
+        (1, "1"),
+        (1.5, "1.5"),
+        ("string", "string"),
+        (date(2023, 10, 17), "2023-10-17"),
+        (datetime(2023, 10, 17, 12, 34, 56), "2023-10-17 12:34:56"),
+        (b"bytes", "bytes"),
+        ([True, False], ["true", "false"]),
+        ([1, 2], ["1", "2"]),
+        ([1.5, 2.5], ["1.5", "2.5"]),
+        (["a", "b"], ["a", "b"]),
+        ([date(2023, 10, 17), date(2023, 10, 18)], ["2023-10-17", "2023-10-18"]),
+        (
+            [datetime(2023, 10, 17, 12, 34, 56), datetime(2023, 10, 18, 12, 34, 56)],
+            ["2023-10-17 12:34:56", "2023-10-18 12:34:56"],
+        ),
+        ([b"bytes", b"testbytes"], ["bytes", "testbytes"]),
+    ],
+)
+def test_encode_partition_value(input_value: Any, expected: str) -> None:
+    if isinstance(input_value, list):
+        assert [encode_partition_value(val) for val in input_value] == expected
+    else:
+        assert encode_partition_value(input_value) == expected
+
+
+@pytest.mark.parametrize(
     "filters, expected",
     [
         (
