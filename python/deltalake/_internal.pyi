@@ -95,6 +95,25 @@ class RawDeltaTable:
         writer_properties: Optional[Dict[str, int]],
         safe_cast: bool = False,
     ) -> str: ...
+    def merge_execute(
+        self,
+        source: pa.RecordBatchReader,
+        predicate: str,
+        source_alias: Optional[str],
+        target_alias: Optional[str],
+        writer_properties: Optional[Dict[str, int | None]],
+        safe_cast: bool,
+        matched_update_updates: Optional[Dict[str, str]],
+        matched_update_predicate: Optional[str],
+        matched_delete_predicate: Optional[str],
+        matched_delete_all: Optional[bool],
+        not_matched_insert_updates: Optional[Dict[str, str]],
+        not_matched_insert_predicate: Optional[str],
+        not_matched_by_source_update_updates: Optional[Dict[str, str]],
+        not_matched_by_source_update_predicate: Optional[str],
+        not_matched_by_source_delete_predicate: Optional[str],
+        not_matched_by_source_delete_all: Optional[bool],
+    ) -> str: ...
     def get_active_partitions(
         self, partitions_filters: Optional[FilterType] = None
     ) -> Any: ...
