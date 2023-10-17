@@ -32,6 +32,7 @@ from pyarrow.dataset import (
 if TYPE_CHECKING:
     import pandas
 
+from ._internal import DeltaDataChecker as _DeltaDataChecker
 from ._internal import RawDeltaTable
 from ._util import encode_partition_value
 from .data_catalog import DataCatalog
@@ -525,6 +526,61 @@ given filters.
     ) -> "TableOptimizer":
         return TableOptimizer(self)
 
+    def merge(
+        self,
+        source: Union[pyarrow.Table, pyarrow.RecordBatch, pyarrow.RecordBatchReader],
+        predicate: str,
+        source_alias: Optional[str] = None,
+        target_alias: Optional[str] = None,
+        error_on_type_mismatch: bool = True,
+    ) -> "TableMerger":
+        """Pass the source data which you want to merge on the target delta table, providing a
+        predicate in SQL query like format. You can also specify on what to do when the underlying data types do not
+        match the underlying table.
+
+        Args:
+            source (pyarrow.Table | pyarrow.RecordBatch | pyarrow.RecordBatchReader ): source data
+            predicate (str): SQL like predicate on how to merge
+            source_alias (str): Alias for the source table
+            target_alias (str): Alias for the target table
+            error_on_type_mismatch (bool): specify if merge will return error if data types are mismatching :default = True
+
+        Returns:
+            TableMerger: TableMerger Object
+        """
+        invariants = self.schema().invariants
+        checker = _DeltaDataChecker(invariants)
+
+        if isinstance(source, pyarrow.RecordBatchReader):
+            schema = source.schema
+        elif isinstance(source, pyarrow.RecordBatch):
+            schema = source.schema
+            source = [source]
+        elif isinstance(source, pyarrow.Table):
+            schema = source.schema
+            source = source.to_reader()
+        else:
+            raise TypeError(
+                f"{type(source).__name__} is not a valid input. Only PyArrow RecordBatchReader, RecordBatch or Table are valid inputs for source."
+            )
+
+        def validate_batch(batch: pyarrow.RecordBatch) -> pyarrow.RecordBatch:
+            checker.check_batch(batch)
+            return batch
+
+        source = pyarrow.RecordBatchReader.from_batches(
+            schema, (validate_batch(batch) for batch in source)
+        )
+
+        return TableMerger(
+            self,
+            source=source,
+            predicate=predicate,
+            source_alias=source_alias,
+            target_alias=target_alias,
+            safe_cast=not error_on_type_mismatch,
+        )
+
     def pyarrow_schema(self) -> pyarrow.Schema:
         """
         Get the current schema of the DeltaTable with the Parquet PyArrow format.
@@ -744,6 +800,308 @@ given filters.
         :return: the metrics from delete.
         """
         metrics = self._table.delete(predicate)
+        return json.loads(metrics)
+
+
+class TableMerger:
+    """API for various table MERGE commands."""
+
+    def __init__(
+        self,
+        table: DeltaTable,
+        source: pyarrow.RecordBatchReader,
+        predicate: str,
+        source_alias: Optional[str] = None,
+        target_alias: Optional[str] = None,
+        safe_cast: bool = True,
+    ):
+        self.table = table
+        self.source = source
+        self.predicate = predicate
+        self.source_alias = source_alias
+        self.target_alias = target_alias
+        self.safe_cast = safe_cast
+        self.writer_properties: Optional[Dict[str, Optional[int]]] = None
+        self.matched_update_updates: Optional[Dict[str, str]] = None
+        self.matched_update_predicate: Optional[str] = None
+        self.matched_delete_predicate: Optional[str] = None
+        self.matched_delete_all: Optional[bool] = None
+        self.not_matched_insert_updates: Optional[Dict[str, str]] = None
+        self.not_matched_insert_predicate: Optional[str] = None
+        self.not_matched_by_source_update_updates: Optional[Dict[str, str]] = None
+        self.not_matched_by_source_update_predicate: Optional[str] = None
+        self.not_matched_by_source_delete_predicate: Optional[str] = None
+        self.not_matched_by_source_delete_all: Optional[bool] = None
+
+    def with_writer_properties(
+        self,
+        data_page_size_limit: Optional[int] = None,
+        dictionary_page_size_limit: Optional[int] = None,
+        data_page_row_count_limit: Optional[int] = None,
+        write_batch_size: Optional[int] = None,
+        max_row_group_size: Optional[int] = None,
+    ) -> "TableMerger":
+        """Pass writer properties to the Rust parquet writer, see options https://arrow.apache.org/rust/parquet/file/properties/struct.WriterProperties.html:
+
+        Args:
+            data_page_size_limit (int|None, optional): Limit DataPage size to this in bytes. Defaults to None.
+            dictionary_page_size_limit (int|None, optional): Limit the size of each DataPage to store dicts to this amount in bytes. Defaults to None.
+            data_page_row_count_limit (int|None, optional): Limit the number of rows in each DataPage. Defaults to None.
+            write_batch_size (int|None, optional): Splits internally to smaller batch size. Defaults to None.
+            max_row_group_size (int|None, optional): Max number of rows in row group. Defaults to None.
+
+        Returns:
+            TableMerger: TableMerger Object
+        """
+        writer_properties = {
+            "data_page_size_limit": data_page_size_limit,
+            "dictionary_page_size_limit": dictionary_page_size_limit,
+            "data_page_row_count_limit": data_page_row_count_limit,
+            "write_batch_size": write_batch_size,
+            "max_row_group_size": max_row_group_size,
+        }
+        self.writer_properties = writer_properties
+        return self
+
+    def when_matched_update(
+        self, updates: Dict[str, str], predicate: Optional[str] = None
+    ) -> "TableMerger":
+        """Update a matched table row based on the rules defined by ``updates``.
+        If a ``predicate`` is specified, then it must evaluate to true for the row to be updated.
+
+        Args:
+            updates (dict): a mapping of column name to update SQL expression.
+            predicate (str | None, optional):  SQL like predicate on when to update. Defaults to None.
+
+        Returns:
+            TableMerger: TableMerger Object
+            
+        Examples:
+
+        >>> from deltalake import DeltaTable
+        >>> import pyarrow as pa
+        >>> data = pa.table({"x": [1, 2, 3], "y": [4, 5, 6]})
+        >>> dt = DeltaTable("tmp")
+        >>> dt.merge(source=data, predicate='target.x = source.x', source_alias='source', target_alias='target') \
+        ...     .when_matched_update(
+        ...         updates = {
+        ...             "x": "source.x",
+        ...             "y": "source.y"
+        ...             }
+        ...         ).execute()
+        """
+        self.matched_update_updates = updates
+        self.matched_update_predicate = predicate
+        return self
+
+    def when_matched_update_all(self, predicate: Optional[str] = None) -> "TableMerger":
+        """Updating all source fields to target fields, source and target are required to have the same field names. 
+        If a ``predicate`` is specified, then it must evaluate to true for the row to be updated.
+
+        Args:
+            predicate (str | None, optional): SQL like predicate on when to update all columns. Defaults to None.
+
+        Returns:
+            TableMerger: TableMerger Object
+            
+        Examples:
+
+        >>> from deltalake import DeltaTable
+        >>> import pyarrow as pa
+        >>> data = pa.table({"x": [1, 2, 3], "y": [4, 5, 6]})
+        >>> dt = DeltaTable("tmp")
+        >>> dt.merge(source=data, predicate='target.x = source.x', source_alias='source', target_alias='target')  \
+        ...     .when_matched_update_all().execute()
+        """
+
+        src_alias = (self.source_alias + ".") if self.source_alias is not None else ""
+        trgt_alias = (self.target_alias + ".") if self.target_alias is not None else ""
+
+        self.matched_update_updates = {
+            f"{trgt_alias}{col.name}": f"{src_alias}{col.name}"
+            for col in self.source.schema
+        }
+        self.matched_update_predicate = predicate
+        return self
+
+    def when_matched_delete(self, predicate: Optional[str] = None) -> "TableMerger":
+        """Delete a matched row from the table only if the given ``predicate`` (if specified) is
+        true for the matched row. If not specified it deletes all matches.
+
+        Args:
+           predicate (str | None, optional):  SQL like predicate on when to delete. Defaults to None.
+
+        Returns:
+            TableMerger: TableMerger Object
+            
+        Examples:
+
+        Delete on a predicate
+        
+        >>> from deltalake import DeltaTable
+        >>> import pyarrow as pa
+        >>> data = pa.table({"x": [1, 2, 3], "y": [4, 5, 6]})
+        >>> dt = DeltaTable("tmp")
+        >>> dt.merge(source=data, predicate='target.x = source.x', source_alias='source', target_alias='target') \
+        ...     .when_matched_delete(predicate = "source.deleted = true")
+        ...     .execute()
+        
+        Delete all records that were matched
+        
+        >>> from deltalake import DeltaTable
+        >>> import pyarrow as pa
+        >>> data = pa.table({"x": [1, 2, 3], "y": [4, 5, 6]})
+        >>> dt = DeltaTable("tmp")
+        >>> dt.merge(source=data, predicate='target.x = source.x', source_alias='source', target_alias='target')  \
+        ...     .when_matched_delete()
+        ...     .execute()
+        """
+
+        if predicate is None:
+            self.matched_delete_all = True
+        else:
+            self.matched_delete_predicate = predicate
+        return self
+
+    def when_not_matched_insert(
+        self, updates: Dict[str, str], predicate: Optional[str] = None
+    ) -> "TableMerger":
+        """Insert a new row to the target table based on the rules defined by ``updates``. If a
+        ``predicate`` is specified, then it must evaluate to true for the new row to be inserted.
+
+        Args:
+            updates (dict):  a mapping of column name to insert SQL expression.
+            predicate (str | None, optional): SQL like predicate on when to insert. Defaults to None.
+
+        Returns:
+            TableMerger: TableMerger Object
+            
+        Examples:
+
+        >>> from deltalake import DeltaTable
+        >>> import pyarrow as pa
+        >>> data = pa.table({"x": [1, 2, 3], "y": [4, 5, 6]})
+        >>> dt = DeltaTable("tmp")
+        >>> dt.merge(source=data, predicate='target.x = source.x', source_alias='source', target_alias='target')  \
+        ...     .when_not_matched_insert(
+        ...         updates = {
+        ...             "x": "source.x",
+        ...             "y": "source.y"
+        ...             }
+        ...         ).execute()
+        """
+
+        self.not_matched_insert_updates = updates
+        self.not_matched_insert_predicate = predicate
+
+        return self
+
+    def when_not_matched_insert_all(
+        self, predicate: Optional[str] = None
+    ) -> "TableMerger":
+        """Insert a new row to the target table, updating all source fields to target fields. Source and target are 
+        required to have the same field names. If a ``predicate`` is specified, then it must evaluate to true for 
+        the new row to be inserted.
+
+        Args:
+            predicate (str | None, optional): SQL like predicate on when to insert. Defaults to None.
+
+        Returns:
+            TableMerger: TableMerger Object
+            
+        Examples:
+
+        >>> from deltalake import DeltaTable
+        >>> import pyarrow as pa
+        >>> data = pa.table({"x": [1, 2, 3], "y": [4, 5, 6]})
+        >>> dt = DeltaTable("tmp")
+        >>> dt.merge(source=data, predicate='target.x = source.x', source_alias='source', target_alias='target')  \
+        ...     .when_not_matched_insert_all().execute()
+        """
+
+        src_alias = (self.source_alias + ".") if self.source_alias is not None else ""
+        trgt_alias = (self.target_alias + ".") if self.target_alias is not None else ""
+        self.not_matched_insert_updates = {
+            f"{trgt_alias}{col.name}": f"{src_alias}{col.name}"
+            for col in self.source.schema
+        }
+        self.not_matched_insert_predicate = predicate
+        return self
+
+    def when_not_matched_by_source_update(
+        self, updates: Dict[str, str], predicate: Optional[str] = None
+    ) -> "TableMerger":
+        """Update a target row that has no matches in the source based on the rules defined by ``updates``.
+        If a ``predicate`` is specified, then it must evaluate to true for the row to be updated.
+
+        Args:
+            updates (dict): a mapping of column name to update SQL expression.
+            predicate (str | None, optional): SQL like predicate on when to update. Defaults to None.
+
+        Returns:
+            TableMerger: TableMerger Object
+            
+        >>> from deltalake import DeltaTable
+        >>> import pyarrow as pa
+        >>> data = pa.table({"x": [1, 2, 3], "y": [4, 5, 6]})
+        >>> dt = DeltaTable("tmp")
+        >>> dt.merge(source=data, predicate='target.x = source.x', source_alias='source', target_alias='target') \
+        ...     .when_not_matched_by_source_update(
+        ...         predicate = "y > 3"
+        ...         updates = {
+        ...             "y": "0",
+        ...             }
+        ...         ).execute()    
+        """
+        self.not_matched_by_source_update_updates = updates
+        self.not_matched_by_source_update_predicate = predicate
+        return self
+
+    def when_not_matched_by_source_delete(
+        self, predicate: Optional[str] = None
+    ) -> "TableMerger":
+        """Delete a target row that has no matches in the source from the table only if the given
+        ``predicate`` (if specified) is true for the target row.
+
+        Args:
+            updates (dict): a mapping of column name to update SQL expression.
+            predicate (str | None, optional):  SQL like predicate on when to delete when not matched by source. Defaults to None.
+
+        Returns:
+            TableMerger: TableMerger Object
+        """
+
+        if predicate is None:
+            self.not_matched_by_source_delete_all = True
+        else:
+            self.not_matched_by_source_delete_predicate = predicate
+        return self
+
+    def execute(self) -> Dict[str, Any]:
+        """Executes MERGE with the previously provided settings in Rust with Apache Datafusion query engine.
+
+        Returns:
+            Dict[str, any]: metrics
+        """
+        metrics = self.table._table.merge_execute(
+            source=self.source,
+            predicate=self.predicate,
+            source_alias=self.source_alias,
+            target_alias=self.target_alias,
+            safe_cast=self.safe_cast,
+            writer_properties=self.writer_properties,
+            matched_update_updates=self.matched_update_updates,
+            matched_update_predicate=self.matched_update_predicate,
+            matched_delete_predicate=self.matched_delete_predicate,
+            matched_delete_all=self.matched_delete_all,
+            not_matched_insert_updates=self.not_matched_insert_updates,
+            not_matched_insert_predicate=self.not_matched_insert_predicate,
+            not_matched_by_source_update_updates=self.not_matched_by_source_update_updates,
+            not_matched_by_source_update_predicate=self.not_matched_by_source_update_predicate,
+            not_matched_by_source_delete_predicate=self.not_matched_by_source_delete_predicate,
+            not_matched_by_source_delete_all=self.not_matched_by_source_delete_all,
+        )
+        self.table.update_incremental()
         return json.loads(metrics)
 
 
