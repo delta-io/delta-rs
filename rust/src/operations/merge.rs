@@ -60,6 +60,7 @@ use datafusion_expr::{col, conditional_expressions::CaseBuilder, lit, when, Expr
 use datafusion_physical_expr::{create_physical_expr, expressions, PhysicalExpr};
 use futures::future::BoxFuture;
 use parquet::file::properties::WriterProperties;
+use serde::Serialize;
 use serde_json::{Map, Value};
 
 use super::datafusion_utils::{into_expr, maybe_into_expr, Expression};
@@ -119,12 +120,13 @@ pub struct MergeBuilder {
 
 impl MergeBuilder {
     /// Create a new [`MergeBuilder`]
-    pub fn new(
+    pub fn new<E: Into<Expression>>(
         object_store: ObjectStoreRef,
         snapshot: DeltaTableState,
-        predicate: Expression,
+        predicate: E,
         source: DataFrame,
     ) -> Self {
+        let predicate = predicate.into();
         Self {
             predicate,
             source,
@@ -527,7 +529,7 @@ impl MergeOperationConfig {
     }
 }
 
-#[derive(Default)]
+#[derive(Default, Serialize)]
 /// Metrics for the Merge Operation
 pub struct MergeMetrics {
     /// Number of rows in the source data
