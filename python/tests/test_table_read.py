@@ -1,14 +1,21 @@
 import os
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 from threading import Barrier, Thread
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import Mock
 
 from packaging import version
+from pyarrow.parquet import filters_to_expression
 
+from deltalake._util import (
+    encode_partition_value,
+    stringify_partition_values,
+    validate_filters,
+)
 from deltalake.exceptions import DeltaProtocolError
-from deltalake.table import ProtocolVersions
+from deltalake.table import FilterType, ProtocolVersions
 from deltalake.writer import write_deltalake
 
 try:
@@ -768,3 +775,109 @@ def test_issue_1653_filter_bool_partition(tmp_path: Path):
         )
         == 1
     )
+
+
+@pytest.mark.parametrize(
+    "filters, expected",
+    [
+        (
+            [("date", "=", "2023-08-25"), ("date", "=", "2023-09-05")],
+            (ds.field("date") == "2023-08-25") & (ds.field("date") == "2023-09-05"),
+        ),
+        (
+            [[("date", "=", "2023-08-25")], [("date", "=", "2023-09-05")]],
+            (ds.field("date") == "2023-08-25") | (ds.field("date") == "2023-09-05"),
+        ),
+        (
+            [
+                ("date", ">=", "2023-08-25"),
+                ("date", "<", "2023-09-05"),
+                ("date", "not in", ["2023-09-01", "2023-09-02"]),
+            ],
+            (ds.field("date") >= "2023-08-25")
+            & (ds.field("date") < "2023-09-05")
+            & ~ds.field("date").isin(["2023-09-01", "2023-09-02"]),
+        ),
+        ([["date", "=", "2023-08-25"]], ds.field("date") == "2023-08-25"),
+        ([("date", "=", "2023-08-25")], ds.field("date") == "2023-08-25"),
+        ([("date", "=", None)], (ds.field("date") == ds.scalar(None))),
+    ],
+)
+def test_filters_to_expression(filters: FilterType, expected: ds.Expression) -> None:
+    result = filters_to_expression(filters)
+    assert result.equals(expected)
+
+
+@pytest.mark.parametrize(
+    "filters, expected",
+    [
+        ([("a", "=", 1)], [[("a", "=", 1)]]),
+        ([("a", "=", 1), ("b", "=", 2)], [[("a", "=", 1), ("b", "=", 2)]]),
+        (
+            [[("a", "=", 1), ("b", "=", 2)], [("c", "=", 3)]],
+            [[("a", "=", 1), ("b", "=", 2)], [("c", "=", 3)]],
+        ),
+        ([[("a", "=", 1)]], [[("a", "=", 1)]]),
+        (
+            [[("a", "=", 1)], [("b", "=", 2)], [("c", "=", 3)]],
+            [[("a", "=", 1)], [("b", "=", 2)], [("c", "=", 3)]],
+        ),
+    ],
+)
+def test_validate_filters(filters: FilterType, expected: FilterType) -> None:
+    result = validate_filters(filters)
+    assert result == expected
+
+
+# Test cases with invalid filters
+@pytest.mark.parametrize(
+    "filters",
+    [
+        [],
+        [[]],
+        [()],
+        [("a", "=", 1), []],
+        [[("a", "=", 1)], ()],
+    ],
+)
+def test_validate_filters_invalid(filters: FilterType) -> None:
+    with pytest.raises(ValueError):
+        validate_filters(filters)
+
+
+@pytest.mark.parametrize(
+    "input_filters, expected",
+    [
+        ([("a", "=", 1)], [("a", "=", "1")]),
+        ([[("a", "=", 1), ("b", "!=", 2)]], [[("a", "=", "1"), ("b", "!=", "2")]]),
+        ([("a", "in", [1, 2])], [("a", "in", ["1", "2"])]),
+        (
+            [[("a", "in", [1, 2]), ("b", "not in", [3, 4])]],
+            [[("a", "in", ["1", "2"]), ("b", "not in", ["3", "4"])]],
+        ),
+        ([("date_col", "=", date(2022, 1, 1))], [("date_col", "=", "2022-01-01")]),
+        (
+            [("datetime_col", "=", datetime(2022, 1, 1, 12, 34, 56))],
+            [("datetime_col", "=", "2022-01-01 12:34:56")],
+        ),
+        (
+            [
+                [
+                    ("date_col", "=", date(2022, 1, 1)),
+                    ("datetime_col", "=", datetime(2022, 1, 1, 12, 34, 56)),
+                ]
+            ],
+            [
+                [
+                    ("date_col", "=", "2022-01-01"),
+                    ("datetime_col", "=", "2022-01-01 12:34:56"),
+                ]
+            ],
+        ),
+    ],
+)
+def test_stringify_partition_values(
+    input_filters: FilterType, expected: FilterType
+) -> None:
+    result = stringify_partition_values(input_filters)
+    assert result == expected
