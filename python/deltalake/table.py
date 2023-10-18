@@ -317,7 +317,7 @@ class DeltaTable:
 
         Returns:
             list of the .parquet files referenced for the current version of the DeltaTable
-        
+
         Predicates are expressed in disjunctive normal form (DNF), like [("x", "=", "a"), ...].
         DNF allows arbitrary boolean logical combinations of single partition predicates.
         The innermost tuples each describe a single partition predicate. The list of inner
@@ -336,7 +336,6 @@ class DeltaTable:
         ```
         """
         return self._table.files(self.__stringify_partition_values(partition_filters))
-
 
     def files_by_partitions(
         self, partition_filters: List[Tuple[str, str, Any]]
@@ -418,7 +417,7 @@ class DeltaTable:
         )
 
     file_uris.__doc__ = ""
-    
+
     def load_version(self, version: int) -> None:
         """
         Load a DeltaTable with a specified version.
@@ -549,8 +548,8 @@ class DeltaTable:
             writer_properties: Pass writer properties to the Rust parquet writer, see options https://arrow.apache.org/rust/parquet/file/properties/struct.WriterProperties.html,
                                 only the following fields are supported: `data_page_size_limit`, `dictionary_page_size_limit`, `data_page_row_count_limit`, `write_batch_size`, `max_row_group_size`.
             error_on_type_mismatch: specify if merge will return error if data types are mismatching :default = True
-        
-        Returns: 
+
+        Returns:
             the metrics from delete
 
         Examples:
@@ -789,7 +788,7 @@ class DeltaTable:
                         given the prefix `null_count.`, `min.`, and `max.`, and tags the
                         prefix `tags.`. Nested field names are concatenated with `.`.
 
-        Returns: 
+        Returns:
             a PyArrow RecordBatch containing the add action data.
 
         Example:
@@ -801,7 +800,7 @@ class DeltaTable:
         dt = DeltaTable("tmp")
         dt.get_add_actions().to_pandas()
         ```
-        
+
         ```
                                                                 path  size_bytes       modification_time  data_change partition_values  num_records null_count       min       max
         0  x=2/0-91820cbf-f698-45fb-886d-5d5f5669530b-0.p...         565 1970-01-20 08:40:08.071         True         {'x': 2}            1   {'y': 0}  {'y': 5}  {'y': 5}
@@ -830,7 +829,7 @@ class DeltaTable:
 
         Args:
             predicate: a SQL where clause. If not passed, will delete all rows.
-            
+
         Returns:
             the metrics from delete.
         """
@@ -929,7 +928,7 @@ class TableOptimizer:
 
         Args:
             columns: the columns to use for Z-ordering. There must be at least one column.
-			partition_filters: the partition filters that will be used for getting the matched files
+                        partition_filters: the partition filters that will be used for getting the matched files
             target_size: desired file size after bin-packing files, in bytes. If not
                             provided, will attempt to read the table configuration value ``delta.targetFileSize``.
                             If that value isn't set, will use default value of 256MB.

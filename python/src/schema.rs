@@ -178,7 +178,6 @@ impl PrimitiveType {
         )?))
     }
 
-    
     #[pyo3(text_signature = "(data_type)")]
     #[staticmethod]
     fn from_pyarrow(data_type: PyArrowType<ArrowDataType>) -> PyResult<Self> {
@@ -538,7 +537,6 @@ impl Field {
         serde_json::to_string(&self.inner).map_err(|err| PyException::new_err(err.to_string()))
     }
 
-    
     #[staticmethod]
     #[pyo3(text_signature = "(field_json)")]
     fn from_json(field_json: String) -> PyResult<Self> {

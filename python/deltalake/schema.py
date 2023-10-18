@@ -26,7 +26,7 @@ def delta_arrow_schema_from_pandas(
 
     Args:
         data: Data to write.
-        
+
     Returns:
         A PyArrow Table and the inferred schema for the Delta Table
     """
