@@ -607,7 +607,6 @@ class DeltaTable:
             safe_cast=not error_on_type_mismatch,
         )
 
-    
     def restore(
         self,
         target: Union[int, datetime, str],
