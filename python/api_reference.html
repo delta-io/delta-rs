@@ -33,7 +33,7 @@
             delta-rs
           </a>
               <div class="version">
-                0.11.0
+                0.12.0
               </div>
 <div role="search">
   <form id="rtd-search-form" class="wy-form" action="search.html" method="get">
@@ -100,6 +100,27 @@
 </dd>
 </dl>
 <dl class="py method">
+<dt class="sig sig-object py" id="deltalake.table.DeltaTable.delete">
+<span class="sig-name descname"><span class="pre">delete</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">predicate</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#deltalake.table.DeltaTable.delete" title="Permalink to this definition"></a></dt>
+<dd><p>Delete records from a Delta Table that statisfy a predicate.</p>
+<p>When a predicate is not provided then all records are deleted from the Delta
+Table. Otherwise a scan of the Delta table is performed to mark any files
+that contain records that satisfy the predicate. Once files are determined
+they are rewritten without the records.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters</dt>
+<dd class="field-odd"><p><strong>predicate</strong> (<em>Optional</em><em>[</em><em>str</em><em>]</em>) – a SQL where clause. If not passed, will delete all rows.</p>
+</dd>
+<dt class="field-even">Returns</dt>
+<dd class="field-even"><p>the metrics from delete.</p>
+</dd>
+<dt class="field-odd">Return type</dt>
+<dd class="field-odd"><p><em>Dict</em>[str, <em>Any</em>]</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
 <dt class="sig sig-object py" id="deltalake.table.DeltaTable.file_uris">
 <span class="sig-name descname"><span class="pre">file_uris</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">partition_filters</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#deltalake.table.DeltaTable.file_uris" title="Permalink to this definition"></a></dt>
 <dd><p>Get the list of files as absolute URIs, including the scheme (e.g. “s3://”).</p>
@@ -121,9 +142,9 @@ given filters.</p>
 <p>Predicates are expressed in disjunctive normal form (DNF), like [(“x”, “=”, “a”), …].
 DNF allows arbitrary boolean logical combinations of single partition predicates.
 The innermost tuples each describe a single partition predicate. The list of inner
-predicates is interpreted as a conjunction (AND), forming a more selective and 
-multiple partition predicates. Each tuple has format: (key, op, value) and compares 
-the key with the value. The supported op are: <cite>=</cite>, <cite>!=</cite>, <cite>in</cite>, and <cite>not in</cite>. If 
+predicates is interpreted as a conjunction (AND), forming a more selective and
+multiple partition predicates. Each tuple has format: (key, op, value) and compares
+the key with the value. The supported op are: <cite>=</cite>, <cite>!=</cite>, <cite>in</cite>, and <cite>not in</cite>. If
 the op is in or not in, the value must be a collection such as a list, a set or a tuple.
 The supported type for value is str. Use empty string <cite>‘’</cite> for Null partition value.</p>
 <p>Examples:
@@ -141,11 +162,11 @@ The supported type for value is str. Use empty string <cite>‘’</cite> for Nu
 relative to the table root or absolute URIs.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters</dt>
-<dd class="field-odd"><p><strong>partition_filters</strong> (<em>Optional</em><em>[</em><em>List</em><em>[</em><em>Tuple</em><em>[</em><em>str</em><em>, </em><em>str</em><em>, </em><em>Any</em><em>]</em><em>]</em><em>]</em>) – the partition filters that will be used for 
+<dd class="field-odd"><p><strong>partition_filters</strong> (<em>Optional</em><em>[</em><em>List</em><em>[</em><em>Tuple</em><em>[</em><em>str</em><em>, </em><em>str</em><em>, </em><em>Any</em><em>]</em><em>]</em><em>]</em>) – the partition filters that will be used for
 getting the matched files</p>
 </dd>
 <dt class="field-even">Returns</dt>
-<dd class="field-even"><p>list of the .parquet files referenced for the current version 
+<dd class="field-even"><p>list of the .parquet files referenced for the current version
 of the DeltaTable</p>
 </dd>
 <dt class="field-odd">Return type</dt>
@@ -155,9 +176,9 @@ of the DeltaTable</p>
 <p>Predicates are expressed in disjunctive normal form (DNF), like [(“x”, “=”, “a”), …].
 DNF allows arbitrary boolean logical combinations of single partition predicates.
 The innermost tuples each describe a single partition predicate. The list of inner
-predicates is interpreted as a conjunction (AND), forming a more selective and 
-multiple partition predicates. Each tuple has format: (key, op, value) and compares 
-the key with the value. The supported op are: <cite>=</cite>, <cite>!=</cite>, <cite>in</cite>, and <cite>not in</cite>. If 
+predicates is interpreted as a conjunction (AND), forming a more selective and
+multiple partition predicates. Each tuple has format: (key, op, value) and compares
+the key with the value. The supported op are: <cite>=</cite>, <cite>!=</cite>, <cite>in</cite>, and <cite>not in</cite>. If
 the op is in or not in, the value must be a collection such as a list, a set or a tuple.
 The supported type for value is str. Use empty string <cite>‘’</cite> for Null partition value.</p>
 <p>Examples:
@@ -165,40 +186,6 @@ The supported type for value is str. Use empty string <cite>‘’</cite> for Nu
 (“x”, “!=”, “a”)
 (“y”, “in”, [“a”, “b”, “c”])
 (“z”, “not in”, [“a”,”b”])</p>
-</dd></dl>
-
-<dl class="py method">
-<dt class="sig sig-object py" id="deltalake.table.DeltaTable.files_by_partitions">
-<span class="sig-name descname"><span class="pre">files_by_partitions</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">partition_filters</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#deltalake.table.DeltaTable.files_by_partitions" title="Permalink to this definition"></a></dt>
-<dd><p>Get the files that match a given list of partitions filters.</p>
-<div class="deprecated">
-<p><span class="versionmodified deprecated">Deprecated since version 0.7.0: </span>Use <a class="reference internal" href="#deltalake.table.DeltaTable.file_uris" title="deltalake.table.DeltaTable.file_uris"><code class="xref py py-meth docutils literal notranslate"><span class="pre">file_uris()</span></code></a> instead.</p>
-</div>
-<p>Partitions which do not match the filter predicate will be removed from scanned data.
-Predicates are expressed in disjunctive normal form (DNF), like [(“x”, “=”, “a”), …].
-DNF allows arbitrary boolean logical combinations of single partition predicates.
-The innermost tuples each describe a single partition predicate.
-The list of inner predicates is interpreted as a conjunction (AND), forming a more selective and multiple partition predicates.
-Each tuple has format: (key, op, value) and compares the key with the value.
-The supported op are: <cite>=</cite>, <cite>!=</cite>, <cite>in</cite>, and <cite>not in</cite>.
-If the op is in or not in, the value must be a collection such as a list, a set or a tuple.
-The supported type for value is str. Use empty string <cite>‘’</cite> for Null partition value.</p>
-<p>Examples:
-(“x”, “=”, “a”)
-(“x”, “!=”, “a”)
-(“y”, “in”, [“a”, “b”, “c”])
-(“z”, “not in”, [“a”,”b”])</p>
-<dl class="field-list simple">
-<dt class="field-odd">Parameters</dt>
-<dd class="field-odd"><p><strong>partition_filters</strong> (<em>List</em><em>[</em><em>Tuple</em><em>[</em><em>str</em><em>, </em><em>str</em><em>, </em><em>Any</em><em>]</em><em>]</em>) – the partition filters that will be used for getting the matched files</p>
-</dd>
-<dt class="field-even">Returns</dt>
-<dd class="field-even"><p>list of the .parquet files after applying the partition filters referenced for the current version of the DeltaTable.</p>
-</dd>
-<dt class="field-odd">Return type</dt>
-<dd class="field-odd"><p><em>List</em>[str]</p>
-</dd>
-</dl>
 </dd></dl>
 
 <dl class="py method">
@@ -318,6 +305,38 @@ The <cite>datetime_string</cite> argument should be an RFC 3339 and ISO 8601 dat
 </dd></dl>
 
 <dl class="py method">
+<dt class="sig sig-object py" id="deltalake.table.DeltaTable.merge">
+<span class="sig-name descname"><span class="pre">merge</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">source</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">predicate</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">source_alias</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">target_alias</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">error_on_type_mismatch</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">True</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#deltalake.table.DeltaTable.merge" title="Permalink to this definition"></a></dt>
+<dd><p>Pass the source data which you want to merge on the target delta table, providing a
+predicate in SQL query like format. You can also specify on what to do when the underlying data types do not
+match the underlying table.</p>
+<dl class="simple">
+<dt>Args:</dt><dd><p>source (pyarrow.Table | pyarrow.RecordBatch | pyarrow.RecordBatchReader ): source data
+predicate (str): SQL like predicate on how to merge
+source_alias (str): Alias for the source table
+target_alias (str): Alias for the target table
+error_on_type_mismatch (bool): specify if merge will return error if data types are mismatching :default = True</p>
+</dd>
+<dt>Returns:</dt><dd><p>TableMerger: TableMerger Object</p>
+</dd>
+</dl>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters</dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>source</strong> (<em>Union</em><em>[</em><a class="reference external" href="https://arrow.apache.org/docs/python/generated/pyarrow.Table.html#pyarrow.Table" title="(in Apache Arrow v13.0.0)"><em>pyarrow.lib.Table</em></a><em>, </em><a class="reference external" href="https://arrow.apache.org/docs/python/generated/pyarrow.RecordBatch.html#pyarrow.RecordBatch" title="(in Apache Arrow v13.0.0)"><em>pyarrow.lib.RecordBatch</em></a><em>, </em><a class="reference external" href="https://arrow.apache.org/docs/python/generated/pyarrow.RecordBatchReader.html#pyarrow.RecordBatchReader" title="(in Apache Arrow v13.0.0)"><em>pyarrow.lib.RecordBatchReader</em></a><em>]</em>) – </p></li>
+<li><p><strong>predicate</strong> (<em>str</em>) – </p></li>
+<li><p><strong>source_alias</strong> (<em>Optional</em><em>[</em><em>str</em><em>]</em>) – </p></li>
+<li><p><strong>target_alias</strong> (<em>Optional</em><em>[</em><em>str</em><em>]</em>) – </p></li>
+<li><p><strong>error_on_type_mismatch</strong> (<em>bool</em>) – </p></li>
+</ul>
+</dd>
+<dt class="field-even">Return type</dt>
+<dd class="field-even"><p><a class="reference internal" href="#deltalake.table.TableMerger" title="deltalake.table.TableMerger">deltalake.table.TableMerger</a></p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
 <dt class="sig sig-object py" id="deltalake.table.DeltaTable.metadata">
 <span class="sig-name descname"><span class="pre">metadata</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#deltalake.table.DeltaTable.metadata" title="Permalink to this definition"></a></dt>
 <dd><p>Get the current metadata of the DeltaTable.</p>
@@ -341,21 +360,6 @@ The <cite>datetime_string</cite> argument should be an RFC 3339 and ISO 8601 dat
 </dd>
 <dt class="field-even">Return type</dt>
 <dd class="field-even"><p><a class="reference internal" href="#deltalake.table.ProtocolVersions" title="deltalake.table.ProtocolVersions">deltalake.table.ProtocolVersions</a></p>
-</dd>
-</dl>
-</dd></dl>
-
-<dl class="py method">
-<dt class="sig sig-object py" id="deltalake.table.DeltaTable.pyarrow_schema">
-<span class="sig-name descname"><span class="pre">pyarrow_schema</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#deltalake.table.DeltaTable.pyarrow_schema" title="Permalink to this definition"></a></dt>
-<dd><p>Get the current schema of the DeltaTable with the Parquet PyArrow format.</p>
-<p>DEPRECATED: use DeltaTable.schema().to_pyarrow() instead.</p>
-<dl class="field-list simple">
-<dt class="field-odd">Returns</dt>
-<dd class="field-odd"><p>the current Schema with the Parquet PyArrow format</p>
-</dd>
-<dt class="field-even">Return type</dt>
-<dd class="field-even"><p><a class="reference external" href="https://arrow.apache.org/docs/python/generated/pyarrow.Schema.html#pyarrow.Schema" title="(in Apache Arrow v13.0.0)">pyarrow.lib.Schema</a></p>
 </dd>
 </dl>
 </dd></dl>
@@ -390,7 +394,7 @@ The <cite>datetime_string</cite> argument should be an RFC 3339 and ISO 8601 dat
 <dd class="field-odd"><p>the current Schema registered in the transaction log</p>
 </dd>
 <dt class="field-even">Return type</dt>
-<dd class="field-even"><p><a class="reference internal" href="#deltalake.schema.Schema" title="deltalake.schema.Schema">deltalake.schema.Schema</a></p>
+<dd class="field-even"><p><a class="reference internal" href="#deltalake.schema.Schema" title="deltalake._internal.Schema">deltalake._internal.Schema</a></p>
 </dd>
 </dl>
 </dd></dl>
@@ -456,6 +460,56 @@ More info: <a class="reference external" href="https://arrow.apache.org/docs/pyt
 </dd></dl>
 
 <dl class="py method">
+<dt class="sig sig-object py" id="deltalake.table.DeltaTable.update">
+<span class="sig-name descname"><span class="pre">update</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">updates</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">predicate</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">writer_properties</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">error_on_type_mismatch</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">True</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#deltalake.table.DeltaTable.update" title="Permalink to this definition"></a></dt>
+<dd><p>UPDATE records in the Delta Table that matches an optional predicate.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters</dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>updates</strong> (<em>Dict</em><em>[</em><em>str</em><em>, </em><em>str</em><em>]</em>) – a mapping of column name to update SQL expression.</p></li>
+<li><p><strong>predicate</strong> (<em>Optional</em><em>[</em><em>str</em><em>]</em>) – a logical expression, defaults to None</p></li>
+<li><p><strong>writer_properties</strong> (<em>Optional</em><em>[</em><em>Dict</em><em>[</em><em>str</em><em>, </em><em>int</em><em>]</em><em>]</em>) – </p></li>
+<li><p><strong>error_on_type_mismatch</strong> (<em>bool</em>) – </p></li>
+</ul>
+</dd>
+<dt class="field-even">Writer_properties</dt>
+<dd class="field-even"><p>Pass writer properties to the Rust parquet writer, see options <a class="reference external" href="https://arrow.apache.org/rust/parquet/file/properties/struct.WriterProperties.html">https://arrow.apache.org/rust/parquet/file/properties/struct.WriterProperties.html</a>,
+only the fields: data_page_size_limit, dictionary_page_size_limit, data_page_row_count_limit, write_batch_size, max_row_group_size are supported.</p>
+</dd>
+<dt class="field-odd">Error_on_type_mismatch</dt>
+<dd class="field-odd"><p>specify if merge will return error if data types are mismatching :default = True</p>
+</dd>
+<dt class="field-even">Returns</dt>
+<dd class="field-even"><p>the metrics from delete</p>
+</dd>
+<dt class="field-odd">Return type</dt>
+<dd class="field-odd"><p><em>Dict</em>[str, <em>Any</em>]</p>
+</dd>
+</dl>
+<p>Examples:</p>
+<p>Update some row values with SQL predicate. This is equivalent to
+<code class="docutils literal notranslate"><span class="pre">UPDATE</span> <span class="pre">table</span> <span class="pre">SET</span> <span class="pre">deleted</span> <span class="pre">=</span> <span class="pre">true</span> <span class="pre">WHERE</span> <span class="pre">id</span> <span class="pre">=</span> <span class="pre">'5'</span></code></p>
+<div class="doctest highlight-default notranslate"><div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="kn">from</span> <span class="nn">deltalake</span> <span class="kn">import</span> <span class="n">DeltaTable</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">dt</span> <span class="o">=</span> <span class="n">DeltaTable</span><span class="p">(</span><span class="s2">&quot;tmp&quot;</span><span class="p">)</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">dt</span><span class="o">.</span><span class="n">update</span><span class="p">(</span><span class="n">predicate</span><span class="o">=</span><span class="s2">&quot;id = &#39;5&#39;&quot;</span><span class="p">,</span>
+<span class="gp">... </span>          <span class="n">updates</span> <span class="o">=</span> <span class="p">{</span>
+<span class="gp">... </span>            <span class="s2">&quot;deleted&quot;</span><span class="p">:</span> <span class="kc">True</span><span class="p">,</span>
+<span class="gp">... </span>            <span class="p">}</span>
+<span class="gp">... </span>        <span class="p">)</span>
+</pre></div>
+</div>
+<p>Update all row values. This is equivalent to
+<code class="docutils literal notranslate"><span class="pre">UPDATE</span> <span class="pre">table</span> <span class="pre">SET</span> <span class="pre">id</span> <span class="pre">=</span> <span class="pre">concat(id,</span> <span class="pre">'_old')</span></code>.
+&gt;&gt;&gt; from deltalake import DeltaTable
+&gt;&gt;&gt; dt = DeltaTable(“tmp”)
+&gt;&gt;&gt; dt.update(updates = {
+…             “deleted”: True,
+…             “id”: “concat(id, ‘_old’)”
+…             }
+…         )</p>
+</dd></dl>
+
+<dl class="py method">
 <dt class="sig sig-object py" id="deltalake.table.DeltaTable.update_incremental">
 <span class="sig-name descname"><span class="pre">update_incremental</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#deltalake.table.DeltaTable.update_incremental" title="Permalink to this definition"></a></dt>
 <dd><p>Updates the DeltaTable to the latest version by incrementally applying
@@ -510,7 +564,7 @@ newer versions.</p>
 <dd><p>Create a Metadata instance.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters</dt>
-<dd class="field-odd"><p><strong>table</strong> (<em>RawDeltaTable</em>) – </p>
+<dd class="field-odd"><p><strong>table</strong> (<em>deltalake._internal.RawDeltaTable</em>) – </p>
 </dd>
 </dl>
 <dl class="py property">
@@ -572,6 +626,303 @@ newer versions.</p>
 <dt class="sig sig-object py" id="deltalake.table.ProtocolVersions.min_writer_version">
 <span class="sig-name descname"><span class="pre">min_writer_version</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="pre">int</span></em><a class="headerlink" href="#deltalake.table.ProtocolVersions.min_writer_version" title="Permalink to this definition"></a></dt>
 <dd><p>Alias for field number 1</p>
+</dd></dl>
+
+</dd></dl>
+
+<dl class="py class">
+<dt class="sig sig-object py" id="deltalake.table.TableMerger">
+<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">deltalake.table.</span></span><span class="sig-name descname"><span class="pre">TableMerger</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">table</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">source</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">predicate</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">source_alias</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">target_alias</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">safe_cast</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">True</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#deltalake.table.TableMerger" title="Permalink to this definition"></a></dt>
+<dd><p>API for various table MERGE commands.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters</dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>table</strong> (<a class="reference internal" href="#deltalake.table.DeltaTable" title="deltalake.table.DeltaTable"><em>deltalake.table.DeltaTable</em></a>) – </p></li>
+<li><p><strong>source</strong> (<a class="reference external" href="https://arrow.apache.org/docs/python/generated/pyarrow.RecordBatchReader.html#pyarrow.RecordBatchReader" title="(in Apache Arrow v13.0.0)"><em>pyarrow.lib.RecordBatchReader</em></a>) – </p></li>
+<li><p><strong>predicate</strong> (<em>str</em>) – </p></li>
+<li><p><strong>source_alias</strong> (<em>Optional</em><em>[</em><em>str</em><em>]</em>) – </p></li>
+<li><p><strong>target_alias</strong> (<em>Optional</em><em>[</em><em>str</em><em>]</em>) – </p></li>
+<li><p><strong>safe_cast</strong> (<em>bool</em>) – </p></li>
+</ul>
+</dd>
+</dl>
+<dl class="py method">
+<dt class="sig sig-object py" id="deltalake.table.TableMerger.execute">
+<span class="sig-name descname"><span class="pre">execute</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#deltalake.table.TableMerger.execute" title="Permalink to this definition"></a></dt>
+<dd><p>Executes MERGE with the previously provided settings in Rust with Apache Datafusion query engine.</p>
+<dl class="simple">
+<dt>Returns:</dt><dd><p>Dict[str, any]: metrics</p>
+</dd>
+</dl>
+<dl class="field-list simple">
+<dt class="field-odd">Return type</dt>
+<dd class="field-odd"><p><em>Dict</em>[str, <em>Any</em>]</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="deltalake.table.TableMerger.when_matched_delete">
+<span class="sig-name descname"><span class="pre">when_matched_delete</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">predicate</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#deltalake.table.TableMerger.when_matched_delete" title="Permalink to this definition"></a></dt>
+<dd><p>Delete a matched row from the table only if the given <code class="docutils literal notranslate"><span class="pre">predicate</span></code> (if specified) is
+true for the matched row. If not specified it deletes all matches.</p>
+<dl class="simple">
+<dt>Args:</dt><dd><p>predicate (str | None, optional):  SQL like predicate on when to delete. Defaults to None.</p>
+</dd>
+<dt>Returns:</dt><dd><p>TableMerger: TableMerger Object</p>
+</dd>
+</dl>
+<p>Examples:</p>
+<p>Delete on a predicate</p>
+<div class="doctest highlight-default notranslate"><div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="kn">from</span> <span class="nn">deltalake</span> <span class="kn">import</span> <span class="n">DeltaTable</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="kn">import</span> <span class="nn">pyarrow</span> <span class="k">as</span> <span class="nn">pa</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">data</span> <span class="o">=</span> <span class="n">pa</span><span class="o">.</span><span class="n">table</span><span class="p">({</span><span class="s2">&quot;x&quot;</span><span class="p">:</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">],</span> <span class="s2">&quot;y&quot;</span><span class="p">:</span> <span class="p">[</span><span class="mi">4</span><span class="p">,</span> <span class="mi">5</span><span class="p">,</span> <span class="mi">6</span><span class="p">]})</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">dt</span> <span class="o">=</span> <span class="n">DeltaTable</span><span class="p">(</span><span class="s2">&quot;tmp&quot;</span><span class="p">)</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">dt</span><span class="o">.</span><span class="n">merge</span><span class="p">(</span><span class="n">source</span><span class="o">=</span><span class="n">data</span><span class="p">,</span> <span class="n">predicate</span><span class="o">=</span><span class="s1">&#39;target.x = source.x&#39;</span><span class="p">,</span> <span class="n">source_alias</span><span class="o">=</span><span class="s1">&#39;source&#39;</span><span class="p">,</span> <span class="n">target_alias</span><span class="o">=</span><span class="s1">&#39;target&#39;</span><span class="p">)</span>         <span class="o">...</span>     <span class="o">.</span><span class="n">when_matched_delete</span><span class="p">(</span><span class="n">predicate</span> <span class="o">=</span> <span class="s2">&quot;source.deleted = true&quot;</span><span class="p">)</span>
+<span class="gp">... </span>    <span class="o">.</span><span class="n">execute</span><span class="p">()</span>
+</pre></div>
+</div>
+<p>Delete all records that were matched</p>
+<div class="doctest highlight-default notranslate"><div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="kn">from</span> <span class="nn">deltalake</span> <span class="kn">import</span> <span class="n">DeltaTable</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="kn">import</span> <span class="nn">pyarrow</span> <span class="k">as</span> <span class="nn">pa</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">data</span> <span class="o">=</span> <span class="n">pa</span><span class="o">.</span><span class="n">table</span><span class="p">({</span><span class="s2">&quot;x&quot;</span><span class="p">:</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">],</span> <span class="s2">&quot;y&quot;</span><span class="p">:</span> <span class="p">[</span><span class="mi">4</span><span class="p">,</span> <span class="mi">5</span><span class="p">,</span> <span class="mi">6</span><span class="p">]})</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">dt</span> <span class="o">=</span> <span class="n">DeltaTable</span><span class="p">(</span><span class="s2">&quot;tmp&quot;</span><span class="p">)</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">dt</span><span class="o">.</span><span class="n">merge</span><span class="p">(</span><span class="n">source</span><span class="o">=</span><span class="n">data</span><span class="p">,</span> <span class="n">predicate</span><span class="o">=</span><span class="s1">&#39;target.x = source.x&#39;</span><span class="p">,</span> <span class="n">source_alias</span><span class="o">=</span><span class="s1">&#39;source&#39;</span><span class="p">,</span> <span class="n">target_alias</span><span class="o">=</span><span class="s1">&#39;target&#39;</span><span class="p">)</span>          <span class="o">...</span>     <span class="o">.</span><span class="n">when_matched_delete</span><span class="p">()</span>
+<span class="gp">... </span>    <span class="o">.</span><span class="n">execute</span><span class="p">()</span>
+</pre></div>
+</div>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters</dt>
+<dd class="field-odd"><p><strong>predicate</strong> (<em>Optional</em><em>[</em><em>str</em><em>]</em>) – </p>
+</dd>
+<dt class="field-even">Return type</dt>
+<dd class="field-even"><p><a class="reference internal" href="#deltalake.table.TableMerger" title="deltalake.table.TableMerger">deltalake.table.TableMerger</a></p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="deltalake.table.TableMerger.when_matched_update">
+<span class="sig-name descname"><span class="pre">when_matched_update</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">updates</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">predicate</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#deltalake.table.TableMerger.when_matched_update" title="Permalink to this definition"></a></dt>
+<dd><p>Update a matched table row based on the rules defined by <code class="docutils literal notranslate"><span class="pre">updates</span></code>.
+If a <code class="docutils literal notranslate"><span class="pre">predicate</span></code> is specified, then it must evaluate to true for the row to be updated.</p>
+<dl class="simple">
+<dt>Args:</dt><dd><p>updates (dict): a mapping of column name to update SQL expression.
+predicate (str | None, optional):  SQL like predicate on when to update. Defaults to None.</p>
+</dd>
+<dt>Returns:</dt><dd><p>TableMerger: TableMerger Object</p>
+</dd>
+</dl>
+<p>Examples:</p>
+<div class="doctest highlight-default notranslate"><div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="kn">from</span> <span class="nn">deltalake</span> <span class="kn">import</span> <span class="n">DeltaTable</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="kn">import</span> <span class="nn">pyarrow</span> <span class="k">as</span> <span class="nn">pa</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">data</span> <span class="o">=</span> <span class="n">pa</span><span class="o">.</span><span class="n">table</span><span class="p">({</span><span class="s2">&quot;x&quot;</span><span class="p">:</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">],</span> <span class="s2">&quot;y&quot;</span><span class="p">:</span> <span class="p">[</span><span class="mi">4</span><span class="p">,</span> <span class="mi">5</span><span class="p">,</span> <span class="mi">6</span><span class="p">]})</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">dt</span> <span class="o">=</span> <span class="n">DeltaTable</span><span class="p">(</span><span class="s2">&quot;tmp&quot;</span><span class="p">)</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">dt</span><span class="o">.</span><span class="n">merge</span><span class="p">(</span><span class="n">source</span><span class="o">=</span><span class="n">data</span><span class="p">,</span> <span class="n">predicate</span><span class="o">=</span><span class="s1">&#39;target.x = source.x&#39;</span><span class="p">,</span> <span class="n">source_alias</span><span class="o">=</span><span class="s1">&#39;source&#39;</span><span class="p">,</span> <span class="n">target_alias</span><span class="o">=</span><span class="s1">&#39;target&#39;</span><span class="p">)</span>         <span class="o">...</span>     <span class="o">.</span><span class="n">when_matched_update</span><span class="p">(</span>
+<span class="gp">... </span>        <span class="n">updates</span> <span class="o">=</span> <span class="p">{</span>
+<span class="gp">... </span>            <span class="s2">&quot;x&quot;</span><span class="p">:</span> <span class="s2">&quot;source.x&quot;</span><span class="p">,</span>
+<span class="gp">... </span>            <span class="s2">&quot;y&quot;</span><span class="p">:</span> <span class="s2">&quot;source.y&quot;</span>
+<span class="gp">... </span>            <span class="p">}</span>
+<span class="gp">... </span>        <span class="p">)</span><span class="o">.</span><span class="n">execute</span><span class="p">()</span>
+</pre></div>
+</div>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters</dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>updates</strong> (<em>Dict</em><em>[</em><em>str</em><em>, </em><em>str</em><em>]</em>) – </p></li>
+<li><p><strong>predicate</strong> (<em>Optional</em><em>[</em><em>str</em><em>]</em>) – </p></li>
+</ul>
+</dd>
+<dt class="field-even">Return type</dt>
+<dd class="field-even"><p><a class="reference internal" href="#deltalake.table.TableMerger" title="deltalake.table.TableMerger">deltalake.table.TableMerger</a></p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="deltalake.table.TableMerger.when_matched_update_all">
+<span class="sig-name descname"><span class="pre">when_matched_update_all</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">predicate</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#deltalake.table.TableMerger.when_matched_update_all" title="Permalink to this definition"></a></dt>
+<dd><p>Updating all source fields to target fields, source and target are required to have the same field names. 
+If a <code class="docutils literal notranslate"><span class="pre">predicate</span></code> is specified, then it must evaluate to true for the row to be updated.</p>
+<dl class="simple">
+<dt>Args:</dt><dd><p>predicate (str | None, optional): SQL like predicate on when to update all columns. Defaults to None.</p>
+</dd>
+<dt>Returns:</dt><dd><p>TableMerger: TableMerger Object</p>
+</dd>
+</dl>
+<p>Examples:</p>
+<div class="doctest highlight-default notranslate"><div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="kn">from</span> <span class="nn">deltalake</span> <span class="kn">import</span> <span class="n">DeltaTable</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="kn">import</span> <span class="nn">pyarrow</span> <span class="k">as</span> <span class="nn">pa</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">data</span> <span class="o">=</span> <span class="n">pa</span><span class="o">.</span><span class="n">table</span><span class="p">({</span><span class="s2">&quot;x&quot;</span><span class="p">:</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">],</span> <span class="s2">&quot;y&quot;</span><span class="p">:</span> <span class="p">[</span><span class="mi">4</span><span class="p">,</span> <span class="mi">5</span><span class="p">,</span> <span class="mi">6</span><span class="p">]})</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">dt</span> <span class="o">=</span> <span class="n">DeltaTable</span><span class="p">(</span><span class="s2">&quot;tmp&quot;</span><span class="p">)</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">dt</span><span class="o">.</span><span class="n">merge</span><span class="p">(</span><span class="n">source</span><span class="o">=</span><span class="n">data</span><span class="p">,</span> <span class="n">predicate</span><span class="o">=</span><span class="s1">&#39;target.x = source.x&#39;</span><span class="p">,</span> <span class="n">source_alias</span><span class="o">=</span><span class="s1">&#39;source&#39;</span><span class="p">,</span> <span class="n">target_alias</span><span class="o">=</span><span class="s1">&#39;target&#39;</span><span class="p">)</span>          <span class="o">...</span>     <span class="o">.</span><span class="n">when_matched_update_all</span><span class="p">()</span><span class="o">.</span><span class="n">execute</span><span class="p">()</span>
+</pre></div>
+</div>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters</dt>
+<dd class="field-odd"><p><strong>predicate</strong> (<em>Optional</em><em>[</em><em>str</em><em>]</em>) – </p>
+</dd>
+<dt class="field-even">Return type</dt>
+<dd class="field-even"><p><a class="reference internal" href="#deltalake.table.TableMerger" title="deltalake.table.TableMerger">deltalake.table.TableMerger</a></p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="deltalake.table.TableMerger.when_not_matched_by_source_delete">
+<span class="sig-name descname"><span class="pre">when_not_matched_by_source_delete</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">predicate</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#deltalake.table.TableMerger.when_not_matched_by_source_delete" title="Permalink to this definition"></a></dt>
+<dd><p>Delete a target row that has no matches in the source from the table only if the given
+<code class="docutils literal notranslate"><span class="pre">predicate</span></code> (if specified) is true for the target row.</p>
+<dl class="simple">
+<dt>Args:</dt><dd><p>updates (dict): a mapping of column name to update SQL expression.
+predicate (str | None, optional):  SQL like predicate on when to delete when not matched by source. Defaults to None.</p>
+</dd>
+<dt>Returns:</dt><dd><p>TableMerger: TableMerger Object</p>
+</dd>
+</dl>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters</dt>
+<dd class="field-odd"><p><strong>predicate</strong> (<em>Optional</em><em>[</em><em>str</em><em>]</em>) – </p>
+</dd>
+<dt class="field-even">Return type</dt>
+<dd class="field-even"><p><a class="reference internal" href="#deltalake.table.TableMerger" title="deltalake.table.TableMerger">deltalake.table.TableMerger</a></p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="deltalake.table.TableMerger.when_not_matched_by_source_update">
+<span class="sig-name descname"><span class="pre">when_not_matched_by_source_update</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">updates</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">predicate</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#deltalake.table.TableMerger.when_not_matched_by_source_update" title="Permalink to this definition"></a></dt>
+<dd><p>Update a target row that has no matches in the source based on the rules defined by <code class="docutils literal notranslate"><span class="pre">updates</span></code>.
+If a <code class="docutils literal notranslate"><span class="pre">predicate</span></code> is specified, then it must evaluate to true for the row to be updated.</p>
+<dl class="simple">
+<dt>Args:</dt><dd><p>updates (dict): a mapping of column name to update SQL expression.
+predicate (str | None, optional): SQL like predicate on when to update. Defaults to None.</p>
+</dd>
+<dt>Returns:</dt><dd><p>TableMerger: TableMerger Object</p>
+</dd>
+</dl>
+<div class="doctest highlight-default notranslate"><div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="kn">from</span> <span class="nn">deltalake</span> <span class="kn">import</span> <span class="n">DeltaTable</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="kn">import</span> <span class="nn">pyarrow</span> <span class="k">as</span> <span class="nn">pa</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">data</span> <span class="o">=</span> <span class="n">pa</span><span class="o">.</span><span class="n">table</span><span class="p">({</span><span class="s2">&quot;x&quot;</span><span class="p">:</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">],</span> <span class="s2">&quot;y&quot;</span><span class="p">:</span> <span class="p">[</span><span class="mi">4</span><span class="p">,</span> <span class="mi">5</span><span class="p">,</span> <span class="mi">6</span><span class="p">]})</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">dt</span> <span class="o">=</span> <span class="n">DeltaTable</span><span class="p">(</span><span class="s2">&quot;tmp&quot;</span><span class="p">)</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">dt</span><span class="o">.</span><span class="n">merge</span><span class="p">(</span><span class="n">source</span><span class="o">=</span><span class="n">data</span><span class="p">,</span> <span class="n">predicate</span><span class="o">=</span><span class="s1">&#39;target.x = source.x&#39;</span><span class="p">,</span> <span class="n">source_alias</span><span class="o">=</span><span class="s1">&#39;source&#39;</span><span class="p">,</span> <span class="n">target_alias</span><span class="o">=</span><span class="s1">&#39;target&#39;</span><span class="p">)</span>         <span class="o">...</span>     <span class="o">.</span><span class="n">when_not_matched_by_source_update</span><span class="p">(</span>
+<span class="gp">... </span>        <span class="n">predicate</span> <span class="o">=</span> <span class="s2">&quot;y &gt; 3&quot;</span>
+<span class="gp">... </span>        <span class="n">updates</span> <span class="o">=</span> <span class="p">{</span>
+<span class="gp">... </span>            <span class="s2">&quot;y&quot;</span><span class="p">:</span> <span class="s2">&quot;0&quot;</span><span class="p">,</span>
+<span class="gp">... </span>            <span class="p">}</span>
+<span class="gp">... </span>        <span class="p">)</span><span class="o">.</span><span class="n">execute</span><span class="p">()</span>    
+</pre></div>
+</div>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters</dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>updates</strong> (<em>Dict</em><em>[</em><em>str</em><em>, </em><em>str</em><em>]</em>) – </p></li>
+<li><p><strong>predicate</strong> (<em>Optional</em><em>[</em><em>str</em><em>]</em>) – </p></li>
+</ul>
+</dd>
+<dt class="field-even">Return type</dt>
+<dd class="field-even"><p><a class="reference internal" href="#deltalake.table.TableMerger" title="deltalake.table.TableMerger">deltalake.table.TableMerger</a></p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="deltalake.table.TableMerger.when_not_matched_insert">
+<span class="sig-name descname"><span class="pre">when_not_matched_insert</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">updates</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">predicate</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#deltalake.table.TableMerger.when_not_matched_insert" title="Permalink to this definition"></a></dt>
+<dd><p>Insert a new row to the target table based on the rules defined by <code class="docutils literal notranslate"><span class="pre">updates</span></code>. If a
+<code class="docutils literal notranslate"><span class="pre">predicate</span></code> is specified, then it must evaluate to true for the new row to be inserted.</p>
+<dl class="simple">
+<dt>Args:</dt><dd><p>updates (dict):  a mapping of column name to insert SQL expression.
+predicate (str | None, optional): SQL like predicate on when to insert. Defaults to None.</p>
+</dd>
+<dt>Returns:</dt><dd><p>TableMerger: TableMerger Object</p>
+</dd>
+</dl>
+<p>Examples:</p>
+<div class="doctest highlight-default notranslate"><div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="kn">from</span> <span class="nn">deltalake</span> <span class="kn">import</span> <span class="n">DeltaTable</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="kn">import</span> <span class="nn">pyarrow</span> <span class="k">as</span> <span class="nn">pa</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">data</span> <span class="o">=</span> <span class="n">pa</span><span class="o">.</span><span class="n">table</span><span class="p">({</span><span class="s2">&quot;x&quot;</span><span class="p">:</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">],</span> <span class="s2">&quot;y&quot;</span><span class="p">:</span> <span class="p">[</span><span class="mi">4</span><span class="p">,</span> <span class="mi">5</span><span class="p">,</span> <span class="mi">6</span><span class="p">]})</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">dt</span> <span class="o">=</span> <span class="n">DeltaTable</span><span class="p">(</span><span class="s2">&quot;tmp&quot;</span><span class="p">)</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">dt</span><span class="o">.</span><span class="n">merge</span><span class="p">(</span><span class="n">source</span><span class="o">=</span><span class="n">data</span><span class="p">,</span> <span class="n">predicate</span><span class="o">=</span><span class="s1">&#39;target.x = source.x&#39;</span><span class="p">,</span> <span class="n">source_alias</span><span class="o">=</span><span class="s1">&#39;source&#39;</span><span class="p">,</span> <span class="n">target_alias</span><span class="o">=</span><span class="s1">&#39;target&#39;</span><span class="p">)</span>          <span class="o">...</span>     <span class="o">.</span><span class="n">when_not_matched_insert</span><span class="p">(</span>
+<span class="gp">... </span>        <span class="n">updates</span> <span class="o">=</span> <span class="p">{</span>
+<span class="gp">... </span>            <span class="s2">&quot;x&quot;</span><span class="p">:</span> <span class="s2">&quot;source.x&quot;</span><span class="p">,</span>
+<span class="gp">... </span>            <span class="s2">&quot;y&quot;</span><span class="p">:</span> <span class="s2">&quot;source.y&quot;</span>
+<span class="gp">... </span>            <span class="p">}</span>
+<span class="gp">... </span>        <span class="p">)</span><span class="o">.</span><span class="n">execute</span><span class="p">()</span>
+</pre></div>
+</div>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters</dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>updates</strong> (<em>Dict</em><em>[</em><em>str</em><em>, </em><em>str</em><em>]</em>) – </p></li>
+<li><p><strong>predicate</strong> (<em>Optional</em><em>[</em><em>str</em><em>]</em>) – </p></li>
+</ul>
+</dd>
+<dt class="field-even">Return type</dt>
+<dd class="field-even"><p><a class="reference internal" href="#deltalake.table.TableMerger" title="deltalake.table.TableMerger">deltalake.table.TableMerger</a></p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="deltalake.table.TableMerger.when_not_matched_insert_all">
+<span class="sig-name descname"><span class="pre">when_not_matched_insert_all</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">predicate</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#deltalake.table.TableMerger.when_not_matched_insert_all" title="Permalink to this definition"></a></dt>
+<dd><p>Insert a new row to the target table, updating all source fields to target fields. Source and target are 
+required to have the same field names. If a <code class="docutils literal notranslate"><span class="pre">predicate</span></code> is specified, then it must evaluate to true for 
+the new row to be inserted.</p>
+<dl class="simple">
+<dt>Args:</dt><dd><p>predicate (str | None, optional): SQL like predicate on when to insert. Defaults to None.</p>
+</dd>
+<dt>Returns:</dt><dd><p>TableMerger: TableMerger Object</p>
+</dd>
+</dl>
+<p>Examples:</p>
+<div class="doctest highlight-default notranslate"><div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="kn">from</span> <span class="nn">deltalake</span> <span class="kn">import</span> <span class="n">DeltaTable</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="kn">import</span> <span class="nn">pyarrow</span> <span class="k">as</span> <span class="nn">pa</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">data</span> <span class="o">=</span> <span class="n">pa</span><span class="o">.</span><span class="n">table</span><span class="p">({</span><span class="s2">&quot;x&quot;</span><span class="p">:</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">],</span> <span class="s2">&quot;y&quot;</span><span class="p">:</span> <span class="p">[</span><span class="mi">4</span><span class="p">,</span> <span class="mi">5</span><span class="p">,</span> <span class="mi">6</span><span class="p">]})</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">dt</span> <span class="o">=</span> <span class="n">DeltaTable</span><span class="p">(</span><span class="s2">&quot;tmp&quot;</span><span class="p">)</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">dt</span><span class="o">.</span><span class="n">merge</span><span class="p">(</span><span class="n">source</span><span class="o">=</span><span class="n">data</span><span class="p">,</span> <span class="n">predicate</span><span class="o">=</span><span class="s1">&#39;target.x = source.x&#39;</span><span class="p">,</span> <span class="n">source_alias</span><span class="o">=</span><span class="s1">&#39;source&#39;</span><span class="p">,</span> <span class="n">target_alias</span><span class="o">=</span><span class="s1">&#39;target&#39;</span><span class="p">)</span>          <span class="o">...</span>     <span class="o">.</span><span class="n">when_not_matched_insert_all</span><span class="p">()</span><span class="o">.</span><span class="n">execute</span><span class="p">()</span>
+</pre></div>
+</div>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters</dt>
+<dd class="field-odd"><p><strong>predicate</strong> (<em>Optional</em><em>[</em><em>str</em><em>]</em>) – </p>
+</dd>
+<dt class="field-even">Return type</dt>
+<dd class="field-even"><p><a class="reference internal" href="#deltalake.table.TableMerger" title="deltalake.table.TableMerger">deltalake.table.TableMerger</a></p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="deltalake.table.TableMerger.with_writer_properties">
+<span class="sig-name descname"><span class="pre">with_writer_properties</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">data_page_size_limit</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">dictionary_page_size_limit</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">data_page_row_count_limit</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">write_batch_size</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">max_row_group_size</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#deltalake.table.TableMerger.with_writer_properties" title="Permalink to this definition"></a></dt>
+<dd><p>Pass writer properties to the Rust parquet writer, see options <a class="reference external" href="https://arrow.apache.org/rust/parquet/file/properties/struct.WriterProperties.html">https://arrow.apache.org/rust/parquet/file/properties/struct.WriterProperties.html</a>:</p>
+<dl class="simple">
+<dt>Args:</dt><dd><p>data_page_size_limit (int|None, optional): Limit DataPage size to this in bytes. Defaults to None.
+dictionary_page_size_limit (int|None, optional): Limit the size of each DataPage to store dicts to this amount in bytes. Defaults to None.
+data_page_row_count_limit (int|None, optional): Limit the number of rows in each DataPage. Defaults to None.
+write_batch_size (int|None, optional): Splits internally to smaller batch size. Defaults to None.
+max_row_group_size (int|None, optional): Max number of rows in row group. Defaults to None.</p>
+</dd>
+<dt>Returns:</dt><dd><p>TableMerger: TableMerger Object</p>
+</dd>
+</dl>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters</dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>data_page_size_limit</strong> (<em>Optional</em><em>[</em><em>int</em><em>]</em>) – </p></li>
+<li><p><strong>dictionary_page_size_limit</strong> (<em>Optional</em><em>[</em><em>int</em><em>]</em>) – </p></li>
+<li><p><strong>data_page_row_count_limit</strong> (<em>Optional</em><em>[</em><em>int</em><em>]</em>) – </p></li>
+<li><p><strong>write_batch_size</strong> (<em>Optional</em><em>[</em><em>int</em><em>]</em>) – </p></li>
+<li><p><strong>max_row_group_size</strong> (<em>Optional</em><em>[</em><em>int</em><em>]</em>) – </p></li>
+</ul>
+</dd>
+<dt class="field-even">Return type</dt>
+<dd class="field-even"><p><a class="reference internal" href="#deltalake.table.TableMerger" title="deltalake.table.TableMerger">deltalake.table.TableMerger</a></p>
+</dd>
+</dl>
 </dd></dl>
 
 </dd></dl>
@@ -669,7 +1020,7 @@ want a commit per partition.</p></li>
 <h2>Writing DeltaTables<a class="headerlink" href="#writing-deltatables" title="Permalink to this headline"></a></h2>
 <dl class="py function">
 <dt class="sig sig-object py" id="deltalake.write_deltalake">
-<span class="sig-prename descclassname"><span class="pre">deltalake.</span></span><span class="sig-name descname"><span class="pre">write_deltalake</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">table_or_uri</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">data</span></span></em>, <em class="sig-param"><span class="o"><span class="pre">*</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">schema</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">partition_by</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">filesystem</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">mode</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">'error'</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">file_options</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">max_partitions</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">max_open_files</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">1024</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">max_rows_per_file</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">10485760</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">min_rows_per_group</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">65536</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">max_rows_per_group</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">131072</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">name</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">description</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">configuration</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">overwrite_schema</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">False</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">storage_options</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">partition_filters</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#deltalake.write_deltalake" title="Permalink to this definition"></a></dt>
+<span class="sig-prename descclassname"><span class="pre">deltalake.</span></span><span class="sig-name descname"><span class="pre">write_deltalake</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">table_or_uri</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">data</span></span></em>, <em class="sig-param"><span class="o"><span class="pre">*</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">schema</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">partition_by</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">filesystem</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">mode</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">'error'</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">file_options</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">max_partitions</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">max_open_files</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">1024</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">max_rows_per_file</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">10485760</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">min_rows_per_group</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">65536</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">max_rows_per_group</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">131072</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">name</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">description</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">configuration</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">overwrite_schema</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">False</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">storage_options</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">partition_filters</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">large_dtypes</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">False</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#deltalake.write_deltalake" title="Permalink to this definition"></a></dt>
 <dd><p>Write to a Delta Lake table</p>
 <p>If the table does not already exist, it will be created.</p>
 <p>This function only supports writer protocol version 2 currently. When
@@ -717,6 +1068,7 @@ If this value is set, then min_rows_per_group should also be set.</p></li>
 <li><p><strong>overwrite_schema</strong> (<em>bool</em>) – If True, allows updating the schema of the table.</p></li>
 <li><p><strong>storage_options</strong> (<em>Optional</em><em>[</em><em>Dict</em><em>[</em><em>str</em><em>, </em><em>str</em><em>]</em><em>]</em>) – options passed to the native delta filesystem. Unused if ‘filesystem’ is defined.</p></li>
 <li><p><strong>partition_filters</strong> (<em>Optional</em><em>[</em><em>List</em><em>[</em><em>Tuple</em><em>[</em><em>str</em><em>, </em><em>str</em><em>, </em><em>Any</em><em>]</em><em>]</em><em>]</em>) – the partition filters that will be used for partition overwrite.</p></li>
+<li><p><strong>large_dtypes</strong> (<em>bool</em>) – If True, the table schema is checked against large_dtypes</p></li>
 </ul>
 </dd>
 <dt class="field-even">Return type</dt>

@@ -31,7 +31,7 @@
             delta-rs
           </a>
               <div class="version">
-                0.11.0
+                0.12.0
               </div>
 <div role="search">
   <form id="rtd-search-form" class="wy-form" action="search.html" method="get">
@@ -131,6 +131,8 @@
   <td style="width: 33%; vertical-align: top;"><ul>
       <li><a href="api_reference.html#deltalake.data_catalog.DataCatalog">DataCatalog (class in deltalake.data_catalog)</a>
 </li>
+      <li><a href="api_reference.html#deltalake.table.DeltaTable.delete">delete() (deltalake.table.DeltaTable method)</a>
+</li>
       <li>
     deltalake.data_catalog
 
@@ -169,6 +171,10 @@
       <li><a href="api_reference.html#deltalake.schema.ArrayType.element_type">element_type (deltalake.schema.ArrayType attribute)</a>
 </li>
   </ul></td>
+  <td style="width: 33%; vertical-align: top;"><ul>
+      <li><a href="api_reference.html#deltalake.table.TableMerger.execute">execute() (deltalake.table.TableMerger method)</a>
+</li>
+  </ul></td>
 </tr></table>
 
 <h2 id="F">F</h2>
@@ -181,8 +187,6 @@
       <li><a href="api_reference.html#deltalake.table.DeltaTable.file_uris">file_uris() (deltalake.table.DeltaTable method)</a>
 </li>
       <li><a href="api_reference.html#deltalake.table.DeltaTable.files">files() (deltalake.table.DeltaTable method)</a>
-</li>
-      <li><a href="api_reference.html#deltalake.table.DeltaTable.files_by_partitions">files_by_partitions() (deltalake.table.DeltaTable method)</a>
 </li>
       <li><a href="api_reference.html#deltalake.table.DeltaTable.from_data_catalog">from_data_catalog() (deltalake.table.DeltaTable class method)</a>
 </li>
@@ -284,16 +288,18 @@
   <td style="width: 33%; vertical-align: top;"><ul>
       <li><a href="api_reference.html#deltalake.schema.MapType">MapType (class in deltalake.schema)</a>
 </li>
+      <li><a href="api_reference.html#deltalake.table.DeltaTable.merge">merge() (deltalake.table.DeltaTable method)</a>
+</li>
       <li><a href="api_reference.html#deltalake.table.Metadata">Metadata (class in deltalake.table)</a>
 </li>
       <li><a href="api_reference.html#deltalake.schema.Field.metadata">metadata (deltalake.schema.Field attribute)</a>
 </li>
       <li><a href="api_reference.html#deltalake.table.DeltaTable.metadata">metadata() (deltalake.table.DeltaTable method)</a>
 </li>
-      <li><a href="api_reference.html#deltalake.table.ProtocolVersions.min_reader_version">min_reader_version (deltalake.table.ProtocolVersions attribute)</a>
-</li>
   </ul></td>
   <td style="width: 33%; vertical-align: top;"><ul>
+      <li><a href="api_reference.html#deltalake.table.ProtocolVersions.min_reader_version">min_reader_version (deltalake.table.ProtocolVersions attribute)</a>
+</li>
       <li><a href="api_reference.html#deltalake.table.ProtocolVersions.min_writer_version">min_writer_version (deltalake.table.ProtocolVersions attribute)</a>
 </li>
       <li>
@@ -353,8 +359,6 @@
 </li>
       <li><a href="api_reference.html#deltalake.table.ProtocolVersions">ProtocolVersions (class in deltalake.table)</a>
 </li>
-      <li><a href="api_reference.html#deltalake.table.DeltaTable.pyarrow_schema">pyarrow_schema() (deltalake.table.DeltaTable method)</a>
-</li>
   </ul></td>
 </tr></table>
 
@@ -383,6 +387,8 @@
 <h2 id="T">T</h2>
 <table style="width: 100%" class="indextable genindextable"><tr>
   <td style="width: 33%; vertical-align: top;"><ul>
+      <li><a href="api_reference.html#deltalake.table.TableMerger">TableMerger (class in deltalake.table)</a>
+</li>
       <li><a href="api_reference.html#deltalake.table.TableOptimizer">TableOptimizer (class in deltalake.table)</a>
 </li>
       <li><a href="api_reference.html#deltalake.schema.ArrayType.to_json">to_json() (deltalake.schema.ArrayType method)</a>
@@ -443,6 +449,8 @@
 </li>
   </ul></td>
   <td style="width: 33%; vertical-align: top;"><ul>
+      <li><a href="api_reference.html#deltalake.table.DeltaTable.update">update() (deltalake.table.DeltaTable method)</a>
+</li>
       <li><a href="api_reference.html#deltalake.table.DeltaTable.update_incremental">update_incremental() (deltalake.table.DeltaTable method)</a>
 </li>
   </ul></td>
@@ -467,6 +475,24 @@
 <h2 id="W">W</h2>
 <table style="width: 100%" class="indextable genindextable"><tr>
   <td style="width: 33%; vertical-align: top;"><ul>
+      <li><a href="api_reference.html#deltalake.table.TableMerger.when_matched_delete">when_matched_delete() (deltalake.table.TableMerger method)</a>
+</li>
+      <li><a href="api_reference.html#deltalake.table.TableMerger.when_matched_update">when_matched_update() (deltalake.table.TableMerger method)</a>
+</li>
+      <li><a href="api_reference.html#deltalake.table.TableMerger.when_matched_update_all">when_matched_update_all() (deltalake.table.TableMerger method)</a>
+</li>
+      <li><a href="api_reference.html#deltalake.table.TableMerger.when_not_matched_by_source_delete">when_not_matched_by_source_delete() (deltalake.table.TableMerger method)</a>
+</li>
+  </ul></td>
+  <td style="width: 33%; vertical-align: top;"><ul>
+      <li><a href="api_reference.html#deltalake.table.TableMerger.when_not_matched_by_source_update">when_not_matched_by_source_update() (deltalake.table.TableMerger method)</a>
+</li>
+      <li><a href="api_reference.html#deltalake.table.TableMerger.when_not_matched_insert">when_not_matched_insert() (deltalake.table.TableMerger method)</a>
+</li>
+      <li><a href="api_reference.html#deltalake.table.TableMerger.when_not_matched_insert_all">when_not_matched_insert_all() (deltalake.table.TableMerger method)</a>
+</li>
+      <li><a href="api_reference.html#deltalake.table.TableMerger.with_writer_properties">with_writer_properties() (deltalake.table.TableMerger method)</a>
+</li>
       <li><a href="api_reference.html#deltalake.write_deltalake">write_deltalake() (in module deltalake)</a>
 </li>
   </ul></td>

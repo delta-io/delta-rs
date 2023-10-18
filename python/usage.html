@@ -34,7 +34,7 @@
             delta-rs
           </a>
               <div class="version">
-                0.11.0
+                0.12.0
               </div>
 <div role="search">
   <form id="rtd-search-form" class="wy-form" action="search.html" method="get">
@@ -65,8 +65,10 @@
 <li class="toctree-l3"><a class="reference internal" href="#optimizing-tables">Optimizing tables</a></li>
 </ul>
 </li>
-<li class="toctree-l2"><a class="reference internal" href="#writing-delta-tables">Writing Delta Tables</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="#writing-delta-tables">Writing Delta Tables</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#updating-delta-tables">Updating Delta Tables</a><ul>
 <li class="toctree-l3"><a class="reference internal" href="#overwriting-a-partition">Overwriting a partition</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#removing-data">Removing data</a></li>
 <li class="toctree-l3"><a class="reference internal" href="#restoring-tables">Restoring tables</a></li>
 </ul>
 </li>
@@ -169,7 +171,10 @@ database and table name. Currently supported are AWS Glue and Databricks Unity C
 </ul>
 </dd>
 </dl>
-<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="kn">from</span> <span class="nn">deltalake</span> <span class="kn">import</span> <span class="n">DataCatalog</span><span class="p">,</span> <span class="n">DeltaTable</span>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="kn">import</span> <span class="nn">os</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="kn">from</span> <span class="nn">deltalake</span> <span class="kn">import</span> <span class="n">DataCatalog</span><span class="p">,</span> <span class="n">DeltaTable</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">os</span><span class="o">.</span><span class="n">environ</span><span class="p">[</span><span class="s1">&#39;DATABRICKS_WORKSPACE_URL&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;https://adb-62800498333851.30.azuredatabricks.net&quot;</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">os</span><span class="o">.</span><span class="n">environ</span><span class="p">[</span><span class="s1">&#39;DATABRICKS_ACCESS_TOKEN&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;&lt;DBAT&gt;&quot;</span>
 <span class="gp">&gt;&gt;&gt; </span><span class="n">catalog_name</span> <span class="o">=</span> <span class="s1">&#39;main&#39;</span>
 <span class="gp">&gt;&gt;&gt; </span><span class="n">schema_name</span> <span class="o">=</span> <span class="s1">&#39;db_schema&#39;</span>
 <span class="gp">&gt;&gt;&gt; </span><span class="n">table_name</span> <span class="o">=</span> <span class="s1">&#39;db_table&#39;</span>
@@ -492,7 +497,7 @@ filter on multiple columns at once.</p>
 <p>For overwrites and appends, use <a class="reference internal" href="api_reference.html#deltalake.write_deltalake" title="deltalake.write_deltalake"><code class="xref py py-func docutils literal notranslate"><span class="pre">write_deltalake()</span></code></a>. If the table does not
 already exist, it will be created. The <code class="docutils literal notranslate"><span class="pre">data</span></code> parameter will accept a Pandas
 DataFrame, a PyArrow Table, or an iterator of PyArrow Record Batches.</p>
-<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="kn">from</span> <span class="nn">deltalake.writer</span> <span class="kn">import</span> <span class="n">write_deltalake</span>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="kn">from</span> <span class="nn">deltalake</span> <span class="kn">import</span> <span class="n">write_deltalake</span>
 <span class="gp">&gt;&gt;&gt; </span><span class="n">df</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">({</span><span class="s1">&#39;x&#39;</span><span class="p">:</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">]})</span>
 <span class="gp">&gt;&gt;&gt; </span><span class="n">write_deltalake</span><span class="p">(</span><span class="s1">&#39;path/to/table&#39;</span><span class="p">,</span> <span class="n">df</span><span class="p">)</span>
 </pre></div>
@@ -513,6 +518,47 @@ to append pass in <code class="docutils literal notranslate"><span class="pre">m
 <p><a class="reference internal" href="api_reference.html#deltalake.write_deltalake" title="deltalake.write_deltalake"><code class="xref py py-meth docutils literal notranslate"><span class="pre">write_deltalake()</span></code></a> will raise <code class="xref py py-exc docutils literal notranslate"><span class="pre">ValueError</span></code> if the schema of
 the data passed to it differs from the existing table’s schema. If you wish to
 alter the schema as part of an overwrite pass in <code class="docutils literal notranslate"><span class="pre">overwrite_schema=True</span></code>.</p>
+</section>
+<section id="updating-delta-tables">
+<h2>Updating Delta Tables<a class="headerlink" href="#updating-delta-tables" title="Permalink to this headline"></a></h2>
+<p>Row values in an existing delta table can be updated with the <a class="reference internal" href="api_reference.html#deltalake.table.DeltaTable.update" title="deltalake.table.DeltaTable.update"><code class="xref py py-meth docutils literal notranslate"><span class="pre">DeltaTable.update()</span></code></a> command. A update
+dictionary has to be passed, where they key is the column you wish to update, and the value is a
+Expression in string format.</p>
+<p>Update all the rows for the column “processed” to the value True.</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="kn">from</span> <span class="nn">deltalake</span> <span class="kn">import</span> <span class="n">write_deltalake</span><span class="p">,</span> <span class="n">DeltaTable</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">df</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">({</span><span class="s1">&#39;x&#39;</span><span class="p">:</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">],</span> <span class="s1">&#39;deleted&#39;</span><span class="p">:</span> <span class="p">[</span><span class="kc">False</span><span class="p">,</span> <span class="kc">False</span><span class="p">,</span> <span class="kc">False</span><span class="p">]})</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">write_deltalake</span><span class="p">(</span><span class="s1">&#39;path/to/table&#39;</span><span class="p">,</span> <span class="n">df</span><span class="p">)</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">dt</span> <span class="o">=</span> <span class="n">DeltaTable</span><span class="p">(</span><span class="s1">&#39;path/to/table&#39;</span><span class="p">)</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">dt</span><span class="o">.</span><span class="n">update</span><span class="p">({</span><span class="s2">&quot;processed&quot;</span><span class="p">:</span> <span class="s2">&quot;True&quot;</span><span class="p">})</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">dt</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span>
+<span class="gp">&gt;&gt;&gt; </span>    <span class="n">x</span>       <span class="n">processed</span>
+<span class="go">0       1       True</span>
+<span class="go">1       2       True</span>
+<span class="go">2       3       True</span>
+</pre></div>
+</div>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<p><a class="reference internal" href="api_reference.html#deltalake.table.DeltaTable.update" title="deltalake.table.DeltaTable.update"><code class="xref py py-meth docutils literal notranslate"><span class="pre">DeltaTable.update()</span></code></a> predicates and updates are all in string format. The predicates and expressions,
+are parsed into Apache Datafusion expressions.</p>
+</div>
+<p>Apply a soft deletion based on a predicate, so update all the rows for the column “deleted” to the value
+True where x = 3</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="kn">from</span> <span class="nn">deltalake</span> <span class="kn">import</span> <span class="n">write_deltalake</span><span class="p">,</span> <span class="n">DeltaTable</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">df</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">({</span><span class="s1">&#39;x&#39;</span><span class="p">:</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">],</span> <span class="s1">&#39;deleted&#39;</span><span class="p">:</span> <span class="p">[</span><span class="kc">False</span><span class="p">,</span> <span class="kc">False</span><span class="p">,</span> <span class="kc">False</span><span class="p">]})</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">write_deltalake</span><span class="p">(</span><span class="s1">&#39;path/to/table&#39;</span><span class="p">,</span> <span class="n">df</span><span class="p">)</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">dt</span> <span class="o">=</span> <span class="n">DeltaTable</span><span class="p">(</span><span class="s1">&#39;path/to/table&#39;</span><span class="p">)</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">dt</span><span class="o">.</span><span class="n">update</span><span class="p">(</span>
+<span class="gp">... </span>   <span class="n">updates</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;deleted&quot;</span><span class="p">:</span> <span class="s2">&quot;True&quot;</span><span class="p">},</span>
+<span class="gp">... </span>   <span class="n">predicate</span><span class="o">=</span> <span class="s1">&#39;x = 3&#39;</span><span class="p">,</span>
+<span class="gp">... </span><span class="p">)</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">dt</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span>
+<span class="gp">&gt;&gt;&gt; </span>    <span class="n">x</span>       <span class="n">deleted</span>
+<span class="go">0       1       False</span>
+<span class="go">1       2       False</span>
+<span class="go">2       3       True</span>
+</pre></div>
+</div>
 <section id="overwriting-a-partition">
 <h3>Overwriting a partition<a class="headerlink" href="#overwriting-a-partition" title="Permalink to this headline"></a></h3>
 <p>You can overwrite a specific partition by using <code class="docutils literal notranslate"><span class="pre">mode=&quot;overwrite&quot;</span></code> together
@@ -520,7 +566,7 @@ with <code class="docutils literal notranslate"><span class="pre">partition_filt
 partition and insert your data as new files. This can only be done on one
 partition at a time. All of the input data must belong to that partition or else
 the method will raise an error.</p>
-<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="kn">from</span> <span class="nn">deltalake.writer</span> <span class="kn">import</span> <span class="n">write_deltalake</span>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="kn">from</span> <span class="nn">deltalake</span> <span class="kn">import</span> <span class="n">write_deltalake</span>
 <span class="gp">&gt;&gt;&gt; </span><span class="n">df</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">({</span><span class="s1">&#39;x&#39;</span><span class="p">:</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">],</span> <span class="s1">&#39;y&#39;</span><span class="p">:</span> <span class="p">[</span><span class="s1">&#39;a&#39;</span><span class="p">,</span> <span class="s1">&#39;a&#39;</span><span class="p">,</span> <span class="s1">&#39;b&#39;</span><span class="p">]})</span>
 <span class="gp">&gt;&gt;&gt; </span><span class="n">write_deltalake</span><span class="p">(</span><span class="s1">&#39;path/to/table&#39;</span><span class="p">,</span> <span class="n">df</span><span class="p">,</span> <span class="n">partition_by</span><span class="o">=</span><span class="p">[</span><span class="s1">&#39;y&#39;</span><span class="p">])</span>
 
@@ -537,6 +583,34 @@ the method will raise an error.</p>
 </div>
 <p>This method could also be used to insert a new partition if one doesn’t already
 exist, making this operation idempotent.</p>
+</section>
+<section id="removing-data">
+<h3>Removing data<a class="headerlink" href="#removing-data" title="Permalink to this headline"></a></h3>
+<p>You can remove rows from a table with <a class="reference internal" href="api_reference.html#deltalake.table.DeltaTable.delete" title="deltalake.table.DeltaTable.delete"><code class="xref py py-meth docutils literal notranslate"><span class="pre">DeltaTable.delete()</span></code></a>. A SQL where clause can
+be provided to only remove some rows. If the clause matches some partition values, then
+the files under those partition values will be removed. If the clause matches rows
+inside some files, then those files will rewritten without the matched rows. Omitting
+the clause will remove all files from the table.</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="kn">from</span> <span class="nn">deltalake</span> <span class="kn">import</span> <span class="n">DeltaTable</span><span class="p">,</span> <span class="n">write_deltalake</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">df</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">({</span><span class="s1">&#39;a&#39;</span><span class="p">:</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">],</span> <span class="s1">&#39;to_delete&#39;</span><span class="p">:</span> <span class="p">[</span><span class="kc">False</span><span class="p">,</span> <span class="kc">False</span><span class="p">,</span> <span class="kc">True</span><span class="p">]})</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">write_deltalake</span><span class="p">(</span><span class="s1">&#39;path/to/table&#39;</span><span class="p">,</span> <span class="n">df</span><span class="p">)</span>
+
+<span class="gp">&gt;&gt;&gt; </span><span class="n">table</span> <span class="o">=</span> <span class="n">DeltaTable</span><span class="p">(</span><span class="s1">&#39;path/to/table&#39;</span><span class="p">)</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">table</span><span class="o">.</span><span class="n">delete</span><span class="p">(</span><span class="n">predicate</span><span class="o">=</span><span class="s2">&quot;to_delete = true&quot;</span><span class="p">)</span>
+<span class="go">{&#39;num_added_files&#39;: 1, &#39;num_removed_files&#39;: 1, &#39;num_deleted_rows&#39;: 1, &#39;num_copied_rows&#39;: 2, &#39;execution_time_ms&#39;: 11081, &#39;scan_time_ms&#39;: 3721, &#39;rewrite_time_ms&#39;: 7}</span>
+
+<span class="gp">&gt;&gt;&gt; </span><span class="n">table</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span>
+<span class="go">   a  to_delete</span>
+<span class="go">0  1      False</span>
+<span class="go">1  2      False</span>
+</pre></div>
+</div>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<p><a class="reference internal" href="api_reference.html#deltalake.table.DeltaTable.delete" title="deltalake.table.DeltaTable.delete"><code class="xref py py-meth docutils literal notranslate"><span class="pre">DeltaTable.delete()</span></code></a> does not delete files from storage but only updates the
+table state to one where the deleted rows are no longer present. See
+<a class="reference internal" href="#vacuuming-tables">Vacuuming tables</a> for more information.</p>
+</div>
 </section>
 <section id="restoring-tables">
 <h3>Restoring tables<a class="headerlink" href="#restoring-tables" title="Permalink to this headline"></a></h3>
