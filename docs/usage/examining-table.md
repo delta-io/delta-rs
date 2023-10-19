@@ -43,10 +43,10 @@ Schema([Field(id, PrimitiveType("long"), nullable=True)])
 
 These schemas have a JSON representation that can be retrieved. To
 reconstruct from json, use
-[DeltaTable.schema.json()][deltalake.schema.Schema.json].
+[DeltaTable.schema.to_json()][deltalake.schema.Schema.to_json].
 
 ``` python
->>> dt.schema().json()
+>>> dt.schema().to_json()
 '{"type":"struct","fields":[{"name":"id","type":"long","nullable":true,"metadata":{}}]}'
 ```
 

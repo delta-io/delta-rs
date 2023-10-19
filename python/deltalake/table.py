@@ -274,7 +274,7 @@ class DeltaTable:
 
         Args:
             data_catalog: the Catalog to use for getting the storage location of the Delta Table
-                            database_name: the database name inside the Data Catalog
+            database_name: the database name inside the Data Catalog
             table_name: the table name inside the Data Catalog
             data_catalog_id: the identifier of the Data Catalog
             version: version of the DeltaTable
@@ -1097,7 +1097,6 @@ class TableMerger:
         ``predicate`` (if specified) is true for the target row.
 
         Args:
-            updates (dict): a mapping of column name to update SQL expression.
             predicate (str | None, optional):  SQL like predicate on when to delete when not matched by source. Defaults to None.
 
         Returns:
