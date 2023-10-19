@@ -193,14 +193,14 @@ Use :meth:`DeltaTable.schema` to retrieve the delta lake schema:
     Schema([Field(id, PrimitiveType("long"), nullable=True)])
 
 These schemas have a JSON representation that can be retrieved. To reconstruct
-from json, use :meth:`deltalake.schema.Schema.from_json()`.
+from json, use `schema.Schema.from_json()`.
 
 .. code-block:: python
 
     >>> dt.schema().json()
     '{"type":"struct","fields":[{"name":"id","type":"long","nullable":true,"metadata":{}}]}'
 
-Use :meth:`deltalake.schema.Schema.to_pyarrow()` to retrieve the PyArrow schema:
+Use `deltalake.schema.Schema.to_pyarrow()` to retrieve the PyArrow schema:
 
 .. code-block:: python
 

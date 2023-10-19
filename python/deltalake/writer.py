@@ -1,11 +1,11 @@
 import json
+import sys
 import uuid
 from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal
 from pathlib import Path
 from typing import (
-    TYPE_CHECKING,
     Any,
     Dict,
     FrozenSet,
@@ -22,11 +22,6 @@ from urllib.parse import unquote
 from deltalake.fs import DeltaStorageHandler
 
 from ._util import encode_partition_value
-
-if TYPE_CHECKING:
-    import pandas as pd
-
-import sys
 
 if sys.version_info >= (3, 8):
     from typing import Literal

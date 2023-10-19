@@ -506,41 +506,32 @@ class DeltaTable:
         Args:
             updates: a mapping of column name to update SQL expression.
             predicate: a logical expression, defaults to None
-            writer_properties: Pass writer properties to the Rust parquet writer, see options https://arrow.apache.org/rust/parquet/file/properties/struct.WriterProperties.html,
-                                only the following fields are supported: `data_page_size_limit`, `dictionary_page_size_limit`, `data_page_row_count_limit`, `write_batch_size`, `max_row_group_size`.
-            error_on_type_mismatch: specify if merge will return error if data types are mismatching :default = True
+            writer_properties: Pass writer properties to the Rust parquet writer, see options
+                                https://arrow.apache.org/rust/parquet/file/properties/struct.WriterProperties.html,
+                                only the following fields are supported: `data_page_size_limit`, `dictionary_page_size_limit`,
+                                `data_page_row_count_limit`, `write_batch_size`, `max_row_group_size`.
+            error_on_type_mismatch: specify if merge will return error if data types are mismatching, default = True
 
         Returns:
             the metrics from delete
 
         Examples:
 
-        Update some row values with SQL predicate. This is equivalent to
-        `UPDATE table SET deleted = true WHERE id = '5'`
+        Update some row values with SQL predicate. This is equivalent to `UPDATE table SET deleted = true WHERE id = '5'`
 
         ```
         from deltalake import DeltaTable
         dt = DeltaTable("tmp")
-        dt.update(
-            predicate="id = '5'",
-            updates = {"deleted": True,}
-        )
+        dt.update(predicate="id = '5'", updates = {"deleted": True})
         ```
 
-        Update all row values. This is equivalent to
-        `UPDATE table SET id = concat(id, '_old')`.
+        Update all row values. This is equivalent to `UPDATE table SET id = concat(id, '_old')`.
         ```
         from deltalake import DeltaTable
         dt = DeltaTable("tmp")
-        dt.update(
-            updates = {
-                "deleted": True,
-                "id": "concat(id, '_old')"
-            }
-        )
+        dt.update(updates={"deleted": True, "id": "concat(id, '_old')"})
         ```
         """
-
         metrics = self._table.update(
             updates, predicate, writer_properties, safe_cast=not error_on_type_mismatch
         )
@@ -799,18 +790,18 @@ class DeltaTable:
         dt = DeltaTable("tmp")
         dt.get_add_actions().to_pandas()
         ```
-
         ```
-                                                                path  size_bytes       modification_time  data_change partition_values  num_records null_count       min       max
+        path                                                size_bytes       modification_time  data_change partition_values  num_records null_count       min       max
         0  x=2/0-91820cbf-f698-45fb-886d-5d5f5669530b-0.p...         565 1970-01-20 08:40:08.071         True         {'x': 2}            1   {'y': 0}  {'y': 5}  {'y': 5}
         1  x=3/0-91820cbf-f698-45fb-886d-5d5f5669530b-0.p...         565 1970-01-20 08:40:08.071         True         {'x': 3}            1   {'y': 0}  {'y': 6}  {'y': 6}
         2  x=1/0-91820cbf-f698-45fb-886d-5d5f5669530b-0.p...         565 1970-01-20 08:40:08.071         True         {'x': 1}            1   {'y': 0}  {'y': 4}  {'y': 4}
         ```
+
         ```
         dt.get_add_actions(flatten=True).to_pandas()
         ```
         ```
-                                                                path  size_bytes       modification_time  data_change  partition.x  num_records  null_count.y  min.y  max.y
+        path                                                size_bytes       modification_time  data_change  partition.x  num_records  null_count.y  min.y  max.y
         0  x=2/0-91820cbf-f698-45fb-886d-5d5f5669530b-0.p...         565 1970-01-20 08:40:08.071         True            2            1             0      5      5
         1  x=3/0-91820cbf-f698-45fb-886d-5d5f5669530b-0.p...         565 1970-01-20 08:40:08.071         True            3            1             0      6      6
         2  x=1/0-91820cbf-f698-45fb-886d-5d5f5669530b-0.p...         565 1970-01-20 08:40:08.071         True            1            1             0      4      4
@@ -877,11 +868,11 @@ class TableMerger:
         """Pass writer properties to the Rust parquet writer, see options https://arrow.apache.org/rust/parquet/file/properties/struct.WriterProperties.html:
 
         Args:
-            data_page_size_limit (int|None, optional): Limit DataPage size to this in bytes. Defaults to None.
-            dictionary_page_size_limit (int|None, optional): Limit the size of each DataPage to store dicts to this amount in bytes. Defaults to None.
-            data_page_row_count_limit (int|None, optional): Limit the number of rows in each DataPage. Defaults to None.
-            write_batch_size (int|None, optional): Splits internally to smaller batch size. Defaults to None.
-            max_row_group_size (int|None, optional): Max number of rows in row group. Defaults to None.
+            data_page_size_limit (int|None, Optional): Limit DataPage size to this in bytes. Defaults to None.
+            dictionary_page_size_limit (int|None, Optional): Limit the size of each DataPage to store dicts to this amount in bytes. Defaults to None.
+            data_page_row_count_limit (int|None, Optional): Limit the number of rows in each DataPage. Defaults to None.
+            write_batch_size (int|None, Optional): Splits internally to smaller batch size. Defaults to None.
+            max_row_group_size (int|None, Optional): Max number of rows in row group. Defaults to None.
 
         Returns:
             TableMerger: TableMerger Object
@@ -904,7 +895,7 @@ class TableMerger:
 
         Args:
             updates (dict): a mapping of column name to update SQL expression.
-            predicate (str | None, optional):  SQL like predicate on when to update. Defaults to None.
+            predicate (str | None, Optional):  SQL like predicate on when to update. Defaults to None.
 
         Returns:
             TableMerger: TableMerger Object
@@ -932,7 +923,7 @@ class TableMerger:
         If a ``predicate`` is specified, then it must evaluate to true for the row to be updated.
 
         Args:
-            predicate (str | None, optional): SQL like predicate on when to update all columns. Defaults to None.
+            predicate (str | None, Optional): SQL like predicate on when to update all columns. Defaults to None.
 
         Returns:
             TableMerger: TableMerger Object
@@ -962,7 +953,7 @@ class TableMerger:
         true for the matched row. If not specified it deletes all matches.
 
         Args:
-           predicate (str | None, optional):  SQL like predicate on when to delete. Defaults to None.
+           predicate (str | None, Optional):  SQL like predicate on when to delete. Defaults to None.
 
         Returns:
             TableMerger: TableMerger Object
@@ -1004,7 +995,7 @@ class TableMerger:
 
         Args:
             updates (dict):  a mapping of column name to insert SQL expression.
-            predicate (str | None, optional): SQL like predicate on when to insert. Defaults to None.
+            predicate (str | None, Optional): SQL like predicate on when to insert. Defaults to None.
 
         Returns:
             TableMerger: TableMerger Object
@@ -1037,7 +1028,7 @@ class TableMerger:
         the new row to be inserted.
 
         Args:
-            predicate (str | None, optional): SQL like predicate on when to insert. Defaults to None.
+            predicate (str | None, Optional): SQL like predicate on when to insert. Defaults to None.
 
         Returns:
             TableMerger: TableMerger Object
@@ -1069,7 +1060,7 @@ class TableMerger:
 
         Args:
             updates (dict): a mapping of column name to update SQL expression.
-            predicate (str | None, optional): SQL like predicate on when to update. Defaults to None.
+            predicate (str | None, Optional): SQL like predicate on when to update. Defaults to None.
 
         Returns:
             TableMerger: TableMerger Object
@@ -1097,7 +1088,7 @@ class TableMerger:
         ``predicate`` (if specified) is true for the target row.
 
         Args:
-            predicate (str | None, optional):  SQL like predicate on when to delete when not matched by source. Defaults to None.
+            predicate (str | None, Optional):  SQL like predicate on when to delete when not matched by source. Defaults to None.
 
         Returns:
             TableMerger: TableMerger Object
@@ -1113,7 +1104,7 @@ class TableMerger:
         """Executes MERGE with the previously provided settings in Rust with Apache Datafusion query engine.
 
         Returns:
-            Dict[str, any]: metrics
+            Dict[str, Any]: metrics
         """
         metrics = self.table._table.merge_execute(
             source=self.source,
