@@ -316,41 +316,6 @@ relative to the table root or absolute URIs.
 {_DNF_filter_doc}
     """
 
-    def files_by_partitions(
-        self, partition_filters: List[Tuple[str, str, Any]]
-    ) -> List[str]:
-        """
-        Get the files that match a given list of partitions filters.
-
-        .. deprecated:: 0.7.0
-            Use :meth:`file_uris` instead.
-
-        Partitions which do not match the filter predicate will be removed from scanned data.
-        Predicates are expressed in disjunctive normal form (DNF), like [("x", "=", "a"), ...].
-        DNF allows arbitrary boolean logical combinations of single partition predicates.
-        The innermost tuples each describe a single partition predicate.
-        The list of inner predicates is interpreted as a conjunction (AND), forming a more selective and multiple partition predicates.
-        Each tuple has format: (key, op, value) and compares the key with the value.
-        The supported op are: `=`, `!=`, `in`, and `not in`.
-        If the op is in or not in, the value must be a collection such as a list, a set or a tuple.
-        The supported type for value is str. Use empty string `''` for Null partition value.
-
-        Examples:
-        ("x", "=", "a")
-        ("x", "!=", "a")
-        ("y", "in", ["a", "b", "c"])
-        ("z", "not in", ["a","b"])
-
-        :param partition_filters: the partition filters that will be used for getting the matched files
-        :return: list of the .parquet files after applying the partition filters referenced for the current version of the DeltaTable.
-        """
-        warnings.warn(
-            "Call to deprecated method files_by_partitions. Please use file_uris instead.",
-            category=DeprecationWarning,
-            stacklevel=2,
-        )
-        return self.file_uris(partition_filters)
-
     def file_uris(
         self, partition_filters: Optional[List[Tuple[str, str, Any]]] = None
     ) -> List[str]:
@@ -580,21 +545,6 @@ given filters.
             target_alias=target_alias,
             safe_cast=not error_on_type_mismatch,
         )
-
-    def pyarrow_schema(self) -> pyarrow.Schema:
-        """
-        Get the current schema of the DeltaTable with the Parquet PyArrow format.
-
-        DEPRECATED: use DeltaTable.schema().to_pyarrow() instead.
-
-        :return: the current Schema with the Parquet PyArrow format
-        """
-        warnings.warn(
-            "DeltaTable.pyarrow_schema() is deprecated. Use DeltaTable.schema().to_pyarrow() instead.",
-            category=DeprecationWarning,
-            stacklevel=2,
-        )
-        return self.schema().to_pyarrow()
 
     def restore(
         self,
