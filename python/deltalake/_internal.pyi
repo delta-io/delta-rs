@@ -526,12 +526,6 @@ class Schema:
     """ The list of invariants on the table. Each invarint is a tuple of strings. The first string is the
         field path and the second is the SQL of the invariant.
     """
-
-    def json(self):
-        """
-        !!! warning "DEPRECATED"
-            Convert to JSON dictionary representation
-        """
     def to_json(self) -> str:
         """Get the JSON string representation of the Schema.
         A schema has the same JSON format as a StructType.
