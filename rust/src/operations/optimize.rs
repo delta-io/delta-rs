@@ -1140,7 +1140,7 @@ pub(super) mod zorder {
                 runtime.register_object_store(&Url::parse("delta-rs://").unwrap(), object_store);
 
                 use url::Url;
-                let ctx = SessionContext::with_config_rt(SessionConfig::default(), runtime);
+                let ctx = SessionContext::new_with_config_rt(SessionConfig::default(), runtime);
                 ctx.register_udf(datafusion::zorder_key_udf());
                 Ok(Self { columns, ctx })
             }
@@ -1242,7 +1242,7 @@ pub(super) mod zorder {
         out: &mut Vec<u8>,
     ) -> Result<(), ArrowError> {
         // Convert array to rows
-        let mut converter = RowConverter::new(vec![SortField::new(input.data_type().clone())])?;
+        let converter = RowConverter::new(vec![SortField::new(input.data_type().clone())])?;
         let rows = converter.convert_columns(&[input])?;
 
         for (row_i, row) in rows.iter().enumerate() {
