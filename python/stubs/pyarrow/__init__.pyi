@@ -4,6 +4,7 @@ __version__: str
 Schema: Any
 Table: Any
 RecordBatch: Any
+RecordBatchReader: Any
 Field: Any
 DataType: Any
 ListType: Any
