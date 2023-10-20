@@ -23,7 +23,7 @@ dependencies = [
 
 [project.optional-dependencies]
 pandas = [
-    "pandas"
+    "pandas==2.0.3"
 ]
 devel = [
     "mypy",
