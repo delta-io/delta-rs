@@ -441,18 +441,23 @@ given filters.
 
     def update(
         self,
-        updates: Dict[str, str],
+        updates: Optional[Dict[str, str]] = None,
+        new_values: Optional[
+            Dict[str, Union[int, float, str, datetime, bool, list]]
+        ] = None,
         predicate: Optional[str] = None,
         writer_properties: Optional[Dict[str, int]] = None,
         error_on_type_mismatch: bool = True,
     ) -> Dict[str, Any]:
-        """UPDATE records in the Delta Table that matches an optional predicate.
+        """`UPDATE` records in the Delta Table that matches an optional predicate. Either updates or new_values needs
+        to be passed for it to execute.
 
         :param updates: a mapping of column name to update SQL expression.
+        :param new_values: a mapping of column name to python datatype.
         :param predicate: a logical expression, defaults to None
         :writer_properties: Pass writer properties to the Rust parquet writer, see options https://arrow.apache.org/rust/parquet/file/properties/struct.WriterProperties.html,
             only the fields: data_page_size_limit, dictionary_page_size_limit, data_page_row_count_limit, write_batch_size, max_row_group_size are supported.
-        :error_on_type_mismatch: specify if merge will return error if data types are mismatching :default = True
+        :error_on_type_mismatch: specify if update will return error if data types are mismatching :default = True
         :return: the metrics from delete
 
         Examples:
@@ -464,7 +469,7 @@ given filters.
         >>> dt = DeltaTable("tmp")
         >>> dt.update(predicate="id = '5'",
         ...           updates = {
-        ...             "deleted": True,
+        ...             "deleted": 'True',
         ...             }
         ...         )
 
@@ -473,15 +478,48 @@ given filters.
         >>> from deltalake import DeltaTable
         >>> dt = DeltaTable("tmp")
         >>> dt.update(updates = {
-        ...             "deleted": True,
+        ...             "deleted": 'True',
         ...             "id": "concat(id, '_old')"
         ...             }
         ...         )
 
+        Update some row values with python object. This is equivalent to
+        ``UPDATE table SET price = 150.10 WHERE id = '5'``
+        >>> from deltalake import DeltaTable
+        >>> dt = DeltaTable("tmp")
+        >>> dt.update(predicate="id = '5'",
+        ...           updates = {
+        ...             "price": 150.10,
+        ...             }
+        ...         )
         """
-
+        if updates is None and new_values is not None:
+            updates = {}
+            for key, value in new_values.items():
+                if isinstance(value, (int, float, bool, list)):
+                    value = str(value)
+                elif isinstance(value, str):
+                    value = f"'{value}'"
+                elif isinstance(value, datetime):
+                    value = str(
+                        int(value.timestamp() * 1000 * 1000)
+                    )  # convert to microseconds
+                updates[key] = value
+        elif updates is not None and new_values is None:
+            pass
+        elif updates is not None and new_values is not None:
+            raise ValueError(
+                "Passing updates and new_values at same time is not allowed, pick one."
+            )
+        else:
+            raise ValueError(
+                "Either updates or new_values need to be passed to update the table."
+            )
         metrics = self._table.update(
-            updates, predicate, writer_properties, safe_cast=not error_on_type_mismatch
+            updates,
+            predicate,
+            writer_properties,
+            safe_cast=not error_on_type_mismatch,
         )
         return json.loads(metrics)
 
