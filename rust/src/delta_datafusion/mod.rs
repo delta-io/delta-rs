@@ -404,7 +404,7 @@ impl DeltaScanConfigBuilder {
     }
 
     /// Indicate that a column containing a records file path is included.
-    /// Column name is randomly generated and can be determined once this Config is built
+    /// Column name is generated and can be determined once this Config is built
     pub fn with_file_column(mut self, include: bool) -> Self {
         self.include_file_column = include;
         self.file_column_name = None;
