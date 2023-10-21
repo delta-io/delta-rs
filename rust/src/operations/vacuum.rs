@@ -182,6 +182,7 @@ impl VacuumBuilder {
         let valid_files = self.snapshot.file_paths_iter().collect::<HashSet<Path>>();
 
         let mut files_to_delete = vec![];
+        let mut file_sizes = vec![];
         let mut all_files = self.store.list(None).await.map_err(DeltaTableError::from)?;
 
         let partition_columns = &self
@@ -201,10 +202,12 @@ impl VacuumBuilder {
             }
 
             files_to_delete.push(obj_meta.location);
+            file_sizes.push(obj_meta.size as i64);
         }
 
         Ok(VacuumPlan {
             files_to_delete,
+            file_sizes,
             retention_check_enabled: enforce_retention_duration,
             default_retention_millis: min_retention.num_milliseconds(),
             specified_retention_millis: Some(retention_period.num_milliseconds()),
@@ -244,6 +247,8 @@ impl std::future::IntoFuture for VacuumBuilder {
 struct VacuumPlan {
     /// What files are to be deleted
     pub files_to_delete: Vec<Path>,
+    /// Size of each file which to delete
+    pub file_sizes: Vec<i64>,
     /// If retention check is enabled
     pub retention_check_enabled: bool,
     /// Default retention in milliseconds
@@ -273,52 +278,12 @@ impl VacuumPlan {
         };
 
         let end_operation = DeltaOperation::VacuumEnd {
-            status: String::from("COMPLETED"),
+            status: String::from("COMPLETED"), // Maybe this should be FAILED when vacuum has error during the files, not sure how to check for this
         };
-
-        // let mut total_size = 0;
-        // for file in self.files_to_delete.clone() {
-        //     println!("{:?}", file);
-        //     let list_stream = store.list(Some(&file)).await.unwrap();
-
-        //     let meta_objects = list_stream.map(|x|x.unwrap().clone()).collect::<Vec<_>>().await;
-
-        //     let object_sizes = meta_objects.iter()
-        //         .map(|meta| meta.clone().size as i64)
-        //         .collect::<Vec<_>>();
-
-        //     let size: i64 = object_sizes.iter().sum();
-        //     println!("{:?}", object_sizes.len());
-        //     println!("{:?}", total_size);
-        //     total_size = total_size + size;
-        // }
-
-        // let mut total_size = 0;
-
-        // for file in &self.files_to_delete {
-        //     let list_stream = store.list(Some(file)).await.expect("Error listing files");
-        
-        //     let meta_objects: Vec<_> = list_stream
-        //         .map(|result| result.expect("Error listing files"))
-        //         .collect()
-        //         .await;
-        
-        //     let object_sizes: Vec<i64> = meta_objects.iter()
-        //         .map(|meta| meta.size as i64)
-        //         .collect();
-        
-        //     let size: i64 = object_sizes.iter().sum();
-        //     println!("{:?}", meta_objects.len());
-        //     println!("{:?}", total_size);
-        //     total_size += size;
-            
-        // }
-
-
 
         let start_metrics = serde_json::to_value(VacuumStartOperationMetrics {
             num_files_to_delete: self.files_to_delete.len() as i64,
-            size_of_data_to_delete: total_size,
+            size_of_data_to_delete: self.file_sizes.iter().sum(),
         });
 
         // Begin VACUUM START COMMIT
