@@ -24,7 +24,7 @@ plugins:
           options:
             # docstring_style: sphinx
             docstring_section_style: table
-            ocstring_section_style: litabst
+            docstring_section_style: litabst
             filters: ["!^_", "^__init__$"]
             heading_level: 3
             show_source: false
