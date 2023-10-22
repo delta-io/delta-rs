@@ -614,24 +614,20 @@ fn deserialize_protocol_column_page(
                 |action: &mut Protocol, v: i32| action.min_writer_version = v,
             )?;
         }
-        "readerFeatures" => {
-            for_each_repeated_string_field_value(
-                actions,
-                page,
-                dict,
-                descriptor,
-                |action: &mut Protocol, v: Vec<String>| action.reader_features = Some(v)
-            )
-        }
-        "writerFeatures" => {
-            for_each_repeated_string_field_value(
-                actions,
-                page,
-                dict,
-                descriptor,
-                |action: &mut Protocol, v: Vec<String>| action.writer_features = Some(v)
-            )
-        }
+        "readerFeatures" => for_each_repeated_string_field_value(
+            actions,
+            page,
+            dict,
+            descriptor,
+            |action: &mut Protocol, v: Vec<String>| action.reader_features = Some(v),
+        ),
+        "writerFeatures" => for_each_repeated_string_field_value(
+            actions,
+            page,
+            dict,
+            descriptor,
+            |action: &mut Protocol, v: Vec<String>| action.writer_features = Some(v),
+        ),
         _ => {
             warn!("Unexpected field `{}` in protocol", f);
         }

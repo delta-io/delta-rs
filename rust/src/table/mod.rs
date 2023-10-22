@@ -23,7 +23,9 @@ use self::builder::DeltaTableConfig;
 use self::state::DeltaTableState;
 use crate::errors::DeltaTableError;
 use crate::partitions::PartitionFilter;
-use crate::protocol::{self, find_latest_check_point_for_version, get_last_checkpoint, Action, TableFeatures};
+use crate::protocol::{
+    self, find_latest_check_point_for_version, get_last_checkpoint, Action, TableFeatures,
+};
 use crate::protocol::{Add, ProtocolError, Stats};
 use crate::schema::*;
 use crate::storage::{commit_uri_from_version, ObjectStoreRef};

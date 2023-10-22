@@ -322,7 +322,7 @@ fn parquet_bytes_from_state(
         min_reader_version: state.min_reader_version(),
         min_writer_version: state.min_writer_version(),
         writer_features: None,
-        reader_features: None
+        reader_features: None,
     }))
     // metaData
     .chain(std::iter::once(Action::metaData(MetaData::try_from(

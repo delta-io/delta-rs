@@ -648,7 +648,7 @@ pub struct Protocol {
     /// Table features are missing from older versions
     /// The table features this writer supports
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub writer_features: Option<Vec<TableFeatures>>
+    pub writer_features: Option<Vec<TableFeatures>>,
 }
 
 /// Features table reader/writers can support as well as let users know
@@ -696,7 +696,7 @@ pub enum TableFeatures {
     ICEBERG_COMPAT_V1,
     /// liquid clustering support
     #[serde(alias = "liquid")]
-    LIQUID
+    LIQUID,
 }
 
 impl fmt::Display for TableFeatures {
@@ -715,11 +715,10 @@ impl fmt::Display for TableFeatures {
             TableFeatures::DOMAIN_METADATA => write!(f, "domainMetadata"),
             TableFeatures::V2_CHECKPOINT => write!(f, "v2Checkpoint"),
             TableFeatures::ICEBERG_COMPAT_V1 => write!(f, "icebergCompatV1"),
-            TableFeatures::LIQUID => write!(f, "liquid")
+            TableFeatures::LIQUID => write!(f, "liquid"),
         }
     }
 }
-
 
 /// The commitInfo is a fairly flexible action within the delta specification, where arbitrary data can be stored.
 /// However the reference implementation as well as delta-rs store useful information that may for instance
