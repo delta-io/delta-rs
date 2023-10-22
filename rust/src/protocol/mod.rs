@@ -22,6 +22,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use std::borrow::Borrow;
 use std::collections::HashMap;
+use std::fmt;
 use std::hash::{Hash, Hasher};
 use std::mem::take;
 use std::str::FromStr;
@@ -640,7 +641,85 @@ pub struct Protocol {
     /// Minimum version of the Delta write protocol a client must implement to correctly read the
     /// table.
     pub min_writer_version: i32,
+    /// Table features are missing from older versions
+    /// The table features this reader supports
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reader_features: Option<Vec<TableFeatures>>,
+    /// Table features are missing from older versions
+    /// The table features this writer supports
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub writer_features: Option<Vec<TableFeatures>>
 }
+
+/// Features table reader/writers can support as well as let users know
+/// what is supported
+#[derive(Serialize, Deserialize, Debug, Copy, Clone, Eq, PartialEq)]
+pub enum TableFeatures {
+    /// Append Only Tables
+    #[serde(alias = "appendOnly")]
+    APPEND_ONLY,
+    /// Table invariants
+    #[serde(alias = "invariants")]
+    INVARIANTS,
+    /// Check constraints on columns
+    #[serde(alias = "checkConstraints")]
+    CHECK_CONSTRAINTS,
+    /// CDF on a table
+    #[serde(alias = "changeDataFeed")]
+    CHANGE_DATA_FEED,
+    /// Columns with generated values
+    #[serde(alias = "generatedColumns")]
+    GENERATED_COLUMNS,
+    /// Mapping of one column to another
+    #[serde(alias = "columnMapping")]
+    COLUMN_MAPPING,
+    /// ID Columns
+    #[serde(alias = "identityColumns")]
+    IDENTITY_COLUMNS,
+    /// Deletion vectors for merge, update, delete
+    #[serde(alias = "deletionVectors")]
+    DELETION_VECTORS,
+    /// Row tracking on tables
+    #[serde(alias = "rowTracking")]
+    ROW_TRACKING,
+    /// timestamps without timezone support
+    #[serde(alias = "timestampNtz")]
+    TIMESTAMP_WITHOUT_TIMEZONE,
+    /// domain specific metadata
+    #[serde(alias = "domainMetadata")]
+    DOMAIN_METADATA,
+    /// version 2 of checkpointing
+    #[serde(alias = "v2Checkpoint")]
+    V2_CHECKPOINT,
+    /// Iceberg compatability support
+    #[serde(alias = "icebergCompatV1")]
+    ICEBERG_COMPAT_V1,
+    /// liquid clustering support
+    #[serde(alias = "liquid")]
+    LIQUID
+}
+
+impl fmt::Display for TableFeatures {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            TableFeatures::APPEND_ONLY => write!(f, "appendOnly"),
+            TableFeatures::INVARIANTS => write!(f, "invariants"),
+            TableFeatures::CHECK_CONSTRAINTS => write!(f, "checkConstraints"),
+            TableFeatures::CHANGE_DATA_FEED => write!(f, "changeDataFeed"),
+            TableFeatures::GENERATED_COLUMNS => write!(f, "generatedColumns"),
+            TableFeatures::COLUMN_MAPPING => write!(f, "columnMapping"),
+            TableFeatures::IDENTITY_COLUMNS => write!(f, "identityColumns"),
+            TableFeatures::DELETION_VECTORS => write!(f, "deletionVector"),
+            TableFeatures::ROW_TRACKING => write!(f, "rowTracking"),
+            TableFeatures::TIMESTAMP_WITHOUT_TIMEZONE => write!(f, "timestampNtz"),
+            TableFeatures::DOMAIN_METADATA => write!(f, "domainMetadata"),
+            TableFeatures::V2_CHECKPOINT => write!(f, "v2Checkpoint"),
+            TableFeatures::ICEBERG_COMPAT_V1 => write!(f, "icebergCompatV1"),
+            TableFeatures::LIQUID => write!(f, "liquid")
+        }
+    }
+}
+
 
 /// The commitInfo is a fairly flexible action within the delta specification, where arbitrary data can be stored.
 /// However the reference implementation as well as delta-rs store useful information that may for instance

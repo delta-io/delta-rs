@@ -6,10 +6,7 @@ use num_traits::cast::ToPrimitive;
 use parquet::record::{Field, ListAccessor, MapAccessor, RowAccessor};
 use serde_json::json;
 
-use crate::protocol::{
-    Action, Add, AddCDCFile, ColumnCountStat, ColumnValueStat, DeletionVector, MetaData, Protocol,
-    ProtocolError, Remove, Stats, Txn,
-};
+use crate::protocol::{Action, Add, AddCDCFile, ColumnCountStat, ColumnValueStat, DeletionVector, MetaData, Protocol, ProtocolError, Remove, Stats, TableFeatures, Txn};
 
 use super::StorageType;
 
@@ -592,6 +589,32 @@ impl Txn {
     }
 }
 
+impl From<&Field> for TableFeatures {
+    fn from(value: &Field) -> Self {
+        match value {
+            Field::Str(feature) =>
+                match feature.as_str() {
+                    "appendOnly" => TableFeatures::APPEND_ONLY,
+                    "invariants" => TableFeatures::INVARIANTS,
+                    "checkConstraints" => TableFeatures::CHECK_CONSTRAINTS,
+                    "changeDataFeed" => TableFeatures::CHANGE_DATA_FEED,
+                    "generatedColumns" => TableFeatures::GENERATED_COLUMNS,
+                    "columnMapping" => TableFeatures::COLUMN_MAPPING,
+                    "identityColumns" => TableFeatures::IDENTITY_COLUMNS,
+                    "deletionVectors" => TableFeatures::DELETION_VECTORS,
+                    "rowTracking" => TableFeatures::ROW_TRACKING,
+                    "timestampNtz" => TableFeatures::TIMESTAMP_WITHOUT_TIMEZONE,
+                    "domainMetadata" => TableFeatures::DOMAIN_METADATA,
+                    "v2Checkpoint" => TableFeatures::V2_CHECKPOINT,
+                    "icebergCompatV1" => TableFeatures::ICEBERG_COMPAT_V1,
+                    "liquid" => TableFeatures::LIQUID,
+                    f => panic!("Unknown table feature encountered: {}", f)
+                }
+            f => panic!("Invalid field type for table features: {}", f)
+        }
+    }
+}
+
 impl Protocol {
     fn from_parquet_record(record: &parquet::record::Row) -> Result<Self, ProtocolError> {
         let mut re = Self {
@@ -609,6 +632,16 @@ impl Protocol {
                     re.min_writer_version = record.get_int(i).map_err(|_| {
                         gen_action_type_error("protocol", "minWriterVersion", "int")
                     })?;
+                }
+                "readerFeatures" => {
+                    re.reader_features = record.get_list(i)
+                        .and_then(|l| Ok(l.elements().iter().map(From::from).collect()))
+                        .ok();
+                }
+                "writerFeatures" => {
+                    re.writer_features = record.get_list(i)
+                        .and_then(|l| Ok(l.elements().iter().map(From::from).collect()))
+                        .ok();
                 }
                 _ => {
                     log::debug!(
