@@ -41,6 +41,8 @@ pub struct DeltaTableState {
     app_transaction_version: HashMap<String, i64>,
     min_reader_version: i32,
     min_writer_version: i32,
+    reader_features: HashSet<String>,
+    writer_features: HashSet<String>,
     // table metadata corresponding to current version
     current_metadata: Option<DeltaTableMetaData>,
     // retention period for tombstones in milli-seconds
@@ -229,6 +231,16 @@ impl DeltaTableState {
         self.min_writer_version
     }
 
+    /// A collection of reader features required by the protocol.
+    pub fn reader_features(&self) -> &HashSet<String> {
+        &self.reader_features
+    }
+
+    /// A collection of writer features required by the protocol.
+    pub fn writer_features(&self) -> &HashSet<String> {
+        &self.writer_features
+    }
+
     /// The most recent metadata of the table.
     pub fn current_metadata(&self) -> Option<&DeltaTableMetaData> {
         self.current_metadata.as_ref()
@@ -290,6 +302,14 @@ impl DeltaTableState {
             self.min_writer_version = new_state.min_writer_version;
         }
 
+        for feature in new_state.reader_features.iter() {
+            self.reader_features.insert(feature.to_owned());
+        }
+
+        for feature in new_state.writer_features.iter() {
+            self.writer_features.insert(feature.to_owned());
+        }
+
         if new_state.current_metadata.is_some() {
             self.tombstone_retention_millis = new_state.tombstone_retention_millis;
             self.log_retention_millis = new_state.log_retention_millis;
@@ -339,6 +359,14 @@ impl DeltaTableState {
             protocol::Action::protocol(v) => {
                 self.min_reader_version = v.min_reader_version;
                 self.min_writer_version = v.min_writer_version;
+
+                for feature in v.reader_features.iter() {
+                    self.reader_features.insert(feature.to_owned());
+                }
+
+                for feature in v.writer_features.iter() {
+                    self.writer_features.insert(feature.to_owned());
+                }
             }
             protocol::Action::metaData(v) => {
                 let md = DeltaTableMetaData::try_from(v)?;
@@ -421,6 +449,8 @@ mod tests {
             app_transaction_version: Default::default(),
             min_reader_version: 0,
             min_writer_version: 0,
+            reader_features: Default::default(),
+            writer_features: Default::default(),
             current_metadata: None,
             tombstone_retention_millis: 0,
             log_retention_millis: 0,
@@ -446,6 +476,8 @@ mod tests {
             current_metadata: None,
             min_reader_version: 1,
             min_writer_version: 1,
+            reader_features: Default::default(),
+            writer_features: Default::default(),
             app_transaction_version,
             tombstone_retention_millis: 0,
             log_retention_millis: 0,

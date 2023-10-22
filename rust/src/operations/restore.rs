@@ -205,6 +205,8 @@ async fn execute(
         Protocol {
             min_reader_version: table.get_min_reader_version(),
             min_writer_version: table.get_min_writer_version(),
+            reader_features: table.get_reader_features().into_iter().cloned().collect(),
+            writer_features: table.get_writer_features().into_iter().cloned().collect(),
         }
     } else {
         Protocol {
@@ -216,6 +218,8 @@ async fn execute(
                 table.get_min_writer_version(),
                 snapshot.min_writer_version(),
             ),
+            reader_features: table.get_reader_features().into_iter().cloned().collect(),
+            writer_features: table.get_writer_features().into_iter().cloned().collect(),
         }
     };
     actions.push(Action::protocol(protocol));

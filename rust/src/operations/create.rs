@@ -250,6 +250,7 @@ impl CreateBuilder {
             .unwrap_or_else(|| Protocol {
                 min_reader_version: MAX_SUPPORTED_READER_VERSION,
                 min_writer_version: MAX_SUPPORTED_WRITER_VERSION,
+                ..Default::default()
             });
 
         let metadata = DeltaTableMetaData::new(
@@ -393,12 +394,15 @@ mod tests {
         assert_eq!(table.version(), 0);
         assert_eq!(table.get_min_reader_version(), MAX_SUPPORTED_READER_VERSION);
         assert_eq!(table.get_min_writer_version(), MAX_SUPPORTED_WRITER_VERSION);
+        assert!(table.get_reader_features().is_empty());
+        assert!(table.get_writer_features().is_empty());
         assert_eq!(table.schema().unwrap(), &schema);
 
         // check we can overwrite default settings via adding actions
         let protocol = Protocol {
             min_reader_version: 0,
             min_writer_version: 0,
+            ..Default::default()
         };
         let table = CreateBuilder::new()
             .with_location("memory://")

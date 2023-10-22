@@ -818,6 +818,16 @@ impl DeltaTable {
         self.state.min_writer_version()
     }
 
+    /// Returns a collection of reader features supported by the DeltaTable based on the loaded metadata.
+    pub fn get_reader_features(&self) -> &HashSet<String> {
+        self.state.reader_features()
+    }
+
+    /// Returns a collection of writer features supported by the DeltaTable based on the loaded metadata.
+    pub fn get_writer_features(&self) -> &HashSet<String> {
+        self.state.writer_features()
+    }
+
     /// Return table schema parsed from transaction log. Return None if table hasn't been loaded or
     /// no metadata was found in the log.
     pub fn schema(&self) -> Option<&Schema> {

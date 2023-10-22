@@ -21,7 +21,7 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use std::borrow::Borrow;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::mem::take;
 use std::str::FromStr;
@@ -637,9 +637,15 @@ pub struct Protocol {
     /// Minimum version of the Delta read protocol a client must implement to correctly read the
     /// table.
     pub min_reader_version: i32,
-    /// Minimum version of the Delta write protocol a client must implement to correctly read the
+    /// Minimum version of the Delta write protocol a client must implement to correctly write the
     /// table.
     pub min_writer_version: i32,
+    /// A collection of reader features that a client must implement in order to correctly read the table.
+    #[serde(skip_serializing_if = "HashSet::is_empty", default)]
+    pub reader_features: HashSet<String>,
+    /// A collection of writer features that a client must implement in order to correctly write the table.
+    #[serde(skip_serializing_if = "HashSet::is_empty", default)]
+    pub writer_features: HashSet<String>,
 }
 
 /// The commitInfo is a fairly flexible action within the delta specification, where arbitrary data can be stored.

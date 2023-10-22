@@ -321,6 +321,8 @@ fn parquet_bytes_from_state(
     let jsons = std::iter::once(Action::protocol(Protocol {
         min_reader_version: state.min_reader_version(),
         min_writer_version: state.min_writer_version(),
+        reader_features: state.reader_features().into_iter().cloned().collect(),
+        writer_features: state.writer_features().into_iter().cloned().collect(),
     }))
     // metaData
     .chain(std::iter::once(Action::metaData(MetaData::try_from(

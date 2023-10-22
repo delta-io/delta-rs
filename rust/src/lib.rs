@@ -190,6 +190,8 @@ mod tests {
         assert_eq!(table.version(), 3);
         assert_eq!(table.get_min_writer_version(), 2);
         assert_eq!(table.get_min_reader_version(), 1);
+        assert_eq!(table.get_reader_features().len(), 0);
+        assert_eq!(table.get_writer_features().len(), 0);
         assert_eq!(
             table.get_files(),
             vec![
@@ -232,6 +234,8 @@ mod tests {
         assert_eq!(table.version(), 0);
         assert_eq!(table.get_min_writer_version(), 2);
         assert_eq!(table.get_min_reader_version(), 1);
+        assert_eq!(table.get_reader_features().len(), 0);
+        assert_eq!(table.get_writer_features().len(), 0);
         assert_eq!(
             table.get_files(),
             vec![
@@ -246,6 +250,8 @@ mod tests {
         assert_eq!(table.version(), 2);
         assert_eq!(table.get_min_writer_version(), 2);
         assert_eq!(table.get_min_reader_version(), 1);
+        assert_eq!(table.get_reader_features().len(), 0);
+        assert_eq!(table.get_writer_features().len(), 0);
         assert_eq!(
             table.get_files(),
             vec![
@@ -260,6 +266,8 @@ mod tests {
         assert_eq!(table.version(), 3);
         assert_eq!(table.get_min_writer_version(), 2);
         assert_eq!(table.get_min_reader_version(), 1);
+        assert_eq!(table.get_reader_features().len(), 0);
+        assert_eq!(table.get_writer_features().len(), 0);
         assert_eq!(
             table.get_files(),
             vec![
@@ -276,6 +284,8 @@ mod tests {
         assert_eq!(table.version(), 1);
         assert_eq!(table.get_min_writer_version(), 2);
         assert_eq!(table.get_min_reader_version(), 1);
+        assert_eq!(table.get_reader_features().len(), 0);
+        assert_eq!(table.get_writer_features().len(), 0);
         assert_eq!(
             table.get_files(),
             vec![
@@ -319,6 +329,8 @@ mod tests {
         assert_eq!(table.version(), 1);
         assert_eq!(table.get_min_writer_version(), 2);
         assert_eq!(table.get_min_reader_version(), 1);
+        assert_eq!(table.get_reader_features().len(), 0);
+        assert_eq!(table.get_writer_features().len(), 0);
         assert_eq!(
             table.get_files(),
             vec![
@@ -330,6 +342,8 @@ mod tests {
         assert_eq!(table.version(), 0);
         assert_eq!(table.get_min_writer_version(), 2);
         assert_eq!(table.get_min_reader_version(), 1);
+        assert_eq!(table.get_reader_features().len(), 0);
+        assert_eq!(table.get_writer_features().len(), 0);
         assert_eq!(
             table.get_files(),
             vec![
@@ -664,5 +678,23 @@ mod tests {
                 "part-00000-7444aec4-710a-4a4c-8abe-3323499043e9.c000.snappy.parquet"
             ),]
         );
+    }
+
+    #[tokio::test]
+    async fn read_delta_table_with_reader_writer_features() {
+        let table = crate::open_table("./tests/data/simple_table_with_reader_writer_features")
+            .await
+            .unwrap();
+        assert_eq!(table.get_min_writer_version(), 7);
+        assert_eq!(table.get_min_reader_version(), 3);
+
+        let reader_features = table.get_reader_features();
+        assert_eq!(reader_features.len(), 1);
+        assert!(reader_features.contains(&"columnMapping".to_string()));
+
+        let writer_features = table.get_writer_features();
+        assert_eq!(writer_features.len(), 2);
+        assert!(writer_features.contains(&"columnMapping".to_string()));
+        assert!(writer_features.contains(&"identityColumns".to_string()));
     }
 }

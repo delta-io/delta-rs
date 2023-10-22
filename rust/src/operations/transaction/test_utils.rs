@@ -33,6 +33,7 @@ pub fn create_protocol_action(max_reader: Option<i32>, max_writer: Option<i32>) 
     let protocol = Protocol {
         min_reader_version: max_reader.unwrap_or(crate::operations::MAX_SUPPORTED_READER_VERSION),
         min_writer_version: max_writer.unwrap_or(crate::operations::MAX_SUPPORTED_WRITER_VERSION),
+        ..Default::default()
     };
     Action::protocol(protocol)
 }
@@ -134,6 +135,7 @@ pub async fn create_initialized_table(
         protocol: Protocol {
             min_reader_version: 1,
             min_writer_version: 1,
+            ..Default::default()
         },
         metadata: DeltaTableMetaData::new(
             None,
