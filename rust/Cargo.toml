@@ -25,7 +25,7 @@ arrow-buffer = { workspace = true, optional = true }
 arrow-cast = { workspace = true, optional = true }
 arrow-ord = { workspace = true, optional = true }
 arrow-row = { workspace = true, optional = true }
-arrow-schema = { workspace = true, optional = true }
+arrow-schema = { workspace = true, optional = true, features = ["serde"] }
 arrow-select = { workspace = true, optional = true }
 parquet = { workspace = true, features = [
     "async",
