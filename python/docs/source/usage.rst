@@ -483,6 +483,56 @@ to append pass in ``mode='append'``:
 the data passed to it differs from the existing table's schema. If you wish to
 alter the schema as part of an overwrite pass in ``overwrite_schema=True``.
 
+Writing to s3
+~~~~~~~~~~~~~
+
+A locking mechanism is needed to prevent unsafe concurrent writes to a
+delta lake directory when writing to S3. DynamoDB is the only available
+locking provider at the moment in delta-rs. To enable DynamoDB as the
+locking provider, you need to set the **AWS_S3_LOCKING_PROVIDER** to 'dynamodb'
+as a ``storage_options`` or as an environment variable.
+
+Additionally, you must create a DynamoDB table with the name ``delta_rs_lock_table``
+so that it can be automatically recognized by delta-rs. Alternatively, you can
+use a table name of your choice, but you must set the **DYNAMO_LOCK_TABLE_NAME**
+variable to match your chosen table name. The required schema for the DynamoDB
+table is as follows:
+
+.. code-block:: json
+
+
+       {
+            "AttributeDefinitions": [
+                {
+                    "AttributeName": "key",
+                    "AttributeType": "S"
+                }
+            ],
+            "TableName": "delta_rs_lock_table",
+            "KeySchema": [
+                {
+                    "AttributeName": "key",
+                    "KeyType": "HASH"
+                }
+            ]
+       }
+
+Here is an example writing to s3 using this mechanism:
+
+.. code-block:: python
+
+    >>> from deltalake import write_deltalake
+    >>> df = pd.DataFrame({'x': [1, 2, 3]})
+    >>> storage_options = {'AWS_S3_LOCKING_PROVIDER': 'dynamodb', 'DYNAMO_LOCK_TABLE_NAME': 'custom_table_name'}
+    >>> write_deltalake('s3://path/to/table', df, 'storage_options'= storage_options)
+
+.. note::
+    if for some reason you don't want to use dynamodb as your locking mechanism you can
+    choose to set the `AWS_S3_ALLOW_UNSAFE_RENAME` variable to ``true`` in order to enable
+    S3 unsafe writes.
+
+Please note that this locking mechanism is not compatible with any other
+locking mechanisms, including the one used by Spark.
 
 Updating Delta Tables
 ---------------------
