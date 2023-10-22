@@ -150,6 +150,15 @@ async fn test_read_liquid_table() -> DeltaResult<()> {
     Ok(())
 }
 
+#[tokio::test]
+async fn test_read_table_features() -> DeltaResult<()> {
+    let path = "./tests/data/table_with_liquid_clustering";
+    let mut _table = deltalake::open_table(&path).await?;
+    assert!(_table.get_state().reader_features().is_some());
+    assert!(_table.get_state().writer_features().is_some());
+    Ok(())
+}
+
 // test for: https://github.com/delta-io/delta-rs/issues/1302
 #[tokio::test]
 async fn read_delta_table_from_dlt() {
