@@ -66,13 +66,16 @@ use serde_json::{Map, Value};
 use super::datafusion_utils::{into_expr, maybe_into_expr, Expression};
 use super::transaction::commit;
 use crate::delta_datafusion::expr::{fmt_expr_to_sql, parse_predicate_expression};
-use crate::delta_datafusion::{parquet_scan_from_actions, register_store};
+use crate::delta_datafusion::{register_store, DeltaScanBuilder};
 use crate::operations::datafusion_utils::MetricObserverExec;
-use crate::operations::write::write_execution_plan;
+use crate::{
+    operations::write::write_execution_plan,
+    storage::{DeltaObjectStore, ObjectStoreRef},
+    DeltaResult, DeltaTable, DeltaTableError,
+};
+
 use crate::protocol::{Action, DeltaOperation, MergePredicate, Remove};
-use crate::storage::{DeltaObjectStore, ObjectStoreRef};
 use crate::table::state::DeltaTableState;
-use crate::{DeltaResult, DeltaTable, DeltaTableError};
 
 const OPERATION_COLUMN: &str = "__delta_rs_operation";
 const DELETE_COLUMN: &str = "__delta_rs_delete";
@@ -579,8 +582,6 @@ async fn execute(
         .current_metadata()
         .ok_or(DeltaTableError::NoMetadata)?;
 
-    let schema = snapshot.input_schema()?;
-
     // TODO: Given the join predicate, remove any expression that involve the
     // source table and keep expressions that only involve the target table.
     // This would allow us to perform statistics/partition pruning E.G
@@ -590,17 +591,12 @@ async fn execute(
     // If the user specified any not_source_match operations then those
     // predicates also need to be considered when pruning
 
-    let target = parquet_scan_from_actions(
-        snapshot,
-        object_store.clone(),
-        snapshot.files(),
-        &schema,
-        None,
-        &state,
-        None,
-        None,
-    )
-    .await?;
+    let target = Arc::new(
+        DeltaScanBuilder::new(snapshot, object_store.clone(), &state)
+            .with_schema(snapshot.input_schema()?)
+            .build()
+            .await?,
+    );
 
     let source = source.create_physical_plan().await?;
 
