@@ -218,8 +218,16 @@ async fn execute(
                 table.get_min_writer_version(),
                 snapshot.min_writer_version(),
             ),
-            reader_features: table.get_reader_features().into_iter().cloned().collect(),
-            writer_features: table.get_writer_features().into_iter().cloned().collect(),
+            reader_features: table
+                .get_reader_features()
+                .union(snapshot.reader_features())
+                .cloned()
+                .collect(),
+            writer_features: table
+                .get_writer_features()
+                .union(snapshot.writer_features())
+                .cloned()
+                .collect(),
         }
     };
     actions.push(Action::protocol(protocol));
