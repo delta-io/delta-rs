@@ -17,6 +17,7 @@ use serde::{Deserialize, Serialize};
 
 use super::{error::Error, DeltaResult};
 
+#[cfg(all(feature = "arrow", feature = "parquet"))]
 pub(crate) mod arrow;
 pub(crate) mod schemas;
 mod serde_path;

@@ -204,7 +204,7 @@ impl StructType {
         Ok(idx)
     }
 
-    /// Returns an immutable reference of a specific [`Field`] instance selected by name.
+    /// Returns a reference of a specific [`StructField`] instance selected by name.
     pub fn field_with_name(&self, name: &str) -> Result<&StructField, Error> {
         Ok(&self.fields[self.index_of(name)?])
     }
