@@ -16,8 +16,11 @@ class DeltaStorageHandler(DeltaFileSystemHandler, FileSystemHandler):
         """
         Open an input file for random access reading.
 
-        :param source: The source to open for reading.
-        :return:  NativeFile
+        Args:
+            path: The source to open for reading.
+
+        Returns:
+            NativeFile
         """
         return pa.PythonFile(DeltaFileSystemHandler.open_input_file(self, path))
 
@@ -25,8 +28,11 @@ class DeltaStorageHandler(DeltaFileSystemHandler, FileSystemHandler):
         """
         Open an input stream for sequential reading.
 
-        :param source: The source to open for reading.
-        :return:  NativeFile
+        Args:
+            path: The source to open for reading.
+
+        Returns:
+            NativeFile
         """
         return pa.PythonFile(DeltaFileSystemHandler.open_input_file(self, path))
 
@@ -38,9 +44,12 @@ class DeltaStorageHandler(DeltaFileSystemHandler, FileSystemHandler):
 
         If the target already exists, existing data is truncated.
 
-        :param path: The source to open for writing.
-        :param metadata: If not None, a mapping of string keys to string values.
-        :return:  NativeFile
+        Args:
+            path: The source to open for writing.
+            metadata: If not None, a mapping of string keys to string values.
+
+        Returns:
+            NativeFile
         """
         return pa.PythonFile(
             DeltaFileSystemHandler.open_output_stream(self, path, metadata)
@@ -50,8 +59,11 @@ class DeltaStorageHandler(DeltaFileSystemHandler, FileSystemHandler):
         """
         Get info for the files defined by FileSelector.
 
-        :param selector: FileSelector object
-        :return: list of file info objects
+        Args:
+            selector: FileSelector object
+
+        Returns:
+            list of file info objects
         """
         return DeltaFileSystemHandler.get_file_info_selector(
             self, selector.base_dir, selector.allow_not_found, selector.recursive
