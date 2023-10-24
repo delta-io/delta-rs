@@ -601,8 +601,8 @@ fn max_min_schema_for_fields(dest: &mut Vec<ArrowField>, f: &ArrowField) {
                 true,
             ));
         }
-        // don't compute min or max for list or map types
-        ArrowDataType::List(_) | ArrowDataType::Map(_, _) => { /* noop */ }
+        // don't compute min or max for list, map or binary types
+        ArrowDataType::List(_) | ArrowDataType::Map(_, _) | ArrowDataType::Binary => { /* noop */ }
         _ => {
             let f = f.clone();
             dest.push(f);
@@ -989,6 +989,7 @@ mod tests {
                 ),
                 true,
             ),
+            ArrowField::new("binary", ArrowDataType::Binary, true),
         ];
 
         let expected = vec![fields[0].clone(), fields[1].clone()];
