@@ -52,6 +52,7 @@ pub enum ActionType {
 #[serde(rename_all = "camelCase")]
 #[allow(missing_docs)]
 pub enum Action {
+    #[serde(rename = "metaData")]
     Metadata(Metadata),
     Protocol(Protocol),
     Add(Add),

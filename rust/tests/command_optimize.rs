@@ -4,16 +4,17 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use std::{collections::HashMap, error::Error, sync::Arc};
 
 use arrow_array::{Int32Array, RecordBatch, StringArray};
-use arrow_schema::{DataType, Field, Schema as ArrowSchema};
+use arrow_schema::{DataType as ArrowDataType, Field, Schema as ArrowSchema};
 use arrow_select::concat::concat_batches;
 use deltalake::errors::DeltaTableError;
+use deltalake::kernel::{Action, DataType, PrimitiveType, Remove, StructField};
 use deltalake::operations::optimize::{create_merge_plan, MetricDetails, Metrics, OptimizeType};
 use deltalake::operations::transaction::commit;
 use deltalake::operations::DeltaOps;
-use deltalake::protocol::{Action, DeltaOperation, Remove};
+use deltalake::protocol::DeltaOperation;
 use deltalake::storage::ObjectStoreRef;
 use deltalake::writer::{DeltaWriter, RecordBatchWriter};
-use deltalake::{DeltaTable, PartitionFilter, Path, SchemaDataType, SchemaField};
+use deltalake::{DeltaTable, PartitionFilter, Path};
 use futures::TryStreamExt;
 use object_store::ObjectStore;
 use parquet::arrow::async_reader::ParquetObjectReader;
@@ -30,23 +31,20 @@ struct Context {
 
 async fn setup_test(partitioned: bool) -> Result<Context, Box<dyn Error>> {
     let columns = vec![
-        SchemaField::new(
+        StructField::new(
             "x".to_owned(),
-            SchemaDataType::primitive("integer".to_owned()),
+            DataType::Primitive(PrimitiveType::Integer),
             false,
-            HashMap::new(),
         ),
-        SchemaField::new(
+        StructField::new(
             "y".to_owned(),
-            SchemaDataType::primitive("integer".to_owned()),
+            DataType::Primitive(PrimitiveType::Integer),
             false,
-            HashMap::new(),
         ),
-        SchemaField::new(
+        StructField::new(
             "date".to_owned(),
-            SchemaDataType::primitive("string".to_owned()),
+            DataType::Primitive(PrimitiveType::String),
             false,
-            HashMap::new(),
         ),
     ];
 
@@ -90,9 +88,9 @@ fn generate_random_batch<T: Into<String>>(
 
     Ok(RecordBatch::try_new(
         Arc::new(ArrowSchema::new(vec![
-            Field::new("x", DataType::Int32, false),
-            Field::new("y", DataType::Int32, false),
-            Field::new("date", DataType::Utf8, false),
+            Field::new("x", ArrowDataType::Int32, false),
+            Field::new("y", ArrowDataType::Int32, false),
+            Field::new("date", ArrowDataType::Utf8, false),
         ])),
         vec![Arc::new(x_array), Arc::new(y_array), Arc::new(date_array)],
     )?)
@@ -119,9 +117,9 @@ fn tuples_to_batch<T: Into<String>>(
 
     Ok(RecordBatch::try_new(
         Arc::new(ArrowSchema::new(vec![
-            Field::new("x", DataType::Int32, false),
-            Field::new("y", DataType::Int32, false),
-            Field::new("date", DataType::Utf8, false),
+            Field::new("x", ArrowDataType::Int32, false),
+            Field::new("y", ArrowDataType::Int32, false),
+            Field::new("date", ArrowDataType::Utf8, false),
         ])),
         vec![Arc::new(x_array), Arc::new(y_array), Arc::new(date_array)],
     )?)
@@ -292,12 +290,14 @@ async fn test_conflict_for_remove_actions() -> Result<(), Box<dyn Error>> {
         partition_values: Some(add.partition_values.clone()),
         tags: Some(HashMap::new()),
         deletion_vector: add.deletion_vector.clone(),
+        base_row_id: add.base_row_id,
+        default_row_commit_version: add.default_row_commit_version,
     };
 
     let operation = DeltaOperation::Delete { predicate: None };
     commit(
         other_dt.object_store().as_ref(),
-        &vec![Action::remove(remove)],
+        &vec![Action::Remove(remove)],
         operation,
         &other_dt.state,
         None,

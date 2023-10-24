@@ -4,8 +4,8 @@ use std::str::FromStr;
 // use std::sync::Arc;
 
 // use roaring::RoaringTreemap;
+use log::warn;
 use serde::{Deserialize, Serialize};
-use tracing::warn;
 use url::Url;
 
 use super::super::schema::StructType;
@@ -105,6 +105,7 @@ impl Metadata {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 /// Defines a protocol action
 pub struct Protocol {
     /// The minimum version of the Delta read protocol that a client must implement
@@ -203,6 +204,7 @@ impl ToString for StorageType {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 /// Defines a deletion vector
 pub struct DeletionVectorDescriptor {
     /// A single character to indicate how to access the DV. Legal options are: ['u', 'i', 'p'].
@@ -336,6 +338,7 @@ impl DeletionVectorDescriptor {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
 /// Defines an add action
 pub struct Add {
     /// A relative path to a data file from the root of the table or an absolute path to a file

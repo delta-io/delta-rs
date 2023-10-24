@@ -2,9 +2,10 @@
 
 use chrono::Utc;
 use deltalake::checkpoints::{cleanup_expired_logs_for, create_checkpoint};
+use deltalake::kernel::{DataType, PrimitiveType};
 use deltalake::test_utils::{IntegrationContext, StorageIntegration, TestResult};
 use deltalake::writer::{DeltaWriter, JsonWriter};
-use deltalake::{errors::DeltaResult, DeltaOps, DeltaTableBuilder, ObjectStore, SchemaDataType};
+use deltalake::{errors::DeltaResult, DeltaOps, DeltaTableBuilder, ObjectStore};
 use object_store::path::Path;
 use serde_json::json;
 use serial_test::serial;
@@ -119,7 +120,7 @@ async fn test_issue_1420_cleanup_expired_logs_for() -> DeltaResult<()> {
         .create()
         .with_column(
             "id",
-            SchemaDataType::primitive("integer".to_string()),
+            DataType::Primitive(PrimitiveType::Integer),
             false,
             None,
         )

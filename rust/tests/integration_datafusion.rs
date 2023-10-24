@@ -10,11 +10,10 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use arrow::array::*;
-use arrow::datatypes::{
+use arrow::record_batch::RecordBatch;
+use arrow_schema::{
     DataType as ArrowDataType, Field as ArrowField, Schema as ArrowSchema, TimeUnit,
 };
-use arrow::record_batch::RecordBatch;
-use arrow_schema::{DataType, Field};
 use datafusion::assert_batches_sorted_eq;
 use datafusion::datasource::physical_plan::ParquetExec;
 use datafusion::datasource::TableProvider;
@@ -32,20 +31,21 @@ use datafusion_proto::bytes::{
 use url::Url;
 
 use deltalake::delta_datafusion::{DeltaPhysicalCodec, DeltaScan};
+use deltalake::kernel::{DataType, MapType, PrimitiveType, StructField, StructType};
 use deltalake::operations::create::CreateBuilder;
 use deltalake::protocol::SaveMode;
 use deltalake::storage::DeltaObjectStore;
 use deltalake::writer::{DeltaWriter, RecordBatchWriter};
 use deltalake::{
     operations::{write::WriteBuilder, DeltaOps},
-    DeltaTable, DeltaTableError, Schema, SchemaDataType, SchemaField,
+    DeltaTable, DeltaTableError,
 };
 use std::error::Error;
 
 mod common;
 
 mod local {
-    use deltalake::{writer::JsonWriter, SchemaTypeMap};
+    use deltalake::writer::JsonWriter;
 
     use super::*;
     #[tokio::test]
@@ -96,14 +96,14 @@ mod local {
         let table_dir = tempfile::tempdir().unwrap();
         let table_path = table_dir.path();
         let table_uri = table_path.to_str().unwrap().to_string();
-        let table_schema: Schema = batches[0].schema().try_into().unwrap();
+        let table_schema: StructType = batches[0].schema().try_into().unwrap();
 
         let mut table = DeltaOps::try_from_uri(table_uri)
             .await
             .unwrap()
             .create()
             .with_save_mode(SaveMode::Ignore)
-            .with_columns(table_schema.get_fields().clone())
+            .with_columns(table_schema.fields().clone())
             .with_partition_columns(partitions)
             .await
             .unwrap();
@@ -195,9 +195,9 @@ mod local {
             &ctx,
             &DeltaPhysicalCodec {},
         )?;
-        let fields = Schema::try_from(source_scan.schema())
+        let fields = StructType::try_from(source_scan.schema())
             .unwrap()
-            .get_fields()
+            .fields()
             .clone();
 
         // Create target Delta Table
@@ -939,21 +939,20 @@ mod local {
     #[tokio::test]
     async fn test_issue_1619_parquet_panic_using_map_type() -> Result<()> {
         let _ = tokio::fs::remove_dir_all("./tests/data/issue-1619").await;
-        let fields: Vec<SchemaField> = vec![SchemaField::new(
+        let fields: Vec<StructField> = vec![StructField::new(
             "metadata".to_string(),
-            SchemaDataType::map(SchemaTypeMap::new(
-                Box::new(SchemaDataType::primitive("string".to_string())),
-                Box::new(SchemaDataType::primitive("string".to_string())),
+            DataType::Map(Box::new(MapType::new(
+                DataType::Primitive(PrimitiveType::String),
+                DataType::Primitive(PrimitiveType::String),
                 true,
-            )),
+            ))),
             true,
-            HashMap::new(),
         )];
-        let schema = deltalake::Schema::new(fields);
+        let schema = StructType::new(fields);
         let table = deltalake::DeltaTableBuilder::from_uri("./tests/data/issue-1619").build()?;
         let _ = DeltaOps::from(table)
             .create()
-            .with_columns(schema.get_fields().to_owned())
+            .with_columns(schema.fields().to_owned())
             .await?;
 
         let mut table = deltalake::open_table("./tests/data/issue-1619").await?;
@@ -1082,17 +1081,15 @@ mod date_partitions {
 
     async fn setup_test() -> Result<DeltaTable, Box<dyn Error>> {
         let columns = vec![
-            SchemaField::new(
+            StructField::new(
                 "id".to_owned(),
-                SchemaDataType::primitive("integer".to_owned()),
+                DataType::Primitive(PrimitiveType::Integer),
                 false,
-                HashMap::new(),
             ),
-            SchemaField::new(
+            StructField::new(
                 "date".to_owned(),
-                SchemaDataType::primitive("date".to_owned()),
+                DataType::Primitive(PrimitiveType::Date),
                 false,
-                HashMap::new(),
             ),
         ];
 
@@ -1114,8 +1111,8 @@ mod date_partitions {
 
         Ok(RecordBatch::try_new(
             Arc::new(ArrowSchema::new(vec![
-                Field::new("id", DataType::Int32, false),
-                Field::new("date", DataType::Date32, false),
+                ArrowField::new("id", ArrowDataType::Int32, false),
+                ArrowField::new("date", ArrowDataType::Date32, false),
             ])),
             vec![Arc::new(ids_array), Arc::new(date_array)],
         )?)
