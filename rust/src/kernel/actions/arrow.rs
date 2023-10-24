@@ -5,7 +5,7 @@ use arrow_schema::{
     SchemaRef as ArrowSchemaRef, TimeUnit,
 };
 
-use crate::schema::{ArrayType, DataType, MapType, PrimitiveType, StructField, StructType};
+use super::super::schema::{ArrayType, DataType, MapType, PrimitiveType, StructField, StructType};
 
 impl TryFrom<&StructType> for ArrowSchema {
     type Error = ArrowError;
@@ -14,7 +14,7 @@ impl TryFrom<&StructType> for ArrowSchema {
         let fields = s
             .fields()
             .iter()
-            .map(|f| <ArrowField as TryFrom<&StructField>>::try_from(*f))
+            .map(|f| <ArrowField as TryFrom<&StructField>>::try_from(f))
             .collect::<Result<Vec<ArrowField>, ArrowError>>()?;
 
         Ok(ArrowSchema::new(fields))
@@ -129,7 +129,7 @@ impl TryFrom<&DataType> for ArrowDataType {
             DataType::Struct(s) => Ok(ArrowDataType::Struct(
                 s.fields()
                     .iter()
-                    .map(|f| <ArrowField as TryFrom<&StructField>>::try_from(*f))
+                    .map(|f| <ArrowField as TryFrom<&StructField>>::try_from(f))
                     .collect::<Result<Vec<ArrowField>, ArrowError>>()?
                     .into(),
             )),

@@ -2,8 +2,8 @@
 
 use std::convert::TryFrom;
 
-use super::SchemaDataType;
 use crate::errors::DeltaTableError;
+use crate::kernel::{DataType, PrimitiveType};
 use std::cmp::Ordering;
 use std::collections::HashMap;
 
@@ -40,18 +40,21 @@ pub struct PartitionFilter {
 fn compare_typed_value(
     partition_value: &str,
     filter_value: &str,
-    data_type: &SchemaDataType,
+    data_type: &DataType,
 ) -> Option<Ordering> {
     match data_type {
-        SchemaDataType::primitive(primitive_type) => match primitive_type.as_str() {
-            "long" | "integer" | "short" | "byte" => match filter_value.parse::<i64>() {
+        DataType::Primitive(primitive_type) => match primitive_type {
+            PrimitiveType::Long
+            | PrimitiveType::Integer
+            | PrimitiveType::Short
+            | PrimitiveType::Byte => match filter_value.parse::<i64>() {
                 Ok(parsed_filter_value) => {
                     let parsed_partition_value = partition_value.parse::<i64>().unwrap();
                     parsed_partition_value.partial_cmp(&parsed_filter_value)
                 }
                 _ => None,
             },
-            "float" | "double" => match filter_value.parse::<f64>() {
+            PrimitiveType::Float | PrimitiveType::Double => match filter_value.parse::<f64>() {
                 Ok(parsed_filter_value) => {
                     let parsed_partition_value = partition_value.parse::<f64>().unwrap();
                     parsed_partition_value.partial_cmp(&parsed_filter_value)
@@ -67,11 +70,7 @@ fn compare_typed_value(
 /// Partition filters methods for filtering the DeltaTable partitions.
 impl PartitionFilter {
     /// Indicates if a DeltaTable partition matches with the partition filter by key and value.
-    pub fn match_partition(
-        &self,
-        partition: &DeltaTablePartition,
-        data_type: &SchemaDataType,
-    ) -> bool {
+    pub fn match_partition(&self, partition: &DeltaTablePartition, data_type: &DataType) -> bool {
         if self.key != partition.key {
             return false;
         }
@@ -109,12 +108,9 @@ impl PartitionFilter {
     pub fn match_partitions(
         &self,
         partitions: &[DeltaTablePartition],
-        partition_col_data_types: &HashMap<&str, &SchemaDataType>,
+        partition_col_data_types: &HashMap<&String, &DataType>,
     ) -> bool {
-        let data_type = partition_col_data_types
-            .get(self.key.as_str())
-            .unwrap()
-            .to_owned();
+        let data_type = partition_col_data_types.get(&self.key).unwrap().to_owned();
         partitions
             .iter()
             .any(|partition| self.match_partition(partition, data_type))

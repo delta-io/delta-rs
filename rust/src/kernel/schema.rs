@@ -1,16 +1,26 @@
+//! Delta table schema
+
 use std::fmt::Formatter;
 use std::sync::Arc;
 use std::{collections::HashMap, fmt::Display};
 
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
+use super::error::Error;
+
+/// Type alias for a top level schema
 pub type Schema = StructType;
+/// Schema reference type
 pub type SchemaRef = Arc<StructType>;
 
+/// A value that can be stored in the metadata of a Delta table schema entity.
 #[derive(Debug, Serialize, Deserialize, PartialEq, Clone)]
 #[serde(untagged)]
 pub enum MetadataValue {
+    /// A number value
     Number(i32),
+    /// A string value
     String(String),
 }
 
@@ -32,7 +42,14 @@ impl From<i32> for MetadataValue {
     }
 }
 
+impl From<Value> for MetadataValue {
+    fn from(value: Value) -> Self {
+        Self::String(value.to_string())
+    }
+}
+
 #[derive(Debug)]
+#[allow(missing_docs)]
 pub enum ColumnMetadataKey {
     ColumnMappingId,
     ColumnMappingPhysicalName,
@@ -59,6 +76,27 @@ impl AsRef<str> for ColumnMetadataKey {
     }
 }
 
+/// An invariant for a column that is enforced on all writes to a Delta table.
+#[derive(Eq, PartialEq, Debug, Default, Clone)]
+pub struct Invariant {
+    /// The full path to the field.
+    pub field_name: String,
+    /// The SQL string that must always evaluate to true.
+    pub invariant_sql: String,
+}
+
+impl Invariant {
+    /// Create a new invariant
+    pub fn new(field_name: &str, invariant_sql: &str) -> Self {
+        Self {
+            field_name: field_name.to_string(),
+            invariant_sql: invariant_sql.to_string(),
+        }
+    }
+}
+
+/// Represents a struct field defined in the Delta table schema.
+// https://github.com/delta-io/delta/blob/master/PROTOCOL.md#Schema-Serialization-Format
 #[derive(Debug, Serialize, Deserialize, PartialEq, Clone)]
 pub struct StructField {
     /// Name of this (possibly nested) column
@@ -83,6 +121,7 @@ impl StructField {
         }
     }
 
+    /// Creates a new field with metadata
     pub fn with_metadata(
         mut self,
         metadata: impl IntoIterator<Item = (impl Into<String>, impl Into<MetadataValue>)>,
@@ -94,26 +133,31 @@ impl StructField {
         self
     }
 
+    /// Get the value of a specific metadata key
     pub fn get_config_value(&self, key: &ColumnMetadataKey) -> Option<&MetadataValue> {
         self.metadata.get(key.as_ref())
     }
 
     #[inline]
+    /// Returns the name of the column
     pub fn name(&self) -> &String {
         &self.name
     }
 
     #[inline]
+    /// Returns whether the column is nullable
     pub fn is_nullable(&self) -> bool {
         self.nullable
     }
 
     #[inline]
+    /// Returns the data type of the column
     pub const fn data_type(&self) -> &DataType {
         &self.data_type
     }
 
     #[inline]
+    /// Returns the metadata of the column
     pub const fn metadata(&self) -> &HashMap<String, MetadataValue> {
         &self.metadata
     }
@@ -124,12 +168,14 @@ impl StructField {
 #[derive(Debug, Serialize, Deserialize, PartialEq, Clone)]
 pub struct StructType {
     #[serde(rename = "type")]
+    /// The type of this struct
     pub type_name: String,
     /// The type of element stored in this array
     pub fields: Vec<StructField>,
 }
 
 impl StructType {
+    /// Creates a new struct type
     pub fn new(fields: Vec<StructField>) -> Self {
         Self {
             type_name: "struct".into(),
@@ -137,15 +183,113 @@ impl StructType {
         }
     }
 
-    pub fn fields(&self) -> Vec<&StructField> {
-        self.fields.iter().collect()
+    /// Returns an immutable reference of the fields in the struct
+    pub fn fields(&self) -> &Vec<StructField> {
+        &self.fields
+    }
+
+    /// Find the index of the column with the given name.
+    pub fn index_of(&self, name: &str) -> Result<usize, Error> {
+        let (idx, _) = self
+            .fields()
+            .iter()
+            .enumerate()
+            .find(|(_, b)| b.name() == name)
+            .ok_or_else(|| {
+                let valid_fields: Vec<_> = self.fields.iter().map(|f| f.name()).collect();
+                Error::Schema(format!(
+                    "Unable to get field named \"{name}\". Valid fields: {valid_fields:?}"
+                ))
+            })?;
+        Ok(idx)
+    }
+
+    /// Returns an immutable reference of a specific [`Field`] instance selected by name.
+    pub fn field_with_name(&self, name: &str) -> Result<&StructField, Error> {
+        Ok(&self.fields[self.index_of(name)?])
+    }
+
+    /// Get all invariants in the schemas
+    pub fn get_invariants(&self) -> Result<Vec<Invariant>, Error> {
+        let mut remaining_fields: Vec<(String, StructField)> = self
+            .fields()
+            .iter()
+            .map(|field| (field.name.clone(), field.clone()))
+            .collect();
+        let mut invariants: Vec<Invariant> = Vec::new();
+
+        let add_segment = |prefix: &str, segment: &str| -> String {
+            if prefix.is_empty() {
+                segment.to_owned()
+            } else {
+                format!("{prefix}.{segment}")
+            }
+        };
+
+        while let Some((field_path, field)) = remaining_fields.pop() {
+            match field.data_type() {
+                DataType::Struct(inner) => {
+                    remaining_fields.extend(
+                        inner
+                            .fields()
+                            .iter()
+                            .map(|field| {
+                                let new_prefix = add_segment(&field_path, &field.name);
+                                (new_prefix, field.clone())
+                            })
+                            .collect::<Vec<(String, StructField)>>(),
+                    );
+                }
+                DataType::Array(inner) => {
+                    let element_field_name = add_segment(&field_path, "element");
+                    remaining_fields.push((
+                        element_field_name,
+                        StructField::new("".to_string(), inner.element_type.clone(), false),
+                    ));
+                }
+                DataType::Map(inner) => {
+                    let key_field_name = add_segment(&field_path, "key");
+                    remaining_fields.push((
+                        key_field_name,
+                        StructField::new("".to_string(), inner.key_type.clone(), false),
+                    ));
+                    let value_field_name = add_segment(&field_path, "value");
+                    remaining_fields.push((
+                        value_field_name,
+                        StructField::new("".to_string(), inner.value_type.clone(), false),
+                    ));
+                }
+                _ => {}
+            }
+            // JSON format: {"expression": {"expression": "<SQL STRING>"} }
+            if let Some(MetadataValue::String(invariant_json)) =
+                field.metadata.get(ColumnMetadataKey::Invariants.as_ref())
+            {
+                let json: Value = serde_json::from_str(invariant_json).map_err(|e| {
+                    Error::InvalidInvariantJson {
+                        json_err: e,
+                        line: invariant_json.to_string(),
+                    }
+                })?;
+                if let Value::Object(json) = json {
+                    if let Some(Value::Object(expr1)) = json.get("expression") {
+                        if let Some(Value::String(sql)) = expr1.get("expression") {
+                            invariants.push(Invariant::new(&field_path, sql));
+                        }
+                    }
+                }
+            }
+        }
+        Ok(invariants)
     }
 }
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Clone)]
 #[serde(rename_all = "camelCase")]
+/// An array stores a variable length collection of items of some type.
 pub struct ArrayType {
     #[serde(rename = "type")]
+    /// The type of this struct
     pub type_name: String,
     /// The type of element stored in this array
     pub element_type: DataType,
@@ -154,6 +298,7 @@ pub struct ArrayType {
 }
 
 impl ArrayType {
+    /// Creates a new array type
     pub fn new(element_type: DataType, contains_null: bool) -> Self {
         Self {
             type_name: "array".into(),
@@ -163,11 +308,13 @@ impl ArrayType {
     }
 
     #[inline]
+    /// Returns the element type of the array
     pub const fn element_type(&self) -> &DataType {
         &self.element_type
     }
 
     #[inline]
+    /// Returns whether the array can contain null values
     pub const fn contains_null(&self) -> bool {
         self.contains_null
     }
@@ -175,8 +322,10 @@ impl ArrayType {
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Clone)]
 #[serde(rename_all = "camelCase")]
+/// A map stores an arbitrary length collection of key-value pairs
 pub struct MapType {
     #[serde(rename = "type")]
+    /// The type of this struct
     pub type_name: String,
     /// The type of element used for the key of this map
     pub key_type: DataType,
@@ -188,6 +337,7 @@ pub struct MapType {
 }
 
 impl MapType {
+    /// Creates a new map type
     pub fn new(key_type: DataType, value_type: DataType, value_contains_null: bool) -> Self {
         Self {
             type_name: "map".into(),
@@ -198,16 +348,19 @@ impl MapType {
     }
 
     #[inline]
+    /// Returns the key type of the map
     pub const fn key_type(&self) -> &DataType {
         &self.key_type
     }
 
     #[inline]
+    /// Returns the value type of the map
     pub const fn value_type(&self) -> &DataType {
         &self.value_type
     }
 
     #[inline]
+    /// Returns whether the map can contain null values
     pub const fn value_contains_null(&self) -> bool {
         self.value_contains_null
     }
@@ -219,6 +372,7 @@ fn default_true() -> bool {
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Clone)]
 #[serde(rename_all = "camelCase")]
+/// Primitive types supported by Delta
 pub enum PrimitiveType {
     /// UTF-8 encoded string of characters
     String,
@@ -236,7 +390,9 @@ pub enum PrimitiveType {
     Double,
     /// bool: boolean values
     Boolean,
+    /// Binary: uninterpreted binary data
     Binary,
+    /// Date: Calendar date (year, month, day)
     Date,
     /// Microsecond precision timestamp, adjusted to UTC.
     Timestamp,
@@ -246,6 +402,7 @@ pub enum PrimitiveType {
         deserialize_with = "deserialize_decimal",
         untagged
     )]
+    /// Decimal: arbitrary precision decimal numbers
     Decimal(i32, i32),
 }
 
@@ -309,6 +466,7 @@ impl Display for PrimitiveType {
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Clone)]
 #[serde(untagged, rename_all = "camelCase")]
+/// The data type of a column
 pub enum DataType {
     /// UTF-8 encoded string of characters
     Primitive(PrimitiveType),
@@ -323,50 +481,62 @@ pub enum DataType {
 }
 
 impl DataType {
+    /// create a new string type
     pub fn string() -> Self {
         DataType::Primitive(PrimitiveType::String)
     }
 
+    /// create a new long type
     pub fn long() -> Self {
         DataType::Primitive(PrimitiveType::Long)
     }
 
+    /// create a new integer type
     pub fn integer() -> Self {
         DataType::Primitive(PrimitiveType::Integer)
     }
 
+    /// create a new short type
     pub fn short() -> Self {
         DataType::Primitive(PrimitiveType::Short)
     }
 
+    /// create a new byte type
     pub fn byte() -> Self {
         DataType::Primitive(PrimitiveType::Byte)
     }
 
+    /// create a new float type
     pub fn float() -> Self {
         DataType::Primitive(PrimitiveType::Float)
     }
 
+    /// create a new double type
     pub fn double() -> Self {
         DataType::Primitive(PrimitiveType::Double)
     }
 
+    /// create a new boolean type
     pub fn boolean() -> Self {
         DataType::Primitive(PrimitiveType::Boolean)
     }
 
+    /// create a new binary type
     pub fn binary() -> Self {
         DataType::Primitive(PrimitiveType::Binary)
     }
 
+    /// create a new date type
     pub fn date() -> Self {
         DataType::Primitive(PrimitiveType::Date)
     }
 
+    /// create a new timestamp type
     pub fn timestamp() -> Self {
         DataType::Primitive(PrimitiveType::Timestamp)
     }
 
+    /// create a new decimal type
     pub fn decimal(precision: usize, scale: usize) -> Self {
         DataType::Primitive(PrimitiveType::Decimal(precision as i32, scale as i32))
     }

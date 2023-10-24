@@ -84,6 +84,7 @@ compile_error!(
 
 pub mod data_catalog;
 pub mod errors;
+pub mod kernel;
 pub mod operations;
 pub mod protocol;
 pub mod schema;
@@ -200,12 +201,17 @@ mod tests {
         );
         let tombstones = table.get_state().all_tombstones();
         assert_eq!(tombstones.len(), 4);
-        assert!(tombstones.contains(&crate::protocol::Remove {
+        assert!(tombstones.contains(&crate::kernel::Remove {
             path: "part-00000-512e1537-8aaa-4193-b8b4-bef3de0de409-c000.snappy.parquet".to_string(),
             deletion_timestamp: Some(1564524298213),
             data_change: false,
             extended_file_metadata: Some(false),
-            ..Default::default()
+            deletion_vector: None,
+            partition_values: None,
+            tags: None,
+            base_row_id: None,
+            default_row_commit_version: None,
+            size: None,
         }));
     }
 
@@ -302,14 +308,17 @@ mod tests {
         );
         let tombstones = table.get_state().all_tombstones();
         assert_eq!(tombstones.len(), 1);
-        assert!(tombstones.contains(&crate::protocol::Remove {
+        assert!(tombstones.contains(&crate::kernel::Remove {
             path: "part-00001-911a94a2-43f6-4acb-8620-5e68c2654989-c000.snappy.parquet".to_string(),
             deletion_timestamp: Some(1615043776198),
             data_change: true,
             extended_file_metadata: Some(true),
             partition_values: Some(HashMap::new()),
             size: Some(445),
-            ..Default::default()
+            base_row_id: None,
+            default_row_commit_version: None,
+            deletion_vector: None,
+            tags: None,
         }));
     }
 

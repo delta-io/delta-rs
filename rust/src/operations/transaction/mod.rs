@@ -1,13 +1,16 @@
 //! Delta transactions
+use std::collections::HashMap;
+
 use chrono::Utc;
 use conflict_checker::ConflictChecker;
 use object_store::path::Path;
 use object_store::{Error as ObjectStoreError, ObjectStore};
-use serde_json::{Map, Value};
+use serde_json::Value;
 
 use crate::crate_version;
 use crate::errors::{DeltaResult, DeltaTableError};
-use crate::protocol::{Action, CommitInfo, DeltaOperation};
+use crate::kernel::{Action, CommitInfo};
+use crate::protocol::DeltaOperation;
 use crate::storage::commit_uri_from_version;
 use crate::table::state::DeltaTableState;
 
@@ -81,24 +84,24 @@ fn log_entry_from_actions<'a>(
 pub(crate) fn get_commit_bytes(
     operation: &DeltaOperation,
     actions: &Vec<Action>,
-    app_metadata: Option<Map<String, Value>>,
+    app_metadata: Option<HashMap<String, Value>>,
 ) -> Result<bytes::Bytes, TransactionError> {
-    if !actions.iter().any(|a| matches!(a, Action::commitInfo(..))) {
-        let mut extra_info = Map::<String, Value>::new();
+    if !actions.iter().any(|a| matches!(a, Action::CommitInfo(..))) {
+        let mut extra_info = HashMap::<String, Value>::new();
         let mut commit_info = operation.get_commit_info();
         commit_info.timestamp = Some(Utc::now().timestamp_millis());
         extra_info.insert(
             "clientVersion".to_string(),
             Value::String(format!("delta-rs.{}", crate_version())),
         );
-        if let Some(mut meta) = app_metadata {
-            extra_info.append(&mut meta)
+        if let Some(meta) = app_metadata {
+            extra_info.extend(meta)
         }
         commit_info.info = extra_info;
         Ok(bytes::Bytes::from(log_entry_from_actions(
             actions
                 .iter()
-                .chain(std::iter::once(&Action::commitInfo(commit_info))),
+                .chain(std::iter::once(&Action::CommitInfo(commit_info))),
         )?))
     } else {
         Ok(bytes::Bytes::from(log_entry_from_actions(actions)?))
@@ -112,7 +115,7 @@ pub(crate) async fn prepare_commit<'a>(
     storage: &dyn ObjectStore,
     operation: &DeltaOperation,
     actions: &Vec<Action>,
-    app_metadata: Option<Map<String, Value>>,
+    app_metadata: Option<HashMap<String, Value>>,
 ) -> Result<Path, TransactionError> {
     // Serialize all actions that are part of this log entry.
     let log_entry = get_commit_bytes(operation, actions, app_metadata)?;
@@ -160,7 +163,7 @@ pub async fn commit(
     actions: &Vec<Action>,
     operation: DeltaOperation,
     read_snapshot: &DeltaTableState,
-    app_metadata: Option<Map<String, Value>>,
+    app_metadata: Option<HashMap<String, Value>>,
 ) -> DeltaResult<i64> {
     commit_with_retries(storage, actions, operation, read_snapshot, app_metadata, 15).await
 }
@@ -174,7 +177,7 @@ pub async fn commit_with_retries(
     actions: &Vec<Action>,
     operation: DeltaOperation,
     read_snapshot: &DeltaTableState,
-    app_metadata: Option<Map<String, Value>>,
+    app_metadata: Option<HashMap<String, Value>>,
     max_retries: usize,
 ) -> DeltaResult<i64> {
     let tmp_commit = prepare_commit(storage, &operation, actions, app_metadata).await?;

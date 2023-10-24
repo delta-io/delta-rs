@@ -7,10 +7,10 @@ use arrow::compute::take;
 use arrow_array::{Int32Array, Int64Array, RecordBatch, StringArray, StructArray, UInt32Array};
 use arrow_schema::{DataType, Field, Schema as ArrowSchema};
 
+use crate::kernel::{DataType as DeltaDataType, PrimitiveType, StructField, StructType};
 use crate::operations::create::CreateBuilder;
-use crate::schema::{Schema, SchemaTypeStruct};
 use crate::table::DeltaTableMetaData;
-use crate::{DeltaTable, DeltaTableBuilder, SchemaDataType, SchemaField};
+use crate::{DeltaTable, DeltaTableBuilder};
 
 pub type TestResult = Result<(), Box<dyn std::error::Error + 'static>>;
 
@@ -131,25 +131,22 @@ fn data_without_null() -> (Int32Array, StringArray, StringArray) {
     (base_int, base_str, base_mod)
 }
 
-pub fn get_delta_schema() -> Schema {
-    Schema::new(vec![
-        SchemaField::new(
+pub fn get_delta_schema() -> StructType {
+    StructType::new(vec![
+        StructField::new(
             "id".to_string(),
-            SchemaDataType::primitive("string".to_string()),
+            DeltaDataType::Primitive(PrimitiveType::String),
             true,
-            HashMap::new(),
         ),
-        SchemaField::new(
+        StructField::new(
             "value".to_string(),
-            SchemaDataType::primitive("integer".to_string()),
+            DeltaDataType::Primitive(PrimitiveType::Integer),
             true,
-            HashMap::new(),
         ),
-        SchemaField::new(
+        StructField::new(
             "modified".to_string(),
-            SchemaDataType::primitive("string".to_string()),
+            DeltaDataType::Primitive(PrimitiveType::String),
             true,
-            HashMap::new(),
         ),
     ])
 }
@@ -250,36 +247,31 @@ pub fn get_record_batch_with_nested_struct() -> RecordBatch {
     .unwrap()
 }
 
-pub fn get_delta_schema_with_nested_struct() -> Schema {
-    Schema::new(vec![
-        SchemaField::new(
+pub fn get_delta_schema_with_nested_struct() -> StructType {
+    StructType::new(vec![
+        StructField::new(
             "id".to_string(),
-            SchemaDataType::primitive("string".to_string()),
+            DeltaDataType::Primitive(PrimitiveType::String),
             true,
-            HashMap::new(),
         ),
-        SchemaField::new(
+        StructField::new(
             "value".to_string(),
-            SchemaDataType::primitive("integer".to_string()),
+            DeltaDataType::Primitive(PrimitiveType::Integer),
             true,
-            HashMap::new(),
         ),
-        SchemaField::new(
+        StructField::new(
             "modified".to_string(),
-            SchemaDataType::primitive("string".to_string()),
+            DeltaDataType::Primitive(PrimitiveType::String),
             true,
-            HashMap::new(),
         ),
-        SchemaField::new(
+        StructField::new(
             String::from("nested"),
-            SchemaDataType::r#struct(SchemaTypeStruct::new(vec![SchemaField::new(
+            DeltaDataType::Struct(Box::new(StructType::new(vec![StructField::new(
                 String::from("count"),
-                SchemaDataType::primitive(String::from("integer")),
+                DeltaDataType::Primitive(PrimitiveType::Integer),
                 true,
-                Default::default(),
-            )])),
+            )]))),
             true,
-            Default::default(),
         ),
     ])
 }
@@ -301,7 +293,7 @@ pub async fn create_initialized_table(partition_cols: &[String]) -> DeltaTable {
         .with_location(table_path.to_str().unwrap())
         .with_table_name("test-table")
         .with_comment("A table for running tests")
-        .with_columns(table_schema.get_fields().clone())
+        .with_columns(table_schema.fields().clone())
         .with_partition_columns(partition_cols)
         .await
         .unwrap()

@@ -20,7 +20,7 @@ use crate::delta_datafusion::{
     get_null_of_arrow_type, logical_expr_to_physical_expr, to_correct_scalar_value,
 };
 use crate::errors::{DeltaResult, DeltaTableError};
-use crate::protocol::Add;
+use crate::kernel::Add;
 use crate::table::state::DeltaTableState;
 
 impl DeltaTableState {
@@ -33,15 +33,15 @@ impl DeltaTableState {
         let meta = self.current_metadata().ok_or(DeltaTableError::NoMetadata)?;
         let fields = meta
             .schema
-            .get_fields()
+            .fields()
             .iter()
-            .filter(|f| !meta.partition_columns.contains(&f.get_name().to_string()))
+            .filter(|f| !meta.partition_columns.contains(&f.name().to_string()))
             .map(|f| f.try_into())
             .chain(
                 meta.schema
-                    .get_fields()
+                    .fields()
                     .iter()
-                    .filter(|f| meta.partition_columns.contains(&f.get_name().to_string()))
+                    .filter(|f| meta.partition_columns.contains(&f.name().to_string()))
                     .map(|f| {
                         let field = ArrowField::try_from(f)?;
                         let corrected = if wrap_partitions {

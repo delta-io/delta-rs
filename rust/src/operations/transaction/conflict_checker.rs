@@ -6,7 +6,8 @@ use object_store::ObjectStore;
 
 use super::CommitInfo;
 use crate::errors::{DeltaResult, DeltaTableError};
-use crate::protocol::{Action, Add, DeltaOperation, MetaData, Protocol, Remove};
+use crate::kernel::{Action, Add, Metadata, Protocol, Remove};
+use crate::protocol::DeltaOperation;
 use crate::storage::commit_uri_from_version;
 use crate::table::config::IsolationLevel;
 use crate::table::state::DeltaTableState;
@@ -169,7 +170,7 @@ impl<'a> TransactionInfo<'a> {
     pub fn metadata_changed(&self) -> bool {
         self.actions
             .iter()
-            .any(|a| matches!(a, Action::metaData(_)))
+            .any(|a| matches!(a, Action::Metadata(_)))
     }
 
     #[cfg(feature = "datafusion")]
@@ -236,9 +237,9 @@ impl WinningCommitSummary {
 
         let commit_info = actions
             .iter()
-            .find(|action| matches!(action, Action::commitInfo(_)))
+            .find(|action| matches!(action, Action::CommitInfo(_)))
             .map(|action| match action {
-                Action::commitInfo(info) => info.clone(),
+                Action::CommitInfo(info) => info.clone(),
                 _ => unreachable!(),
             });
 
@@ -248,12 +249,12 @@ impl WinningCommitSummary {
         })
     }
 
-    pub fn metadata_updates(&self) -> Vec<MetaData> {
+    pub fn metadata_updates(&self) -> Vec<Metadata> {
         self.actions
             .iter()
             .cloned()
             .filter_map(|action| match action {
-                Action::metaData(metadata) => Some(metadata),
+                Action::Metadata(metadata) => Some(metadata),
                 _ => None,
             })
             .collect()
@@ -264,7 +265,7 @@ impl WinningCommitSummary {
             .iter()
             .cloned()
             .filter_map(|action| match action {
-                Action::txn(txn) => Some(txn.app_id),
+                Action::Txn(txn) => Some(txn.app_id),
                 _ => None,
             })
             .collect()
@@ -275,7 +276,7 @@ impl WinningCommitSummary {
             .iter()
             .cloned()
             .filter_map(|action| match action {
-                Action::protocol(protocol) => Some(protocol),
+                Action::Protocol(protocol) => Some(protocol),
                 _ => None,
             })
             .collect()
@@ -286,7 +287,7 @@ impl WinningCommitSummary {
             .iter()
             .cloned()
             .filter_map(|action| match action {
-                Action::remove(remove) => Some(remove),
+                Action::Remove(remove) => Some(remove),
                 _ => None,
             })
             .collect()
@@ -297,7 +298,7 @@ impl WinningCommitSummary {
             .iter()
             .cloned()
             .filter_map(|action| match action {
-                Action::add(add) => Some(add),
+                Action::Add(add) => Some(add),
                 _ => None,
             })
             .collect()
@@ -414,7 +415,7 @@ impl<'a> ConflictChecker<'a> {
                 .txn_info
                 .actions
                 .iter()
-                .any(|a| matches!(a, Action::protocol(_)))
+                .any(|a| matches!(a, Action::Protocol(_)))
         {
             return Err(CommitConflictError::ProtocolChanged(
                 "protocol changed".into(),
@@ -546,7 +547,7 @@ impl<'a> ConflictChecker<'a> {
             .iter()
             .cloned()
             .filter_map(|action| match action {
-                Action::remove(remove) => Some(remove.path),
+                Action::Remove(remove) => Some(remove.path),
                 _ => None,
             })
             .collect();
@@ -620,8 +621,8 @@ pub(super) fn can_downgrade_to_snapshot_isolation<'a>(
     let mut has_non_file_actions = false;
     for action in actions {
         match action {
-            Action::add(act) if act.data_change => data_changed = true,
-            Action::remove(rem) if rem.data_change => data_changed = true,
+            Action::Add(act) if act.data_change => data_changed = true,
+            Action::Remove(rem) if rem.data_change => data_changed = true,
             _ => has_non_file_actions = true,
         }
     }
@@ -644,7 +645,7 @@ mod tests {
     use super::super::test_utils as tu;
     use super::super::test_utils::init_table_actions;
     use super::*;
-    use crate::protocol::Action;
+    use crate::kernel::Action;
     #[cfg(feature = "datafusion")]
     use datafusion_expr::{col, lit};
     use serde_json::json;

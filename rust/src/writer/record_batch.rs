@@ -26,9 +26,10 @@ use super::utils::{
 };
 use super::{DeltaWriter, DeltaWriterError};
 use crate::errors::DeltaTableError;
+use crate::kernel::{Add, StructType};
 use crate::table::builder::DeltaTableBuilder;
 use crate::table::DeltaTableMetaData;
-use crate::{protocol::Add, storage::DeltaObjectStore, DeltaTable, Schema};
+use crate::{storage::DeltaObjectStore, DeltaTable};
 
 /// Writes messages to a delta lake table.
 pub struct RecordBatchWriter {
@@ -76,7 +77,8 @@ impl RecordBatchWriter {
     pub fn for_table(table: &DeltaTable) -> Result<Self, DeltaTableError> {
         // Initialize an arrow schema ref from the delta table schema
         let metadata = table.get_metadata()?;
-        let arrow_schema = <ArrowSchema as TryFrom<&Schema>>::try_from(&metadata.schema.clone())?;
+        let arrow_schema =
+            <ArrowSchema as TryFrom<&StructType>>::try_from(&metadata.schema.clone())?;
         let arrow_schema_ref = Arc::new(arrow_schema);
         let partition_columns = metadata.partition_columns.clone();
 
@@ -103,7 +105,8 @@ impl RecordBatchWriter {
         &mut self,
         metadata: &DeltaTableMetaData,
     ) -> Result<bool, DeltaTableError> {
-        let schema: ArrowSchema = <ArrowSchema as TryFrom<&Schema>>::try_from(&metadata.schema)?;
+        let schema: ArrowSchema =
+            <ArrowSchema as TryFrom<&StructType>>::try_from(&metadata.schema)?;
 
         let schema_updated = self.arrow_schema_ref.as_ref() != &schema
             || self.partition_columns != metadata.partition_columns;
@@ -450,7 +453,7 @@ mod tests {
      */
     #[tokio::test]
     async fn test_divide_record_batch_with_map_single_partition() {
-        use crate::{DeltaOps, SchemaTypeStruct};
+        use crate::DeltaOps;
 
         let table = crate::writer::test_utils::create_bare_table();
         let partition_cols = vec!["modified".to_string()];
@@ -466,13 +469,13 @@ mod tests {
             ]
         }"#;
 
-        let delta_schema: SchemaTypeStruct =
+        let delta_schema: StructType =
             serde_json::from_str(delta_schema).expect("Failed to parse schema");
 
         let table = DeltaOps(table)
             .create()
             .with_partition_columns(partition_cols.to_vec())
-            .with_columns(delta_schema.get_fields().clone())
+            .with_columns(delta_schema.fields().clone())
             .await
             .unwrap();
 
@@ -484,7 +487,7 @@ mod tests {
             .as_bytes();
 
         let schema: ArrowSchema =
-            <ArrowSchema as TryFrom<&Schema>>::try_from(&delta_schema).unwrap();
+            <ArrowSchema as TryFrom<&StructType>>::try_from(&delta_schema).unwrap();
 
         // Using a batch size of two since the buf above only has two records
         let mut decoder = ReaderBuilder::new(Arc::new(schema))

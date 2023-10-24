@@ -1,4 +1,10 @@
+//! Actions are the fundamental unit of work in Delta Lake. Each action performs a single atomic
+//! operation on the state of a Delta table. Actions are stored in the `_delta_log` directory of a
+//! Delta table in JSON format. The log is a time series of actions that represent all the changes
+//! made to a table.
+
 use std::collections::HashMap;
+use std::str::FromStr;
 
 use arrow_array::{
     BooleanArray, Int32Array, Int64Array, ListArray, MapArray, RecordBatch, StringArray,
@@ -7,17 +13,20 @@ use arrow_array::{
 use either::Either;
 use fix_hidden_lifetime_bug::fix_hidden_lifetime_bug;
 use itertools::izip;
+use serde::{Deserialize, Serialize};
 
-use super::super::{DeltaResult, Error};
+use super::{error::Error, DeltaResult};
 
 pub(crate) mod arrow;
 pub(crate) mod schemas;
+mod serde_path;
 pub(crate) mod types;
 
 pub use schemas::get_log_schema;
 pub use types::*;
 
 #[derive(Debug)]
+/// The type of action that was performed on the table
 pub enum ActionType {
     /// modify the data in a table by adding individual logical files
     Add,
@@ -35,18 +44,36 @@ pub enum ActionType {
     Remove,
     /// The Row ID high-water mark tracks the largest ID that has been assigned to a row in the table.
     RowIdHighWaterMark,
+    /// Transactional information
     Txn,
 }
 
-#[derive(Debug, PartialEq, Eq, Clone)]
+#[derive(Debug, PartialEq, Eq, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+#[allow(missing_docs)]
 pub enum Action {
     Metadata(Metadata),
     Protocol(Protocol),
     Add(Add),
     Remove(Remove),
+    Cdc(AddCDCFile),
+    Txn(Txn),
+    CommitInfo(CommitInfo),
+    DomainMetadata(DomainMetadata),
+}
+
+impl Action {
+    /// Create a commit info from a map
+    pub fn commit_info(info: HashMap<String, serde_json::Value>) -> Self {
+        Self::CommitInfo(CommitInfo {
+            info,
+            ..Default::default()
+        })
+    }
 }
 
 #[fix_hidden_lifetime_bug]
+#[allow(dead_code)]
 pub(crate) fn parse_actions<'a>(
     batch: &RecordBatch,
     types: impl IntoIterator<Item = &'a ActionType>,
@@ -326,10 +353,12 @@ fn parse_actions_add(arr: &StructArray) -> DeltaResult<Box<dyn Iterator<Item = A
                     data_change,
                     partition_values: partition_values.unwrap_or_default(),
                     stats: stat.map(|v| v.to_string()),
-                    tags: tags.unwrap_or_default(),
+                    tags: tags,
                     base_row_id,
                     default_row_commit_version,
                     deletion_vector,
+                    stats_parsed: None,
+                    partition_values_parsed: None,
                 })
             } else {
                 None
@@ -488,7 +517,7 @@ fn parse_dv(
                 maybe_cardinality,
             ) {
                 Some(DeletionVectorDescriptor {
-                    storage_type: storage_type.into(),
+                    storage_type: StorageType::from_str(storage_type).unwrap(),
                     path_or_inline_dv: path_or_inline_dv.into(),
                     size_in_bytes,
                     cardinality,

@@ -19,7 +19,7 @@ use log::*;
 use object_store::{path::Path, Error as ObjectStoreError, ObjectStore};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
-use serde_json::{Map, Value};
+use serde_json::Value;
 use std::borrow::Borrow;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
@@ -27,10 +27,10 @@ use std::mem::take;
 use std::str::FromStr;
 
 use crate::errors::DeltaResult;
+use crate::kernel::{Add, CommitInfo, Metadata, Protocol, Remove, StructType};
 use crate::storage::ObjectStoreRef;
-use crate::table::config::IsolationLevel;
+use crate::table::CheckPoint;
 use crate::table::DeltaTableMetaData;
-use crate::{schema::*, table::CheckPoint};
 
 /// Error returned when an invalid Delta log action is encountered.
 #[allow(missing_docs)]
@@ -104,6 +104,12 @@ pub enum ProtocolError {
     IO {
         #[from]
         source: std::io::Error,
+    },
+
+    #[error("Kernel: {source}")]
+    Kernel {
+        #[from]
+        source: crate::kernel::Error,
     },
 }
 
@@ -264,7 +270,6 @@ pub struct AddCDCFile {
 
 ///Storage type of deletion vector
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
-#[serde()]
 pub enum StorageType {
     /// Stored at relative path derived from a UUID.
     #[serde(rename = "u")]
@@ -341,72 +346,6 @@ impl PartialEq for DeletionVector {
 }
 
 impl Eq for DeletionVector {}
-
-/// Delta log action that describes a parquet data file that is part of the table.
-#[derive(Serialize, Deserialize, Clone, Debug, Default)]
-#[serde(rename_all = "camelCase")]
-pub struct Add {
-    /// A relative path, from the root of the table, to a file that should be added to the table
-    #[serde(with = "serde_path")]
-    pub path: String,
-    /// The size of this file in bytes
-    pub size: i64,
-    /// A map from partition column to value for this file
-    pub partition_values: HashMap<String, Option<String>>,
-    /// Partition values stored in raw parquet struct format. In this struct, the column names
-    /// correspond to the partition columns and the values are stored in their corresponding data
-    /// type. This is a required field when the table is partitioned and the table property
-    /// delta.checkpoint.writeStatsAsStruct is set to true. If the table is not partitioned, this
-    /// column can be omitted.
-    ///
-    /// This field is only available in add action records read from checkpoints
-    #[cfg(feature = "parquet")]
-    #[serde(skip_serializing, skip_deserializing)]
-    pub partition_values_parsed: Option<parquet::record::Row>,
-    /// Partition values stored in raw parquet struct format. In this struct, the column names
-    /// correspond to the partition columns and the values are stored in their corresponding data
-    /// type. This is a required field when the table is partitioned and the table property
-    /// delta.checkpoint.writeStatsAsStruct is set to true. If the table is not partitioned, this
-    /// column can be omitted.
-    ///
-    /// This field is only available in add action records read from checkpoints
-    #[cfg(feature = "parquet2")]
-    #[serde(skip_serializing, skip_deserializing)]
-    pub partition_values_parsed: Option<String>,
-    /// The time this file was created, as milliseconds since the epoch
-    pub modification_time: i64,
-    /// When false the file must already be present in the table or the records in the added file
-    /// must be contained in one or more remove actions in the same version
-    ///
-    /// streaming queries that are tailing the transaction log can use this flag to skip actions
-    /// that would not affect the final results.
-    pub data_change: bool,
-    /// Contains statistics (e.g., count, min/max values for columns) about the data in this file
-    pub stats: Option<String>,
-    /// Contains statistics (e.g., count, min/max values for columns) about the data in this file in
-    /// raw parquet format. This field needs to be written when statistics are available and the
-    /// table property: delta.checkpoint.writeStatsAsStruct is set to true.
-    ///
-    /// This field is only available in add action records read from checkpoints
-    #[cfg(feature = "parquet")]
-    #[serde(skip_serializing, skip_deserializing)]
-    pub stats_parsed: Option<parquet::record::Row>,
-    /// Contains statistics (e.g., count, min/max values for columns) about the data in this file in
-    /// raw parquet format. This field needs to be written when statistics are available and the
-    /// table property: delta.checkpoint.writeStatsAsStruct is set to true.
-    ///
-    /// This field is only available in add action records read from checkpoints
-    #[cfg(feature = "parquet2")]
-    #[serde(skip_serializing, skip_deserializing)]
-    pub stats_parsed: Option<String>,
-    /// Map containing metadata about this file
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub tags: Option<HashMap<String, Option<String>>>,
-
-    /// Metadata about deletion vector
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub deletion_vector: Option<DeletionVector>,
-}
 
 impl Hash for Add {
     fn hash<H: Hasher>(&self, state: &mut H) {
@@ -500,45 +439,15 @@ impl Default for Format {
     }
 }
 
-/// Return a default empty schema to be used for edge-cases when a schema is missing
-fn default_schema() -> String {
-    warn!("A `metaData` action was missing a `schemaString` and has been given an empty schema");
-    r#"{"type":"struct",  "fields": []}"#.into()
-}
-
-/// Action that describes the metadata of the table.
-/// This is a top-level action in Delta log entries.
-#[derive(Serialize, Deserialize, Debug, Default, Clone)]
-#[serde(rename_all = "camelCase")]
-pub struct MetaData {
-    /// Unique identifier for this table
-    pub id: Guid,
-    /// User-provided identifier for this table
-    pub name: Option<String>,
-    /// User-provided description for this table
-    pub description: Option<String>,
-    /// Specification of the encoding for the files stored in the table
-    pub format: Format,
-    /// Schema of the table
-    #[serde(default = "default_schema")]
-    pub schema_string: String,
-    /// An array containing the names of columns by which the data should be partitioned
-    pub partition_columns: Vec<String>,
-    /// The time when this metadata action is created, in milliseconds since the Unix epoch
-    pub created_time: Option<i64>,
-    /// A map containing configuration options for the table
-    pub configuration: HashMap<String, Option<String>>,
-}
-
-impl MetaData {
+impl Metadata {
     /// Returns the table schema from the embedded schema string contained within the metadata
     /// action.
-    pub fn get_schema(&self) -> Result<Schema, serde_json::error::Error> {
+    pub fn get_schema(&self) -> Result<StructType, serde_json::error::Error> {
         serde_json::from_str(&self.schema_string)
     }
 }
 
-impl TryFrom<DeltaTableMetaData> for MetaData {
+impl TryFrom<DeltaTableMetaData> for Metadata {
     type Error = ProtocolError;
 
     fn try_from(metadata: DeltaTableMetaData) -> Result<Self, Self::Error> {
@@ -555,38 +464,6 @@ impl TryFrom<DeltaTableMetaData> for MetaData {
             configuration: metadata.configuration,
         })
     }
-}
-
-/// Represents a tombstone (deleted file) in the Delta log.
-/// This is a top-level action in Delta log entries.
-#[derive(Serialize, Deserialize, Clone, Eq, Debug, Default)]
-#[serde(rename_all = "camelCase")]
-pub struct Remove {
-    /// The path of the file that is removed from the table.
-    #[serde(with = "serde_path")]
-    pub path: String,
-    /// The timestamp when the remove was added to table state.
-    pub deletion_timestamp: Option<i64>,
-    /// Whether data is changed by the remove. A table optimize will report this as false for
-    /// example, since it adds and removes files by combining many files into one.
-    pub data_change: bool,
-    /// When true the fields partitionValues, size, and tags are present
-    ///
-    /// NOTE: Although it's defined as required in scala delta implementation, but some writes
-    /// it's still nullable so we keep it as Option<> for compatibly.
-    pub extended_file_metadata: Option<bool>,
-    /// A map from partition column to value for this file.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub partition_values: Option<HashMap<String, Option<String>>>,
-    /// Size of this file in bytes
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub size: Option<i64>,
-    /// Map containing metadata about this file
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub tags: Option<HashMap<String, Option<String>>>,
-    /// Metadata about deletion vector
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub deletion_vector: Option<DeletionVector>,
 }
 
 impl Hash for Remove {
@@ -613,116 +490,6 @@ impl PartialEq for Remove {
             && self.size == other.size
             && self.tags == other.tags
             && self.deletion_vector == other.deletion_vector
-    }
-}
-
-/// Action used by streaming systems to track progress using application-specific versions to
-/// enable idempotency.
-#[derive(Serialize, Deserialize, Debug, Default, Clone)]
-#[serde(rename_all = "camelCase")]
-pub struct Txn {
-    /// A unique identifier for the application performing the transaction.
-    pub app_id: String,
-    /// An application-specific numeric identifier for this transaction.
-    pub version: i64,
-    /// The time when this transaction action was created in milliseconds since the Unix epoch.
-    pub last_updated: Option<i64>,
-}
-
-/// Action used to increase the version of the Delta protocol required to read or write to the
-/// table.
-#[derive(Serialize, Deserialize, Debug, Default, Clone, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct Protocol {
-    /// Minimum version of the Delta read protocol a client must implement to correctly read the
-    /// table.
-    pub min_reader_version: i32,
-    /// Minimum version of the Delta write protocol a client must implement to correctly read the
-    /// table.
-    pub min_writer_version: i32,
-}
-
-/// The commitInfo is a fairly flexible action within the delta specification, where arbitrary data can be stored.
-/// However the reference implementation as well as delta-rs store useful information that may for instance
-/// allow us to be more permissive in commit conflict resolution.
-#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub struct CommitInfo {
-    /// Timestamp in millis when the commit was created
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub timestamp: Option<i64>,
-    /// Id of the user invoking the commit
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub user_id: Option<String>,
-    /// Name of the user invoking the commit
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub user_name: Option<String>,
-    /// The operation performed during the
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub operation: Option<String>,
-    /// Parameters used for table operation
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub operation_parameters: Option<HashMap<String, serde_json::Value>>,
-    /// Version of the table when the operation was started
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub read_version: Option<i64>,
-    /// The isolation level of the commit
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub isolation_level: Option<IsolationLevel>,
-    /// TODO
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub is_blind_append: Option<bool>,
-    /// Delta engine which created the commit.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub engine_info: Option<String>,
-    /// Additional provenance information for the commit
-    #[serde(flatten, default)]
-    pub info: Map<String, serde_json::Value>,
-}
-
-/// The domain metadata action contains a configuration (string) for a named metadata domain
-#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub struct DomainMetaData {
-    /// Identifier for this domain (system or user-provided)
-    pub domain: String,
-    /// String containing configuration for the metadata domain
-    pub configuration: String,
-    /// When `true` the action serves as a tombstone
-    pub removed: bool,
-}
-
-/// Represents an action in the Delta log. The Delta log is an aggregate of all actions performed
-/// on the table, so the full list of actions is required to properly read a table.
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub enum Action {
-    /// Changes the current metadata of the table. Must be present in the first version of a table.
-    /// Subsequent `metaData` actions completely overwrite previous metadata.
-    metaData(MetaData),
-    /// Adds CDC a file to the table state.
-    cdc(AddCDCFile),
-    /// Adds a file to the table state.
-    add(Add),
-    /// Removes a file from the table state.
-    remove(Remove),
-    /// Used by streaming systems to track progress externally with application specific version
-    /// identifiers.
-    txn(Txn),
-    /// Describes the minimum reader and writer versions required to read or write to the table.
-    protocol(Protocol),
-    /// Describes commit provenance information for the table.
-    commitInfo(CommitInfo),
-    /// Describe s the configuration for a named metadata domain
-    domainMetadata(DomainMetaData),
-}
-
-impl Action {
-    /// Create a commit info from a map
-    pub fn commit_info(info: Map<String, serde_json::Value>) -> Self {
-        Self::commitInfo(CommitInfo {
-            info,
-            ..Default::default()
-        })
     }
 }
 
@@ -1029,6 +796,7 @@ pub(crate) async fn find_latest_check_point_for_version(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::kernel::Action;
 
     #[test]
     fn test_load_table_stats() {
@@ -1042,7 +810,17 @@ mod tests {
                 })
                 .to_string(),
             ),
-            ..Default::default()
+            path: Default::default(),
+            data_change: true,
+            deletion_vector: None,
+            partition_values: Default::default(),
+            partition_values_parsed: None,
+            stats_parsed: None,
+            tags: None,
+            size: 0,
+            modification_time: 0,
+            base_row_id: None,
+            default_row_commit_version: None,
         };
 
         let stats = action.get_stats().unwrap().unwrap();
@@ -1107,7 +885,17 @@ mod tests {
                 })
                 .to_string(),
             ),
-            ..Default::default()
+            path: Default::default(),
+            data_change: true,
+            deletion_vector: None,
+            partition_values: Default::default(),
+            partition_values_parsed: None,
+            stats_parsed: None,
+            tags: None,
+            size: 0,
+            modification_time: 0,
+            base_row_id: None,
+            default_row_commit_version: None,
         };
 
         let stats = action.get_stats().unwrap().unwrap();

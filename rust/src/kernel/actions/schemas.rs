@@ -5,6 +5,7 @@ use arrow_schema::{DataType, Field, Fields, Schema};
 use super::ActionType;
 
 impl ActionType {
+    /// Returns the root field for the action type
     pub fn field(&self) -> Field {
         match self {
             Self::Add => get_root("add", self.fields()),
@@ -19,6 +20,7 @@ impl ActionType {
         }
     }
 
+    /// Returns the child fields for the action type
     pub fn fields(&self) -> Vec<Field> {
         match self {
             Self::Add => add_fields(),
@@ -34,6 +36,7 @@ impl ActionType {
     }
 }
 
+/// Returns the schema for the delta log
 pub fn get_log_schema() -> Schema {
     Schema {
         fields: Fields::from_iter([
