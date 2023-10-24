@@ -354,7 +354,7 @@ fn parse_actions_add(arr: &StructArray) -> DeltaResult<Box<dyn Iterator<Item = A
                     data_change,
                     partition_values: partition_values.unwrap_or_default(),
                     stats: stat.map(|v| v.to_string()),
-                    tags: tags,
+                    tags,
                     base_row_id,
                     default_row_commit_version,
                     deletion_vector,
