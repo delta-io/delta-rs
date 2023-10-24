@@ -8,7 +8,7 @@ use crate::kernel::{
 use crate::protocol::{DeltaOperation, SaveMode};
 use crate::table::state::DeltaTableState;
 use crate::table::DeltaTableMetaData;
-use crate::{DeltaTable, DeltaTableBuilder, Schema, SchemaDataType, SchemaField};
+use crate::{DeltaTable, DeltaTableBuilder};
 
 pub fn create_add_action(
     path: impl Into<String>,

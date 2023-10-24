@@ -566,6 +566,7 @@ impl Display for DataType {
 mod tests {
     use super::*;
     use serde_json;
+    use serde_json::json;
 
     #[test]
     fn test_serde_data_types() {
@@ -714,11 +715,74 @@ mod tests {
     #[test]
     fn test_read_schemas() {
         let file = std::fs::File::open("./tests/serde/schema.json").unwrap();
-        let schema: Result<Schema, _> = serde_json::from_reader(file);
+        let schema: Result<StructType, _> = serde_json::from_reader(file);
         assert!(schema.is_ok());
 
         let file = std::fs::File::open("./tests/serde/checkpoint_schema.json").unwrap();
-        let schema: Result<Schema, _> = serde_json::from_reader(file);
+        let schema: Result<StructType, _> = serde_json::from_reader(file);
         assert!(schema.is_ok())
+    }
+
+    #[test]
+    fn test_get_invariants() {
+        let schema: StructType = serde_json::from_value(json!({
+            "type": "struct",
+            "fields": [{"name": "x", "type": "string", "nullable": true, "metadata": {}}]
+        }))
+        .unwrap();
+        let invariants = schema.get_invariants().unwrap();
+        assert_eq!(invariants.len(), 0);
+
+        let schema: StructType = serde_json::from_value(json!({
+            "type": "struct",
+            "fields": [
+                {"name": "x", "type": "integer", "nullable": true, "metadata": {
+                    "delta.invariants": "{\"expression\": { \"expression\": \"x > 2\"} }"
+                }},
+                {"name": "y", "type": "integer", "nullable": true, "metadata": {
+                    "delta.invariants": "{\"expression\": { \"expression\": \"y < 4\"} }"
+                }}
+            ]
+        }))
+        .unwrap();
+        let invariants = schema.get_invariants().unwrap();
+        assert_eq!(invariants.len(), 2);
+        assert!(invariants.contains(&Invariant::new("x", "x > 2")));
+        assert!(invariants.contains(&Invariant::new("y", "y < 4")));
+
+        let schema: StructType = serde_json::from_value(json!({
+            "type": "struct",
+            "fields": [{
+                "name": "a_map",
+                "type": {
+                    "type": "map",
+                    "keyType": "string",
+                    "valueType": {
+                        "type": "array",
+                        "elementType": {
+                            "type": "struct",
+                            "fields": [{
+                                "name": "d",
+                                "type": "integer",
+                                "metadata": {
+                                    "delta.invariants": "{\"expression\": { \"expression\": \"a_map.value.element.d < 4\"} }"
+                                },
+                                "nullable": false
+                            }]
+                        },
+                        "containsNull": false
+                    },
+                    "valueContainsNull": false
+                },
+                "nullable": false,
+                "metadata": {}
+            }]
+        })).unwrap();
+        let invariants = schema.get_invariants().unwrap();
+        assert_eq!(invariants.len(), 1);
+        assert_eq!(
+            invariants[0],
+            Invariant::new("a_map.value.element.d", "a_map.value.element.d < 4")
+        );
     }
 }
