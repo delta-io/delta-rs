@@ -73,6 +73,7 @@ fn checkpoint_to_py(err: ProtocolError) -> PyErr {
         ProtocolError::ParquetParseError { source } => PyIOError::new_err(source.to_string()),
         ProtocolError::IO { source } => PyIOError::new_err(source.to_string()),
         ProtocolError::Generic(msg) => DeltaError::new_err(msg),
+        ProtocolError::Kernel { source } => DeltaError::new_err(source.to_string()),
     }
 }
 

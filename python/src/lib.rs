@@ -25,6 +25,7 @@ use deltalake::datafusion::datasource::provider::TableProvider;
 use deltalake::datafusion::prelude::SessionContext;
 use deltalake::delta_datafusion::DeltaDataChecker;
 use deltalake::errors::DeltaTableError;
+use deltalake::kernel::{Action, Add, Invariant, Metadata, Remove, StructType};
 use deltalake::operations::delete::DeleteBuilder;
 use deltalake::operations::merge::MergeBuilder;
 use deltalake::operations::optimize::{OptimizeBuilder, OptimizeType};
@@ -34,11 +35,9 @@ use deltalake::operations::update::UpdateBuilder;
 use deltalake::operations::vacuum::VacuumBuilder;
 use deltalake::parquet::file::properties::WriterProperties;
 use deltalake::partitions::PartitionFilter;
-use deltalake::protocol::{
-    self, Action, ColumnCountStat, ColumnValueStat, DeltaOperation, SaveMode, Stats,
-};
+use deltalake::protocol::{ColumnCountStat, ColumnValueStat, DeltaOperation, SaveMode, Stats};
+use deltalake::DeltaOps;
 use deltalake::DeltaTableBuilder;
-use deltalake::{DeltaOps, Invariant, Schema};
 use pyo3::exceptions::{PyIOError, PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyFrozenSet, PyType};
@@ -260,7 +259,7 @@ impl RawDeltaTable {
 
     #[getter]
     pub fn schema(&self, py: Python) -> PyResult<PyObject> {
-        let schema: &Schema = self._table.get_schema().map_err(PythonError::from)?;
+        let schema: &StructType = self._table.get_schema().map_err(PythonError::from)?;
         schema_to_pyobject(schema, py)
     }
 
@@ -666,9 +665,9 @@ impl RawDeltaTable {
             ._table
             .schema()
             .ok_or_else(|| DeltaProtocolError::new_err("table does not yet have a schema"))?
-            .get_fields()
+            .fields()
             .iter()
-            .map(|field| field.get_name())
+            .map(|field| field.name().as_str())
             .collect();
         let partition_columns: HashSet<&str> = self
             ._table
@@ -738,13 +737,13 @@ impl RawDeltaTable {
         partitions_filters: Option<Vec<(&str, &str, PartitionFilterValue)>>,
     ) -> PyResult<()> {
         let mode = save_mode_from_str(mode)?;
-        let schema: Schema = (&schema.0).try_into().map_err(PythonError::from)?;
+        let schema: StructType = (&schema.0).try_into().map_err(PythonError::from)?;
 
         let existing_schema = self._table.get_schema().map_err(PythonError::from)?;
 
-        let mut actions: Vec<protocol::Action> = add_actions
+        let mut actions: Vec<Action> = add_actions
             .iter()
-            .map(|add| Action::add(add.into()))
+            .map(|add| Action::Add(add.into()))
             .collect();
 
         match mode {
@@ -760,7 +759,7 @@ impl RawDeltaTable {
                     .map_err(PythonError::from)?;
 
                 for old_add in add_actions {
-                    let remove_action = Action::remove(protocol::Remove {
+                    let remove_action = Action::Remove(Remove {
                         path: old_add.path.clone(),
                         deletion_timestamp: Some(current_timestamp()),
                         data_change: true,
@@ -769,6 +768,8 @@ impl RawDeltaTable {
                         size: Some(old_add.size),
                         deletion_vector: old_add.deletion_vector.clone(),
                         tags: old_add.tags.clone(),
+                        base_row_id: old_add.base_row_id,
+                        default_row_commit_version: old_add.default_row_commit_version,
                     });
                     actions.push(remove_action);
                 }
@@ -781,9 +782,9 @@ impl RawDeltaTable {
                         .map_err(PythonError::from)?
                         .clone();
                     metadata.schema = schema;
-                    let metadata_action = protocol::MetaData::try_from(metadata)
+                    let metadata_action = Metadata::try_from(metadata)
                         .map_err(|_| PyValueError::new_err("Failed to reparse metadata"))?;
-                    actions.push(Action::metaData(metadata_action));
+                    actions.push(Action::Metadata(metadata_action));
                 }
             }
             _ => {
@@ -1056,9 +1057,9 @@ pub struct PyAddAction {
     stats: Option<String>,
 }
 
-impl From<&PyAddAction> for protocol::Add {
+impl From<&PyAddAction> for Add {
     fn from(action: &PyAddAction) -> Self {
-        protocol::Add {
+        Add {
             path: action.path.clone(),
             size: action.size,
             partition_values: action.partition_values.clone(),
@@ -1069,6 +1070,8 @@ impl From<&PyAddAction> for protocol::Add {
             stats_parsed: None,
             tags: None,
             deletion_vector: None,
+            base_row_id: None,
+            default_row_commit_version: None,
         }
     }
 }
@@ -1091,13 +1094,13 @@ fn write_new_deltalake(
         .build()
         .map_err(PythonError::from)?;
 
-    let schema: Schema = (&schema.0).try_into().map_err(PythonError::from)?;
+    let schema: StructType = (&schema.0).try_into().map_err(PythonError::from)?;
 
     let mut builder = DeltaOps(table)
         .create()
-        .with_columns(schema.get_fields().clone())
+        .with_columns(schema.fields().clone())
         .with_partition_columns(partition_by)
-        .with_actions(add_actions.iter().map(|add| Action::add(add.into())));
+        .with_actions(add_actions.iter().map(|add| Action::Add(add.into())));
 
     if let Some(name) = &name {
         builder = builder.with_table_name(name);
