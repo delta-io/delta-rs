@@ -691,7 +691,7 @@ mod tests {
         actions: Vec<Action>,
         read_whole_table: bool,
     ) -> Result<(), CommitConflictError> {
-        let setup_actions = setup.unwrap_or_else(init_table_actions);
+        let setup_actions = setup.unwrap_or_else(|| init_table_actions(None));
         let state = DeltaTableState::from_actions(setup_actions, 0).unwrap();
         let transaction_info = TransactionInfo::new(&state, reads, &actions, read_whole_table);
         let summary = WinningCommitSummary {
@@ -717,7 +717,7 @@ mod tests {
         // the concurrent transaction deletes a file that the current transaction did NOT read
         let file_not_read = tu::create_add_action("file_not_read", true, get_stats(1, 10));
         let file_read = tu::create_add_action("file_read", true, get_stats(100, 10000));
-        let mut setup_actions = init_table_actions();
+        let mut setup_actions = init_table_actions(None);
         setup_actions.push(file_not_read);
         setup_actions.push(file_read);
         let result = execute_test(
@@ -733,7 +733,7 @@ mod tests {
         // concurrently add file, that the current transaction would not have read
         let file_added = tu::create_add_action("file_added", true, get_stats(1, 10));
         let file_read = tu::create_add_action("file_read", true, get_stats(100, 10000));
-        let mut setup_actions = init_table_actions();
+        let mut setup_actions = init_table_actions(None);
         setup_actions.push(file_read);
         let result = execute_test(
             Some(setup_actions),
@@ -797,7 +797,7 @@ mod tests {
         // delete / read
         // transaction reads a file that is removed by concurrent transaction
         let file_read = tu::create_add_action("file_read", true, get_stats(1, 10));
-        let mut setup_actions = init_table_actions();
+        let mut setup_actions = init_table_actions(None);
         setup_actions.push(file_read);
         let result = execute_test(
             Some(setup_actions),
@@ -842,7 +842,7 @@ mod tests {
         let file_part1 = tu::create_add_action("file_part1", true, get_stats(1, 10));
         let file_part2 = tu::create_add_action("file_part2", true, get_stats(11, 100));
         let file_part3 = tu::create_add_action("file_part3", true, get_stats(101, 1000));
-        let mut setup_actions = init_table_actions();
+        let mut setup_actions = init_table_actions(None);
         setup_actions.push(file_part1);
         let result = execute_test(
             Some(setup_actions),
@@ -858,7 +858,7 @@ mod tests {
         // `read_whole_table` should disallow any concurrent remove actions
         let file_part1 = tu::create_add_action("file_part1", true, get_stats(1, 10));
         let file_part2 = tu::create_add_action("file_part2", true, get_stats(11, 100));
-        let mut setup_actions = init_table_actions();
+        let mut setup_actions = init_table_actions(None);
         setup_actions.push(file_part1);
         let result = execute_test(
             Some(setup_actions),
