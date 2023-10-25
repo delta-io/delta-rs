@@ -632,6 +632,8 @@ mod tests {
 
     // use object_store::local::LocalFileSystem;
 
+    use crate::kernel::PrimitiveType;
+
     use super::*;
     // use crate::client::filesystem::ObjectStoreFileSystemClient;
     // use crate::executor::tokio::TokioBackgroundExecutor;
@@ -704,6 +706,12 @@ mod tests {
             .unwrap();
         let example = dv_example();
         assert_eq!(dv_url, example.absolute_path(&parent).unwrap().unwrap());
+    }
+
+    #[test]
+    fn test_primitive() {
+        let types: PrimitiveType = serde_json::from_str("\"string\"").unwrap();
+        println!("{:?}", types);
     }
 
     // #[test]

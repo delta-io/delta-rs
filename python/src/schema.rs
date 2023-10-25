@@ -85,7 +85,7 @@ impl PrimitiveType {
     #[new]
     #[pyo3(signature = (data_type))]
     fn new(data_type: String) -> PyResult<Self> {
-        let data_type: DeltaPrimitve = serde_json::from_str(&data_type)
+        let data_type: DeltaPrimitve = serde_json::from_str(&format!("\"{data_type}\""))
             .map_err(|_| PyValueError::new_err(format!("invalid type string: {data_type}")))?;
 
         Ok(Self {

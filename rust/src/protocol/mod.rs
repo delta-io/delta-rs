@@ -8,7 +8,6 @@ pub mod checkpoints;
 pub mod parquet2_read;
 #[cfg(feature = "parquet")]
 mod parquet_read;
-mod serde_path;
 mod time_utils;
 
 #[cfg(feature = "arrow")]
@@ -24,7 +23,6 @@ use std::borrow::Borrow;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::mem::take;
-use std::str::FromStr;
 
 use crate::errors::DeltaResult;
 use crate::kernel::{Add, CommitInfo, Metadata, Protocol, Remove, StructType};
@@ -250,103 +248,6 @@ pub struct StatsParsed {
     pub null_count: HashMap<String, i64>,
 }
 
-/// Delta AddCDCFile action that describes a parquet CDC data file.
-#[derive(Serialize, Deserialize, Clone, Debug, Default)]
-#[serde(rename_all = "camelCase")]
-pub struct AddCDCFile {
-    /// A relative path, from the root of the table, or an
-    /// absolute path to a CDC file
-    #[serde(with = "serde_path")]
-    pub path: String,
-    /// The size of this file in bytes
-    pub size: i64,
-    /// A map from partition column to value for this file
-    pub partition_values: HashMap<String, Option<String>>,
-    /// Should always be set to false because they do not change the underlying data of the table
-    pub data_change: bool,
-    /// Map containing metadata about this file
-    pub tags: Option<HashMap<String, Option<String>>>,
-}
-
-///Storage type of deletion vector
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
-pub enum StorageType {
-    /// Stored at relative path derived from a UUID.
-    #[serde(rename = "u")]
-    UuidRelativePath,
-    /// Stored as inline string.
-    #[serde(rename = "i")]
-    Inline,
-    /// Stored at an absolute path.
-    #[serde(rename = "p")]
-    AbsolutePath,
-}
-
-impl Default for StorageType {
-    fn default() -> Self {
-        Self::UuidRelativePath // seems to be used by Databricks and therefore most common
-    }
-}
-
-impl FromStr for StorageType {
-    type Err = ProtocolError;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "u" => Ok(Self::UuidRelativePath),
-            "i" => Ok(Self::Inline),
-            "p" => Ok(Self::AbsolutePath),
-            _ => Err(ProtocolError::InvalidDeletionVectorStorageType(
-                s.to_string(),
-            )),
-        }
-    }
-}
-
-impl ToString for StorageType {
-    fn to_string(&self) -> String {
-        match self {
-            Self::UuidRelativePath => "u".to_string(),
-            Self::Inline => "i".to_string(),
-            Self::AbsolutePath => "p".to_string(),
-        }
-    }
-}
-
-/// Describes deleted rows of a parquet file as part of an add or remove action
-#[derive(Serialize, Deserialize, Clone, Debug, Default)]
-#[serde(rename_all = "camelCase")]
-pub struct DeletionVector {
-    ///storageType of the deletion vector. p = Absolute Path, i = Inline, u = UUid Relative Path
-    pub storage_type: StorageType,
-
-    ///If storageType = 'u' then <random prefix - optional><base85 encoded uuid>
-    ///If storageType = 'i' then <base85 encoded bytes> of the deletion vector data
-    ///If storageType = 'p' then <absolute path>
-    pub path_or_inline_dv: String,
-
-    ///Start of the data for this DV in number of bytes from the beginning of the file it is stored in. Always None (absent in JSON) when storageType = 'i'.
-    pub offset: Option<i32>,
-
-    ///Size of the serialized DV in bytes (raw data size, i.e. before base85 encoding, if inline).
-    pub size_in_bytes: i32,
-
-    ///Number of rows the given DV logically removes from the file.
-    pub cardinality: i64,
-}
-
-impl PartialEq for DeletionVector {
-    fn eq(&self, other: &Self) -> bool {
-        self.storage_type == other.storage_type
-            && self.path_or_inline_dv == other.path_or_inline_dv
-            && self.offset == other.offset
-            && self.size_in_bytes == other.size_in_bytes
-            && self.cardinality == other.cardinality
-    }
-}
-
-impl Eq for DeletionVector {}
-
 impl Hash for Add {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.path.hash(state);
@@ -403,38 +304,6 @@ impl Add {
             Ok(Some(mut partial)) => Ok(Some(partial.as_stats())),
             Ok(None) => Ok(None),
             Err(e) => Err(e),
-        }
-    }
-}
-
-/// Describes the data format of files in the table.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
-pub struct Format {
-    /// Name of the encoding for files in this table.
-    provider: String,
-    /// A map containing configuration options for the format.
-    options: HashMap<String, Option<String>>,
-}
-
-impl Format {
-    /// Allows creation of a new action::Format
-    pub fn new(provider: String, options: Option<HashMap<String, Option<String>>>) -> Self {
-        let options = options.unwrap_or_default();
-        Self { provider, options }
-    }
-
-    /// Return the Format provider
-    pub fn get_provider(self) -> String {
-        self.provider
-    }
-}
-
-// Assuming this is a more appropriate default than derived Default
-impl Default for Format {
-    fn default() -> Self {
-        Self {
-            provider: "parquet".to_string(),
-            options: Default::default(),
         }
     }
 }
