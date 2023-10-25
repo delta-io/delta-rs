@@ -21,6 +21,19 @@ pub struct Format {
     pub options: HashMap<String, Option<String>>,
 }
 
+impl Format {
+    /// Allows creation of a new action::Format
+    pub fn new(provider: String, options: Option<HashMap<String, Option<String>>>) -> Self {
+        let options = options.unwrap_or_default();
+        Self { provider, options }
+    }
+
+    /// Return the Format provider
+    pub fn get_provider(self) -> String {
+        self.provider
+    }
+}
+
 impl Default for Format {
     fn default() -> Self {
         Self {
@@ -36,7 +49,7 @@ fn default_schema() -> String {
     r#"{"type":"struct",  "fields": []}"#.into()
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default)]
 #[serde(rename_all = "camelCase")]
 /// Defines a metadata action
 pub struct Metadata {
@@ -104,7 +117,7 @@ impl Metadata {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default)]
 #[serde(rename_all = "camelCase")]
 /// Defines a protocol action
 pub struct Protocol {
@@ -337,7 +350,7 @@ impl DeletionVectorDescriptor {
     // }
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
 #[serde(rename_all = "camelCase")]
 /// Defines an add action
 pub struct Add {
@@ -392,6 +405,10 @@ pub struct Add {
     #[cfg(feature = "parquet")]
     #[serde(skip_serializing, skip_deserializing)]
     pub partition_values_parsed: Option<parquet::record::Row>,
+    /// Partition values parsed for parquet2
+    #[cfg(feature = "parquet2")]
+    #[serde(skip_serializing, skip_deserializing)]
+    pub partition_values_parsed: Option<String>,
 
     /// Contains statistics (e.g., count, min/max values for columns) about the data in this file in
     /// raw parquet format. This field needs to be written when statistics are available and the
@@ -401,6 +418,10 @@ pub struct Add {
     #[cfg(feature = "parquet")]
     #[serde(skip_serializing, skip_deserializing)]
     pub stats_parsed: Option<parquet::record::Row>,
+    /// Stats parsed for parquet2
+    #[cfg(feature = "parquet2")]
+    #[serde(skip_serializing, skip_deserializing)]
+    pub stats_parsed: Option<String>,
 }
 
 impl Add {
@@ -417,7 +438,7 @@ impl Add {
 }
 
 /// Represents a tombstone (deleted file) in the Delta log.
-#[derive(Serialize, Deserialize, Debug, Clone, Eq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Eq, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct Remove {
     /// A relative path to a data file from the root of the table or an absolute path to a file
