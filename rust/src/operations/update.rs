@@ -79,7 +79,7 @@ pub struct UpdateBuilder {
     safe_cast: bool,
 }
 
-#[derive(Default, Serialize)]
+#[derive(Default, Serialize, Debug)]
 /// Metrics collected during the Update operation
 pub struct UpdateMetrics {
     /// Number of files added.
@@ -459,12 +459,14 @@ impl std::future::IntoFuture for UpdateBuilder {
 
 #[cfg(test)]
 mod tests {
-
     use crate::operations::DeltaOps;
     use crate::writer::test_utils::datafusion::get_data;
-    use crate::writer::test_utils::{get_arrow_schema, get_delta_schema};
+    use crate::writer::test_utils::{
+        get_arrow_schema, get_delta_schema, get_record_batch, setup_table_with_configuration,
+        write_batch,
+    };
+    use crate::DeltaConfigKey;
     use crate::DeltaTable;
-    use crate::{protocol::SaveMode, DeltaResult};
     use arrow::datatypes::{Field, Schema};
     use arrow::record_batch::RecordBatch;
     use arrow_array::Int32Array;
@@ -484,13 +486,6 @@ mod tests {
             .unwrap();
         assert_eq!(table.version(), 0);
         table
-    }
-
-    async fn write_batch(table: DeltaTable, batch: RecordBatch) -> DeltaResult<DeltaTable> {
-        DeltaOps(table)
-            .write(vec![batch.clone()])
-            .with_save_mode(SaveMode::Append)
-            .await
     }
 
     async fn prepare_values_table() -> DeltaTable {
@@ -516,6 +511,19 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_update_when_delta_table_is_append_only() {
+        let table = setup_table_with_configuration(DeltaConfigKey::AppendOnly, Some("true")).await;
+        let batch = get_record_batch(None, false);
+        // Append
+        let table = write_batch(table, batch).await;
+        let _err = DeltaOps(table)
+            .update()
+            .with_update("modified", lit("2023-05-14"))
+            .await
+            .expect_err("Remove action is included when Delta table is append-only. Should error");
+    }
+
+    #[tokio::test]
     async fn test_update_no_predicate() {
         let schema = get_arrow_schema(&None);
         let table = setup_table(None).await;
@@ -535,7 +543,7 @@ mod tests {
         )
         .unwrap();
 
-        let table = write_batch(table, batch).await.unwrap();
+        let table = write_batch(table, batch).await;
         assert_eq!(table.version(), 1);
         assert_eq!(table.get_file_uris().count(), 1);
 
@@ -589,7 +597,7 @@ mod tests {
         // Update a partitioned table where the predicate contains only partition column
         // The expectation is that a physical scan of data is not required
 
-        let table = write_batch(table, batch).await.unwrap();
+        let table = write_batch(table, batch).await;
         assert_eq!(table.version(), 1);
         assert_eq!(table.get_file_uris().count(), 1);
 
@@ -646,7 +654,7 @@ mod tests {
         )
         .unwrap();
 
-        let table = write_batch(table, batch.clone()).await.unwrap();
+        let table = write_batch(table, batch.clone()).await;
         assert_eq!(table.version(), 1);
         assert_eq!(table.get_file_uris().count(), 2);
 
@@ -681,7 +689,7 @@ mod tests {
 
         // Update a partitioned table where the predicate contains a partition column and non-partition column
         let table = setup_table(Some(vec!["modified"])).await;
-        let table = write_batch(table, batch).await.unwrap();
+        let table = write_batch(table, batch).await;
         assert_eq!(table.version(), 1);
         assert_eq!(table.get_file_uris().count(), 2);
 
