@@ -73,7 +73,7 @@ pub fn create_metadata_action(
     Action::metaData(MetaData::try_from(metadata).unwrap())
 }
 
-pub fn init_table_actions() -> Vec<Action> {
+pub fn init_table_actions(configuration: Option<HashMap<String, Option<String>>>) -> Vec<Action> {
     let raw = r#"
         {
             "timestamp": 1670892998177,
@@ -97,7 +97,7 @@ pub fn init_table_actions() -> Vec<Action> {
     vec![
         Action::commitInfo(commit_info),
         create_protocol_action(None, None),
-        create_metadata_action(None, None),
+        create_metadata_action(None, configuration),
     ]
 }
 
@@ -128,7 +128,7 @@ pub async fn create_initialized_table(
             HashMap::new(),
         ),
     ]);
-    let state = DeltaTableState::from_actions(init_table_actions(), 0).unwrap();
+    let state = DeltaTableState::from_actions(init_table_actions(None), 0).unwrap();
     let operation = DeltaOperation::Create {
         mode: SaveMode::ErrorIfExists,
         location: "location".into(),
@@ -146,8 +146,8 @@ pub async fn create_initialized_table(
             configuration.unwrap_or_default(),
         ),
     };
-    let actions = init_table_actions();
-    let prepared_commit = prepare_commit(storage.as_ref(), &operation, &actions, None)
+    let actions = init_table_actions(None);
+    let prepared_commit = prepare_commit(storage.as_ref(), &operation, &actions, &state, None)
         .await
         .unwrap();
     try_commit_transaction(storage.as_ref(), &prepared_commit, 0)
