@@ -530,7 +530,7 @@ impl MergeOperationConfig {
     }
 }
 
-#[derive(Default, Serialize)]
+#[derive(Default, Serialize, Debug)]
 /// Metrics for the Merge Operation
 pub struct MergeMetrics {
     /// Number of rows in the source data
@@ -1245,12 +1245,13 @@ impl std::future::IntoFuture for MergeBuilder {
 
 #[cfg(test)]
 mod tests {
-
     use crate::operations::DeltaOps;
     use crate::protocol::*;
     use crate::writer::test_utils::datafusion::get_data;
     use crate::writer::test_utils::get_arrow_schema;
     use crate::writer::test_utils::get_delta_schema;
+    use crate::writer::test_utils::setup_table_with_configuration;
+    use crate::DeltaConfigKey;
     use crate::DeltaTable;
     use arrow::datatypes::Schema as ArrowSchema;
     use arrow::record_batch::RecordBatch;
@@ -1277,6 +1278,21 @@ mod tests {
         table
     }
 
+    #[tokio::test]
+    async fn test_merge_when_delta_table_is_append_only() {
+        let schema = get_arrow_schema(&None);
+        let table = setup_table_with_configuration(DeltaConfigKey::AppendOnly, Some("true")).await;
+        // append some data
+        let table = write_data(table, &schema).await;
+        // merge
+        let _err = DeltaOps(table)
+            .merge(merge_source(schema), col("target.id").eq(col("source.id")))
+            .with_source_alias("source")
+            .with_target_alias("target")
+            .await
+            .expect_err("Remove action is included when Delta table is append-only. Should error");
+    }
+
     async fn write_data(table: DeltaTable, schema: &Arc<ArrowSchema>) -> DeltaTable {
         let batch = RecordBatch::try_new(
             Arc::clone(schema),
@@ -1300,14 +1316,7 @@ mod tests {
             .unwrap()
     }
 
-    async fn setup() -> (DeltaTable, DataFrame) {
-        let schema = get_arrow_schema(&None);
-        let table = setup_table(None).await;
-
-        let table = write_data(table, &schema).await;
-        assert_eq!(table.version(), 1);
-        assert_eq!(table.get_file_uris().count(), 1);
-
+    fn merge_source(schema: Arc<ArrowSchema>) -> DataFrame {
         let ctx = SessionContext::new();
         let batch = RecordBatch::try_new(
             Arc::clone(&schema),
@@ -1322,8 +1331,18 @@ mod tests {
             ],
         )
         .unwrap();
-        let source = ctx.read_batch(batch).unwrap();
-        (table, source)
+        ctx.read_batch(batch).unwrap()
+    }
+
+    async fn setup() -> (DeltaTable, DataFrame) {
+        let schema = get_arrow_schema(&None);
+        let table = setup_table(None).await;
+
+        let table = write_data(table, &schema).await;
+        assert_eq!(table.version(), 1);
+        assert_eq!(table.get_file_uris().count(), 1);
+
+        (table, merge_source(schema))
     }
 
     async fn assert_merge(table: DeltaTable, metrics: MergeMetrics) {

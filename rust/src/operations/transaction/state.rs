@@ -334,7 +334,7 @@ mod tests {
 
     #[test]
     fn test_parse_predicate_expression() {
-        let snapshot = DeltaTableState::from_actions(init_table_actions(), 0).unwrap();
+        let snapshot = DeltaTableState::from_actions(init_table_actions(None), 0).unwrap();
         let session = SessionContext::new();
         let state = session.state();
 
@@ -361,7 +361,7 @@ mod tests {
 
     #[test]
     fn test_files_matching_predicate() {
-        let mut actions = init_table_actions();
+        let mut actions = init_table_actions(None);
         actions.push(create_add_action("excluded", true, Some("{\"numRecords\":10,\"minValues\":{\"value\":1},\"maxValues\":{\"value\":10},\"nullCount\":{\"value\":0}}".into())));
         actions.push(create_add_action("included-1", true, Some("{\"numRecords\":10,\"minValues\":{\"value\":1},\"maxValues\":{\"value\":100},\"nullCount\":{\"value\":0}}".into())));
         actions.push(create_add_action("included-2", true, Some("{\"numRecords\":10,\"minValues\":{\"value\":-10},\"maxValues\":{\"value\":3},\"nullCount\":{\"value\":0}}".into())));

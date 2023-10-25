@@ -9,8 +9,10 @@ use arrow_schema::{DataType, Field, Schema as ArrowSchema};
 
 use crate::kernel::{DataType as DeltaDataType, PrimitiveType, StructField, StructType};
 use crate::operations::create::CreateBuilder;
+use crate::operations::DeltaOps;
 use crate::table::DeltaTableMetaData;
-use crate::{DeltaTable, DeltaTableBuilder};
+use crate::writer::SaveMode;
+use crate::{DeltaConfigKey, DeltaTable, DeltaTableBuilder};
 
 pub type TestResult = Result<(), Box<dyn std::error::Error + 'static>>;
 
@@ -46,6 +48,14 @@ pub fn get_record_batch(part: Option<String>, with_null: bool) -> RecordBatch {
         Some(_) => RecordBatch::try_new(schema, vec![str_values, int_values]).unwrap(),
         _ => RecordBatch::try_new(schema, vec![str_values, int_values, mod_values]).unwrap(),
     }
+}
+
+pub async fn write_batch(table: DeltaTable, batch: RecordBatch) -> DeltaTable {
+    DeltaOps(table)
+        .write(vec![batch.clone()])
+        .with_save_mode(SaveMode::Append)
+        .await
+        .expect("Failed to append")
 }
 
 pub fn get_arrow_schema(part: &Option<String>) -> Arc<ArrowSchema> {
@@ -274,6 +284,19 @@ pub fn get_delta_schema_with_nested_struct() -> StructType {
             true,
         ),
     ])
+}
+
+pub async fn setup_table_with_configuration(
+    key: DeltaConfigKey,
+    value: Option<impl Into<String>>,
+) -> DeltaTable {
+    let table_schema = get_delta_schema();
+    DeltaOps::new_in_memory()
+        .create()
+        .with_columns(table_schema.fields().clone())
+        .with_configuration_property(key, value)
+        .await
+        .expect("Failed to create table")
 }
 
 pub fn create_bare_table() -> DeltaTable {

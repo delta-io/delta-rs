@@ -314,11 +314,14 @@ impl std::future::IntoFuture for DeleteBuilder {
 
 #[cfg(test)]
 mod tests {
-
     use crate::operations::DeltaOps;
     use crate::protocol::*;
     use crate::writer::test_utils::datafusion::get_data;
-    use crate::writer::test_utils::{get_arrow_schema, get_delta_schema};
+    use crate::writer::test_utils::{
+        get_arrow_schema, get_delta_schema, get_record_batch, setup_table_with_configuration,
+        write_batch,
+    };
+    use crate::DeltaConfigKey;
     use crate::DeltaTable;
     use arrow::array::Int32Array;
     use arrow::datatypes::{Field, Schema};
@@ -339,6 +342,19 @@ mod tests {
             .unwrap();
         assert_eq!(table.version(), 0);
         table
+    }
+
+    #[tokio::test]
+    async fn test_delete_when_delta_table_is_append_only() {
+        let table = setup_table_with_configuration(DeltaConfigKey::AppendOnly, Some("true")).await;
+        let batch = get_record_batch(None, false);
+        // append some data
+        let table = write_batch(table, batch).await;
+        // delete
+        let _err = DeltaOps(table)
+            .delete()
+            .await
+            .expect_err("Remove action is included when Delta table is append-only. Should error");
     }
 
     #[tokio::test]

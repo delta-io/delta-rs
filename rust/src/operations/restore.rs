@@ -237,6 +237,7 @@ async fn execute(
             datetime: datetime_to_restore.map(|time| -> i64 { time.timestamp_millis() }),
         },
         &actions,
+        &snapshot,
         None,
     )
     .await?;
