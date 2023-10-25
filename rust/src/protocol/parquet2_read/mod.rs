@@ -26,7 +26,7 @@ mod stats;
 mod string;
 mod validity;
 
-/// Parquet deserilization error
+/// Parquet deserialization error
 #[derive(thiserror::Error, Debug)]
 pub enum ParseError {
     /// Generic parsing error
@@ -619,14 +619,18 @@ fn deserialize_protocol_column_page(
             page,
             dict,
             descriptor,
-            |action: &mut Protocol, v: Vec<String>| action.reader_features = Some(v),
+            |action: &mut Protocol, v: Vec<String>| {
+                action.reader_features = v.into_iter().map(Into::into).collect()
+            },
         ),
         "writerFeatures" => for_each_repeated_string_field_value(
             actions,
             page,
             dict,
             descriptor,
-            |action: &mut Protocol, v: Vec<String>| action.writer_features = Some(v),
+            |action: &mut Protocol, v: Vec<String>| {
+                action.writer_features = v.into_iter().map(Into::into).collect()
+            },
         ),
         _ => {
             warn!("Unexpected field `{}` in protocol", f);

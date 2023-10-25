@@ -8,7 +8,7 @@ use serde_json::json;
 
 use crate::protocol::{
     Action, Add, AddCDCFile, ColumnCountStat, ColumnValueStat, DeletionVector, MetaData, Protocol,
-    ProtocolError, Remove, Stats, TableFeatures, Txn,
+    ProtocolError, ReaderFeatures, Remove, Stats, Txn, WriterFeatures,
 };
 
 use super::StorageType;
@@ -592,24 +592,38 @@ impl Txn {
     }
 }
 
-impl From<&Field> for TableFeatures {
+impl From<&Field> for ReaderFeatures {
     fn from(value: &Field) -> Self {
         match value {
             Field::Str(feature) => match feature.as_str() {
-                "appendOnly" => TableFeatures::APPEND_ONLY,
-                "invariants" => TableFeatures::INVARIANTS,
-                "checkConstraints" => TableFeatures::CHECK_CONSTRAINTS,
-                "changeDataFeed" => TableFeatures::CHANGE_DATA_FEED,
-                "generatedColumns" => TableFeatures::GENERATED_COLUMNS,
-                "columnMapping" => TableFeatures::COLUMN_MAPPING,
-                "identityColumns" => TableFeatures::IDENTITY_COLUMNS,
-                "deletionVectors" => TableFeatures::DELETION_VECTORS,
-                "rowTracking" => TableFeatures::ROW_TRACKING,
-                "timestampNtz" => TableFeatures::TIMESTAMP_WITHOUT_TIMEZONE,
-                "domainMetadata" => TableFeatures::DOMAIN_METADATA,
-                "v2Checkpoint" => TableFeatures::V2_CHECKPOINT,
-                "icebergCompatV1" => TableFeatures::ICEBERG_COMPAT_V1,
-                "liquid" => TableFeatures::LIQUID,
+                "columnMapping" => ReaderFeatures::COLUMN_MAPPING,
+                "deletionVectors" => ReaderFeatures::DELETION_VECTORS,
+                "timestampNtz" => ReaderFeatures::TIMESTAMP_WITHOUT_TIMEZONE,
+                "v2Checkpoint" => ReaderFeatures::V2_CHECKPOINT,
+                f => panic!("Unknown reader feature encountered: {}", f),
+            },
+            f => panic!("Unknown field in reader features field: {}", f),
+        }
+    }
+}
+impl From<&Field> for WriterFeatures {
+    fn from(value: &Field) -> Self {
+        match value {
+            Field::Str(feature) => match feature.as_str() {
+                "appendOnly" => WriterFeatures::APPEND_ONLY,
+                "invariants" => WriterFeatures::INVARIANTS,
+                "checkConstraints" => WriterFeatures::CHECK_CONSTRAINTS,
+                "changeDataFeed" => WriterFeatures::CHANGE_DATA_FEED,
+                "generatedColumns" => WriterFeatures::GENERATED_COLUMNS,
+                "columnMapping" => WriterFeatures::COLUMN_MAPPING,
+                "identityColumns" => WriterFeatures::IDENTITY_COLUMNS,
+                "deletionVectors" => WriterFeatures::DELETION_VECTORS,
+                "rowTracking" => WriterFeatures::ROW_TRACKING,
+                "timestampNtz" => WriterFeatures::TIMESTAMP_WITHOUT_TIMEZONE,
+                "domainMetadata" => WriterFeatures::DOMAIN_METADATA,
+                "v2Checkpoint" => WriterFeatures::V2_CHECKPOINT,
+                "icebergCompatV1" => WriterFeatures::ICEBERG_COMPAT_V1,
+                "liquid" => WriterFeatures::LIQUID,
                 f => panic!("Unknown table feature encountered: {}", f),
             },
             f => panic!("Invalid field type for table features: {}", f),
@@ -636,16 +650,10 @@ impl Protocol {
                     })?;
                 }
                 "readerFeatures" => {
-                    re.reader_features = record
-                        .get_list(i)
-                        .and_then(|l| Ok(l.elements().iter().map(From::from).collect()))
-                        .ok();
+                    re.reader_features = record.get_list(i).map(|l| l.elements().iter().map(From::from).collect()).ok()
                 }
                 "writerFeatures" => {
-                    re.writer_features = record
-                        .get_list(i)
-                        .and_then(|l| Ok(l.elements().iter().map(From::from).collect()))
-                        .ok();
+                    re.writer_features = record.get_list(i).map(|l| l.elements().iter().map(From::from).collect()).ok()
                 }
                 _ => {
                     log::debug!(
