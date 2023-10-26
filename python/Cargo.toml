@@ -46,7 +46,7 @@ version = "0.19"
 features = ["extension-module", "abi3", "abi3-py37"]
 
 [dependencies.deltalake]
-path = "../rust"
+path = "../crates/deltalake"
 version = "0"
 features = ["azure", "gcs", "python", "datafusion", "unity-experimental"]
 
