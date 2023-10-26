@@ -211,7 +211,7 @@ mod datafusion_utils {
         metrics::{ExecutionPlanMetricsSet, MetricsSet},
         ExecutionPlan, RecordBatchStream, SendableRecordBatchStream,
     };
-    use datafusion_common::DFSchema;
+    use datafusion_common::{DFSchema, Statistics};
     use datafusion_expr::Expr;
     use futures::{Stream, StreamExt};
 
@@ -337,7 +337,7 @@ mod datafusion_utils {
             }))
         }
 
-        fn statistics(&self) -> datafusion_common::Statistics {
+        fn statistics(&self) -> DataFusionResult<Statistics> {
             self.parent.statistics()
         }
 

@@ -70,6 +70,10 @@ impl<'a> ContextProvider for DeltaContextProvider<'a> {
     fn get_window_meta(&self, name: &str) -> Option<Arc<datafusion_expr::WindowUDF>> {
         self.state.window_functions().get(name).cloned()
     }
+
+    fn get_table_source(&self, _name: TableReference) -> DFResult<Arc<dyn TableSource>> {
+        unimplemented!()
+    }
 }
 
 /// Parse a string predicate into an `Expr`

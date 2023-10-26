@@ -15,23 +15,23 @@ debug = "line-tables-only"
 
 [workspace.dependencies]
 # arrow
-arrow = { version = "47" }
-arrow-array = { version = "47" }
-arrow-buffer = { version = "47" }
-arrow-cast = { version = "47" }
-arrow-ord = { version = "47" }
-arrow-row = { version = "47" }
-arrow-schema = { version = "47" }
-arrow-select = { version = "47" }
-parquet = { version = "47" }
+arrow = { version = "48" }
+arrow-array = { version = "48" }
+arrow-buffer = { version = "48" }
+arrow-cast = { version = "48" }
+arrow-ord = { version = "48" }
+arrow-row = { version = "48" }
+arrow-schema = { version = "48" }
+arrow-select = { version = "48" }
+parquet = { version = "48" }
 
 # datafusion
-datafusion = { version = "32" }
-datafusion-expr = { version = "32" }
-datafusion-common = { version = "32" }
-datafusion-proto = { version = "32" }
-datafusion-sql = { version = "32" }
-datafusion-physical-expr = { version = "32" }
+datafusion = { git = "https://github.com/apache/arrow-datafusion" }
+datafusion-expr = { git = "https://github.com/apache/arrow-datafusion" }
+datafusion-common = {  git = "https://github.com/apache/arrow-datafusion" }
+datafusion-proto =  {  git = "https://github.com/apache/arrow-datafusion" }
+datafusion-sql =  {  git = "https://github.com/apache/arrow-datafusion" }
+datafusion-physical-expr =  {  git = "https://github.com/apache/arrow-datafusion" }
 
 # serde
 serde = { version = "1", features = ["derive"] }

@@ -45,6 +45,7 @@ use std::error::Error;
 mod common;
 
 mod local {
+    use datafusion::common::stats::Precision;
     use deltalake::{writer::JsonWriter, SchemaTypeMap};
 
     use super::*;
@@ -288,19 +289,22 @@ mod local {
             .unwrap();
         let statistics = table.state.datafusion_table_statistics();
 
-        assert_eq!(statistics.num_rows, Some(4),);
-
-        assert_eq!(statistics.total_byte_size, Some(440 + 440));
+        assert_eq!(statistics.num_rows, Precision::Exact(4 as usize),);
 
         assert_eq!(
-            statistics
-                .column_statistics
-                .clone()
-                .unwrap()
-                .iter()
-                .map(|x| x.null_count)
-                .collect::<Vec<Option<usize>>>(),
-            vec![Some(0)],
+            statistics.total_byte_size,
+            Precision::Exact((440 + 440) as usize)
+        );
+
+        let column_stats = statistics.column_statistics.get(0).unwrap();
+        assert_eq!(column_stats.null_count, Precision::Exact(0));
+        assert_eq!(
+            column_stats.max_value,
+            Precision::Exact(ScalarValue::from(4_i32))
+        );
+        assert_eq!(
+            column_stats.min_value,
+            Precision::Exact(ScalarValue::from(0_i32))
         );
 
         let ctx = SessionContext::new();
@@ -322,28 +326,6 @@ mod local {
         assert_eq!(
             batch.column(1).as_ref(),
             Arc::new(Int32Array::from(vec![0])).as_ref(),
-        );
-
-        assert_eq!(
-            statistics
-                .column_statistics
-                .clone()
-                .unwrap()
-                .iter()
-                .map(|x| x.max_value.as_ref())
-                .collect::<Vec<Option<&ScalarValue>>>(),
-            vec![Some(&ScalarValue::from(4_i32))],
-        );
-
-        assert_eq!(
-            statistics
-                .column_statistics
-                .clone()
-                .unwrap()
-                .iter()
-                .map(|x| x.min_value.as_ref())
-                .collect::<Vec<Option<&ScalarValue>>>(),
-            vec![Some(&ScalarValue::from(0_i32))],
         );
 
         Ok(())
@@ -786,14 +768,14 @@ mod local {
 
         let expected_schema = ArrowSchema::new(vec![
             ArrowField::new("c3", ArrowDataType::Int32, true),
-            ArrowField::new("c1", ArrowDataType::Int32, false),
+            ArrowField::new("c1", ArrowDataType::Int32, true),
             ArrowField::new(
                 "c2",
                 ArrowDataType::Dictionary(
                     Box::new(ArrowDataType::UInt16),
                     Box::new(ArrowDataType::Utf8),
                 ),
-                false,
+                true,
             ),
         ]);
 

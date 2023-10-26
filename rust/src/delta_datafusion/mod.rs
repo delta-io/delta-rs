@@ -22,7 +22,6 @@
 
 use std::any::Any;
 use std::collections::{HashMap, HashSet};
-use std::convert::TryFrom;
 use std::fmt::{self, Debug};
 use std::sync::Arc;
 
@@ -56,6 +55,7 @@ use datafusion::physical_plan::{
     SendableRecordBatchStream, Statistics,
 };
 use datafusion_common::scalar::ScalarValue;
+use datafusion_common::stats::Precision;
 use datafusion_common::tree_node::{TreeNode, TreeNodeVisitor, VisitRecursion};
 use datafusion_common::{Column, DataFusionError, Result as DataFusionResult, ToDFSchema};
 use datafusion_expr::expr::{ScalarFunction, ScalarUDF};
@@ -70,7 +70,7 @@ use serde::{Deserialize, Serialize};
 use url::Url;
 
 use crate::errors::{DeltaResult, DeltaTableError};
-use crate::protocol::{self, Add};
+use crate::protocol::{self, Add, ColumnCountStat, ColumnValueStat};
 use crate::storage::ObjectStoreRef;
 use crate::table::builder::ensure_table_uri;
 use crate::table::state::DeltaTableState;
@@ -107,149 +107,133 @@ impl From<DataFusionError> for DeltaTableError {
 impl DeltaTableState {
     /// Return statistics for Datafusion Table
     pub fn datafusion_table_statistics(&self) -> Statistics {
-        let stats = self
-            .files()
-            .iter()
-            .try_fold(
-                Statistics {
-                    num_rows: Some(0),
-                    total_byte_size: Some(0),
-                    column_statistics: Some(vec![
-                        ColumnStatistics {
-                            null_count: Some(0),
-                            max_value: None,
-                            min_value: None,
-                            distinct_count: None
-                        };
-                        self.schema().unwrap().get_fields().len()
-                    ]),
-                    is_exact: true,
-                },
-                |acc, action| {
-                    let new_stats = action
-                        .get_stats()
-                        .unwrap_or_else(|_| Some(protocol::Stats::default()))?;
-                    Some(Statistics {
-                        num_rows: acc
-                            .num_rows
-                            .map(|rows| rows + new_stats.num_records as usize),
-                        total_byte_size: acc
-                            .total_byte_size
-                            .map(|total_size| total_size + action.size as usize),
-                        column_statistics: acc.column_statistics.map(|col_stats| {
-                            self.schema()
-                                .unwrap()
-                                .get_fields()
-                                .iter()
-                                .zip(col_stats)
-                                .map(|(field, stats)| {
-                                    let null_count = new_stats
-                                        .null_count
-                                        .get(field.get_name())
-                                        .and_then(|x| {
-                                            let null_count_acc = stats.null_count?;
-                                            let null_count = x.as_value()? as usize;
-                                            Some(null_count_acc + null_count)
-                                        })
-                                        .or(stats.null_count);
+        let schema = self.arrow_schema().unwrap();
+        // Downgrade statistics to absent if file metadata is not present.
+        let mut downgrade = false;
+        let unknown_stats = Statistics::new_unknown(&schema);
 
-                                    let max_value = new_stats
-                                        .max_values
-                                        .get(field.get_name())
-                                        .and_then(|x| {
-                                            let old_stats = stats.clone();
-                                            let max_value = to_scalar_value(x.as_value()?);
+        let files = self.files();
 
-                                            match (max_value, old_stats.max_value) {
-                                                (Some(max_value), Some(old_max_value)) => {
-                                                    if left_larger_than_right(
-                                                        old_max_value.clone(),
-                                                        max_value.clone(),
-                                                    )? {
-                                                        Some(old_max_value)
-                                                    } else {
-                                                        Some(max_value)
-                                                    }
-                                                }
-                                                (Some(max_value), None) => Some(max_value),
-                                                (None, old) => old,
-                                            }
-                                        })
-                                        .or_else(|| stats.max_value.clone());
+        // Initalize statistics
+        let mut table_stats = match files.get(0) {
+            Some(file) => {
+                match file.get_stats() {
+                    Ok(Some(stats)) => {
+                        let mut column_statistics = Vec::with_capacity(schema.fields().size());
+                        let total_byte_size = Precision::Exact(file.size as usize);
+                        let num_rows = Precision::Exact(stats.num_records as usize);
 
-                                    let min_value = new_stats
-                                        .min_values
-                                        .get(field.get_name())
-                                        .and_then(|x| {
-                                            let old_stats = stats.clone();
-                                            let min_value = to_scalar_value(x.as_value()?);
+                        for field in schema.fields() {
+                            let null_count = match stats.null_count.get(field.name()) {
+                                Some(ColumnCountStat::Value(x)) => Precision::Exact(*x as usize),
+                                //TODO: determine how to handle nested structures...
+                                _ => Precision::Absent,
+                            };
 
-                                            match (min_value, old_stats.min_value) {
-                                                (Some(min_value), Some(old_min_value)) => {
-                                                    if left_larger_than_right(
-                                                        min_value.clone(),
-                                                        old_min_value.clone(),
-                                                    )? {
-                                                        Some(old_min_value)
-                                                    } else {
-                                                        Some(min_value)
-                                                    }
-                                                }
-                                                (Some(min_value), None) => Some(min_value),
-                                                (None, old) => old,
-                                            }
-                                        })
-                                        .or_else(|| stats.min_value.clone());
+                            let max_value = match stats.max_values.get(field.name()) {
+                                Some(ColumnValueStat::Value(value)) => Precision::Exact(
+                                    to_correct_scalar_value(value, field.data_type()).unwrap(),
+                                ),
+                                //TODO: determine how to handle nested structures...
+                                _ => Precision::Absent,
+                            };
 
-                                    ColumnStatistics {
-                                        null_count,
-                                        max_value,
-                                        min_value,
-                                        distinct_count: None, // TODO: distinct
-                                    }
-                                })
-                                .collect()
-                        }),
-                        is_exact: true,
-                    })
-                },
-            )
-            .unwrap_or_default();
+                            let min_value = match stats.min_values.get(field.name()) {
+                                Some(ColumnValueStat::Value(value)) => Precision::Exact(
+                                    to_correct_scalar_value(value, field.data_type()).unwrap(),
+                                ),
+                                //TODO: determine how to handle nested structures...
+                                _ => Precision::Absent,
+                            };
 
-        // Convert column max/min scalar values to correct types based on arrow types.
-        Statistics {
-            is_exact: true,
-            num_rows: stats.num_rows,
-            total_byte_size: stats.total_byte_size,
-            column_statistics: stats.column_statistics.map(|col_stats| {
-                let fields = self.schema().unwrap().get_fields();
-                col_stats
-                    .iter()
-                    .zip(fields)
-                    .map(|(col_states, field)| {
-                        let dt = self
-                            .arrow_schema()
-                            .unwrap()
-                            .field_with_name(field.get_name())
-                            .unwrap()
-                            .data_type()
-                            .clone();
-                        ColumnStatistics {
-                            null_count: col_states.null_count,
-                            max_value: col_states
-                                .max_value
-                                .as_ref()
-                                .and_then(|scalar| correct_scalar_value_type(scalar.clone(), &dt)),
-                            min_value: col_states
-                                .min_value
-                                .as_ref()
-                                .and_then(|scalar| correct_scalar_value_type(scalar.clone(), &dt)),
-                            distinct_count: col_states.distinct_count,
+                            column_statistics.push(ColumnStatistics {
+                                null_count,
+                                max_value,
+                                min_value,
+                                distinct_count: Precision::Absent,
+                            });
                         }
-                    })
-                    .collect()
-            }),
+
+                        Statistics {
+                            total_byte_size,
+                            num_rows,
+                            column_statistics,
+                        }
+                    }
+                    Ok(None) => {
+                        downgrade = true;
+                        let mut stats = unknown_stats.clone();
+                        stats.total_byte_size = Precision::Exact(file.size as usize);
+                        stats
+                    }
+                    _ => return unknown_stats,
+                }
+            }
+            None => {
+                // The Table is empty
+                let mut stats = unknown_stats;
+                stats.num_rows = Precision::Exact(0);
+                stats.total_byte_size = Precision::Exact(0);
+                return stats;
+            }
+        };
+
+        // Populate the remaining statistics. If file statistics are not present then relevant statistics are downgraded to absent.
+        for file in &files.as_slice()[1..] {
+            let byte_size = Precision::Exact(file.size as usize);
+            table_stats.total_byte_size = table_stats.total_byte_size.add(&byte_size);
+
+            if !downgrade {
+                match file.get_stats() {
+                    Ok(Some(stats)) => {
+                        let num_records = Precision::Exact(stats.num_records as usize);
+
+                        table_stats.num_rows = table_stats.num_rows.add(&num_records);
+
+                        for (idx, field) in schema.fields().iter().enumerate() {
+                            let column_stats = table_stats.column_statistics.get_mut(idx).unwrap();
+
+                            let null_count = match stats.null_count.get(field.name()) {
+                                Some(ColumnCountStat::Value(x)) => Precision::Exact(*x as usize),
+                                //TODO: determine how to handle nested structures...
+                                _ => Precision::Absent,
+                            };
+
+                            let max_value = match stats.max_values.get(field.name()) {
+                                Some(ColumnValueStat::Value(value)) => Precision::Exact(
+                                    to_correct_scalar_value(value, field.data_type()).unwrap(),
+                                ),
+                                //TODO: determine how to handle nested structures...
+                                _ => Precision::Absent,
+                            };
+
+                            let min_value = match stats.min_values.get(field.name()) {
+                                Some(ColumnValueStat::Value(value)) => Precision::Exact(
+                                    to_correct_scalar_value(value, field.data_type()).unwrap(),
+                                ),
+                                //TODO: determine how to handle nested structures...
+                                _ => Precision::Absent,
+                            };
+
+                            column_stats.null_count = column_stats.null_count.add(&null_count);
+                            column_stats.max_value = column_stats.max_value.max(&max_value);
+                            column_stats.min_value = column_stats.min_value.min(&min_value);
+                        }
+                    }
+                    Ok(None) => {
+                        downgrade = true;
+                    }
+                    Err(_) => return unknown_stats,
+                }
+            }
         }
+
+        if downgrade {
+            table_stats.column_statistics = unknown_stats.column_statistics;
+            table_stats.num_rows = Precision::Absent;
+        }
+
+        table_stats
     }
 }
 
@@ -620,13 +604,14 @@ impl<'a> DeltaScanBuilder<'a> {
 
         let mut table_partition_cols = table_partition_cols
             .iter()
-            .map(|c| Ok((c.to_owned(), schema.field_with_name(c)?.data_type().clone())))
+            .map(|name| schema.field_with_name(name).map(|f| f.to_owned()))
             .collect::<Result<Vec<_>, ArrowError>>()?;
 
         if let Some(file_column_name) = &config.file_column_name {
-            table_partition_cols.push((
+            table_partition_cols.push(Field::new(
                 file_column_name.clone(),
                 wrap_partition_type_in_dict(DataType::Utf8),
+                false,
             ));
         }
 
@@ -855,7 +840,7 @@ impl ExecutionPlan for DeltaScan {
         self.parquet_scan.execute(partition, context)
     }
 
-    fn statistics(&self) -> Statistics {
+    fn statistics(&self) -> DataFusionResult<Statistics> {
         self.parquet_scan.statistics()
     }
 }
@@ -955,23 +940,27 @@ pub(crate) fn partitioned_file_from_action(
     }
 }
 
-fn to_scalar_value(stat_val: &serde_json::Value) -> Option<ScalarValue> {
-    match stat_val {
-        serde_json::Value::Bool(val) => Some(ScalarValue::from(*val)),
-        serde_json::Value::Number(num) => {
-            if let Some(val) = num.as_i64() {
-                Some(ScalarValue::from(val))
-            } else if let Some(val) = num.as_u64() {
-                Some(ScalarValue::from(val))
-            } else {
-                num.as_f64().map(ScalarValue::from)
-            }
-        }
-        serde_json::Value::String(s) => Some(ScalarValue::from(s.as_str())),
-        serde_json::Value::Array(_) => None,
-        serde_json::Value::Object(_) => None,
-        serde_json::Value::Null => None,
-    }
+fn parse_timestamp(stat_val: &serde_json::Value, field_dt: &ArrowDataType) -> Option<ScalarValue> {
+    let string = match stat_val {
+        serde_json::Value::String(s) => s.to_owned(),
+        _ => stat_val.to_string(),
+    };
+
+    let time_micro = ScalarValue::try_from_string(
+        string,
+        &ArrowDataType::Timestamp(TimeUnit::Microsecond, None),
+    )
+    .ok()?;
+    let cast_arr = cast_with_options(
+        &time_micro.to_array(),
+        field_dt,
+        &CastOptions {
+            safe: false,
+            ..Default::default()
+        },
+    )
+    .ok()?;
+    ScalarValue::try_from_array(&cast_arr, 0).ok()
 }
 
 pub(crate) fn to_correct_scalar_value(
@@ -983,143 +972,13 @@ pub(crate) fn to_correct_scalar_value(
         serde_json::Value::Object(_) => None,
         serde_json::Value::Null => get_null_of_arrow_type(field_dt).ok(),
         serde_json::Value::String(string_val) => match field_dt {
-            ArrowDataType::Timestamp(_, _) => {
-                let time_nanos = ScalarValue::try_from_string(
-                    string_val.to_owned(),
-                    &ArrowDataType::Timestamp(TimeUnit::Nanosecond, None),
-                )
-                .ok()?;
-                let cast_arr = cast_with_options(
-                    &time_nanos.to_array(),
-                    field_dt,
-                    &CastOptions {
-                        safe: false,
-                        ..Default::default()
-                    },
-                )
-                .ok()?;
-                Some(ScalarValue::try_from_array(&cast_arr, 0).ok()?)
-            }
+            ArrowDataType::Timestamp(_, _) => parse_timestamp(stat_val, field_dt),
             _ => Some(ScalarValue::try_from_string(string_val.to_owned(), field_dt).ok()?),
         },
         other => match field_dt {
-            ArrowDataType::Timestamp(_, _) => {
-                let time_nanos = ScalarValue::try_from_string(
-                    other.to_string(),
-                    &ArrowDataType::Timestamp(TimeUnit::Nanosecond, None),
-                )
-                .ok()?;
-                let cast_arr = cast_with_options(
-                    &time_nanos.to_array(),
-                    field_dt,
-                    &CastOptions {
-                        safe: false,
-                        ..Default::default()
-                    },
-                )
-                .ok()?;
-                Some(ScalarValue::try_from_array(&cast_arr, 0).ok()?)
-            }
+            ArrowDataType::Timestamp(_, _) => parse_timestamp(stat_val, field_dt),
             _ => Some(ScalarValue::try_from_string(other.to_string(), field_dt).ok()?),
         },
-    }
-}
-
-fn correct_scalar_value_type(value: ScalarValue, field_dt: &ArrowDataType) -> Option<ScalarValue> {
-    match field_dt {
-        ArrowDataType::Int64 => {
-            let raw_value = i64::try_from(value).ok()?;
-            Some(ScalarValue::from(raw_value))
-        }
-        ArrowDataType::Int32 => {
-            let raw_value = i64::try_from(value).ok()? as i32;
-            Some(ScalarValue::from(raw_value))
-        }
-        ArrowDataType::Int16 => {
-            let raw_value = i64::try_from(value).ok()? as i16;
-            Some(ScalarValue::from(raw_value))
-        }
-        ArrowDataType::Int8 => {
-            let raw_value = i64::try_from(value).ok()? as i8;
-            Some(ScalarValue::from(raw_value))
-        }
-        ArrowDataType::Float32 => {
-            let raw_value = f64::try_from(value).ok()? as f32;
-            Some(ScalarValue::from(raw_value))
-        }
-        ArrowDataType::Float64 => {
-            let raw_value = f64::try_from(value).ok()?;
-            Some(ScalarValue::from(raw_value))
-        }
-        ArrowDataType::Utf8 => match value {
-            ScalarValue::Utf8(val) => Some(ScalarValue::Utf8(val)),
-            _ => None,
-        },
-        ArrowDataType::LargeUtf8 => match value {
-            ScalarValue::Utf8(val) => Some(ScalarValue::LargeUtf8(val)),
-            _ => None,
-        },
-        ArrowDataType::Boolean => {
-            let raw_value = bool::try_from(value).ok()?;
-            Some(ScalarValue::from(raw_value))
-        }
-        ArrowDataType::Decimal128(_, _) => {
-            let raw_value = f64::try_from(value).ok()?;
-            Some(ScalarValue::from(raw_value))
-        }
-        ArrowDataType::Decimal256(_, _) => {
-            let raw_value = f64::try_from(value).ok()?;
-            Some(ScalarValue::from(raw_value))
-        }
-        ArrowDataType::Date32 => {
-            let raw_value = i64::try_from(value).ok()? as i32;
-            Some(ScalarValue::Date32(Some(raw_value)))
-        }
-        ArrowDataType::Date64 => {
-            let raw_value = i64::try_from(value).ok()?;
-            Some(ScalarValue::Date64(Some(raw_value)))
-        }
-        ArrowDataType::Timestamp(TimeUnit::Nanosecond, None) => {
-            let raw_value = i64::try_from(value).ok()?;
-            Some(ScalarValue::TimestampNanosecond(Some(raw_value), None))
-        }
-        ArrowDataType::Timestamp(TimeUnit::Microsecond, None) => {
-            let raw_value = i64::try_from(value).ok()?;
-            Some(ScalarValue::TimestampMicrosecond(Some(raw_value), None))
-        }
-        ArrowDataType::Timestamp(TimeUnit::Millisecond, None) => {
-            let raw_value = i64::try_from(value).ok()?;
-            Some(ScalarValue::TimestampMillisecond(Some(raw_value), None))
-        }
-        _ => {
-            log::error!(
-                "Scalar value of arrow type unimplemented for {:?} and {:?}",
-                value,
-                field_dt
-            );
-            None
-        }
-    }
-}
-
-fn left_larger_than_right(left: ScalarValue, right: ScalarValue) -> Option<bool> {
-    match (&left, &right) {
-        (ScalarValue::Float64(Some(l)), ScalarValue::Float64(Some(r))) => Some(l > r),
-        (ScalarValue::Float32(Some(l)), ScalarValue::Float32(Some(r))) => Some(l > r),
-        (ScalarValue::Int8(Some(l)), ScalarValue::Int8(Some(r))) => Some(l > r),
-        (ScalarValue::Int16(Some(l)), ScalarValue::Int16(Some(r))) => Some(l > r),
-        (ScalarValue::Int32(Some(l)), ScalarValue::Int32(Some(r))) => Some(l > r),
-        (ScalarValue::Int64(Some(l)), ScalarValue::Int64(Some(r))) => Some(l > r),
-        (ScalarValue::Utf8(Some(l)), ScalarValue::Utf8(Some(r))) => Some(l > r),
-        (ScalarValue::Boolean(Some(l)), ScalarValue::Boolean(Some(r))) => Some(l & !r),
-        _ => {
-            log::error!(
-                "Scalar value comparison unimplemented for {:?} and {:?}",
-                left,
-                right
-            );
-            None
-        }
     }
 }
 
@@ -1702,76 +1561,6 @@ mod tests {
         for (raw, data_type, ref_scalar) in reference_pairs {
             let scalar = to_correct_scalar_value(raw, data_type).unwrap();
             assert_eq!(*ref_scalar, scalar)
-        }
-    }
-
-    #[test]
-    fn test_to_scalar_value() {
-        let reference_pairs = &[
-            (
-                json!("val"),
-                Some(ScalarValue::Utf8(Some(String::from("val")))),
-            ),
-            (json!("2"), Some(ScalarValue::Utf8(Some(String::from("2"))))),
-            (json!(true), Some(ScalarValue::Boolean(Some(true)))),
-            (json!(false), Some(ScalarValue::Boolean(Some(false)))),
-            (json!(2), Some(ScalarValue::Int64(Some(2)))),
-            (json!(-2), Some(ScalarValue::Int64(Some(-2)))),
-            (json!(2.0), Some(ScalarValue::Float64(Some(2.0)))),
-            (json!(["1", "2"]), None),
-            (json!({"key": "val"}), None),
-            (json!(null), None),
-        ];
-        for (stat_val, scalar_val) in reference_pairs {
-            assert_eq!(to_scalar_value(stat_val), *scalar_val)
-        }
-    }
-
-    #[test]
-    fn test_left_larger_than_right() {
-        let correct_reference_pairs = vec![
-            (
-                ScalarValue::Float64(Some(1.0)),
-                ScalarValue::Float64(Some(2.0)),
-            ),
-            (
-                ScalarValue::Float32(Some(1.0)),
-                ScalarValue::Float32(Some(2.0)),
-            ),
-            (ScalarValue::Int8(Some(1)), ScalarValue::Int8(Some(2))),
-            (ScalarValue::Int16(Some(1)), ScalarValue::Int16(Some(2))),
-            (ScalarValue::Int32(Some(1)), ScalarValue::Int32(Some(2))),
-            (ScalarValue::Int64(Some(1)), ScalarValue::Int64(Some(2))),
-            (
-                ScalarValue::Boolean(Some(false)),
-                ScalarValue::Boolean(Some(true)),
-            ),
-            (
-                ScalarValue::Utf8(Some(String::from("1"))),
-                ScalarValue::Utf8(Some(String::from("2"))),
-            ),
-        ];
-        for (smaller_val, larger_val) in correct_reference_pairs {
-            assert_eq!(
-                left_larger_than_right(smaller_val.clone(), larger_val.clone()),
-                Some(false)
-            );
-            assert_eq!(left_larger_than_right(larger_val, smaller_val), Some(true));
-        }
-
-        let incorrect_reference_pairs = vec![
-            (
-                ScalarValue::Float64(Some(1.0)),
-                ScalarValue::Float32(Some(2.0)),
-            ),
-            (ScalarValue::Int32(Some(1)), ScalarValue::Float32(Some(2.0))),
-            (
-                ScalarValue::Boolean(Some(true)),
-                ScalarValue::Float32(Some(2.0)),
-            ),
-        ];
-        for (left, right) in incorrect_reference_pairs {
-            assert_eq!(left_larger_than_right(left, right), None);
         }
     }
 
