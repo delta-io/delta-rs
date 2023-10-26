@@ -58,7 +58,7 @@ def s3_localstack_creds():
             "s3",
             "sync",
             "--quiet",
-            "../rust/tests/data/simple_table",
+            "../crates/deltalake-core/tests/data/simple_table",
             "s3://deltars/simple",
             "--endpoint-url",
             endpoint_url,
