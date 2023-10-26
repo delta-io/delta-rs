@@ -251,7 +251,7 @@ impl CreateBuilder {
                 min_reader_version: MAX_SUPPORTED_READER_VERSION,
                 min_writer_version: MAX_SUPPORTED_WRITER_VERSION,
                 writer_features: None,
-                reader_features: None
+                reader_features: None,
             });
 
         let metadata = DeltaTableMetaData::new(
@@ -402,7 +402,7 @@ mod tests {
             min_reader_version: 0,
             min_writer_version: 0,
             writer_features: None,
-            reader_features: None
+            reader_features: None,
         };
         let table = CreateBuilder::new()
             .with_location("memory://")

@@ -23,7 +23,10 @@ use self::builder::DeltaTableConfig;
 use self::state::DeltaTableState;
 use crate::errors::DeltaTableError;
 use crate::partitions::PartitionFilter;
-use crate::protocol::{self, find_latest_check_point_for_version, get_last_checkpoint, Action, TableFeatures};
+use crate::protocol::{
+    self, find_latest_check_point_for_version, get_last_checkpoint, Action, ReaderFeatures,
+    WriterFeatures,
+};
 use crate::protocol::{Add, ProtocolError, Stats};
 use crate::schema::*;
 use crate::storage::{commit_uri_from_version, ObjectStoreRef};
@@ -819,12 +822,12 @@ impl DeltaTable {
     }
 
     /// Returns current supported reader features by this table
-    pub fn get_reader_features(&self) -> Option<&Vec<TableFeatures>> {
+    pub fn get_reader_features(&self) -> Option<&HashSet<ReaderFeatures>> {
         self.state.reader_features()
     }
 
     /// Returns current supported writer features by this table
-    pub fn get_writer_features(&self) -> Option<&Vec<TableFeatures>> {
+    pub fn get_writer_features(&self) -> Option<&HashSet<WriterFeatures>> {
         self.state.writer_features()
     }
 

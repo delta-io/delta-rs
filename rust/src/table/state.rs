@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 use super::config::TableConfig;
 use crate::errors::DeltaTableError;
 use crate::partitions::{DeltaTablePartition, PartitionFilter};
-use crate::protocol::{self, Action, Add, ProtocolError, TableFeatures};
+use crate::protocol::{self, Action, Add, ProtocolError, ReaderFeatures, WriterFeatures};
 use crate::schema::SchemaDataType;
 use crate::storage::commit_uri_from_version;
 use crate::table::DeltaTableMetaData;
@@ -41,8 +41,8 @@ pub struct DeltaTableState {
     app_transaction_version: HashMap<String, i64>,
     min_reader_version: i32,
     min_writer_version: i32,
-    reader_features: Option<Vec<TableFeatures>>,
-    writer_features: Option<Vec<TableFeatures>>,
+    reader_features: Option<HashSet<ReaderFeatures>>,
+    writer_features: Option<HashSet<WriterFeatures>>,
     // table metadata corresponding to current version
     current_metadata: Option<DeltaTableMetaData>,
     // retention period for tombstones in milli-seconds
@@ -232,12 +232,12 @@ impl DeltaTableState {
     }
 
     /// Current supported reader features
-    pub fn reader_features(&self) -> Option<&Vec<TableFeatures>> {
+    pub fn reader_features(&self) -> Option<&HashSet<ReaderFeatures>> {
         self.reader_features.as_ref()
     }
 
     /// Current supported writer features
-    pub fn writer_features(&self) -> Option<&Vec<TableFeatures>> {
+    pub fn writer_features(&self) -> Option<&HashSet<WriterFeatures>> {
         self.writer_features.as_ref()
     }
 
