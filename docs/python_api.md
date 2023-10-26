@@ -1,6 +1,6 @@
 # Python API Reference
 
-## DeltaTable
+## Delta Table
 
 ::: deltalake.table
 
@@ -13,16 +13,28 @@
 Schemas, fields, and data types are provided in the ``deltalake.schema`` submodule.
 
 ::: deltalake.schema.Schema
+    options:
+        show_root_heading: true
 
 ::: deltalake.schema.PrimitiveType
+    options:
+        show_root_heading: true
 
 ::: deltalake.schema.ArrayType
+    options:
+        show_root_heading: true
 
 ::: deltalake.schema.MapType
+    options:
+        show_root_heading: true
 
 ::: deltalake.schema.Field
+    options:
+        show_root_heading: true
 
 ::: deltalake.schema.StructType
+    options:
+        show_root_heading: true
 
 ## Data Catalog
 
