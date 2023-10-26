@@ -65,6 +65,7 @@ use datafusion_physical_expr::execution_props::ExecutionProps;
 use datafusion_physical_expr::{create_physical_expr, PhysicalExpr};
 use datafusion_proto::logical_plan::LogicalExtensionCodec;
 use datafusion_proto::physical_plan::PhysicalExtensionCodec;
+use log::error;
 use object_store::ObjectMeta;
 use serde::{Deserialize, Serialize};
 use url::Url;
@@ -104,10 +105,34 @@ impl From<DataFusionError> for DeltaTableError {
     }
 }
 
+fn get_scalar_value(value: Option<&ColumnValueStat>, field: &Arc<Field>) -> Precision<ScalarValue> {
+    match value {
+        Some(ColumnValueStat::Value(value)) => to_correct_scalar_value(value, field.data_type())
+            .map(|maybe_scalar| {
+                maybe_scalar
+                    .map(Precision::Exact)
+                    .unwrap_or_default()
+            })
+            .unwrap_or_else(|_| {
+                error!(
+                    "Unable to parse scalar value of {:?} with type {} for column {}",
+                    value,
+                    field.data_type(),
+                    field.name()
+                );
+                Precision::Absent
+            }),
+        _ => Precision::Absent,
+    }
+}
+
 impl DeltaTableState {
-    /// Return statistics for Datafusion Table
-    pub fn datafusion_table_statistics(&self) -> Statistics {
-        let schema = self.arrow_schema().unwrap();
+    /// Provide table level statistics to Datafusion
+    pub fn datafusion_table_statistics(&self) -> DataFusionResult<Statistics> {
+        // Statistics only support primitive types. Any non primitive column will not have their statistics captured
+        // If column statistics are missing for any add actions then we simply downgrade to Absent.
+
+        let schema = self.arrow_schema()?;
         // Downgrade statistics to absent if file metadata is not present.
         let mut downgrade = false;
         let unknown_stats = Statistics::new_unknown(&schema);
@@ -116,65 +141,49 @@ impl DeltaTableState {
 
         // Initalize statistics
         let mut table_stats = match files.get(0) {
-            Some(file) => {
-                match file.get_stats() {
-                    Ok(Some(stats)) => {
-                        let mut column_statistics = Vec::with_capacity(schema.fields().size());
-                        let total_byte_size = Precision::Exact(file.size as usize);
-                        let num_rows = Precision::Exact(stats.num_records as usize);
+            Some(file) => match file.get_stats() {
+                Ok(Some(stats)) => {
+                    let mut column_statistics = Vec::with_capacity(schema.fields().size());
+                    let total_byte_size = Precision::Exact(file.size as usize);
+                    let num_rows = Precision::Exact(stats.num_records as usize);
 
-                        for field in schema.fields() {
-                            let null_count = match stats.null_count.get(field.name()) {
-                                Some(ColumnCountStat::Value(x)) => Precision::Exact(*x as usize),
-                                //TODO: determine how to handle nested structures...
-                                _ => Precision::Absent,
-                            };
+                    for field in schema.fields() {
+                        let null_count = match stats.null_count.get(field.name()) {
+                            Some(ColumnCountStat::Value(x)) => Precision::Exact(*x as usize),
+                            _ => Precision::Absent,
+                        };
 
-                            let max_value = match stats.max_values.get(field.name()) {
-                                Some(ColumnValueStat::Value(value)) => Precision::Exact(
-                                    to_correct_scalar_value(value, field.data_type()).unwrap(),
-                                ),
-                                //TODO: determine how to handle nested structures...
-                                _ => Precision::Absent,
-                            };
+                        let max_value = get_scalar_value(stats.max_values.get(field.name()), field);
+                        let min_value = get_scalar_value(stats.min_values.get(field.name()), field);
 
-                            let min_value = match stats.min_values.get(field.name()) {
-                                Some(ColumnValueStat::Value(value)) => Precision::Exact(
-                                    to_correct_scalar_value(value, field.data_type()).unwrap(),
-                                ),
-                                //TODO: determine how to handle nested structures...
-                                _ => Precision::Absent,
-                            };
-
-                            column_statistics.push(ColumnStatistics {
-                                null_count,
-                                max_value,
-                                min_value,
-                                distinct_count: Precision::Absent,
-                            });
-                        }
-
-                        Statistics {
-                            total_byte_size,
-                            num_rows,
-                            column_statistics,
-                        }
+                        column_statistics.push(ColumnStatistics {
+                            null_count,
+                            max_value,
+                            min_value,
+                            distinct_count: Precision::Absent,
+                        });
                     }
-                    Ok(None) => {
-                        downgrade = true;
-                        let mut stats = unknown_stats.clone();
-                        stats.total_byte_size = Precision::Exact(file.size as usize);
-                        stats
+
+                    Statistics {
+                        total_byte_size,
+                        num_rows,
+                        column_statistics,
                     }
-                    _ => return unknown_stats,
                 }
-            }
+                Ok(None) => {
+                    downgrade = true;
+                    let mut stats = unknown_stats.clone();
+                    stats.total_byte_size = Precision::Exact(file.size as usize);
+                    stats
+                }
+                _ => return Ok(unknown_stats),
+            },
             None => {
                 // The Table is empty
                 let mut stats = unknown_stats;
                 stats.num_rows = Precision::Exact(0);
                 stats.total_byte_size = Precision::Exact(0);
-                return stats;
+                return Ok(stats);
             }
         };
 
@@ -195,25 +204,13 @@ impl DeltaTableState {
 
                             let null_count = match stats.null_count.get(field.name()) {
                                 Some(ColumnCountStat::Value(x)) => Precision::Exact(*x as usize),
-                                //TODO: determine how to handle nested structures...
                                 _ => Precision::Absent,
                             };
 
-                            let max_value = match stats.max_values.get(field.name()) {
-                                Some(ColumnValueStat::Value(value)) => Precision::Exact(
-                                    to_correct_scalar_value(value, field.data_type()).unwrap(),
-                                ),
-                                //TODO: determine how to handle nested structures...
-                                _ => Precision::Absent,
-                            };
-
-                            let min_value = match stats.min_values.get(field.name()) {
-                                Some(ColumnValueStat::Value(value)) => Precision::Exact(
-                                    to_correct_scalar_value(value, field.data_type()).unwrap(),
-                                ),
-                                //TODO: determine how to handle nested structures...
-                                _ => Precision::Absent,
-                            };
+                            let max_value =
+                                get_scalar_value(stats.max_values.get(field.name()), field);
+                            let min_value =
+                                get_scalar_value(stats.min_values.get(field.name()), field);
 
                             column_stats.null_count = column_stats.null_count.add(&null_count);
                             column_stats.max_value = column_stats.max_value.max(&max_value);
@@ -223,7 +220,7 @@ impl DeltaTableState {
                     Ok(None) => {
                         downgrade = true;
                     }
-                    Err(_) => return unknown_stats,
+                    Err(_) => return Ok(unknown_stats),
                 }
             }
         }
@@ -233,7 +230,7 @@ impl DeltaTableState {
             table_stats.num_rows = Precision::Absent;
         }
 
-        table_stats
+        Ok(table_stats)
     }
 }
 
@@ -261,9 +258,12 @@ fn get_prune_stats(table: &DeltaTable, column: &Column, get_max: bool) -> Option
                 Some(v) => serde_json::Value::String(v.to_string()),
                 None => serde_json::Value::Null,
             };
-            to_correct_scalar_value(&value, &data_type).unwrap_or(
-                get_null_of_arrow_type(&data_type).expect("Could not determine null type"),
-            )
+            to_correct_scalar_value(&value, &data_type)
+                .ok()
+                .flatten()
+                .unwrap_or(
+                    get_null_of_arrow_type(&data_type).expect("Could not determine null type"),
+                )
         } else if let Ok(Some(statistics)) = add.get_stats() {
             let values = if get_max {
                 statistics.max_values
@@ -273,7 +273,11 @@ fn get_prune_stats(table: &DeltaTable, column: &Column, get_max: bool) -> Option
 
             values
                 .get(&column.name)
-                .and_then(|f| to_correct_scalar_value(f.as_value()?, &data_type))
+                .and_then(|f| {
+                    to_correct_scalar_value(f.as_value()?, &data_type)
+                        .ok()
+                        .flatten()
+                })
                 .unwrap_or(
                     get_null_of_arrow_type(&data_type).expect("Could not determine null type"),
                 )
@@ -615,6 +619,17 @@ impl<'a> DeltaScanBuilder<'a> {
             ));
         }
 
+        let stats = self
+            .snapshot
+            .datafusion_table_statistics()
+            .unwrap_or_else(|e| {
+                error!(
+                    "Error while computing table statistics. Using unknown statistics. {}",
+                    e
+                );
+                Statistics::new_unknown(&schema)
+            });
+
         let scan = ParquetFormat::new()
             .create_physical_plan(
                 self.state,
@@ -622,7 +637,7 @@ impl<'a> DeltaScanBuilder<'a> {
                     object_store_url: self.object_store.object_store_url(),
                     file_schema,
                     file_groups: file_groups.into_values().collect(),
-                    statistics: self.snapshot.datafusion_table_statistics(),
+                    statistics: stats,
                     projection: self.projection.cloned(),
                     limit: self.limit,
                     table_partition_cols,
@@ -694,7 +709,7 @@ impl TableProvider for DeltaTable {
     }
 
     fn statistics(&self) -> Option<Statistics> {
-        Some(self.state.datafusion_table_statistics())
+        self.state.datafusion_table_statistics().ok()
     }
 }
 
@@ -773,7 +788,7 @@ impl TableProvider for DeltaTableProvider {
     }
 
     fn statistics(&self) -> Option<Statistics> {
-        Some(self.snapshot.datafusion_table_statistics())
+        self.snapshot.datafusion_table_statistics().ok()
     }
 }
 
@@ -919,6 +934,8 @@ pub(crate) fn partitioned_file_from_action(
                     &serde_json::Value::String(value.to_string()),
                     f.data_type(),
                 )
+                .ok()
+                .flatten()
                 .unwrap_or(ScalarValue::Null),
                 None => get_null_of_arrow_type(f.data_type()).unwrap_or(ScalarValue::Null),
             })
@@ -940,7 +957,10 @@ pub(crate) fn partitioned_file_from_action(
     }
 }
 
-fn parse_timestamp(stat_val: &serde_json::Value, field_dt: &ArrowDataType) -> Option<ScalarValue> {
+fn parse_timestamp(
+    stat_val: &serde_json::Value,
+    field_dt: &ArrowDataType,
+) -> DataFusionResult<ScalarValue> {
     let string = match stat_val {
         serde_json::Value::String(s) => s.to_owned(),
         _ => stat_val.to_string(),
@@ -949,8 +969,7 @@ fn parse_timestamp(stat_val: &serde_json::Value, field_dt: &ArrowDataType) -> Op
     let time_micro = ScalarValue::try_from_string(
         string,
         &ArrowDataType::Timestamp(TimeUnit::Microsecond, None),
-    )
-    .ok()?;
+    )?;
     let cast_arr = cast_with_options(
         &time_micro.to_array(),
         field_dt,
@@ -958,26 +977,31 @@ fn parse_timestamp(stat_val: &serde_json::Value, field_dt: &ArrowDataType) -> Op
             safe: false,
             ..Default::default()
         },
-    )
-    .ok()?;
-    ScalarValue::try_from_array(&cast_arr, 0).ok()
+    )?;
+    ScalarValue::try_from_array(&cast_arr, 0)
 }
 
 pub(crate) fn to_correct_scalar_value(
     stat_val: &serde_json::Value,
     field_dt: &ArrowDataType,
-) -> Option<ScalarValue> {
+) -> DataFusionResult<Option<ScalarValue>> {
     match stat_val {
-        serde_json::Value::Array(_) => None,
-        serde_json::Value::Object(_) => None,
-        serde_json::Value::Null => get_null_of_arrow_type(field_dt).ok(),
+        serde_json::Value::Array(_) => Ok(None),
+        serde_json::Value::Object(_) => Ok(None),
+        serde_json::Value::Null => Ok(Some(get_null_of_arrow_type(field_dt)?)),
         serde_json::Value::String(string_val) => match field_dt {
-            ArrowDataType::Timestamp(_, _) => parse_timestamp(stat_val, field_dt),
-            _ => Some(ScalarValue::try_from_string(string_val.to_owned(), field_dt).ok()?),
+            ArrowDataType::Timestamp(_, _) => Ok(Some(parse_timestamp(stat_val, field_dt)?)),
+            _ => Ok(Some(ScalarValue::try_from_string(
+                string_val.to_owned(),
+                field_dt,
+            )?)),
         },
         other => match field_dt {
-            ArrowDataType::Timestamp(_, _) => parse_timestamp(stat_val, field_dt),
-            _ => Some(ScalarValue::try_from_string(other.to_string(), field_dt).ok()?),
+            ArrowDataType::Timestamp(_, _) => Ok(Some(parse_timestamp(stat_val, field_dt)?)),
+            _ => Ok(Some(ScalarValue::try_from_string(
+                other.to_string(),
+                field_dt,
+            )?)),
         },
     }
 }
@@ -1559,7 +1583,7 @@ mod tests {
         ];
 
         for (raw, data_type, ref_scalar) in reference_pairs {
-            let scalar = to_correct_scalar_value(raw, data_type).unwrap();
+            let scalar = to_correct_scalar_value(raw, data_type).unwrap().unwrap();
             assert_eq!(*ref_scalar, scalar)
         }
     }
