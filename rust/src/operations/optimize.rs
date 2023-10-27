@@ -1181,6 +1181,106 @@ pub(super) mod zorder {
             let array = zorder_key(&columns)?;
             Ok(ColumnarValue::Array(array))
         }
+
+        #[cfg(test)]
+        mod tests {
+            use super::*;
+            use ::datafusion::assert_batches_eq;
+            use arrow_array::{Int32Array, StringArray};
+            use arrow_ord::sort::sort_to_indices;
+            use arrow_select::take::take;
+            use rand::Rng;
+            #[test]
+            fn test_order() {
+                let int: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5]));
+                let str: ArrayRef = Arc::new(StringArray::from(vec![
+                    Some("a"),
+                    Some("x"),
+                    Some("a"),
+                    Some("x"),
+                    None,
+                ]));
+                let int_large: ArrayRef = Arc::new(Int32Array::from(vec![10000, 2000, 300, 40, 5]));
+                let batch = RecordBatch::try_from_iter(vec![
+                    ("int", int),
+                    ("str", str),
+                    ("int_large", int_large),
+                ])
+                .unwrap();
+
+                let expected_1 = vec![
+                    "+-----+-----+-----------+",
+                    "| int | str | int_large |",
+                    "+-----+-----+-----------+",
+                    "| 1   | a   | 10000     |",
+                    "| 2   | x   | 2000      |",
+                    "| 3   | a   | 300       |",
+                    "| 4   | x   | 40        |",
+                    "| 5   |     | 5         |",
+                    "+-----+-----+-----------+",
+                ];
+                let expected_2 = vec![
+                    "+-----+-----+-----------+",
+                    "| int | str | int_large |",
+                    "+-----+-----+-----------+",
+                    "| 5   |     | 5         |",
+                    "| 1   | a   | 10000     |",
+                    "| 3   | a   | 300       |",
+                    "| 2   | x   | 2000      |",
+                    "| 4   | x   | 40        |",
+                    "+-----+-----+-----------+",
+                ];
+                let expected_3 = vec![
+                    "+-----+-----+-----------+",
+                    "| int | str | int_large |",
+                    "+-----+-----+-----------+",
+                    "| 5   |     | 5         |",
+                    "| 4   | x   | 40        |",
+                    "| 2   | x   | 2000      |",
+                    "| 3   | a   | 300       |",
+                    "| 1   | a   | 10000     |",
+                    "+-----+-----+-----------+",
+                ];
+
+                let expected = vec![expected_1, expected_2, expected_3];
+
+                let indices = Int32Array::from(shuffled_indices().to_vec());
+                let shuffled_columns = batch
+                    .columns()
+                    .iter()
+                    .map(|c| take(c, &indices, None).unwrap())
+                    .collect::<Vec<_>>();
+                let shuffled_batch =
+                    RecordBatch::try_new(batch.schema(), shuffled_columns).unwrap();
+
+                for i in 1..=batch.num_columns() {
+                    let columns = (0..i)
+                        .map(|idx| shuffled_batch.column(idx).clone())
+                        .collect::<Vec<_>>();
+
+                    let order_keys = zorder_key(&columns).unwrap();
+                    let indices = sort_to_indices(order_keys.as_ref(), None, None).unwrap();
+                    let sorted_columns = shuffled_batch
+                        .columns()
+                        .iter()
+                        .map(|c| take(c, &indices, None).unwrap())
+                        .collect::<Vec<_>>();
+                    let sorted_batch =
+                        RecordBatch::try_new(batch.schema(), sorted_columns).unwrap();
+
+                    assert_batches_eq!(expected[i - 1], &[sorted_batch]);
+                }
+            }
+            fn shuffled_indices() -> [i32; 5] {
+                let mut rng = rand::thread_rng();
+                let mut array = [0, 1, 2, 3, 4];
+                for i in (1..array.len()).rev() {
+                    let j = rng.gen_range(0..=i);
+                    array.swap(i, j);
+                }
+                array
+            }
+        }
     }
 
     /// Creates a new binary array containing the zorder keys for the given columns
@@ -1287,14 +1387,10 @@ pub(super) mod zorder {
 
     #[cfg(test)]
     mod test {
-        use ::datafusion::assert_batches_eq;
         use arrow_array::{
-            cast::as_generic_binary_array, new_empty_array, Int32Array, StringArray, UInt8Array,
+            cast::as_generic_binary_array, new_empty_array, StringArray, UInt8Array,
         };
-        use arrow_ord::sort::sort_to_indices;
         use arrow_schema::DataType;
-        use arrow_select::take::take;
-        use rand::Rng;
 
         use super::*;
 
@@ -1339,96 +1435,6 @@ pub(super) mod zorder {
             dbg!(data);
             assert_eq!(data.value_data().len(), 3 * 16 * 3);
             assert!(data.iter().all(|x| x.unwrap().len() == 3 * 16));
-        }
-
-        #[test]
-        fn test_order() {
-            let int: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5]));
-            let str: ArrayRef = Arc::new(StringArray::from(vec![
-                Some("a"),
-                Some("x"),
-                Some("a"),
-                Some("x"),
-                None,
-            ]));
-            let int_large: ArrayRef = Arc::new(Int32Array::from(vec![10000, 2000, 300, 40, 5]));
-            let batch = RecordBatch::try_from_iter(vec![
-                ("int", int),
-                ("str", str),
-                ("int_large", int_large),
-            ])
-            .unwrap();
-
-            let expected_1 = vec![
-                "+-----+-----+-----------+",
-                "| int | str | int_large |",
-                "+-----+-----+-----------+",
-                "| 1   | a   | 10000     |",
-                "| 2   | x   | 2000      |",
-                "| 3   | a   | 300       |",
-                "| 4   | x   | 40        |",
-                "| 5   |     | 5         |",
-                "+-----+-----+-----------+",
-            ];
-            let expected_2 = vec![
-                "+-----+-----+-----------+",
-                "| int | str | int_large |",
-                "+-----+-----+-----------+",
-                "| 5   |     | 5         |",
-                "| 1   | a   | 10000     |",
-                "| 3   | a   | 300       |",
-                "| 2   | x   | 2000      |",
-                "| 4   | x   | 40        |",
-                "+-----+-----+-----------+",
-            ];
-            let expected_3 = vec![
-                "+-----+-----+-----------+",
-                "| int | str | int_large |",
-                "+-----+-----+-----------+",
-                "| 5   |     | 5         |",
-                "| 4   | x   | 40        |",
-                "| 2   | x   | 2000      |",
-                "| 3   | a   | 300       |",
-                "| 1   | a   | 10000     |",
-                "+-----+-----+-----------+",
-            ];
-
-            let expected = vec![expected_1, expected_2, expected_3];
-
-            let indices = Int32Array::from(shuffled_indices().to_vec());
-            let shuffled_columns = batch
-                .columns()
-                .iter()
-                .map(|c| take(c, &indices, None).unwrap())
-                .collect::<Vec<_>>();
-            let shuffled_batch = RecordBatch::try_new(batch.schema(), shuffled_columns).unwrap();
-
-            for i in 1..=batch.num_columns() {
-                let columns = (0..i)
-                    .map(|idx| shuffled_batch.column(idx).clone())
-                    .collect::<Vec<_>>();
-
-                let order_keys = zorder_key(&columns).unwrap();
-                let indices = sort_to_indices(order_keys.as_ref(), None, None).unwrap();
-                let sorted_columns = shuffled_batch
-                    .columns()
-                    .iter()
-                    .map(|c| take(c, &indices, None).unwrap())
-                    .collect::<Vec<_>>();
-                let sorted_batch = RecordBatch::try_new(batch.schema(), sorted_columns).unwrap();
-
-                assert_batches_eq!(expected[i - 1], &[sorted_batch]);
-            }
-        }
-
-        fn shuffled_indices() -> [i32; 5] {
-            let mut rng = rand::thread_rng();
-            let mut array = [0, 1, 2, 3, 4];
-            for i in (1..array.len()).rev() {
-                let j = rng.gen_range(0..=i);
-                array.swap(i, j);
-            }
-            array
         }
     }
 }
