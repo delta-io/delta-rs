@@ -65,6 +65,7 @@ def write_deltalake(
     table_or_uri: Union[str, Path, DeltaTable],
     data: Union[
         "pd.DataFrame",
+        ds.Dataset,
         pa.Table,
         pa.RecordBatch,
         Iterable[pa.RecordBatch],
@@ -330,6 +331,8 @@ def write_deltalake(
         elif isinstance(data, pa.RecordBatch):
             batch_iter = [data]
         elif isinstance(data, pa.Table):
+            batch_iter = data.to_batches()
+        elif isinstance(data, ds.Dataset):
             batch_iter = data.to_batches()
         else:
             batch_iter = data
