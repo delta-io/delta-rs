@@ -650,10 +650,16 @@ impl Protocol {
                     })?;
                 }
                 "readerFeatures" => {
-                    re.reader_features = record.get_list(i).map(|l| l.elements().iter().map(From::from).collect()).ok()
+                    re.reader_features = record
+                        .get_list(i)
+                        .map(|l| l.elements().iter().map(From::from).collect())
+                        .ok()
                 }
                 "writerFeatures" => {
-                    re.writer_features = record.get_list(i).map(|l| l.elements().iter().map(From::from).collect()).ok()
+                    re.writer_features = record
+                        .get_list(i)
+                        .map(|l| l.elements().iter().map(From::from).collect())
+                        .ok()
                 }
                 _ => {
                     log::debug!(

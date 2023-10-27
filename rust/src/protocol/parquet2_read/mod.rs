@@ -10,7 +10,7 @@ use parquet2::read::decompress;
 use parquet2::read::get_page_iterator;
 use parquet2::read::levels::get_bit_width;
 
-use super::ProtocolError;
+use super::{ProtocolError, ReaderFeatures, WriterFeatures};
 use crate::protocol::{Action, Add, CommitInfo, MetaData, Protocol, Remove, Txn};
 use crate::schema::Guid;
 use boolean::for_each_boolean_field_value;
@@ -62,6 +62,40 @@ struct DeserState {
     remove_tags: map::MapState,
     metadata_fromat_options: map::MapState,
     metadata_configuration: map::MapState,
+}
+
+impl From<String> for ReaderFeatures {
+    fn from(value: String) -> Self {
+        match value.as_str() {
+            "columnMapping" => ReaderFeatures::COLUMN_MAPPING,
+            "deletionVectors" => ReaderFeatures::DELETION_VECTORS,
+            "timestampNtz" => ReaderFeatures::TIMESTAMP_WITHOUT_TIMEZONE,
+            "v2Checkpoint" => ReaderFeatures::V2_CHECKPOINT,
+            f => panic!("Unknown reader feature encountered: {}", f),
+        }
+    }
+}
+
+impl From<String> for WriterFeatures {
+    fn from(value: String) -> Self {
+        match value.as_str() {
+            "appendOnly" => WriterFeatures::APPEND_ONLY,
+            "invariants" => WriterFeatures::INVARIANTS,
+            "checkConstraints" => WriterFeatures::CHECK_CONSTRAINTS,
+            "changeDataFeed" => WriterFeatures::CHANGE_DATA_FEED,
+            "generatedColumns" => WriterFeatures::GENERATED_COLUMNS,
+            "columnMapping" => WriterFeatures::COLUMN_MAPPING,
+            "identityColumns" => WriterFeatures::IDENTITY_COLUMNS,
+            "deletionVectors" => WriterFeatures::DELETION_VECTORS,
+            "rowTracking" => WriterFeatures::ROW_TRACKING,
+            "timestampNtz" => WriterFeatures::TIMESTAMP_WITHOUT_TIMEZONE,
+            "domainMetadata" => WriterFeatures::DOMAIN_METADATA,
+            "v2Checkpoint" => WriterFeatures::V2_CHECKPOINT,
+            "icebergCompatV1" => WriterFeatures::ICEBERG_COMPAT_V1,
+            "liquid" => WriterFeatures::LIQUID,
+            f => panic!("Unknown table feature encountered: {}", f),
+        }
+    }
 }
 
 fn hashmap_from_kvpairs<Key, Val>(
@@ -614,24 +648,30 @@ fn deserialize_protocol_column_page(
                 |action: &mut Protocol, v: i32| action.min_writer_version = v,
             )?;
         }
-        "readerFeatures" => for_each_repeated_string_field_value(
-            actions,
-            page,
-            dict,
-            descriptor,
-            |action: &mut Protocol, v: Vec<String>| {
-                action.reader_features = v.into_iter().map(Into::into).collect()
-            },
-        ),
-        "writerFeatures" => for_each_repeated_string_field_value(
-            actions,
-            page,
-            dict,
-            descriptor,
-            |action: &mut Protocol, v: Vec<String>| {
-                action.writer_features = v.into_iter().map(Into::into).collect()
-            },
-        ),
+        "readerFeatures" => {
+            for_each_repeated_string_field_value(
+                actions,
+                page,
+                dict,
+                descriptor,
+                |action: &mut Protocol, v: Vec<String>| {
+                    action.reader_features =
+                        Some(v.into_iter().map(ReaderFeatures::from).collect());
+                },
+            )?;
+        }
+        "writerFeatures" => {
+            for_each_repeated_string_field_value(
+                actions,
+                page,
+                dict,
+                descriptor,
+                |action: &mut Protocol, v: Vec<String>| {
+                    action.writer_features =
+                        Some(v.into_iter().map(WriterFeatures::from).collect());
+                },
+            )?;
+        }
         _ => {
             warn!("Unexpected field `{}` in protocol", f);
         }
