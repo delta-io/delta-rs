@@ -108,11 +108,7 @@ impl From<DataFusionError> for DeltaTableError {
 fn get_scalar_value(value: Option<&ColumnValueStat>, field: &Arc<Field>) -> Precision<ScalarValue> {
     match value {
         Some(ColumnValueStat::Value(value)) => to_correct_scalar_value(value, field.data_type())
-            .map(|maybe_scalar| {
-                maybe_scalar
-                    .map(Precision::Exact)
-                    .unwrap_or_default()
-            })
+            .map(|maybe_scalar| maybe_scalar.map(Precision::Exact).unwrap_or_default())
             .unwrap_or_else(|_| {
                 error!(
                     "Unable to parse scalar value of {:?} with type {} for column {}",
