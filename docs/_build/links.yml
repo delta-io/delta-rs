@@ -1,6 +1,4 @@
 python:
-  DeltaTable: PYTHON_API_URL/delta_table
-  DeltaTableOriginal: https://delta-io.github.io/delta-rs/python/api_reference.html#module-deltalake.table
-  file_uris: "PYTHON_API_URL/delta_table/#deltalake.table.DeltaTable.file_uris"
+  DeltaTable: PYTHON_API_URL#deltalake.table.DeltaTable
 rust:
   DeltaTable: https://docs.rs/deltalake/latest/deltalake/table/struct.DeltaTable.html
