@@ -128,6 +128,9 @@ impl TryFrom<&schema::SchemaDataType> for ArrowDataType {
                     ))),
                 }
             }
+            schema::SchemaDataType::timestamp(_) => {
+                Ok(ArrowDataType::Timestamp(TimeUnit::Microsecond, None))
+            }
             schema::SchemaDataType::r#struct(s) => Ok(ArrowDataType::Struct(
                 s.get_fields()
                     .iter()
@@ -247,6 +250,14 @@ impl TryFrom<&ArrowDataType> for schema::SchemaDataType {
                 if tz.eq_ignore_ascii_case("utc") =>
             {
                 Ok(schema::SchemaDataType::primitive("timestamp".to_string()))
+            }
+            ArrowDataType::Timestamp(TimeUnit::Nanosecond, None) => {
+                Ok(schema::SchemaDataType::timestamp(true))
+            }
+            ArrowDataType::Timestamp(TimeUnit::Nanosecond, Some(tz))
+                if tz.eq_ignore_ascii_case("utc") =>
+            {
+                Ok(schema::SchemaDataType::timestamp(true))
             }
             ArrowDataType::Struct(fields) => {
                 let converted_fields: Result<Vec<schema::SchemaField>, _> = fields
@@ -827,6 +838,15 @@ mod tests {
         assert_eq!(
             <crate::SchemaDataType as TryFrom<&ArrowDataType>>::try_from(&timestamp_field).unwrap(),
             crate::SchemaDataType::primitive("timestamp".to_string())
+        );
+    }
+
+    #[test]
+    fn test_delta_from_arrow_timestamp_nano_type() {
+        let timestamp_field = ArrowDataType::Timestamp(TimeUnit::Nanosecond, None);
+        assert_eq!(
+            <crate::SchemaDataType as TryFrom<&ArrowDataType>>::try_from(&timestamp_field).unwrap(),
+            crate::SchemaDataType::timestamp(true)
         );
     }
 

@@ -298,6 +298,10 @@ pub enum SchemaDataType {
     ///  * timestamp: Microsecond precision timestamp without a timezone
     ///  * decimal: Signed decimal number with fixed precision (maximum number of digits) and scale (number of digits on right side of dot), where the precision and scale can be up to 38
     primitive(String),
+    /// Variant for timestamps that specifies whether timestamps must be converted from nanoseconds
+    /// This is only for an initial convert to delta call, after initial parquet is converted it would
+    /// go back to primitive usage above, so this type should never be written back out
+    timestamp(bool),
     /// Variant representing a struct.
     r#struct(SchemaTypeStruct),
     /// Variant representing an array.

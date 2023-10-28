@@ -66,6 +66,9 @@ fn schema_type_to_python(schema_type: SchemaDataType, py: Python) -> PyResult<Py
             let struct_type: StructType = struct_type.into();
             Ok(struct_type.into_py(py))
         }
+        SchemaDataType::timestamp(_) => Err(PyErr::new::<PyTypeError, _>(
+            "Encountered schema field not meant to be written",
+        )),
     }
 }
 
