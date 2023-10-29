@@ -51,7 +51,7 @@ fn object_store_to_py(err: ObjectStoreError) -> PyErr {
 
 fn arrow_to_py(err: ArrowError) -> PyErr {
     match err {
-        ArrowError::IoError(msg) => PyIOError::new_err(msg),
+        ArrowError::IoError(msg, _) => PyIOError::new_err(msg),
         ArrowError::DivideByZero => PyValueError::new_err("division by zero"),
         ArrowError::InvalidArgumentError(msg) => PyValueError::new_err(msg),
         ArrowError::NotYetImplemented(msg) => PyNotImplementedError::new_err(msg),

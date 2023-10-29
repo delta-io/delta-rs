@@ -151,7 +151,7 @@ def _check_dnf(
 
 def _convert_single_predicate(column: str, op: str, value: Any) -> Expression:
     """
-    Convert given `tuple` to `pyarrow.dataset.Expression`.
+    Convert given `tuple` to [pyarrow.dataset.Expression].
     """
     import pyarrow.dataset as ds
 
@@ -180,7 +180,7 @@ def _convert_single_predicate(column: str, op: str, value: Any) -> Expression:
 
 def _filters_to_expression(filters: FilterType) -> Expression:
     """
-    Check if filters are well-formed and convert to an ``pyarrow.dataset.Expression``.
+    Check if filters are well-formed and convert to an [pyarrow.dataset.Expression].
     """
     if isinstance(filters[0][0], str):
         # We have encountered the situation where we have one nesting level too few:
@@ -209,16 +209,18 @@ the op is in or not in, the value must be a collection such as a list, a set or 
 The supported type for value is str. Use empty string `''` for Null partition value.
 
 Examples:
+```
 ("x", "=", "a")
 ("x", "!=", "a")
 ("y", "in", ["a", "b", "c"])
 ("z", "not in", ["a","b"])
+```
 """
 
 
 @dataclass(init=False)
 class DeltaTable:
-    """Create a DeltaTable instance."""
+    """Represents a Delta Table"""
 
     def __init__(
         self,
@@ -233,13 +235,14 @@ class DeltaTable:
         Multiple StorageBackends are currently supported: AWS S3, Azure Data Lake Storage Gen2, Google Cloud Storage (GCS) and local URI.
         Depending on the storage backend used, you could provide options values using the ``storage_options`` parameter.
 
-        :param table_uri: the path of the DeltaTable
-        :param version: version of the DeltaTable
-        :param storage_options: a dictionary of the options to use for the storage backend
-        :param without_files: If True, will load table without tracking files.
-                              Some append-only applications might have no need of tracking any files. So, the
-                              DeltaTable will be loaded with a significant memory reduction.
-        :param log_buffer_size: Number of files to buffer when reading the commit log. A positive integer.
+        Args:
+            table_uri: the path of the DeltaTable
+            version: version of the DeltaTable
+            storage_options: a dictionary of the options to use for the storage backend
+            without_files: If True, will load table without tracking files.
+                                Some append-only applications might have no need of tracking any files. So, the
+                                DeltaTable will be loaded with a significant memory reduction.
+            log_buffer_size: Number of files to buffer when reading the commit log. A positive integer.
                                 Setting a value greater than 1 results in concurrent calls to the storage api.
                                 This can decrease latency if there are many files in the log since the last checkpoint,
                                 but will also increase memory usage. Possible rate limits of the storage backend should
@@ -269,12 +272,13 @@ class DeltaTable:
         """
         Create the Delta Table from a Data Catalog.
 
-        :param data_catalog: the Catalog to use for getting the storage location of the Delta Table
-        :param database_name: the database name inside the Data Catalog
-        :param table_name: the table name inside the Data Catalog
-        :param data_catalog_id: the identifier of the Data Catalog
-        :param version: version of the DeltaTable
-        :param log_buffer_size: Number of files to buffer when reading the commit log. A positive integer.
+        Args:
+            data_catalog: the Catalog to use for getting the storage location of the Delta Table
+            database_name: the database name inside the Data Catalog
+            table_name: the table name inside the Data Catalog
+            data_catalog_id: the identifier of the Data Catalog
+            version: version of the DeltaTable
+            log_buffer_size: Number of files to buffer when reading the commit log. A positive integer.
                                 Setting a value greater than 1 results in concurrent calls to the storage api.
                                 This can decrease latency if there are many files in the log since the last checkpoint,
                                 but will also increase memory usage. Possible rate limits of the storage backend should
@@ -294,54 +298,93 @@ class DeltaTable:
         """
         Get the version of the DeltaTable.
 
-        :return: The current version of the DeltaTable
+        Returns:
+            The current version of the DeltaTable
         """
         return self._table.version()
 
     def files(
         self, partition_filters: Optional[List[Tuple[str, str, Any]]] = None
     ) -> List[str]:
+        """
+        Get the .parquet files of the DeltaTable.
+
+        The paths are as they are saved in the delta log, which may either be
+        relative to the table root or absolute URIs.
+
+        Args:
+            partition_filters: the partition filters that will be used for
+                                getting the matched files
+
+        Returns:
+            list of the .parquet files referenced for the current version of the DeltaTable
+
+        Predicates are expressed in disjunctive normal form (DNF), like [("x", "=", "a"), ...].
+        DNF allows arbitrary boolean logical combinations of single partition predicates.
+        The innermost tuples each describe a single partition predicate. The list of inner
+        predicates is interpreted as a conjunction (AND), forming a more selective and
+        multiple partition predicates. Each tuple has format: (key, op, value) and compares
+        the key with the value. The supported op are: `=`, `!=`, `in`, and `not in`. If
+        the op is in or not in, the value must be a collection such as a list, a set or a tuple.
+        The supported type for value is str. Use empty string `''` for Null partition value.
+
+        Examples:
+        ```
+        ("x", "=", "a")
+        ("x", "!=", "a")
+        ("y", "in", ["a", "b", "c"])
+        ("z", "not in", ["a","b"])
+        ```
+        """
         return self._table.files(self.__stringify_partition_values(partition_filters))
-
-    files.__doc__ = f"""
-Get the .parquet files of the DeltaTable.
-
-The paths are as they are saved in the delta log, which may either be
-relative to the table root or absolute URIs.
-
-:param partition_filters: the partition filters that will be used for
-    getting the matched files
-:return: list of the .parquet files referenced for the current version
-    of the DeltaTable
-{_DNF_filter_doc}
-    """
 
     def file_uris(
         self, partition_filters: Optional[List[Tuple[str, str, Any]]] = None
     ) -> List[str]:
+        """
+        Get the list of files as absolute URIs, including the scheme (e.g. "s3://").
+
+        Local files will be just plain absolute paths, without a scheme. (That is,
+        no 'file://' prefix.)
+
+        Use the partition_filters parameter to retrieve a subset of files that match the
+        given filters.
+
+        Args:
+            partition_filters: the partition filters that will be used for getting the matched files
+
+        Returns:
+            list of the .parquet files with an absolute URI referenced for the current version of the DeltaTable
+
+        Predicates are expressed in disjunctive normal form (DNF), like [("x", "=", "a"), ...].
+        DNF allows arbitrary boolean logical combinations of single partition predicates.
+        The innermost tuples each describe a single partition predicate. The list of inner
+        predicates is interpreted as a conjunction (AND), forming a more selective and
+        multiple partition predicates. Each tuple has format: (key, op, value) and compares
+        the key with the value. The supported op are: `=`, `!=`, `in`, and `not in`. If
+        the op is in or not in, the value must be a collection such as a list, a set or a tuple.
+        The supported type for value is str. Use empty string `''` for Null partition value.
+
+        Examples:
+        ```
+        ("x", "=", "a")
+        ("x", "!=", "a")
+        ("y", "in", ["a", "b", "c"])
+        ("z", "not in", ["a","b"])
+        ```
+        """
         return self._table.file_uris(
             self.__stringify_partition_values(partition_filters)
         )
 
-    file_uris.__doc__ = f"""
-Get the list of files as absolute URIs, including the scheme (e.g. "s3://").
-
-Local files will be just plain absolute paths, without a scheme. (That is,
-no 'file://' prefix.)
-
-Use the partition_filters parameter to retrieve a subset of files that match the
-given filters.
-
-:param partition_filters: the partition filters that will be used for getting the matched files
-:return: list of the .parquet files with an absolute URI referenced for the current version of the DeltaTable
-{_DNF_filter_doc}
-    """
+    file_uris.__doc__ = ""
 
     def load_version(self, version: int) -> None:
         """
         Load a DeltaTable with a specified version.
 
-        :param version: the identifier of the version of the DeltaTable to load
+        Args:
+            version: the identifier of the version of the DeltaTable to load
         """
         self._table.load_version(version)
 
@@ -350,12 +393,15 @@ given filters.
         Time travel Delta table to the latest version that's created at or before provided `datetime_string` argument.
         The `datetime_string` argument should be an RFC 3339 and ISO 8601 date and time string.
 
-        Examples:
-        `2018-01-26T18:30:09Z`
-        `2018-12-19T16:39:57-08:00`
-        `2018-01-26T18:30:09.453+00:00`
+        Args:
+            datetime_string: the identifier of the datetime point of the DeltaTable to load
 
-        :param datetime_string: the identifier of the datetime point of the DeltaTable to load
+        Examples:
+        ```
+        "2018-01-26T18:30:09Z"
+        "2018-12-19T16:39:57-08:00"
+        "2018-01-26T18:30:09.453+00:00"
+        ```
         """
         self._table.load_with_datetime(datetime_string)
 
@@ -367,7 +413,8 @@ given filters.
         """
         Get the current schema of the DeltaTable.
 
-        :return: the current Schema registered in the transaction log
+        Returns:
+            the current Schema registered in the transaction log
         """
         return self._table.schema
 
@@ -375,7 +422,8 @@ given filters.
         """
         Get the current metadata of the DeltaTable.
 
-        :return: the current Metadata registered in the transaction log
+        Returns:
+            the current Metadata registered in the transaction log
         """
         return self._metadata
 
@@ -383,7 +431,8 @@ given filters.
         """
         Get the reader and writer protocol versions of the DeltaTable.
 
-        :return: the current ProtocolVersions registered in the transaction log
+        Returns:
+            the current ProtocolVersions registered in the transaction log
         """
         return ProtocolVersions(*self._table.protocol_versions())
 
@@ -392,8 +441,11 @@ given filters.
         Run the history command on the DeltaTable.
         The operations are returned in reverse chronological order.
 
-        :param limit: the commit info limit to return
-        :return: list of the commit infos registered in the transaction log
+        Args:
+            limit: the commit info limit to return
+
+        Returns:
+            list of the commit infos registered in the transaction log
         """
 
         def _backwards_enumerate(
@@ -424,10 +476,13 @@ given filters.
         """
         Run the Vacuum command on the Delta Table: list and delete files no longer referenced by the Delta table and are older than the retention threshold.
 
-        :param retention_hours: the retention threshold in hours, if none then the value from `configuration.deletedFileRetentionDuration` is used or default of 1 week otherwise.
-        :param dry_run: when activated, list only the files, delete otherwise
-        :param enforce_retention_duration: when disabled, accepts retention hours smaller than the value from `configuration.deletedFileRetentionDuration`.
-        :return: the list of files no longer referenced by the Delta Table and are older than the retention threshold.
+        Args:
+            retention_hours: the retention threshold in hours, if none then the value from `configuration.deletedFileRetentionDuration` is used or default of 1 week otherwise.
+            dry_run: when activated, list only the files, delete otherwise
+            enforce_retention_duration: when disabled, accepts retention hours smaller than the value from `configuration.deletedFileRetentionDuration`.
+
+        Returns:
+            the list of files no longer referenced by the Delta Table and are older than the retention threshold.
         """
         if retention_hours:
             if retention_hours < 0:
@@ -448,38 +503,35 @@ given filters.
     ) -> Dict[str, Any]:
         """UPDATE records in the Delta Table that matches an optional predicate.
 
-        :param updates: a mapping of column name to update SQL expression.
-        :param predicate: a logical expression, defaults to None
-        :writer_properties: Pass writer properties to the Rust parquet writer, see options https://arrow.apache.org/rust/parquet/file/properties/struct.WriterProperties.html,
-            only the fields: data_page_size_limit, dictionary_page_size_limit, data_page_row_count_limit, write_batch_size, max_row_group_size are supported.
-        :error_on_type_mismatch: specify if merge will return error if data types are mismatching :default = True
-        :return: the metrics from delete
+        Args:
+            updates: a mapping of column name to update SQL expression.
+            predicate: a logical expression, defaults to None
+            writer_properties: Pass writer properties to the Rust parquet writer, see options
+                                https://arrow.apache.org/rust/parquet/file/properties/struct.WriterProperties.html,
+                                only the following fields are supported: `data_page_size_limit`, `dictionary_page_size_limit`,
+                                `data_page_row_count_limit`, `write_batch_size`, `max_row_group_size`.
+            error_on_type_mismatch: specify if merge will return error if data types are mismatching, default = True
+
+        Returns:
+            the metrics from delete
 
         Examples:
 
-        Update some row values with SQL predicate. This is equivalent to
-        ``UPDATE table SET deleted = true WHERE id = '5'``
+        Update some row values with SQL predicate. This is equivalent to `UPDATE table SET deleted = true WHERE id = '5'`
 
-        >>> from deltalake import DeltaTable
-        >>> dt = DeltaTable("tmp")
-        >>> dt.update(predicate="id = '5'",
-        ...           updates = {
-        ...             "deleted": True,
-        ...             }
-        ...         )
+        ```
+        from deltalake import DeltaTable
+        dt = DeltaTable("tmp")
+        dt.update(predicate="id = '5'", updates = {"deleted": True})
+        ```
 
-        Update all row values. This is equivalent to
-        ``UPDATE table SET id = concat(id, '_old')``.
-        >>> from deltalake import DeltaTable
-        >>> dt = DeltaTable("tmp")
-        >>> dt.update(updates = {
-        ...             "deleted": True,
-        ...             "id": "concat(id, '_old')"
-        ...             }
-        ...         )
-
+        Update all row values. This is equivalent to `UPDATE table SET id = concat(id, '_old')`.
+        ```
+        from deltalake import DeltaTable
+        dt = DeltaTable("tmp")
+        dt.update(updates={"deleted": True, "id": "concat(id, '_old')"})
+        ```
         """
-
         metrics = self._table.update(
             updates, predicate, writer_properties, safe_cast=not error_on_type_mismatch
         )
@@ -556,10 +608,13 @@ given filters.
         """
         Run the Restore command on the Delta Table: restore table to a given version or datetime.
 
-        :param target: the expected version will restore, which represented by int, date str or datetime.
-        :param ignore_missing_files: whether the operation carry on when some data files missing.
-        :param protocol_downgrade_allowed: whether the operation when protocol version upgraded.
-        :return: the metrics from restore.
+        Args:
+            target: the expected version will restore, which represented by int, date str or datetime.
+            ignore_missing_files: whether the operation carry on when some data files missing.
+            protocol_downgrade_allowed: whether the operation when protocol version upgraded.
+
+        Returns:
+            the metrics from restore.
         """
         if isinstance(target, datetime):
             metrics = self._table.restore(
@@ -584,11 +639,15 @@ given filters.
         """
         Build a PyArrow Dataset using data from the DeltaTable.
 
-        :param partitions: A list of partition filters, see help(DeltaTable.files_by_partitions) for filter syntax
-        :param filesystem: A concrete implementation of the Pyarrow FileSystem or a fsspec-compatible interface. If None, the first file path will be used to determine the right FileSystem
-        :param parquet_read_options: Optional read options for Parquet. Use this to handle INT96 to timestamp conversion for edge cases like 0001-01-01 or 9999-12-31
+        Args:
+            partitions: A list of partition filters, see help(DeltaTable.files_by_partitions) for filter syntax
+            filesystem: A concrete implementation of the Pyarrow FileSystem or a fsspec-compatible interface. If None, the first file path will be used to determine the right FileSystem
+            parquet_read_options: Optional read options for Parquet. Use this to handle INT96 to timestamp conversion for edge cases like 0001-01-01 or 9999-12-31
+
          More info: https://arrow.apache.org/docs/python/generated/pyarrow.dataset.ParquetReadOptions.html
-        :return: the PyArrow dataset in PyArrow
+
+        Returns:
+            the PyArrow dataset in PyArrow
         """
         if self.protocol().min_reader_version > MAX_SUPPORTED_READER_VERSION:
             raise DeltaProtocolError(
@@ -646,10 +705,11 @@ given filters.
         """
         Build a PyArrow Table using data from the DeltaTable.
 
-        :param partitions: A list of partition filters, see help(DeltaTable.files_by_partitions) for filter syntax
-        :param columns: The columns to project. This can be a list of column names to include (order and duplicates will be preserved)
-        :param filesystem: A concrete implementation of the Pyarrow FileSystem or a fsspec-compatible interface. If None, the first file path will be used to determine the right FileSystem
-        :param filters: A disjunctive normal form (DNF) predicate for filtering rows. If you pass a filter you do not need to pass ``partitions``
+        Args:
+            partitions: A list of partition filters, see help(DeltaTable.files_by_partitions) for filter syntax
+            columns: The columns to project. This can be a list of column names to include (order and duplicates will be preserved)
+            filesystem: A concrete implementation of the Pyarrow FileSystem or a fsspec-compatible interface. If None, the first file path will be used to determine the right FileSystem
+            filters: A disjunctive normal form (DNF) predicate for filtering rows. If you pass a filter you do not need to pass ``partitions``
         """
         if filters is not None:
             filters = _filters_to_expression(filters)
@@ -667,10 +727,11 @@ given filters.
         """
         Build a pandas dataframe using data from the DeltaTable.
 
-        :param partitions: A list of partition filters, see help(DeltaTable.files_by_partitions) for filter syntax
-        :param columns: The columns to project. This can be a list of column names to include (order and duplicates will be preserved)
-        :param filesystem: A concrete implementation of the Pyarrow FileSystem or a fsspec-compatible interface. If None, the first file path will be used to determine the right FileSystem
-        :param filters: A disjunctive normal form (DNF) predicate for filtering rows. If you pass a filter you do not need to pass ``partitions``
+        Args:
+            partitions: A list of partition filters, see help(DeltaTable.files_by_partitions) for filter syntax
+            columns: The columns to project. This can be a list of column names to include (order and duplicates will be preserved)
+            filesystem: A concrete implementation of the Pyarrow FileSystem or a fsspec-compatible interface. If None, the first file path will be used to determine the right FileSystem
+            filters: A disjunctive normal form (DNF) predicate for filtering rows. If you pass a filter you do not need to pass ``partitions``
         """
         return self.to_pyarrow_table(
             partitions=partitions,
@@ -711,30 +772,40 @@ given filters.
         Add actions represent the files that currently make up the table. This
         data is a low-level representation parsed from the transaction log.
 
-        :param flatten: whether to flatten the schema. Partition values columns are
-          given the prefix `partition.`, statistics (null_count, min, and max) are
-          given the prefix `null_count.`, `min.`, and `max.`, and tags the
-          prefix `tags.`. Nested field names are concatenated with `.`.
+        Args:
+            flatten: whether to flatten the schema. Partition values columns are
+                        given the prefix `partition.`, statistics (null_count, min, and max) are
+                        given the prefix `null_count.`, `min.`, and `max.`, and tags the
+                        prefix `tags.`. Nested field names are concatenated with `.`.
 
-        :returns: a PyArrow RecordBatch containing the add action data.
+        Returns:
+            a PyArrow RecordBatch containing the add action data.
 
-        Examples:
-
-        >>> from deltalake import DeltaTable, write_deltalake
-        >>> import pyarrow as pa
-        >>> data = pa.table({"x": [1, 2, 3], "y": [4, 5, 6]})
-        >>> write_deltalake("tmp", data, partition_by=["x"])
-        >>> dt = DeltaTable("tmp")
-        >>> dt.get_add_actions().to_pandas()
-                                                                path  size_bytes       modification_time  data_change partition_values  num_records null_count       min       max
+        Example:
+        ```
+        from deltalake import DeltaTable, write_deltalake
+        import pyarrow as pa
+        data = pa.table({"x": [1, 2, 3], "y": [4, 5, 6]})
+        write_deltalake("tmp", data, partition_by=["x"])
+        dt = DeltaTable("tmp")
+        dt.get_add_actions().to_pandas()
+        ```
+        ```
+        path                                                size_bytes       modification_time  data_change partition_values  num_records null_count       min       max
         0  x=2/0-91820cbf-f698-45fb-886d-5d5f5669530b-0.p...         565 1970-01-20 08:40:08.071         True         {'x': 2}            1   {'y': 0}  {'y': 5}  {'y': 5}
         1  x=3/0-91820cbf-f698-45fb-886d-5d5f5669530b-0.p...         565 1970-01-20 08:40:08.071         True         {'x': 3}            1   {'y': 0}  {'y': 6}  {'y': 6}
         2  x=1/0-91820cbf-f698-45fb-886d-5d5f5669530b-0.p...         565 1970-01-20 08:40:08.071         True         {'x': 1}            1   {'y': 0}  {'y': 4}  {'y': 4}
-        >>> dt.get_add_actions(flatten=True).to_pandas()
-                                                                path  size_bytes       modification_time  data_change  partition.x  num_records  null_count.y  min.y  max.y
+        ```
+
+        ```
+        dt.get_add_actions(flatten=True).to_pandas()
+        ```
+        ```
+        path                                                size_bytes       modification_time  data_change  partition.x  num_records  null_count.y  min.y  max.y
         0  x=2/0-91820cbf-f698-45fb-886d-5d5f5669530b-0.p...         565 1970-01-20 08:40:08.071         True            2            1             0      5      5
         1  x=3/0-91820cbf-f698-45fb-886d-5d5f5669530b-0.p...         565 1970-01-20 08:40:08.071         True            3            1             0      6      6
         2  x=1/0-91820cbf-f698-45fb-886d-5d5f5669530b-0.p...         565 1970-01-20 08:40:08.071         True            1            1             0      4      4
+        ```
         """
         return self._table.get_add_actions(flatten)
 
@@ -746,8 +817,11 @@ given filters.
         that contain records that satisfy the predicate. Once files are determined
         they are rewritten without the records.
 
-        :param predicate: a SQL where clause. If not passed, will delete all rows.
-        :return: the metrics from delete.
+        Args:
+            predicate: a SQL where clause. If not passed, will delete all rows.
+
+        Returns:
+            the metrics from delete.
         """
         metrics = self._table.delete(predicate)
         return json.loads(metrics)
@@ -819,11 +893,11 @@ class TableMerger:
         """Pass writer properties to the Rust parquet writer, see options https://arrow.apache.org/rust/parquet/file/properties/struct.WriterProperties.html:
 
         Args:
-            data_page_size_limit (int|None, optional): Limit DataPage size to this in bytes. Defaults to None.
-            dictionary_page_size_limit (int|None, optional): Limit the size of each DataPage to store dicts to this amount in bytes. Defaults to None.
-            data_page_row_count_limit (int|None, optional): Limit the number of rows in each DataPage. Defaults to None.
-            write_batch_size (int|None, optional): Splits internally to smaller batch size. Defaults to None.
-            max_row_group_size (int|None, optional): Max number of rows in row group. Defaults to None.
+            data_page_size_limit (int|None, Optional): Limit DataPage size to this in bytes. Defaults to None.
+            dictionary_page_size_limit (int|None, Optional): Limit the size of each DataPage to store dicts to this amount in bytes. Defaults to None.
+            data_page_row_count_limit (int|None, Optional): Limit the number of rows in each DataPage. Defaults to None.
+            write_batch_size (int|None, Optional): Splits internally to smaller batch size. Defaults to None.
+            max_row_group_size (int|None, Optional): Max number of rows in row group. Defaults to None.
 
         Returns:
             TableMerger: TableMerger Object
@@ -846,7 +920,7 @@ class TableMerger:
 
         Args:
             updates (dict): a mapping of column name to update SQL expression.
-            predicate (str | None, optional):  SQL like predicate on when to update. Defaults to None.
+            predicate (str | None, Optional):  SQL like predicate on when to update. Defaults to None.
 
         Returns:
             TableMerger: TableMerger Object
@@ -874,7 +948,7 @@ class TableMerger:
         If a ``predicate`` is specified, then it must evaluate to true for the row to be updated.
 
         Args:
-            predicate (str | None, optional): SQL like predicate on when to update all columns. Defaults to None.
+            predicate (str | None, Optional): SQL like predicate on when to update all columns. Defaults to None.
 
         Returns:
             TableMerger: TableMerger Object
@@ -904,7 +978,7 @@ class TableMerger:
         true for the matched row. If not specified it deletes all matches.
 
         Args:
-           predicate (str | None, optional):  SQL like predicate on when to delete. Defaults to None.
+           predicate (str | None, Optional):  SQL like predicate on when to delete. Defaults to None.
 
         Returns:
             TableMerger: TableMerger Object
@@ -946,7 +1020,7 @@ class TableMerger:
 
         Args:
             updates (dict):  a mapping of column name to insert SQL expression.
-            predicate (str | None, optional): SQL like predicate on when to insert. Defaults to None.
+            predicate (str | None, Optional): SQL like predicate on when to insert. Defaults to None.
 
         Returns:
             TableMerger: TableMerger Object
@@ -979,7 +1053,7 @@ class TableMerger:
         the new row to be inserted.
 
         Args:
-            predicate (str | None, optional): SQL like predicate on when to insert. Defaults to None.
+            predicate (str | None, Optional): SQL like predicate on when to insert. Defaults to None.
 
         Returns:
             TableMerger: TableMerger Object
@@ -1011,7 +1085,7 @@ class TableMerger:
 
         Args:
             updates (dict): a mapping of column name to update SQL expression.
-            predicate (str | None, optional): SQL like predicate on when to update. Defaults to None.
+            predicate (str | None, Optional): SQL like predicate on when to update. Defaults to None.
 
         Returns:
             TableMerger: TableMerger Object
@@ -1039,8 +1113,7 @@ class TableMerger:
         ``predicate`` (if specified) is true for the target row.
 
         Args:
-            updates (dict): a mapping of column name to update SQL expression.
-            predicate (str | None, optional):  SQL like predicate on when to delete when not matched by source. Defaults to None.
+            predicate (str | None, Optional):  SQL like predicate on when to delete when not matched by source. Defaults to None.
 
         Returns:
             TableMerger: TableMerger Object
@@ -1056,7 +1129,7 @@ class TableMerger:
         """Executes MERGE with the previously provided settings in Rust with Apache Datafusion query engine.
 
         Returns:
-            Dict[str, any]: metrics
+            Dict[str, Any]: metrics
         """
         metrics = self.table._table.merge_execute(
             source=self.source,
@@ -1093,8 +1166,8 @@ class TableOptimizer:
         max_concurrent_tasks: Optional[int] = None,
     ) -> Dict[str, Any]:
         """
-        .. deprecated:: 0.10.0
-            Use :meth:`compact` instead, which has the same signature.
+        !!! warning "DEPRECATED 0.10.0"
+            Use [compact][deltalake.table.DeltaTable.compact] instead, which has the same signature.
         """
 
         warnings.warn(
@@ -1121,26 +1194,30 @@ class TableOptimizer:
         If this operation happens concurrently with any operations other than append,
         it will fail.
 
-        :param partition_filters: the partition filters that will be used for getting the matched files
-        :param target_size: desired file size after bin-packing files, in bytes. If not
-          provided, will attempt to read the table configuration value ``delta.targetFileSize``.
-          If that value isn't set, will use default value of 256MB.
-        :param max_concurrent_tasks: the maximum number of concurrent tasks to use for
-            file compaction. Defaults to number of CPUs. More concurrent tasks can make compaction
-            faster, but will also use more memory.
-        :param min_commit_interval: minimum interval in seconds or as timedeltas before a new commit is
-            created. Interval is useful for long running executions. Set to 0 or timedelta(0), if you
-            want a commit per partition.
-        :return: the metrics from optimize
+        Args:
+            partition_filters: the partition filters that will be used for getting the matched files
+            target_size: desired file size after bin-packing files, in bytes. If not
+                            provided, will attempt to read the table configuration value ``delta.targetFileSize``.
+                            If that value isn't set, will use default value of 256MB.
+            max_concurrent_tasks: the maximum number of concurrent tasks to use for
+                                    file compaction. Defaults to number of CPUs. More concurrent tasks can make compaction
+                                    faster, but will also use more memory.
+            min_commit_interval: minimum interval in seconds or as timedeltas before a new commit is
+                                    created. Interval is useful for long running executions. Set to 0 or timedelta(0), if you
+                                    want a commit per partition.
 
-        Examples:
+        Returns:
+            the metrics from optimize
 
-        Use a timedelta object to specify the seconds, minutes or hours of the interval.
-        >>> from deltalake import DeltaTable
-        >>> from datetime import timedelta
-        >>> dt = DeltaTable("tmp")
-        >>> time_delta = timedelta(minutes=10)
-        >>> dt.optimize.z_order(["timestamp"], min_commit_interval=time_delta)
+        Example:
+        ```
+        # Use a timedelta object to specify the seconds, minutes or hours of the interval.
+        from deltalake import DeltaTable
+        from datetime import timedelta
+        dt = DeltaTable("tmp")
+        time_delta = timedelta(minutes=10)
+        dt.optimize.z_order(["timestamp"], min_commit_interval=time_delta)
+        ```
         """
         if isinstance(min_commit_interval, timedelta):
             min_commit_interval = int(min_commit_interval.total_seconds())
@@ -1165,28 +1242,32 @@ class TableOptimizer:
 
         This also performs compaction, so the same parameters as compact() apply.
 
-        :param columns: the columns to use for Z-ordering. There must be at least one column.
-        :param partition_filters: the partition filters that will be used for getting the matched files
-        :param target_size: desired file size after bin-packing files, in bytes. If not
-          provided, will attempt to read the table configuration value ``delta.targetFileSize``.
-          If that value isn't set, will use default value of 256MB.
-        :param max_concurrent_tasks: the maximum number of concurrent tasks to use for
-            file compaction. Defaults to number of CPUs. More concurrent tasks can make compaction
-            faster, but will also use more memory.
-        :param max_spill_size: the maximum number of bytes to spill to disk. Defaults to 20GB.
-        :param min_commit_interval: minimum interval in seconds or as timedeltas before a new commit is
-            created. Interval is useful for long running executions. Set to 0 or timedelta(0), if you
-            want a commit per partition.
-        :return: the metrics from optimize
+        Args:
+            columns: the columns to use for Z-ordering. There must be at least one column.
+                        partition_filters: the partition filters that will be used for getting the matched files
+            target_size: desired file size after bin-packing files, in bytes. If not
+                            provided, will attempt to read the table configuration value ``delta.targetFileSize``.
+                            If that value isn't set, will use default value of 256MB.
+            max_concurrent_tasks: the maximum number of concurrent tasks to use for
+                                    file compaction. Defaults to number of CPUs. More concurrent tasks can make compaction
+                                    faster, but will also use more memory.
+            max_spill_size: the maximum number of bytes to spill to disk. Defaults to 20GB.
+            min_commit_interval: minimum interval in seconds or as timedeltas before a new commit is
+                                    created. Interval is useful for long running executions. Set to 0 or timedelta(0), if you
+                                    want a commit per partition.
 
-        Examples:
+        Returns:
+            the metrics from optimize
 
-        Use a timedelta object to specify the seconds, minutes or hours of the interval.
-        >>> from deltalake import DeltaTable
-        >>> from datetime import timedelta
-        >>> dt = DeltaTable("tmp")
-        >>> time_delta = timedelta(minutes=10)
-        >>> dt.optimize.compact(min_commit_interval=time_delta)
+        Example:
+        ```
+        # Use a timedelta object to specify the seconds, minutes or hours of the interval.
+        from deltalake import DeltaTable
+        from datetime import timedelta
+        dt = DeltaTable("tmp")
+        time_delta = timedelta(minutes=10)
+        dt.optimize.compact(min_commit_interval=time_delta)
+        ```
         """
         if isinstance(min_commit_interval, timedelta):
             min_commit_interval = int(min_commit_interval.total_seconds())

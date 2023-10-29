@@ -35,8 +35,7 @@ use serde::Serialize;
 use serde_json::Map;
 use serde_json::Value;
 
-use crate::delta_datafusion::find_files;
-use crate::delta_datafusion::{parquet_scan_from_actions, register_store};
+use crate::delta_datafusion::{find_files, register_store, DeltaScanBuilder};
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::operations::transaction::commit;
 use crate::operations::write::write_execution_plan;
@@ -136,7 +135,6 @@ async fn excute_non_empty_expr(
     // For each identified file perform a parquet scan + filter + limit (1) + count.
     // If returned count is not zero then append the file to be rewritten and removed from the log. Otherwise do nothing to the file.
 
-    let schema = snapshot.arrow_schema()?;
     let input_schema = snapshot.input_schema()?;
     let input_dfschema: DFSchema = input_schema.clone().as_ref().clone().try_into()?;
 
@@ -146,17 +144,11 @@ async fn excute_non_empty_expr(
         .partition_columns
         .clone();
 
-    let parquet_scan = parquet_scan_from_actions(
-        snapshot,
-        object_store.clone(),
-        rewrite,
-        &schema,
-        None,
-        state,
-        None,
-        None,
-    )
-    .await?;
+    let scan = DeltaScanBuilder::new(snapshot, object_store.clone(), state)
+        .with_files(rewrite)
+        .build()
+        .await?;
+    let scan = Arc::new(scan);
 
     // Apply the negation of the filter and rewrite files
     let negated_expression = Expr::Not(Box::new(Expr::IsTrue(Box::new(expression.clone()))));
@@ -168,7 +160,7 @@ async fn excute_non_empty_expr(
         state.execution_props(),
     )?;
     let filter: Arc<dyn ExecutionPlan> =
-        Arc::new(FilterExec::try_new(predicate_expr, parquet_scan.clone())?);
+        Arc::new(FilterExec::try_new(predicate_expr, scan.clone())?);
 
     let add_actions = write_execution_plan(
         snapshot,
@@ -183,7 +175,7 @@ async fn excute_non_empty_expr(
     )
     .await?;
 
-    let read_records = parquet_scan.metrics().and_then(|m| m.output_rows());
+    let read_records = scan.parquet_scan.metrics().and_then(|m| m.output_rows());
     let filter_records = filter.metrics().and_then(|m| m.output_rows());
     metrics.num_copied_rows = filter_records;
     metrics.num_deleted_rows = read_records
@@ -203,17 +195,9 @@ async fn execute(
 ) -> DeltaResult<((Vec<Action>, i64), DeleteMetrics)> {
     let exec_start = Instant::now();
     let mut metrics = DeleteMetrics::default();
-    let schema = snapshot.arrow_schema()?;
 
     let scan_start = Instant::now();
-    let candidates = find_files(
-        snapshot,
-        object_store.clone(),
-        schema.clone(),
-        &state,
-        predicate.clone(),
-    )
-    .await?;
+    let candidates = find_files(snapshot, object_store.clone(), &state, predicate.clone()).await?;
     metrics.scan_time_ms = Instant::now().duration_since(scan_start).as_micros();
 
     let predicate = predicate.unwrap_or(Expr::Literal(ScalarValue::Boolean(Some(true))));
@@ -328,11 +312,14 @@ impl std::future::IntoFuture for DeleteBuilder {
 
 #[cfg(test)]
 mod tests {
-
     use crate::operations::DeltaOps;
     use crate::protocol::*;
     use crate::writer::test_utils::datafusion::get_data;
-    use crate::writer::test_utils::{get_arrow_schema, get_delta_schema};
+    use crate::writer::test_utils::{
+        get_arrow_schema, get_delta_schema, get_record_batch, setup_table_with_configuration,
+        write_batch,
+    };
+    use crate::DeltaConfigKey;
     use crate::DeltaTable;
     use arrow::array::Int32Array;
     use arrow::datatypes::{Field, Schema};
@@ -353,6 +340,19 @@ mod tests {
             .unwrap();
         assert_eq!(table.version(), 0);
         table
+    }
+
+    #[tokio::test]
+    async fn test_delete_when_delta_table_is_append_only() {
+        let table = setup_table_with_configuration(DeltaConfigKey::AppendOnly, Some("true")).await;
+        let batch = get_record_batch(None, false);
+        // append some data
+        let table = write_batch(table, batch).await;
+        // delete
+        let _err = DeltaOps(table)
+            .delete()
+            .await
+            .expect_err("Remove action is included when Delta table is append-only. Should error");
     }
 
     #[tokio::test]
