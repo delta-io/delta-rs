@@ -827,7 +827,7 @@ class DeltaTable:
         return json.loads(metrics)
 
     def repair(self, dry_run: bool = False) -> Dict[str, Any]:
-        """It repairs the Delta Table by auditting active files that do not exist in the underlying
+        """Repair the Delta Table by auditing active files that do not exist in the underlying
         filesystem and removes them. This can be useful when there are accidental deletions or corrupted files.
 
         Active files are ones that have an add action in the log, but no corresponding remove action.
