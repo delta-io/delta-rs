@@ -22,6 +22,7 @@ use futures::future::BoxFuture;
 use futures::StreamExt;
 pub use object_store::path::Path;
 use object_store::ObjectStore;
+use serde::Serialize;
 use url::{ParseError, Url};
 
 use crate::errors::{DeltaResult, DeltaTableError};
@@ -44,7 +45,7 @@ pub struct FileSystemCheckBuilder {
 }
 
 /// Details of the FSCK operation including which files were removed from the log
-#[derive(Debug)]
+#[derive(Debug, Serialize)]
 pub struct FileSystemCheckMetrics {
     /// Was this a dry run
     pub dry_run: bool,
