@@ -4,6 +4,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal
+from math import inf
 from pathlib import Path
 from typing import (
     Any,
@@ -65,6 +66,7 @@ def write_deltalake(
     table_or_uri: Union[str, Path, DeltaTable],
     data: Union[
         "pd.DataFrame",
+        ds.Dataset,
         pa.Table,
         pa.RecordBatch,
         Iterable[pa.RecordBatch],
@@ -98,6 +100,24 @@ def write_deltalake(
     this function will throw DeltaProtocolError.
 
     Note that this function does NOT register this table in a data catalog.
+
+    A locking mechanism is needed to prevent unsafe concurrent writes to a
+    delta lake directory when writing to S3. DynamoDB is the only available
+    locking provider at the moment in delta-rs. To enable DynamoDB as the
+    locking provider, you need to set the `AWS_S3_LOCKING_PROVIDER` to 'dynamodb'
+    as a storage_option or as an environment variable.
+
+    Additionally, you must create a DynamoDB table with the name 'delta_rs_lock_table'
+    so that it can be automatically discovered by delta-rs. Alternatively, you can
+    use a table name of your choice, but you must set the `DYNAMO_LOCK_TABLE_NAME`
+    variable to match your chosen table name. The required schema for the DynamoDB
+    table is as follows:
+
+    - Key Schema: AttributeName=key, KeyType=HASH
+    - Attribute Definitions: AttributeName=key, AttributeType=S
+
+    Please note that this locking mechanism is not compatible with any other
+    locking mechanisms, including the one used by Spark.
 
     Args:
         table_or_uri: URI of a table or a DeltaTable object.
@@ -313,6 +333,8 @@ def write_deltalake(
             batch_iter = [data]
         elif isinstance(data, pa.Table):
             batch_iter = data.to_batches()
+        elif isinstance(data, ds.Dataset):
+            batch_iter = data.to_batches()
         else:
             batch_iter = data
 
@@ -499,14 +521,16 @@ def get_file_stats_from_metadata(
                     for group in iter_groups(metadata)
                 )
                 # If some row groups have all null values, their min and max will be null too.
-                stats["minValues"][name] = min(
-                    minimum for minimum in minimums if minimum is not None
-                )
+                min_value = min(minimum for minimum in minimums if minimum is not None)
+                # Infinity cannot be serialized to JSON, so we skip it. Saying
+                # min/max is infinity is equivalent to saying it is null, anyways.
+                if min_value != -inf:
+                    stats["minValues"][name] = min_value
                 maximums = (
                     group.column(column_idx).statistics.max
                     for group in iter_groups(metadata)
                 )
-                stats["maxValues"][name] = max(
-                    maximum for maximum in maximums if maximum is not None
-                )
+                max_value = max(maximum for maximum in maximums if maximum is not None)
+                if max_value != inf:
+                    stats["maxValues"][name] = max_value
     return stats

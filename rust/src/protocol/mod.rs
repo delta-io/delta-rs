@@ -829,6 +829,23 @@ pub enum DeltaOperation {
         ///Datetime to restore
         datetime: Option<i64>,
     }, // TODO: Add more operations
+
+    #[serde(rename_all = "camelCase")]
+    /// Represents the start of `Vacuum` operation
+    VacuumStart {
+        /// Whether the retention check is enforced
+        retention_check_enabled: bool,
+        /// The specified retetion period in milliseconds
+        specified_retention_millis: Option<i64>,
+        /// The default delta table retention milliseconds policy
+        default_retention_millis: i64,
+    },
+
+    /// Represents the end of `Vacuum` operation
+    VacuumEnd {
+        /// The status of the operation
+        status: String,
+    },
 }
 
 impl DeltaOperation {
@@ -849,6 +866,8 @@ impl DeltaOperation {
             DeltaOperation::Optimize { .. } => "OPTIMIZE",
             DeltaOperation::FileSystemCheck { .. } => "FSCK",
             DeltaOperation::Restore { .. } => "RESTORE",
+            DeltaOperation::VacuumStart { .. } => "VACUUM START",
+            DeltaOperation::VacuumEnd { .. } => "VACUUM END",
         }
     }
 
@@ -884,7 +903,7 @@ impl DeltaOperation {
     /// Denotes if the operation changes the data contained in the table
     pub fn changes_data(&self) -> bool {
         match self {
-            Self::Optimize { .. } => false,
+            Self::Optimize { .. } | Self::VacuumStart { .. } | Self::VacuumEnd { .. } => false,
             Self::Create { .. }
             | Self::FileSystemCheck {}
             | Self::StreamingUpdate { .. }
