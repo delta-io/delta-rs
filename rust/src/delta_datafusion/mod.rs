@@ -586,8 +586,15 @@ impl<'a> DeltaScanBuilder<'a> {
         // However we may want to do some additional balancing in case we are far off from the above.
         let mut file_groups: HashMap<Vec<ScalarValue>, Vec<PartitionedFile>> = HashMap::new();
 
+        let table_partition_cols = self
+            .snapshot
+            .current_metadata()
+            .ok_or(DeltaTableError::NoMetadata)?
+            .partition_columns
+            .clone();
+
         for action in files.iter() {
-            let mut part = partitioned_file_from_action(action, &schema);
+            let mut part = partitioned_file_from_action(action, &table_partition_cols, &schema);
 
             if config.file_column_name.is_some() {
                 part.partition_values
@@ -601,13 +608,6 @@ impl<'a> DeltaScanBuilder<'a> {
                 .or_default()
                 .push(part);
         }
-
-        let table_partition_cols = self
-            .snapshot
-            .current_metadata()
-            .ok_or(DeltaTableError::NoMetadata)?
-            .partition_columns
-            .clone();
 
         let file_schema = Arc::new(ArrowSchema::new(
             schema
@@ -923,20 +923,27 @@ pub(crate) fn get_null_of_arrow_type(t: &ArrowDataType) -> DeltaResult<ScalarVal
 
 pub(crate) fn partitioned_file_from_action(
     action: &protocol::Add,
+    partition_columns: &[String],
     schema: &ArrowSchema,
 ) -> PartitionedFile {
-    let partition_values = schema
-        .fields()
+    let partition_values = partition_columns
         .iter()
-        .filter_map(|f| {
-            action.partition_values.get(f.name()).map(|val| match val {
-                Some(value) => to_correct_scalar_value(
-                    &serde_json::Value::String(value.to_string()),
-                    f.data_type(),
-                )
-                .unwrap_or(ScalarValue::Null),
-                None => get_null_of_arrow_type(f.data_type()).unwrap_or(ScalarValue::Null),
-            })
+        .map(|part| {
+            action
+                .partition_values
+                .get(part)
+                .map(|val| match val {
+                    Some(value) => to_correct_scalar_value(
+                        &serde_json::Value::String(value.to_string()),
+                        schema.field_with_name(part).unwrap().data_type(),
+                    )
+                    .unwrap_or(ScalarValue::Null),
+                    None => {
+                        get_null_of_arrow_type(schema.field_with_name(part).unwrap().data_type())
+                            .unwrap_or(ScalarValue::Null)
+                    }
+                })
+                .unwrap()
         })
         .collect::<Vec<_>>();
 
@@ -1797,7 +1804,8 @@ mod tests {
             Field::new("month", ArrowDataType::Int64, true),
         ]);
 
-        let file = partitioned_file_from_action(&action, &schema);
+        let part_columns = vec!["year".to_string(), "month".to_string()];
+        let file = partitioned_file_from_action(&action, &part_columns, &schema);
         let ref_file = PartitionedFile {
             object_meta: object_store::ObjectMeta {
                 location: Path::from("year=2015/month=1/part-00000-4dcb50d3-d017-450c-9df7-a7257dbd3c5d-c000.snappy.parquet".to_string()), 
