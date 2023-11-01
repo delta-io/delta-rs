@@ -16,17 +16,17 @@ use parquet::{
 use serde_json::Value;
 use uuid::Uuid;
 
-use super::stats::config::WriteStatsConfig;
+use super::stats::config::WriteStatsFilterConfig;
 use super::stats::create_add;
 use super::utils::{
     arrow_schema_without_partitions, next_data_path, record_batch_from_message,
     record_batch_without_partitions, stringified_partition_value,
 };
 use super::{utils::PartitionPath, DeltaWriter, DeltaWriterError};
-use crate::DeltaConfigKey;
 use crate::errors::DeltaTableError;
 use crate::table::builder::DeltaTableBuilder;
 use crate::table::DeltaTableMetaData;
+use crate::DeltaConfigKey;
 use crate::{protocol::Add, DeltaTable, Schema};
 use crate::{storage::DeltaObjectStore, writer::utils::ShareableBuffer};
 
@@ -37,7 +37,7 @@ pub struct JsonWriter {
     storage: Arc<DeltaObjectStore>,
     arrow_schema_ref: Arc<arrow::datatypes::Schema>,
     writer_properties: WriterProperties,
-    write_stats: WriteStatsConfig,
+    write_stats: WriteStatsFilterConfig,
     partition_columns: Vec<String>,
     arrow_writers: HashMap<String, DataArrowWriter>,
 }
@@ -196,7 +196,7 @@ impl JsonWriter {
             .set_compression(Compression::SNAPPY)
             .build();
 
-        let write_stats = WriteStatsConfig::default();
+        let write_stats = WriteStatsFilterConfig::default();
 
         Ok(Self {
             storage,
@@ -224,7 +224,7 @@ impl JsonWriter {
 
         let write_stats = match table
             .get_configurations()?
-            .get(DeltaConfigKey::WriteStats.as_ref())
+            .get(DeltaConfigKey::WriteStatsFilter.as_ref())
             .and_then(|o| o.clone())
         {
             Some(str) => {
@@ -232,7 +232,7 @@ impl JsonWriter {
                     serde_json::from_str(&str).map_err(|source| DeltaTableError::GenericError {
                         source: Box::new(source),
                     })?;
-                WriteStatsConfig::try_from(json).map_err(|source| {
+                WriteStatsFilterConfig::try_from(json).map_err(|source| {
                     DeltaTableError::GenericError {
                         source: Box::new(source),
                     }

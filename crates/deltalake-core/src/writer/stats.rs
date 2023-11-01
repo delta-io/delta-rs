@@ -12,7 +12,7 @@ use parquet::{
     format::TimeUnit,
 };
 
-use self::config::WriteStatsConfig;
+use self::config::WriteStatsFilterConfig;
 
 use super::*;
 use crate::protocol::{Add, ColumnValueStat, Stats};
@@ -22,7 +22,7 @@ pub mod config;
 /// Creates an [`Add`] log action struct.
 pub fn create_add(
     partition_values: &HashMap<String, Option<String>>,
-    write_stats_config: &WriteStatsConfig,
+    write_stats_config: &WriteStatsFilterConfig,
     path: String,
     size: i64,
     file_metadata: &FileMetaData,
@@ -51,7 +51,7 @@ pub fn create_add(
 
 fn stats_from_file_metadata(
     partition_values: &HashMap<String, Option<String>>,
-    write_stats_config: &WriteStatsConfig,
+    write_stats_config: &WriteStatsFilterConfig,
     file_metadata: &FileMetaData,
 ) -> Result<Stats, DeltaWriterError> {
     let type_ptr = parquet::schema::types::from_thrift(file_metadata.schema.as_slice());

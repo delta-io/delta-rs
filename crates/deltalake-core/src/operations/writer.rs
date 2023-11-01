@@ -16,7 +16,7 @@ use crate::errors::{DeltaResult, DeltaTableError};
 use crate::protocol::Add;
 use crate::storage::ObjectStoreRef;
 use crate::writer::record_batch::{divide_by_partition_values, PartitionResult};
-use crate::writer::stats::config::WriteStatsConfig;
+use crate::writer::stats::config::WriteStatsFilterConfig;
 use crate::writer::stats::create_add;
 use crate::writer::utils::{
     arrow_schema_without_partitions, next_data_path, record_batch_without_partitions,
@@ -84,7 +84,7 @@ pub struct WriterConfig {
     write_batch_size: usize,
     /// Configuration on which columns to generate statistics for.
     #[allow(dead_code)]
-    write_stats: WriteStatsConfig,
+    write_stats: WriteStatsFilterConfig,
 }
 
 impl WriterConfig {
@@ -110,12 +110,12 @@ impl WriterConfig {
             writer_properties,
             target_file_size,
             write_batch_size,
-            write_stats: WriteStatsConfig::default(),
+            write_stats: WriteStatsFilterConfig::default(),
         }
     }
 
     /// Create a new instance of [WriterConfig] based of this one, adding configuration on which columns to write statistics for.
-    pub fn with_stats_config(self, write_stats: WriteStatsConfig) -> Self {
+    pub fn with_stats_config(self, write_stats: WriteStatsFilterConfig) -> Self {
         Self {
             write_stats,
             ..self
@@ -248,7 +248,7 @@ pub(crate) struct PartitionWriterConfig {
     /// determine how fine granular we can track / control the size of resulting files.
     write_batch_size: usize,
     /// Configuration on which columns to generate stats for in Add actions.
-    write_stats: WriteStatsConfig,
+    write_stats: WriteStatsFilterConfig,
 }
 
 impl PartitionWriterConfig {
@@ -256,7 +256,7 @@ impl PartitionWriterConfig {
         file_schema: ArrowSchemaRef,
         partition_values: HashMap<String, Option<String>>,
         partition_columns: Vec<String>,
-        write_stats: WriteStatsConfig,
+        write_stats: WriteStatsFilterConfig,
         writer_properties: Option<WriterProperties>,
         target_file_size: Option<usize>,
         write_batch_size: Option<usize>,
@@ -484,7 +484,7 @@ mod tests {
     fn get_writer(
         object_store: ObjectStoreRef,
         batch: &RecordBatch,
-        write_stats: WriteStatsConfig,
+        write_stats: WriteStatsFilterConfig,
         writer_properties: Option<WriterProperties>,
         target_file_size: Option<usize>,
     ) -> PartitionWriter {

@@ -120,7 +120,7 @@ pub enum DeltaConfigKey {
     /// }
     ///
     /// ```
-    WriteStats,
+    WriteStatsFilter,
 }
 
 impl AsRef<str> for DeltaConfigKey {
@@ -146,7 +146,7 @@ impl AsRef<str> for DeltaConfigKey {
             Self::SetTransactionRetentionDuration => "delta.setTransactionRetentionDuration",
             Self::TargetFileSize => "delta.targetFileSize",
             Self::TuneFileSizesForRewrites => "delta.tuneFileSizesForRewrites",
-            Self::WriteStats => "delta-rs.writeStats",
+            Self::WriteStatsFilter => "delta-rs.writeStatsFilter",
         }
     }
 }
@@ -180,7 +180,7 @@ impl FromStr for DeltaConfigKey {
             "delta.setTransactionRetentionDuration" => Ok(Self::SetTransactionRetentionDuration),
             "delta.targetFileSize" => Ok(Self::TargetFileSize),
             "delta.tuneFileSizesForRewrites" => Ok(Self::TuneFileSizesForRewrites),
-            "delta-rs.writeStats" => Ok(Self::WriteStats),
+            "delta-rs.writeStatsFilter" => Ok(Self::WriteStatsFilter),
 
             _ => Err(DeltaTableError::Generic("unknown config key".into())),
         }

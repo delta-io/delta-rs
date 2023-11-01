@@ -19,7 +19,7 @@ use parquet::{arrow::ArrowWriter, errors::ParquetError};
 use parquet::{basic::Compression, file::properties::WriterProperties};
 use uuid::Uuid;
 
-use super::stats::config::WriteStatsConfig;
+use super::stats::config::WriteStatsFilterConfig;
 use super::stats::create_add;
 use super::utils::{
     arrow_schema_without_partitions, next_data_path, record_batch_without_partitions,
@@ -37,7 +37,7 @@ pub struct RecordBatchWriter {
     storage: Arc<DeltaObjectStore>,
     arrow_schema_ref: Arc<ArrowSchema>,
     writer_properties: WriterProperties,
-    write_stats: WriteStatsConfig,
+    write_stats: WriteStatsFilterConfig,
     partition_columns: Vec<String>,
     arrow_writers: HashMap<String, PartitionWriter>,
 }
@@ -94,7 +94,7 @@ impl RecordBatchWriter {
 
         let write_stats = match table
             .get_configurations()?
-            .get(DeltaConfigKey::WriteStats.as_ref())
+            .get(DeltaConfigKey::WriteStatsFilter.as_ref())
             .and_then(|o| o.as_ref())
         {
             Some(str) => {
@@ -102,7 +102,7 @@ impl RecordBatchWriter {
                     serde_json::from_str(str).map_err(|source| DeltaTableError::GenericError {
                         source: Box::new(source),
                     })?;
-                WriteStatsConfig::try_from(json).map_err(|source| {
+                WriteStatsFilterConfig::try_from(json).map_err(|source| {
                     DeltaTableError::GenericError {
                         source: Box::new(source),
                     }
@@ -581,7 +581,7 @@ mod tests {
             serde_json::to_string(&serde_json::json!({"exclude":["modified"]})).unwrap();
 
         let properties = HashMap::<String, Option<String>>::from_iter(vec![(
-            DeltaConfigKey::WriteStats.as_ref().to_owned(),
+            DeltaConfigKey::WriteStatsFilter.as_ref().to_owned(),
             Some(stats_json),
         )]);
 
@@ -609,7 +609,7 @@ mod tests {
             serde_json::to_string(&serde_json::json!({"include":["modified"]})).unwrap();
 
         let properties = HashMap::<String, Option<String>>::from_iter(vec![(
-            DeltaConfigKey::WriteStats.as_ref().to_owned(),
+            DeltaConfigKey::WriteStatsFilter.as_ref().to_owned(),
             Some(stats_json),
         )]);
 
