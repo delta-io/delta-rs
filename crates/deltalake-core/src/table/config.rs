@@ -6,6 +6,7 @@ use lazy_static::lazy_static;
 use serde::{Deserialize, Serialize};
 
 use crate::errors::DeltaTableError;
+use crate::writer::stats::config::WriteStatsFilterConfig;
 
 /// Typed property keys that can be defined on a delta table
 /// <https://docs.delta.io/latest/table-properties.html#delta-table-properties-reference>
@@ -302,6 +303,19 @@ impl<'a> TableConfig<'a> {
         self.0
             .get(DeltaConfigKey::IsolationLevel.as_ref())
             .and_then(|o| o.as_ref().and_then(|v| v.parse().ok()))
+            .unwrap_or_default()
+    }
+
+    pub fn write_stats_filter(&self) -> WriteStatsFilterConfig {
+        self.0
+            .get(DeltaConfigKey::WriteStatsFilter.as_ref())
+            .and_then(|o| {
+                o.as_ref().and_then(|s| {
+                    serde_json::from_str::<serde_json::Value>(s)
+                        .ok()
+                        .and_then(|v| WriteStatsFilterConfig::try_from(v).ok())
+                })
+            })
             .unwrap_or_default()
     }
 }

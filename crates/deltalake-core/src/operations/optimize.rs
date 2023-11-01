@@ -164,6 +164,8 @@ pub struct OptimizeBuilder<'a> {
     writer_properties: Option<WriterProperties>,
     /// Additional metadata to be added to commit
     app_metadata: Option<HashMap<String, serde_json::Value>>,
+    /// Which stats to write
+    write_stats_filter: WriteStatsFilter,
     /// Whether to preserve insertion order within files (default false)
     preserve_insertion_order: bool,
     /// Max number of concurrent tasks (default is number of cpus)
@@ -190,6 +192,7 @@ impl<'a> OptimizeBuilder<'a> {
             max_spill_size: 20 * 1024 * 1024 * 2014, // 20 GB.
             optimize_type: OptimizeType::Compact,
             min_commit_interval: None,
+            write_stats_filter: Default::default(),
         }
     }
 
@@ -249,6 +252,12 @@ impl<'a> OptimizeBuilder<'a> {
         self.min_commit_interval = Some(min_commit_interval);
         self
     }
+
+    /// Filter on which columsn to generate stats for in the Add action
+    pub fn with_write_stats_filter(mut self, write_stats_filter: WriteStatsFilterConfig) -> Self {
+        self.write_stats_filter = write_stats_filter;
+        self
+    }
 }
 
 impl<'a> std::future::IntoFuture for OptimizeBuilder<'a> {
@@ -265,12 +274,14 @@ impl<'a> std::future::IntoFuture for OptimizeBuilder<'a> {
                     .set_created_by(format!("delta-rs version {}", crate_version()))
                     .build()
             });
+            let write_stats_filter = this.snapshot.table_config().write_stats_filter();
             let plan = create_merge_plan(
                 this.optimize_type,
                 &this.snapshot,
                 this.filters,
                 this.target_size.to_owned(),
                 writer_properties,
+                write_stats_filter,
             )?;
             let metrics = plan
                 .execute(
@@ -368,6 +379,8 @@ pub struct MergeTaskParameters {
     partition_columns: Vec<String>,
     /// Properties passed to parquet writer
     writer_properties: WriterProperties,
+    /// Filter on which columns to write stats for in the Add action.
+    write_stats_filter: WriteStatsFilterConfig,
 }
 
 /// A stream of record batches, with a ParquetError on failure.
@@ -425,7 +438,7 @@ impl MergePlan {
             task_parameters.file_schema.clone(),
             partition_values.clone(),
             task_parameters.partition_columns.clone(),
-            Default::default(),
+            write_stats_filter,
             Some(task_parameters.writer_properties.clone()),
             Some(task_parameters.input_parameters.target_size as usize),
             None,
@@ -773,6 +786,7 @@ pub fn create_merge_plan(
     filters: &[PartitionFilter],
     target_size: Option<i64>,
     writer_properties: WriterProperties,
+    write_stats_filter: WriteStatsFilterConfig,
 ) -> Result<MergePlan, DeltaTableError> {
     let target_size = target_size.unwrap_or_else(|| snapshot.table_config().target_file_size());
 
@@ -809,6 +823,7 @@ pub fn create_merge_plan(
             file_schema,
             partition_columns: partitions_keys.clone(),
             writer_properties,
+            write_stats_filter,
         }),
         read_table_version: snapshot.version(),
     })
