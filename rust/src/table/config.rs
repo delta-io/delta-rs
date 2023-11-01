@@ -100,6 +100,27 @@ pub enum DeltaConfigKey {
 
     /// The target file size in bytes or higher units for file tuning. For example, 104857600 (bytes) or 100mb.
     TuneFileSizesForRewrites,
+
+    /// Configuration describing which columns to write stats for when creating [Add] actions. This is expressed as a JSON object with a top-level
+    /// key indicating if this filter is include or exclude:
+    /// ```ignore
+    /// {
+    ///   "include" : {
+    ///     "foo" : {}, // include the 'foo' column or any sub-columns
+    ///     "bar" : ["baz", "quux"] // include only the 'baz' and 'quux' columns out of the 'bar' struct
+    ///   }
+    /// }
+    /// ```
+    /// If the top-level key is `include` then all substructures listed will be included, and all others will be excluded. `exclude`
+    /// inverts this, by-default including but allowing exclusions. If the schema is flat (or if all include/exclude decisions are flat) then
+    /// users can just use a flat array:
+    /// ```ignore
+    /// {
+    ///   "include": ["foo", "bar"]
+    /// }
+    ///
+    /// ```
+    WriteStats,
 }
 
 impl AsRef<str> for DeltaConfigKey {
@@ -125,6 +146,7 @@ impl AsRef<str> for DeltaConfigKey {
             Self::SetTransactionRetentionDuration => "delta.setTransactionRetentionDuration",
             Self::TargetFileSize => "delta.targetFileSize",
             Self::TuneFileSizesForRewrites => "delta.tuneFileSizesForRewrites",
+            Self::WriteStats => "delta-rs.writeStats",
         }
     }
 }
@@ -158,6 +180,8 @@ impl FromStr for DeltaConfigKey {
             "delta.setTransactionRetentionDuration" => Ok(Self::SetTransactionRetentionDuration),
             "delta.targetFileSize" => Ok(Self::TargetFileSize),
             "delta.tuneFileSizesForRewrites" => Ok(Self::TuneFileSizesForRewrites),
+            "delta-rs.writeStats" => Ok(Self::WriteStats),
+
             _ => Err(DeltaTableError::Generic("unknown config key".into())),
         }
     }

@@ -314,7 +314,10 @@ pub fn create_bare_table() -> DeltaTable {
         .unwrap()
 }
 
-pub async fn create_initialized_table(partition_cols: &[String]) -> DeltaTable {
+pub async fn create_initialized_table(
+    partition_cols: &[String],
+    configuration: Option<HashMap<String, Option<String>>>,
+) -> DeltaTable {
     let table_schema = get_delta_schema();
     let table_dir = tempfile::tempdir().unwrap();
     let table_path = table_dir.path();
@@ -325,6 +328,7 @@ pub async fn create_initialized_table(partition_cols: &[String]) -> DeltaTable {
         .with_comment("A table for running tests")
         .with_columns(table_schema.get_fields().clone())
         .with_partition_columns(partition_cols)
+        .with_configuration(configuration.unwrap_or_default().into_iter())
         .await
         .unwrap()
 }

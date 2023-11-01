@@ -19,6 +19,7 @@ use parquet::{arrow::ArrowWriter, errors::ParquetError};
 use parquet::{basic::Compression, file::properties::WriterProperties};
 use uuid::Uuid;
 
+use super::stats::config::WriteStatsConfig;
 use super::stats::create_add;
 use super::utils::{
     arrow_schema_without_partitions, next_data_path, record_batch_without_partitions,
@@ -28,6 +29,7 @@ use super::{DeltaWriter, DeltaWriterError};
 use crate::errors::DeltaTableError;
 use crate::table::builder::DeltaTableBuilder;
 use crate::table::DeltaTableMetaData;
+use crate::DeltaConfigKey;
 use crate::{protocol::Add, storage::DeltaObjectStore, DeltaTable, Schema};
 
 /// Writes messages to a delta lake table.
@@ -35,6 +37,7 @@ pub struct RecordBatchWriter {
     storage: Arc<DeltaObjectStore>,
     arrow_schema_ref: Arc<ArrowSchema>,
     writer_properties: WriterProperties,
+    write_stats: WriteStatsConfig,
     partition_columns: Vec<String>,
     arrow_writers: HashMap<String, PartitionWriter>,
 }
@@ -63,10 +66,13 @@ impl RecordBatchWriter {
             .set_compression(Compression::SNAPPY)
             .build();
 
+        let write_stats = Default::default(); // TODO: Should this attempt to initialise the table to retrieve config?
+
         Ok(Self {
             storage,
             arrow_schema_ref: schema,
             writer_properties,
+            write_stats,
             partition_columns: partition_columns.unwrap_or_default(),
             arrow_writers: HashMap::new(),
         })
@@ -86,10 +92,30 @@ impl RecordBatchWriter {
             .set_compression(Compression::SNAPPY)
             .build();
 
+        let write_stats = match table
+            .get_configurations()?
+            .get(DeltaConfigKey::WriteStats.as_ref())
+            .and_then(|o| o.as_ref())
+        {
+            Some(str) => {
+                let json: serde_json::Value =
+                    serde_json::from_str(str).map_err(|source| DeltaTableError::GenericError {
+                        source: Box::new(source),
+                    })?;
+                WriteStatsConfig::try_from(json).map_err(|source| {
+                    DeltaTableError::GenericError {
+                        source: Box::new(source),
+                    }
+                })?
+            }
+            None => Default::default(),
+        };
+
         Ok(Self {
             storage: table.storage.clone(),
             arrow_schema_ref,
             writer_properties,
+            write_stats,
             partition_columns,
             arrow_writers: HashMap::new(),
         })
@@ -223,6 +249,7 @@ impl DeltaWriter<RecordBatch> for RecordBatchWriter {
 
             actions.push(create_add(
                 &writer.partition_values,
+                &self.write_stats,
                 path.to_string(),
                 file_size,
                 &metadata,
@@ -405,7 +432,7 @@ mod tests {
     async fn test_buffer_len_includes_unflushed_row_group() {
         let batch = get_record_batch(None, false);
         let partition_cols = vec![];
-        let table = create_initialized_table(&partition_cols).await;
+        let table = create_initialized_table(&partition_cols, None).await;
         let mut writer = RecordBatchWriter::for_table(&table).unwrap();
 
         writer.write(batch).await.unwrap();
@@ -417,7 +444,7 @@ mod tests {
     async fn test_divide_record_batch_no_partition() {
         let batch = get_record_batch(None, false);
         let partition_cols = vec![];
-        let table = create_initialized_table(&partition_cols).await;
+        let table = create_initialized_table(&partition_cols, None).await;
         let mut writer = RecordBatchWriter::for_table(&table).unwrap();
 
         let partitions = writer.divide_by_partition_values(&batch).unwrap();
@@ -430,7 +457,7 @@ mod tests {
     async fn test_divide_record_batch_single_partition() {
         let batch = get_record_batch(None, false);
         let partition_cols = vec!["modified".to_string()];
-        let table = create_initialized_table(&partition_cols).await;
+        let table = create_initialized_table(&partition_cols, None).await;
         let mut writer = RecordBatchWriter::for_table(&table).unwrap();
 
         let partitions = writer.divide_by_partition_values(&batch).unwrap();
@@ -519,7 +546,7 @@ mod tests {
     async fn test_divide_record_batch_multiple_partitions() {
         let batch = get_record_batch(None, false);
         let partition_cols = vec!["modified".to_string(), "id".to_string()];
-        let table = create_initialized_table(&partition_cols).await;
+        let table = create_initialized_table(&partition_cols, None).await;
         let mut writer = RecordBatchWriter::for_table(&table).unwrap();
 
         let partitions = writer.divide_by_partition_values(&batch).unwrap();
@@ -537,7 +564,7 @@ mod tests {
     async fn test_write_no_partitions() {
         let batch = get_record_batch(None, false);
         let partition_cols = vec![];
-        let table = create_initialized_table(&partition_cols).await;
+        let table = create_initialized_table(&partition_cols, None).await;
         let mut writer = RecordBatchWriter::for_table(&table).unwrap();
 
         writer.write(batch).await.unwrap();
@@ -546,10 +573,66 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_write_restricted_stats() {
+        let batch = get_record_batch(None, false);
+        let partition_cols = vec![];
+
+        let stats_json =
+            serde_json::to_string(&serde_json::json!({"exclude":["modified"]})).unwrap();
+
+        let properties = HashMap::<String, Option<String>>::from_iter(vec![(
+            DeltaConfigKey::WriteStats.as_ref().to_owned(),
+            Some(stats_json),
+        )]);
+
+        let table = create_initialized_table(&partition_cols, Some(properties)).await;
+
+        let mut writer = RecordBatchWriter::for_table(&table).unwrap();
+
+        writer.write(batch).await.unwrap();
+        let adds = writer.flush().await.unwrap();
+        assert_eq!(adds.len(), 1);
+
+        let add_stats = adds[0].get_stats().unwrap().unwrap();
+
+        assert!(!add_stats.min_values.contains_key("modified"));
+        assert!(!add_stats.max_values.contains_key("modified"));
+        assert!(!add_stats.null_count.contains_key("modified"));
+    }
+
+    #[tokio::test]
+    async fn test_write_restricted_stats_include() {
+        let batch = get_record_batch(None, false);
+        let partition_cols = vec![];
+
+        let stats_json =
+            serde_json::to_string(&serde_json::json!({"include":["modified"]})).unwrap();
+
+        let properties = HashMap::<String, Option<String>>::from_iter(vec![(
+            DeltaConfigKey::WriteStats.as_ref().to_owned(),
+            Some(stats_json),
+        )]);
+
+        let table = create_initialized_table(&partition_cols, Some(properties)).await;
+
+        let mut writer = RecordBatchWriter::for_table(&table).unwrap();
+
+        writer.write(batch).await.unwrap();
+        let adds = writer.flush().await.unwrap();
+        assert_eq!(adds.len(), 1);
+
+        let add_stats = adds[0].get_stats().unwrap().unwrap();
+
+        assert!(add_stats.min_values.contains_key("modified") && add_stats.min_values.len() == 1);
+        assert!(add_stats.max_values.contains_key("modified") && add_stats.max_values.len() == 1);
+        assert!(add_stats.null_count.contains_key("modified") && add_stats.null_count.len() == 1);
+    }
+
+    #[tokio::test]
     async fn test_write_multiple_partitions() {
         let batch = get_record_batch(None, false);
         let partition_cols = vec!["modified".to_string(), "id".to_string()];
-        let table = create_initialized_table(&partition_cols).await;
+        let table = create_initialized_table(&partition_cols, None).await;
         let mut writer = RecordBatchWriter::for_table(&table).unwrap();
 
         writer.write(batch).await.unwrap();

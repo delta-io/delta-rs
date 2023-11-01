@@ -425,6 +425,7 @@ impl MergePlan {
             task_parameters.file_schema.clone(),
             partition_values.clone(),
             task_parameters.partition_columns.clone(),
+            Default::default(),
             Some(task_parameters.writer_properties.clone()),
             Some(task_parameters.input_parameters.target_size as usize),
             None,

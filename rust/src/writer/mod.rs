@@ -18,7 +18,7 @@ pub use stats::create_add;
 
 pub mod json;
 pub mod record_batch;
-pub(crate) mod stats;
+pub mod stats;
 pub mod utils;
 
 #[cfg(test)]

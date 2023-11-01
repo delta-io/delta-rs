@@ -16,12 +16,14 @@ use parquet::{
 use serde_json::Value;
 use uuid::Uuid;
 
+use super::stats::config::WriteStatsConfig;
 use super::stats::create_add;
 use super::utils::{
     arrow_schema_without_partitions, next_data_path, record_batch_from_message,
     record_batch_without_partitions, stringified_partition_value,
 };
 use super::{utils::PartitionPath, DeltaWriter, DeltaWriterError};
+use crate::DeltaConfigKey;
 use crate::errors::DeltaTableError;
 use crate::table::builder::DeltaTableBuilder;
 use crate::table::DeltaTableMetaData;
@@ -35,6 +37,7 @@ pub struct JsonWriter {
     storage: Arc<DeltaObjectStore>,
     arrow_schema_ref: Arc<arrow::datatypes::Schema>,
     writer_properties: WriterProperties,
+    write_stats: WriteStatsConfig,
     partition_columns: Vec<String>,
     arrow_writers: HashMap<String, DataArrowWriter>,
 }
@@ -193,10 +196,13 @@ impl JsonWriter {
             .set_compression(Compression::SNAPPY)
             .build();
 
+        let write_stats = WriteStatsConfig::default();
+
         Ok(Self {
             storage,
             arrow_schema_ref: schema,
             writer_properties,
+            write_stats,
             partition_columns: partition_columns.unwrap_or_default(),
             arrow_writers: HashMap::new(),
         })
@@ -216,10 +222,30 @@ impl JsonWriter {
             .set_compression(Compression::SNAPPY)
             .build();
 
+        let write_stats = match table
+            .get_configurations()?
+            .get(DeltaConfigKey::WriteStats.as_ref())
+            .and_then(|o| o.clone())
+        {
+            Some(str) => {
+                let json: serde_json::Value =
+                    serde_json::from_str(&str).map_err(|source| DeltaTableError::GenericError {
+                        source: Box::new(source),
+                    })?;
+                WriteStatsConfig::try_from(json).map_err(|source| {
+                    DeltaTableError::GenericError {
+                        source: Box::new(source),
+                    }
+                })?
+            }
+            None => Default::default(),
+        };
+
         Ok(Self {
             storage: table.storage.clone(),
             arrow_schema_ref,
             writer_properties,
+            write_stats,
             partition_columns,
             arrow_writers: HashMap::new(),
         })
@@ -375,6 +401,7 @@ impl DeltaWriter<Vec<Value>> for JsonWriter {
 
             actions.push(create_add(
                 &writer.partition_values,
+                &self.write_stats,
                 path.to_string(),
                 file_size,
                 &metadata,

@@ -1,3 +1,5 @@
+//! Functions associated with statistics on delta Add actions.
+
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use std::{collections::HashMap, ops::AddAssign};
@@ -10,17 +12,22 @@ use parquet::{
     format::TimeUnit,
 };
 
+use self::config::WriteStatsConfig;
+
 use super::*;
 use crate::protocol::{Add, ColumnValueStat, Stats};
+
+pub mod config;
 
 /// Creates an [`Add`] log action struct.
 pub fn create_add(
     partition_values: &HashMap<String, Option<String>>,
+    write_stats_config: &WriteStatsConfig,
     path: String,
     size: i64,
     file_metadata: &FileMetaData,
 ) -> Result<Add, DeltaTableError> {
-    let stats = stats_from_file_metadata(partition_values, file_metadata)?;
+    let stats = stats_from_file_metadata(partition_values, write_stats_config, file_metadata)?;
     let stats_string = serde_json::to_string(&stats)?;
 
     // Determine the modification timestamp to include in the add action - milliseconds since epoch
@@ -44,6 +51,7 @@ pub fn create_add(
 
 fn stats_from_file_metadata(
     partition_values: &HashMap<String, Option<String>>,
+    write_stats_config: &WriteStatsConfig,
     file_metadata: &FileMetaData,
 ) -> Result<Stats, DeltaWriterError> {
     let type_ptr = parquet::schema::types::from_thrift(file_metadata.schema.as_slice());
@@ -68,6 +76,11 @@ fn stats_from_file_metadata(
 
         // Do not include partition columns in statistics
         if partition_values.contains_key(&column_path_parts[0]) {
+            continue;
+        }
+
+        // Do not include columns where statistics have been excluded
+        if !write_stats_config.should_write(column_path_parts) {
             continue;
         }
 

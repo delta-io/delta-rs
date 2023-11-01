@@ -16,6 +16,7 @@ use crate::errors::{DeltaResult, DeltaTableError};
 use crate::protocol::Add;
 use crate::storage::ObjectStoreRef;
 use crate::writer::record_batch::{divide_by_partition_values, PartitionResult};
+use crate::writer::stats::config::WriteStatsConfig;
 use crate::writer::stats::create_add;
 use crate::writer::utils::{
     arrow_schema_without_partitions, next_data_path, record_batch_without_partitions,
@@ -81,6 +82,9 @@ pub struct WriterConfig {
     /// Row chunks passed to parquet writer. This and the internal parquet writer settings
     /// determine how fine granular we can track / control the size of resulting files.
     write_batch_size: usize,
+    /// Configuration on which columns to generate statistics for.
+    #[allow(dead_code)]
+    write_stats: WriteStatsConfig,
 }
 
 impl WriterConfig {
@@ -106,6 +110,15 @@ impl WriterConfig {
             writer_properties,
             target_file_size,
             write_batch_size,
+            write_stats: WriteStatsConfig::default(),
+        }
+    }
+
+    /// Create a new instance of [WriterConfig] based of this one, adding configuration on which columns to write statistics for.
+    pub fn with_stats_config(self, write_stats: WriteStatsConfig) -> Self {
+        Self {
+            write_stats,
+            ..self
         }
     }
 
@@ -178,6 +191,7 @@ impl DeltaWriter {
                     self.config.file_schema(),
                     partition_values.clone(),
                     self.config.partition_columns.clone(),
+                    self.config.write_stats.clone(),
                     Some(self.config.writer_properties.clone()),
                     Some(self.config.target_file_size),
                     Some(self.config.write_batch_size),
@@ -233,6 +247,8 @@ pub(crate) struct PartitionWriterConfig {
     /// Row chunks passed to parquet writer. This and the internal parquet writer settings
     /// determine how fine granular we can track / control the size of resulting files.
     write_batch_size: usize,
+    /// Configuration on which columns to generate stats for in Add actions.
+    write_stats: WriteStatsConfig,
 }
 
 impl PartitionWriterConfig {
@@ -240,6 +256,7 @@ impl PartitionWriterConfig {
         file_schema: ArrowSchemaRef,
         partition_values: HashMap<String, Option<String>>,
         partition_columns: Vec<String>,
+        write_stats: WriteStatsConfig,
         writer_properties: Option<WriterProperties>,
         target_file_size: Option<usize>,
         write_batch_size: Option<usize>,
@@ -264,6 +281,7 @@ impl PartitionWriterConfig {
             writer_properties,
             target_file_size,
             write_batch_size,
+            write_stats,
         })
     }
 }
@@ -348,6 +366,7 @@ impl PartitionWriter {
         self.files_written.push(
             create_add(
                 &self.config.partition_values,
+                &self.config.write_stats,
                 path.to_string(),
                 file_size,
                 &metadata,
@@ -412,7 +431,7 @@ mod tests {
         let batch = get_record_batch(None, false);
 
         // write single un-partitioned batch
-        let mut writer = get_writer(object_store.clone(), &batch, None, None);
+        let mut writer = get_writer(object_store.clone(), &batch, Default::default(), None, None);
         writer.write(&batch).await.unwrap();
         let files = list(object_store.as_ref(), None).await.unwrap();
         assert_eq!(files.len(), 0);
@@ -444,7 +463,13 @@ mod tests {
             .set_max_row_group_size(1024)
             .build();
         // configure small target file size and and row group size so we can observe multiple files written
-        let mut writer = get_writer(object_store.clone(), &batch, Some(properties), Some(10_000));
+        let mut writer = get_writer(
+            object_store.clone(),
+            &batch,
+            Default::default(),
+            Some(properties),
+            Some(10_000),
+        );
         writer.write(&batch).await.unwrap();
 
         // check that we have written more then once file, and no more then 1 is below target size
@@ -459,6 +484,7 @@ mod tests {
     fn get_writer(
         object_store: ObjectStoreRef,
         batch: &RecordBatch,
+        write_stats: WriteStatsConfig,
         writer_properties: Option<WriterProperties>,
         target_file_size: Option<usize>,
     ) -> PartitionWriter {
@@ -466,6 +492,7 @@ mod tests {
             batch.schema(),
             HashMap::new(),
             Vec::new(),
+            write_stats,
             writer_properties,
             target_file_size,
             None,
