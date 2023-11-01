@@ -1,20 +1,35 @@
-site_name: Python Delta Lake Documentation
+site_name: Delta Lake Documentation
+site_url: https://github.com/delta-io/delta-rs
+repo_url: https://github.com/delta-io/delta-rs
+repo_name: delta-io/delta-rs
+
 theme:
-  name: mkdocs
-  navigation_depth: 2
-  hljs_style: nord
+  name: material
+  locale: en
+  navigation_depth: 3
+  features:
+    - navigation.tracking
+    - navigation.instant
+    - navigation.tabs
+    - navigation.tabs.sticky
+    - navigation.footer
+    - content.tabs.link
 nav:
   - Home: index.md
   - Installation: installation.md
   - Usage:
-      - Overview: usage/index.md
-      - Loading a Delta Table: usage/loading-table.md
-      - Examining a Delta Table: usage/examining-table.md
-      - Querying a Delta Table: usage/querying-delta-tables.md
-      - Managing a Delta Table: usage/managing-tables.md
-      - Writing Delta Tables: usage/writing-delta-tables.md
-  - API Reference: python_api.md
-
+    - Overview: usage/index.md
+    - Loading a Delta Table: usage/loading-table.md
+    - Examining a Delta Table: usage/examining-table.md
+    - Querying a Delta Table: usage/querying-delta-tables.md
+    - Managing a Delta Table: usage/managing-tables.md
+    - Writing Delta Tables: usage/writing-delta-tables.md
+  - API Reference:
+    - api/delta_table.md
+    - api/schema.md
+    - api/storage.md
+not_in_nav: |
+  /_build/
 plugins:
   - autorefs
   - mkdocstrings:
@@ -22,9 +37,8 @@ plugins:
         python:
           path: [../python]
           options:
-            # docstring_style: sphinx
+            show_root_toc_entry: false
             docstring_section_style: table
-            docstring_section_style: litabst
             filters: ["!^_", "^__init__$"]
             heading_level: 3
             show_source: false
@@ -40,6 +54,30 @@ plugins:
             # for cross references
             - https://arrow.apache.org/docs/objects.inv
             - https://pandas.pydata.org/docs/objects.inv
+  - search:
+      lang: en
+  - markdown-exec
+  - macros:
+      module_name: docs/_build/macro
+  - mkdocs-simple-hooks:
+      hooks:
+        on_page_markdown: 'docs._build.hooks:on_page_markdown'
 
 markdown_extensions:
   - admonition
+  - pymdownx.details
+  - attr_list
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.snippets:
+      base_path: ['.','docs/src/']
+      check_paths: true
+      dedent_subsections: true
+  - footnotes
+
+extra:
+  python_api_url: https://delta-io.github.io/delta-rs/python/api_reference.html
