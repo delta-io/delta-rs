@@ -152,7 +152,7 @@ async fn test_read_liquid_table() -> DeltaResult<()> {
 
 #[tokio::test]
 async fn test_read_table_features() -> DeltaResult<()> {
-    let mut _table = deltalake_core::open_table("./tests/data/simple_table").await?;
+    let mut _table = deltalake_core::open_table("./tests/data/simple_table_features").await?;
     let rf = _table.get_reader_features();
     let wf = _table.get_writer_features();
 
