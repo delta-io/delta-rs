@@ -1944,6 +1944,8 @@ mod tests {
 
     #[tokio::test]
     async fn delta_scan_mixed_partition_order() {
+        // Tests issue (1787) where partition columns were incorrect when they
+        // have a different order in the metadata and table schema
         let schema = Arc::new(ArrowSchema::new(vec![
             Field::new("modified", DataType::Utf8, true),
             Field::new("id", DataType::Utf8, true),
@@ -1987,7 +1989,7 @@ mod tests {
 
         let df = ctx.sql("select * from test").await.unwrap();
         let actual = df.collect().await.unwrap();
-        let expected = vec! [
+        let expected = vec![
             "+-------+------------+----+",
             "| value | modified   | id |",
             "+-------+------------+----+",
