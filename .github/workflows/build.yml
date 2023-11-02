@@ -164,5 +164,5 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - name: Run tests
-        working-directory: rust
+        working-directory: crates/deltalake-core
         run: cargo test --no-default-features --features=parquet2

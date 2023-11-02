@@ -102,7 +102,7 @@ You can also try Delta Lake docker at [DockerHub](https://go.delta.io/dockerhub)
 
 ## Get Involved
 
-We encourage you to reach out, and are [commited](https://github.com/delta-io/delta-rs/blob/main/CODE_OF_CONDUCT.md)
+We encourage you to reach out, and are [committed](https://github.com/delta-io/delta-rs/blob/main/CODE_OF_CONDUCT.md)
 to provide a welcoming community.
 
 - [Join us in our Slack workspace](https://join.slack.com/t/delta-users/shared_invite/zt-23h0xwez7-wDTm43ZVEW2ZcbKn6Bc8Fg)
@@ -159,7 +159,7 @@ of features outlined in the Delta [protocol][protocol] is also [tracked](#protoc
 
 | Writer Version | Requirement                                   |        Status        |
 | -------------- | --------------------------------------------- | :------------------: |
-| Version 2      | Append Only Tables                            |  [![open]][roadmap]  |
+| Version 2      | Append Only Tables                            |       ![done]  
 | Version 2      | Column Invariants                             |       ![done]        |
 | Version 3      | Enforce `delta.checkpoint.writeStatsAsJson`   | [![open]][writer-rs] |
 | Version 3      | Enforce `delta.checkpoint.writeStatsAsStruct` | [![open]][writer-rs] |

@@ -28,3 +28,4 @@ Cargo.lock
 !/proofs/Cargo.lock
 
 justfile
+site
