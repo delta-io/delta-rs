@@ -652,7 +652,7 @@ pub struct Protocol {
 
 /// Features table readers can support as well as let users know
 /// what is supported
-#[derive(Serialize, Deserialize, Debug, Copy, Clone, Eq, PartialEq, Hash)]
+#[derive(Serialize, Deserialize, Debug, Clone, Eq, PartialEq, Hash)]
 pub enum ReaderFeatures {
     /// Mapping of one column to another
     #[serde(alias = "columnMapping")]
@@ -667,15 +667,15 @@ pub enum ReaderFeatures {
     #[serde(alias = "v2Checkpoint")]
     V2_CHECKPOINT,
     /// If we do not match any other reader features
-    #[serde(other)]
-    OTHER,
+    #[serde(untagged)]
+    OTHER(String),
 }
 
 #[allow(clippy::from_over_into)]
 impl Into<usize> for ReaderFeatures {
     fn into(self) -> usize {
         match self {
-            ReaderFeatures::OTHER => 0,
+            ReaderFeatures::OTHER(_) => 0,
             ReaderFeatures::COLUMN_MAPPING => 2,
             ReaderFeatures::DELETION_VECTORS
             | ReaderFeatures::TIMESTAMP_WITHOUT_TIMEZONE
@@ -693,9 +693,9 @@ impl From<&parquet::record::Field> for ReaderFeatures {
                 "deletionVectors" => ReaderFeatures::DELETION_VECTORS,
                 "timestampNtz" => ReaderFeatures::TIMESTAMP_WITHOUT_TIMEZONE,
                 "v2Checkpoint" => ReaderFeatures::V2_CHECKPOINT,
-                _ => ReaderFeatures::OTHER,
+                f => ReaderFeatures::OTHER(f.to_string()),
             },
-            _ => ReaderFeatures::OTHER,
+            f => ReaderFeatures::OTHER(f.to_string()),
         }
     }
 }
@@ -707,14 +707,14 @@ impl From<String> for ReaderFeatures {
             "deletionVectors" => ReaderFeatures::DELETION_VECTORS,
             "timestampNtz" => ReaderFeatures::TIMESTAMP_WITHOUT_TIMEZONE,
             "v2Checkpoint" => ReaderFeatures::V2_CHECKPOINT,
-            _ => ReaderFeatures::OTHER,
+            f => ReaderFeatures::OTHER(f.to_string()),
         }
     }
 }
 
 /// Features table writers can support as well as let users know
 /// what is supported
-#[derive(Serialize, Deserialize, Debug, Copy, Clone, Eq, PartialEq, Hash)]
+#[derive(Serialize, Deserialize, Debug, Clone, Eq, PartialEq, Hash)]
 pub enum WriterFeatures {
     /// Append Only Tables
     #[serde(alias = "appendOnly")]
@@ -756,15 +756,15 @@ pub enum WriterFeatures {
     #[serde(alias = "icebergCompatV1")]
     ICEBERG_COMPAT_V1,
     /// If we do not match any other reader features
-    #[serde(other)]
-    OTHER,
+    #[serde(untagged)]
+    OTHER(String),
 }
 
 #[allow(clippy::from_over_into)]
 impl Into<usize> for WriterFeatures {
     fn into(self) -> usize {
         match self {
-            WriterFeatures::OTHER => 0,
+            WriterFeatures::OTHER(_) => 0,
             WriterFeatures::APPEND_ONLY | WriterFeatures::INVARIANTS => 2,
             WriterFeatures::CHECK_CONSTRAINTS => 3,
             WriterFeatures::CHANGE_DATA_FEED | WriterFeatures::GENERATED_COLUMNS => 4,
@@ -796,7 +796,7 @@ impl From<String> for WriterFeatures {
             "domainMetadata" => WriterFeatures::DOMAIN_METADATA,
             "v2Checkpoint" => WriterFeatures::V2_CHECKPOINT,
             "icebergCompatV1" => WriterFeatures::ICEBERG_COMPAT_V1,
-            _ => WriterFeatures::OTHER,
+            f => WriterFeatures::OTHER(f.to_string()),
         }
     }
 }
@@ -819,9 +819,9 @@ impl From<&parquet::record::Field> for WriterFeatures {
                 "domainMetadata" => WriterFeatures::DOMAIN_METADATA,
                 "v2Checkpoint" => WriterFeatures::V2_CHECKPOINT,
                 "icebergCompatV1" => WriterFeatures::ICEBERG_COMPAT_V1,
-                _ => WriterFeatures::OTHER,
+                f => WriterFeatures::OTHER(f.to_string()),
             },
-            _ => WriterFeatures::OTHER,
+            f => WriterFeatures::OTHER(f.to_string()),
         }
     }
 }
