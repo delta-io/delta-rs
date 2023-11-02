@@ -182,3 +182,19 @@ def test_update_to_many_inputs(tmp_path: pathlib.Path, sample_table: pa.Table):
         str(excinfo.value)
         == "Passing updates and new_values at same time is not allowed, pick one."
     )
+
+
+def test_update_with_incorrect_updates_input(
+    tmp_path: pathlib.Path, sample_table: pa.Table
+):
+    write_deltalake(tmp_path, sample_table, mode="append")
+
+    dt = DeltaTable(tmp_path)
+    updates = {"col": {}}
+    with pytest.raises(Exception) as excinfo:
+        dt.update(new_values=updates)
+
+    assert (
+        str(excinfo.value)
+        == "Invalid datatype provided in new_values, only int, float, bool, list, str or datetime or accepted."
+    )

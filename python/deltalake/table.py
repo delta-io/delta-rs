@@ -505,9 +505,19 @@ given filters.
                     value = str(
                         int(value.timestamp() * 1000 * 1000)
                     )  # convert to microseconds
+                else:
+                    raise TypeError(
+                        "Invalid datatype provided in new_values, only int, float, bool, list, str or datetime or accepted."
+                    )
                 updates[key] = value
         elif updates is not None and new_values is None:
-            pass
+            for key, value in updates.items():
+                print(type(key), type(value))
+                if not isinstance(value, str) or not isinstance(key, str):
+                    raise TypeError(
+                        f"The values of the updates parameter must all be SQL strings. Got {updates}. Did you mean to use the new_values parameter?"
+                    )
+
         elif updates is not None and new_values is not None:
             raise ValueError(
                 "Passing updates and new_values at same time is not allowed, pick one."
