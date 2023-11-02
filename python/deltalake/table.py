@@ -488,7 +488,7 @@ given filters.
         >>> from deltalake import DeltaTable
         >>> dt = DeltaTable("tmp")
         >>> dt.update(predicate="id = '5'",
-        ...           updates = {
+        ...           new_values = {
         ...             "price": 150.10,
         ...             }
         ...         )
