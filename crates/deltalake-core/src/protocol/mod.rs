@@ -668,7 +668,7 @@ pub enum ReaderFeatures {
     V2_CHECKPOINT,
     /// If we do not match any other reader features
     #[serde(other)]
-    OTHER
+    OTHER,
 }
 
 #[allow(clippy::from_over_into)]
@@ -707,7 +707,7 @@ impl From<String> for ReaderFeatures {
             "deletionVectors" => ReaderFeatures::DELETION_VECTORS,
             "timestampNtz" => ReaderFeatures::TIMESTAMP_WITHOUT_TIMEZONE,
             "v2Checkpoint" => ReaderFeatures::V2_CHECKPOINT,
-           _ => ReaderFeatures::OTHER
+            _ => ReaderFeatures::OTHER,
         }
     }
 }
@@ -757,7 +757,7 @@ pub enum WriterFeatures {
     ICEBERG_COMPAT_V1,
     /// If we do not match any other reader features
     #[serde(other)]
-    OTHER
+    OTHER,
 }
 
 #[allow(clippy::from_over_into)]
@@ -796,7 +796,7 @@ impl From<String> for WriterFeatures {
             "domainMetadata" => WriterFeatures::DOMAIN_METADATA,
             "v2Checkpoint" => WriterFeatures::V2_CHECKPOINT,
             "icebergCompatV1" => WriterFeatures::ICEBERG_COMPAT_V1,
-            _ => WriterFeatures::OTHER
+            _ => WriterFeatures::OTHER,
         }
     }
 }
@@ -819,9 +819,9 @@ impl From<&parquet::record::Field> for WriterFeatures {
                 "domainMetadata" => WriterFeatures::DOMAIN_METADATA,
                 "v2Checkpoint" => WriterFeatures::V2_CHECKPOINT,
                 "icebergCompatV1" => WriterFeatures::ICEBERG_COMPAT_V1,
-                _ => WriterFeatures::OTHER
+                _ => WriterFeatures::OTHER,
             },
-            _ => WriterFeatures::OTHER
+            _ => WriterFeatures::OTHER,
         }
     }
 }

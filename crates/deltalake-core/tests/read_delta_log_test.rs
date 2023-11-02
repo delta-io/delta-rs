@@ -152,13 +152,13 @@ async fn test_read_liquid_table() -> DeltaResult<()> {
 
 #[tokio::test]
 async fn test_read_table_features() -> DeltaResult<()> {
-    let mut _table = deltalake::open_table("./tests/data/simple_table").await?;
+    let mut _table = deltalake_core::open_table("./tests/data/simple_table").await?;
     let rf = _table.get_reader_features();
     let wf = _table.get_writer_features();
     dbg!(rf);
     assert!(rf.is_some());
     assert!(wf.is_some());
-    assert_eq!(rf.unwrap().len(), 4);
+    assert_eq!(rf.unwrap().len(), 5);
     assert_eq!(wf.unwrap().len(), 13);
     Ok(())
 }
