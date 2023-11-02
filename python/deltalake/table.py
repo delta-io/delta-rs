@@ -483,7 +483,8 @@ given filters.
         ...             }
         ...         )
 
-        Update some row values with python object. This is equivalent to
+        To use Python objects instead of SQL strings, use the `new_values` parameter
+        instead of the `updates` parameter. For example, this is equivalent to
         ``UPDATE table SET price = 150.10 WHERE id = '5'``
         >>> from deltalake import DeltaTable
         >>> dt = DeltaTable("tmp")
