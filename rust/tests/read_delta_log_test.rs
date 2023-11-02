@@ -152,10 +152,14 @@ async fn test_read_liquid_table() -> DeltaResult<()> {
 
 #[tokio::test]
 async fn test_read_table_features() -> DeltaResult<()> {
-    let path = "./tests/data/table_with_liquid_clustering";
-    let mut _table = deltalake::open_table(&path).await?;
-    assert!(_table.get_state().reader_features().is_some());
-    assert!(_table.get_state().writer_features().is_some());
+    let mut _table = deltalake::open_table("./tests/data/simple_table").await?;
+    let rf = _table.get_reader_features();
+    let wf = _table.get_writer_features();
+    dbg!(rf);
+    assert!(rf.is_some());
+    assert!(wf.is_some());
+    assert_eq!(rf.unwrap().len(), 4);
+    assert_eq!(wf.unwrap().len(), 13);
     Ok(())
 }
 

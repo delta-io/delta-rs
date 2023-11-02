@@ -666,12 +666,16 @@ pub enum ReaderFeatures {
     /// version 2 of checkpointing
     #[serde(alias = "v2Checkpoint")]
     V2_CHECKPOINT,
+    /// If we do not match any other reader features
+    #[serde(other)]
+    OTHER
 }
 
 #[allow(clippy::from_over_into)]
 impl Into<usize> for ReaderFeatures {
     fn into(self) -> usize {
         match self {
+            ReaderFeatures::OTHER => 0,
             ReaderFeatures::COLUMN_MAPPING => 2,
             ReaderFeatures::DELETION_VECTORS
             | ReaderFeatures::TIMESTAMP_WITHOUT_TIMEZONE
@@ -679,6 +683,35 @@ impl Into<usize> for ReaderFeatures {
         }
     }
 }
+
+#[cfg(all(not(feature = "parquet2"), feature = "parquet"))]
+impl From<&parquet::record::Field> for ReaderFeatures {
+    fn from(value: &parquet::record::Field) -> Self {
+        match value {
+            parquet::record::Field::Str(feature) => match feature.as_str() {
+                "columnMapping" => ReaderFeatures::COLUMN_MAPPING,
+                "deletionVectors" => ReaderFeatures::DELETION_VECTORS,
+                "timestampNtz" => ReaderFeatures::TIMESTAMP_WITHOUT_TIMEZONE,
+                "v2Checkpoint" => ReaderFeatures::V2_CHECKPOINT,
+                _ => ReaderFeatures::OTHER,
+            },
+            _ => ReaderFeatures::OTHER,
+        }
+    }
+}
+
+impl From<String> for ReaderFeatures {
+    fn from(value: String) -> Self {
+        match value.as_str() {
+            "columnMapping" => ReaderFeatures::COLUMN_MAPPING,
+            "deletionVectors" => ReaderFeatures::DELETION_VECTORS,
+            "timestampNtz" => ReaderFeatures::TIMESTAMP_WITHOUT_TIMEZONE,
+            "v2Checkpoint" => ReaderFeatures::V2_CHECKPOINT,
+           _ => ReaderFeatures::OTHER
+        }
+    }
+}
+
 /// Features table writers can support as well as let users know
 /// what is supported
 #[derive(Serialize, Deserialize, Debug, Copy, Clone, Eq, PartialEq, Hash)]
@@ -722,15 +755,16 @@ pub enum WriterFeatures {
     /// Iceberg compatability support
     #[serde(alias = "icebergCompatV1")]
     ICEBERG_COMPAT_V1,
-    /// liquid clustering support
-    #[serde(alias = "liquid")]
-    LIQUID,
+    /// If we do not match any other reader features
+    #[serde(other)]
+    OTHER
 }
 
 #[allow(clippy::from_over_into)]
 impl Into<usize> for WriterFeatures {
     fn into(self) -> usize {
         match self {
+            WriterFeatures::OTHER => 0,
             WriterFeatures::APPEND_ONLY | WriterFeatures::INVARIANTS => 2,
             WriterFeatures::CHECK_CONSTRAINTS => 3,
             WriterFeatures::CHANGE_DATA_FEED | WriterFeatures::GENERATED_COLUMNS => 4,
@@ -741,8 +775,53 @@ impl Into<usize> for WriterFeatures {
             | WriterFeatures::TIMESTAMP_WITHOUT_TIMEZONE
             | WriterFeatures::DOMAIN_METADATA
             | WriterFeatures::V2_CHECKPOINT
-            | WriterFeatures::ICEBERG_COMPAT_V1
-            | WriterFeatures::LIQUID => 7,
+            | WriterFeatures::ICEBERG_COMPAT_V1 => 7,
+        }
+    }
+}
+
+impl From<String> for WriterFeatures {
+    fn from(value: String) -> Self {
+        match value.as_str() {
+            "appendOnly" => WriterFeatures::APPEND_ONLY,
+            "invariants" => WriterFeatures::INVARIANTS,
+            "checkConstraints" => WriterFeatures::CHECK_CONSTRAINTS,
+            "changeDataFeed" => WriterFeatures::CHANGE_DATA_FEED,
+            "generatedColumns" => WriterFeatures::GENERATED_COLUMNS,
+            "columnMapping" => WriterFeatures::COLUMN_MAPPING,
+            "identityColumns" => WriterFeatures::IDENTITY_COLUMNS,
+            "deletionVectors" => WriterFeatures::DELETION_VECTORS,
+            "rowTracking" => WriterFeatures::ROW_TRACKING,
+            "timestampNtz" => WriterFeatures::TIMESTAMP_WITHOUT_TIMEZONE,
+            "domainMetadata" => WriterFeatures::DOMAIN_METADATA,
+            "v2Checkpoint" => WriterFeatures::V2_CHECKPOINT,
+            "icebergCompatV1" => WriterFeatures::ICEBERG_COMPAT_V1,
+            _ => WriterFeatures::OTHER
+        }
+    }
+}
+
+#[cfg(all(not(feature = "parquet2"), feature = "parquet"))]
+impl From<&parquet::record::Field> for WriterFeatures {
+    fn from(value: &parquet::record::Field) -> Self {
+        match value {
+            parquet::record::Field::Str(feature) => match feature.as_str() {
+                "appendOnly" => WriterFeatures::APPEND_ONLY,
+                "invariants" => WriterFeatures::INVARIANTS,
+                "checkConstraints" => WriterFeatures::CHECK_CONSTRAINTS,
+                "changeDataFeed" => WriterFeatures::CHANGE_DATA_FEED,
+                "generatedColumns" => WriterFeatures::GENERATED_COLUMNS,
+                "columnMapping" => WriterFeatures::COLUMN_MAPPING,
+                "identityColumns" => WriterFeatures::IDENTITY_COLUMNS,
+                "deletionVectors" => WriterFeatures::DELETION_VECTORS,
+                "rowTracking" => WriterFeatures::ROW_TRACKING,
+                "timestampNtz" => WriterFeatures::TIMESTAMP_WITHOUT_TIMEZONE,
+                "domainMetadata" => WriterFeatures::DOMAIN_METADATA,
+                "v2Checkpoint" => WriterFeatures::V2_CHECKPOINT,
+                "icebergCompatV1" => WriterFeatures::ICEBERG_COMPAT_V1,
+                _ => WriterFeatures::OTHER
+            },
+            _ => WriterFeatures::OTHER
         }
     }
 }

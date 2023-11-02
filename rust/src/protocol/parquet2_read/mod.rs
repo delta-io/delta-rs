@@ -64,40 +64,6 @@ struct DeserState {
     metadata_configuration: map::MapState,
 }
 
-impl From<String> for ReaderFeatures {
-    fn from(value: String) -> Self {
-        match value.as_str() {
-            "columnMapping" => ReaderFeatures::COLUMN_MAPPING,
-            "deletionVectors" => ReaderFeatures::DELETION_VECTORS,
-            "timestampNtz" => ReaderFeatures::TIMESTAMP_WITHOUT_TIMEZONE,
-            "v2Checkpoint" => ReaderFeatures::V2_CHECKPOINT,
-            f => panic!("Unknown reader feature encountered: {}", f),
-        }
-    }
-}
-
-impl From<String> for WriterFeatures {
-    fn from(value: String) -> Self {
-        match value.as_str() {
-            "appendOnly" => WriterFeatures::APPEND_ONLY,
-            "invariants" => WriterFeatures::INVARIANTS,
-            "checkConstraints" => WriterFeatures::CHECK_CONSTRAINTS,
-            "changeDataFeed" => WriterFeatures::CHANGE_DATA_FEED,
-            "generatedColumns" => WriterFeatures::GENERATED_COLUMNS,
-            "columnMapping" => WriterFeatures::COLUMN_MAPPING,
-            "identityColumns" => WriterFeatures::IDENTITY_COLUMNS,
-            "deletionVectors" => WriterFeatures::DELETION_VECTORS,
-            "rowTracking" => WriterFeatures::ROW_TRACKING,
-            "timestampNtz" => WriterFeatures::TIMESTAMP_WITHOUT_TIMEZONE,
-            "domainMetadata" => WriterFeatures::DOMAIN_METADATA,
-            "v2Checkpoint" => WriterFeatures::V2_CHECKPOINT,
-            "icebergCompatV1" => WriterFeatures::ICEBERG_COMPAT_V1,
-            "liquid" => WriterFeatures::LIQUID,
-            f => panic!("Unknown table feature encountered: {}", f),
-        }
-    }
-}
-
 fn hashmap_from_kvpairs<Key, Val>(
     keys: impl IntoIterator<Item = Key>,
     values: impl IntoIterator<Item = Val>,

@@ -302,16 +302,12 @@ impl DeltaTableState {
             self.min_writer_version = new_state.min_writer_version;
         }
 
-        if new_state.min_writer_version >= 7 {
+        if new_state.min_writer_version >= 5 {
             self.writer_features = new_state.writer_features;
-        } else {
-            self.writer_features = None;
         }
 
         if new_state.min_reader_version >= 3 {
             self.reader_features = new_state.reader_features;
-        } else {
-            self.reader_features = None;
         }
 
         if new_state.current_metadata.is_some() {

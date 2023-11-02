@@ -8,7 +8,7 @@ use serde_json::json;
 
 use crate::protocol::{
     Action, Add, AddCDCFile, ColumnCountStat, ColumnValueStat, DeletionVector, MetaData, Protocol,
-    ProtocolError, ReaderFeatures, Remove, Stats, Txn, WriterFeatures,
+    ProtocolError, Remove, Stats, Txn,
 };
 
 use super::StorageType;
@@ -589,45 +589,6 @@ impl Txn {
         }
 
         Ok(re)
-    }
-}
-
-impl From<&Field> for ReaderFeatures {
-    fn from(value: &Field) -> Self {
-        match value {
-            Field::Str(feature) => match feature.as_str() {
-                "columnMapping" => ReaderFeatures::COLUMN_MAPPING,
-                "deletionVectors" => ReaderFeatures::DELETION_VECTORS,
-                "timestampNtz" => ReaderFeatures::TIMESTAMP_WITHOUT_TIMEZONE,
-                "v2Checkpoint" => ReaderFeatures::V2_CHECKPOINT,
-                f => panic!("Unknown reader feature encountered: {}", f),
-            },
-            f => panic!("Unknown field in reader features field: {}", f),
-        }
-    }
-}
-impl From<&Field> for WriterFeatures {
-    fn from(value: &Field) -> Self {
-        match value {
-            Field::Str(feature) => match feature.as_str() {
-                "appendOnly" => WriterFeatures::APPEND_ONLY,
-                "invariants" => WriterFeatures::INVARIANTS,
-                "checkConstraints" => WriterFeatures::CHECK_CONSTRAINTS,
-                "changeDataFeed" => WriterFeatures::CHANGE_DATA_FEED,
-                "generatedColumns" => WriterFeatures::GENERATED_COLUMNS,
-                "columnMapping" => WriterFeatures::COLUMN_MAPPING,
-                "identityColumns" => WriterFeatures::IDENTITY_COLUMNS,
-                "deletionVectors" => WriterFeatures::DELETION_VECTORS,
-                "rowTracking" => WriterFeatures::ROW_TRACKING,
-                "timestampNtz" => WriterFeatures::TIMESTAMP_WITHOUT_TIMEZONE,
-                "domainMetadata" => WriterFeatures::DOMAIN_METADATA,
-                "v2Checkpoint" => WriterFeatures::V2_CHECKPOINT,
-                "icebergCompatV1" => WriterFeatures::ICEBERG_COMPAT_V1,
-                "liquid" => WriterFeatures::LIQUID,
-                f => panic!("Unknown table feature encountered: {}", f),
-            },
-            f => panic!("Invalid field type for table features: {}", f),
-        }
     }
 }
 
