@@ -8,7 +8,7 @@ from deltalake.schema import ArrayType, MapType, PrimitiveType, Schema, StructTy
 
 
 def test_table_schema():
-    table_path = "../rust/tests/data/simple_table"
+    table_path = "../crates/deltalake-core/tests/data/simple_table"
     dt = DeltaTable(table_path)
     schema = dt.schema()
     assert json.loads(schema.to_json()) == {
@@ -30,7 +30,7 @@ def test_table_schema():
 
 
 def test_table_schema_pyarrow_simple():
-    table_path = "../rust/tests/data/simple_table"
+    table_path = "../crates/deltalake-core/tests/data/simple_table"
     dt = DeltaTable(table_path)
     schema = dt.schema().to_pyarrow()
     field = schema.field(0)
@@ -42,7 +42,7 @@ def test_table_schema_pyarrow_simple():
 
 
 def test_table_schema_pyarrow_020():
-    table_path = "../rust/tests/data/delta-0.2.0"
+    table_path = "../crates/deltalake-core/tests/data/delta-0.2.0"
     dt = DeltaTable(table_path)
     schema = dt.schema().to_pyarrow()
     field = schema.field(0)

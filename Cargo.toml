@@ -1,5 +1,9 @@
 [workspace]
-members = ["delta-inspect", "rust", "python"]
+members = [
+    "crates/*",
+    "delta-inspect",
+    "python",
+]
 exclude = ["proofs"]
 resolver = "2"
 

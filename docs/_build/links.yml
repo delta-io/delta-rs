@@ -1,0 +1,4 @@
+python:
+  DeltaTable: PYTHON_API_URL#deltalake.table.DeltaTable
+rust:
+  DeltaTable: https://docs.rs/deltalake/latest/deltalake/table/struct.DeltaTable.html

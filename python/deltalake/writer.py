@@ -4,6 +4,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal
+from math import inf
 from pathlib import Path
 from typing import (
     Any,
@@ -520,14 +521,16 @@ def get_file_stats_from_metadata(
                     for group in iter_groups(metadata)
                 )
                 # If some row groups have all null values, their min and max will be null too.
-                stats["minValues"][name] = min(
-                    minimum for minimum in minimums if minimum is not None
-                )
+                min_value = min(minimum for minimum in minimums if minimum is not None)
+                # Infinity cannot be serialized to JSON, so we skip it. Saying
+                # min/max is infinity is equivalent to saying it is null, anyways.
+                if min_value != -inf:
+                    stats["minValues"][name] = min_value
                 maximums = (
                     group.column(column_idx).statistics.max
                     for group in iter_groups(metadata)
                 )
-                stats["maxValues"][name] = max(
-                    maximum for maximum in maximums if maximum is not None
-                )
+                max_value = max(maximum for maximum in maximums if maximum is not None)
+                if max_value != inf:
+                    stats["maxValues"][name] = max_value
     return stats
