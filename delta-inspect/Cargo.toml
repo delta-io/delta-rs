@@ -16,7 +16,7 @@ tokio = { version = "1", features = ["fs", "macros", "rt", "io-util"] }
 env_logger = "0"
 
 [dependencies.deltalake]
-path = "../rust"
+path = "../crates/deltalake"
 version = "0"
 features = ["azure", "gcs"]
 
