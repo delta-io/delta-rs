@@ -150,6 +150,19 @@ async fn test_read_liquid_table() -> DeltaResult<()> {
     Ok(())
 }
 
+#[tokio::test]
+async fn test_read_table_features() -> DeltaResult<()> {
+    let mut _table = deltalake_core::open_table("./tests/data/simple_table_features").await?;
+    let rf = _table.get_reader_features();
+    let wf = _table.get_writer_features();
+
+    assert!(rf.is_some());
+    assert!(wf.is_some());
+    assert_eq!(rf.unwrap().len(), 5);
+    assert_eq!(wf.unwrap().len(), 13);
+    Ok(())
+}
+
 // test for: https://github.com/delta-io/delta-rs/issues/1302
 #[tokio::test]
 async fn read_delta_table_from_dlt() {
