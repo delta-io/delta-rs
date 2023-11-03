@@ -47,7 +47,7 @@ pyspark = [
 ]
 
 [project.urls]
-documentation = "https://delta-io.github.io/delta-rs/python/"
+documentation = "https://delta-io.github.io/delta-rs/"
 repository = "https://github.com/delta-io/delta-rs/tree/main/python/"
 
 [tool.mypy]
