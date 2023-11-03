@@ -586,12 +586,11 @@ impl<'a> DeltaScanBuilder<'a> {
         // However we may want to do some additional balancing in case we are far off from the above.
         let mut file_groups: HashMap<Vec<ScalarValue>, Vec<PartitionedFile>> = HashMap::new();
 
-        let table_partition_cols = self
+        let table_partition_cols = &self
             .snapshot
             .current_metadata()
             .ok_or(DeltaTableError::NoMetadata)?
-            .partition_columns
-            .clone();
+            .partition_columns;
 
         for action in files.iter() {
             let mut part = partitioned_file_from_action(action, &table_partition_cols, &schema);
