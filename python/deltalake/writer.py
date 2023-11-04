@@ -320,7 +320,6 @@ def write_deltalake(
                     )
 
         def validate_batch(batch: pa.RecordBatch) -> pa.RecordBatch:
-            # batch = _cast_to_equal_batch(batch, schema)
             checker.check_batch(batch)
 
             if mode == "overwrite" and partition_filters:
