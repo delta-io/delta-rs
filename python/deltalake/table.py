@@ -530,7 +530,7 @@ class DeltaTable:
         ```
 
         Update all row values. This is equivalent to
-        ``UPDATE table SET id = concat(id, '_old')``.
+        ``UPDATE table SET deleted = true, id = concat(id, '_old')``.
         ```
         from deltalake import DeltaTable
         dt = DeltaTable("tmp")
