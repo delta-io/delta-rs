@@ -346,7 +346,7 @@ def write_deltalake(
     if file_options is not None:
         file_options.update(use_compliant_nested_type=False)
     else:
-        file_options = pa.dataset.ParquetFileFormat().make_write_options(
+        file_options = ds.ParquetFileFormat().make_write_options(
             use_compliant_nested_type=False
         )
 
