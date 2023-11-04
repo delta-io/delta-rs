@@ -88,4 +88,4 @@ markdown_extensions:
   - footnotes
 
 extra:
-  python_api_url: https://delta-io.github.io/delta-rs/python/api_reference.html
+  python_api_url: https://delta-io.github.io/delta-rs/api/
