@@ -1435,18 +1435,3 @@ class TableOptimizer:
         )
         self.table.update_incremental()
         return json.loads(metrics)
-
-
-def _cast_to_equal_batch(
-    batch: pyarrow.RecordBatch, schema: pyarrow.Schema
-) -> pyarrow.RecordBatch:
-    """
-    Cast a batch to a schema, if it is already considered equal.
-
-    This is mostly for mapping things like list field names, which arrow-rs
-    checks when looking at schema equality, but pyarrow does not.
-    """
-    if batch.schema == schema:
-        return pyarrow.Table.from_batches([batch]).cast(schema).to_batches()[0]
-    else:
-        return batch

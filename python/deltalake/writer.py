@@ -40,7 +40,7 @@ from ._internal import DeltaDataChecker as _DeltaDataChecker
 from ._internal import batch_distinct
 from ._internal import write_new_deltalake as _write_new_deltalake
 from .exceptions import DeltaProtocolError, TableNotFoundError
-from .table import MAX_SUPPORTED_WRITER_VERSION, DeltaTable, _cast_to_equal_batch
+from .table import MAX_SUPPORTED_WRITER_VERSION, DeltaTable
 
 try:
     import pandas as pd  # noqa: F811
@@ -320,7 +320,7 @@ def write_deltalake(
                     )
 
         def validate_batch(batch: pa.RecordBatch) -> pa.RecordBatch:
-            batch = _cast_to_equal_batch(batch, schema)
+            # batch = _cast_to_equal_batch(batch, schema)
             checker.check_batch(batch)
 
             if mode == "overwrite" and partition_filters:
