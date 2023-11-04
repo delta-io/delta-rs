@@ -498,7 +498,7 @@ class DeltaTable:
         self,
         updates: Optional[Dict[str, str]] = None,
         new_values: Optional[
-            Dict[str, Union[int, float, str, datetime, bool, list]]
+            Dict[str, Union[int, float, str, datetime, bool, List[Any]]]
         ] = None,
         predicate: Optional[str] = None,
         writer_properties: Optional[Dict[str, int]] = None,
@@ -511,10 +511,9 @@ class DeltaTable:
             updates: a mapping of column name to update SQL expression.
             new_values: a mapping of column name to python datatype.
             predicate: a logical expression, defaults to None
-            writer_properties: Pass writer properties to the Rust parquet writer, see options
-                                https://arrow.apache.org/rust/parquet/file/properties/struct.WriterProperties.html,
-                                only the following fields are supported: `data_page_size_limit`, `dictionary_page_size_limit`,
-                                `data_page_row_count_limit`, `write_batch_size`, `max_row_group_size`.
+            writer_properties: Pass writer properties to the Rust parquet writer, see options https://arrow.apache.org/rust/parquet/file/properties/struct.WriterProperties.html,
+                only the following fields are supported: `data_page_size_limit`, `dictionary_page_size_limit`,
+                `data_page_row_count_limit`, `write_batch_size`, `max_row_group_size`.
             error_on_type_mismatch: specify if update will return error if data types are mismatching :default = True
 
         Returns:
@@ -527,11 +526,7 @@ class DeltaTable:
         ```
         from deltalake import DeltaTable
         dt = DeltaTable("tmp")
-        dt.update(predicate="id = '5'",
-                  updates = {
-                    "deleted": 'True',
-                    }
-                )
+        dt.update(predicate="id = '5'", updates = {"deleted": 'True'})
         ```
 
         Update all row values. This is equivalent to
@@ -539,11 +534,7 @@ class DeltaTable:
         ```
         from deltalake import DeltaTable
         dt = DeltaTable("tmp")
-        dt.update(updates = {
-                    "deleted": 'True',
-                    "id": "concat(id, '_old')"
-                    }
-                )
+        dt.update(updates = {"deleted": 'True', "id": "concat(id, '_old')"})
         ```
 
         To use Python objects instead of SQL strings, use the `new_values` parameter
@@ -552,11 +543,7 @@ class DeltaTable:
         ```
         from deltalake import DeltaTable
         dt = DeltaTable("tmp")
-        dt.update(predicate="id = '5'",
-                  new_values = {
-                    "price": 150.10,
-                    }
-                )
+        dt.update(predicate="id = '5'", new_values = {"price": 150.10})
         ```
         """
         if updates is None and new_values is not None:
