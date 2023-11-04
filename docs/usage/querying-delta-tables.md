@@ -61,7 +61,7 @@ scanning operation.
 ```
 
 PyArrow datasets may also be passed to compatible query engines, such as
-[DuckDB](https://duckdb.org/docs/api/python).
+[DuckDB](https://duckdb.org/docs/api/python/overview.html)
 
 ``` python
 >>> import duckdb
