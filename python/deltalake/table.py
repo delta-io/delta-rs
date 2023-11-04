@@ -835,7 +835,7 @@ class DeltaTable:
         or corrupted files.
 
         Args:
-            dry_run(bool): when activated, list only the files, otherwise add remove actions to transaction log. Defaults to False.
+            dry_run: when activated, list only the files, otherwise add remove actions to transaction log. Defaults to False.
         Returns:
             The metrics from repair (FSCK) action.
 
@@ -844,9 +844,10 @@ class DeltaTable:
         from deltalake import DeltaTable
         dt = DeltaTable('TEST')
         dt.repair(dry_run=False)
-        {'dry_run': False,
-        'files_removed': ['6-0d084325-6885-4847-b008-82c1cf30674c-0.parquet',
-        '5-4fba1d3e-3e20-4de1-933d-a8e13ac59f53-0.parquet']}
+        ```
+        Results in
+        ```
+        {'dry_run': False, 'files_removed': ['6-0d084325-6885-4847-b008-82c1cf30674c-0.parquet', 5-4fba1d3e-3e20-4de1-933d-a8e13ac59f53-0.parquet']}
         ```
         """
         metrics = self._table.repair(dry_run)
