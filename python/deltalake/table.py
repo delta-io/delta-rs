@@ -840,18 +840,14 @@ class DeltaTable:
             The metrics from repair (FSCK) action.
 
         Examples:
-
         ```
         from deltalake import DeltaTable
-
         dt = DeltaTable('TEST')
         dt.repair(dry_run=False)
         ```
         Results in
         ```
-        {'dry_run': False,
-        'files_removed': ['6-0d084325-6885-4847-b008-82c1cf30674c-0.parquet',
-        '5-4fba1d3e-3e20-4de1-933d-a8e13ac59f53-0.parquet']}
+        {'dry_run': False, 'files_removed': ['6-0d084325-6885-4847-b008-82c1cf30674c-0.parquet', 5-4fba1d3e-3e20-4de1-933d-a8e13ac59f53-0.parquet']}
         ```
         """
         metrics = self._table.repair(dry_run)
