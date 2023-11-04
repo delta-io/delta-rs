@@ -496,24 +496,28 @@ class DeltaTable:
 
     def update(
         self,
-        updates: Dict[str, str],
+        updates: Optional[Dict[str, str]] = None,
+        new_values: Optional[
+            Dict[str, Union[int, float, str, datetime, bool, List[Any]]]
+        ] = None,
         predicate: Optional[str] = None,
         writer_properties: Optional[Dict[str, int]] = None,
         error_on_type_mismatch: bool = True,
     ) -> Dict[str, Any]:
-        """UPDATE records in the Delta Table that matches an optional predicate.
+        """`UPDATE` records in the Delta Table that matches an optional predicate. Either updates or new_values needs
+        to be passed for it to execute.
 
         Args:
             updates: a mapping of column name to update SQL expression.
+            new_values: a mapping of column name to python datatype.
             predicate: a logical expression, defaults to None
-            writer_properties: Pass writer properties to the Rust parquet writer, see options
-                                https://arrow.apache.org/rust/parquet/file/properties/struct.WriterProperties.html,
-                                only the following fields are supported: `data_page_size_limit`, `dictionary_page_size_limit`,
-                                `data_page_row_count_limit`, `write_batch_size`, `max_row_group_size`.
-            error_on_type_mismatch: specify if merge will return error if data types are mismatching, default = True
+            writer_properties: Pass writer properties to the Rust parquet writer, see options https://arrow.apache.org/rust/parquet/file/properties/struct.WriterProperties.html,
+                only the following fields are supported: `data_page_size_limit`, `dictionary_page_size_limit`,
+                `data_page_row_count_limit`, `write_batch_size`, `max_row_group_size`.
+            error_on_type_mismatch: specify if update will return error if data types are mismatching :default = True
 
         Returns:
-            the metrics from delete
+            the metrics from update
 
         Examples:
 
@@ -522,18 +526,63 @@ class DeltaTable:
         ```
         from deltalake import DeltaTable
         dt = DeltaTable("tmp")
-        dt.update(predicate="id = '5'", updates = {"deleted": True})
+        dt.update(predicate="id = '5'", updates = {"deleted": 'True'})
         ```
 
-        Update all row values. This is equivalent to `UPDATE table SET id = concat(id, '_old')`.
+        Update all row values. This is equivalent to
+        ``UPDATE table SET deleted = true, id = concat(id, '_old')``.
         ```
         from deltalake import DeltaTable
         dt = DeltaTable("tmp")
-        dt.update(updates={"deleted": True, "id": "concat(id, '_old')"})
+        dt.update(updates = {"deleted": 'True', "id": "concat(id, '_old')"})
+        ```
+
+        To use Python objects instead of SQL strings, use the `new_values` parameter
+        instead of the `updates` parameter. For example, this is equivalent to
+        ``UPDATE table SET price = 150.10 WHERE id = '5'``
+        ```
+        from deltalake import DeltaTable
+        dt = DeltaTable("tmp")
+        dt.update(predicate="id = '5'", new_values = {"price": 150.10})
         ```
         """
+        if updates is None and new_values is not None:
+            updates = {}
+            for key, value in new_values.items():
+                if isinstance(value, (int, float, bool, list)):
+                    value = str(value)
+                elif isinstance(value, str):
+                    value = f"'{value}'"
+                elif isinstance(value, datetime):
+                    value = str(
+                        int(value.timestamp() * 1000 * 1000)
+                    )  # convert to microseconds
+                else:
+                    raise TypeError(
+                        "Invalid datatype provided in new_values, only int, float, bool, list, str or datetime or accepted."
+                    )
+                updates[key] = value
+        elif updates is not None and new_values is None:
+            for key, value in updates.items():
+                print(type(key), type(value))
+                if not isinstance(value, str) or not isinstance(key, str):
+                    raise TypeError(
+                        f"The values of the updates parameter must all be SQL strings. Got {updates}. Did you mean to use the new_values parameter?"
+                    )
+
+        elif updates is not None and new_values is not None:
+            raise ValueError(
+                "Passing updates and new_values at same time is not allowed, pick one."
+            )
+        else:
+            raise ValueError(
+                "Either updates or new_values need to be passed to update the table."
+            )
         metrics = self._table.update(
-            updates, predicate, writer_properties, safe_cast=not error_on_type_mismatch
+            updates,
+            predicate,
+            writer_properties,
+            safe_cast=not error_on_type_mismatch,
         )
         return json.loads(metrics)
 
