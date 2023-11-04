@@ -565,9 +565,10 @@ mod tests {
     use crate::operations::{collect_sendable_stream, DeltaOps};
     use crate::protocol::SaveMode;
     use crate::writer::test_utils::datafusion::get_data;
+    use crate::writer::test_utils::datafusion::write_batch;
     use crate::writer::test_utils::{
         get_delta_schema, get_delta_schema_with_nested_struct, get_record_batch,
-        get_record_batch_with_nested_struct, setup_table_with_configuration, write_batch,
+        get_record_batch_with_nested_struct, setup_table_with_configuration,
     };
     use crate::DeltaConfigKey;
     use arrow::datatypes::Field;
