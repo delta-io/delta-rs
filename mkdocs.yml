@@ -30,6 +30,14 @@ nav:
     - api/storage.md
 not_in_nav: |
   /_build/
+
+exclude_docs: |
+  /_build/
+  /mlc_config.json
+  /src
+  /requirements.txt
+  *.py
+
 plugins:
   - autorefs
   - mkdocstrings:

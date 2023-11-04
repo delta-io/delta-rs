@@ -29,3 +29,4 @@ Cargo.lock
 
 justfile
 site
+__pycache__
