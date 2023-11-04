@@ -1,0 +1,64 @@
+name: Build documentation
+
+on:
+  pull_request:
+    paths:
+      - python/**
+      - docs/**
+      - mkdocs.yml
+      - .github/workflows/docs.yml
+jobs:
+  markdown-link-check:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v3
+    - uses: gaurav-nelson/github-action-markdown-link-check@v1
+      with:
+        config-file: docs/mlc-config.json
+        folder-path: docs
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: psf/black@stable
+        with:
+          src: docs/src/python
+
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Install Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          override: true
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Set up Python
+        uses: actions/setup-python@v3
+        with:
+          python-version: '3.10'
+
+      - name: Build and install deltalake
+        run: |
+          cd python
+          pip install virtualenv
+          virtualenv venv
+          source venv/bin/activate
+          make develop
+          cd ..
+
+      - name: Install dependencies
+        run: |
+          source python/venv/bin/activate
+          pip install -r docs/requirements.txt
+
+      - name: Build documentation
+        run: |
+          source python/venv/bin/activate
+          mkdocs build

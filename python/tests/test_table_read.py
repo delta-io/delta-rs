@@ -1,12 +1,14 @@
 import os
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 from threading import Barrier, Thread
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import Mock
 
 from packaging import version
 
+from deltalake._util import encode_partition_value
 from deltalake.exceptions import DeltaProtocolError
 from deltalake.table import ProtocolVersions
 from deltalake.writer import write_deltalake
@@ -28,7 +30,7 @@ from deltalake import DeltaTable
 
 
 def test_read_table_with_edge_timestamps():
-    table_path = "../rust/tests/data/table_with_edge_timestamps"
+    table_path = "../crates/deltalake-core/tests/data/table_with_edge_timestamps"
     dt = DeltaTable(table_path)
     dataset = dt.to_pyarrow_dataset(
         parquet_read_options=ParquetReadOptions(coerce_int96_timestamp_unit="ms")
@@ -44,25 +46,25 @@ def test_read_table_with_edge_timestamps():
 
 
 def test_read_simple_table_to_dict():
-    table_path = "../rust/tests/data/simple_table"
+    table_path = "../crates/deltalake-core/tests/data/simple_table"
     dt = DeltaTable(table_path)
     assert dt.to_pyarrow_dataset().to_table().to_pydict() == {"id": [5, 7, 9]}
 
 
 def test_read_simple_table_by_version_to_dict():
-    table_path = "../rust/tests/data/delta-0.2.0"
+    table_path = "../crates/deltalake-core/tests/data/delta-0.2.0"
     dt = DeltaTable(table_path, version=2)
     assert dt.to_pyarrow_dataset().to_table().to_pydict() == {"value": [1, 2, 3]}
 
 
 def test_read_simple_table_using_options_to_dict():
-    table_path = "../rust/tests/data/delta-0.2.0"
+    table_path = "../crates/deltalake-core/tests/data/delta-0.2.0"
     dt = DeltaTable(table_path, version=2, storage_options={})
     assert dt.to_pyarrow_dataset().to_table().to_pydict() == {"value": [1, 2, 3]}
 
 
 def test_load_with_datetime():
-    log_dir = "../rust/tests/data/simple_table/_delta_log"
+    log_dir = "../crates/deltalake-core/tests/data/simple_table/_delta_log"
     log_mtime_pair = [
         ("00000000000000000000.json", 1588398451.0),
         ("00000000000000000001.json", 1588484851.0),
@@ -74,7 +76,7 @@ def test_load_with_datetime():
         file_path = os.path.join(log_dir, file_name)
         os.utime(file_path, (dt_epoch, dt_epoch))
 
-    table_path = "../rust/tests/data/simple_table"
+    table_path = "../crates/deltalake-core/tests/data/simple_table"
     dt = DeltaTable(table_path)
     dt.load_with_datetime("2020-05-01T00:47:31-07:00")
     assert dt.version() == 0
@@ -85,7 +87,7 @@ def test_load_with_datetime():
 
 
 def test_load_with_datetime_bad_format():
-    table_path = "../rust/tests/data/simple_table"
+    table_path = "../crates/deltalake-core/tests/data/simple_table"
     dt = DeltaTable(table_path)
 
     for bad_format in [
@@ -98,7 +100,7 @@ def test_load_with_datetime_bad_format():
 
 
 def test_read_simple_table_update_incremental():
-    table_path = "../rust/tests/data/simple_table"
+    table_path = "../crates/deltalake-core/tests/data/simple_table"
     dt = DeltaTable(table_path, version=0)
     assert dt.to_pyarrow_dataset().to_table().to_pydict() == {"id": [0, 1, 2, 3, 4]}
     dt.update_incremental()
@@ -106,7 +108,7 @@ def test_read_simple_table_update_incremental():
 
 
 def test_read_simple_table_file_sizes_failure():
-    table_path = "../rust/tests/data/simple_table"
+    table_path = "../crates/deltalake-core/tests/data/simple_table"
     dt = DeltaTable(table_path)
     add_actions = dt.get_add_actions().to_pydict()
 
@@ -125,7 +127,7 @@ def test_read_simple_table_file_sizes_failure():
 
 
 def test_read_partitioned_table_to_dict():
-    table_path = "../rust/tests/data/delta-0.8.0-partitioned"
+    table_path = "../crates/deltalake-core/tests/data/delta-0.8.0-partitioned"
     dt = DeltaTable(table_path)
     expected = {
         "value": ["1", "2", "3", "6", "7", "5", "4"],
@@ -137,7 +139,7 @@ def test_read_partitioned_table_to_dict():
 
 
 def test_read_partitioned_table_with_partitions_filters_to_dict():
-    table_path = "../rust/tests/data/delta-0.8.0-partitioned"
+    table_path = "../crates/deltalake-core/tests/data/delta-0.8.0-partitioned"
     dt = DeltaTable(table_path)
     partitions = [("year", "=", "2021")]
     expected = {
@@ -151,7 +153,7 @@ def test_read_partitioned_table_with_partitions_filters_to_dict():
 
 
 def test_read_empty_delta_table_after_delete():
-    table_path = "../rust/tests/data/delta-0.8-empty"
+    table_path = "../crates/deltalake-core/tests/data/delta-0.8-empty"
     dt = DeltaTable(table_path)
     expected = {"column": []}
 
@@ -159,7 +161,7 @@ def test_read_empty_delta_table_after_delete():
 
 
 def test_read_table_with_column_subset():
-    table_path = "../rust/tests/data/delta-0.8.0-partitioned"
+    table_path = "../crates/deltalake-core/tests/data/delta-0.8.0-partitioned"
     dt = DeltaTable(table_path)
     expected = {
         "value": ["1", "2", "3", "6", "7", "5", "4"],
@@ -172,7 +174,7 @@ def test_read_table_with_column_subset():
 
 
 def test_read_table_as_category():
-    table_path = "../rust/tests/data/delta-0.8.0-partitioned"
+    table_path = "../crates/deltalake-core/tests/data/delta-0.8.0-partitioned"
     dt = DeltaTable(table_path)
 
     assert dt.schema().to_pyarrow().field("value").type == pa.string()
@@ -186,7 +188,7 @@ def test_read_table_as_category():
 
 
 def test_read_table_with_filter():
-    table_path = "../rust/tests/data/delta-0.8.0-partitioned"
+    table_path = "../crates/deltalake-core/tests/data/delta-0.8.0-partitioned"
     dt = DeltaTable(table_path)
     expected = {
         "value": ["6", "7", "5"],
@@ -203,7 +205,7 @@ def test_read_table_with_filter():
 
 
 def test_read_table_with_stats():
-    table_path = "../rust/tests/data/COVID-19_NYT"
+    table_path = "../crates/deltalake-core/tests/data/COVID-19_NYT"
     dt = DeltaTable(table_path)
     dataset = dt.to_pyarrow_dataset()
 
@@ -229,7 +231,7 @@ def test_read_table_with_stats():
 
 
 def test_read_special_partition():
-    table_path = "../rust/tests/data/delta-0.8.0-special-partition"
+    table_path = "../crates/deltalake-core/tests/data/delta-0.8.0-special-partition"
     dt = DeltaTable(table_path)
 
     file1 = (
@@ -251,7 +253,7 @@ def test_read_special_partition():
 
 
 def test_read_partitioned_table_metadata():
-    table_path = "../rust/tests/data/delta-0.8.0-partitioned"
+    table_path = "../crates/deltalake-core/tests/data/delta-0.8.0-partitioned"
     dt = DeltaTable(table_path)
     metadata = dt.metadata()
     assert metadata.id == "fe5a3c11-30d4-4dd7-b115-a1c121e66a4e"
@@ -263,7 +265,7 @@ def test_read_partitioned_table_metadata():
 
 
 def test_read_partitioned_table_protocol():
-    table_path = "../rust/tests/data/delta-0.8.0-partitioned"
+    table_path = "../crates/deltalake-core/tests/data/delta-0.8.0-partitioned"
     dt = DeltaTable(table_path)
     protocol = dt.protocol()
     assert protocol.min_reader_version == 1
@@ -271,7 +273,7 @@ def test_read_partitioned_table_protocol():
 
 
 def test_read_table_with_cdc():
-    table_path = "../rust/tests/data/simple_table_with_cdc"
+    table_path = "../crates/deltalake-core/tests/data/simple_table_with_cdc"
     dt = DeltaTable(table_path)
     assert dt.to_pyarrow_table().to_pydict() == {
         "id": [0],
@@ -280,7 +282,7 @@ def test_read_table_with_cdc():
 
 
 def test_history_partitioned_table_metadata():
-    table_path = "../rust/tests/data/delta-0.8.0-partitioned"
+    table_path = "../crates/deltalake-core/tests/data/delta-0.8.0-partitioned"
     dt = DeltaTable(table_path)
     history = dt.history()
     commit_info = history[0]
@@ -299,12 +301,13 @@ def test_history_partitioned_table_metadata():
             "numOutputBytes": "2477",
             "numOutputRows": "7",
         },
+        "version": 0,
     }
 
 
 @pytest.mark.parametrize("flatten", [True, False])
 def test_add_actions_table(flatten: bool):
-    table_path = "../rust/tests/data/delta-0.8.0-partitioned"
+    table_path = "../crates/deltalake-core/tests/data/delta-0.8.0-partitioned"
     dt = DeltaTable(table_path)
     actions_df = dt.get_add_actions(flatten)
     # RecordBatch doesn't have a sort_by method yet
@@ -348,10 +351,10 @@ def assert_correct_files(dt: DeltaTable, partition_filters, expected_paths):
 
 
 def test_get_files_partitioned_table():
-    table_path = "../rust/tests/data/delta-0.8.0-partitioned"
+    table_path = "../crates/deltalake-core/tests/data/delta-0.8.0-partitioned"
     dt = DeltaTable(table_path)
     table_path = (
-        Path.cwd().parent / "rust/tests/data/delta-0.8.0-partitioned"
+        Path.cwd().parent / "crates/deltalake-core/tests/data/delta-0.8.0-partitioned"
     ).as_posix()
 
     partition_filters = [("day", "=", "3")]
@@ -424,14 +427,14 @@ def test_get_files_partitioned_table():
 
 @pytest.mark.pandas
 def test_delta_table_to_pandas():
-    table_path = "../rust/tests/data/simple_table"
+    table_path = "../crates/deltalake-core/tests/data/simple_table"
     dt = DeltaTable(table_path)
     assert dt.to_pandas().equals(pd.DataFrame({"id": [5, 7, 9]}))
 
 
 @pytest.mark.pandas
 def test_delta_table_with_filesystem():
-    table_path = "../rust/tests/data/simple_table"
+    table_path = "../crates/deltalake-core/tests/data/simple_table"
     dt = DeltaTable(table_path)
     filesystem = SubTreeFileSystem(table_path, LocalFileSystem())
     assert dt.to_pandas(filesystem=filesystem).equals(pd.DataFrame({"id": [5, 7, 9]}))
@@ -439,7 +442,7 @@ def test_delta_table_with_filesystem():
 
 @pytest.mark.pandas
 def test_delta_table_with_filters():
-    table_path = "../rust/tests/data/COVID-19_NYT"
+    table_path = "../crates/deltalake-core/tests/data/COVID-19_NYT"
     dt = DeltaTable(table_path)
     dataset = dt.to_pyarrow_dataset()
 
@@ -481,7 +484,7 @@ def test_delta_table_with_filters():
 
 
 def test_writer_fails_on_protocol():
-    table_path = "../rust/tests/data/simple_table"
+    table_path = "../crates/deltalake-core/tests/data/simple_table"
     dt = DeltaTable(table_path)
     dt.protocol = Mock(return_value=ProtocolVersions(2, 1))
     with pytest.raises(DeltaProtocolError):
@@ -539,7 +542,7 @@ class ExcPassThroughThread(Thread):
 @pytest.mark.timeout(timeout=5, method="thread")
 def test_read_multiple_tables_from_s3(s3_localstack):
     """Should be able to create multiple cloud storage based DeltaTable instances
-    without blocking on async rust function calls.
+    without blocking on async crates/deltalake-core function calls.
     """
     for path in ["s3://deltars/simple", "s3://deltars/simple"]:
         t = DeltaTable(path)
@@ -648,3 +651,79 @@ def test_filter_nulls(tmp_path: Path):
     assert_num_fragments(table, predicate, 2)
     expected = pa.table({"part": ["a", "a", "b", "b"], "value": [1, 1, None, None]})
     assert_scan_equals(table, predicate, expected)
+
+
+def test_issue_1653_filter_bool_partition(tmp_path: Path):
+    ta = pa.Table.from_pydict(
+        {
+            "bool_col": [True, False, True, False],
+            "int_col": [0, 1, 2, 3],
+            "str_col": ["a", "b", "c", "d"],
+        }
+    )
+    write_deltalake(
+        tmp_path, ta, partition_by=["bool_col", "int_col"], mode="overwrite"
+    )
+    dt = DeltaTable(tmp_path)
+
+    assert (
+        dt.to_pyarrow_table(
+            filters=[
+                ("int_col", "=", 0),
+                ("bool_col", "=", True),
+            ]
+        ).num_rows
+        == 1
+    )
+    assert (
+        len(
+            dt.file_uris(
+                partition_filters=[
+                    ("int_col", "=", 0),
+                    ("bool_col", "=", "true"),
+                ]
+            )
+        )
+        == 1
+    )
+    assert (
+        len(
+            dt.file_uris(
+                partition_filters=[
+                    ("int_col", "=", 0),
+                    ("bool_col", "=", True),
+                ]
+            )
+        )
+        == 1
+    )
+
+
+@pytest.mark.parametrize(
+    "input_value, expected",
+    [
+        (True, "true"),
+        (False, "false"),
+        (1, "1"),
+        (1.5, "1.5"),
+        ("string", "string"),
+        (date(2023, 10, 17), "2023-10-17"),
+        (datetime(2023, 10, 17, 12, 34, 56), "2023-10-17 12:34:56"),
+        (b"bytes", "bytes"),
+        ([True, False], ["true", "false"]),
+        ([1, 2], ["1", "2"]),
+        ([1.5, 2.5], ["1.5", "2.5"]),
+        (["a", "b"], ["a", "b"]),
+        ([date(2023, 10, 17), date(2023, 10, 18)], ["2023-10-17", "2023-10-18"]),
+        (
+            [datetime(2023, 10, 17, 12, 34, 56), datetime(2023, 10, 18, 12, 34, 56)],
+            ["2023-10-17 12:34:56", "2023-10-18 12:34:56"],
+        ),
+        ([b"bytes", b"testbytes"], ["bytes", "testbytes"]),
+    ],
+)
+def test_encode_partition_value(input_value: Any, expected: str) -> None:
+    if isinstance(input_value, list):
+        assert [encode_partition_value(val) for val in input_value] == expected
+    else:
+        assert encode_partition_value(input_value) == expected

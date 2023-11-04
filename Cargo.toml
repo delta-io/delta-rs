@@ -1,6 +1,10 @@
 [workspace]
-members = ["rust", "python"]
-exclude = ["proofs", "delta-inspect"]
+members = [
+    "crates/*",
+    "delta-inspect",
+    "python",
+]
+exclude = ["proofs"]
 resolver = "2"
 
 [profile.release-with-debug]
@@ -15,23 +19,23 @@ debug = "line-tables-only"
 
 [workspace.dependencies]
 # arrow
-arrow = { version = "46" }
-arrow-array = { version = "46" }
-arrow-buffer = { version = "46" }
-arrow-cast = { version = "46" }
-arrow-ord = { version = "46" }
-arrow-row = { version = "46" }
-arrow-schema = { version = "46" }
-arrow-select = { version = "46" }
-parquet = { version = "46" }
+arrow = { version = "47" }
+arrow-array = { version = "47" }
+arrow-buffer = { version = "47" }
+arrow-cast = { version = "47" }
+arrow-ord = { version = "47" }
+arrow-row = { version = "47" }
+arrow-schema = { version = "47" }
+arrow-select = { version = "47" }
+parquet = { version = "47" }
 
 # datafusion
-datafusion = { version = "31" }
-datafusion-expr = { version = "31" }
-datafusion-common = { version = "31" }
-datafusion-proto = { version = "31" }
-datafusion-sql = { version = "31" }
-datafusion-physical-expr = { version = "31" }
+datafusion = { version = "32" }
+datafusion-expr = { version = "32" }
+datafusion-common = { version = "32" }
+datafusion-proto = { version = "32" }
+datafusion-sql = { version = "32" }
+datafusion-physical-expr = { version = "32" }
 
 # serde
 serde = { version = "1", features = ["derive"] }

@@ -66,7 +66,7 @@ check-rust: ## Run check on Rust
 .PHONY: check-python
 check-python: ## Run check on Python
 	$(info Check Python black)
-	black --check .
+	black --check --diff .
 	$(info Check Python ruff)
 	ruff check .
 	$(info Check Python mypy)

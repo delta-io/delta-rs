@@ -1,11 +1,12 @@
 import json
+import sys
 import uuid
 from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal
+from math import inf
 from pathlib import Path
 from typing import (
-    TYPE_CHECKING,
     Any,
     Dict,
     FrozenSet,
@@ -17,13 +18,11 @@ from typing import (
     Tuple,
     Union,
 )
+from urllib.parse import unquote
 
 from deltalake.fs import DeltaStorageHandler
 
-if TYPE_CHECKING:
-    import pandas as pd
-
-import sys
+from ._util import encode_partition_value
 
 if sys.version_info >= (3, 8):
     from typing import Literal
@@ -67,6 +66,7 @@ def write_deltalake(
     table_or_uri: Union[str, Path, DeltaTable],
     data: Union[
         "pd.DataFrame",
+        ds.Dataset,
         pa.Table,
         pa.RecordBatch,
         Iterable[pa.RecordBatch],
@@ -89,6 +89,7 @@ def write_deltalake(
     overwrite_schema: bool = False,
     storage_options: Optional[Dict[str, str]] = None,
     partition_filters: Optional[List[Tuple[str, str, Any]]] = None,
+    large_dtypes: bool = False,
 ) -> None:
     """Write to a Delta Lake table
 
@@ -100,44 +101,64 @@ def write_deltalake(
 
     Note that this function does NOT register this table in a data catalog.
 
-    :param table_or_uri: URI of a table or a DeltaTable object.
-    :param data: Data to write. If passing iterable, the schema must also be given.
-    :param schema: Optional schema to write.
-    :param partition_by: List of columns to partition the table by. Only required
-        when creating a new table.
-    :param filesystem: Optional filesystem to pass to PyArrow. If not provided will
-        be inferred from uri. The file system has to be rooted in the table root.
-        Use the pyarrow.fs.SubTreeFileSystem, to adopt the root of pyarrow file systems.
-    :param mode: How to handle existing data. Default is to error if table already exists.
-        If 'append', will add new data.
-        If 'overwrite', will replace table with new data.
-        If 'ignore', will not write anything if table already exists.
-    :param file_options: Optional write options for Parquet (ParquetFileWriteOptions).
-        Can be provided with defaults using ParquetFileWriteOptions().make_write_options().
-        Please refer to https://github.com/apache/arrow/blob/master/python/pyarrow/_dataset_parquet.pyx#L492-L533
-        for the list of available options
-    :param max_partitions: the maximum number of partitions that will be used.
-    :param max_open_files: Limits the maximum number of
-        files that can be left open while writing. If an attempt is made to open
-        too many files then the least recently used file will be closed.
-        If this setting is set too low you may end up fragmenting your
-        data into many small files.
-    :param max_rows_per_file: Maximum number of rows per file.
-        If greater than 0 then this will limit how many rows are placed in any single file.
-        Otherwise there will be no limit and one file will be created in each output directory
-        unless files need to be closed to respect max_open_files
-    :param min_rows_per_group: Minimum number of rows per group. When the value is set,
-        the dataset writer will batch incoming data and only write the row groups to the disk
-        when sufficient rows have accumulated.
-    :param max_rows_per_group: Maximum number of rows per group.
-        If the value is set, then the dataset writer may split up large incoming batches into multiple row groups.
-        If this value is set, then min_rows_per_group should also be set.
-    :param name: User-provided identifier for this table.
-    :param description: User-provided description for this table.
-    :param configuration: A map containing configuration options for the metadata action.
-    :param overwrite_schema: If True, allows updating the schema of the table.
-    :param storage_options: options passed to the native delta filesystem. Unused if 'filesystem' is defined.
-    :param partition_filters: the partition filters that will be used for partition overwrite.
+    A locking mechanism is needed to prevent unsafe concurrent writes to a
+    delta lake directory when writing to S3. DynamoDB is the only available
+    locking provider at the moment in delta-rs. To enable DynamoDB as the
+    locking provider, you need to set the `AWS_S3_LOCKING_PROVIDER` to 'dynamodb'
+    as a storage_option or as an environment variable.
+
+    Additionally, you must create a DynamoDB table with the name 'delta_rs_lock_table'
+    so that it can be automatically discovered by delta-rs. Alternatively, you can
+    use a table name of your choice, but you must set the `DYNAMO_LOCK_TABLE_NAME`
+    variable to match your chosen table name. The required schema for the DynamoDB
+    table is as follows:
+
+    - Key Schema: AttributeName=key, KeyType=HASH
+    - Attribute Definitions: AttributeName=key, AttributeType=S
+
+    Please note that this locking mechanism is not compatible with any other
+    locking mechanisms, including the one used by Spark.
+
+    Args:
+        table_or_uri: URI of a table or a DeltaTable object.
+        data: Data to write. If passing iterable, the schema must also be given.
+        schema: Optional schema to write.
+        partition_by: List of columns to partition the table by. Only required
+            when creating a new table.
+        filesystem: Optional filesystem to pass to PyArrow. If not provided will
+            be inferred from uri. The file system has to be rooted in the table root.
+            Use the pyarrow.fs.SubTreeFileSystem, to adopt the root of pyarrow file systems.
+        mode: How to handle existing data. Default is to error if table already exists.
+            If 'append', will add new data.
+            If 'overwrite', will replace table with new data.
+            If 'ignore', will not write anything if table already exists.
+        file_options: Optional write options for Parquet (ParquetFileWriteOptions).
+            Can be provided with defaults using ParquetFileWriteOptions().make_write_options().
+            Please refer to https://github.com/apache/arrow/blob/master/python/pyarrow/_dataset_parquet.pyx#L492-L533
+            for the list of available options
+        max_partitions: the maximum number of partitions that will be used.
+        max_open_files: Limits the maximum number of
+            files that can be left open while writing. If an attempt is made to open
+            too many files then the least recently used file will be closed.
+            If this setting is set too low you may end up fragmenting your
+            data into many small files.
+        max_rows_per_file: Maximum number of rows per file.
+            If greater than 0 then this will limit how many rows are placed in any single file.
+            Otherwise there will be no limit and one file will be created in each output directory
+            unless files need to be closed to respect max_open_files
+            min_rows_per_group: Minimum number of rows per group. When the value is set,
+            the dataset writer will batch incoming data and only write the row groups to the disk
+            when sufficient rows have accumulated.
+        max_rows_per_group: Maximum number of rows per group.
+            If the value is set, then the dataset writer may split up large incoming batches into multiple row groups.
+            If this value is set, then min_rows_per_group should also be set.
+        name: User-provided identifier for this table.
+        description: User-provided description for this table.
+        configuration: A map containing configuration options for the metadata action.
+        overwrite_schema: If True, allows updating the schema of the table.
+        storage_options: options passed to the native delta filesystem. Unused if 'filesystem' is defined.
+        partition_filters: the partition filters that will be used for partition overwrite.
+        large_dtypes: If True, the table schema is checked against large_dtypes
     """
     if _has_pandas and isinstance(data, pd.DataFrame):
         if schema is not None:
@@ -174,12 +195,12 @@ def write_deltalake(
         partition_by = [partition_by]
 
     if table:  # already exists
-        if schema != table.schema().to_pyarrow() and not (
+        if schema != table.schema().to_pyarrow(as_large_types=large_dtypes) and not (
             mode == "overwrite" and overwrite_schema
         ):
             raise ValueError(
                 "Schema of data does not match table schema\n"
-                f"Table schema:\n{schema}\nData Schema:\n{table.schema().to_pyarrow()}"
+                f"Data schema:\n{schema}\nTable Schema:\n{table.schema().to_pyarrow(as_large_types=large_dtypes)}"
             )
 
         if mode == "error":
@@ -203,8 +224,26 @@ def write_deltalake(
     else:  # creating a new table
         current_version = -1
 
+    dtype_map = {
+        pa.large_string(): pa.string(),  # type: ignore
+    }
+
+    def _large_to_normal_dtype(dtype: pa.DataType) -> pa.DataType:
+        try:
+            return dtype_map[dtype]
+        except KeyError:
+            return dtype
+
     if partition_by:
-        partition_schema = pa.schema([schema.field(name) for name in partition_by])
+        if PYARROW_MAJOR_VERSION < 12:
+            partition_schema = pa.schema(
+                [
+                    pa.field(name, _large_to_normal_dtype(schema.field(name).type))
+                    for name in partition_by
+                ]
+            )
+        else:
+            partition_schema = pa.schema([schema.field(name) for name in partition_by])
         partitioning = ds.partitioning(partition_schema, flavor="hive")
     else:
         partitioning = None
@@ -262,7 +301,7 @@ def write_deltalake(
             for i in range(partition_values.num_rows):
                 # Map will maintain order of partition_columns
                 partition_map = {
-                    column_name: __encode_partition_value(
+                    column_name: encode_partition_value(
                         batch.column(column_name)[i].as_py()
                     )
                     for column_name in table.metadata().partition_columns
@@ -294,6 +333,8 @@ def write_deltalake(
         elif isinstance(data, pa.RecordBatch):
             batch_iter = [data]
         elif isinstance(data, pa.Table):
+            batch_iter = data.to_batches()
+        elif isinstance(data, ds.Dataset):
             batch_iter = data.to_batches()
         else:
             batch_iter = data
@@ -385,12 +426,14 @@ def try_get_table_and_table_uri(
     storage_options: Optional[Dict[str, str]] = None,
 ) -> Tuple[Optional[DeltaTable], str]:
     """Parses the `table_or_uri`.
+    Raises [ValueError] If `table_or_uri` is not of type str, Path or DeltaTable.
 
-    :param table_or_uri: URI of a table or a DeltaTable object.
-    :param storage_options: Options passed to the native delta filesystem.
-    :raises ValueError: If `table_or_uri` is not of type str, Path or DeltaTable.
-    :returns table: DeltaTable object
-    :return table_uri: URI of the table
+    Args:
+        table_or_uri: URI of a table or a DeltaTable object.
+        storage_options: Options passed to the native delta filesystem.
+
+    Returns:
+        (DeltaTable object, URI of the table)
     """
     if not isinstance(table_or_uri, (str, Path, DeltaTable)):
         raise ValueError("table_or_uri must be a str, Path or DeltaTable")
@@ -427,7 +470,7 @@ def get_partitions_from_path(path: str) -> Tuple[str, Dict[str, Optional[str]]]:
         if value == "__HIVE_DEFAULT_PARTITION__":
             out[key] = None
         else:
-            out[key] = value
+            out[key] = unquote(value)
     return path, out
 
 
@@ -483,32 +526,16 @@ def get_file_stats_from_metadata(
                     for group in iter_groups(metadata)
                 )
                 # If some row groups have all null values, their min and max will be null too.
-                stats["minValues"][name] = min(
-                    minimum for minimum in minimums if minimum is not None
-                )
+                min_value = min(minimum for minimum in minimums if minimum is not None)
+                # Infinity cannot be serialized to JSON, so we skip it. Saying
+                # min/max is infinity is equivalent to saying it is null, anyways.
+                if min_value != -inf:
+                    stats["minValues"][name] = min_value
                 maximums = (
                     group.column(column_idx).statistics.max
                     for group in iter_groups(metadata)
                 )
-                stats["maxValues"][name] = max(
-                    maximum for maximum in maximums if maximum is not None
-                )
+                max_value = max(maximum for maximum in maximums if maximum is not None)
+                if max_value != inf:
+                    stats["maxValues"][name] = max_value
     return stats
-
-
-def __encode_partition_value(val: Any) -> str:
-    # Rules based on: https://github.com/delta-io/delta/blob/master/PROTOCOL.md#partition-value-serialization
-    if isinstance(val, bool):
-        return str(val).lower()
-    if isinstance(val, str):
-        return val
-    elif isinstance(val, (int, float)):
-        return str(val)
-    elif isinstance(val, date):
-        return val.isoformat()
-    elif isinstance(val, datetime):
-        return val.isoformat(sep=" ")
-    elif isinstance(val, bytes):
-        return val.decode("unicode_escape", "backslashreplace")
-    else:
-        raise ValueError(f"Could not encode partition value for type: {val}")

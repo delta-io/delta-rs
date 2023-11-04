@@ -102,7 +102,7 @@ jobs:
       AWS_ACCESS_KEY_ID: deltalake
       AWS_SECRET_ACCESS_KEY: weloverust
       AWS_ENDPOINT_URL: http://localhost:4566
-      AWS_STORAGE_ALLOW_HTTP: "1"
+      AWS_ALLOW_HTTP: "1"
       AZURE_USE_EMULATOR: "1"
       AZURE_STORAGE_ALLOW_HTTP: "1"
       AZURITE_BLOB_STORAGE_URL: "http://localhost:10000"
@@ -164,5 +164,5 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - name: Run tests
-        working-directory: rust
+        working-directory: crates/deltalake-core
         run: cargo test --no-default-features --features=parquet2

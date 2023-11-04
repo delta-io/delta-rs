@@ -58,7 +58,7 @@ def s3_localstack_creds():
             "s3",
             "sync",
             "--quiet",
-            "../rust/tests/data/simple_table",
+            "../crates/deltalake-core/tests/data/simple_table",
             "s3://deltars/simple",
             "--endpoint-url",
             endpoint_url,
@@ -103,7 +103,7 @@ def s3_localstack_creds():
 
 @pytest.fixture()
 def s3_localstack(monkeypatch, s3_localstack_creds):
-    monkeypatch.setenv("AWS_STORAGE_ALLOW_HTTP", "TRUE")
+    monkeypatch.setenv("AWS_ALLOW_HTTP", "TRUE")
     for key, value in s3_localstack_creds.items():
         monkeypatch.setenv(key, value)
 
@@ -235,3 +235,16 @@ def existing_table(tmp_path: pathlib.Path, sample_data: pa.Table):
     path = str(tmp_path)
     write_deltalake(path, sample_data)
     return DeltaTable(path)
+
+
+@pytest.fixture()
+def sample_table():
+    nrows = 5
+    return pa.table(
+        {
+            "id": pa.array(["1", "2", "3", "4", "5"]),
+            "price": pa.array(list(range(nrows)), pa.int64()),
+            "sold": pa.array(list(range(nrows)), pa.int32()),
+            "deleted": pa.array([False] * nrows),
+        }
+    )
