@@ -593,7 +593,7 @@ impl<'a> DeltaScanBuilder<'a> {
             .partition_columns;
 
         for action in files.iter() {
-            let mut part = partitioned_file_from_action(action, &table_partition_cols, &schema);
+            let mut part = partitioned_file_from_action(action, table_partition_cols, &schema);
 
             if config.file_column_name.is_some() {
                 part.partition_values
