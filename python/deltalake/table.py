@@ -840,20 +840,21 @@ class DeltaTable:
             The metrics from repair (FSCK) action.
 
         Examples:
-
-        >>> from deltalake import DeltaTable
-        >>> dt = DeltaTable('TEST')
-        >>> dt.repair(dry_run=False)
+        ```
+        from deltalake import DeltaTable
+        dt = DeltaTable('TEST')
+        dt.repair(dry_run=False)
         {'dry_run': False,
         'files_removed': ['6-0d084325-6885-4847-b008-82c1cf30674c-0.parquet',
         '5-4fba1d3e-3e20-4de1-933d-a8e13ac59f53-0.parquet']}
+        ```
         """
         metrics = self._table.repair(dry_run)
         return json.loads(metrics)
 
 
 class TableMerger:
-    """API for various table MERGE commands."""
+    """API for various table `MERGE` commands."""
 
     def __init__(
         self,
@@ -926,22 +927,24 @@ class TableMerger:
 
         Returns:
             TableMerger: TableMerger Object
-            
+
         Examples:
-
-        >>> from deltalake import DeltaTable
-        >>> import pyarrow as pa
-        >>> data = pa.table({"x": [1, 2, 3], "y": [4, 5, 6]})
-        >>> dt = DeltaTable("tmp")
-        >>> dt.merge(source=data, predicate='target.x = source.x', source_alias='source', target_alias='target') \
-        ...     .when_matched_update(
-        ...         updates = {
-        ...             "x": "source.x",
-        ...             "y": "source.y"
-        ...             }
-        ...         ).execute()
+        ```
+        from deltalake import DeltaTable
+        import pyarrow as pa
+        data = pa.table({"x": [1, 2, 3], "y": [4, 5, 6]})
+        dt = DeltaTable("tmp")
+        ( \
+            dt.merge( \
+                source=data, \
+                predicate="target.x = source.x", \
+                source_alias="source", \
+                target_alias="target") \
+            .when_matched_update(updates={"x": "source.x", "y": "source.y"}) \
+            .execute() \
+        )
+        ```
         """
-
         if isinstance(self.matched_update_updates, list) and isinstance(
             self.matched_update_predicate, list
         ):
@@ -964,12 +967,21 @@ class TableMerger:
             
         Examples:
 
-        >>> from deltalake import DeltaTable
-        >>> import pyarrow as pa
-        >>> data = pa.table({"x": [1, 2, 3], "y": [4, 5, 6]})
-        >>> dt = DeltaTable("tmp")
-        >>> dt.merge(source=data, predicate='target.x = source.x', source_alias='source', target_alias='target')  \
-        ...     .when_matched_update_all().execute()
+        ```
+        from deltalake import DeltaTable
+        import pyarrow as pa
+        data = pa.table({"x": [1, 2, 3], "y": [4, 5, 6]})
+        dt = DeltaTable("tmp")
+        (\
+            dt.merge( \
+                source=data, \
+                predicate='target.x = source.x', \
+                source_alias='source', \
+                target_alias='target')  \
+            .when_matched_update_all() \
+            .execute() \
+            )
+        ```
         """
 
         src_alias = (self.source_alias + ".") if self.source_alias is not None else ""
@@ -1004,24 +1016,36 @@ class TableMerger:
         Examples:
 
         Delete on a predicate
-        
-        >>> from deltalake import DeltaTable
-        >>> import pyarrow as pa
-        >>> data = pa.table({"x": [1, 2, 3], "y": [4, 5, 6]})
-        >>> dt = DeltaTable("tmp")
-        >>> dt.merge(source=data, predicate='target.x = source.x', source_alias='source', target_alias='target') \
-        ...     .when_matched_delete(predicate = "source.deleted = true")
-        ...     .execute()
-        
+        ```
+        from deltalake import DeltaTable
+        import pyarrow as pa
+        data = pa.table({"x": [1, 2, 3], "y": [4, 5, 6]})
+        dt = DeltaTable("tmp")
+        ( \
+            dt.merge( \
+                source=data, \
+                predicate='target.x = source.x', \
+                source_alias='source', \
+                target_alias='target') \
+            .when_matched_delete( \
+                predicate = "source.deleted = true") \
+            .execute() \
+        ```
         Delete all records that were matched
-        
-        >>> from deltalake import DeltaTable
-        >>> import pyarrow as pa
-        >>> data = pa.table({"x": [1, 2, 3], "y": [4, 5, 6]})
-        >>> dt = DeltaTable("tmp")
-        >>> dt.merge(source=data, predicate='target.x = source.x', source_alias='source', target_alias='target')  \
-        ...     .when_matched_delete()
-        ...     .execute()
+        ```
+        from deltalake import DeltaTable
+        import pyarrow as pa
+        data = pa.table({"x": [1, 2, 3], "y": [4, 5, 6]})
+        dt = DeltaTable("tmp")
+        ( \
+            dt.merge( \
+                source=data, \
+                predicate='target.x = source.x', \
+                source_alias='source', \
+                target_alias='target')  \
+             .when_matched_delete() \
+             .execute() \
+        ```
         """
         if self.matched_delete_all is not None:
             raise ValueError(
@@ -1053,17 +1077,25 @@ class TableMerger:
             
         Examples:
 
-        >>> from deltalake import DeltaTable
-        >>> import pyarrow as pa
-        >>> data = pa.table({"x": [1, 2, 3], "y": [4, 5, 6]})
-        >>> dt = DeltaTable("tmp")
-        >>> dt.merge(source=data, predicate='target.x = source.x', source_alias='source', target_alias='target')  \
-        ...     .when_not_matched_insert(
-        ...         updates = {
-        ...             "x": "source.x",
-        ...             "y": "source.y"
-        ...             }
-        ...         ).execute()
+        ```
+        from deltalake import DeltaTable
+        import pyarrow as pa
+        data = pa.table({"x": [1, 2, 3], "y": [4, 5, 6]})
+        dt = DeltaTable("tmp")
+        ( \
+            dt.merge( \
+                source=data, \
+                predicate='target.x = source.x', \
+                source_alias='source', \
+                target_alias='target') \
+            .when_not_matched_insert( \
+                 updates = { \
+                     "x": "source.x", \
+                     "y": "source.y", \
+                         }) \
+            .execute() \
+                )
+        ```
         """
 
         if isinstance(self.not_matched_insert_updates, list) and isinstance(
@@ -1092,12 +1124,22 @@ class TableMerger:
             
         Examples:
 
-        >>> from deltalake import DeltaTable
-        >>> import pyarrow as pa
-        >>> data = pa.table({"x": [1, 2, 3], "y": [4, 5, 6]})
-        >>> dt = DeltaTable("tmp")
-        >>> dt.merge(source=data, predicate='target.x = source.x', source_alias='source', target_alias='target')  \
-        ...     .when_not_matched_insert_all().execute()
+        ```
+        from deltalake import DeltaTable
+        import pyarrow as pa
+        data = pa.table({"x": [1, 2, 3], "y": [4, 5, 6]})
+        dt = DeltaTable("tmp")
+        ( \
+            dt \
+            .merge( \
+                source=data, \
+                predicate='target.x = source.x', \
+                source_alias='source', \
+                target_alias='target') \
+            .when_not_matched_insert_all() \
+            .execute() \
+             )
+        ```
         """
 
         src_alias = (self.source_alias + ".") if self.source_alias is not None else ""
@@ -1129,18 +1171,24 @@ class TableMerger:
 
         Returns:
             TableMerger: TableMerger Object
-            
-        >>> from deltalake import DeltaTable
-        >>> import pyarrow as pa
-        >>> data = pa.table({"x": [1, 2, 3], "y": [4, 5, 6]})
-        >>> dt = DeltaTable("tmp")
-        >>> dt.merge(source=data, predicate='target.x = source.x', source_alias='source', target_alias='target') \
-        ...     .when_not_matched_by_source_update(
-        ...         predicate = "y > 3"
-        ...         updates = {
-        ...             "y": "0",
-        ...             }
-        ...         ).execute()    
+        
+        ```
+        from deltalake import DeltaTable
+        import pyarrow as pa
+        data = pa.table({"x": [1, 2, 3], "y": [4, 5, 6]})
+        dt = DeltaTable("tmp")
+        ( \
+            dt.merge( \
+                source=data, \
+                predicate='target.x = source.x', \
+                source_alias='source', \
+                target_alias='target') \
+            .when_not_matched_by_source_update( \
+                predicate = "y > 3", \
+                updates = {"y": "0"}) \
+            .execute() \
+            ) \
+        ```
         """
 
         if isinstance(self.not_matched_by_source_update_updates, list) and isinstance(
@@ -1181,7 +1229,7 @@ class TableMerger:
         return self
 
     def execute(self) -> Dict[str, Any]:
-        """Executes MERGE with the previously provided settings in Rust with Apache Datafusion query engine.
+        """Executes `MERGE` with the previously provided settings in Rust with Apache Datafusion query engine.
 
         Returns:
             Dict[str, Any]: metrics
