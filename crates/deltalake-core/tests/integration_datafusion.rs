@@ -37,6 +37,7 @@ use deltalake_core::protocol::SaveMode;
 use deltalake_core::storage::DeltaObjectStore;
 use deltalake_core::writer::{DeltaWriter, RecordBatchWriter};
 use deltalake_core::{
+    open_table,
     operations::{write::WriteBuilder, DeltaOps},
     DeltaTable, DeltaTableError,
 };
@@ -45,7 +46,7 @@ use std::error::Error;
 mod common;
 
 mod local {
-    use deltalake::writer::JsonWriter;
+    use deltalake_core::writer::JsonWriter;
 
     use super::*;
     #[tokio::test]
@@ -153,7 +154,7 @@ mod local {
     #[tokio::test]
     async fn test_datafusion_simple_query_partitioned() -> Result<()> {
         let ctx = SessionContext::new();
-        let table = deltalake::open_table("./tests/data/delta-0.8.0-partitioned")
+        let table = open_table("./tests/data/delta-0.8.0-partitioned")
             .await
             .unwrap();
         ctx.register_table("demo", Arc::new(table))?;
@@ -182,7 +183,7 @@ mod local {
         let source_scan_bytes = {
             let ctx = SessionContext::new();
             let state = ctx.state();
-            let source_table = deltalake::open_table("./tests/data/delta-0.8.0-date").await?;
+            let source_table = open_table("./tests/data/delta-0.8.0-date").await?;
             let source_scan = source_table.scan(&state, None, &[], None).await?;
             physical_plan_to_bytes_with_extension_codec(source_scan, &DeltaPhysicalCodec {})?
         };
@@ -262,9 +263,7 @@ mod local {
     #[tokio::test]
     async fn test_datafusion_date_column() -> Result<()> {
         let ctx = SessionContext::new();
-        let table = deltalake::open_table("./tests/data/delta-0.8.0-date")
-            .await
-            .unwrap();
+        let table = open_table("./tests/data/delta-0.8.0-date").await.unwrap();
         ctx.register_table("dates", Arc::new(table))?;
 
         let batches = ctx
@@ -283,9 +282,7 @@ mod local {
 
     #[tokio::test]
     async fn test_datafusion_stats() -> Result<()> {
-        let table = deltalake::open_table("./tests/data/delta-0.8.0")
-            .await
-            .unwrap();
+        let table = open_table("./tests/data/delta-0.8.0").await.unwrap();
         let statistics = table.state.datafusion_table_statistics();
 
         assert_eq!(statistics.num_rows, Some(4),);
@@ -735,7 +732,7 @@ mod local {
         assert_eq!(metrics.num_scanned_files(), 1);
 
         // Ensure that tables without stats and partition columns can be pruned for just partitions
-        // let table = deltalake::open_table("./tests/data/delta-0.8.0-null-partition").await?;
+        // let table = open_table("./tests/data/delta-0.8.0-null-partition").await?;
 
         /*
         // Logically this should prune. See above
@@ -765,7 +762,7 @@ mod local {
     #[tokio::test]
     async fn test_datafusion_partitioned_types() -> Result<()> {
         let ctx = SessionContext::new();
-        let table = deltalake::open_table("./tests/data/delta-2.2.0-partitioned-types")
+        let table = open_table("./tests/data/delta-2.2.0-partitioned-types")
             .await
             .unwrap();
         ctx.register_table("demo", Arc::new(table))?;
@@ -814,7 +811,7 @@ mod local {
     #[tokio::test]
     async fn test_datafusion_scan_timestamps() -> Result<()> {
         let ctx = SessionContext::new();
-        let table = deltalake::open_table("./tests/data/table_with_edge_timestamps")
+        let table = open_table("./tests/data/table_with_edge_timestamps")
             .await
             .unwrap();
         ctx.register_table("demo", Arc::new(table))?;
@@ -838,9 +835,7 @@ mod local {
     #[tokio::test]
     async fn test_issue_1292_datafusion_sql_projection() -> Result<()> {
         let ctx = SessionContext::new();
-        let table = deltalake::open_table("./tests/data/http_requests")
-            .await
-            .unwrap();
+        let table = open_table("./tests/data/http_requests").await.unwrap();
         ctx.register_table("http_requests", Arc::new(table))?;
 
         let batches = ctx
@@ -869,9 +864,7 @@ mod local {
     #[tokio::test]
     async fn test_issue_1291_datafusion_sql_partitioned_data() -> Result<()> {
         let ctx = SessionContext::new();
-        let table = deltalake::open_table("./tests/data/http_requests")
-            .await
-            .unwrap();
+        let table = open_table("./tests/data/http_requests").await.unwrap();
         ctx.register_table("http_requests", Arc::new(table))?;
 
         let batches = ctx
@@ -902,9 +895,7 @@ mod local {
     #[tokio::test]
     async fn test_issue_1374() -> Result<()> {
         let ctx = SessionContext::new();
-        let table = deltalake::open_table("./tests/data/issue_1374")
-            .await
-            .unwrap();
+        let table = open_table("./tests/data/issue_1374").await.unwrap();
         ctx.register_table("t", Arc::new(table))?;
 
         let batches = ctx
@@ -949,13 +940,14 @@ mod local {
             true,
         )];
         let schema = StructType::new(fields);
-        let table = deltalake::DeltaTableBuilder::from_uri("./tests/data/issue-1619").build()?;
+        let table =
+            deltalake_core::DeltaTableBuilder::from_uri("./tests/data/issue-1619").build()?;
         let _ = DeltaOps::from(table)
             .create()
             .with_columns(schema.fields().to_owned())
             .await?;
 
-        let mut table = deltalake::open_table("./tests/data/issue-1619").await?;
+        let mut table = open_table("./tests/data/issue-1619").await?;
 
         let mut writer = JsonWriter::for_table(&table).unwrap();
         writer

@@ -10,7 +10,6 @@ use deltalake::parquet::{
     file::properties::WriterProperties,
 };
 use deltalake::{protocol::SaveMode, DeltaOps};
-use deltalake::{protocol::SaveMode, DeltaOps, SchemaDataType, SchemaField};
 
 use std::sync::Arc;
 

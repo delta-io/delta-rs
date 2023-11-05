@@ -12,7 +12,10 @@ use serde::{Deserialize, Serialize};
 
 use super::config::TableConfig;
 use crate::errors::DeltaTableError;
-use crate::kernel::{Action, Add, CommitInfo, DataType, DomainMetadata, Remove, StructType};
+use crate::kernel::{
+    Action, Add, CommitInfo, DataType, DomainMetadata, ReaderFeatures, Remove, StructType,
+    WriterFeatures,
+};
 use crate::partitions::{DeltaTablePartition, PartitionFilter};
 use crate::protocol::ProtocolError;
 use crate::storage::commit_uri_from_version;

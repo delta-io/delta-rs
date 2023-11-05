@@ -6,7 +6,6 @@
  * This example was originally posted by @rtyler in:
  *      <https://github.com/buoyant-data/demo-recordbatch-writer>
  */
-
 use chrono::prelude::*;
 use deltalake::arrow::array::*;
 use deltalake::arrow::record_batch::RecordBatch;
@@ -17,9 +16,9 @@ use deltalake::parquet::{
     file::properties::WriterProperties,
 };
 use deltalake::writer::{DeltaWriter, RecordBatchWriter};
+use deltalake::Path;
 use deltalake::*;
 use log::*;
-use object_store::path::Path;
 use std::sync::Arc;
 
 /*

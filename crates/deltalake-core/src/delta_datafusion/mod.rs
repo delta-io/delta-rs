@@ -920,7 +920,7 @@ pub(crate) fn get_null_of_arrow_type(t: &ArrowDataType) -> DeltaResult<ScalarVal
 }
 
 pub(crate) fn partitioned_file_from_action(
-    action: &protocol::Add,
+    action: &Add,
     partition_columns: &[String],
     schema: &ArrowSchema,
 ) -> PartitionedFile {
@@ -1954,7 +1954,7 @@ mod tests {
 
         let table = crate::DeltaOps::new_in_memory()
             .create()
-            .with_columns(get_delta_schema().get_fields().clone())
+            .with_columns(get_delta_schema().fields().clone())
             .with_partition_columns(["modified", "id"])
             .await
             .unwrap();

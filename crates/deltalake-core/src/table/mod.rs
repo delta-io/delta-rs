@@ -22,7 +22,10 @@ use uuid::Uuid;
 use self::builder::DeltaTableConfig;
 use self::state::DeltaTableState;
 use crate::errors::DeltaTableError;
-use crate::kernel::{Action, Add, CommitInfo, DataType, Format, Metadata, Remove, StructType};
+use crate::kernel::{
+    Action, Add, CommitInfo, DataType, Format, Metadata, ReaderFeatures, Remove, StructType,
+    WriterFeatures,
+};
 use crate::partitions::PartitionFilter;
 use crate::protocol::{
     find_latest_check_point_for_version, get_last_checkpoint, ProtocolError, Stats,

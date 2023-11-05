@@ -11,7 +11,6 @@ use crate::kernel::{DataType as DeltaDataType, PrimitiveType, StructField, Struc
 use crate::operations::create::CreateBuilder;
 use crate::operations::DeltaOps;
 use crate::table::DeltaTableMetaData;
-use crate::writer::SaveMode;
 use crate::{DeltaConfigKey, DeltaTable, DeltaTableBuilder};
 
 pub type TestResult = Result<(), Box<dyn std::error::Error + 'static>>;

@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::str::FromStr;
 // use std::io::{Cursor, Read};
 // use std::sync::Arc;
@@ -129,10 +129,10 @@ pub struct Protocol {
     pub min_writer_version: i32,
     /// A collection of features that a client must implement in order to correctly
     /// read this table (exist only when minReaderVersion is set to 3)
-    pub reader_features: Option<Vec<String>>,
+    pub reader_features: Option<HashSet<ReaderFeatures>>,
     /// A collection of features that a client must implement in order to correctly
     /// write this table (exist only when minWriterVersion is set to 7)
-    pub writer_features: Option<Vec<String>>,
+    pub writer_features: Option<HashSet<WriterFeatures>>,
 }
 
 impl Protocol {
@@ -149,7 +149,7 @@ impl Protocol {
     /// set the reader features in the protocol action
     pub fn with_reader_features(
         mut self,
-        reader_features: impl IntoIterator<Item = impl Into<String>>,
+        reader_features: impl IntoIterator<Item = impl Into<ReaderFeatures>>,
     ) -> Self {
         self.reader_features = Some(reader_features.into_iter().map(|c| c.into()).collect());
         self
@@ -158,10 +158,173 @@ impl Protocol {
     /// set the writer features in the protocol action
     pub fn with_writer_features(
         mut self,
-        writer_features: impl IntoIterator<Item = impl Into<String>>,
+        writer_features: impl IntoIterator<Item = impl Into<WriterFeatures>>,
     ) -> Self {
         self.writer_features = Some(writer_features.into_iter().map(|c| c.into()).collect());
         self
+    }
+}
+
+/// Features table readers can support as well as let users know
+/// what is supported
+#[derive(Serialize, Deserialize, Debug, Clone, Eq, PartialEq, Hash)]
+#[serde(rename_all = "camelCase")]
+pub enum ReaderFeatures {
+    /// Mapping of one column to another
+    ColumnMapping,
+    /// Deletion vectors for merge, update, delete
+    DeleteionVecotrs,
+    /// timestamps without timezone support
+    #[serde(alias = "timestampNtz")]
+    TimestampWithoutTimezone,
+    /// version 2 of checkpointing
+    V2Checkpoint,
+    /// If we do not match any other reader features
+    #[serde(untagged)]
+    Other(String),
+}
+
+#[allow(clippy::from_over_into)]
+impl Into<usize> for ReaderFeatures {
+    fn into(self) -> usize {
+        match self {
+            ReaderFeatures::Other(_) => 0,
+            ReaderFeatures::ColumnMapping => 2,
+            ReaderFeatures::DeleteionVecotrs
+            | ReaderFeatures::TimestampWithoutTimezone
+            | ReaderFeatures::V2Checkpoint => 3,
+        }
+    }
+}
+
+#[cfg(all(not(feature = "parquet2"), feature = "parquet"))]
+impl From<&parquet::record::Field> for ReaderFeatures {
+    fn from(value: &parquet::record::Field) -> Self {
+        match value {
+            parquet::record::Field::Str(feature) => match feature.as_str() {
+                "columnMapping" => ReaderFeatures::ColumnMapping,
+                "deletionVectors" => ReaderFeatures::DeleteionVecotrs,
+                "timestampNtz" => ReaderFeatures::TimestampWithoutTimezone,
+                "v2Checkpoint" => ReaderFeatures::V2Checkpoint,
+                f => ReaderFeatures::Other(f.to_string()),
+            },
+            f => ReaderFeatures::Other(f.to_string()),
+        }
+    }
+}
+
+impl From<String> for ReaderFeatures {
+    fn from(value: String) -> Self {
+        match value.as_str() {
+            "columnMapping" => ReaderFeatures::ColumnMapping,
+            "deletionVectors" => ReaderFeatures::DeleteionVecotrs,
+            "timestampNtz" => ReaderFeatures::TimestampWithoutTimezone,
+            "v2Checkpoint" => ReaderFeatures::V2Checkpoint,
+            f => ReaderFeatures::Other(f.to_string()),
+        }
+    }
+}
+
+/// Features table writers can support as well as let users know
+/// what is supported
+#[derive(Serialize, Deserialize, Debug, Clone, Eq, PartialEq, Hash)]
+#[serde(rename_all = "camelCase")]
+pub enum WriterFeatures {
+    /// Append Only Tables
+    AppendOnly,
+    /// Table invariants
+    Invariants,
+    /// Check constraints on columns
+    CheckConstraints,
+    /// CDF on a table
+    ChangeDataFeed,
+    /// Columns with generated values
+    GeneratedColumns,
+    /// Mapping of one column to another
+    ColumnMapping,
+    /// ID Columns
+    IdentityColumns,
+    /// Deletion vectors for merge, update, delete
+    DeleteionVecotrs,
+    /// Row tracking on tables
+    RowTracking,
+    /// timestamps without timezone support
+    #[serde(alias = "timestampNtz")]
+    TimestampWithoutTimezone,
+    /// domain specific metadata
+    DomainMetadata,
+    /// version 2 of checkpointing
+    V2Checkpoint,
+    /// Iceberg compatability support
+    IcebergCompatV1,
+    /// If we do not match any other reader features
+    #[serde(untagged)]
+    Other(String),
+}
+
+#[allow(clippy::from_over_into)]
+impl Into<usize> for WriterFeatures {
+    fn into(self) -> usize {
+        match self {
+            WriterFeatures::Other(_) => 0,
+            WriterFeatures::AppendOnly | WriterFeatures::Invariants => 2,
+            WriterFeatures::CheckConstraints => 3,
+            WriterFeatures::ChangeDataFeed | WriterFeatures::GeneratedColumns => 4,
+            WriterFeatures::ColumnMapping => 5,
+            WriterFeatures::IdentityColumns
+            | WriterFeatures::DeleteionVecotrs
+            | WriterFeatures::RowTracking
+            | WriterFeatures::TimestampWithoutTimezone
+            | WriterFeatures::DomainMetadata
+            | WriterFeatures::V2Checkpoint
+            | WriterFeatures::IcebergCompatV1 => 7,
+        }
+    }
+}
+
+impl From<String> for WriterFeatures {
+    fn from(value: String) -> Self {
+        match value.as_str() {
+            "appendOnly" => WriterFeatures::AppendOnly,
+            "invariants" => WriterFeatures::Invariants,
+            "checkConstraints" => WriterFeatures::CheckConstraints,
+            "changeDataFeed" => WriterFeatures::ChangeDataFeed,
+            "generatedColumns" => WriterFeatures::GeneratedColumns,
+            "columnMapping" => WriterFeatures::ColumnMapping,
+            "identityColumns" => WriterFeatures::IdentityColumns,
+            "deletionVectors" => WriterFeatures::DeleteionVecotrs,
+            "rowTracking" => WriterFeatures::RowTracking,
+            "timestampNtz" => WriterFeatures::TimestampWithoutTimezone,
+            "domainMetadata" => WriterFeatures::DomainMetadata,
+            "v2Checkpoint" => WriterFeatures::V2Checkpoint,
+            "icebergCompatV1" => WriterFeatures::IcebergCompatV1,
+            f => WriterFeatures::Other(f.to_string()),
+        }
+    }
+}
+
+#[cfg(all(not(feature = "parquet2"), feature = "parquet"))]
+impl From<&parquet::record::Field> for WriterFeatures {
+    fn from(value: &parquet::record::Field) -> Self {
+        match value {
+            parquet::record::Field::Str(feature) => match feature.as_str() {
+                "appendOnly" => WriterFeatures::AppendOnly,
+                "invariants" => WriterFeatures::Invariants,
+                "checkConstraints" => WriterFeatures::CheckConstraints,
+                "changeDataFeed" => WriterFeatures::ChangeDataFeed,
+                "generatedColumns" => WriterFeatures::GeneratedColumns,
+                "columnMapping" => WriterFeatures::ColumnMapping,
+                "identityColumns" => WriterFeatures::IdentityColumns,
+                "deletionVectors" => WriterFeatures::DeleteionVecotrs,
+                "rowTracking" => WriterFeatures::RowTracking,
+                "timestampNtz" => WriterFeatures::TimestampWithoutTimezone,
+                "domainMetadata" => WriterFeatures::DomainMetadata,
+                "v2Checkpoint" => WriterFeatures::V2Checkpoint,
+                "icebergCompatV1" => WriterFeatures::IcebergCompatV1,
+                f => WriterFeatures::Other(f.to_string()),
+            },
+            f => WriterFeatures::Other(f.to_string()),
+        }
     }
 }
 

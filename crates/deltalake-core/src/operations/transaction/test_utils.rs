@@ -1,9 +1,10 @@
 #![allow(unused)]
 use std::collections::HashMap;
 
-use super::{prepare_commit, try_commit_transaction, CommitInfo};
+use super::{prepare_commit, try_commit_transaction};
 use crate::kernel::{
-    Action, Add, DataType, Metadata, PrimitiveType, Protocol, Remove, StructField, StructType,
+    Action, Add, CommitInfo, DataType, Metadata, PrimitiveType, Protocol, Remove, StructField,
+    StructType,
 };
 use crate::protocol::{DeltaOperation, SaveMode};
 use crate::table::state::DeltaTableState;

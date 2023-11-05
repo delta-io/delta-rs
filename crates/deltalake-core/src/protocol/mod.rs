@@ -14,18 +14,18 @@ mod time_utils;
 use arrow_schema::ArrowError;
 use futures::StreamExt;
 use lazy_static::lazy_static;
-use log::*;
+use log::debug;
 use object_store::{path::Path, Error as ObjectStoreError, ObjectStore};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::borrow::Borrow;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::mem::take;
 
 use crate::errors::DeltaResult;
-use crate::kernel::{Add, CommitInfo, Metadata, Protocol, Remove, StructType};
+use crate::kernel::{Add, CommitInfo, Metadata, Protocol, Remove};
 use crate::storage::ObjectStoreRef;
 use crate::table::CheckPoint;
 use crate::table::DeltaTableMetaData;
@@ -308,33 +308,6 @@ impl Add {
     }
 }
 
-impl Metadata {
-    /// Returns the table schema from the embedded schema string contained within the metadata
-    /// action.
-    pub fn get_schema(&self) -> Result<StructType, serde_json::error::Error> {
-        serde_json::from_str(&self.schema_string)
-    }
-}
-
-impl TryFrom<DeltaTableMetaData> for Metadata {
-    type Error = ProtocolError;
-
-    fn try_from(metadata: DeltaTableMetaData) -> Result<Self, Self::Error> {
-        let schema_string = serde_json::to_string(&metadata.schema)
-            .map_err(|source| ProtocolError::SerializeOperation { source })?;
-        Ok(Self {
-            id: metadata.id,
-            name: metadata.name,
-            description: metadata.description,
-            format: metadata.format,
-            schema_string,
-            partition_columns: metadata.partition_columns,
-            created_time: metadata.created_time,
-            configuration: metadata.configuration,
-        })
-    }
-}
-
 impl Hash for Remove {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.path.hash(state);
@@ -362,296 +335,21 @@ impl PartialEq for Remove {
     }
 }
 
-/// Action used by streaming systems to track progress using application-specific versions to
-/// enable idempotency.
-#[derive(Serialize, Deserialize, Debug, Default, Clone)]
-#[serde(rename_all = "camelCase")]
-pub struct Txn {
-    /// A unique identifier for the application performing the transaction.
-    pub app_id: String,
-    /// An application-specific numeric identifier for this transaction.
-    pub version: i64,
-    /// The time when this transaction action was created in milliseconds since the Unix epoch.
-    pub last_updated: Option<i64>,
-}
+impl TryFrom<DeltaTableMetaData> for Metadata {
+    type Error = ProtocolError;
 
-/// Action used to increase the version of the Delta protocol required to read or write to the
-/// table.
-#[derive(Serialize, Deserialize, Debug, Default, Clone, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct Protocol {
-    /// Minimum version of the Delta read protocol a client must implement to correctly read the
-    /// table.
-    pub min_reader_version: i32,
-    /// Minimum version of the Delta write protocol a client must implement to correctly read the
-    /// table.
-    pub min_writer_version: i32,
-    /// Table features are missing from older versions
-    /// The table features this reader supports
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub reader_features: Option<HashSet<ReaderFeatures>>,
-    /// Table features are missing from older versions
-    /// The table features this writer supports
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub writer_features: Option<HashSet<WriterFeatures>>,
-}
-
-/// Features table readers can support as well as let users know
-/// what is supported
-#[derive(Serialize, Deserialize, Debug, Clone, Eq, PartialEq, Hash)]
-pub enum ReaderFeatures {
-    /// Mapping of one column to another
-    #[serde(alias = "columnMapping")]
-    COLUMN_MAPPING,
-    /// Deletion vectors for merge, update, delete
-    #[serde(alias = "deletionVectors")]
-    DELETION_VECTORS,
-    /// timestamps without timezone support
-    #[serde(alias = "timestampNtz")]
-    TIMESTAMP_WITHOUT_TIMEZONE,
-    /// version 2 of checkpointing
-    #[serde(alias = "v2Checkpoint")]
-    V2_CHECKPOINT,
-    /// If we do not match any other reader features
-    #[serde(untagged)]
-    OTHER(String),
-}
-
-#[allow(clippy::from_over_into)]
-impl Into<usize> for ReaderFeatures {
-    fn into(self) -> usize {
-        match self {
-            ReaderFeatures::OTHER(_) => 0,
-            ReaderFeatures::COLUMN_MAPPING => 2,
-            ReaderFeatures::DELETION_VECTORS
-            | ReaderFeatures::TIMESTAMP_WITHOUT_TIMEZONE
-            | ReaderFeatures::V2_CHECKPOINT => 3,
-        }
-    }
-}
-
-#[cfg(all(not(feature = "parquet2"), feature = "parquet"))]
-impl From<&parquet::record::Field> for ReaderFeatures {
-    fn from(value: &parquet::record::Field) -> Self {
-        match value {
-            parquet::record::Field::Str(feature) => match feature.as_str() {
-                "columnMapping" => ReaderFeatures::COLUMN_MAPPING,
-                "deletionVectors" => ReaderFeatures::DELETION_VECTORS,
-                "timestampNtz" => ReaderFeatures::TIMESTAMP_WITHOUT_TIMEZONE,
-                "v2Checkpoint" => ReaderFeatures::V2_CHECKPOINT,
-                f => ReaderFeatures::OTHER(f.to_string()),
-            },
-            f => ReaderFeatures::OTHER(f.to_string()),
-        }
-    }
-}
-
-impl From<String> for ReaderFeatures {
-    fn from(value: String) -> Self {
-        match value.as_str() {
-            "columnMapping" => ReaderFeatures::COLUMN_MAPPING,
-            "deletionVectors" => ReaderFeatures::DELETION_VECTORS,
-            "timestampNtz" => ReaderFeatures::TIMESTAMP_WITHOUT_TIMEZONE,
-            "v2Checkpoint" => ReaderFeatures::V2_CHECKPOINT,
-            f => ReaderFeatures::OTHER(f.to_string()),
-        }
-    }
-}
-
-/// Features table writers can support as well as let users know
-/// what is supported
-#[derive(Serialize, Deserialize, Debug, Clone, Eq, PartialEq, Hash)]
-pub enum WriterFeatures {
-    /// Append Only Tables
-    #[serde(alias = "appendOnly")]
-    APPEND_ONLY,
-    /// Table invariants
-    #[serde(alias = "invariants")]
-    INVARIANTS,
-    /// Check constraints on columns
-    #[serde(alias = "checkConstraints")]
-    CHECK_CONSTRAINTS,
-    /// CDF on a table
-    #[serde(alias = "changeDataFeed")]
-    CHANGE_DATA_FEED,
-    /// Columns with generated values
-    #[serde(alias = "generatedColumns")]
-    GENERATED_COLUMNS,
-    /// Mapping of one column to another
-    #[serde(alias = "columnMapping")]
-    COLUMN_MAPPING,
-    /// ID Columns
-    #[serde(alias = "identityColumns")]
-    IDENTITY_COLUMNS,
-    /// Deletion vectors for merge, update, delete
-    #[serde(alias = "deletionVectors")]
-    DELETION_VECTORS,
-    /// Row tracking on tables
-    #[serde(alias = "rowTracking")]
-    ROW_TRACKING,
-    /// timestamps without timezone support
-    #[serde(alias = "timestampNtz")]
-    TIMESTAMP_WITHOUT_TIMEZONE,
-    /// domain specific metadata
-    #[serde(alias = "domainMetadata")]
-    DOMAIN_METADATA,
-    /// version 2 of checkpointing
-    #[serde(alias = "v2Checkpoint")]
-    V2_CHECKPOINT,
-    /// Iceberg compatability support
-    #[serde(alias = "icebergCompatV1")]
-    ICEBERG_COMPAT_V1,
-    /// If we do not match any other reader features
-    #[serde(untagged)]
-    OTHER(String),
-}
-
-#[allow(clippy::from_over_into)]
-impl Into<usize> for WriterFeatures {
-    fn into(self) -> usize {
-        match self {
-            WriterFeatures::OTHER(_) => 0,
-            WriterFeatures::APPEND_ONLY | WriterFeatures::INVARIANTS => 2,
-            WriterFeatures::CHECK_CONSTRAINTS => 3,
-            WriterFeatures::CHANGE_DATA_FEED | WriterFeatures::GENERATED_COLUMNS => 4,
-            WriterFeatures::COLUMN_MAPPING => 5,
-            WriterFeatures::IDENTITY_COLUMNS
-            | WriterFeatures::DELETION_VECTORS
-            | WriterFeatures::ROW_TRACKING
-            | WriterFeatures::TIMESTAMP_WITHOUT_TIMEZONE
-            | WriterFeatures::DOMAIN_METADATA
-            | WriterFeatures::V2_CHECKPOINT
-            | WriterFeatures::ICEBERG_COMPAT_V1 => 7,
-        }
-    }
-}
-
-impl From<String> for WriterFeatures {
-    fn from(value: String) -> Self {
-        match value.as_str() {
-            "appendOnly" => WriterFeatures::APPEND_ONLY,
-            "invariants" => WriterFeatures::INVARIANTS,
-            "checkConstraints" => WriterFeatures::CHECK_CONSTRAINTS,
-            "changeDataFeed" => WriterFeatures::CHANGE_DATA_FEED,
-            "generatedColumns" => WriterFeatures::GENERATED_COLUMNS,
-            "columnMapping" => WriterFeatures::COLUMN_MAPPING,
-            "identityColumns" => WriterFeatures::IDENTITY_COLUMNS,
-            "deletionVectors" => WriterFeatures::DELETION_VECTORS,
-            "rowTracking" => WriterFeatures::ROW_TRACKING,
-            "timestampNtz" => WriterFeatures::TIMESTAMP_WITHOUT_TIMEZONE,
-            "domainMetadata" => WriterFeatures::DOMAIN_METADATA,
-            "v2Checkpoint" => WriterFeatures::V2_CHECKPOINT,
-            "icebergCompatV1" => WriterFeatures::ICEBERG_COMPAT_V1,
-            f => WriterFeatures::OTHER(f.to_string()),
-        }
-    }
-}
-
-#[cfg(all(not(feature = "parquet2"), feature = "parquet"))]
-impl From<&parquet::record::Field> for WriterFeatures {
-    fn from(value: &parquet::record::Field) -> Self {
-        match value {
-            parquet::record::Field::Str(feature) => match feature.as_str() {
-                "appendOnly" => WriterFeatures::APPEND_ONLY,
-                "invariants" => WriterFeatures::INVARIANTS,
-                "checkConstraints" => WriterFeatures::CHECK_CONSTRAINTS,
-                "changeDataFeed" => WriterFeatures::CHANGE_DATA_FEED,
-                "generatedColumns" => WriterFeatures::GENERATED_COLUMNS,
-                "columnMapping" => WriterFeatures::COLUMN_MAPPING,
-                "identityColumns" => WriterFeatures::IDENTITY_COLUMNS,
-                "deletionVectors" => WriterFeatures::DELETION_VECTORS,
-                "rowTracking" => WriterFeatures::ROW_TRACKING,
-                "timestampNtz" => WriterFeatures::TIMESTAMP_WITHOUT_TIMEZONE,
-                "domainMetadata" => WriterFeatures::DOMAIN_METADATA,
-                "v2Checkpoint" => WriterFeatures::V2_CHECKPOINT,
-                "icebergCompatV1" => WriterFeatures::ICEBERG_COMPAT_V1,
-                f => WriterFeatures::OTHER(f.to_string()),
-            },
-            f => WriterFeatures::OTHER(f.to_string()),
-        }
-    }
-}
-
-/// The commitInfo is a fairly flexible action within the delta specification, where arbitrary data can be stored.
-/// However the reference implementation as well as delta-rs store useful information that may for instance
-/// allow us to be more permissive in commit conflict resolution.
-#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub struct CommitInfo {
-    /// Timestamp in millis when the commit was created
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub timestamp: Option<i64>,
-    /// Id of the user invoking the commit
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub user_id: Option<String>,
-    /// Name of the user invoking the commit
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub user_name: Option<String>,
-    /// The operation performed during the
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub operation: Option<String>,
-    /// Parameters used for table operation
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub operation_parameters: Option<HashMap<String, serde_json::Value>>,
-    /// Version of the table when the operation was started
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub read_version: Option<i64>,
-    /// The isolation level of the commit
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub isolation_level: Option<IsolationLevel>,
-    /// TODO
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub is_blind_append: Option<bool>,
-    /// Delta engine which created the commit.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub engine_info: Option<String>,
-    /// Additional provenance information for the commit
-    #[serde(flatten, default)]
-    pub info: Map<String, serde_json::Value>,
-}
-
-/// The domain metadata action contains a configuration (string) for a named metadata domain
-#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub struct DomainMetaData {
-    /// Identifier for this domain (system or user-provided)
-    pub domain: String,
-    /// String containing configuration for the metadata domain
-    pub configuration: String,
-    /// When `true` the action serves as a tombstone
-    pub removed: bool,
-}
-
-/// Represents an action in the Delta log. The Delta log is an aggregate of all actions performed
-/// on the table, so the full list of actions is required to properly read a table.
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub enum Action {
-    /// Changes the current metadata of the table. Must be present in the first version of a table.
-    /// Subsequent `metaData` actions completely overwrite previous metadata.
-    metaData(MetaData),
-    /// Adds CDC a file to the table state.
-    cdc(AddCDCFile),
-    /// Adds a file to the table state.
-    add(Add),
-    /// Removes a file from the table state.
-    remove(Remove),
-    /// Used by streaming systems to track progress externally with application specific version
-    /// identifiers.
-    txn(Txn),
-    /// Describes the minimum reader and writer versions required to read or write to the table.
-    protocol(Protocol),
-    /// Describes commit provenance information for the table.
-    commitInfo(CommitInfo),
-    /// Describe s the configuration for a named metadata domain
-    domainMetadata(DomainMetaData),
-}
-
-impl Action {
-    /// Create a commit info from a map
-    pub fn commit_info(info: Map<String, serde_json::Value>) -> Self {
-        Self::commitInfo(CommitInfo {
-            info,
-            ..Default::default()
+    fn try_from(metadata: DeltaTableMetaData) -> Result<Self, Self::Error> {
+        let schema_string = serde_json::to_string(&metadata.schema)
+            .map_err(|source| ProtocolError::SerializeOperation { source })?;
+        Ok(Self {
+            id: metadata.id,
+            name: metadata.name,
+            description: metadata.description,
+            format: metadata.format,
+            schema_string,
+            partition_columns: metadata.partition_columns,
+            created_time: metadata.created_time,
+            configuration: metadata.configuration,
         })
     }
 }
