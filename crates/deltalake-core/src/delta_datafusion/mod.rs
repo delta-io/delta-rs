@@ -936,8 +936,7 @@ pub(crate) fn partitioned_file_from_action(
                                 field.data_type(),
                             )
                             .unwrap_or(Some(ScalarValue::Null))
-                            .unwrap_or(ScalarValue::Null)
-                            ,
+                            .unwrap_or(ScalarValue::Null),
                             None => get_null_of_arrow_type(field.data_type())
                                 .unwrap_or(ScalarValue::Null),
                         })
