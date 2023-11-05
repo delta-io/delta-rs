@@ -461,9 +461,9 @@ impl std::future::IntoFuture for UpdateBuilder {
 mod tests {
     use crate::operations::DeltaOps;
     use crate::writer::test_utils::datafusion::get_data;
+    use crate::writer::test_utils::datafusion::write_batch;
     use crate::writer::test_utils::{
         get_arrow_schema, get_delta_schema, get_record_batch, setup_table_with_configuration,
-        write_batch,
     };
     use crate::DeltaConfigKey;
     use crate::DeltaTable;
