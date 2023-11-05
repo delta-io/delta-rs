@@ -11,7 +11,6 @@ use super::transaction::commit;
 use super::{MAX_SUPPORTED_READER_VERSION, MAX_SUPPORTED_WRITER_VERSION};
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::{Action, DataType, Metadata, Protocol, StructField, StructType};
-// use crate::kernel::{SchemaDataType, SchemaField, SchemaTypeStruct};
 use crate::protocol::{DeltaOperation, SaveMode};
 use crate::storage::DeltaObjectStore;
 use crate::table::builder::ensure_table_uri;

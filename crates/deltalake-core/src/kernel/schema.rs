@@ -447,10 +447,10 @@ impl Display for PrimitiveType {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             PrimitiveType::String => write!(f, "string"),
-            PrimitiveType::Long => write!(f, "bigint"),
-            PrimitiveType::Integer => write!(f, "int"),
-            PrimitiveType::Short => write!(f, "smallint"),
-            PrimitiveType::Byte => write!(f, "tinyint"),
+            PrimitiveType::Long => write!(f, "long"),
+            PrimitiveType::Integer => write!(f, "integer"),
+            PrimitiveType::Short => write!(f, "short"),
+            PrimitiveType::Byte => write!(f, "byte"),
             PrimitiveType::Float => write!(f, "float"),
             PrimitiveType::Double => write!(f, "double"),
             PrimitiveType::Boolean => write!(f, "boolean"),
