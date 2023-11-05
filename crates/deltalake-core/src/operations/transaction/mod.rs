@@ -69,6 +69,14 @@ pub enum TransactionError {
     /// Error returned when unsupported writer features are required
     #[error("Unsupported writer features required: {0:?}")]
     UnsupportedWriterFeatures(Vec<WriterFeatures>),
+
+    /// Error returned when writer features are required but not specified
+    #[error("Writer features must be specified for writerversion >= 7")]
+    WriterFeaturesRequired,
+
+    /// Error returned when reader features are required but not specified
+    #[error("Reader features must be specified for reader version >= 3")]
+    ReaderFeaturesRequired,
 }
 
 impl From<TransactionError> for DeltaTableError {
@@ -89,18 +97,9 @@ impl From<TransactionError> for DeltaTableError {
 // Convert actions to their json representation
 fn log_entry_from_actions<'a>(
     actions: impl IntoIterator<Item = &'a Action>,
-    read_snapshot: &DeltaTableState,
 ) -> Result<String, TransactionError> {
-    let append_only = read_snapshot.table_config().append_only();
     let mut jsons = Vec::<String>::new();
     for action in actions {
-        if append_only {
-            if let Action::Remove(remove) = action {
-                if remove.data_change {
-                    return Err(TransactionError::DeltaTableAppendOnly);
-                }
-            }
-        }
         let json = serde_json::to_string(action)
             .map_err(|e| TransactionError::SerializeLogJson { json_err: e })?;
         jsons.push(json);
@@ -111,7 +110,6 @@ fn log_entry_from_actions<'a>(
 pub(crate) fn get_commit_bytes(
     operation: &DeltaOperation,
     actions: &Vec<Action>,
-    read_snapshot: &DeltaTableState,
     app_metadata: Option<HashMap<String, Value>>,
 ) -> Result<bytes::Bytes, TransactionError> {
     if !actions.iter().any(|a| matches!(a, Action::CommitInfo(..))) {
@@ -130,13 +128,9 @@ pub(crate) fn get_commit_bytes(
             actions
                 .iter()
                 .chain(std::iter::once(&Action::CommitInfo(commit_info))),
-            read_snapshot,
         )?))
     } else {
-        Ok(bytes::Bytes::from(log_entry_from_actions(
-            actions,
-            read_snapshot,
-        )?))
+        Ok(bytes::Bytes::from(log_entry_from_actions(actions)?))
     }
 }
 
@@ -148,11 +142,10 @@ pub(crate) async fn prepare_commit<'a>(
     storage: &dyn ObjectStore,
     operation: &DeltaOperation,
     actions: &Vec<Action>,
-    read_snapshot: &DeltaTableState,
     app_metadata: Option<HashMap<String, Value>>,
 ) -> Result<Path, TransactionError> {
     // Serialize all actions that are part of this log entry.
-    let log_entry = get_commit_bytes(operation, actions, read_snapshot, app_metadata)?;
+    let log_entry = get_commit_bytes(operation, actions, app_metadata)?;
 
     // Write delta log entry as temporary file to storage. For the actual commit,
     // the temporary file is moved (atomic rename) to the delta log folder within `commit` function.
@@ -198,11 +191,11 @@ pub async fn commit_with_retries(
     app_metadata: Option<HashMap<String, Value>>,
     max_retries: usize,
 ) -> DeltaResult<i64> {
+    PROTOCOL.can_commit(read_snapshot, actions)?;
     let tmp_commit = prepare_commit(
         log_store.object_store().as_ref(),
         &operation,
         actions,
-        read_snapshot,
         app_metadata,
     )
     .await?;
@@ -253,12 +246,9 @@ pub async fn commit_with_retries(
 mod tests {
     use std::{collections::HashMap, sync::Arc};
 
-    use self::test_utils::{create_remove_action, init_table_actions};
+    use self::test_utils::init_table_actions;
     use super::*;
-    use crate::{
-        logstore::default_logstore::DefaultLogStore, storage::commit_uri_from_version,
-        DeltaConfigKey,
-    };
+    use crate::{logstore::default_logstore::DefaultLogStore, storage::commit_uri_from_version};
     use object_store::memory::InMemory;
     use url::Url;
 
@@ -273,33 +263,10 @@ mod tests {
     #[test]
     fn test_log_entry_from_actions() {
         let actions = init_table_actions(None);
-        let state = DeltaTableState::from_actions(actions.clone(), 0).unwrap();
-        let entry = log_entry_from_actions(&actions, &state).unwrap();
+        let entry = log_entry_from_actions(&actions).unwrap();
         let lines: Vec<_> = entry.lines().collect();
         // writes every action to a line
         assert_eq!(actions.len(), lines.len())
-    }
-
-    fn remove_action_exists_when_delta_table_is_append_only(
-        data_change: bool,
-    ) -> Result<String, TransactionError> {
-        let remove = create_remove_action("test_append_only", data_change);
-        let mut actions = init_table_actions(Some(HashMap::from([(
-            DeltaConfigKey::AppendOnly.as_ref().to_string(),
-            Some("true".to_string()),
-        )])));
-        actions.push(remove);
-        let state =
-            DeltaTableState::from_actions(actions.clone(), 0).expect("Failed to get table state");
-        log_entry_from_actions(&actions, &state)
-    }
-
-    #[test]
-    fn test_remove_action_exists_when_delta_table_is_append_only() {
-        let _err = remove_action_exists_when_delta_table_is_append_only(true)
-            .expect_err("Remove action is included when Delta table is append-only. Should error");
-        let _actions = remove_action_exists_when_delta_table_is_append_only(false)
-            .expect("Data is not changed by the Remove action. Should succeed");
     }
 
     #[tokio::test]

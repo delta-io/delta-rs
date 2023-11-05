@@ -166,7 +166,6 @@ pub async fn create_initialized_table(
         log_store.object_store().as_ref(),
         &operation,
         &actions,
-        &state,
         None,
     )
     .await
