@@ -458,7 +458,7 @@ impl Display for PrimitiveType {
             PrimitiveType::Date => write!(f, "date"),
             PrimitiveType::Timestamp => write!(f, "timestamp"),
             PrimitiveType::Decimal(precision, scale) => {
-                write!(f, "decimal({}, {})", precision, scale)
+                write!(f, "decimal({},{})", precision, scale)
             }
         }
     }

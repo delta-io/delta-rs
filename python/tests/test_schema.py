@@ -175,7 +175,10 @@ def test_delta_field():
         assert field.name == name
         assert field.type == (PrimitiveType(ty) if isinstance(ty, str) else ty)
         assert field.nullable == nullable
-        assert field.metadata == (metadata or {})
+        if metadata:
+            assert json.loads(field.metadata["x"]) == {"y": 3}
+        else:
+            assert field.metadata == {}
 
         # Field metadata doesn't roundtrip currently
         # See: https://github.com/apache/arrow-rs/issues/478
