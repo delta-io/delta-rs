@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 use super::config::TableConfig;
 use crate::errors::DeltaTableError;
 use crate::partitions::{DeltaTablePartition, PartitionFilter};
-use crate::protocol::{self, Action, Add, ProtocolError};
+use crate::protocol::{self, Action, Add, ProtocolError, ReaderFeatures, WriterFeatures};
 use crate::schema::SchemaDataType;
 use crate::storage::commit_uri_from_version;
 use crate::table::DeltaTableMetaData;
@@ -41,6 +41,8 @@ pub struct DeltaTableState {
     app_transaction_version: HashMap<String, i64>,
     min_reader_version: i32,
     min_writer_version: i32,
+    reader_features: Option<HashSet<ReaderFeatures>>,
+    writer_features: Option<HashSet<WriterFeatures>>,
     // table metadata corresponding to current version
     current_metadata: Option<DeltaTableMetaData>,
     // retention period for tombstones in milli-seconds
@@ -229,6 +231,16 @@ impl DeltaTableState {
         self.min_writer_version
     }
 
+    /// Current supported reader features
+    pub fn reader_features(&self) -> Option<&HashSet<ReaderFeatures>> {
+        self.reader_features.as_ref()
+    }
+
+    /// Current supported writer features
+    pub fn writer_features(&self) -> Option<&HashSet<WriterFeatures>> {
+        self.writer_features.as_ref()
+    }
+
     /// The most recent metadata of the table.
     pub fn current_metadata(&self) -> Option<&DeltaTableMetaData> {
         self.current_metadata.as_ref()
@@ -290,6 +302,14 @@ impl DeltaTableState {
             self.min_writer_version = new_state.min_writer_version;
         }
 
+        if new_state.min_writer_version >= 5 {
+            self.writer_features = new_state.writer_features;
+        }
+
+        if new_state.min_reader_version >= 3 {
+            self.reader_features = new_state.reader_features;
+        }
+
         if new_state.current_metadata.is_some() {
             self.tombstone_retention_millis = new_state.tombstone_retention_millis;
             self.log_retention_millis = new_state.log_retention_millis;
@@ -339,6 +359,8 @@ impl DeltaTableState {
             protocol::Action::protocol(v) => {
                 self.min_reader_version = v.min_reader_version;
                 self.min_writer_version = v.min_writer_version;
+                self.reader_features = v.reader_features;
+                self.writer_features = v.writer_features;
             }
             protocol::Action::metaData(v) => {
                 let md = DeltaTableMetaData::try_from(v)?;
@@ -421,6 +443,8 @@ mod tests {
             app_transaction_version: Default::default(),
             min_reader_version: 0,
             min_writer_version: 0,
+            reader_features: None,
+            writer_features: None,
             current_metadata: None,
             tombstone_retention_millis: 0,
             log_retention_millis: 0,
@@ -446,6 +470,8 @@ mod tests {
             current_metadata: None,
             min_reader_version: 1,
             min_writer_version: 1,
+            reader_features: None,
+            writer_features: None,
             app_transaction_version,
             tombstone_retention_millis: 0,
             log_retention_millis: 0,

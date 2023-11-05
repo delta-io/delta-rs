@@ -1432,7 +1432,6 @@ pub(super) mod zorder {
             assert_eq!(result.null_count(), 0);
 
             let data: &BinaryArray = as_generic_binary_array(result.as_ref());
-            dbg!(data);
             assert_eq!(data.value_data().len(), 3 * 16 * 3);
             assert!(data.iter().all(|x| x.unwrap().len() == 3 * 16));
         }

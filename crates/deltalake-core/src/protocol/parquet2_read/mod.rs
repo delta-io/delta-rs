@@ -10,7 +10,7 @@ use parquet2::read::decompress;
 use parquet2::read::get_page_iterator;
 use parquet2::read::levels::get_bit_width;
 
-use super::ProtocolError;
+use super::{ProtocolError, ReaderFeatures, WriterFeatures};
 use crate::protocol::{Action, Add, CommitInfo, MetaData, Protocol, Remove, Txn};
 use crate::schema::Guid;
 use boolean::for_each_boolean_field_value;
@@ -26,7 +26,7 @@ mod stats;
 mod string;
 mod validity;
 
-/// Parquet deserilization error
+/// Parquet deserialization error
 #[derive(thiserror::Error, Debug)]
 pub enum ParseError {
     /// Generic parsing error
@@ -612,6 +612,30 @@ fn deserialize_protocol_column_page(
                 dict,
                 descriptor,
                 |action: &mut Protocol, v: i32| action.min_writer_version = v,
+            )?;
+        }
+        "readerFeatures" => {
+            for_each_repeated_string_field_value(
+                actions,
+                page,
+                dict,
+                descriptor,
+                |action: &mut Protocol, v: Vec<String>| {
+                    action.reader_features =
+                        Some(v.into_iter().map(ReaderFeatures::from).collect());
+                },
+            )?;
+        }
+        "writerFeatures" => {
+            for_each_repeated_string_field_value(
+                actions,
+                page,
+                dict,
+                descriptor,
+                |action: &mut Protocol, v: Vec<String>| {
+                    action.writer_features =
+                        Some(v.into_iter().map(WriterFeatures::from).collect());
+                },
             )?;
         }
         _ => {

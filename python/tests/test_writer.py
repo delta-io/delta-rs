@@ -308,7 +308,9 @@ def test_write_recordbatchreader(
     tmp_path: pathlib.Path, existing_table: DeltaTable, sample_data: pa.Table
 ):
     batches = existing_table.to_pyarrow_dataset().to_batches()
-    reader = RecordBatchReader.from_batches(sample_data.schema, batches)
+    reader = RecordBatchReader.from_batches(
+        existing_table.to_pyarrow_dataset().schema, batches
+    )
 
     write_deltalake(tmp_path, reader, mode="overwrite")
     assert DeltaTable(tmp_path).to_pyarrow_table() == sample_data
@@ -892,7 +894,7 @@ def test_concurrency(existing_table: DeltaTable, sample_data: pa.Table):
             # concurrently, then this will fail.
             assert data.num_rows == sample_data.num_rows
             try:
-                write_deltalake(dt.table_uri, data, mode="overwrite")
+                write_deltalake(dt.table_uri, sample_data, mode="overwrite")
             except Exception as e:
                 exception = e
 
