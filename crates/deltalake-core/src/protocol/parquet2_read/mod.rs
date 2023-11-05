@@ -10,9 +10,10 @@ use parquet2::read::decompress;
 use parquet2::read::get_page_iterator;
 use parquet2::read::levels::get_bit_width;
 
-use super::{ProtocolError, ReaderFeatures, WriterFeatures};
-use crate::kernel::{Action, Add, CommitInfo, Metadata, Protocol, Remove, Txn};
-use crate::schema::Guid;
+use super::ProtocolError;
+use crate::kernel::{
+    Action, Add, CommitInfo, Metadata, Protocol, ReaderFeatures, Remove, Txn, WriterFeatures,
+};
 use boolean::for_each_boolean_field_value;
 use map::for_each_map_field_value;
 use primitive::for_each_primitive_field_value;
