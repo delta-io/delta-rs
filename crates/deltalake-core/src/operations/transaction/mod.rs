@@ -7,20 +7,22 @@ use object_store::path::Path;
 use object_store::{Error as ObjectStoreError, ObjectStore};
 use serde_json::Value;
 
+use self::conflict_checker::{CommitConflictError, TransactionInfo, WinningCommitSummary};
 use crate::crate_version;
 use crate::errors::{DeltaResult, DeltaTableError};
-use crate::kernel::{Action, CommitInfo};
+use crate::kernel::{Action, CommitInfo, ReaderFeatures, WriterFeatures};
 use crate::logstore::LogStore;
 use crate::protocol::DeltaOperation;
 use crate::table::state::DeltaTableState;
 
+pub use self::protocol::INSTANCE as PROTOCOL;
+
 mod conflict_checker;
+mod protocol;
 #[cfg(feature = "datafusion")]
 mod state;
 #[cfg(test)]
 pub(crate) mod test_utils;
-
-use self::conflict_checker::{CommitConflictError, TransactionInfo, WinningCommitSummary};
 
 const DELTA_LOG_FOLDER: &str = "_delta_log";
 
@@ -45,17 +47,28 @@ pub enum TransactionError {
         #[from]
         source: ObjectStoreError,
     },
+
     /// Error returned when a commit conflict ocurred
     #[error("Failed to commit transaction: {0}")]
     CommitConflict(#[from] CommitConflictError),
+
     /// Error returned when maximum number of commit trioals is exceeded
     #[error("Failed to commit transaction: {0}")]
     MaxCommitAttempts(i32),
+
     /// The transaction includes Remove action with data change but Delta table is append-only
     #[error(
         "The transaction includes Remove action with data change but Delta table is append-only"
     )]
     DeltaTableAppendOnly,
+
+    /// Error returned when unsupported reader features are required
+    #[error("Unsupported reader features required: {0:?}")]
+    UnsupportedReaderFeatures(Vec<ReaderFeatures>),
+
+    /// Error returned when unsupported writer features are required
+    #[error("Unsupported writer features required: {0:?}")]
+    UnsupportedWriterFeatures(Vec<WriterFeatures>),
 }
 
 impl From<TransactionError> for DeltaTableError {

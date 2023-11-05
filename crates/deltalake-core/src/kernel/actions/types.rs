@@ -1,4 +1,5 @@
 use std::collections::{HashMap, HashSet};
+use std::fmt;
 use std::str::FromStr;
 // use std::io::{Cursor, Read};
 // use std::sync::Arc;
@@ -225,6 +226,24 @@ impl From<String> for ReaderFeatures {
     }
 }
 
+impl AsRef<str> for ReaderFeatures {
+    fn as_ref(&self) -> &str {
+        match self {
+            ReaderFeatures::ColumnMapping => "columnMapping",
+            ReaderFeatures::DeleteionVecotrs => "deletionVectors",
+            ReaderFeatures::TimestampWithoutTimezone => "timestampNtz",
+            ReaderFeatures::V2Checkpoint => "v2Checkpoint",
+            ReaderFeatures::Other(f) => f,
+        }
+    }
+}
+
+impl fmt::Display for ReaderFeatures {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.as_ref())
+    }
+}
+
 /// Features table writers can support as well as let users know
 /// what is supported
 #[derive(Serialize, Deserialize, Debug, Clone, Eq, PartialEq, Hash)]
@@ -300,6 +319,33 @@ impl From<String> for WriterFeatures {
             "icebergCompatV1" => WriterFeatures::IcebergCompatV1,
             f => WriterFeatures::Other(f.to_string()),
         }
+    }
+}
+
+impl AsRef<str> for WriterFeatures {
+    fn as_ref(&self) -> &str {
+        match self {
+            WriterFeatures::AppendOnly => "appendOnly",
+            WriterFeatures::Invariants => "invariants",
+            WriterFeatures::CheckConstraints => "checkConstraints",
+            WriterFeatures::ChangeDataFeed => "changeDataFeed",
+            WriterFeatures::GeneratedColumns => "generatedColumns",
+            WriterFeatures::ColumnMapping => "columnMapping",
+            WriterFeatures::IdentityColumns => "identityColumns",
+            WriterFeatures::DeleteionVecotrs => "deletionVectors",
+            WriterFeatures::RowTracking => "rowTracking",
+            WriterFeatures::TimestampWithoutTimezone => "timestampNtz",
+            WriterFeatures::DomainMetadata => "domainMetadata",
+            WriterFeatures::V2Checkpoint => "v2Checkpoint",
+            WriterFeatures::IcebergCompatV1 => "icebergCompatV1",
+            WriterFeatures::Other(f) => f,
+        }
+    }
+}
+
+impl fmt::Display for WriterFeatures {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.as_ref())
     }
 }
 

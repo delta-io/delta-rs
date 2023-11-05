@@ -50,11 +50,6 @@ pub mod write;
 #[cfg(all(feature = "arrow", feature = "parquet"))]
 pub mod writer;
 
-/// Maximum supported writer version
-pub const MAX_SUPPORTED_WRITER_VERSION: i32 = 1;
-/// Maximum supported reader version
-pub const MAX_SUPPORTED_READER_VERSION: i32 = 1;
-
 /// High level interface for executing commands against a DeltaTable
 pub struct DeltaOps(pub DeltaTable);
 
