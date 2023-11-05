@@ -13,6 +13,7 @@ use std::time;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use arrow::pyarrow::PyArrowType;
+use arrow_schema::DataType;
 use chrono::{DateTime, Duration, FixedOffset, Utc};
 use deltalake::arrow::compute::concat_batches;
 use deltalake::arrow::ffi_stream::ArrowArrayStreamReader;
@@ -27,6 +28,7 @@ use deltalake::delta_datafusion::DeltaDataChecker;
 use deltalake::errors::DeltaTableError;
 use deltalake::kernel::{Action, Add, Invariant, Metadata, Remove, StructType};
 use deltalake::operations::delete::DeleteBuilder;
+use deltalake::operations::filesystem_check::FileSystemCheckBuilder;
 use deltalake::operations::merge::MergeBuilder;
 use deltalake::operations::optimize::{OptimizeBuilder, OptimizeType};
 use deltalake::operations::restore::RestoreBuilder;
@@ -425,15 +427,15 @@ impl RawDeltaTable {
         target_alias: Option<String>,
         safe_cast: bool,
         writer_properties: Option<HashMap<String, usize>>,
-        matched_update_updates: Option<HashMap<String, String>>,
-        matched_update_predicate: Option<String>,
-        matched_delete_predicate: Option<String>,
+        matched_update_updates: Option<Vec<HashMap<String, String>>>,
+        matched_update_predicate: Option<Vec<Option<String>>>,
+        matched_delete_predicate: Option<Vec<String>>,
         matched_delete_all: Option<bool>,
-        not_matched_insert_updates: Option<HashMap<String, String>>,
-        not_matched_insert_predicate: Option<String>,
-        not_matched_by_source_update_updates: Option<HashMap<String, String>>,
-        not_matched_by_source_update_predicate: Option<String>,
-        not_matched_by_source_delete_predicate: Option<String>,
+        not_matched_insert_updates: Option<Vec<HashMap<String, String>>>,
+        not_matched_insert_predicate: Option<Vec<Option<String>>>,
+        not_matched_by_source_update_updates: Option<Vec<HashMap<String, String>>>,
+        not_matched_by_source_update_predicate: Option<Vec<Option<String>>>,
+        not_matched_by_source_delete_predicate: Option<Vec<String>>,
         not_matched_by_source_delete_all: Option<bool>,
     ) -> PyResult<String> {
         let ctx = SessionContext::new();
@@ -487,23 +489,29 @@ impl RawDeltaTable {
 
         if let Some(mu_updates) = matched_update_updates {
             if let Some(mu_predicate) = matched_update_predicate {
-                cmd = cmd
-                    .when_matched_update(|mut update| {
-                        for (col_name, expression) in mu_updates {
-                            update = update.update(col_name.clone(), expression.clone());
-                        }
-                        update.predicate(mu_predicate)
-                    })
-                    .map_err(PythonError::from)?;
-            } else {
-                cmd = cmd
-                    .when_matched_update(|mut update| {
-                        for (col_name, expression) in mu_updates {
-                            update = update.update(col_name.clone(), expression.clone());
-                        }
-                        update
-                    })
-                    .map_err(PythonError::from)?;
+                for it in mu_updates.iter().zip(mu_predicate.iter()) {
+                    let (update_values, predicate_value) = it;
+
+                    if let Some(pred) = predicate_value {
+                        cmd = cmd
+                            .when_matched_update(|mut update| {
+                                for (col_name, expression) in update_values {
+                                    update = update.update(col_name.clone(), expression.clone());
+                                }
+                                update.predicate(pred.clone())
+                            })
+                            .map_err(PythonError::from)?;
+                    } else {
+                        cmd = cmd
+                            .when_matched_update(|mut update| {
+                                for (col_name, expression) in update_values {
+                                    update = update.update(col_name.clone(), expression.clone());
+                                }
+                                update
+                            })
+                            .map_err(PythonError::from)?;
+                    }
+                }
             }
         }
 
@@ -512,52 +520,64 @@ impl RawDeltaTable {
                 .when_matched_delete(|delete| delete)
                 .map_err(PythonError::from)?;
         } else if let Some(md_predicate) = matched_delete_predicate {
-            cmd = cmd
-                .when_matched_delete(|delete| delete.predicate(md_predicate))
-                .map_err(PythonError::from)?;
+            for pred in md_predicate.iter() {
+                cmd = cmd
+                    .when_matched_delete(|delete| delete.predicate(pred.clone()))
+                    .map_err(PythonError::from)?;
+            }
         }
 
         if let Some(nmi_updates) = not_matched_insert_updates {
             if let Some(nmi_predicate) = not_matched_insert_predicate {
-                cmd = cmd
-                    .when_not_matched_insert(|mut insert| {
-                        for (col_name, expression) in nmi_updates {
-                            insert = insert.set(col_name.clone(), expression.clone());
-                        }
-                        insert.predicate(nmi_predicate)
-                    })
-                    .map_err(PythonError::from)?;
-            } else {
-                cmd = cmd
-                    .when_not_matched_insert(|mut insert| {
-                        for (col_name, expression) in nmi_updates {
-                            insert = insert.set(col_name.clone(), expression.clone());
-                        }
-                        insert
-                    })
-                    .map_err(PythonError::from)?;
+                for it in nmi_updates.iter().zip(nmi_predicate.iter()) {
+                    let (update_values, predicate_value) = it;
+                    if let Some(pred) = predicate_value {
+                        cmd = cmd
+                            .when_not_matched_insert(|mut insert| {
+                                for (col_name, expression) in update_values {
+                                    insert = insert.set(col_name.clone(), expression.clone());
+                                }
+                                insert.predicate(pred.clone())
+                            })
+                            .map_err(PythonError::from)?;
+                    } else {
+                        cmd = cmd
+                            .when_not_matched_insert(|mut insert| {
+                                for (col_name, expression) in update_values {
+                                    insert = insert.set(col_name.clone(), expression.clone());
+                                }
+                                insert
+                            })
+                            .map_err(PythonError::from)?;
+                    }
+                }
             }
         }
 
         if let Some(nmbsu_updates) = not_matched_by_source_update_updates {
             if let Some(nmbsu_predicate) = not_matched_by_source_update_predicate {
-                cmd = cmd
-                    .when_not_matched_by_source_update(|mut update| {
-                        for (col_name, expression) in nmbsu_updates {
-                            update = update.update(col_name.clone(), expression.clone());
-                        }
-                        update.predicate(nmbsu_predicate)
-                    })
-                    .map_err(PythonError::from)?;
-            } else {
-                cmd = cmd
-                    .when_not_matched_by_source_update(|mut update| {
-                        for (col_name, expression) in nmbsu_updates {
-                            update = update.update(col_name.clone(), expression.clone());
-                        }
-                        update
-                    })
-                    .map_err(PythonError::from)?;
+                for it in nmbsu_updates.iter().zip(nmbsu_predicate.iter()) {
+                    let (update_values, predicate_value) = it;
+                    if let Some(pred) = predicate_value {
+                        cmd = cmd
+                            .when_not_matched_by_source_update(|mut update| {
+                                for (col_name, expression) in update_values {
+                                    update = update.update(col_name.clone(), expression.clone());
+                                }
+                                update.predicate(pred.clone())
+                            })
+                            .map_err(PythonError::from)?;
+                    } else {
+                        cmd = cmd
+                            .when_not_matched_by_source_update(|mut update| {
+                                for (col_name, expression) in update_values {
+                                    update = update.update(col_name.clone(), expression.clone());
+                                }
+                                update
+                            })
+                            .map_err(PythonError::from)?;
+                    }
+                }
             }
         }
 
@@ -566,9 +586,11 @@ impl RawDeltaTable {
                 .when_not_matched_by_source_delete(|delete| delete)
                 .map_err(PythonError::from)?;
         } else if let Some(nmbs_predicate) = not_matched_by_source_delete_predicate {
-            cmd = cmd
-                .when_not_matched_by_source_delete(|delete| delete.predicate(nmbs_predicate))
-                .map_err(PythonError::from)?;
+            for pred in nmbs_predicate.iter() {
+                cmd = cmd
+                    .when_not_matched_by_source_delete(|delete| delete.predicate(pred.clone()))
+                    .map_err(PythonError::from)?;
+            }
         }
 
         let (table, metrics) = rt()?
@@ -854,6 +876,21 @@ impl RawDeltaTable {
         self._table.state = table.state;
         Ok(serde_json::to_string(&metrics).unwrap())
     }
+
+    /// Execute the File System Check command (FSCK) on the delta table: removes old reference to files that
+    /// have been deleted or are malformed
+    #[pyo3(signature = (dry_run = true))]
+    pub fn repair(&mut self, dry_run: bool) -> PyResult<String> {
+        let cmd =
+            FileSystemCheckBuilder::new(self._table.object_store(), self._table.state.clone())
+                .with_dry_run(dry_run);
+
+        let (table, metrics) = rt()?
+            .block_on(cmd.into_future())
+            .map_err(PythonError::from)?;
+        self._table.state = table.state;
+        Ok(serde_json::to_string(&metrics).unwrap())
+    }
 }
 
 fn convert_partition_filters<'a>(
@@ -912,16 +949,31 @@ fn filestats_to_expression<'py>(
     let mut expressions: Vec<PyResult<&PyAny>> = Vec::new();
 
     let cast_to_type = |column_name: &String, value: PyObject, schema: &ArrowSchema| {
-        let column_type = PyArrowType(
-            schema
-                .field_with_name(column_name)
-                .map_err(|_| {
-                    PyValueError::new_err(format!("Column not found in schema: {column_name}"))
-                })?
-                .data_type()
-                .clone(),
-        )
-        .into_py(py);
+        let column_type = schema
+            .field_with_name(column_name)
+            .map_err(|_| {
+                PyValueError::new_err(format!("Column not found in schema: {column_name}"))
+            })?
+            .data_type()
+            .clone();
+
+        let value = match column_type {
+            // Since PyArrow 13.0.0, casting string -> timestamp fails if it ends with "Z"
+            // and the target type is timezone naive.
+            DataType::Timestamp(_, _) if value.extract::<String>(py).is_ok() => {
+                value.call_method1(py, "rstrip", ("Z",))?
+            }
+            // PyArrow 13.0.0 lost the ability to cast from string to date32, so
+            // we have to implement that manually.
+            DataType::Date32 if value.extract::<String>(py).is_ok() => {
+                let date = Python::import(py, "datetime")?.getattr("date")?;
+                let date = date.call_method1("fromisoformat", (value,))?;
+                date.to_object(py)
+            }
+            _ => value,
+        };
+
+        let column_type = PyArrowType(column_type).into_py(py);
         pa.call_method1("scalar", (value,))?
             .call_method1("cast", (column_type,))
     };

@@ -5,6 +5,7 @@ import pathlib
 import random
 import threading
 from datetime import date, datetime
+from math import inf
 from typing import Any, Dict, Iterable, List
 from unittest.mock import Mock
 
@@ -307,7 +308,9 @@ def test_write_recordbatchreader(
     tmp_path: pathlib.Path, existing_table: DeltaTable, sample_data: pa.Table
 ):
     batches = existing_table.to_pyarrow_dataset().to_batches()
-    reader = RecordBatchReader.from_batches(sample_data.schema, batches)
+    reader = RecordBatchReader.from_batches(
+        existing_table.to_pyarrow_dataset().schema, batches
+    )
 
     write_deltalake(tmp_path, reader, mode="overwrite")
     assert DeltaTable(tmp_path).to_pyarrow_table() == sample_data
@@ -891,7 +894,7 @@ def test_concurrency(existing_table: DeltaTable, sample_data: pa.Table):
             # concurrently, then this will fail.
             assert data.num_rows == sample_data.num_rows
             try:
-                write_deltalake(dt.table_uri, data, mode="overwrite")
+                write_deltalake(dt.table_uri, sample_data, mode="overwrite")
             except Exception as e:
                 exception = e
 
@@ -924,3 +927,26 @@ def test_issue_1651_roundtrip_timestamp(tmp_path: pathlib.Path):
     dataset = dt.to_pyarrow_dataset()
 
     assert dataset.count_rows() == 1
+
+
+def test_float_values(tmp_path: pathlib.Path):
+    data = pa.table(
+        {
+            "id": pa.array(range(4)),
+            "x1": pa.array([0.0, inf, None, 1.0]),
+            "x2": pa.array([0.0, -inf, None, 1.0]),
+        }
+    )
+    write_deltalake(tmp_path, data)
+    dt = DeltaTable(tmp_path)
+    assert dt.to_pyarrow_table() == data
+
+    actions = dt.get_add_actions()
+    # x1 has no max, since inf was the highest value
+    assert actions["min"].field("x1")[0].as_py() == -0.0
+    assert actions["max"].field("x1")[0].as_py() is None
+    assert actions["null_count"].field("x1")[0].as_py() == 1
+    # x2 has no min, since -inf was the lowest value
+    assert actions["min"].field("x2")[0].as_py() is None
+    assert actions["max"].field("x2")[0].as_py() == 1.0
+    assert actions["null_count"].field("x2")[0].as_py() == 1

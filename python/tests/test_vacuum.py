@@ -8,7 +8,7 @@ from deltalake import DeltaTable, write_deltalake
 
 
 def test_vacuum_dry_run_simple_table():
-    table_path = "../rust/tests/data/delta-0.2.0"
+    table_path = "../crates/deltalake-core/tests/data/delta-0.2.0"
     dt = DeltaTable(table_path)
     retention_periods = 169
     tombstones = dt.vacuum(retention_periods)
@@ -64,3 +64,32 @@ def test_vacuum_zero_duration(
 
     parquet_files = {f for f in os.listdir(table_path) if f.endswith("parquet")}
     assert parquet_files == new_files
+
+
+def test_vacuum_transaction_log(tmp_path: pathlib.Path, sample_data: pa.Table):
+    for i in range(5):
+        write_deltalake(tmp_path, sample_data, mode="overwrite")
+
+    dt = DeltaTable(tmp_path)
+
+    dt.vacuum(retention_hours=0, dry_run=False, enforce_retention_duration=False)
+
+    dt = DeltaTable(tmp_path)
+
+    history = dt.history(2)
+
+    expected_start_parameters = {
+        "retentionCheckEnabled": "false",
+        "specifiedRetentionMillis": "0",
+        "defaultRetentionMillis": "604800000",
+    }
+
+    assert history[0]["operation"] == "VACUUM END"
+    assert history[1]["operation"] == "VACUUM START"
+
+    assert history[0]["operationParameters"]["status"] == "COMPLETED"
+    assert history[1]["operationParameters"] == expected_start_parameters
+
+    assert history[0]["operationMetrics"]["numDeletedFiles"] == 4
+    assert history[1]["operationMetrics"]["numFilesToDelete"] == 4
+    assert history[1]["operationMetrics"]["sizeOfDataToDelete"] > 0

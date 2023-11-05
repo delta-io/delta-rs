@@ -4,6 +4,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal
+from math import inf
 from pathlib import Path
 from typing import (
     Any,
@@ -65,6 +66,7 @@ def write_deltalake(
     table_or_uri: Union[str, Path, DeltaTable],
     data: Union[
         "pd.DataFrame",
+        ds.Dataset,
         pa.Table,
         pa.RecordBatch,
         Iterable[pa.RecordBatch],
@@ -331,11 +333,20 @@ def write_deltalake(
             batch_iter = [data]
         elif isinstance(data, pa.Table):
             batch_iter = data.to_batches()
+        elif isinstance(data, ds.Dataset):
+            batch_iter = data.to_batches()
         else:
             batch_iter = data
 
         data = RecordBatchReader.from_batches(
             schema, (validate_batch(batch) for batch in batch_iter)
+        )
+
+    if file_options is not None:
+        file_options.update(use_compliant_nested_type=False)
+    else:
+        file_options = ds.ParquetFileFormat().make_write_options(
+            use_compliant_nested_type=False
         )
 
     ds.write_dataset(
@@ -517,14 +528,16 @@ def get_file_stats_from_metadata(
                     for group in iter_groups(metadata)
                 )
                 # If some row groups have all null values, their min and max will be null too.
-                stats["minValues"][name] = min(
-                    minimum for minimum in minimums if minimum is not None
-                )
+                min_value = min(minimum for minimum in minimums if minimum is not None)
+                # Infinity cannot be serialized to JSON, so we skip it. Saying
+                # min/max is infinity is equivalent to saying it is null, anyways.
+                if min_value != -inf:
+                    stats["minValues"][name] = min_value
                 maximums = (
                     group.column(column_idx).statistics.max
                     for group in iter_groups(metadata)
                 )
-                stats["maxValues"][name] = max(
-                    maximum for maximum in maximums if maximum is not None
-                )
+                max_value = max(maximum for maximum in maximums if maximum is not None)
+                if max_value != inf:
+                    stats["maxValues"][name] = max_value
     return stats
