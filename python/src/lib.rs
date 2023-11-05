@@ -13,6 +13,7 @@ use std::time;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use arrow::pyarrow::PyArrowType;
+use arrow_schema::DataType;
 use chrono::{DateTime, Duration, FixedOffset, Utc};
 use deltalake::arrow::compute::concat_batches;
 use deltalake::arrow::ffi_stream::ArrowArrayStreamReader;
@@ -947,16 +948,31 @@ fn filestats_to_expression<'py>(
     let mut expressions: Vec<PyResult<&PyAny>> = Vec::new();
 
     let cast_to_type = |column_name: &String, value: PyObject, schema: &ArrowSchema| {
-        let column_type = PyArrowType(
-            schema
-                .field_with_name(column_name)
-                .map_err(|_| {
-                    PyValueError::new_err(format!("Column not found in schema: {column_name}"))
-                })?
-                .data_type()
-                .clone(),
-        )
-        .into_py(py);
+        let column_type = schema
+            .field_with_name(column_name)
+            .map_err(|_| {
+                PyValueError::new_err(format!("Column not found in schema: {column_name}"))
+            })?
+            .data_type()
+            .clone();
+
+        let value = match column_type {
+            // Since PyArrow 13.0.0, casting string -> timestamp fails if it ends with "Z"
+            // and the target type is timezone naive.
+            DataType::Timestamp(_, _) if value.extract::<String>(py).is_ok() => {
+                value.call_method1(py, "rstrip", ("Z",))?
+            }
+            // PyArrow 13.0.0 lost the ability to cast from string to date32, so
+            // we have to implement that manually.
+            DataType::Date32 if value.extract::<String>(py).is_ok() => {
+                let date = Python::import(py, "datetime")?.getattr("date")?;
+                let date = date.call_method1("fromisoformat", (value,))?;
+                date.to_object(py)
+            }
+            _ => value,
+        };
+
+        let column_type = PyArrowType(column_type).into_py(py);
         pa.call_method1("scalar", (value,))?
             .call_method1("cast", (column_type,))
     };
