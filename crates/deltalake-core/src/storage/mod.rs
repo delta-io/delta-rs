@@ -23,7 +23,7 @@ lazy_static! {
 }
 
 /// Return the uri of commit version.
-pub(crate) fn commit_uri_from_version(version: i64) -> Path {
+pub fn commit_uri_from_version(version: i64) -> Path {
     let version = format!("{version:020}.json");
     DELTA_LOG_PATH.child(version.as_str())
 }
