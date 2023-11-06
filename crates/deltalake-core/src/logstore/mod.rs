@@ -3,6 +3,7 @@ use futures::StreamExt;
 use lazy_static::lazy_static;
 use regex::Regex;
 use std::{cmp::max, sync::Arc};
+use url::Url;
 
 use crate::{
     errors::DeltaResult,
@@ -19,6 +20,10 @@ pub mod default_logstore;
 
 /// Sharable reference to [`LogStore`]
 pub type LogStoreRef = Arc<dyn LogStore>;
+
+lazy_static! {
+    static ref DELTA_LOG_PATH: Path = Path::from("_delta_log");
+}
 
 /// Trait for critical operations required to read and write commit entries in Delta logs.
 ///
@@ -51,6 +56,19 @@ pub trait LogStore: Sync + Send {
 
     /// Get underlying object store.
     fn object_store(&self) -> ObjectStoreRef;
+
+    /// [Path] to Delta log
+    fn to_uri(&self, location: &Path) -> String;
+
+    /// Get fully qualified uri for table root
+    fn root_uri(&self) -> String {
+        self.to_uri(&Path::from(""))
+    }
+
+    /// [Path] to Delta log
+    fn log_path(&self) -> &Path {
+        &DELTA_LOG_PATH
+    }
 }
 
 // TODO: maybe a bit of a hack, required to `#[derive(Debug)]` for the operation builders
@@ -64,6 +82,35 @@ lazy_static! {
     static ref DELTA_LOG_REGEX: Regex = Regex::new(r"(\d{20})\.(json|checkpoint).*$").unwrap();
 }
 
+fn to_uri(root: &Url, location: &Path) -> String {
+    match root.scheme() {
+        "file" => {
+            #[cfg(windows)]
+            let uri = format!(
+                "{}/{}",
+                root.as_ref().trim_end_matches('/'),
+                location.as_ref()
+            )
+            .replace("file:///", "");
+            #[cfg(unix)]
+            let uri = format!(
+                "{}/{}",
+                root.as_ref().trim_end_matches('/'),
+                location.as_ref()
+            )
+            .replace("file://", "");
+            uri
+        }
+        _ => {
+            if location.as_ref().is_empty() || location.as_ref() == "/" {
+                root.as_ref().to_string()
+            } else {
+                format!("{}/{}", root.as_ref(), location.as_ref())
+            }
+        }
+    }
+}
+
 /// Extract version from a file name in the delta log
 pub fn extract_version_from_filename(name: &str) -> Option<i64> {
     DELTA_LOG_REGEX
@@ -71,8 +118,9 @@ pub fn extract_version_from_filename(name: &str) -> Option<i64> {
         .map(|captures| captures.get(1).unwrap().as_str().parse().unwrap())
 }
 
-async fn get_latest_version(storage: &ObjectStoreRef, current_version: i64) -> DeltaResult<i64> {
-    let version_start = match get_last_checkpoint(storage).await {
+async fn get_latest_version(log_store: &dyn LogStore, current_version: i64) -> DeltaResult<i64> {
+    let object_store = log_store.object_store();
+    let version_start = match get_last_checkpoint(&object_store).await {
         Ok(last_check_point) => last_check_point.version,
         Err(ProtocolError::CheckpointNotFound) => {
             // no checkpoint
@@ -90,9 +138,9 @@ async fn get_latest_version(storage: &ObjectStoreRef, current_version: i64) -> D
     // list files to find max version
     let version = async {
         let mut max_version: i64 = version_start;
-        let prefix = Some(storage.log_path());
+        let prefix = Some(log_store.log_path());
         let offset_path = commit_uri_from_version(max_version);
-        let mut files = storage.list_with_offset(prefix, &offset_path).await?;
+        let mut files = object_store.list_with_offset(prefix, &offset_path).await?;
 
         while let Some(obj_meta) = files.next().await {
             let obj_meta = obj_meta?;
@@ -106,7 +154,7 @@ async fn get_latest_version(storage: &ObjectStoreRef, current_version: i64) -> D
         }
 
         if max_version < 0 {
-            return Err(DeltaTableError::not_a_table(storage.root_uri()));
+            return Err(DeltaTableError::not_a_table(log_store.root_uri()));
         }
 
         Ok::<i64, DeltaTableError>(max_version)

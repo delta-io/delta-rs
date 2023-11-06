@@ -110,9 +110,8 @@ impl DeltaObjectStore {
         &self.options
     }
 
-    /// Get fully qualified uri for table root
-    pub fn root_uri(&self) -> String {
-        self.to_uri(&Path::from(""))
+    pub(crate) fn location(&self) -> Url {
+        self.location.clone()
     }
 
     #[cfg(feature = "datafusion")]
@@ -139,36 +138,6 @@ impl DeltaObjectStore {
     /// [Path] to Delta log
     pub fn log_path(&self) -> &Path {
         &DELTA_LOG_PATH
-    }
-
-    /// [Path] to Delta log
-    pub fn to_uri(&self, location: &Path) -> String {
-        match self.location.scheme() {
-            "file" => {
-                #[cfg(windows)]
-                let uri = format!(
-                    "{}/{}",
-                    self.location.as_ref().trim_end_matches('/'),
-                    location.as_ref()
-                )
-                .replace("file:///", "");
-                #[cfg(unix)]
-                let uri = format!(
-                    "{}/{}",
-                    self.location.as_ref().trim_end_matches('/'),
-                    location.as_ref()
-                )
-                .replace("file://", "");
-                uri
-            }
-            _ => {
-                if location.as_ref().is_empty() || location.as_ref() == "/" {
-                    self.location.as_ref().to_string()
-                } else {
-                    format!("{}/{}", self.location.as_ref(), location.as_ref())
-                }
-            }
-        }
     }
 
     /// Deletes object by `paths`.

@@ -41,7 +41,6 @@ use crate::kernel::{Action, Add, Remove};
 use crate::operations::transaction::commit;
 use crate::operations::write::write_execution_plan;
 use crate::protocol::DeltaOperation;
-use crate::storage::ObjectStoreRef;
 use crate::table::state::DeltaTableState;
 use crate::DeltaTable;
 
@@ -126,7 +125,7 @@ impl DeleteBuilder {
 
 async fn excute_non_empty_expr(
     snapshot: &DeltaTableState,
-    object_store: ObjectStoreRef,
+    log_store: LogStoreRef,
     state: &SessionState,
     expression: &Expr,
     metrics: &mut DeleteMetrics,
@@ -145,7 +144,7 @@ async fn excute_non_empty_expr(
         .partition_columns
         .clone();
 
-    let scan = DeltaScanBuilder::new(snapshot, object_store.clone(), state)
+    let scan = DeltaScanBuilder::new(snapshot, log_store.clone(), state)
         .with_files(rewrite)
         .build()
         .await?;
@@ -168,7 +167,7 @@ async fn excute_non_empty_expr(
         state.clone(),
         filter.clone(),
         table_partition_cols.clone(),
-        object_store.clone(),
+        log_store.object_store(),
         Some(snapshot.table_config().target_file_size() as usize),
         None,
         writer_properties,
@@ -198,13 +197,7 @@ async fn execute(
     let mut metrics = DeleteMetrics::default();
 
     let scan_start = Instant::now();
-    let candidates = find_files(
-        snapshot,
-        log_store.object_store().clone(),
-        &state,
-        predicate.clone(),
-    )
-    .await?;
+    let candidates = find_files(snapshot, log_store.clone(), &state, predicate.clone()).await?;
     metrics.scan_time_ms = Instant::now().duration_since(scan_start).as_micros();
 
     let predicate = predicate.unwrap_or(Expr::Literal(ScalarValue::Boolean(Some(true))));
@@ -215,7 +208,7 @@ async fn execute(
         let write_start = Instant::now();
         let add = excute_non_empty_expr(
             snapshot,
-            log_store.object_store().clone(),
+            log_store.clone(),
             &state,
             &predicate,
             &mut metrics,

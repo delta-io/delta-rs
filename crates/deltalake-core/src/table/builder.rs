@@ -247,12 +247,11 @@ impl DeltaTableBuilder {
     /// Build a delta storage backend for the given config
     pub fn build_storage(self) -> DeltaResult<LogStoreRef> {
         match self.options.storage_backend {
-            Some((storage, location)) => Ok(Arc::new(DefaultLogStore {
-                storage: Arc::new(DeltaObjectStore::new(
-                    storage,
-                    ensure_table_uri(location.as_str())?,
-                )),
-            })),
+            Some((storage, location)) => {
+                let location = ensure_table_uri(location.as_str())?;
+                let storage = DeltaObjectStore::new(storage, location.clone());
+                Ok(Arc::new(DefaultLogStore::new(Arc::new(storage), location)))
+            }
             None => {
                 let location = ensure_table_uri(&self.options.table_uri)?;
                 Ok(config::configure_log_store(

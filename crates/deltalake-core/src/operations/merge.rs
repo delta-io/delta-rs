@@ -590,7 +590,7 @@ async fn execute(
     // predicates also need to be considered when pruning
 
     let target = Arc::new(
-        DeltaScanBuilder::new(snapshot, log_store.object_store(), &state)
+        DeltaScanBuilder::new(snapshot, log_store.clone(), &state)
             .with_schema(snapshot.input_schema()?)
             .build()
             .await?,

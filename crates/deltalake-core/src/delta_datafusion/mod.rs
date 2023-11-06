@@ -71,6 +71,7 @@ use url::Url;
 
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::{Add, DataType as DeltaDataType, Invariant, PrimitiveType};
+use crate::logstore::LogStoreRef;
 use crate::protocol::{self};
 use crate::storage::ObjectStoreRef;
 use crate::table::builder::ensure_table_uri;
@@ -467,7 +468,7 @@ pub struct DeltaScanConfig {
 #[derive(Debug)]
 pub(crate) struct DeltaScanBuilder<'a> {
     snapshot: &'a DeltaTableState,
-    object_store: ObjectStoreRef,
+    log_store: LogStoreRef,
     filter: Option<Expr>,
     state: &'a SessionState,
     projection: Option<&'a Vec<usize>>,
@@ -480,12 +481,12 @@ pub(crate) struct DeltaScanBuilder<'a> {
 impl<'a> DeltaScanBuilder<'a> {
     pub fn new(
         snapshot: &'a DeltaTableState,
-        object_store: ObjectStoreRef,
+        log_store: LogStoreRef,
         state: &'a SessionState,
     ) -> Self {
         DeltaScanBuilder {
             snapshot,
-            object_store,
+            log_store,
             filter: None,
             state,
             files: None,
@@ -532,7 +533,7 @@ impl<'a> DeltaScanBuilder<'a> {
             Some(schema) => schema,
             None => {
                 self.snapshot
-                    .physical_arrow_schema(self.object_store.clone())
+                    .physical_arrow_schema(self.log_store.object_store())
                     .await?
             }
         };
@@ -632,7 +633,7 @@ impl<'a> DeltaScanBuilder<'a> {
             .create_physical_plan(
                 self.state,
                 FileScanConfig {
-                    object_store_url: self.object_store.object_store_url(),
+                    object_store_url: self.log_store.object_store().object_store_url(),
                     file_schema,
                     file_groups: file_groups.into_values().collect(),
                     statistics: self.snapshot.datafusion_table_statistics(),
@@ -647,9 +648,7 @@ impl<'a> DeltaScanBuilder<'a> {
             .await?;
 
         Ok(DeltaScan {
-            table_uri: ensure_table_uri(self.object_store.root_uri())?
-                .as_str()
-                .into(),
+            table_uri: ensure_table_uri(self.log_store.root_uri())?.as_str().into(),
             parquet_scan: scan,
             config,
             logical_schema,
@@ -689,7 +688,7 @@ impl TableProvider for DeltaTable {
         register_store(self.object_store(), session.runtime_env().clone());
         let filter_expr = conjunction(filters.iter().cloned());
 
-        let scan = DeltaScanBuilder::new(&self.state, self.object_store(), session)
+        let scan = DeltaScanBuilder::new(&self.state, self.log_store(), session)
             .with_projection(projection)
             .with_limit(limit)
             .with_filter(filter_expr)
@@ -714,7 +713,7 @@ impl TableProvider for DeltaTable {
 /// A Delta table provider that enables additonal metadata columns to be included during the scan
 pub struct DeltaTableProvider {
     snapshot: DeltaTableState,
-    store: ObjectStoreRef,
+    log_store: LogStoreRef,
     config: DeltaScanConfig,
     schema: Arc<ArrowSchema>,
 }
@@ -723,13 +722,13 @@ impl DeltaTableProvider {
     /// Build a DeltaTableProvider
     pub fn try_new(
         snapshot: DeltaTableState,
-        store: ObjectStoreRef,
+        log_store: LogStoreRef,
         config: DeltaScanConfig,
     ) -> DeltaResult<Self> {
         Ok(DeltaTableProvider {
             schema: logical_schema(&snapshot, &config)?,
             snapshot,
-            store,
+            log_store,
             config,
         })
     }
@@ -764,10 +763,10 @@ impl TableProvider for DeltaTableProvider {
         filters: &[Expr],
         limit: Option<usize>,
     ) -> DataFusionResult<Arc<dyn ExecutionPlan>> {
-        register_store(self.store.clone(), session.runtime_env().clone());
+        register_store(self.log_store.object_store(), session.runtime_env().clone());
         let filter_expr = conjunction(filters.iter().cloned());
 
-        let scan = DeltaScanBuilder::new(&self.snapshot, self.store.clone(), session)
+        let scan = DeltaScanBuilder::new(&self.snapshot, self.log_store.clone(), session)
             .with_projection(projection)
             .with_limit(limit)
             .with_filter(filter_expr)
@@ -1462,7 +1461,7 @@ fn join_batches_with_add_actions(
 /// Determine which files contain a record that statisfies the predicate
 pub(crate) async fn find_files_scan<'a>(
     snapshot: &DeltaTableState,
-    store: ObjectStoreRef,
+    log_store: LogStoreRef,
     state: &SessionState,
     expression: Expr,
 ) -> DeltaResult<Vec<Add>> {
@@ -1489,7 +1488,7 @@ pub(crate) async fn find_files_scan<'a>(
     // Add path column
     used_columns.push(logical_schema.index_of(scan_config.file_column_name.as_ref().unwrap())?);
 
-    let scan = DeltaScanBuilder::new(snapshot, store.clone(), state)
+    let scan = DeltaScanBuilder::new(snapshot, log_store.clone(), state)
         .with_filter(Some(expression.clone()))
         .with_projection(Some(&used_columns))
         .with_scan_config(scan_config)
@@ -1580,7 +1579,7 @@ pub(crate) async fn scan_memory_table(
 /// Finds files in a snapshot that match the provided predicate.
 pub async fn find_files<'a>(
     snapshot: &DeltaTableState,
-    object_store: ObjectStoreRef,
+    log_store: LogStoreRef,
     state: &SessionState,
     predicate: Option<Expr>,
 ) -> DeltaResult<FindFiles> {
@@ -1608,8 +1607,7 @@ pub async fn find_files<'a>(
                 })
             } else {
                 let candidates =
-                    find_files_scan(snapshot, object_store.clone(), state, predicate.to_owned())
-                        .await?;
+                    find_files_scan(snapshot, log_store, state, predicate.to_owned()).await?;
 
                 Ok(FindFiles {
                     candidates,
@@ -1924,8 +1922,8 @@ mod tests {
             .build(&table.state)
             .unwrap();
 
-        let storage = table.object_store();
-        let provider = DeltaTableProvider::try_new(table.state, storage, config).unwrap();
+        let log_store = table.log_store();
+        let provider = DeltaTableProvider::try_new(table.state, log_store, config).unwrap();
         let ctx = SessionContext::new();
         ctx.register_table("test", Arc::new(provider)).unwrap();
 
@@ -1984,8 +1982,8 @@ mod tests {
 
         let config = DeltaScanConfigBuilder::new().build(&table.state).unwrap();
 
-        let storage = table.object_store();
-        let provider = DeltaTableProvider::try_new(table.state, storage, config).unwrap();
+        let log_store = table.log_store();
+        let provider = DeltaTableProvider::try_new(table.state, log_store, config).unwrap();
         let ctx = SessionContext::new();
         ctx.register_table("test", Arc::new(provider)).unwrap();
 

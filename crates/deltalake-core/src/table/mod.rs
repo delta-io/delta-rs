@@ -298,13 +298,15 @@ impl<'de> Deserialize<'de> for DeltaTable {
                 let config = seq
                     .next_element()?
                     .ok_or_else(|| A::Error::invalid_length(0, &self))?;
+                // TODO twh; proper (de-)serialization
                 let storage = Arc::new(
                     seq.next_element()?
                         .ok_or_else(|| A::Error::invalid_length(0, &self))?,
                 );
-                let log_store = Arc::new(DefaultLogStore {
-                    storage: Arc::clone(&storage),
-                });
+                let log_store = Arc::new(DefaultLogStore::new(
+                    Arc::clone(&storage),
+                    storage.location().to_owned(),
+                ));
                 let last_check_point = seq
                     .next_element()?
                     .ok_or_else(|| A::Error::invalid_length(0, &self))?;
@@ -364,7 +366,7 @@ impl DeltaTable {
 
     /// The URI of the underlying data
     pub fn table_uri(&self) -> String {
-        self.log_store.object_store().root_uri()
+        self.log_store.root_uri()
     }
 
     /// get a shared reference to the log store
@@ -714,7 +716,7 @@ impl DeltaTable {
         let files = self.get_files_by_partitions(filters)?;
         Ok(files
             .iter()
-            .map(|fname| self.object_store().to_uri(fname))
+            .map(|fname| self.log_store.to_uri(fname))
             .collect())
     }
 
@@ -739,7 +741,7 @@ impl DeltaTable {
     pub fn get_file_uris(&self) -> impl Iterator<Item = String> + '_ {
         self.state
             .file_paths_iter()
-            .map(|path| self.object_store().to_uri(&path))
+            .map(|path| self.log_store.to_uri(&path))
     }
 
     /// Returns statistics for files, in order

@@ -221,9 +221,7 @@ impl CreateBuilder {
 
         let (storage_url, table) = if let Some(log_store) = self.log_store {
             (
-                ensure_table_uri(log_store.object_store().root_uri())?
-                    .as_str()
-                    .to_string(),
+                ensure_table_uri(log_store.root_uri())?.as_str().to_string(),
                 DeltaTable::new(log_store, Default::default()),
             )
         } else {

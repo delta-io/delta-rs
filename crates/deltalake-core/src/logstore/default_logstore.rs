@@ -17,14 +17,26 @@ use crate::{
 #[derive(Debug, Clone)]
 pub struct DefaultLogStore {
     pub(crate) storage: ObjectStoreRef,
+    location: Url,
 }
 
 impl DefaultLogStore {
+    /// Create a new instance of [`DefaultLogStore`]
+    ///
+    /// # Arguments
+    ///
+    /// * `storage` - A shared reference to an [`object_store::ObjectStore`] with "/" pointing at delta table root (i.e. where `_delta_log` is located).
+    /// * `location` - A url corresponding to the storage location of `storage`.
+    pub fn new(storage: ObjectStoreRef, location: Url) -> Self {
+        DefaultLogStore { storage, location }
+    }
+
     /// Create log store
     pub fn try_new(location: Url, options: impl Into<StorageOptions> + Clone) -> DeltaResult<Self> {
-        let object_store = DeltaObjectStore::try_new(location, options.clone())?;
+        let object_store = DeltaObjectStore::try_new(location.clone(), options.clone())?;
         Ok(Self {
             storage: Arc::new(object_store),
+            location,
         })
     }
 }
@@ -49,10 +61,14 @@ impl LogStore for DefaultLogStore {
     }
 
     async fn get_latest_version(&self, current_version: i64) -> DeltaResult<i64> {
-        super::get_latest_version(&self.storage, current_version).await
+        super::get_latest_version(self, current_version).await
     }
 
     fn object_store(&self) -> ObjectStoreRef {
         self.storage.clone()
+    }
+
+    fn to_uri(&self, location: &Path) -> String {
+        super::to_uri(&self.location, location)
     }
 }

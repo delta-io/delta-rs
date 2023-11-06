@@ -220,7 +220,7 @@ impl WriteBuilder {
                 } else {
                     match self.mode {
                         SaveMode::ErrorIfExists => {
-                            Err(WriteError::AlreadyExists(object_store.root_uri()).into())
+                            Err(WriteError::AlreadyExists(self.log_store.root_uri()).into())
                         }
                         _ => Ok(vec![]),
                     }
