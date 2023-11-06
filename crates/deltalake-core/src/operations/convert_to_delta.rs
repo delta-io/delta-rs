@@ -7,7 +7,6 @@ use crate::{
     operations::create::CreateBuilder,
     protocol::SaveMode,
     storage::config::configure_log_store,
-    table::builder::ensure_table_uri,
     table::config::DeltaConfigKey,
     DeltaResult, DeltaTable, DeltaTableError, DeltaTablePartition, ObjectStoreError,
     NULL_PARTITION_VALUE_DATA_PATH,
@@ -234,10 +233,7 @@ impl ConvertToDeltaBuilder {
         let log_store = if let Some(log_store) = self.log_store {
             log_store
         } else if let Some(location) = self.location {
-            configure_log_store(
-                ensure_table_uri(location)?,
-                self.storage_options.unwrap_or_default(),
-            )?
+            configure_log_store(&location, self.storage_options.unwrap_or_default(), None)?
         } else {
             return Err(Error::MissingLocation);
         };
@@ -395,10 +391,7 @@ impl std::future::IntoFuture for ConvertToDeltaBuilder {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        configure_log_store, ensure_table_uri, ConvertToDeltaBuilder, DeltaTable, LogStoreRef,
-        StructField,
-    };
+    use super::{configure_log_store, ConvertToDeltaBuilder, DeltaTable, LogStoreRef, StructField};
     use crate::{
         kernel::schema::{DataType, PrimitiveType},
         open_table,
@@ -433,11 +426,8 @@ mod tests {
     }
 
     fn log_store(path: impl Into<String>) -> LogStoreRef {
-        configure_log_store(
-            ensure_table_uri(path.into()).expect("Failed to convert to table URI"),
-            StorageOptions::default(),
-        )
-        .expect("Failed to create an object store")
+        configure_log_store(&path.into(), StorageOptions::default(), None)
+            .expect("Failed to create an object store")
     }
 
     async fn create_delta_table(
