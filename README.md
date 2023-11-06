@@ -152,8 +152,8 @@ of features outlined in the Delta [protocol][protocol] is also [tracked](#protoc
 | Delete - predicates   |         ![done]          |       ![done]       | Delete data based on a predicate            |
 | Optimize - compaction |         ![done]          |       ![done]       | Harmonize the size of data file             |
 | Optimize - Z-order    |         ![done]          |       ![done]       | Place similar data into the same file       |
-| Merge                 | [![semi-done]][merge-rs] | [![open]][merge-py] | Merge two tables (limited to full re-write) |
-| FS check              |         ![done]          |                     | Remove corrupted files from table           |
+| Merge                 | [![semi-done]][merge-rs] | [![semi-done]][merge-py] | Merge two tables (limited to full re-write) |
+| FS check              |         ![done]          |       ![done]       | Remove corrupted files from table           |
 
 ### Protocol Support Level
 
@@ -168,12 +168,12 @@ of features outlined in the Delta [protocol][protocol] is also [tracked](#protoc
 | Version 4      | Generated Columns                             |                      |
 | Version 5      | Column Mapping                                |                      |
 | Version 6      | Identity Columns                              |                      |
-| Version 7      | Table Features                                |                      |
+| Version 7      | Table Features                                |       ![done]        |
 
 | Reader Version | Requirement                         | Status |
 | -------------- | ----------------------------------- | ------ |
 | Version 2      | Column Mapping                      |        |
-| Version 3      | Table Features (requires reader V7) |        |
+| Version 3      | Table Features (requires reader V7) |    ![done] |
 
 [datafusion]: https://github.com/apache/arrow-datafusion
 [ballista]: https://github.com/apache/arrow-ballista
