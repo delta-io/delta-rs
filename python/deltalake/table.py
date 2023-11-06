@@ -1,5 +1,6 @@
 import json
 import operator
+import os
 import warnings
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -225,7 +226,7 @@ class DeltaTable:
 
     def __init__(
         self,
-        table_uri: Union[str, Path],
+        table_uri: Union[str, Path, os.PathLike],
         version: Optional[int] = None,
         storage_options: Optional[Dict[str, str]] = None,
         without_files: bool = False,
