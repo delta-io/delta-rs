@@ -23,9 +23,10 @@ use super::utils::{
 };
 use super::{utils::PartitionPath, DeltaWriter, DeltaWriterError};
 use crate::errors::DeltaTableError;
+use crate::kernel::{Add, StructType};
 use crate::table::builder::DeltaTableBuilder;
 use crate::table::DeltaTableMetaData;
-use crate::{protocol::Add, DeltaTable, Schema};
+use crate::DeltaTable;
 use crate::{storage::DeltaObjectStore, writer::utils::ShareableBuffer};
 
 type BadValue = (Value, ParquetError);
@@ -33,7 +34,7 @@ type BadValue = (Value, ParquetError);
 /// Writes messages to a delta lake table.
 pub struct JsonWriter {
     storage: Arc<DeltaObjectStore>,
-    arrow_schema_ref: Arc<arrow::datatypes::Schema>,
+    arrow_schema_ref: Arc<arrow_schema::Schema>,
     writer_properties: WriterProperties,
     partition_columns: Vec<String>,
     arrow_writers: HashMap<String, DataArrowWriter>,
@@ -206,7 +207,7 @@ impl JsonWriter {
     pub fn for_table(table: &DeltaTable) -> Result<JsonWriter, DeltaTableError> {
         // Initialize an arrow schema ref from the delta table schema
         let metadata = table.get_metadata()?;
-        let arrow_schema = <ArrowSchema as TryFrom<&Schema>>::try_from(&metadata.schema)?;
+        let arrow_schema = <ArrowSchema as TryFrom<&StructType>>::try_from(&metadata.schema)?;
         let arrow_schema_ref = Arc::new(arrow_schema);
         let partition_columns = metadata.partition_columns.clone();
 
@@ -232,7 +233,8 @@ impl JsonWriter {
         &mut self,
         metadata: &DeltaTableMetaData,
     ) -> Result<bool, DeltaTableError> {
-        let schema: ArrowSchema = <ArrowSchema as TryFrom<&Schema>>::try_from(&metadata.schema)?;
+        let schema: ArrowSchema =
+            <ArrowSchema as TryFrom<&StructType>>::try_from(&metadata.schema)?;
 
         let schema_updated = self.arrow_schema_ref.as_ref() != &schema
             || self.partition_columns != metadata.partition_columns;
@@ -440,6 +442,11 @@ fn extract_partition_values(
 
 #[cfg(test)]
 mod tests {
+    use parquet::file::reader::FileReader;
+    use parquet::file::serialized_reader::SerializedFileReader;
+    use std::fs::File;
+    use std::sync::Arc;
+
     use super::*;
     use crate::arrow::array::Int32Array;
     use crate::arrow::datatypes::{
@@ -448,11 +455,6 @@ mod tests {
     use crate::writer::test_utils::get_delta_schema;
     use crate::writer::DeltaWriter;
     use crate::writer::JsonWriter;
-    use crate::Schema;
-    use parquet::file::reader::FileReader;
-    use parquet::file::serialized_reader::SerializedFileReader;
-    use std::fs::File;
-    use std::sync::Arc;
 
     #[tokio::test]
     async fn test_partition_not_written_to_parquet() {
@@ -460,7 +462,7 @@ mod tests {
         let schema = get_delta_schema();
         let path = table_dir.path().to_str().unwrap().to_string();
 
-        let arrow_schema = <ArrowSchema as TryFrom<&Schema>>::try_from(&schema).unwrap();
+        let arrow_schema = <ArrowSchema as TryFrom<&StructType>>::try_from(&schema).unwrap();
         let mut writer = JsonWriter::try_new(
             path.clone(),
             Arc::new(arrow_schema),

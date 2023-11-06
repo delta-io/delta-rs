@@ -26,8 +26,9 @@ use serde::Serialize;
 use url::{ParseError, Url};
 
 use crate::errors::{DeltaResult, DeltaTableError};
+use crate::kernel::{Action, Add, Remove};
 use crate::operations::transaction::commit;
-use crate::protocol::{Action, Add, DeltaOperation, Remove};
+use crate::protocol::DeltaOperation;
 use crate::storage::DeltaObjectStore;
 use crate::table::state::DeltaTableState;
 use crate::DeltaTable;
@@ -140,7 +141,7 @@ impl FileSystemCheckPlan {
             let deletion_time = SystemTime::now().duration_since(UNIX_EPOCH).unwrap();
             let deletion_time = deletion_time.as_millis() as i64;
             removed_file_paths.push(file.path.clone());
-            actions.push(Action::remove(Remove {
+            actions.push(Action::Remove(Remove {
                 path: file.path,
                 deletion_timestamp: Some(deletion_time),
                 data_change: true,
@@ -149,6 +150,8 @@ impl FileSystemCheckPlan {
                 size: Some(file.size),
                 deletion_vector: None,
                 tags: file.tags,
+                base_row_id: file.base_row_id,
+                default_row_commit_version: file.default_row_commit_version,
             }));
         }
 

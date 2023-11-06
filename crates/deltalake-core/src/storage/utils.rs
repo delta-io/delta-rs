@@ -9,7 +9,7 @@ use object_store::path::Path;
 use object_store::{DynObjectStore, ObjectMeta, Result as ObjectStoreResult};
 
 use crate::errors::{DeltaResult, DeltaTableError};
-use crate::protocol::Add;
+use crate::kernel::Add;
 use crate::table::builder::DeltaTableBuilder;
 
 /// Copies the contents from the `from` location into the `to` location
@@ -109,7 +109,15 @@ mod tests {
                 .to_string(),
             size: 123,
             modification_time: 123456789,
-            ..Default::default()
+            data_change: true,
+            stats: None,
+            partition_values: Default::default(),
+            tags: Default::default(),
+            base_row_id: None,
+            default_row_commit_version: None,
+            deletion_vector: None,
+            partition_values_parsed: None,
+            stats_parsed: None,
         };
 
         let meta: ObjectMeta = (&add).try_into().unwrap();

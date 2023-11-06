@@ -1,47 +1,45 @@
 use deltalake::arrow::{
     array::{Int32Array, StringArray, TimestampMicrosecondArray},
-    datatypes::{DataType, Field, Schema as ArrowSchema, TimeUnit},
+    datatypes::{DataType as ArrowDataType, Field, Schema as ArrowSchema, TimeUnit},
     record_batch::RecordBatch,
 };
+use deltalake::kernel::{DataType, PrimitiveType, StructField};
 use deltalake::operations::collect_sendable_stream;
 use deltalake::parquet::{
     basic::{Compression, ZstdLevel},
     file::properties::WriterProperties,
 };
-use deltalake::{protocol::SaveMode, DeltaOps, SchemaDataType, SchemaField};
+use deltalake::{protocol::SaveMode, DeltaOps};
 
 use std::sync::Arc;
 
-fn get_table_columns() -> Vec<SchemaField> {
+fn get_table_columns() -> Vec<StructField> {
     vec![
-        SchemaField::new(
+        StructField::new(
             String::from("int"),
-            SchemaDataType::primitive(String::from("integer")),
+            DataType::Primitive(PrimitiveType::Integer),
             false,
-            Default::default(),
         ),
-        SchemaField::new(
+        StructField::new(
             String::from("string"),
-            SchemaDataType::primitive(String::from("string")),
+            DataType::Primitive(PrimitiveType::String),
             true,
-            Default::default(),
         ),
-        SchemaField::new(
+        StructField::new(
             String::from("timestamp"),
-            SchemaDataType::primitive(String::from("timestamp")),
+            DataType::Primitive(PrimitiveType::Timestamp),
             true,
-            Default::default(),
         ),
     ]
 }
 
 fn get_table_batches() -> RecordBatch {
     let schema = Arc::new(ArrowSchema::new(vec![
-        Field::new("int", DataType::Int32, false),
-        Field::new("string", DataType::Utf8, true),
+        Field::new("int", ArrowDataType::Int32, false),
+        Field::new("string", ArrowDataType::Utf8, true),
         Field::new(
             "timestamp",
-            DataType::Timestamp(TimeUnit::Microsecond, None),
+            ArrowDataType::Timestamp(TimeUnit::Microsecond, None),
             true,
         ),
     ]));

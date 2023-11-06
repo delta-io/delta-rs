@@ -30,8 +30,9 @@ use object_store::path::Path;
 use object_store::ObjectStore;
 use serde::Serialize;
 
+use crate::kernel::{Action, Add, Protocol, Remove};
 use crate::operations::transaction::{prepare_commit, try_commit_transaction, TransactionError};
-use crate::protocol::{Action, Add, DeltaOperation, Protocol, Remove};
+use crate::protocol::DeltaOperation;
 use crate::storage::ObjectStoreRef;
 use crate::table::state::DeltaTableState;
 use crate::{DeltaResult, DeltaTable, DeltaTableConfig, DeltaTableError, ObjectStoreError};
@@ -187,6 +188,8 @@ async fn execute(
                 size: Some(a.size),
                 tags: a.tags,
                 deletion_vector: a.deletion_vector,
+                base_row_id: a.base_row_id,
+                default_row_commit_version: a.default_row_commit_version,
             }
         })
         .collect();
@@ -230,9 +233,9 @@ async fn execute(
             reader_features: snapshot.reader_features().cloned(),
         }
     };
-    actions.push(Action::protocol(protocol));
-    actions.extend(files_to_add.into_iter().map(Action::add));
-    actions.extend(files_to_remove.into_iter().map(Action::remove));
+    actions.push(Action::Protocol(protocol));
+    actions.extend(files_to_add.into_iter().map(Action::Add));
+    actions.extend(files_to_remove.into_iter().map(Action::Remove));
 
     let commit = prepare_commit(
         object_store.as_ref(),
