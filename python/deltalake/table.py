@@ -12,6 +12,7 @@ from typing import (
     Generator,
     Iterable,
     List,
+    Literal,
     NamedTuple,
     Optional,
     Tuple,
@@ -1337,6 +1338,7 @@ class TableOptimizer:
         target_size: Optional[int] = None,
         max_concurrent_tasks: Optional[int] = None,
         min_commit_interval: Optional[Union[int, timedelta]] = None,
+        compression: Literal["snappy", "gzip", "brotli", "lz4", "zstd"] = "snappy",
     ) -> Dict[str, Any]:
         """
         Compacts small files to reduce the total number of files in the table.
@@ -1376,7 +1378,11 @@ class TableOptimizer:
             min_commit_interval = int(min_commit_interval.total_seconds())
 
         metrics = self.table._table.compact_optimize(
-            partition_filters, target_size, max_concurrent_tasks, min_commit_interval
+            partition_filters,
+            target_size,
+            max_concurrent_tasks,
+            min_commit_interval,
+            compression,
         )
         self.table.update_incremental()
         return json.loads(metrics)
@@ -1389,6 +1395,7 @@ class TableOptimizer:
         max_concurrent_tasks: Optional[int] = None,
         max_spill_size: int = 20 * 1024 * 1024 * 1024,
         min_commit_interval: Optional[Union[int, timedelta]] = None,
+        compression: Literal["snappy", "gzip", "brotli", "lz4", "zstd"] = "snappy",
     ) -> Dict[str, Any]:
         """
         Reorders the data using a Z-order curve to improve data skipping.
@@ -1432,6 +1439,7 @@ class TableOptimizer:
             max_concurrent_tasks,
             max_spill_size,
             min_commit_interval,
+            compression,
         )
         self.table.update_incremental()
         return json.loads(metrics)

@@ -90,6 +90,7 @@ def write_deltalake(
     storage_options: Optional[Dict[str, str]] = None,
     partition_filters: Optional[List[Tuple[str, str, Any]]] = None,
     large_dtypes: bool = False,
+    compression: Literal["snappy", "gzip", "brotli", "lz4", "zstd"] = "snappy",
 ) -> None:
     """Write to a Delta Lake table
 
@@ -343,10 +344,11 @@ def write_deltalake(
         )
 
     if file_options is not None:
-        file_options.update(use_compliant_nested_type=False)
+        file_options.update(use_compliant_nested_type=False, compression=compression)
     else:
         file_options = ds.ParquetFileFormat().make_write_options(
-            use_compliant_nested_type=False
+            use_compliant_nested_type=False,
+            compression=compression,
         )
 
     ds.write_dataset(

@@ -64,6 +64,7 @@ class RawDeltaTable:
         target_size: Optional[int],
         max_concurrent_tasks: Optional[int],
         min_commit_interval: Optional[int],
+        compression: Literal["snappy", "gzip", "brotli", "lz4", "zstd"],
     ) -> str: ...
     def z_order_optimize(
         self,
@@ -73,6 +74,7 @@ class RawDeltaTable:
         max_concurrent_tasks: Optional[int],
         max_spill_size: Optional[int],
         min_commit_interval: Optional[int],
+        compression: Literal["snappy", "gzip", "brotli", "lz4", "zstd"],
     ) -> str: ...
     def restore(
         self,
