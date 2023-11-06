@@ -379,7 +379,7 @@ class DeltaTable:
 
     file_uris.__doc__ = ""
 
-    def load_version(self, version: int) -> None:
+    def load_version(self, version: int) -> "DeltaTable":
         """
         Load a DeltaTable with a specified version.
 
@@ -387,8 +387,9 @@ class DeltaTable:
             version: the identifier of the version of the DeltaTable to load
         """
         self._table.load_version(version)
+        return self
 
-    def load_with_datetime(self, datetime_string: str) -> None:
+    def load_with_datetime(self, datetime_string: str) -> "DeltaTable":
         """
         Time travel Delta table to the latest version that's created at or before provided `datetime_string` argument.
         The `datetime_string` argument should be an RFC 3339 and ISO 8601 date and time string.
@@ -404,6 +405,7 @@ class DeltaTable:
         ```
         """
         self._table.load_with_datetime(datetime_string)
+        return self
 
     @property
     def table_uri(self) -> str:
