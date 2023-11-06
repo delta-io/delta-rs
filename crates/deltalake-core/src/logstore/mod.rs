@@ -14,7 +14,12 @@ use crate::{
 };
 use bytes::Bytes;
 use log::debug;
-use object_store::{path::Path, Error as ObjectStoreError, ObjectStore};
+use object_store::{
+    path::Path, Error as ObjectStoreError, ObjectStore, Result as ObjectStoreResult,
+};
+
+#[cfg(feature = "datafusion")]
+use datafusion::datasource::object_store::ObjectStoreUrl;
 
 pub mod default_logstore;
 
@@ -44,7 +49,7 @@ pub trait LogStore: Sync + Send {
     /// Write list of actions as delta commit entry for given version.
     ///
     /// This operation can be retried with a higher version in case the write
-    /// fails with `TransactionError::VersionAlreadyExists`.
+    /// fails with [`TransactionError::VersionAlreadyExists`].
     async fn write_commit_entry(
         &self,
         version: i64,
@@ -68,6 +73,43 @@ pub trait LogStore: Sync + Send {
     /// [Path] to Delta log
     fn log_path(&self) -> &Path {
         &DELTA_LOG_PATH
+    }
+
+    /// Check if the location is a delta table location
+    async fn is_delta_table_location(&self) -> ObjectStoreResult<bool> {
+        // TODO We should really be using HEAD here, but this fails in windows tests
+        let object_store = self.object_store();
+        let mut stream = object_store.list(Some(self.log_path())).await?;
+        if let Some(res) = stream.next().await {
+            match res {
+                Ok(_) => Ok(true),
+                Err(ObjectStoreError::NotFound { .. }) => Ok(false),
+                Err(err) => Err(err),
+            }
+        } else {
+            Ok(false)
+        }
+    }
+
+    #[cfg(feature = "datafusion")]
+    /// Generate a unique enough url to identify the store in datafusion.
+    /// The DF object store registry only cares about the scheme and the host of the url for
+    /// registering/fetching. In our case the scheme is hard-coded to "delta-rs", so to get a unique
+    /// host we convert the location from this `DeltaObjectStore` to a valid name, combining the
+    /// original scheme, host and path with invalid characters replaced.
+    fn object_store_url(&self) -> ObjectStoreUrl;
+
+    /// Deletes object by `paths`.
+    async fn delete_batch(&self, paths: &[Path]) -> ObjectStoreResult<()> {
+        let object_store = self.object_store();
+        for path in paths {
+            match object_store.delete(path).await {
+                Ok(_) => continue,
+                Err(ObjectStoreError::NotFound { .. }) => continue,
+                Err(e) => return Err(e),
+            }
+        }
+        Ok(())
     }
 }
 
@@ -111,6 +153,21 @@ fn to_uri(root: &Url, location: &Path) -> String {
     }
 }
 
+#[cfg(feature = "datafusion")]
+fn object_store_url(location: &Url) -> ObjectStoreUrl {
+    // we are certain, that the URL can be parsed, since
+    // we make sure when we are parsing the table uri
+
+    use object_store::path::DELIMITER;
+    ObjectStoreUrl::parse(format!(
+        "delta-rs://{}-{}{}",
+        location.scheme(),
+        location.host_str().unwrap_or("-"),
+        location.path().replace(DELIMITER, "-").replace(':', "-")
+    ))
+    .expect("Invalid object store url.")
+}
+
 /// Extract version from a file name in the delta log
 pub fn extract_version_from_filename(name: &str) -> Option<i64> {
     DELTA_LOG_REGEX
@@ -119,8 +176,7 @@ pub fn extract_version_from_filename(name: &str) -> Option<i64> {
 }
 
 async fn get_latest_version(log_store: &dyn LogStore, current_version: i64) -> DeltaResult<i64> {
-    let object_store = log_store.object_store();
-    let version_start = match get_last_checkpoint(&object_store).await {
+    let version_start = match get_last_checkpoint(log_store).await {
         Ok(last_check_point) => last_check_point.version,
         Err(ProtocolError::CheckpointNotFound) => {
             // no checkpoint
@@ -140,6 +196,8 @@ async fn get_latest_version(log_store: &dyn LogStore, current_version: i64) -> D
         let mut max_version: i64 = version_start;
         let prefix = Some(log_store.log_path());
         let offset_path = commit_uri_from_version(max_version);
+        // let log_store = log_store.clone();
+        let object_store = log_store.object_store();
         let mut files = object_store.list_with_offset(prefix, &offset_path).await?;
 
         while let Some(obj_meta) = files.next().await {
@@ -188,4 +246,30 @@ async fn write_commit_entry(
             }
         })?;
     Ok(())
+}
+
+#[cfg(feature = "datafusion")]
+#[cfg(test)]
+mod tests {
+    use url::Url;
+
+    #[tokio::test]
+    async fn test_unique_object_store_url() {
+        for (location_1, location_2) in [
+            // Same scheme, no host, different path
+            ("file:///path/to/table_1", "file:///path/to/table_2"),
+            // Different scheme/host, same path
+            ("s3://my_bucket/path/to/table_1", "file:///path/to/table_1"),
+            // Same scheme, different host, same path
+            ("s3://bucket_1/table_1", "s3://bucket_2/table_1"),
+        ] {
+            let url_1 = Url::parse(location_1).unwrap();
+            let url_2 = Url::parse(location_2).unwrap();
+
+            assert_ne!(
+                super::object_store_url(&url_1).as_str(),
+                super::object_store_url(&url_2).as_str(),
+            );
+        }
+    }
 }

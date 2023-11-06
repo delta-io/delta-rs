@@ -3,6 +3,8 @@
 use std::sync::Arc;
 
 use bytes::Bytes;
+#[cfg(feature = "datafusion")]
+use datafusion::execution::object_store::ObjectStoreUrl;
 use object_store::path::Path;
 use url::Url;
 
@@ -47,7 +49,7 @@ impl LogStore for DefaultLogStore {
         super::read_commit_entry(self.storage.as_ref(), version).await
     }
 
-    /// Tries to commit a prepared commit file. Returns [DeltaTableError::VersionAlreadyExists]
+    /// Tries to commit a prepared commit file. Returns [`TransactionError`]
     /// if the given `version` already exists. The caller should handle the retry logic itself.
     /// This is low-level transaction API. If user does not want to maintain the commit loop then
     /// the `DeltaTransaction.commit` is desired to be used as it handles `try_commit_transaction`
@@ -70,5 +72,10 @@ impl LogStore for DefaultLogStore {
 
     fn to_uri(&self, location: &Path) -> String {
         super::to_uri(&self.location, location)
+    }
+
+    #[cfg(feature = "datafusion")]
+    fn object_store_url(&self) -> ObjectStoreUrl {
+        super::object_store_url(&self.location)
     }
 }

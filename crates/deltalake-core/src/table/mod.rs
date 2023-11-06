@@ -377,8 +377,7 @@ impl DeltaTable {
     /// Return the list of paths of given checkpoint.
     pub fn get_checkpoint_data_paths(&self, check_point: &CheckPoint) -> Vec<Path> {
         let checkpoint_prefix = format!("{:020}", check_point.version);
-        let object_store = self.object_store();
-        let log_path = object_store.log_path();
+        let log_path = self.log_store.log_path();
         let mut checkpoint_data_paths = Vec::new();
 
         match check_point.parts {
@@ -414,7 +413,7 @@ impl DeltaTable {
 
         // Get file objects from table.
         let storage = self.object_store();
-        let mut stream = storage.list(Some(storage.log_path())).await?;
+        let mut stream = storage.list(Some(self.log_store.log_path())).await?;
         while let Some(obj_meta) = stream.next().await {
             let obj_meta = obj_meta?;
 
@@ -497,7 +496,7 @@ impl DeltaTable {
     /// loading the last checkpoint and incrementally applying each version since.
     #[cfg(any(feature = "parquet", feature = "parquet2"))]
     pub async fn update(&mut self) -> Result<(), DeltaTableError> {
-        match get_last_checkpoint(&self.object_store()).await {
+        match get_last_checkpoint(self.log_store.as_ref()).await {
             Ok(last_check_point) => {
                 debug!("update with latest checkpoint {last_check_point:?}");
                 if Some(last_check_point) == self.last_check_point {
@@ -595,7 +594,7 @@ impl DeltaTable {
 
         // 1. find latest checkpoint below version
         #[cfg(any(feature = "parquet", feature = "parquet2"))]
-        match find_latest_check_point_for_version(&self.object_store(), version).await? {
+        match find_latest_check_point_for_version(self.log_store.as_ref(), version).await? {
             Some(check_point) => {
                 self.restore_checkpoint(check_point).await?;
             }

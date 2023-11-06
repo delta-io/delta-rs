@@ -6,7 +6,7 @@ use std::ops::Range;
 use std::sync::Arc;
 
 use bytes::Bytes;
-use futures::{stream::BoxStream, StreamExt};
+use futures::stream::BoxStream;
 use lazy_static::lazy_static;
 use object_store::GetOptions;
 use serde::de::{Error, SeqAccess, Visitor};
@@ -24,9 +24,6 @@ pub mod utils;
 
 #[cfg(any(feature = "s3", feature = "s3-native-tls"))]
 pub mod s3;
-
-#[cfg(feature = "datafusion")]
-use datafusion::datasource::object_store::ObjectStoreUrl;
 
 pub use object_store::path::{Path, DELIMITER};
 pub use object_store::{
@@ -112,59 +109,6 @@ impl DeltaObjectStore {
 
     pub(crate) fn location(&self) -> Url {
         self.location.clone()
-    }
-
-    #[cfg(feature = "datafusion")]
-    /// Generate a unique enough url to identify the store in datafusion.
-    /// The DF object store registry only cares about the scheme and the host of the url for
-    /// registering/fetching. In our case the scheme is hard-coded to "delta-rs", so to get a unique
-    /// host we convert the location from this `DeltaObjectStore` to a valid name, combining the
-    /// original scheme, host and path with invalid characters replaced.
-    pub fn object_store_url(&self) -> ObjectStoreUrl {
-        // we are certain, that the URL can be parsed, since
-        // we make sure when we are parsing the table uri
-        ObjectStoreUrl::parse(format!(
-            "delta-rs://{}-{}{}",
-            self.location.scheme(),
-            self.location.host_str().unwrap_or("-"),
-            self.location
-                .path()
-                .replace(DELIMITER, "-")
-                .replace(':', "-")
-        ))
-        .expect("Invalid object store url.")
-    }
-
-    /// [Path] to Delta log
-    pub fn log_path(&self) -> &Path {
-        &DELTA_LOG_PATH
-    }
-
-    /// Deletes object by `paths`.
-    pub async fn delete_batch(&self, paths: &[Path]) -> ObjectStoreResult<()> {
-        for path in paths {
-            match self.delete(path).await {
-                Ok(_) => continue,
-                Err(ObjectStoreError::NotFound { .. }) => continue,
-                Err(e) => return Err(e),
-            }
-        }
-        Ok(())
-    }
-
-    /// Check if the location is a delta table location
-    pub async fn is_delta_table_location(&self) -> ObjectStoreResult<bool> {
-        // TODO We should really be using HEAD here, but this fails in windows tests
-        let mut stream = self.list(Some(self.log_path())).await?;
-        if let Some(res) = stream.next().await {
-            match res {
-                Ok(_) => Ok(true),
-                Err(ObjectStoreError::NotFound { .. }) => Ok(false),
-                Err(err) => Err(err),
-            }
-        } else {
-            Ok(false)
-        }
     }
 }
 
@@ -317,39 +261,5 @@ impl<'de> Deserialize<'de> for DeltaObjectStore {
         }
 
         deserializer.deserialize_seq(DeltaObjectStoreVisitor {})
-    }
-}
-
-#[cfg(feature = "datafusion")]
-#[cfg(test)]
-mod tests {
-    use crate::storage::DeltaObjectStore;
-    use object_store::memory::InMemory;
-    use std::sync::Arc;
-    use url::Url;
-
-    #[tokio::test]
-    async fn test_unique_object_store_url() {
-        // Just a dummy store to be passed for initialization
-        let inner_store = Arc::from(InMemory::new());
-
-        for (location_1, location_2) in [
-            // Same scheme, no host, different path
-            ("file:///path/to/table_1", "file:///path/to/table_2"),
-            // Different scheme/host, same path
-            ("s3://my_bucket/path/to/table_1", "file:///path/to/table_1"),
-            // Same scheme, different host, same path
-            ("s3://bucket_1/table_1", "s3://bucket_2/table_1"),
-        ] {
-            let url_1 = Url::parse(location_1).unwrap();
-            let url_2 = Url::parse(location_2).unwrap();
-            let store_1 = DeltaObjectStore::new(inner_store.clone(), url_1);
-            let store_2 = DeltaObjectStore::new(inner_store.clone(), url_2);
-
-            assert_ne!(
-                store_1.object_store_url().as_str(),
-                store_2.object_store_url().as_str(),
-            );
-        }
     }
 }

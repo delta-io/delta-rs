@@ -278,7 +278,7 @@ impl std::future::IntoFuture for DeleteBuilder {
                 let session = SessionContext::new();
 
                 // If a user provides their own their DF state then they must register the store themselves
-                register_store(this.log_store.object_store().clone(), session.runtime_env());
+                register_store(this.log_store.clone(), session.runtime_env());
 
                 session.state()
             });

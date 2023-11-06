@@ -232,10 +232,8 @@ pub(crate) fn configure_log_store(
     options: impl Into<StorageOptions> + Clone,
 ) -> DeltaResult<LogStoreRef> {
     let mut options = options.into();
-    let (scheme, _prefix) = ObjectStoreScheme::parse(&url, &mut options)?;
-    match scheme {
-        _ => Ok(Arc::new(DefaultLogStore::try_new(url, options)?)),
-    }
+    let (_scheme, _prefix) = ObjectStoreScheme::parse(&url, &mut options)?;
+    Ok(Arc::new(DefaultLogStore::try_new(url, options)?))
 }
 
 pub(crate) fn configure_store(

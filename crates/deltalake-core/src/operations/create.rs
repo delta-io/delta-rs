@@ -291,7 +291,8 @@ impl std::future::IntoFuture for CreateBuilder {
         Box::pin(async move {
             let mode = this.mode.clone();
             let (mut table, actions, operation) = this.into_table_and_actions()?;
-            let table_state = if table.object_store().is_delta_table_location().await? {
+            let log_store = table.log_store();
+            let table_state = if log_store.is_delta_table_location().await? {
                 match mode {
                     SaveMode::ErrorIfExists => return Err(CreateError::TableAlreadyExists.into()),
                     SaveMode::Append => return Err(CreateError::AppendNotAllowed.into()),

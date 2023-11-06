@@ -73,7 +73,6 @@ use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::{Add, DataType as DeltaDataType, Invariant, PrimitiveType};
 use crate::logstore::LogStoreRef;
 use crate::protocol::{self};
-use crate::storage::ObjectStoreRef;
 use crate::table::builder::ensure_table_uri;
 use crate::table::state::DeltaTableState;
 use crate::{open_table, open_table_with_storage_options, DeltaTable};
@@ -358,10 +357,10 @@ impl PruningStatistics for DeltaTable {
 
 // each delta table must register a specific object store, since paths are internally
 // handled relative to the table root.
-pub(crate) fn register_store(store: ObjectStoreRef, env: Arc<RuntimeEnv>) {
+pub(crate) fn register_store(store: LogStoreRef, env: Arc<RuntimeEnv>) {
     let object_store_url = store.object_store_url();
     let url: &Url = object_store_url.as_ref();
-    env.register_object_store(url, store);
+    env.register_object_store(url, store.object_store());
 }
 
 pub(crate) fn logical_schema(
@@ -633,7 +632,7 @@ impl<'a> DeltaScanBuilder<'a> {
             .create_physical_plan(
                 self.state,
                 FileScanConfig {
-                    object_store_url: self.log_store.object_store().object_store_url(),
+                    object_store_url: self.log_store.object_store_url(),
                     file_schema,
                     file_groups: file_groups.into_values().collect(),
                     statistics: self.snapshot.datafusion_table_statistics(),
@@ -685,7 +684,7 @@ impl TableProvider for DeltaTable {
         filters: &[Expr],
         limit: Option<usize>,
     ) -> DataFusionResult<Arc<dyn ExecutionPlan>> {
-        register_store(self.object_store(), session.runtime_env().clone());
+        register_store(self.log_store(), session.runtime_env().clone());
         let filter_expr = conjunction(filters.iter().cloned());
 
         let scan = DeltaScanBuilder::new(&self.state, self.log_store(), session)
@@ -763,7 +762,7 @@ impl TableProvider for DeltaTableProvider {
         filters: &[Expr],
         limit: Option<usize>,
     ) -> DataFusionResult<Arc<dyn ExecutionPlan>> {
-        register_store(self.log_store.object_store(), session.runtime_env().clone());
+        register_store(self.log_store.clone(), session.runtime_env().clone());
         let filter_expr = conjunction(filters.iter().cloned());
 
         let scan = DeltaScanBuilder::new(&self.snapshot, self.log_store.clone(), session)

@@ -211,8 +211,7 @@ impl WriteBuilder {
     }
 
     async fn check_preconditions(&self) -> DeltaResult<Vec<Action>> {
-        let object_store = self.log_store.object_store();
-        match object_store.is_delta_table_location().await? {
+        match self.log_store.is_delta_table_location().await? {
             true => {
                 let min_writer = self.snapshot.min_writer_version();
                 if min_writer > MAX_SUPPORTED_WRITER_VERSION {
