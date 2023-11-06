@@ -70,11 +70,12 @@ use serde::{Deserialize, Serialize};
 use url::Url;
 
 use crate::errors::{DeltaResult, DeltaTableError};
-use crate::protocol::{self, Add};
+use crate::kernel::{Add, DataType as DeltaDataType, Invariant, PrimitiveType};
+use crate::protocol::{self};
 use crate::storage::ObjectStoreRef;
 use crate::table::builder::ensure_table_uri;
 use crate::table::state::DeltaTableState;
-use crate::{open_table, open_table_with_storage_options, DeltaTable, Invariant, SchemaDataType};
+use crate::{open_table, open_table_with_storage_options, DeltaTable};
 
 const PATH_COLUMN: &str = "__delta_rs_path";
 
@@ -121,7 +122,7 @@ impl DeltaTableState {
                             min_value: None,
                             distinct_count: None
                         };
-                        self.schema().unwrap().get_fields().len()
+                        self.schema().unwrap().fields().len()
                     ]),
                     is_exact: true,
                 },
@@ -139,13 +140,13 @@ impl DeltaTableState {
                         column_statistics: acc.column_statistics.map(|col_stats| {
                             self.schema()
                                 .unwrap()
-                                .get_fields()
+                                .fields()
                                 .iter()
                                 .zip(col_stats)
                                 .map(|(field, stats)| {
                                     let null_count = new_stats
                                         .null_count
-                                        .get(field.get_name())
+                                        .get(field.name())
                                         .and_then(|x| {
                                             let null_count_acc = stats.null_count?;
                                             let null_count = x.as_value()? as usize;
@@ -155,7 +156,7 @@ impl DeltaTableState {
 
                                     let max_value = new_stats
                                         .max_values
-                                        .get(field.get_name())
+                                        .get(field.name())
                                         .and_then(|x| {
                                             let old_stats = stats.clone();
                                             let max_value = to_scalar_value(x.as_value()?);
@@ -179,7 +180,7 @@ impl DeltaTableState {
 
                                     let min_value = new_stats
                                         .min_values
-                                        .get(field.get_name())
+                                        .get(field.name())
                                         .and_then(|x| {
                                             let old_stats = stats.clone();
                                             let min_value = to_scalar_value(x.as_value()?);
@@ -222,7 +223,7 @@ impl DeltaTableState {
             num_rows: stats.num_rows,
             total_byte_size: stats.total_byte_size,
             column_statistics: stats.column_statistics.map(|col_stats| {
-                let fields = self.schema().unwrap().get_fields();
+                let fields = self.schema().unwrap().fields();
                 col_stats
                     .iter()
                     .zip(fields)
@@ -230,7 +231,7 @@ impl DeltaTableState {
                         let dt = self
                             .arrow_schema()
                             .unwrap()
-                            .field_with_name(field.get_name())
+                            .field_with_name(field.name())
                             .unwrap()
                             .data_type()
                             .clone();
@@ -258,16 +259,14 @@ fn get_prune_stats(table: &DeltaTable, column: &Column, get_max: bool) -> Option
     let field = table
         .get_schema()
         .ok()
-        .map(|s| s.get_field_with_name(&column.name).ok())??;
+        .map(|s| s.field_with_name(&column.name).ok())??;
 
     // See issue 1214. Binary type does not support natural order which is required for Datafusion to prune
-    if let SchemaDataType::primitive(t) = &field.get_type() {
-        if t == "binary" {
-            return None;
-        }
+    if let DeltaDataType::Primitive(PrimitiveType::Binary) = &field.data_type() {
+        return None;
     }
 
-    let data_type = field.get_type().try_into().ok()?;
+    let data_type = field.data_type().try_into().ok()?;
     let partition_columns = &table.get_metadata().ok()?.partition_columns;
 
     let values = table.get_state().files().iter().map(|add| {
@@ -586,8 +585,14 @@ impl<'a> DeltaScanBuilder<'a> {
         // However we may want to do some additional balancing in case we are far off from the above.
         let mut file_groups: HashMap<Vec<ScalarValue>, Vec<PartitionedFile>> = HashMap::new();
 
+        let table_partition_cols = &self
+            .snapshot
+            .current_metadata()
+            .ok_or(DeltaTableError::NoMetadata)?
+            .partition_columns;
+
         for action in files.iter() {
-            let mut part = partitioned_file_from_action(action, &schema);
+            let mut part = partitioned_file_from_action(action, table_partition_cols, &schema);
 
             if config.file_column_name.is_some() {
                 part.partition_values
@@ -601,13 +606,6 @@ impl<'a> DeltaScanBuilder<'a> {
                 .or_default()
                 .push(part);
         }
-
-        let table_partition_cols = self
-            .snapshot
-            .current_metadata()
-            .ok_or(DeltaTableError::NoMetadata)?
-            .partition_columns
-            .clone();
 
         let file_schema = Arc::new(ArrowSchema::new(
             schema
@@ -922,21 +920,31 @@ pub(crate) fn get_null_of_arrow_type(t: &ArrowDataType) -> DeltaResult<ScalarVal
 }
 
 pub(crate) fn partitioned_file_from_action(
-    action: &protocol::Add,
+    action: &Add,
+    partition_columns: &[String],
     schema: &ArrowSchema,
 ) -> PartitionedFile {
-    let partition_values = schema
-        .fields()
+    let partition_values = partition_columns
         .iter()
-        .filter_map(|f| {
-            action.partition_values.get(f.name()).map(|val| match val {
-                Some(value) => to_correct_scalar_value(
-                    &serde_json::Value::String(value.to_string()),
-                    f.data_type(),
-                )
-                .unwrap_or(ScalarValue::Null),
-                None => get_null_of_arrow_type(f.data_type()).unwrap_or(ScalarValue::Null),
-            })
+        .map(|part| {
+            action
+                .partition_values
+                .get(part)
+                .map(|val| {
+                    schema
+                        .field_with_name(part)
+                        .map(|field| match val {
+                            Some(value) => to_correct_scalar_value(
+                                &serde_json::Value::String(value.to_string()),
+                                field.data_type(),
+                            )
+                            .unwrap_or(ScalarValue::Null),
+                            None => get_null_of_arrow_type(field.data_type())
+                                .unwrap_or(ScalarValue::Null),
+                        })
+                        .unwrap_or(ScalarValue::Null)
+                })
+                .unwrap_or(ScalarValue::Null)
         })
         .collect::<Vec<_>>();
 
@@ -1618,6 +1626,7 @@ pub async fn find_files<'a>(
 
 #[cfg(test)]
 mod tests {
+    use crate::writer::test_utils::get_delta_schema;
     use arrow::array::StructArray;
     use arrow::datatypes::{DataType, Field, Schema};
     use chrono::{TimeZone, Utc};
@@ -1780,7 +1789,7 @@ mod tests {
         let mut partition_values = std::collections::HashMap::new();
         partition_values.insert("month".to_string(), Some("1".to_string()));
         partition_values.insert("year".to_string(), Some("2015".to_string()));
-        let action = protocol::Add {
+        let action = Add {
             path: "year=2015/month=1/part-00000-4dcb50d3-d017-450c-9df7-a7257dbd3c5d-c000.snappy.parquet".to_string(),
             size: 10644,
             partition_values,
@@ -1791,13 +1800,16 @@ mod tests {
             deletion_vector: None,
             stats_parsed: None,
             tags: None,
+            base_row_id: None,
+            default_row_commit_version: None,
         };
         let schema = ArrowSchema::new(vec![
             Field::new("year", ArrowDataType::Int64, true),
             Field::new("month", ArrowDataType::Int64, true),
         ]);
 
-        let file = partitioned_file_from_action(&action, &schema);
+        let part_columns = vec!["year".to_string(), "month".to_string()];
+        let file = partitioned_file_from_action(&action, &part_columns, &schema);
         let ref_file = PartitionedFile {
             object_meta: object_store::ObjectMeta {
                 location: Path::from("year=2015/month=1/part-00000-4dcb50d3-d017-450c-9df7-a7257dbd3c5d-c000.snappy.parquet".to_string()), 
@@ -1927,6 +1939,66 @@ mod tests {
                 "| 6  | 5  | b  | c1=5/c2=b/part-00007-4e73fa3b-2c88-424a-8051-f8b54328ffdb.c000.snappy.parquet |",
                 "+----+----+----+-------------------------------------------------------------------------------+",
             ];
+        assert_batches_sorted_eq!(&expected, &actual);
+    }
+
+    #[tokio::test]
+    async fn delta_scan_mixed_partition_order() {
+        // Tests issue (1787) where partition columns were incorrect when they
+        // have a different order in the metadata and table schema
+        let schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("modified", DataType::Utf8, true),
+            Field::new("id", DataType::Utf8, true),
+            Field::new("value", DataType::Int32, true),
+        ]));
+
+        let table = crate::DeltaOps::new_in_memory()
+            .create()
+            .with_columns(get_delta_schema().fields().clone())
+            .with_partition_columns(["modified", "id"])
+            .await
+            .unwrap();
+        assert_eq!(table.version(), 0);
+
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(arrow::array::StringArray::from(vec![
+                    "2021-02-01",
+                    "2021-02-01",
+                    "2021-02-02",
+                    "2021-02-02",
+                ])),
+                Arc::new(arrow::array::StringArray::from(vec!["A", "B", "C", "D"])),
+                Arc::new(arrow::array::Int32Array::from(vec![1, 10, 20, 100])),
+            ],
+        )
+        .unwrap();
+        // write some data
+        let table = crate::DeltaOps(table)
+            .write(vec![batch.clone()])
+            .with_save_mode(crate::protocol::SaveMode::Append)
+            .await
+            .unwrap();
+
+        let config = DeltaScanConfigBuilder::new().build(&table.state).unwrap();
+
+        let provider = DeltaTableProvider::try_new(table.state, table.storage, config).unwrap();
+        let ctx = SessionContext::new();
+        ctx.register_table("test", Arc::new(provider)).unwrap();
+
+        let df = ctx.sql("select * from test").await.unwrap();
+        let actual = df.collect().await.unwrap();
+        let expected = vec![
+            "+-------+------------+----+",
+            "| value | modified   | id |",
+            "+-------+------------+----+",
+            "| 1     | 2021-02-01 | A  |",
+            "| 10    | 2021-02-01 | B  |",
+            "| 100   | 2021-02-02 | D  |",
+            "| 20    | 2021-02-02 | C  |",
+            "+-------+------------+----+",
+        ];
         assert_batches_sorted_eq!(&expected, &actual);
     }
 }

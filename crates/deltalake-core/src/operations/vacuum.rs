@@ -21,7 +21,7 @@
 //! let (table, metrics) = VacuumBuilder::new(table.object_store(). table.state).await?;
 //! ````
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
 use std::sync::Arc;
 
@@ -31,12 +31,13 @@ use futures::{StreamExt, TryStreamExt};
 use object_store::Error;
 use object_store::{path::Path, ObjectStore};
 use serde::Serialize;
-use serde_json::{Map, Value};
+use serde_json::Value;
 
 use super::transaction::commit;
 use crate::crate_version;
 use crate::errors::{DeltaResult, DeltaTableError};
-use crate::protocol::{Action, DeltaOperation}; // Txn CommitInfo
+use crate::kernel::Action;
+use crate::protocol::DeltaOperation;
 use crate::storage::DeltaObjectStore;
 use crate::table::state::DeltaTableState;
 use crate::DeltaTable;
@@ -288,7 +289,7 @@ impl VacuumPlan {
 
         // Begin VACUUM START COMMIT
         let mut commit_info = start_operation.get_commit_info();
-        let mut extra_info = Map::<String, Value>::new();
+        let mut extra_info = HashMap::<String, Value>::new();
 
         commit_info.timestamp = Some(Utc::now().timestamp_millis());
         extra_info.insert(
@@ -300,7 +301,7 @@ impl VacuumPlan {
         }
         commit_info.info = extra_info;
 
-        let start_actions = vec![Action::commitInfo(commit_info)];
+        let start_actions = vec![Action::CommitInfo(commit_info)];
 
         commit(store, &start_actions, start_operation, snapshot, None).await?;
         // Finish VACUUM START COMMIT
@@ -327,7 +328,7 @@ impl VacuumPlan {
 
         // Begin VACUUM END COMMIT
         let mut commit_info = end_operation.get_commit_info();
-        let mut extra_info = Map::<String, Value>::new();
+        let mut extra_info = HashMap::<String, Value>::new();
 
         commit_info.timestamp = Some(Utc::now().timestamp_millis());
         extra_info.insert(
@@ -339,7 +340,7 @@ impl VacuumPlan {
         }
         commit_info.info = extra_info;
 
-        let end_actions = vec![Action::commitInfo(commit_info)];
+        let end_actions = vec![Action::CommitInfo(commit_info)];
 
         commit(store, &end_actions, end_operation, snapshot, None).await?;
         // Finish VACUUM END COMMIT

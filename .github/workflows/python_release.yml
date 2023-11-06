@@ -114,6 +114,10 @@ jobs:
           target: aarch64-unknown-linux-gnu
           command: publish
           args: --skip-existing -m python/Cargo.toml --no-sdist ${{ env.FEATURES_FLAG }}
+          before-script-linux: |
+            # We can remove this once we upgrade to 2_28.
+            # https://github.com/briansmith/ring/issues/1728
+            export CFLAGS_aarch64_unknown_linux_gnu="-D__ARM_ARCH=8"
 
   release-docs:
     needs:

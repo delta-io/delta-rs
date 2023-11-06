@@ -9,7 +9,7 @@ use super::dictionary;
 use super::dictionary::binary::BinaryPageDict;
 use super::validity::{ValidityRepeatedRowIndexIter, ValidityRowIndexIter};
 use super::{split_page, split_page_nested, ActionVariant, ParseError};
-use crate::protocol::Action;
+use crate::kernel::Action;
 
 pub trait StringValueIter<'a>: Iterator<Item = Result<String, ParseError>> {
     fn try_from_encoded_values(

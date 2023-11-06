@@ -37,12 +37,12 @@ use parquet::basic::{Compression, ZstdLevel};
 use parquet::errors::ParquetError;
 use parquet::file::properties::WriterProperties;
 use serde::{Deserialize, Serialize};
-use serde_json::Map;
 
 use super::transaction::commit;
 use super::writer::{PartitionWriter, PartitionWriterConfig};
 use crate::errors::{DeltaResult, DeltaTableError};
-use crate::protocol::{self, Action, DeltaOperation};
+use crate::kernel::{Action, Remove};
+use crate::protocol::DeltaOperation;
 use crate::storage::ObjectStoreRef;
 use crate::table::state::DeltaTableState;
 use crate::writer::utils::arrow_schema_without_partitions;
@@ -311,7 +311,7 @@ fn create_remove(
     let deletion_time = SystemTime::now().duration_since(UNIX_EPOCH).unwrap();
     let deletion_time = deletion_time.as_millis() as i64;
 
-    Ok(Action::remove(protocol::Remove {
+    Ok(Action::Remove(Remove {
         path: path.to_string(),
         deletion_timestamp: Some(deletion_time),
         data_change: false,
@@ -320,6 +320,8 @@ fn create_remove(
         size: Some(size),
         deletion_vector: None,
         tags: None,
+        base_row_id: None,
+        default_row_commit_version: None,
     }))
 }
 
@@ -450,7 +452,7 @@ impl MergePlan {
             partial_metrics.files_added.max = std::cmp::max(partial_metrics.files_added.max, size);
             partial_metrics.files_added.min = std::cmp::min(partial_metrics.files_added.min, size);
 
-            Action::add(add)
+            Action::Add(add)
         });
         partial_actions.extend(add_actions);
 
@@ -703,7 +705,7 @@ impl MergePlan {
                 last_commit = now;
 
                 buffered_metrics.preserve_insertion_order = true;
-                let mut metadata = Map::new();
+                let mut metadata = HashMap::new();
                 metadata.insert("readVersion".to_owned(), self.read_table_version.into());
                 let maybe_map_metrics = serde_json::to_value(std::mem::replace(
                     &mut buffered_metrics,
@@ -791,12 +793,14 @@ pub fn create_merge_plan(
 
     let input_parameters = OptimizeInput { target_size };
     let file_schema = arrow_schema_without_partitions(
-        &Arc::new(<ArrowSchema as TryFrom<&crate::schema::Schema>>::try_from(
-            &snapshot
-                .current_metadata()
-                .ok_or(DeltaTableError::NoMetadata)?
-                .schema,
-        )?),
+        &Arc::new(
+            <ArrowSchema as TryFrom<&crate::kernel::StructType>>::try_from(
+                &snapshot
+                    .current_metadata()
+                    .ok_or(DeltaTableError::NoMetadata)?
+                    .schema,
+            )?,
+        ),
         partitions_keys,
     );
 
@@ -943,9 +947,9 @@ fn build_zorder_plan(
         .current_metadata()
         .unwrap()
         .schema
-        .get_fields()
+        .fields()
         .iter()
-        .map(|field| field.get_name().to_string())
+        .map(|field| field.name().to_string())
         .collect_vec();
     let unknown_columns = zorder_columns
         .iter()
@@ -1432,7 +1436,6 @@ pub(super) mod zorder {
             assert_eq!(result.null_count(), 0);
 
             let data: &BinaryArray = as_generic_binary_array(result.as_ref());
-            dbg!(data);
             assert_eq!(data.value_data().len(), 3 * 16 * 3);
             assert!(data.iter().all(|x| x.unwrap().len() == 3 * 16));
         }

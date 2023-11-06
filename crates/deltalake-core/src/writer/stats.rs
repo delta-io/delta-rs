@@ -11,7 +11,8 @@ use parquet::{
 };
 
 use super::*;
-use crate::protocol::{Add, ColumnValueStat, Stats};
+use crate::kernel::Add;
+use crate::protocol::{ColumnValueStat, Stats};
 
 /// Creates an [`Add`] log action struct.
 pub fn create_add(
@@ -32,13 +33,15 @@ pub fn create_add(
         path,
         size,
         partition_values: partition_values.to_owned(),
-        partition_values_parsed: None,
         modification_time,
         data_change: true,
         stats: Some(stats_string),
-        stats_parsed: None,
         tags: None,
         deletion_vector: None,
+        base_row_id: None,
+        default_row_commit_version: None,
+        stats_parsed: None,
+        partition_values_parsed: None,
     })
 }
 

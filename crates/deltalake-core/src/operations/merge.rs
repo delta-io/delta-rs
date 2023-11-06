@@ -61,21 +61,19 @@ use datafusion_physical_expr::{create_physical_expr, expressions, PhysicalExpr};
 use futures::future::BoxFuture;
 use parquet::file::properties::WriterProperties;
 use serde::Serialize;
-use serde_json::{Map, Value};
+use serde_json::Value;
 
 use super::datafusion_utils::{into_expr, maybe_into_expr, Expression};
 use super::transaction::commit;
 use crate::delta_datafusion::expr::{fmt_expr_to_sql, parse_predicate_expression};
 use crate::delta_datafusion::{register_store, DeltaScanBuilder};
+use crate::kernel::{Action, Remove};
 use crate::operations::datafusion_utils::MetricObserverExec;
-use crate::{
-    operations::write::write_execution_plan,
-    storage::{DeltaObjectStore, ObjectStoreRef},
-    DeltaResult, DeltaTable, DeltaTableError,
-};
-
-use crate::protocol::{Action, DeltaOperation, MergePredicate, Remove};
+use crate::operations::write::write_execution_plan;
+use crate::protocol::{DeltaOperation, MergePredicate};
+use crate::storage::{DeltaObjectStore, ObjectStoreRef};
 use crate::table::state::DeltaTableState;
+use crate::{DeltaResult, DeltaTable, DeltaTableError};
 
 const OPERATION_COLUMN: &str = "__delta_rs_operation";
 const DELETE_COLUMN: &str = "__delta_rs_delete";
@@ -115,7 +113,7 @@ pub struct MergeBuilder {
     /// Properties passed to underlying parquet writer for when files are rewritten
     writer_properties: Option<WriterProperties>,
     /// Additional metadata to be added to commit
-    app_metadata: Option<Map<String, serde_json::Value>>,
+    app_metadata: Option<HashMap<String, serde_json::Value>>,
     /// safe_cast determines how data types that do not match the underlying table are handled
     /// By default an error is returned
     safe_cast: bool,
@@ -343,7 +341,7 @@ impl MergeBuilder {
         mut self,
         metadata: impl IntoIterator<Item = (String, serde_json::Value)>,
     ) -> Self {
-        self.app_metadata = Some(Map::from_iter(metadata));
+        self.app_metadata = Some(HashMap::from_iter(metadata));
         self
     }
 
@@ -567,7 +565,7 @@ async fn execute(
     snapshot: &DeltaTableState,
     state: SessionState,
     writer_properties: Option<WriterProperties>,
-    app_metadata: Option<Map<String, Value>>,
+    app_metadata: Option<HashMap<String, Value>>,
     safe_cast: bool,
     source_alias: Option<String>,
     target_alias: Option<String>,
@@ -843,7 +841,7 @@ async fn execute(
     let mut projection_map = HashMap::new();
     let mut f = project_schema_df.fields().clone();
 
-    for delta_field in snapshot.schema().unwrap().get_fields() {
+    for delta_field in snapshot.schema().unwrap().fields() {
         let mut when_expr = Vec::with_capacity(operations_size);
         let mut then_expr = Vec::with_capacity(operations_size);
 
@@ -853,7 +851,7 @@ async fn execute(
             }),
             None => TableReference::none(),
         };
-        let name = delta_field.get_name();
+        let name = delta_field.name();
         let column = Column::new(qualifier.clone(), name);
         let field = project_schema_df.field_with_name(qualifier.as_ref(), name)?;
 
@@ -882,8 +880,8 @@ async fn execute(
             state.execution_props(),
         )?;
 
-        projection_map.insert(delta_field.get_name(), expressions.len());
-        let name = "__delta_rs_c_".to_owned() + delta_field.get_name();
+        projection_map.insert(delta_field.name(), expressions.len());
+        let name = "__delta_rs_c_".to_owned() + delta_field.name();
 
         f.push(DFField::new_unqualified(
             &name,
@@ -1143,12 +1141,12 @@ async fn execute(
         .unwrap()
         .as_millis() as i64;
 
-    let mut actions: Vec<Action> = add_actions.into_iter().map(Action::add).collect();
+    let mut actions: Vec<Action> = add_actions.into_iter().map(Action::Add).collect();
     metrics.num_target_files_added = actions.len();
 
     for action in snapshot.files() {
         metrics.num_target_files_removed += 1;
-        actions.push(Action::remove(Remove {
+        actions.push(Action::Remove(Remove {
             path: action.path.clone(),
             deletion_timestamp: Some(deletion_timestamp),
             data_change: true,
@@ -1157,6 +1155,8 @@ async fn execute(
             deletion_vector: action.deletion_vector.clone(),
             size: Some(action.size),
             tags: None,
+            base_row_id: action.base_row_id,
+            default_row_commit_version: action.default_row_commit_version,
         }))
     }
 
@@ -1270,7 +1270,7 @@ mod tests {
 
         let table = DeltaOps::new_in_memory()
             .create()
-            .with_columns(table_schema.get_fields().clone())
+            .with_columns(table_schema.fields().clone())
             .with_partition_columns(partitions.unwrap_or_default())
             .await
             .unwrap();

@@ -338,14 +338,13 @@ impl<'a> fmt::Display for ScalarValueFormat<'a> {
 
 #[cfg(test)]
 mod test {
-    use std::collections::HashMap;
-
-    use arrow_schema::DataType;
+    use arrow_schema::DataType as ArrowDataType;
     use datafusion::prelude::SessionContext;
     use datafusion_common::{DFSchema, ScalarValue};
     use datafusion_expr::{col, decode, lit, substring, Cast, Expr, ExprSchemable};
 
-    use crate::{DeltaOps, DeltaTable, Schema, SchemaDataType, SchemaField};
+    use crate::kernel::{DataType, PrimitiveType, StructField, StructType};
+    use crate::{DeltaOps, DeltaTable};
 
     use super::fmt_expr_to_sql;
 
@@ -366,66 +365,57 @@ mod test {
     }
 
     async fn setup_table() -> DeltaTable {
-        let schema = Schema::new(vec![
-            SchemaField::new(
+        let schema = StructType::new(vec![
+            StructField::new(
                 "id".to_string(),
-                SchemaDataType::primitive("string".to_string()),
+                DataType::Primitive(PrimitiveType::String),
                 true,
-                HashMap::new(),
             ),
-            SchemaField::new(
+            StructField::new(
                 "value".to_string(),
-                SchemaDataType::primitive("integer".to_string()),
+                DataType::Primitive(PrimitiveType::Integer),
                 true,
-                HashMap::new(),
             ),
-            SchemaField::new(
+            StructField::new(
                 "value2".to_string(),
-                SchemaDataType::primitive("integer".to_string()),
+                DataType::Primitive(PrimitiveType::Integer),
                 true,
-                HashMap::new(),
             ),
-            SchemaField::new(
+            StructField::new(
                 "modified".to_string(),
-                SchemaDataType::primitive("string".to_string()),
+                DataType::Primitive(PrimitiveType::String),
                 true,
-                HashMap::new(),
             ),
-            SchemaField::new(
+            StructField::new(
                 "active".to_string(),
-                SchemaDataType::primitive("boolean".to_string()),
+                DataType::Primitive(PrimitiveType::Boolean),
                 true,
-                HashMap::new(),
             ),
-            SchemaField::new(
+            StructField::new(
                 "money".to_string(),
-                SchemaDataType::primitive("decimal(12,2)".to_string()),
+                DataType::Primitive(PrimitiveType::Decimal(12, 2)),
                 true,
-                HashMap::new(),
             ),
-            SchemaField::new(
+            StructField::new(
                 "_date".to_string(),
-                SchemaDataType::primitive("date".to_string()),
+                DataType::Primitive(PrimitiveType::Date),
                 true,
-                HashMap::new(),
             ),
-            SchemaField::new(
+            StructField::new(
                 "_timestamp".to_string(),
-                SchemaDataType::primitive("timestamp".to_string()),
+                DataType::Primitive(PrimitiveType::Timestamp),
                 true,
-                HashMap::new(),
             ),
-            SchemaField::new(
+            StructField::new(
                 "_binary".to_string(),
-                SchemaDataType::primitive("binary".to_string()),
+                DataType::Primitive(PrimitiveType::Binary),
                 true,
-                HashMap::new(),
             ),
         ]);
 
         let table = DeltaOps::new_in_memory()
             .create()
-            .with_columns(schema.get_fields().clone())
+            .with_columns(schema.fields().clone())
             .await
             .unwrap();
         assert_eq!(table.version(), 0);
@@ -441,7 +431,7 @@ mod test {
             simple!(
                 Expr::Cast(Cast {
                     expr: Box::new(lit(1_i64)),
-                    data_type: DataType::Int32
+                    data_type: ArrowDataType::Int32
                 }),
                 "arrow_cast(1, 'Int32')".to_string()
             ),

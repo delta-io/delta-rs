@@ -1,10 +1,11 @@
 #![cfg(feature = "integration_test")]
 
+use deltalake_core::kernel::{Action, Add, DataType, PrimitiveType, StructField, StructType};
 use deltalake_core::operations::transaction::commit;
 use deltalake_core::operations::DeltaOps;
-use deltalake_core::protocol::{Action, Add, DeltaOperation, SaveMode};
+use deltalake_core::protocol::{DeltaOperation, SaveMode};
 use deltalake_core::test_utils::{IntegrationContext, StorageIntegration, TestResult, TestTables};
-use deltalake_core::{DeltaTable, DeltaTableBuilder, Schema, SchemaDataType, SchemaField};
+use deltalake_core::{DeltaTable, DeltaTableBuilder};
 use std::collections::HashMap;
 use std::future::Future;
 use std::iter::FromIterator;
@@ -49,11 +50,10 @@ async fn test_concurrent_writes(integration: StorageIntegration) -> TestResult {
 async fn prepare_table(
     context: &IntegrationContext,
 ) -> Result<(DeltaTable, String), Box<dyn std::error::Error + 'static>> {
-    let schema = Schema::new(vec![SchemaField::new(
+    let schema = StructType::new(vec![StructField::new(
         "Id".to_string(),
-        SchemaDataType::primitive("integer".to_string()),
+        DataType::Primitive(PrimitiveType::Integer),
         true,
-        HashMap::new(),
     )]);
 
     let table_uri = context.uri_for_table(TestTables::Custom("concurrent_workers".into()));
@@ -64,7 +64,7 @@ async fn prepare_table(
 
     let table = DeltaOps(table)
         .create()
-        .with_columns(schema.get_fields().clone())
+        .with_columns(schema.fields().clone())
         .await?;
 
     assert_eq!(0, table.version());
@@ -153,7 +153,7 @@ impl Worker {
             partition_by: None,
             predicate: None,
         };
-        let actions = vec![Action::add(Add {
+        let actions = vec![Action::Add(Add {
             path: format!("{}.parquet", name),
             size: 396,
             partition_values: HashMap::new(),
@@ -164,6 +164,8 @@ impl Worker {
             stats_parsed: None,
             tags: None,
             deletion_vector: None,
+            base_row_id: None,
+            default_row_commit_version: None,
         })];
         let version = commit(
             self.table.object_store().as_ref(),
