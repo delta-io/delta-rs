@@ -6,12 +6,10 @@ use num_traits::cast::ToPrimitive;
 use parquet::record::{Field, ListAccessor, MapAccessor, RowAccessor};
 use serde_json::json;
 
-use crate::protocol::{
-    Action, Add, AddCDCFile, ColumnCountStat, ColumnValueStat, DeletionVector, MetaData, Protocol,
-    ProtocolError, Remove, Stats, Txn,
+use crate::kernel::{
+    Action, Add, AddCDCFile, DeletionVectorDescriptor, Metadata, Protocol, Remove, StorageType, Txn,
 };
-
-use super::StorageType;
+use crate::protocol::{ColumnCountStat, ColumnValueStat, ProtocolError, Stats};
 
 fn populate_hashmap_with_option_from_parquet_map(
     map: &mut HashMap<String, Option<String>>,
@@ -46,10 +44,14 @@ impl AddCDCFile {
     }
 }
 
-impl DeletionVector {
+impl DeletionVectorDescriptor {
     fn from_parquet_record(record: &parquet::record::Row) -> Result<Self, ProtocolError> {
         let mut re = Self {
-            ..Default::default()
+            cardinality: -1,
+            offset: None,
+            path_or_inline_dv: "".to_string(),
+            size_in_bytes: -1,
+            storage_type: StorageType::default(),
         };
         for (i, (name, _)) in record.get_column_iter().enumerate() {
             match name.as_str() {
@@ -99,7 +101,18 @@ impl DeletionVector {
 impl Add {
     fn from_parquet_record(record: &parquet::record::Row) -> Result<Self, ProtocolError> {
         let mut re = Self {
-            ..Default::default()
+            path: "".to_string(),
+            size: -1,
+            modification_time: -1,
+            data_change: true,
+            partition_values_parsed: None,
+            partition_values: HashMap::new(),
+            stats: None,
+            stats_parsed: None,
+            deletion_vector: None,
+            base_row_id: None,
+            default_row_commit_version: None,
+            tags: None,
         };
 
         for (i, (name, _)) in record.get_column_iter().enumerate() {
@@ -182,7 +195,8 @@ impl Add {
                 },
                 "deletionVector" => match record.get_group(i) {
                     Ok(row) => {
-                        re.deletion_vector = Some(DeletionVector::from_parquet_record(row)?);
+                        re.deletion_vector =
+                            Some(DeletionVectorDescriptor::from_parquet_record(row)?);
                     }
                     _ => {
                         re.deletion_vector = None;
@@ -364,10 +378,17 @@ fn convert_date_to_string(value: i32) -> Result<String, &'static str> {
     Ok(format!("{}", dt.format("%Y-%m-%d")))
 }
 
-impl MetaData {
+impl Metadata {
     fn from_parquet_record(record: &parquet::record::Row) -> Result<Self, ProtocolError> {
         let mut re = Self {
-            ..Default::default()
+            id: "".to_string(),
+            name: None,
+            description: None,
+            partition_columns: vec![],
+            schema_string: "".to_string(),
+            created_time: None,
+            configuration: HashMap::new(),
+            format: Default::default(),
         };
 
         for (i, (name, _)) in record.get_column_iter().enumerate() {
@@ -480,7 +501,14 @@ impl Remove {
         let mut re = Self {
             data_change: true,
             extended_file_metadata: Some(false),
-            ..Default::default()
+            deletion_timestamp: None,
+            deletion_vector: None,
+            partition_values: None,
+            path: "".to_string(),
+            size: None,
+            tags: None,
+            base_row_id: None,
+            default_row_commit_version: None,
         };
 
         for (i, (name, _)) in record.get_column_iter().enumerate() {
@@ -595,7 +623,10 @@ impl Txn {
 impl Protocol {
     fn from_parquet_record(record: &parquet::record::Row) -> Result<Self, ProtocolError> {
         let mut re = Self {
-            ..Default::default()
+            min_reader_version: -1,
+            min_writer_version: -1,
+            reader_features: None,
+            writer_features: None,
         };
 
         for (i, (name, _)) in record.get_column_iter().enumerate() {
@@ -673,12 +704,12 @@ impl Action {
         let field = &fields[col_idx];
 
         Ok(match field.get_basic_info().name() {
-            "add" => Action::add(Add::from_parquet_record(col_data)?),
-            "metaData" => Action::metaData(MetaData::from_parquet_record(col_data)?),
-            "remove" => Action::remove(Remove::from_parquet_record(col_data)?),
-            "txn" => Action::txn(Txn::from_parquet_record(col_data)?),
-            "protocol" => Action::protocol(Protocol::from_parquet_record(col_data)?),
-            "cdc" => Action::cdc(AddCDCFile::from_parquet_record(col_data)?),
+            "add" => Action::Add(Add::from_parquet_record(col_data)?),
+            "metaData" => Action::Metadata(Metadata::from_parquet_record(col_data)?),
+            "remove" => Action::Remove(Remove::from_parquet_record(col_data)?),
+            "txn" => Action::Txn(Txn::from_parquet_record(col_data)?),
+            "protocol" => Action::Protocol(Protocol::from_parquet_record(col_data)?),
+            "cdc" => Action::Cdc(AddCDCFile::from_parquet_record(col_data)?),
             name => {
                 return Err(ProtocolError::InvalidField(format!(
                     "Unexpected action from checkpoint: {name}",

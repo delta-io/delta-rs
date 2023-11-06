@@ -10,8 +10,8 @@ use serde_json::{Map, Value};
 use super::transaction::commit;
 use super::{MAX_SUPPORTED_READER_VERSION, MAX_SUPPORTED_WRITER_VERSION};
 use crate::errors::{DeltaResult, DeltaTableError};
-use crate::protocol::{Action, DeltaOperation, MetaData, Protocol, SaveMode};
-use crate::schema::{SchemaDataType, SchemaField, SchemaTypeStruct};
+use crate::kernel::{Action, DataType, Metadata, Protocol, StructField, StructType};
+use crate::protocol::{DeltaOperation, SaveMode};
 use crate::storage::DeltaObjectStore;
 use crate::table::builder::ensure_table_uri;
 use crate::table::config::DeltaConfigKey;
@@ -51,7 +51,7 @@ pub struct CreateBuilder {
     location: Option<String>,
     mode: SaveMode,
     comment: Option<String>,
-    columns: Vec<SchemaField>,
+    columns: Vec<StructField>,
     partition_columns: Option<Vec<String>>,
     storage_options: Option<HashMap<String, String>>,
     actions: Vec<Action>,
@@ -114,23 +114,22 @@ impl CreateBuilder {
     pub fn with_column(
         mut self,
         name: impl Into<String>,
-        data_type: SchemaDataType,
+        data_type: DataType,
         nullable: bool,
         metadata: Option<HashMap<String, Value>>,
     ) -> Self {
-        self.columns.push(SchemaField::new(
-            name.into(),
-            data_type,
-            nullable,
-            metadata.unwrap_or_default(),
-        ));
+        let mut field = StructField::new(name.into(), data_type, nullable);
+        if let Some(meta) = metadata {
+            field = field.with_metadata(meta);
+        };
+        self.columns.push(field);
         self
     }
 
     /// Specify columns to append to schema
     pub fn with_columns(
         mut self,
-        columns: impl IntoIterator<Item = impl Into<SchemaField>>,
+        columns: impl IntoIterator<Item = impl Into<StructField>>,
     ) -> Self {
         self.columns.extend(columns.into_iter().map(|c| c.into()));
         self
@@ -212,7 +211,7 @@ impl CreateBuilder {
         if self
             .actions
             .iter()
-            .any(|a| matches!(a, Action::metaData(_)))
+            .any(|a| matches!(a, Action::Metadata(_)))
         {
             return Err(CreateError::MetadataSpecified.into());
         }
@@ -242,9 +241,9 @@ impl CreateBuilder {
         let protocol = self
             .actions
             .iter()
-            .find(|a| matches!(a, Action::protocol(_)))
+            .find(|a| matches!(a, Action::Protocol(_)))
             .map(|a| match a {
-                Action::protocol(p) => p.clone(),
+                Action::Protocol(p) => p.clone(),
                 _ => unreachable!(),
             })
             .unwrap_or_else(|| Protocol {
@@ -258,7 +257,7 @@ impl CreateBuilder {
             self.name,
             self.comment,
             None,
-            SchemaTypeStruct::new(self.columns),
+            StructType::new(self.columns),
             self.partition_columns.unwrap_or_default(),
             self.configuration,
         );
@@ -271,13 +270,13 @@ impl CreateBuilder {
         };
 
         let mut actions = vec![
-            Action::protocol(protocol),
-            Action::metaData(MetaData::try_from(metadata)?),
+            Action::Protocol(protocol),
+            Action::Metadata(Metadata::try_from(metadata)?),
         ];
         actions.extend(
             self.actions
                 .into_iter()
-                .filter(|a| !matches!(a, Action::protocol(_))),
+                .filter(|a| !matches!(a, Action::Protocol(_))),
         );
 
         Ok((table, actions, operation))
@@ -340,7 +339,7 @@ mod tests {
 
         let table = DeltaOps::new_in_memory()
             .create()
-            .with_columns(table_schema.get_fields().clone())
+            .with_columns(table_schema.fields().clone())
             .with_save_mode(SaveMode::Ignore)
             .await
             .unwrap();
@@ -360,7 +359,7 @@ mod tests {
             .await
             .unwrap()
             .create()
-            .with_columns(table_schema.get_fields().clone())
+            .with_columns(table_schema.fields().clone())
             .with_save_mode(SaveMode::Ignore)
             .await
             .unwrap();
@@ -378,7 +377,7 @@ mod tests {
         );
         let table = CreateBuilder::new()
             .with_location(format!("./{relative_path}"))
-            .with_columns(schema.get_fields().clone())
+            .with_columns(schema.fields().clone())
             .await
             .unwrap();
         assert_eq!(table.version(), 0);
@@ -389,7 +388,7 @@ mod tests {
         let schema = get_delta_schema();
         let table = CreateBuilder::new()
             .with_location("memory://")
-            .with_columns(schema.get_fields().clone())
+            .with_columns(schema.fields().clone())
             .await
             .unwrap();
         assert_eq!(table.version(), 0);
@@ -406,8 +405,8 @@ mod tests {
         };
         let table = CreateBuilder::new()
             .with_location("memory://")
-            .with_columns(schema.get_fields().clone())
-            .with_actions(vec![Action::protocol(protocol)])
+            .with_columns(schema.fields().clone())
+            .with_actions(vec![Action::Protocol(protocol)])
             .await
             .unwrap();
         assert_eq!(table.get_min_reader_version(), 0);
@@ -415,7 +414,7 @@ mod tests {
 
         let table = CreateBuilder::new()
             .with_location("memory://")
-            .with_columns(schema.get_fields().clone())
+            .with_columns(schema.fields().clone())
             .with_configuration_property(DeltaConfigKey::AppendOnly, Some("true"))
             .await
             .unwrap();
@@ -438,7 +437,7 @@ mod tests {
         let schema = get_delta_schema();
         let table = CreateBuilder::new()
             .with_location(tmp_dir.path().to_str().unwrap())
-            .with_columns(schema.get_fields().clone())
+            .with_columns(schema.fields().clone())
             .await
             .unwrap();
         assert_eq!(table.version(), 0);
@@ -449,7 +448,7 @@ mod tests {
         // Check an error is raised when a table exists at location
         let table = CreateBuilder::new()
             .with_object_store(object_store.clone())
-            .with_columns(schema.get_fields().clone())
+            .with_columns(schema.fields().clone())
             .with_save_mode(SaveMode::ErrorIfExists)
             .await;
         assert!(table.is_err());
@@ -457,7 +456,7 @@ mod tests {
         // Check current table is returned when ignore option is chosen.
         let table = CreateBuilder::new()
             .with_object_store(object_store.clone())
-            .with_columns(schema.get_fields().clone())
+            .with_columns(schema.fields().clone())
             .with_save_mode(SaveMode::Ignore)
             .await
             .unwrap();
@@ -466,7 +465,7 @@ mod tests {
         // Check table is overwritten
         let table = CreateBuilder::new()
             .with_object_store(object_store.clone())
-            .with_columns(schema.get_fields().clone())
+            .with_columns(schema.fields().iter().cloned())
             .with_save_mode(SaveMode::Overwrite)
             .await
             .unwrap();

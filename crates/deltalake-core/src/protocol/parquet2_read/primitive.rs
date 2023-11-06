@@ -12,7 +12,7 @@ use parquet2::types::NativeType;
 use super::dictionary;
 use super::validity::ValidityRowIndexIter;
 use super::{split_page, ActionVariant, ParseError};
-use crate::protocol::Action;
+use crate::kernel::Action;
 
 struct ExactChunksIter<'a, T: NativeType> {
     chunks: std::slice::ChunksExact<'a, u8>,

@@ -3,7 +3,7 @@ use parquet2::page::{DataPage, DictPage};
 
 use super::string::for_each_repeated_string_field_value_with_idx;
 use super::{ActionVariant, ParseError};
-use crate::protocol::Action;
+use crate::kernel::Action;
 
 #[derive(Default)]
 pub struct MapState {

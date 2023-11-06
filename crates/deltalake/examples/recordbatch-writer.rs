@@ -6,11 +6,11 @@
  * This example was originally posted by @rtyler in:
  *      <https://github.com/buoyant-data/demo-recordbatch-writer>
  */
-
 use chrono::prelude::*;
 use deltalake::arrow::array::*;
 use deltalake::arrow::record_batch::RecordBatch;
 use deltalake::errors::DeltaTableError;
+use deltalake::kernel::{DataType, PrimitiveType, StructField, StructType};
 use deltalake::parquet::{
     basic::{Compression, ZstdLevel},
     file::properties::WriterProperties,
@@ -19,8 +19,6 @@ use deltalake::writer::{DeltaWriter, RecordBatchWriter};
 use deltalake::Path;
 use deltalake::*;
 use log::*;
-
-use std::collections::HashMap;
 use std::sync::Arc;
 
 /*
@@ -86,31 +84,27 @@ struct WeatherRecord {
 }
 
 impl WeatherRecord {
-    fn columns() -> Vec<SchemaField> {
+    fn columns() -> Vec<StructField> {
         vec![
-            SchemaField::new(
+            StructField::new(
                 "timestamp".to_string(),
-                SchemaDataType::primitive("timestamp".to_string()),
+                DataType::Primitive(PrimitiveType::Timestamp),
                 true,
-                HashMap::new(),
             ),
-            SchemaField::new(
+            StructField::new(
                 "temp".to_string(),
-                SchemaDataType::primitive("integer".to_string()),
+                DataType::Primitive(PrimitiveType::Integer),
                 true,
-                HashMap::new(),
             ),
-            SchemaField::new(
+            StructField::new(
                 "lat".to_string(),
-                SchemaDataType::primitive("double".to_string()),
+                DataType::Primitive(PrimitiveType::Float),
                 true,
-                HashMap::new(),
             ),
-            SchemaField::new(
+            StructField::new(
                 "long".to_string(),
-                SchemaDataType::primitive("double".to_string()),
+                DataType::Primitive(PrimitiveType::Float),
                 true,
-                HashMap::new(),
             ),
         ]
     }
@@ -167,7 +161,7 @@ fn convert_to_batch(table: &DeltaTable, records: &Vec<WeatherRecord>) -> RecordB
     let metadata = table
         .get_metadata()
         .expect("Failed to get metadata for the table");
-    let arrow_schema = <deltalake::arrow::datatypes::Schema as TryFrom<&Schema>>::try_from(
+    let arrow_schema = <deltalake::arrow::datatypes::Schema as TryFrom<&StructType>>::try_from(
         &metadata.schema.clone(),
     )
     .expect("Failed to convert to arrow schema");

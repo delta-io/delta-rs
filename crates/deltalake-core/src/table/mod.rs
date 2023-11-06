@@ -22,13 +22,14 @@ use uuid::Uuid;
 use self::builder::DeltaTableConfig;
 use self::state::DeltaTableState;
 use crate::errors::DeltaTableError;
-use crate::partitions::PartitionFilter;
-use crate::protocol::{
-    self, find_latest_check_point_for_version, get_last_checkpoint, Action, ReaderFeatures,
+use crate::kernel::{
+    Action, Add, CommitInfo, DataType, Format, Metadata, ReaderFeatures, Remove, StructType,
     WriterFeatures,
 };
-use crate::protocol::{Add, ProtocolError, Stats};
-use crate::schema::*;
+use crate::partitions::PartitionFilter;
+use crate::protocol::{
+    find_latest_check_point_for_version, get_last_checkpoint, ProtocolError, Stats,
+};
 use crate::storage::{commit_uri_from_version, ObjectStoreRef};
 
 pub mod builder;
@@ -133,16 +134,17 @@ impl Eq for CheckPoint {}
 /// Delta table metadata
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct DeltaTableMetaData {
+    // TODO make this a UUID?
     /// Unique identifier for this table
-    pub id: Guid,
+    pub id: String,
     /// User-provided identifier for this table
     pub name: Option<String>,
     /// User-provided description for this table
     pub description: Option<String>,
     /// Specification of the encoding for the files stored in the table
-    pub format: protocol::Format,
+    pub format: Format,
     /// Schema of the table
-    pub schema: Schema,
+    pub schema: StructType,
     /// An array containing the names of columns by which the data should be partitioned
     pub partition_columns: Vec<String>,
     /// The time when this metadata action is created, in milliseconds since the Unix epoch
@@ -156,8 +158,8 @@ impl DeltaTableMetaData {
     pub fn new(
         name: Option<String>,
         description: Option<String>,
-        format: Option<protocol::Format>,
-        schema: Schema,
+        format: Option<Format>,
+        schema: StructType,
         partition_columns: Vec<String>,
         configuration: HashMap<String, Option<String>>,
     ) -> Self {
@@ -181,19 +183,19 @@ impl DeltaTableMetaData {
     }
 
     /// Return partition fields along with their data type from the current schema.
-    pub fn get_partition_col_data_types(&self) -> Vec<(&str, &SchemaDataType)> {
+    pub fn get_partition_col_data_types(&self) -> Vec<(&String, &DataType)> {
         // JSON add actions contain a `partitionValues` field which is a map<string, string>.
         // When loading `partitionValues_parsed` we have to convert the stringified partition values back to the correct data type.
         self.schema
-            .get_fields()
+            .fields()
             .iter()
             .filter_map(|f| {
                 if self
                     .partition_columns
                     .iter()
-                    .any(|s| s.as_str() == f.get_name())
+                    .any(|s| s.as_str() == f.name())
                 {
-                    Some((f.get_name(), f.get_type()))
+                    Some((f.name(), f.data_type()))
                 } else {
                     None
                 }
@@ -212,16 +214,16 @@ impl fmt::Display for DeltaTableMetaData {
     }
 }
 
-impl TryFrom<protocol::MetaData> for DeltaTableMetaData {
+impl TryFrom<Metadata> for DeltaTableMetaData {
     type Error = ProtocolError;
 
-    fn try_from(action_metadata: protocol::MetaData) -> Result<Self, Self::Error> {
-        let schema = action_metadata.get_schema()?;
+    fn try_from(action_metadata: Metadata) -> Result<Self, Self::Error> {
+        let schema = action_metadata.schema()?;
         Ok(Self {
             id: action_metadata.id,
             name: action_metadata.name,
             description: action_metadata.description,
-            format: action_metadata.format,
+            format: Format::default(),
             schema,
             partition_columns: action_metadata.partition_columns,
             created_time: action_metadata.created_time,
@@ -667,7 +669,7 @@ impl DeltaTable {
     pub async fn history(
         &mut self,
         limit: Option<usize>,
-    ) -> Result<Vec<protocol::CommitInfo>, DeltaTableError> {
+    ) -> Result<Vec<CommitInfo>, DeltaTableError> {
         let mut version = match limit {
             Some(l) => max(self.version() - l as i64 + 1, 0),
             None => self.get_earliest_delta_log_version().await?,
@@ -800,7 +802,7 @@ impl DeltaTable {
     }
 
     /// Returns a vector of active tombstones (i.e. `Remove` actions present in the current delta log).
-    pub fn get_tombstones(&self) -> impl Iterator<Item = &protocol::Remove> {
+    pub fn get_tombstones(&self) -> impl Iterator<Item = &Remove> {
         self.state.unexpired_tombstones()
     }
 
@@ -833,13 +835,13 @@ impl DeltaTable {
 
     /// Return table schema parsed from transaction log. Return None if table hasn't been loaded or
     /// no metadata was found in the log.
-    pub fn schema(&self) -> Option<&Schema> {
+    pub fn schema(&self) -> Option<&StructType> {
         self.state.schema()
     }
 
     /// Return table schema parsed from transaction log. Return `DeltaTableError` if table hasn't
     /// been loaded or no metadata was found in the log.
-    pub fn get_schema(&self) -> Result<&Schema, DeltaTableError> {
+    pub fn get_schema(&self) -> Result<&StructType, DeltaTableError> {
         self.schema().ok_or(DeltaTableError::NoSchema)
     }
 
@@ -923,13 +925,14 @@ impl std::fmt::Debug for DeltaTable {
 
 #[cfg(test)]
 mod tests {
+    use pretty_assertions::assert_eq;
+    use tempdir::TempDir;
+
     use super::*;
+    use crate::kernel::{DataType, PrimitiveType, StructField};
     use crate::operations::create::CreateBuilder;
     #[cfg(any(feature = "s3", feature = "s3-native-tls"))]
     use crate::table::builder::DeltaTableBuilder;
-    use pretty_assertions::assert_eq;
-    use std::collections::HashMap;
-    use tempdir::TempDir;
 
     #[tokio::test]
     async fn table_round_trip() {
@@ -966,17 +969,15 @@ mod tests {
             .with_table_name("Test Table Create")
             .with_comment("This table is made to test the create function for a DeltaTable")
             .with_columns(vec![
-                SchemaField::new(
+                StructField::new(
                     "Id".to_string(),
-                    SchemaDataType::primitive("integer".to_string()),
+                    DataType::Primitive(PrimitiveType::Integer),
                     true,
-                    HashMap::new(),
                 ),
-                SchemaField::new(
+                StructField::new(
                     "Name".to_string(),
-                    SchemaDataType::primitive("string".to_string()),
+                    DataType::Primitive(PrimitiveType::String),
                     true,
-                    HashMap::new(),
                 ),
             ])
             .await

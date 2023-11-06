@@ -60,7 +60,7 @@ mod local {
         assert_eq!(table.get_files(), vec![Path::from(a.path.clone())]);
 
         // Remove added file.
-        let r = deltalake::protocol::Remove {
+        let r = deltalake_core::kernel::Remove {
             path: a.path.clone(),
             deletion_timestamp: Some(chrono::Utc::now().timestamp_millis()),
             data_change: false,
@@ -69,6 +69,8 @@ mod local {
             size: None,
             tags: None,
             deletion_vector: None,
+            base_row_id: None,
+            default_row_commit_version: None,
         };
 
         assert_eq!(2, fs_common::commit_removes(&mut table, vec![&r]).await);
@@ -210,12 +212,17 @@ async fn read_simple_table(integration: &IntegrationContext) -> TestResult {
     );
     let tombstones = table.get_state().all_tombstones();
     assert_eq!(tombstones.len(), 31);
-    assert!(tombstones.contains(&deltalake::protocol::Remove {
+    assert!(tombstones.contains(&deltalake_core::kernel::Remove {
         path: "part-00006-63ce9deb-bc0f-482d-b9a1-7e717b67f294-c000.snappy.parquet".to_string(),
         deletion_timestamp: Some(1587968596250),
         data_change: true,
         extended_file_metadata: None,
-        ..Default::default()
+        deletion_vector: None,
+        base_row_id: None,
+        default_row_commit_version: None,
+        size: None,
+        partition_values: None,
+        tags: None,
     }));
 
     Ok(())
@@ -246,11 +253,17 @@ async fn read_simple_table_with_version(integration: &IntegrationContext) -> Tes
     );
     let tombstones = table.get_state().all_tombstones();
     assert_eq!(tombstones.len(), 29);
-    assert!(tombstones.contains(&deltalake::protocol::Remove {
+    assert!(tombstones.contains(&deltalake_core::kernel::Remove {
         path: "part-00006-63ce9deb-bc0f-482d-b9a1-7e717b67f294-c000.snappy.parquet".to_string(),
         deletion_timestamp: Some(1587968596250),
         data_change: true,
-        ..Default::default()
+        tags: None,
+        partition_values: None,
+        base_row_id: None,
+        default_row_commit_version: None,
+        size: None,
+        deletion_vector: None,
+        extended_file_metadata: None,
     }));
 
     Ok(())
@@ -291,7 +304,7 @@ mod gcs {
     #[tokio::test]
     async fn test_gcs_simple() {
         let bucket = std::env::var("GCS_DELTA_BUCKET").unwrap();
-        let table = deltalake::open_table(format!("gs://{}/simple_table", bucket).as_str())
+        let table = deltalake_core::open_table(format!("gs://{}/simple_table", bucket).as_str())
             .await
             .unwrap();
         assert_eq!(table.version(), 4);
@@ -309,11 +322,17 @@ mod gcs {
         );
         let tombstones = table.get_state().all_tombstones();
         assert_eq!(tombstones.len(), 31);
-        assert!(tombstones.contains(&deltalake::protocol::Remove {
+        assert!(tombstones.contains(&deltalake_core::kernel::Remove {
             path: "part-00006-63ce9deb-bc0f-482d-b9a1-7e717b67f294-c000.snappy.parquet".to_string(),
             deletion_timestamp: Some(1587968596250),
             data_change: true,
-            ..Default::default()
+            extended_file_metadata: None,
+            deletion_vector: None,
+            base_row_id: None,
+            default_row_commit_version: None,
+            size: None,
+            partition_values: None,
+            tags: None,
         }));
     }
 }

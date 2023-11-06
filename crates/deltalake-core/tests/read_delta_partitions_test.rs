@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::convert::TryFrom;
 
-use deltalake_core::schema::SchemaDataType;
+use deltalake_core::kernel::{DataType, PrimitiveType};
 
 #[allow(dead_code)]
 mod fs_common;
@@ -50,7 +50,7 @@ fn test_match_partition() {
         key: "month".to_string(),
         value: deltalake_core::PartitionValue::Equal("12".to_string()),
     };
-    let string_type = SchemaDataType::primitive(String::from("string"));
+    let string_type = DataType::Primitive(PrimitiveType::String);
 
     assert!(!partition_year_2020_filter.match_partition(&partition_2021, &string_type));
     assert!(partition_year_2020_filter.match_partition(&partition_2020, &string_type));
@@ -71,11 +71,13 @@ fn test_match_filters() {
         },
     ];
 
-    let string_type = SchemaDataType::primitive(String::from("string"));
-    let partition_data_types: HashMap<&str, &SchemaDataType> =
-        vec![("year", &string_type), ("month", &string_type)]
-            .into_iter()
-            .collect();
+    let string_type = DataType::Primitive(PrimitiveType::String);
+    let partition_data_types: HashMap<&String, &DataType> = vec![
+        (&partitions[0].key, &string_type),
+        (&partitions[1].key, &string_type),
+    ]
+    .into_iter()
+    .collect();
 
     let valid_filters = deltalake_core::PartitionFilter {
         key: "year".to_string(),
@@ -101,7 +103,7 @@ fn test_match_filters() {
 #[cfg(all(feature = "arrow", feature = "parquet"))]
 #[tokio::test]
 async fn read_null_partitions_from_checkpoint() {
-    use deltalake_core::protocol::Add;
+    use deltalake_core::kernel::Add;
     use maplit::hashmap;
     use serde_json::json;
 

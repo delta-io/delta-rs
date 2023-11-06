@@ -10,11 +10,10 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use arrow::array::*;
-use arrow::datatypes::{
+use arrow::record_batch::RecordBatch;
+use arrow_schema::{
     DataType as ArrowDataType, Field as ArrowField, Schema as ArrowSchema, TimeUnit,
 };
-use arrow::record_batch::RecordBatch;
-use arrow_schema::{DataType, Field};
 use datafusion::assert_batches_sorted_eq;
 use datafusion::datasource::physical_plan::ParquetExec;
 use datafusion::datasource::TableProvider;
@@ -32,20 +31,22 @@ use datafusion_proto::bytes::{
 use url::Url;
 
 use deltalake_core::delta_datafusion::{DeltaPhysicalCodec, DeltaScan};
+use deltalake_core::kernel::{DataType, MapType, PrimitiveType, StructField, StructType};
 use deltalake_core::operations::create::CreateBuilder;
 use deltalake_core::protocol::SaveMode;
 use deltalake_core::storage::DeltaObjectStore;
 use deltalake_core::writer::{DeltaWriter, RecordBatchWriter};
 use deltalake_core::{
+    open_table,
     operations::{write::WriteBuilder, DeltaOps},
-    DeltaTable, DeltaTableError, Schema, SchemaDataType, SchemaField,
+    DeltaTable, DeltaTableError,
 };
 use std::error::Error;
 
 mod common;
 
 mod local {
-    use deltalake::{writer::JsonWriter, SchemaTypeMap};
+    use deltalake_core::writer::JsonWriter;
 
     use super::*;
     #[tokio::test]
@@ -96,14 +97,14 @@ mod local {
         let table_dir = tempfile::tempdir().unwrap();
         let table_path = table_dir.path();
         let table_uri = table_path.to_str().unwrap().to_string();
-        let table_schema: Schema = batches[0].schema().try_into().unwrap();
+        let table_schema: StructType = batches[0].schema().try_into().unwrap();
 
         let mut table = DeltaOps::try_from_uri(table_uri)
             .await
             .unwrap()
             .create()
             .with_save_mode(SaveMode::Ignore)
-            .with_columns(table_schema.get_fields().clone())
+            .with_columns(table_schema.fields().clone())
             .with_partition_columns(partitions)
             .await
             .unwrap();
@@ -153,7 +154,7 @@ mod local {
     #[tokio::test]
     async fn test_datafusion_simple_query_partitioned() -> Result<()> {
         let ctx = SessionContext::new();
-        let table = deltalake::open_table("./tests/data/delta-0.8.0-partitioned")
+        let table = open_table("./tests/data/delta-0.8.0-partitioned")
             .await
             .unwrap();
         ctx.register_table("demo", Arc::new(table))?;
@@ -182,7 +183,7 @@ mod local {
         let source_scan_bytes = {
             let ctx = SessionContext::new();
             let state = ctx.state();
-            let source_table = deltalake::open_table("./tests/data/delta-0.8.0-date").await?;
+            let source_table = open_table("./tests/data/delta-0.8.0-date").await?;
             let source_scan = source_table.scan(&state, None, &[], None).await?;
             physical_plan_to_bytes_with_extension_codec(source_scan, &DeltaPhysicalCodec {})?
         };
@@ -195,9 +196,9 @@ mod local {
             &ctx,
             &DeltaPhysicalCodec {},
         )?;
-        let fields = Schema::try_from(source_scan.schema())
+        let fields = StructType::try_from(source_scan.schema())
             .unwrap()
-            .get_fields()
+            .fields()
             .clone();
 
         // Create target Delta Table
@@ -262,9 +263,7 @@ mod local {
     #[tokio::test]
     async fn test_datafusion_date_column() -> Result<()> {
         let ctx = SessionContext::new();
-        let table = deltalake::open_table("./tests/data/delta-0.8.0-date")
-            .await
-            .unwrap();
+        let table = open_table("./tests/data/delta-0.8.0-date").await.unwrap();
         ctx.register_table("dates", Arc::new(table))?;
 
         let batches = ctx
@@ -283,9 +282,7 @@ mod local {
 
     #[tokio::test]
     async fn test_datafusion_stats() -> Result<()> {
-        let table = deltalake::open_table("./tests/data/delta-0.8.0")
-            .await
-            .unwrap();
+        let table = open_table("./tests/data/delta-0.8.0").await.unwrap();
         let statistics = table.state.datafusion_table_statistics();
 
         assert_eq!(statistics.num_rows, Some(4),);
@@ -735,7 +732,7 @@ mod local {
         assert_eq!(metrics.num_scanned_files(), 1);
 
         // Ensure that tables without stats and partition columns can be pruned for just partitions
-        // let table = deltalake::open_table("./tests/data/delta-0.8.0-null-partition").await?;
+        // let table = open_table("./tests/data/delta-0.8.0-null-partition").await?;
 
         /*
         // Logically this should prune. See above
@@ -765,7 +762,7 @@ mod local {
     #[tokio::test]
     async fn test_datafusion_partitioned_types() -> Result<()> {
         let ctx = SessionContext::new();
-        let table = deltalake::open_table("./tests/data/delta-2.2.0-partitioned-types")
+        let table = open_table("./tests/data/delta-2.2.0-partitioned-types")
             .await
             .unwrap();
         ctx.register_table("demo", Arc::new(table))?;
@@ -814,7 +811,7 @@ mod local {
     #[tokio::test]
     async fn test_datafusion_scan_timestamps() -> Result<()> {
         let ctx = SessionContext::new();
-        let table = deltalake::open_table("./tests/data/table_with_edge_timestamps")
+        let table = open_table("./tests/data/table_with_edge_timestamps")
             .await
             .unwrap();
         ctx.register_table("demo", Arc::new(table))?;
@@ -838,9 +835,7 @@ mod local {
     #[tokio::test]
     async fn test_issue_1292_datafusion_sql_projection() -> Result<()> {
         let ctx = SessionContext::new();
-        let table = deltalake::open_table("./tests/data/http_requests")
-            .await
-            .unwrap();
+        let table = open_table("./tests/data/http_requests").await.unwrap();
         ctx.register_table("http_requests", Arc::new(table))?;
 
         let batches = ctx
@@ -869,9 +864,7 @@ mod local {
     #[tokio::test]
     async fn test_issue_1291_datafusion_sql_partitioned_data() -> Result<()> {
         let ctx = SessionContext::new();
-        let table = deltalake::open_table("./tests/data/http_requests")
-            .await
-            .unwrap();
+        let table = open_table("./tests/data/http_requests").await.unwrap();
         ctx.register_table("http_requests", Arc::new(table))?;
 
         let batches = ctx
@@ -902,9 +895,7 @@ mod local {
     #[tokio::test]
     async fn test_issue_1374() -> Result<()> {
         let ctx = SessionContext::new();
-        let table = deltalake::open_table("./tests/data/issue_1374")
-            .await
-            .unwrap();
+        let table = open_table("./tests/data/issue_1374").await.unwrap();
         ctx.register_table("t", Arc::new(table))?;
 
         let batches = ctx
@@ -939,24 +930,24 @@ mod local {
     #[tokio::test]
     async fn test_issue_1619_parquet_panic_using_map_type() -> Result<()> {
         let _ = tokio::fs::remove_dir_all("./tests/data/issue-1619").await;
-        let fields: Vec<SchemaField> = vec![SchemaField::new(
+        let fields: Vec<StructField> = vec![StructField::new(
             "metadata".to_string(),
-            SchemaDataType::map(SchemaTypeMap::new(
-                Box::new(SchemaDataType::primitive("string".to_string())),
-                Box::new(SchemaDataType::primitive("string".to_string())),
+            DataType::Map(Box::new(MapType::new(
+                DataType::Primitive(PrimitiveType::String),
+                DataType::Primitive(PrimitiveType::String),
                 true,
-            )),
+            ))),
             true,
-            HashMap::new(),
         )];
-        let schema = deltalake::Schema::new(fields);
-        let table = deltalake::DeltaTableBuilder::from_uri("./tests/data/issue-1619").build()?;
+        let schema = StructType::new(fields);
+        let table =
+            deltalake_core::DeltaTableBuilder::from_uri("./tests/data/issue-1619").build()?;
         let _ = DeltaOps::from(table)
             .create()
-            .with_columns(schema.get_fields().to_owned())
+            .with_columns(schema.fields().to_owned())
             .await?;
 
-        let mut table = deltalake::open_table("./tests/data/issue-1619").await?;
+        let mut table = open_table("./tests/data/issue-1619").await?;
 
         let mut writer = JsonWriter::for_table(&table).unwrap();
         writer
@@ -1082,17 +1073,15 @@ mod date_partitions {
 
     async fn setup_test() -> Result<DeltaTable, Box<dyn Error>> {
         let columns = vec![
-            SchemaField::new(
+            StructField::new(
                 "id".to_owned(),
-                SchemaDataType::primitive("integer".to_owned()),
+                DataType::Primitive(PrimitiveType::Integer),
                 false,
-                HashMap::new(),
             ),
-            SchemaField::new(
+            StructField::new(
                 "date".to_owned(),
-                SchemaDataType::primitive("date".to_owned()),
+                DataType::Primitive(PrimitiveType::Date),
                 false,
-                HashMap::new(),
             ),
         ];
 
@@ -1114,8 +1103,8 @@ mod date_partitions {
 
         Ok(RecordBatch::try_new(
             Arc::new(ArrowSchema::new(vec![
-                Field::new("id", DataType::Int32, false),
-                Field::new("date", DataType::Date32, false),
+                ArrowField::new("id", ArrowDataType::Int32, false),
+                ArrowField::new("date", ArrowDataType::Date32, false),
             ])),
             vec![Arc::new(ids_array), Arc::new(date_array)],
         )?)
