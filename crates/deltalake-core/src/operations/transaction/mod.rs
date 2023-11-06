@@ -77,6 +77,16 @@ pub enum TransactionError {
     /// Error returned when reader features are required but not specified
     #[error("Reader features must be specified for reader version >= 3")]
     ReaderFeaturesRequired,
+
+    /// The transaction failed to commit due to an error in an implementation-specific layer.
+    /// Currently used by DynamoDb-backed S3 log store when database operations fail.
+    #[error("Transaction failed: {msg}")]
+    LogStoreError {
+        /// Detailed message for the commit failure.
+        msg: String,
+        /// underlying error in the log store transactional layer.
+        source: Box<dyn std::error::Error + Send + Sync + 'static>,
+    },
 }
 
 impl From<TransactionError> for DeltaTableError {
@@ -138,7 +148,7 @@ pub(crate) fn get_commit_bytes(
 /// the transaction object could be dropped and the actual commit could be executed
 /// with `DeltaTable.try_commit_transaction`.
 /// TODO: comment is outdated now
-pub(crate) async fn prepare_commit<'a>(
+pub async fn prepare_commit<'a>(
     storage: &dyn ObjectStore,
     operation: &DeltaOperation,
     actions: &Vec<Action>,
@@ -207,12 +217,8 @@ pub async fn commit_with_retries(
         match log_store.write_commit_entry(version, &tmp_commit).await {
             Ok(()) => return Ok(version),
             Err(TransactionError::VersionAlreadyExists(version)) => {
-                let summary = WinningCommitSummary::try_new(
-                    log_store.object_store().as_ref(),
-                    version - 1,
-                    version,
-                )
-                .await?;
+                let summary =
+                    WinningCommitSummary::try_new(log_store, version - 1, version).await?;
                 let transaction_info = TransactionInfo::try_new(
                     read_snapshot,
                     operation.read_predicate(),

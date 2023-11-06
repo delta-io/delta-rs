@@ -286,7 +286,6 @@ impl std::future::IntoFuture for CreateBuilder {
 
     fn into_future(self) -> Self::IntoFuture {
         let this = self;
-
         Box::pin(async move {
             let mode = this.mode.clone();
             let (mut table, actions, operation) = this.into_table_and_actions()?;
