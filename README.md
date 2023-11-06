@@ -168,12 +168,12 @@ of features outlined in the Delta [protocol][protocol] is also [tracked](#protoc
 | Version 4      | Generated Columns                             |                      |
 | Version 5      | Column Mapping                                |                      |
 | Version 6      | Identity Columns                              |                      |
-| Version 7      | Table Features                                |       ![done]        |
+| Version 7      | Table Features                                |                      |
 
 | Reader Version | Requirement                         | Status |
 | -------------- | ----------------------------------- | ------ |
 | Version 2      | Column Mapping                      |        |
-| Version 3      | Table Features (requires reader V7) |    ![done] |
+| Version 3      | Table Features (requires reader V7) |        |
 
 [datafusion]: https://github.com/apache/arrow-datafusion
 [ballista]: https://github.com/apache/arrow-ballista
