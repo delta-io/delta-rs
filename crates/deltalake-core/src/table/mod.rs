@@ -26,6 +26,7 @@ use crate::kernel::{
     Action, Add, CommitInfo, DataType, Format, Metadata, ReaderFeatures, Remove, StructType,
     WriterFeatures,
 };
+use crate::logstore::{default_logstore::DefaultLogStore, LogStoreRef};
 use crate::partitions::PartitionFilter;
 use crate::protocol::{
     find_latest_check_point_for_version, get_last_checkpoint, ProtocolError, Stats,
@@ -249,8 +250,8 @@ pub struct DeltaTable {
     pub state: DeltaTableState,
     /// the load options used during load
     pub config: DeltaTableConfig,
-    /// object store to access log and data files
-    pub(crate) storage: ObjectStoreRef,
+    /// log store
+    pub(crate) log_store: LogStoreRef,
     /// file metadata for latest checkpoint
     last_check_point: Option<CheckPoint>,
     /// table versions associated with timestamps
@@ -265,7 +266,8 @@ impl Serialize for DeltaTable {
         let mut seq = serializer.serialize_seq(None)?;
         seq.serialize_element(&self.state)?;
         seq.serialize_element(&self.config)?;
-        seq.serialize_element(self.storage.as_ref())?;
+        // tp::TODO (de)serialize actual log store instead
+        seq.serialize_element(self.object_store().as_ref())?;
         seq.serialize_element(&self.last_check_point)?;
         seq.serialize_element(&self.version_timestamp)?;
         seq.end()
@@ -296,9 +298,13 @@ impl<'de> Deserialize<'de> for DeltaTable {
                 let config = seq
                     .next_element()?
                     .ok_or_else(|| A::Error::invalid_length(0, &self))?;
-                let storage = seq
-                    .next_element()?
-                    .ok_or_else(|| A::Error::invalid_length(0, &self))?;
+                let storage = Arc::new(
+                    seq.next_element()?
+                        .ok_or_else(|| A::Error::invalid_length(0, &self))?,
+                );
+                let log_store = Arc::new(DefaultLogStore {
+                    storage: Arc::clone(&storage),
+                });
                 let last_check_point = seq
                     .next_element()?
                     .ok_or_else(|| A::Error::invalid_length(0, &self))?;
@@ -309,7 +315,7 @@ impl<'de> Deserialize<'de> for DeltaTable {
                 let table = DeltaTable {
                     state,
                     config,
-                    storage: Arc::new(storage),
+                    log_store,
                     last_check_point,
                     version_timestamp,
                 };
@@ -326,10 +332,10 @@ impl DeltaTable {
     ///
     /// NOTE: This is for advanced users. If you don't know why you need to use this method, please
     /// call one of the `open_table` helper methods instead.
-    pub fn new(storage: ObjectStoreRef, config: DeltaTableConfig) -> Self {
+    pub fn new(log_store: LogStoreRef, config: DeltaTableConfig) -> Self {
         Self {
             state: DeltaTableState::with_version(-1),
-            storage,
+            log_store,
             config,
             last_check_point: None,
             version_timestamp: HashMap::new(),
@@ -341,10 +347,10 @@ impl DeltaTable {
     ///
     /// NOTE: This is for advanced users. If you don't know why you need to use this method,
     /// please call one of the `open_table` helper methods instead.
-    pub(crate) fn new_with_state(storage: ObjectStoreRef, state: DeltaTableState) -> Self {
+    pub(crate) fn new_with_state(log_store: LogStoreRef, state: DeltaTableState) -> Self {
         Self {
             state,
-            storage,
+            log_store,
             config: Default::default(),
             last_check_point: None,
             version_timestamp: HashMap::new(),
@@ -353,18 +359,24 @@ impl DeltaTable {
 
     /// get a shared reference to the delta object store
     pub fn object_store(&self) -> ObjectStoreRef {
-        self.storage.clone()
+        self.log_store.object_store()
     }
 
     /// The URI of the underlying data
     pub fn table_uri(&self) -> String {
-        self.storage.root_uri()
+        self.log_store.object_store().root_uri()
+    }
+
+    /// get a shared reference to the log store
+    pub fn log_store(&self) -> LogStoreRef {
+        self.log_store.clone()
     }
 
     /// Return the list of paths of given checkpoint.
     pub fn get_checkpoint_data_paths(&self, check_point: &CheckPoint) -> Vec<Path> {
         let checkpoint_prefix = format!("{:020}", check_point.version);
-        let log_path = self.storage.log_path();
+        let object_store = self.object_store();
+        let log_path = object_store.log_path();
         let mut checkpoint_data_paths = Vec::new();
 
         match check_point.parts {
@@ -399,7 +411,8 @@ impl DeltaTable {
         let mut current_delta_log_ver = i64::MAX;
 
         // Get file objects from table.
-        let mut stream = self.storage.list(Some(self.storage.log_path())).await?;
+        let storage = self.object_store();
+        let mut stream = storage.list(Some(storage.log_path())).await?;
         while let Some(obj_meta) = stream.next().await {
             let obj_meta = obj_meta?;
 
@@ -422,54 +435,7 @@ impl DeltaTable {
     }
     /// returns the latest available version of the table
     pub async fn get_latest_version(&mut self) -> Result<i64, DeltaTableError> {
-        let version_start = match get_last_checkpoint(&self.storage).await {
-            Ok(last_check_point) => last_check_point.version,
-            Err(ProtocolError::CheckpointNotFound) => {
-                // no checkpoint
-                -1
-            }
-            Err(e) => {
-                return Err(DeltaTableError::from(e));
-            }
-        };
-
-        debug!("latest checkpoint version: {version_start}");
-
-        let version_start = max(self.version(), version_start);
-
-        lazy_static! {
-            static ref DELTA_LOG_REGEX: Regex =
-                Regex::new(r"_delta_log/(\d{20})\.(json|checkpoint).*$").unwrap();
-        }
-
-        // list files to find max version
-        let version = async {
-            let mut max_version: i64 = version_start;
-            let prefix = Some(self.storage.log_path());
-            let offset_path = commit_uri_from_version(max_version);
-            let mut files = self.storage.list_with_offset(prefix, &offset_path).await?;
-
-            while let Some(obj_meta) = files.next().await {
-                let obj_meta = obj_meta?;
-                if let Some(captures) = DELTA_LOG_REGEX.captures(obj_meta.location.as_ref()) {
-                    let log_version = captures.get(1).unwrap().as_str().parse().unwrap();
-                    // listing may not be ordered
-                    max_version = max(max_version, log_version);
-                    // also cache timestamp for version, for faster time-travel
-                    self.version_timestamp
-                        .insert(log_version, obj_meta.last_modified.timestamp());
-                }
-            }
-
-            if max_version < 0 {
-                return Err(DeltaTableError::not_a_table(self.table_uri()));
-            }
-
-            Ok::<i64, DeltaTableError>(max_version)
-        }
-        .await?;
-
-        Ok(version)
+        self.log_store.get_latest_version(self.version()).await
     }
 
     /// Currently loaded version of the table
@@ -490,12 +456,12 @@ impl DeltaTable {
         current_version: i64,
     ) -> Result<PeekCommit, DeltaTableError> {
         let next_version = current_version + 1;
-        let commit_uri = commit_uri_from_version(next_version);
-        let commit_log_bytes = self.storage.get(&commit_uri).await;
-        let commit_log_bytes = match commit_log_bytes {
-            Err(ObjectStoreError::NotFound { .. }) => return Ok(PeekCommit::UpToDate),
+        let commit_log_bytes = match self.log_store.read_commit_entry(next_version).await {
+            Ok(bytes) => Ok(bytes),
+            Err(DeltaTableError::ObjectStore {
+                source: ObjectStoreError::NotFound { .. },
+            }) => return Ok(PeekCommit::UpToDate),
             Err(err) => Err(err),
-            Ok(result) => result.bytes().await,
         }?;
 
         let actions = Self::get_actions(next_version, commit_log_bytes).await;
@@ -529,7 +495,7 @@ impl DeltaTable {
     /// loading the last checkpoint and incrementally applying each version since.
     #[cfg(any(feature = "parquet", feature = "parquet2"))]
     pub async fn update(&mut self) -> Result<(), DeltaTableError> {
-        match get_last_checkpoint(&self.storage).await {
+        match get_last_checkpoint(&self.object_store()).await {
             Ok(last_check_point) => {
                 debug!("update with latest checkpoint {last_check_point:?}");
                 if Some(last_check_point) == self.last_check_point {
@@ -574,13 +540,12 @@ impl DeltaTable {
 
         let buf_size = self.config.log_buffer_size;
 
-        let store = self.storage.clone();
+        let log_store = self.log_store.clone();
         let mut log_stream = futures::stream::iter(self.version() + 1..max_version + 1)
             .map(|version| {
-                let store = store.clone();
-                let loc = commit_uri_from_version(version);
+                let log_store = log_store.clone();
                 async move {
-                    let data = store.get(&loc).await?.bytes().await?;
+                    let data = log_store.read_commit_entry(version).await?;
                     let actions = Self::get_actions(version, data).await?;
                     Ok((version, actions))
                 }
@@ -616,7 +581,7 @@ impl DeltaTable {
     pub async fn load_version(&mut self, version: i64) -> Result<(), DeltaTableError> {
         // check if version is valid
         let commit_uri = commit_uri_from_version(version);
-        match self.storage.head(&commit_uri).await {
+        match self.object_store().head(&commit_uri).await {
             Ok(_) => {}
             Err(ObjectStoreError::NotFound { .. }) => {
                 return Err(DeltaTableError::InvalidVersion(version));
@@ -628,7 +593,7 @@ impl DeltaTable {
 
         // 1. find latest checkpoint below version
         #[cfg(any(feature = "parquet", feature = "parquet2"))]
-        match find_latest_check_point_for_version(&self.storage, version).await? {
+        match find_latest_check_point_for_version(&self.object_store(), version).await? {
             Some(check_point) => {
                 self.restore_checkpoint(check_point).await?;
             }
@@ -652,7 +617,10 @@ impl DeltaTable {
         match self.version_timestamp.get(&version) {
             Some(ts) => Ok(*ts),
             None => {
-                let meta = self.storage.head(&commit_uri_from_version(version)).await?;
+                let meta = self
+                    .object_store()
+                    .head(&commit_uri_from_version(version))
+                    .await?;
                 let ts = meta.last_modified.timestamp();
                 // also cache timestamp for version
                 self.version_timestamp.insert(version, ts);
@@ -746,7 +714,7 @@ impl DeltaTable {
         let files = self.get_files_by_partitions(filters)?;
         Ok(files
             .iter()
-            .map(|fname| self.storage.to_uri(fname))
+            .map(|fname| self.object_store().to_uri(fname))
             .collect())
     }
 
@@ -771,7 +739,7 @@ impl DeltaTable {
     pub fn get_file_uris(&self) -> impl Iterator<Item = String> + '_ {
         self.state
             .file_paths_iter()
-            .map(|path| self.storage.to_uri(&path))
+            .map(|path| self.object_store().to_uri(&path))
     }
 
     /// Returns statistics for files, in order

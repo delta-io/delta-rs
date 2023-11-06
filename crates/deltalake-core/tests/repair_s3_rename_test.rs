@@ -117,6 +117,7 @@ fn create_s3_backend(
         .with_allow_http(true)
         .build_storage()
         .unwrap()
+        .object_store()
         .storage_backend();
 
     let delayed_store = DelayedObjectStore {

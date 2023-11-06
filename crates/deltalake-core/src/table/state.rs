@@ -71,7 +71,7 @@ impl DeltaTableState {
     /// Construct a delta table state object from commit version.
     pub async fn from_commit(table: &DeltaTable, version: i64) -> Result<Self, ProtocolError> {
         let commit_uri = commit_uri_from_version(version);
-        let commit_log_bytes = match table.storage.get(&commit_uri).await {
+        let commit_log_bytes = match table.object_store().get(&commit_uri).await {
             Ok(get) => Ok(get.bytes().await?),
             Err(ObjectStoreError::NotFound { .. }) => Err(ProtocolError::EndOfLog),
             Err(source) => Err(ProtocolError::ObjectStore { source }),
@@ -161,7 +161,7 @@ impl DeltaTableState {
         let mut new_state = Self::with_version(check_point.version);
 
         for f in &checkpoint_data_paths {
-            let obj = table.storage.get(f).await?.bytes().await?;
+            let obj = table.object_store().get(f).await?.bytes().await?;
             new_state.process_checkpoint_bytes(obj, &table.config)?;
         }
 

@@ -56,7 +56,8 @@ impl RecordBatchWriter {
     ) -> Result<Self, DeltaTableError> {
         let storage = DeltaTableBuilder::from_uri(table_uri)
             .with_storage_options(storage_options.unwrap_or_default())
-            .build_storage()?;
+            .build_storage()?
+            .object_store();
 
         // Initialize writer properties for the underlying arrow writer
         let writer_properties = WriterProperties::builder()
@@ -89,7 +90,7 @@ impl RecordBatchWriter {
             .build();
 
         Ok(Self {
-            storage: table.storage.clone(),
+            storage: table.object_store(),
             arrow_schema_ref,
             writer_properties,
             partition_columns,

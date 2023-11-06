@@ -12,6 +12,8 @@ use url::Url;
 use super::file::FileStorageBackend;
 use super::utils::str_is_truthy;
 use crate::errors::{DeltaResult, DeltaTableError};
+use crate::logstore::default_logstore::DefaultLogStore;
+use crate::logstore::LogStoreRef;
 
 #[cfg(any(feature = "s3", feature = "s3-native-tls"))]
 use super::s3::{S3StorageBackend, S3StorageOptions};
@@ -222,6 +224,17 @@ impl StorageOptions {
 impl From<HashMap<String, String>> for StorageOptions {
     fn from(value: HashMap<String, String>) -> Self {
         Self::new(value)
+    }
+}
+
+pub(crate) fn configure_log_store(
+    url: Url,
+    options: impl Into<StorageOptions> + Clone,
+) -> DeltaResult<LogStoreRef> {
+    let mut options = options.into();
+    let (scheme, _prefix) = ObjectStoreScheme::parse(&url, &mut options)?;
+    match scheme {
+        _ => Ok(Arc::new(DefaultLogStore::try_new(url, options)?)),
     }
 }
 

@@ -10,8 +10,8 @@ use serde_json::Value;
 use crate::crate_version;
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::{Action, CommitInfo};
+use crate::logstore::LogStore;
 use crate::protocol::DeltaOperation;
-use crate::storage::commit_uri_from_version;
 use crate::table::state::DeltaTableState;
 
 mod conflict_checker;
@@ -130,6 +130,7 @@ pub(crate) fn get_commit_bytes(
 /// Low-level transaction API. Creates a temporary commit file. Once created,
 /// the transaction object could be dropped and the actual commit could be executed
 /// with `DeltaTable.try_commit_transaction`.
+/// TODO: comment is outdated now
 pub(crate) async fn prepare_commit<'a>(
     storage: &dyn ObjectStore,
     operation: &DeltaOperation,
@@ -150,42 +151,26 @@ pub(crate) async fn prepare_commit<'a>(
     Ok(path)
 }
 
-/// Tries to commit a prepared commit file. Returns [DeltaTableError::VersionAlreadyExists]
-/// if the given `version` already exists. The caller should handle the retry logic itself.
-/// This is low-level transaction API. If user does not want to maintain the commit loop then
-/// the `DeltaTransaction.commit` is desired to be used as it handles `try_commit_transaction`
-/// with retry logic.
-pub(crate) async fn try_commit_transaction(
-    storage: &dyn ObjectStore,
-    tmp_commit: &Path,
-    version: i64,
-) -> Result<i64, TransactionError> {
-    // move temporary commit file to delta log directory
-    // rely on storage to fail if the file already exists -
-    storage
-        .rename_if_not_exists(tmp_commit, &commit_uri_from_version(version))
-        .await
-        .map_err(|err| match err {
-            ObjectStoreError::AlreadyExists { .. } => {
-                TransactionError::VersionAlreadyExists(version)
-            }
-            _ => TransactionError::from(err),
-        })?;
-    Ok(version)
-}
-
 /// Commit a transaction, with up to 15 retries. This is higher-level transaction API.
 ///
 /// Will error early if the a concurrent transaction has already been committed
 /// and conflicts with this transaction.
 pub async fn commit(
-    storage: &dyn ObjectStore,
+    log_store: &dyn LogStore,
     actions: &Vec<Action>,
     operation: DeltaOperation,
     read_snapshot: &DeltaTableState,
     app_metadata: Option<HashMap<String, Value>>,
 ) -> DeltaResult<i64> {
-    commit_with_retries(storage, actions, operation, read_snapshot, app_metadata, 15).await
+    commit_with_retries(
+        log_store,
+        actions,
+        operation,
+        read_snapshot,
+        app_metadata,
+        15,
+    )
+    .await
 }
 
 /// Commit a transaction, with up configurable number of retries. This is higher-level transaction API.
@@ -193,24 +178,35 @@ pub async fn commit(
 /// The function will error early if the a concurrent transaction has already been committed
 /// and conflicts with this transaction.
 pub async fn commit_with_retries(
-    storage: &dyn ObjectStore,
+    log_store: &dyn LogStore,
     actions: &Vec<Action>,
     operation: DeltaOperation,
     read_snapshot: &DeltaTableState,
     app_metadata: Option<HashMap<String, Value>>,
     max_retries: usize,
 ) -> DeltaResult<i64> {
-    let tmp_commit =
-        prepare_commit(storage, &operation, actions, read_snapshot, app_metadata).await?;
+    let tmp_commit = prepare_commit(
+        log_store.object_store().as_ref(),
+        &operation,
+        actions,
+        read_snapshot,
+        app_metadata,
+    )
+    .await?;
 
     let mut attempt_number = 1;
 
     while attempt_number <= max_retries {
         let version = read_snapshot.version() + attempt_number as i64;
-        match try_commit_transaction(storage, &tmp_commit, version).await {
-            Ok(version) => return Ok(version),
+        match log_store.write_commit_entry(version, &tmp_commit).await {
+            Ok(()) => return Ok(version),
             Err(TransactionError::VersionAlreadyExists(version)) => {
-                let summary = WinningCommitSummary::try_new(storage, version - 1, version).await?;
+                let summary = WinningCommitSummary::try_new(
+                    log_store.object_store().as_ref(),
+                    version - 1,
+                    version,
+                )
+                .await?;
                 let transaction_info = TransactionInfo::try_new(
                     read_snapshot,
                     operation.read_predicate(),
@@ -225,13 +221,13 @@ pub async fn commit_with_retries(
                         attempt_number += 1;
                     }
                     Err(err) => {
-                        storage.delete(&tmp_commit).await?;
+                        log_store.object_store().delete(&tmp_commit).await?;
                         return Err(TransactionError::CommitConflict(err).into());
                     }
                 };
             }
             Err(err) => {
-                storage.delete(&tmp_commit).await?;
+                log_store.object_store().delete(&tmp_commit).await?;
                 return Err(err.into());
             }
         }
@@ -242,11 +238,17 @@ pub async fn commit_with_retries(
 
 #[cfg(all(test, feature = "parquet"))]
 mod tests {
+    use std::{collections::HashMap, sync::Arc};
+
     use self::test_utils::{create_remove_action, init_table_actions};
     use super::*;
-    use crate::DeltaConfigKey;
+    use crate::{
+        logstore::default_logstore::DefaultLogStore,
+        storage::{commit_uri_from_version, DeltaObjectStore},
+        DeltaConfigKey,
+    };
     use object_store::memory::InMemory;
-    use std::collections::HashMap;
+    use url::Url;
 
     #[test]
     fn test_commit_uri_from_version() {
@@ -290,18 +292,22 @@ mod tests {
 
     #[tokio::test]
     async fn test_try_commit_transaction() {
-        let store = InMemory::new();
+        let store = Arc::new(InMemory::new());
+        let url = Url::parse("mem://what/is/this").unwrap();
+        let delta_store = DeltaObjectStore::new(store.clone(), url);
+        let log_store = DefaultLogStore {
+            storage: Arc::new(delta_store),
+        };
         let tmp_path = Path::from("_delta_log/tmp");
         let version_path = Path::from("_delta_log/00000000000000000000.json");
         store.put(&tmp_path, bytes::Bytes::new()).await.unwrap();
         store.put(&version_path, bytes::Bytes::new()).await.unwrap();
 
+        let res = log_store.write_commit_entry(0, &tmp_path).await;
         // fails if file version already exists
-        let res = try_commit_transaction(&store, &tmp_path, 0).await;
         assert!(res.is_err());
 
         // succeeds for next version
-        let res = try_commit_transaction(&store, &tmp_path, 1).await.unwrap();
-        assert_eq!(res, 1);
+        log_store.write_commit_entry(1, &tmp_path).await.unwrap();
     }
 }

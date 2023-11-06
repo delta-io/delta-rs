@@ -70,7 +70,12 @@ pub const CHECKPOINT_RECORD_BATCH_SIZE: usize = 5000;
 
 /// Creates checkpoint at current table version
 pub async fn create_checkpoint(table: &DeltaTable) -> Result<(), ProtocolError> {
-    create_checkpoint_for(table.version(), table.get_state(), table.storage.as_ref()).await?;
+    create_checkpoint_for(
+        table.version(),
+        table.get_state(),
+        table.object_store().as_ref(),
+    )
+    .await?;
     Ok(())
 }
 
@@ -81,7 +86,7 @@ pub async fn cleanup_metadata(table: &DeltaTable) -> Result<usize, ProtocolError
         Utc::now().timestamp_millis() - table.get_state().log_retention_millis();
     cleanup_expired_logs_for(
         table.version(),
-        table.storage.as_ref(),
+        table.object_store().as_ref(),
         log_retention_timestamp,
     )
     .await
@@ -98,7 +103,7 @@ pub async fn create_checkpoint_from_table_uri_and_cleanup(
     let table = open_table_with_version(table_uri, version)
         .await
         .map_err(|err| ProtocolError::Generic(err.to_string()))?;
-    create_checkpoint_for(version, table.get_state(), table.storage.as_ref()).await?;
+    create_checkpoint_for(version, table.get_state(), table.object_store().as_ref()).await?;
 
     let enable_expired_log_cleanup =
         cleanup.unwrap_or_else(|| table.get_state().enable_expired_log_cleanup());

@@ -297,6 +297,6 @@ async fn test_non_managed_files() {
 
 async fn is_deleted(context: &mut TestContext, path: &Path) -> bool {
     let backend = context.get_storage();
-    let res = backend.head(path).await;
+    let res = backend.object_store().head(path).await;
     matches!(res, Err(ObjectStoreError::NotFound { .. }))
 }

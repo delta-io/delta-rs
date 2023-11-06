@@ -1924,7 +1924,8 @@ mod tests {
             .build(&table.state)
             .unwrap();
 
-        let provider = DeltaTableProvider::try_new(table.state, table.storage, config).unwrap();
+        let storage = table.object_store();
+        let provider = DeltaTableProvider::try_new(table.state, storage, config).unwrap();
         let ctx = SessionContext::new();
         ctx.register_table("test", Arc::new(provider)).unwrap();
 
@@ -1983,7 +1984,8 @@ mod tests {
 
         let config = DeltaScanConfigBuilder::new().build(&table.state).unwrap();
 
-        let provider = DeltaTableProvider::try_new(table.state, table.storage, config).unwrap();
+        let storage = table.object_store();
+        let provider = DeltaTableProvider::try_new(table.state, storage, config).unwrap();
         let ctx = SessionContext::new();
         ctx.register_table("test", Arc::new(provider)).unwrap();
 

@@ -195,7 +195,7 @@ impl JsonWriter {
             .build();
 
         Ok(Self {
-            storage,
+            storage: storage.object_store(),
             arrow_schema_ref: schema,
             writer_properties,
             partition_columns: partition_columns.unwrap_or_default(),
@@ -218,7 +218,7 @@ impl JsonWriter {
             .build();
 
         Ok(Self {
-            storage: table.storage.clone(),
+            storage: table.object_store(),
             arrow_schema_ref,
             writer_properties,
             partition_columns,

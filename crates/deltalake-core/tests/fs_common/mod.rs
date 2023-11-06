@@ -119,7 +119,7 @@ pub async fn commit_actions(
     operation: DeltaOperation,
 ) -> i64 {
     let version = commit(
-        table.object_store().as_ref(),
+        table.log_store().as_ref(),
         &actions,
         operation,
         &table.state,
