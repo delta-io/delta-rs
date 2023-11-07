@@ -15,7 +15,7 @@ edition = "2021"
 [package.metadata.docs.rs]
 # We cannot use all_features because TLS features are mutually exclusive.
 # We cannot use hdfs feature because it requires Java to be installed.
-features = ["azure", "datafusion", "gcs", "glue", "hdfs", "json", "python", "s3", "unity-experimental"]
+features = ["azure", "datafusion", "gcs", "hdfs", "json", "python", "s3", "unity-experimental"]
 
 [dependencies]
 # arrow
@@ -99,8 +99,6 @@ rusoto_credential = { version = "0.47", optional = true }
 rusoto_sts = { version = "0.47", default-features = false, optional = true }
 rusoto_dynamodb = { version = "0.47", default-features = false, optional = true }
 
-# Glue
-rusoto_glue = { version = "0.47", default-features = false, optional = true }
 
 # Unity
 reqwest = { version = "0.11.18", default-features = false, features = [
@@ -158,8 +156,6 @@ datafusion = [
 ]
 datafusion-ext = ["datafusion"]
 gcs = ["object_store/gcp"]
-glue = ["s3", "rusoto_glue/rustls", "tracing", "hyper"]
-glue-native-tls = ["s3-native-tls", "rusoto_glue", "tracing", "hyper"]
 hdfs = ["datafusion-objectstore-hdfs"]
 # used only for integration testing
 integration_test = ["fs_extra", "tempdir"]

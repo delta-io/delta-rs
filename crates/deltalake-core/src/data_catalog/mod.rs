@@ -7,8 +7,6 @@ pub use unity::*;
 
 #[cfg(feature = "unity-experimental")]
 pub mod client;
-#[cfg(feature = "glue")]
-pub mod glue;
 #[cfg(feature = "datafusion")]
 pub mod storage;
 #[cfg(feature = "unity-experimental")]
@@ -25,10 +23,13 @@ pub enum DataCatalogError {
     Generic {
         /// Name of the catalog
         catalog: &'static str,
-
         /// Error message
         source: Box<dyn std::error::Error + Send + Sync + 'static>,
     },
+
+    /// Error from a specific catalog provider
+    #[error("Catalog implementation error: {0}")]
+    Error(Box<dyn std::error::Error + Send + Sync + 'static>),
 
     /// A generic error qualified in the message
     #[cfg(feature = "unity-experimental")]
@@ -46,41 +47,6 @@ pub enum DataCatalogError {
         /// The underlying reqwest_middleware::Error
         #[from]
         source: reqwest::Error,
-    },
-
-    /// Missing metadata in the catalog
-    #[cfg(feature = "glue")]
-    #[error("Missing Metadata {metadata} in the Data Catalog ")]
-    MissingMetadata {
-        /// The missing metadata property
-        metadata: String,
-    },
-
-    /// Glue Glue Data Catalog Error
-    #[cfg(feature = "glue")]
-    #[error("Catalog glue error: {source}")]
-    GlueError {
-        /// The underlying Glue Data Catalog Error
-        #[from]
-        source: rusoto_core::RusotoError<rusoto_glue::GetTableError>,
-    },
-
-    /// Error caused by the http request dispatcher not being able to be created.
-    #[cfg(feature = "glue")]
-    #[error("Failed to create request dispatcher: {source}")]
-    AWSHttpClient {
-        /// The underlying Rusoto TlsError
-        #[from]
-        source: rusoto_core::request::TlsError,
-    },
-
-    /// Error representing a failure to retrieve AWS credentials.
-    #[cfg(feature = "glue")]
-    #[error("Failed to retrieve AWS credentials: {source}")]
-    AWSCredentials {
-        /// The underlying Rusoto CredentialsError
-        #[from]
-        source: rusoto_credential::CredentialsError,
     },
 
     /// Error caused by missing environment variable for Unity Catalog.

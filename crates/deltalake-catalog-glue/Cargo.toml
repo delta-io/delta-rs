@@ -1,0 +1,26 @@
+[package]
+name = "deltalake-catalog-glue"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+async-trait = { workspace = true }
+thiserror = { workspace = true }
+deltalake-core = { path = "../deltalake-core" }
+# This can depend on a lowest common denominator of core once that's released
+# deltalake_core = { version = "0.17.0" }
+rusoto_core = { version = "0.47", default-features = false, optional = true }
+rusoto_credential = { version = "0.47" }
+rusoto_sts = { version = "0.47", default-features = false, optional = true}
+rusoto_glue = { version = "0.47", default-features = false, optional = true}
+
+[features]
+default = ["rusoto_glue/rustls",
+    "rusoto_core/rustls",
+    "rusoto_sts/rustls",
+]
+native-tls = [
+    "rusoto_core/native-tls",
+    "rusoto_glue/native-tls",
+    "rusoto_sts/native-tls",
+    ]

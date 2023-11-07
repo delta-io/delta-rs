@@ -1,12 +1,52 @@
 //! Glue Data Catalog.
 //!
 //! This module is gated behind the "glue" feature.
-use super::{DataCatalog, DataCatalogError};
+use deltalake_core::data_catalog::{DataCatalog, DataCatalogError};
 use rusoto_core::{HttpClient, Region};
 use rusoto_credential::AutoRefreshingProvider;
 use rusoto_sts::WebIdentityProvider;
 
 use rusoto_glue::{GetTableRequest, Glue, GlueClient};
+
+#[derive(thiserror::Error, Debug)]
+pub enum GlueError {
+    /// Missing metadata in the catalog
+    #[error("Missing Metadata {metadata} in the Data Catalog ")]
+    MissingMetadata {
+        /// The missing metadata property
+        metadata: String,
+    },
+
+    /// Glue Glue Data Catalog Error
+    #[error("Catalog glue error: {source}")]
+    GlueError {
+        /// The underlying Glue Data Catalog Error
+        #[from]
+        source: rusoto_core::RusotoError<rusoto_glue::GetTableError>,
+    },
+
+    /// Error caused by the http request dispatcher not being able to be created.
+    #[error("Failed to create request dispatcher: {source}")]
+    AWSHttpClient {
+        /// The underlying Rusoto TlsError
+        #[from]
+        source: rusoto_core::request::TlsError,
+    },
+
+    /// Error representing a failure to retrieve AWS credentials.
+    #[error("Failed to retrieve AWS credentials: {source}")]
+    AWSCredentials {
+        /// The underlying Rusoto CredentialsError
+        #[from]
+        source: rusoto_credential::CredentialsError,
+    },
+}
+
+impl Into<DataCatalogError> for GlueError {
+    fn into(self) -> DataCatalogError {
+        DataCatalogError::Error(Box::new(self))
+    }
+}
 
 /// A Glue Data Catalog implement of the `Catalog` trait
 pub struct GlueDataCatalog {
@@ -15,7 +55,7 @@ pub struct GlueDataCatalog {
 
 impl GlueDataCatalog {
     /// Creates a new GlueDataCatalog.
-    pub fn new() -> Result<Self, DataCatalogError> {
+    pub fn new() -> Result<Self, GlueError> {
         let region = if let Ok(url) = std::env::var("AWS_ENDPOINT_URL") {
             Region::Custom {
                 name: std::env::var("AWS_REGION").unwrap_or_else(|_| "custom".to_string()),
@@ -37,13 +77,12 @@ impl From<GlueClient> for GlueDataCatalog {
     }
 }
 
-fn get_web_identity_provider(
-) -> Result<AutoRefreshingProvider<WebIdentityProvider>, DataCatalogError> {
+fn get_web_identity_provider() -> Result<AutoRefreshingProvider<WebIdentityProvider>, GlueError> {
     let provider = WebIdentityProvider::from_k8s_env();
     Ok(AutoRefreshingProvider::new(provider)?)
 }
 
-fn create_glue_client(region: Region) -> Result<GlueClient, DataCatalogError> {
+fn create_glue_client(region: Region) -> Result<GlueClient, GlueError> {
     match std::env::var("AWS_WEB_IDENTITY_TOKEN_FILE") {
         Ok(_) => Ok(GlueClient::new_with(
             HttpClient::new()?,
@@ -79,20 +118,23 @@ impl DataCatalog for GlueDataCatalog {
                 database_name: database_name.to_string(),
                 name: table_name.to_string(),
             })
-            .await?;
+            .await
+            .map_err(|e| DataCatalogError::Error(Box::new(e)))?;
 
         let location = response
             .table
-            .ok_or(DataCatalogError::MissingMetadata {
+            .ok_or(GlueError::MissingMetadata {
                 metadata: "Table".to_string(),
-            })?
+            })
+            .map_err(|e| DataCatalogError::Error(Box::new(e)))?
             .storage_descriptor
-            .ok_or(DataCatalogError::MissingMetadata {
+            .ok_or(GlueError::MissingMetadata {
                 metadata: "Storage Descriptor".to_string(),
-            })?
+            })
+            .map_err(|e| DataCatalogError::Error(Box::new(e)))?
             .location
             .map(|l| l.replace("s3a", "s3"))
-            .ok_or(DataCatalogError::MissingMetadata {
+            .ok_or(GlueError::MissingMetadata {
                 metadata: "Location".to_string(),
             });
 
@@ -104,7 +146,7 @@ impl DataCatalog for GlueDataCatalog {
                     Ok(location)
                 }
             }
-            Err(err) => Err(err),
+            Err(err) => Err(err.into()),
         }
     }
 }
