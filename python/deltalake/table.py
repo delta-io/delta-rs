@@ -109,6 +109,15 @@ FilterDNFType = List[FilterConjunctionType]
 FilterType = Union[FilterConjunctionType, FilterDNFType]
 
 
+def _get_parquet_rs_compression(compression: str):
+    """Returns compression into parquet-rs compression format with pyarrow default compression level"""
+    if compression in ["gzip", "brotli", "zstd"]:
+        compression = (
+            f"{compression}({pyarrow.Codec.default_compression_level(compression)})"
+        )
+    return compression
+
+
 def _check_contains_null(value: Any) -> bool:
     """
     Check if target contains nullish value.
@@ -1377,12 +1386,14 @@ class TableOptimizer:
         if isinstance(min_commit_interval, timedelta):
             min_commit_interval = int(min_commit_interval.total_seconds())
 
+        compress = _get_parquet_rs_compression(compression)
+
         metrics = self.table._table.compact_optimize(
             partition_filters,
             target_size,
             max_concurrent_tasks,
             min_commit_interval,
-            compression,
+            compress,
         )
         self.table.update_incremental()
         return json.loads(metrics)
@@ -1432,6 +1443,8 @@ class TableOptimizer:
         if isinstance(min_commit_interval, timedelta):
             min_commit_interval = int(min_commit_interval.total_seconds())
 
+        compress = _get_parquet_rs_compression(compression)
+
         metrics = self.table._table.z_order_optimize(
             list(columns),
             partition_filters,
@@ -1439,7 +1452,7 @@ class TableOptimizer:
             max_concurrent_tasks,
             max_spill_size,
             min_commit_interval,
-            compression,
+            compress,
         )
         self.table.update_incremental()
         return json.loads(metrics)
