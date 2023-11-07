@@ -57,7 +57,6 @@ pub struct LogStoreConfig {
 #[async_trait::async_trait]
 pub trait LogStore: Sync + Send {
     /// Read data for commit entry with the given version.
-    /// TODO: return the actual commit data, i.e. Vec<Action>, instead?
     async fn read_commit_entry(&self, version: i64) -> DeltaResult<Bytes>;
 
     /// Write list of actions as delta commit entry for given version.
@@ -133,7 +132,7 @@ pub trait LogStore: Sync + Send {
 // TODO: maybe a bit of a hack, required to `#[derive(Debug)]` for the operation builders
 impl std::fmt::Debug for dyn LogStore + '_ {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "LogStore({})", self.root_url())
+        write!(f, "LogStore({})", self.root_uri())
     }
 }
 
@@ -261,7 +260,6 @@ async fn get_latest_version(log_store: &dyn LogStore, current_version: i64) -> D
         let mut max_version: i64 = version_start;
         let prefix = Some(log_store.log_path());
         let offset_path = commit_uri_from_version(max_version);
-        // let log_store = log_store.clone();
         let object_store = log_store.object_store();
         let mut files = object_store.list_with_offset(prefix, &offset_path).await?;
 

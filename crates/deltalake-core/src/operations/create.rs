@@ -463,7 +463,7 @@ mod tests {
 
         // Check table is overwritten
         let table = CreateBuilder::new()
-            .with_log_store(log_store.clone())
+            .with_log_store(log_store)
             .with_columns(schema.fields().iter().cloned())
             .with_save_mode(SaveMode::Overwrite)
             .await

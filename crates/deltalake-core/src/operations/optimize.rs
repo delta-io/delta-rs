@@ -608,13 +608,12 @@ impl MergePlan {
                     for file in files.iter() {
                         debug!("  file {}", file.location);
                     }
-                    let object_store_ref = log_store.clone();
+                    let object_store_ref = log_store.object_store().clone();
                     let batch_stream = futures::stream::iter(files.clone())
                         .then(move |file| {
                             let object_store_ref = object_store_ref.clone();
                             async move {
-                                let file_reader =
-                                    ParquetObjectReader::new(object_store_ref.object_store(), file);
+                                let file_reader = ParquetObjectReader::new(object_store_ref, file);
                                 ParquetRecordBatchStreamBuilder::new(file_reader)
                                     .await?
                                     .build()
