@@ -358,7 +358,7 @@ impl RawDeltaTable {
             .with_writer_properties(
                 WriterProperties::builder()
                     .set_compression(compress)
-                    .build(),
+                    .build()
             );
 
         if let Some(size) = target_size {
@@ -388,7 +388,7 @@ impl RawDeltaTable {
         max_concurrent_tasks: Option<usize>,
         max_spill_size: usize,
         min_commit_interval: Option<u64>,
-        compression: Option<&str>,
+        compression: &str,
     ) -> PyResult<String> {
         let mut compress: Compression = compression.parse().unwrap();
 
@@ -399,7 +399,7 @@ impl RawDeltaTable {
             .with_writer_properties(
                 WriterProperties::builder()
                     .set_compression(compress)
-                    .build(),
+                    .build()
             );
         if let Some(size) = target_size {
             cmd = cmd.with_target_size(size);
