@@ -34,7 +34,7 @@ use crate::table::state::DeltaTableState;
 use crate::DeltaTable;
 
 /// Audit the Delta Table's active files with the underlying file system.
-/// See this module's documentaiton for more information
+/// See this module's documentation for more information
 #[derive(Debug)]
 pub struct FileSystemCheckBuilder {
     /// A snapshot of the to-be-checked table's state

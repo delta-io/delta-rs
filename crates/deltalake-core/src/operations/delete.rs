@@ -47,7 +47,7 @@ use crate::DeltaTable;
 use super::datafusion_utils::Expression;
 
 /// Delete Records from the Delta Table.
-/// See this module's documentaiton for more information
+/// See this module's documentation for more information
 pub struct DeleteBuilder {
     /// Which records to delete
     predicate: Option<Expression>,
