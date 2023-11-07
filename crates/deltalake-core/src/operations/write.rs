@@ -53,17 +53,24 @@ use crate::writer::utils::PartitionPath;
 use crate::DeltaTable;
 
 #[derive(thiserror::Error, Debug)]
-enum WriteError {
+/// A write error for delta data
+pub enum WriteError {
     #[error("No data source supplied to write command.")]
+    /// No data supplied
     MissingData,
 
     #[error("Failed to execute write task: {source}")]
-    WriteTask { source: tokio::task::JoinError },
+    /// The write task failed
+    WriteTask { 
+        /// The source of the failure
+        source: tokio::task::JoinError },
 
     #[error("Delta-rs does not support writer version requirement: {0}")]
+    /// Incorrect version
     UnsupportedWriterVersion(i32),
 
     #[error("A table already exists at: {0}")]
+    /// Trying to overwrite a table that already exists
     AlreadyExists(String),
 
     #[error(
@@ -71,8 +78,11 @@ enum WriteError {
         expected,
         got
     )]
+    /// Partitioning mismatch
     PartitionColumnMismatch {
+        /// expected partition columns
         expected: Vec<String>,
+        /// actual partition column
         got: Vec<String>,
     },
 }
@@ -496,7 +506,8 @@ impl std::future::IntoFuture for WriteBuilder {
     }
 }
 
-fn can_cast_batch(from_fields: &Fields, to_fields: &Fields) -> bool {
+/// Checks to see whether the schema of a batch can be cast to another batch
+pub fn can_cast_batch(from_fields: &Fields, to_fields: &Fields) -> bool {
     if from_fields.len() != to_fields.len() {
         return false;
     }
@@ -545,7 +556,8 @@ fn cast_record_batch_columns(
         .collect::<Result<Vec<_>, _>>()
 }
 
-fn cast_record_batch(
+/// casts a recordbatch to another recordbatch
+pub fn cast_record_batch(
     batch: &RecordBatch,
     target_schema: ArrowSchemaRef,
     safe: bool,
