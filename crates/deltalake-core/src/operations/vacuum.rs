@@ -180,7 +180,6 @@ impl VacuumBuilder {
         };
 
         let expired_tombstones = get_stale_files(&self.snapshot, retention_period, now_millis);
-        let valid_files = self.snapshot.file_paths_iter().collect::<HashSet<Path>>();
 
         let mut files_to_delete = vec![];
         let mut file_sizes = vec![];
@@ -192,14 +191,35 @@ impl VacuumBuilder {
             .ok_or(DeltaTableError::NoMetadata)?
             .partition_columns;
 
+        let managed_files = self
+            .snapshot
+            .files()
+            .iter()
+            .map(|a| a.path.as_str())
+            .chain(
+                self.snapshot
+                    .all_tombstones()
+                    .iter()
+                    .map(|r| r.path.as_str()),
+            )
+            .collect::<HashSet<&str>>();
+
         while let Some(obj_meta) = all_files.next().await {
             // TODO should we allow NotFound here in case we have a temporary commit file in the list
             let obj_meta = obj_meta.map_err(DeltaTableError::from)?;
-            if valid_files.contains(&obj_meta.location) // file is still being tracked in table
-            || !expired_tombstones.contains(obj_meta.location.as_ref()) // file is not an expired tombstone
-            || is_hidden_directory(partition_columns, &obj_meta.location)?
-            {
-                continue;
+            let is_hidden = is_hidden_directory(partition_columns, &obj_meta.location)?;
+
+            if managed_files.contains(obj_meta.location.as_ref()) {
+                if !expired_tombstones.contains(obj_meta.location.as_ref()) || is_hidden {
+                    continue;
+                }
+            } else {
+                if now_millis - retention_period.num_milliseconds()
+                    < obj_meta.last_modified.timestamp_millis()
+                    || is_hidden
+                {
+                    continue;
+                }
             }
 
             files_to_delete.push(obj_meta.location);
@@ -357,8 +377,12 @@ impl VacuumPlan {
 /// deleted even if they'd normally be hidden. The _db_index directory contains (bloom filter)
 /// indexes and these must be deleted when the data they are tied to is deleted.
 fn is_hidden_directory(partition_columns: &[String], path: &Path) -> Result<bool, DeltaTableError> {
-    let path_name = path.to_string();
-    Ok((path_name.starts_with('.') || path_name.starts_with('_'))
+    let is_hidden = path
+        .parts()
+        .any(|p| p.as_ref().starts_with('.') || p.as_ref().starts_with('_'));
+
+    let path_name = path.as_ref();
+    Ok(is_hidden
         && !path_name.starts_with("_delta_index")
         && !path_name.starts_with("_change_data")
         && !partition_columns

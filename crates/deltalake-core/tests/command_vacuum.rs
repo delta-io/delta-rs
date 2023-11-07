@@ -216,7 +216,6 @@ async fn test_partitions_included() {
     );
 }
 
-#[ignore]
 #[tokio::test]
 // files that are not managed by the delta log and have a last_modified greater
 // than the retention period should be deleted. Unmanaged files and directories
@@ -276,7 +275,7 @@ async fn test_non_managed_files() {
 
     // Validate unmanaged files are deleted after the retention period
     let res = {
-        clock.tick(Duration::hours(1));
+        clock.tick(Duration::days(7));
         let (_, metrics) = DeltaOps(table)
             .vacuum()
             .with_clock(Arc::new(clock.clone()))
