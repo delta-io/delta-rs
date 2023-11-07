@@ -172,18 +172,20 @@ def write_deltalake(
         table.update_incremental()
 
     if isinstance(data, RecordBatchReader):
-        data, schema = convert_pyarrow_recordbatchreader(data, large_dtypes)
+        data, delta_schema = convert_pyarrow_recordbatchreader(data, large_dtypes)
     elif isinstance(data, pa.RecordBatch):
-        data, schema = convert_pyarrow_recordbatch(data, large_dtypes)
+        data, delta_schema = convert_pyarrow_recordbatch(data, large_dtypes)
     elif isinstance(data, pa.Table):
-        data, schema = convert_pyarrow_table(data, large_dtypes)
+        data, delta_schema = convert_pyarrow_table(data, large_dtypes)
     elif isinstance(data, ds.Dataset):
-        data, schema = convert_pyarrow_table(data.to_table(), large_dtypes)
+        data, delta_schema = convert_pyarrow_table(data.to_table(), large_dtypes)
     elif _has_pandas and isinstance(data, pd.DataFrame):
         if schema is not None:
             data = pa.Table.from_pandas(data, schema=schema)
         else:
-            data, schema = convert_pyarrow_table(pa.Table.from_pandas(data), False)
+            data, delta_schema = convert_pyarrow_table(
+                pa.Table.from_pandas(data), False
+            )
     elif isinstance(data, Iterable):
         if schema is None:
             raise ValueError("You must provide schema if data is Iterable")
@@ -191,6 +193,9 @@ def write_deltalake(
         raise TypeError(
             f"{type(data).__name__} is not a valid input. Only PyArrow RecordBatchReader, RecordBatch, Iterable[RecordBatch], Table, Dataset or Pandas DataFrame are valid inputs for source."
         )
+
+    if schema is None:
+        schema = delta_schema
 
     if filesystem is not None:
         raise NotImplementedError("Filesystem support is not yet implemented.  #570")
