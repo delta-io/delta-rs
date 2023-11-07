@@ -227,7 +227,8 @@ impl From<HashMap<String, String>> for StorageOptions {
     }
 }
 
-pub(crate) fn configure_log_store(
+/// Configure a [`LogStoreRef`] for the given url and configuration
+pub fn configure_log_store(
     url: Url,
     options: impl Into<StorageOptions> + Clone,
 ) -> DeltaResult<LogStoreRef> {
@@ -236,7 +237,8 @@ pub(crate) fn configure_log_store(
     Ok(Arc::new(DefaultLogStore::try_new(url, options)?))
 }
 
-pub(crate) fn configure_store(
+/// Configure an instance of an [`ObjectStore`] for the given url and configuration
+pub fn configure_store(
     url: &Url,
     options: &mut StorageOptions,
 ) -> DeltaResult<Arc<DynObjectStore>> {

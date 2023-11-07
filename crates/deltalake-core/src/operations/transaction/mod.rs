@@ -243,8 +243,7 @@ mod tests {
     use self::test_utils::{create_remove_action, init_table_actions};
     use super::*;
     use crate::{
-        logstore::default_logstore::DefaultLogStore,
-        storage::{commit_uri_from_version, DeltaObjectStore},
+        logstore::default_logstore::DefaultLogStore, storage::commit_uri_from_version,
         DeltaConfigKey,
     };
     use object_store::memory::InMemory;
@@ -294,8 +293,13 @@ mod tests {
     async fn test_try_commit_transaction() {
         let store = Arc::new(InMemory::new());
         let url = Url::parse("mem://what/is/this").unwrap();
-        let delta_store = DeltaObjectStore::new(store.clone(), url.clone());
-        let log_store = DefaultLogStore::new(Arc::new(delta_store), url);
+        let log_store = DefaultLogStore::new(
+            store.clone(),
+            crate::logstore::LogStoreConfig {
+                location: url,
+                options: HashMap::new().into(),
+            },
+        );
         let tmp_path = Path::from("_delta_log/tmp");
         let version_path = Path::from("_delta_log/00000000000000000000.json");
         store.put(&tmp_path, bytes::Bytes::new()).await.unwrap();

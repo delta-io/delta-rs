@@ -29,11 +29,11 @@ use crate::errors::DeltaTableError;
 use crate::kernel::{Add, StructType};
 use crate::table::builder::DeltaTableBuilder;
 use crate::table::DeltaTableMetaData;
-use crate::{storage::DeltaObjectStore, DeltaTable};
+use crate::DeltaTable;
 
 /// Writes messages to a delta lake table.
 pub struct RecordBatchWriter {
-    storage: Arc<DeltaObjectStore>,
+    storage: Arc<dyn ObjectStore>,
     arrow_schema_ref: Arc<ArrowSchema>,
     writer_properties: WriterProperties,
     partition_columns: Vec<String>,

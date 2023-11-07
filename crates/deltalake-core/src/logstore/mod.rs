@@ -2,14 +2,19 @@
 use futures::StreamExt;
 use lazy_static::lazy_static;
 use regex::Regex;
-use std::{cmp::max, sync::Arc};
+use serde::{
+    de::{Error, SeqAccess, Visitor},
+    ser::SerializeSeq,
+    Deserialize, Serialize,
+};
+use std::{cmp::max, collections::HashMap, sync::Arc};
 use url::Url;
 
 use crate::{
     errors::DeltaResult,
     operations::transaction::TransactionError,
     protocol::{get_last_checkpoint, ProtocolError},
-    storage::{commit_uri_from_version, DeltaObjectStore, ObjectStoreRef},
+    storage::{commit_uri_from_version, config::StorageOptions},
     DeltaTableError,
 };
 use bytes::Bytes;
@@ -28,6 +33,15 @@ pub type LogStoreRef = Arc<dyn LogStore>;
 
 lazy_static! {
     static ref DELTA_LOG_PATH: Path = Path::from("_delta_log");
+}
+
+/// Configuration parameters for a log store
+#[derive(Debug, Clone)]
+pub struct LogStoreConfig {
+    /// url corresponding to the storage location.
+    pub location: Url,
+    /// Options used for configuring backend storage
+    pub options: StorageOptions,
 }
 
 /// Trait for critical operations required to read and write commit entries in Delta logs.
@@ -60,7 +74,7 @@ pub trait LogStore: Sync + Send {
     async fn get_latest_version(&self, start_version: i64) -> DeltaResult<i64>;
 
     /// Get underlying object store.
-    fn object_store(&self) -> ObjectStoreRef;
+    fn object_store(&self) -> Arc<dyn ObjectStore>;
 
     /// [Path] to Delta log
     fn to_uri(&self, location: &Path) -> String;
@@ -95,7 +109,7 @@ pub trait LogStore: Sync + Send {
     /// Generate a unique enough url to identify the store in datafusion.
     /// The DF object store registry only cares about the scheme and the host of the url for
     /// registering/fetching. In our case the scheme is hard-coded to "delta-rs", so to get a unique
-    /// host we convert the location from this `DeltaObjectStore` to a valid name, combining the
+    /// host we convert the location from this `LogStore` to a valid name, combining the
     /// original scheme, host and path with invalid characters replaced.
     fn object_store_url(&self) -> ObjectStoreUrl;
 
@@ -111,12 +125,63 @@ pub trait LogStore: Sync + Send {
         }
         Ok(())
     }
+
+    /// Get configuration representing configured log store.
+    fn config(&self) -> &LogStoreConfig;
 }
 
 // TODO: maybe a bit of a hack, required to `#[derive(Debug)]` for the operation builders
 impl std::fmt::Debug for dyn LogStore + '_ {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         self.object_store().fmt(f)
+    }
+}
+
+impl Serialize for LogStoreConfig {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let mut seq = serializer.serialize_seq(None)?;
+        seq.serialize_element(&self.location.to_string())?;
+        seq.serialize_element(&self.options.0)?;
+        seq.end()
+    }
+}
+
+impl<'de> Deserialize<'de> for LogStoreConfig {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        struct LogStoreConfigVisitor {}
+
+        impl<'de> Visitor<'de> for LogStoreConfigVisitor {
+            type Value = LogStoreConfig;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+                formatter.write_str("struct LogStoreConfig")
+            }
+
+            fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
+            where
+                A: SeqAccess<'de>,
+            {
+                let location_str: String = seq
+                    .next_element()?
+                    .ok_or_else(|| A::Error::invalid_length(0, &self))?;
+                let options: HashMap<String, String> = seq
+                    .next_element()?
+                    .ok_or_else(|| A::Error::invalid_length(0, &self))?;
+                let location = Url::parse(&location_str).unwrap();
+                Ok(LogStoreConfig {
+                    location,
+                    options: options.into(),
+                })
+            }
+        }
+
+        deserializer.deserialize_seq(LogStoreConfigVisitor {})
     }
 }
 
@@ -228,7 +293,7 @@ async fn read_commit_entry(storage: &dyn ObjectStore, version: i64) -> DeltaResu
 }
 
 async fn write_commit_entry(
-    storage: &DeltaObjectStore,
+    storage: &dyn ObjectStore,
     version: i64,
     tmp_commit: &Path,
 ) -> Result<(), TransactionError> {

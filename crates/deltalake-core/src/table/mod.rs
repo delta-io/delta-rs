@@ -5,7 +5,6 @@ use std::convert::TryFrom;
 use std::fmt;
 use std::fmt::Formatter;
 use std::io::{BufRead, BufReader, Cursor};
-use std::sync::Arc;
 use std::{cmp::max, cmp::Ordering, collections::HashSet};
 
 use chrono::{DateTime, Utc};
@@ -26,11 +25,13 @@ use crate::kernel::{
     Action, Add, CommitInfo, DataType, Format, Metadata, ReaderFeatures, Remove, StructType,
     WriterFeatures,
 };
-use crate::logstore::{default_logstore::DefaultLogStore, LogStoreRef};
+use crate::logstore::LogStoreConfig;
+use crate::logstore::LogStoreRef;
 use crate::partitions::PartitionFilter;
 use crate::protocol::{
     find_latest_check_point_for_version, get_last_checkpoint, ProtocolError, Stats,
 };
+use crate::storage::config::configure_log_store;
 use crate::storage::{commit_uri_from_version, ObjectStoreRef};
 
 pub mod builder;
@@ -266,8 +267,7 @@ impl Serialize for DeltaTable {
         let mut seq = serializer.serialize_seq(None)?;
         seq.serialize_element(&self.state)?;
         seq.serialize_element(&self.config)?;
-        // tp::TODO (de)serialize actual log store instead
-        seq.serialize_element(self.object_store().as_ref())?;
+        seq.serialize_element(self.log_store.config())?;
         seq.serialize_element(&self.last_check_point)?;
         seq.serialize_element(&self.version_timestamp)?;
         seq.end()
@@ -298,15 +298,12 @@ impl<'de> Deserialize<'de> for DeltaTable {
                 let config = seq
                     .next_element()?
                     .ok_or_else(|| A::Error::invalid_length(0, &self))?;
-                // TODO twh; proper (de-)serialization
-                let storage = Arc::new(
-                    seq.next_element()?
-                        .ok_or_else(|| A::Error::invalid_length(0, &self))?,
-                );
-                let log_store = Arc::new(DefaultLogStore::new(
-                    Arc::clone(&storage),
-                    storage.location().to_owned(),
-                ));
+                let storage_config: LogStoreConfig = seq
+                    .next_element()?
+                    .ok_or_else(|| A::Error::invalid_length(0, &self))?;
+                let log_store =
+                    configure_log_store(storage_config.location, storage_config.options)
+                        .map_err(|_| A::Error::custom("Failed deserializing LogStore"))?;
                 let last_check_point = seq
                     .next_element()?
                     .ok_or_else(|| A::Error::invalid_length(0, &self))?;

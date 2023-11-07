@@ -26,14 +26,14 @@ use crate::errors::DeltaTableError;
 use crate::kernel::{Add, StructType};
 use crate::table::builder::DeltaTableBuilder;
 use crate::table::DeltaTableMetaData;
+use crate::writer::utils::ShareableBuffer;
 use crate::DeltaTable;
-use crate::{storage::DeltaObjectStore, writer::utils::ShareableBuffer};
 
 type BadValue = (Value, ParquetError);
 
 /// Writes messages to a delta lake table.
 pub struct JsonWriter {
-    storage: Arc<DeltaObjectStore>,
+    storage: Arc<dyn ObjectStore>,
     arrow_schema_ref: Arc<arrow_schema::Schema>,
     writer_properties: WriterProperties,
     partition_columns: Vec<String>,
