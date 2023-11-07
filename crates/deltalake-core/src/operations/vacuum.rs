@@ -213,13 +213,11 @@ impl VacuumBuilder {
                 if !expired_tombstones.contains(obj_meta.location.as_ref()) || is_hidden {
                     continue;
                 }
-            } else {
-                if now_millis - retention_period.num_milliseconds()
-                    < obj_meta.last_modified.timestamp_millis()
-                    || is_hidden
-                {
-                    continue;
-                }
+            } else if now_millis - retention_period.num_milliseconds()
+                < obj_meta.last_modified.timestamp_millis()
+                || is_hidden
+            {
+                continue;
             }
 
             files_to_delete.push(obj_meta.location);
