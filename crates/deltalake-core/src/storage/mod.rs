@@ -6,6 +6,7 @@ use lazy_static::lazy_static;
 
 pub mod config;
 pub mod file;
+pub mod path;
 pub mod utils;
 
 #[cfg(any(feature = "s3", feature = "s3-native-tls"))]
