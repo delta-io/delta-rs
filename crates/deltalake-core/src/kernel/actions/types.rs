@@ -255,7 +255,7 @@ pub enum WriterFeatures {
     DomainMetadata,
     /// version 2 of checkpointing
     V2Checkpoint,
-    /// Iceberg compatability support
+    /// Iceberg compatibility support
     IcebergCompatV1,
     /// If we do not match any other reader features
     #[serde(untagged)]
