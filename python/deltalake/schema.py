@@ -23,11 +23,11 @@ def _convert_pa_schema_to_delta(
 ) -> pa.schema:
     """Convert a PyArrow schema to a schema compatible with Delta Lake. Converts unsigned to signed equivalent, and
     converts all timestamps to `us` timestamps. With the boolean flag large_dtypes you can control if the schema
-    should keep large types in the schema.
+    should keep cast normal to large types in the schema, or from large to normal.
 
     Args
         schema: Source schema
-        large_dtypes: If True, the pyarrow schema is kept in large_dtypes
+        large_dtypes: If True, the pyarrow schema is casted to large_dtypes
     """
     dtype_map = {
         pa.uint8(): pa.int8(),
@@ -35,7 +35,12 @@ def _convert_pa_schema_to_delta(
         pa.uint32(): pa.int32(),
         pa.uint64(): pa.int64(),
     }
-    if not large_dtypes:
+    if large_dtypes:
+        dtype_map = {
+            **dtype_map,
+            **{pa.string(): pa.large_string(), pa.binary(): pa.large_binary()},
+        }
+    else:
         dtype_map = {
             **dtype_map,
             **{pa.large_string(): pa.string(), pa.large_binary(): pa.binary()},
@@ -43,7 +48,7 @@ def _convert_pa_schema_to_delta(
 
     def dtype_to_delta_dtype(dtype: pa.DataType) -> pa.DataType:
         # Handle nested types
-        if isinstance(dtype, pa.LargeListType):
+        if isinstance(dtype, (pa.LargeListType, pa.ListType)):
             return list_to_delta_dtype(dtype)
         elif isinstance(dtype, pa.StructType):
             return struct_to_delta_dtype(dtype)
@@ -55,7 +60,7 @@ def _convert_pa_schema_to_delta(
             return dtype
 
     def list_to_delta_dtype(
-        dtype: pa.LargeListType,
+        dtype: Union[pa.LargeListType, pa.ListType],
     ) -> Union[pa.LargeListType, pa.ListType]:
         nested_dtype = dtype.value_type
         nested_dtype_cast = dtype_to_delta_dtype(nested_dtype)
