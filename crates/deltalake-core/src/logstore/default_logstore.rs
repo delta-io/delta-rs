@@ -33,7 +33,7 @@ impl DefaultLogStore {
     /// * `storage` - A shared reference to an [`object_store::ObjectStore`] with "/" pointing at delta table root (i.e. where `_delta_log` is located).
     /// * `location` - A url corresponding to the storage location of `storage`.
     pub fn new(storage: ObjectStoreRef, config: LogStoreConfig) -> Self {
-        DefaultLogStore { storage, config }
+        Self { storage, config }
     }
 
     /// Create log store

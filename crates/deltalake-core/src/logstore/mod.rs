@@ -133,7 +133,7 @@ pub trait LogStore: Sync + Send {
 // TODO: maybe a bit of a hack, required to `#[derive(Debug)]` for the operation builders
 impl std::fmt::Debug for dyn LogStore + '_ {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.object_store().fmt(f)
+        write!(f, "LogStore({})", self.root_url())
     }
 }
 
