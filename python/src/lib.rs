@@ -43,7 +43,7 @@ use deltalake::DeltaOps;
 use deltalake::DeltaTableBuilder;
 use pyo3::exceptions::{PyIOError, PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::{PyFrozenSet, PyType};
+use pyo3::types::{PyBytes, PyFrozenSet, PyType};
 use serde_json::{Map, Value};
 
 use crate::error::DeltaProtocolError;
@@ -152,6 +152,13 @@ impl RawDeltaTable {
 
     pub fn version(&self) -> PyResult<i64> {
         Ok(self._table.version())
+    }
+
+    pub fn get_obj<'py>(&self, py: Python<'py>, version: i64) -> PyResult<&'py PyBytes> {
+        let commit_log_bytes = rt()?
+            .block_on(self._table.get_obj_from_version(version))
+            .map_err(PythonError::from)?;
+        return Ok(PyBytes::new(py, &commit_log_bytes));
     }
 
     pub fn metadata(&self) -> PyResult<RawDeltaTableMetaData> {
