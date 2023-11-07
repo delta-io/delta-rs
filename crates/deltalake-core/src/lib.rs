@@ -40,7 +40,6 @@
 //! - `s3`, `gcs`, `azure` - enable the storage backends for AWS S3, Google Cloud Storage (GCS),
 //!   or Azure Blob Storage / Azure Data Lake Storage Gen2 (ADLS2). Use `s3-native-tls` to use native TLS
 //!   instead of Rust TLS implementation.
-//! - `glue` - enable the Glue data catalog to work with Delta Tables with AWS Glue.
 //! - `datafusion` - enable the `datafusion::datasource::TableProvider` trait implementation
 //!   for Delta Tables, allowing them to be queried using [DataFusion](https://github.com/apache/arrow-datafusion).
 //! - `datafusion-ext` - DEPRECATED: alias for `datafusion` feature.
