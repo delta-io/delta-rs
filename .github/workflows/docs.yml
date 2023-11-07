@@ -7,6 +7,16 @@ on:
       - docs/**
       - mkdocs.yml
       - .github/workflows/docs.yml
+  repository_dispatch:
+    types:
+      - release-docs
+  # Allow manual trigger for now
+  workflow_dispatch:
+
+env:    
+  IS_RELEASE: ${{ github.event_name == 'repository_dispatch' || github.event_name == 'workflow_dispatch' }}
+  BUILD_ARGS: ${{ (github.event_name == 'repository_dispatch' || github.event_name == 'workflow_dispatch') && 'install MATURIN_EXTRA_ARGS="--manylinux off"' || 'develop' }}
+
 jobs:
   markdown-link-check:
     runs-on: ubuntu-latest
@@ -26,6 +36,11 @@ jobs:
           src: docs/src/python
 
   build:
+    needs:
+      [
+        lint,
+        markdown-link-check,
+      ]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
@@ -50,15 +65,29 @@ jobs:
           pip install virtualenv
           virtualenv venv
           source venv/bin/activate
-          make develop
-          cd ..
+          make ${{ env.BUILD_ARGS }}
 
       - name: Install dependencies
         run: |
           source python/venv/bin/activate
           pip install -r docs/requirements.txt
 
-      - name: Build documentation
+      - name: Build
         run: |
           source python/venv/bin/activate
           mkdocs build
+
+      - name: Deploy
+        if: ${{ env.IS_RELEASE == 'true' }}
+        uses: JamesIves/github-pages-deploy-action@v4
+        with:
+          folder: site
+          clean-exclude: |
+            python/
+            .nojekyll
+          single-commit: false
+          git-config-name: "Github Action"
+          git-config-email: "deltars@users.noreply.github.com"
+          commit-message: "doc update for tag `${{ github.event.client_payload.tag || github.ref_name }}`"
+
+
