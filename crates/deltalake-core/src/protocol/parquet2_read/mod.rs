@@ -335,7 +335,7 @@ fn deserialize_add_column_page(
                 },
             )?;
         }
-        // FIXME suport partitionValueParsed
+        // FIXME support partitionValueParsed
         "dataChange" => {
             for_each_boolean_field_value(
                 actions,
@@ -420,7 +420,7 @@ fn deserialize_remove_column_page(
                 |action: &mut Remove, v: i64| action.size = Some(v),
             )?;
         }
-        // FIXME suport partitionValueParsed
+        // FIXME support partitionValueParsed
         "partitionValues" => {
             for_each_map_field_value(
                 &field[1..],

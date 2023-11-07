@@ -114,7 +114,7 @@ impl UpdateBuilder {
         self
     }
 
-    /// Perform an additonal update expression during the operaton
+    /// Perform an additional update expression during the operaton
     pub fn with_update<S: Into<Column>, E: Into<Expression>>(
         mut self,
         column: S,

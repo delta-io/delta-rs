@@ -385,7 +385,7 @@ pub(crate) fn logical_schema(
 }
 
 #[derive(Debug, Clone, Default)]
-/// Used to specify if additonal metadata columns are exposed to the user
+/// Used to specify if additional metadata columns are exposed to the user
 pub struct DeltaScanConfigBuilder {
     /// Include the source path for each record. The name of this column is determine by `file_column_name`
     include_file_column: bool,
@@ -458,7 +458,7 @@ impl DeltaScanConfigBuilder {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
-/// Include additonal metadata columns during a [`DeltaScan`]
+/// Include additional metadata columns during a [`DeltaScan`]
 pub struct DeltaScanConfig {
     /// Include the source path for each record
     pub file_column_name: Option<String>,
@@ -711,7 +711,7 @@ impl TableProvider for DeltaTable {
     }
 }
 
-/// A Delta table provider that enables additonal metadata columns to be included during the scan
+/// A Delta table provider that enables additional metadata columns to be included during the scan
 pub struct DeltaTableProvider {
     snapshot: DeltaTableState,
     store: ObjectStoreRef,
