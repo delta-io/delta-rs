@@ -24,6 +24,7 @@ arrow-arith = { workspace = true, optional = true }
 arrow-array = { workspace = true, optional = true }
 arrow-buffer = { workspace = true, optional = true }
 arrow-cast = { workspace = true, optional = true }
+arrow-json = { workspace = true, optional = true }
 arrow-ord = { workspace = true, optional = true }
 arrow-row = { workspace = true, optional = true }
 arrow-schema = { workspace = true, optional = true, features = ["serde"] }
@@ -140,6 +141,7 @@ arrow = [
     "arrow-arith",
     "arrow-array",
     "arrow-cast",
+    "arrow-json",
     "arrow-ord",
     "arrow-row",
     "arrow-schema",

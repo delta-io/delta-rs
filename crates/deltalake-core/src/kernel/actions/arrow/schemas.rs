@@ -2,26 +2,26 @@ use std::sync::Arc;
 
 use arrow_schema::{DataType, Field, Fields, Schema};
 
-use super::ActionType;
+use super::super::ActionType;
 
 impl ActionType {
     /// Returns the root field for the action type
-    pub fn field(&self) -> Field {
+    pub fn arrow_field(&self) -> Field {
         match self {
-            Self::Add => get_root("add", self.fields()),
-            Self::Cdc => get_root("cdc", self.fields()),
-            Self::CommitInfo => get_root("commitInfo", self.fields()),
-            Self::DomainMetadata => get_root("domainMetadata", self.fields()),
-            Self::Metadata => get_root("metaData", self.fields()),
-            Self::Protocol => get_root("protocol", self.fields()),
-            Self::Remove => get_root("remove", self.fields()),
-            Self::RowIdHighWaterMark => get_root("rowIdHighWaterMark", self.fields()),
-            Self::Txn => get_root("txn", self.fields()),
+            Self::Add => get_root("add", self.arrow_fields()),
+            Self::Cdc => get_root("cdc", self.arrow_fields()),
+            Self::CommitInfo => get_root("commitInfo", self.arrow_fields()),
+            Self::DomainMetadata => get_root("domainMetadata", self.arrow_fields()),
+            Self::Metadata => get_root("metaData", self.arrow_fields()),
+            Self::Protocol => get_root("protocol", self.arrow_fields()),
+            Self::Remove => get_root("remove", self.arrow_fields()),
+            Self::RowIdHighWaterMark => get_root("rowIdHighWaterMark", self.arrow_fields()),
+            Self::Txn => get_root("txn", self.arrow_fields()),
         }
     }
 
     /// Returns the child fields for the action type
-    pub fn fields(&self) -> Vec<Field> {
+    pub fn arrow_fields(&self) -> Vec<Field> {
         match self {
             Self::Add => add_fields(),
             Self::Cdc => cdc_fields(),
@@ -37,18 +37,19 @@ impl ActionType {
 }
 
 /// Returns the schema for the delta log
+#[allow(dead_code)]
 pub fn get_log_schema() -> Schema {
     Schema {
         fields: Fields::from_iter([
-            ActionType::Add.field(),
-            ActionType::Cdc.field(),
-            ActionType::CommitInfo.field(),
-            ActionType::DomainMetadata.field(),
-            ActionType::Metadata.field(),
-            ActionType::Protocol.field(),
-            ActionType::Remove.field(),
-            ActionType::RowIdHighWaterMark.field(),
-            ActionType::Txn.field(),
+            ActionType::Add.arrow_field(),
+            ActionType::Cdc.arrow_field(),
+            ActionType::CommitInfo.arrow_field(),
+            ActionType::DomainMetadata.arrow_field(),
+            ActionType::Metadata.arrow_field(),
+            ActionType::Protocol.arrow_field(),
+            ActionType::Remove.arrow_field(),
+            ActionType::RowIdHighWaterMark.arrow_field(),
+            ActionType::Txn.arrow_field(),
         ]),
         metadata: Default::default(),
     }

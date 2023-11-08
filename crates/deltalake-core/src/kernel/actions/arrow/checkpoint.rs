@@ -1,19 +1,53 @@
-use std::collections::HashMap;
+#![allow(dead_code)]
+
+use std::collections::{HashMap, HashSet};
+use std::io::Cursor;
 use std::str::FromStr;
 
 use arrow_array::{
     BooleanArray, Int32Array, Int64Array, ListArray, MapArray, RecordBatch, StringArray,
     StructArray,
 };
+use arrow_json::ReaderBuilder;
+use arrow_schema::SchemaRef as ArrowSchemaRef;
+use arrow_select::concat::concat_batches;
 use either::Either;
 use fix_hidden_lifetime_bug::fix_hidden_lifetime_bug;
-use itertools::izip;
-use serde::{Deserialize, Serialize};
 
-use super::{error::Error, DeltaResult};
+use itertools::izip;
+
+use crate::kernel::error::{DeltaResult, Error};
+use crate::kernel::{
+    Action, ActionType, Add, DeletionVectorDescriptor, Format, Metadata, Protocol, Remove,
+    StorageType,
+};
+
+pub fn parse_json(
+    json_strings: StringArray,
+    output_schema: ArrowSchemaRef,
+) -> DeltaResult<RecordBatch> {
+    // TODO concatenating to a single string is probably not needed if we use the
+    // lower level RawDecoder APIs
+    let data = json_strings
+        .into_iter()
+        .filter_map(|d| {
+            d.map(|dd| {
+                let mut data = dd.as_bytes().to_vec();
+                data.extend("\n".as_bytes());
+                data
+            })
+        })
+        .flatten()
+        .collect::<Vec<_>>();
+
+    let batches = ReaderBuilder::new(output_schema.clone())
+        .build(Cursor::new(data))?
+        .collect::<Result<Vec<_>, _>>()?;
+
+    Ok(concat_batches(&output_schema, &batches)?)
+}
 
 #[fix_hidden_lifetime_bug]
-#[allow(dead_code)]
 pub(crate) fn parse_actions<'a>(
     batch: &RecordBatch,
     types: impl IntoIterator<Item = &'a ActionType>,
@@ -175,15 +209,15 @@ fn parse_action_protocol(arr: &StructArray) -> DeltaResult<Box<dyn Iterator<Item
                             .as_any()
                             .downcast_ref::<StringArray>()?
                             .iter()
-                            .filter_map(|v| v.map(|inner| inner.to_owned()))
-                            .collect::<Vec<_>>();
+                            .filter_map(|v| v.map(|inner| inner.into()))
+                            .collect::<HashSet<_>>();
                         Some(vals)
                     } else {
                         None
                     }
                 })
                 .flatten()
-                .collect::<Vec<_>>()
+                .collect::<HashSet<_>>()
         });
 
     protocol.writer_features = cast_struct_column::<ListArray>(arr, "writerFeatures")
@@ -196,15 +230,15 @@ fn parse_action_protocol(arr: &StructArray) -> DeltaResult<Box<dyn Iterator<Item
                             .as_any()
                             .downcast_ref::<StringArray>()?
                             .iter()
-                            .filter_map(|v| v.map(|inner| inner.to_string()))
-                            .collect::<Vec<_>>();
+                            .filter_map(|v| v.map(|inner| inner.into()))
+                            .collect::<HashSet<_>>();
                         Some(vals)
                     } else {
                         None
                     }
                 })
                 .flatten()
-                .collect::<Vec<_>>()
+                .collect::<HashSet<_>>()
         });
 
     Ok(Box::new(std::iter::once(Action::Protocol(protocol))))
@@ -490,22 +524,15 @@ fn struct_array_to_map(arr: &StructArray) -> DeltaResult<HashMap<String, Option<
         .collect())
 }
 
-#[cfg(all(test, feature = "default-client"))]
+#[cfg(test)]
 mod tests {
     use std::sync::Arc;
 
-    use object_store::local::LocalFileSystem;
-
+    use super::super::schemas::get_log_schema;
     use super::*;
-    use crate::actions::Protocol;
-    use crate::client::json::DefaultJsonHandler;
-    use crate::executor::tokio::TokioBackgroundExecutor;
-    use crate::JsonHandler;
+    use crate::kernel::{Format, Metadata, Protocol, ReaderFeatures, WriterFeatures};
 
     fn action_batch() -> RecordBatch {
-        let store = Arc::new(LocalFileSystem::new());
-        let handler = DefaultJsonHandler::new(store, Arc::new(TokioBackgroundExecutor::new()));
-
         let json_strings: StringArray = vec![
             r#"{"add":{"path":"part-00000-fae5310a-a37d-4e51-827b-c3d5516560ca-c000.snappy.parquet","partitionValues":{},"size":635,"modificationTime":1677811178336,"dataChange":true,"stats":"{\"numRecords\":10,\"minValues\":{\"value\":0},\"maxValues\":{\"value\":9},\"nullCount\":{\"value\":0},\"tightBounds\":true}","tags":{"INSERTION_TIME":"1677811178336000","MIN_INSERTION_TIME":"1677811178336000","MAX_INSERTION_TIME":"1677811178336000","OPTIMIZE_TARGET_SIZE":"268435456"}}}"#,
             r#"{"commitInfo":{"timestamp":1677811178585,"operation":"WRITE","operationParameters":{"mode":"ErrorIfExists","partitionBy":"[]"},"isolationLevel":"WriteSerializable","isBlindAppend":true,"operationMetrics":{"numFiles":"1","numOutputRows":"10","numOutputBytes":"635"},"engineInfo":"Databricks-Runtime/<unknown>","txnId":"a6a94671-55ef-450e-9546-b8465b9147de"}}"#,
@@ -514,7 +541,7 @@ mod tests {
         ]
         .into();
         let output_schema = Arc::new(get_log_schema());
-        handler.parse_json(json_strings, output_schema).unwrap()
+        parse_json(json_strings, output_schema).unwrap()
     }
 
     #[test]
@@ -526,12 +553,11 @@ mod tests {
         let expected = Action::Protocol(Protocol {
             min_reader_version: 3,
             min_writer_version: 7,
-            reader_features: Some(vec!["deletionVectors".into()]),
-            writer_features: Some(vec!["deletionVectors".into()]),
+            reader_features: Some(vec![ReaderFeatures::DeletionVectors].into_iter().collect()),
+            writer_features: Some(vec![WriterFeatures::DeletionVectors].into_iter().collect()),
         });
         assert_eq!(action[0], expected)
     }
-
     #[test]
     fn test_parse_metadata() {
         let batch = action_batch();
@@ -566,9 +592,6 @@ mod tests {
 
     #[test]
     fn test_parse_add_partitioned() {
-        let store = Arc::new(LocalFileSystem::new());
-        let handler = DefaultJsonHandler::new(store, Arc::new(TokioBackgroundExecutor::new()));
-
         let json_strings: StringArray = vec![
             r#"{"commitInfo":{"timestamp":1670892998177,"operation":"WRITE","operationParameters":{"mode":"Append","partitionBy":"[\"c1\",\"c2\"]"},"isolationLevel":"Serializable","isBlindAppend":true,"operationMetrics":{"numFiles":"3","numOutputRows":"3","numOutputBytes":"1356"},"engineInfo":"Apache-Spark/3.3.1 Delta-Lake/2.2.0","txnId":"046a258f-45e3-4657-b0bf-abfb0f76681c"}}"#,
             r#"{"protocol":{"minReaderVersion":1,"minWriterVersion":2}}"#,
@@ -579,7 +602,7 @@ mod tests {
         ]
         .into();
         let output_schema = Arc::new(get_log_schema());
-        let batch = handler.parse_json(json_strings, output_schema).unwrap();
+        let batch = parse_json(json_strings, output_schema).unwrap();
 
         let actions = parse_action(&batch, &ActionType::Add)
             .unwrap()

@@ -8,6 +8,10 @@ use lazy_static::lazy_static;
 
 use super::super::schema::{ArrayType, DataType, MapType, PrimitiveType, StructField, StructType};
 
+pub mod checkpoint;
+pub mod schemas;
+// pub mod snapshot;
+
 impl TryFrom<&StructType> for ArrowSchema {
     type Error = ArrowError;
 
