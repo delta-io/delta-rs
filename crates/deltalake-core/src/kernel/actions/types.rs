@@ -174,7 +174,7 @@ pub enum ReaderFeatures {
     /// Mapping of one column to another
     ColumnMapping,
     /// Deletion vectors for merge, update, delete
-    DeleteionVecotrs,
+    DeletionVectors,
     /// timestamps without timezone support
     #[serde(alias = "timestampNtz")]
     TimestampWithoutTimezone,
@@ -191,7 +191,7 @@ impl Into<usize> for ReaderFeatures {
         match self {
             ReaderFeatures::Other(_) => 0,
             ReaderFeatures::ColumnMapping => 2,
-            ReaderFeatures::DeleteionVecotrs
+            ReaderFeatures::DeletionVectors
             | ReaderFeatures::TimestampWithoutTimezone
             | ReaderFeatures::V2Checkpoint => 3,
         }
@@ -204,7 +204,7 @@ impl From<&parquet::record::Field> for ReaderFeatures {
         match value {
             parquet::record::Field::Str(feature) => match feature.as_str() {
                 "columnMapping" => ReaderFeatures::ColumnMapping,
-                "deletionVectors" => ReaderFeatures::DeleteionVecotrs,
+                "deletionVectors" => ReaderFeatures::DeletionVectors,
                 "timestampNtz" => ReaderFeatures::TimestampWithoutTimezone,
                 "v2Checkpoint" => ReaderFeatures::V2Checkpoint,
                 f => ReaderFeatures::Other(f.to_string()),
@@ -216,9 +216,15 @@ impl From<&parquet::record::Field> for ReaderFeatures {
 
 impl From<String> for ReaderFeatures {
     fn from(value: String) -> Self {
-        match value.as_str() {
+        value.as_str().into()
+    }
+}
+
+impl From<&str> for ReaderFeatures {
+    fn from(value: &str) -> Self {
+        match value {
             "columnMapping" => ReaderFeatures::ColumnMapping,
-            "deletionVectors" => ReaderFeatures::DeleteionVecotrs,
+            "deletionVectors" => ReaderFeatures::DeletionVectors,
             "timestampNtz" => ReaderFeatures::TimestampWithoutTimezone,
             "v2Checkpoint" => ReaderFeatures::V2Checkpoint,
             f => ReaderFeatures::Other(f.to_string()),
@@ -230,7 +236,7 @@ impl AsRef<str> for ReaderFeatures {
     fn as_ref(&self) -> &str {
         match self {
             ReaderFeatures::ColumnMapping => "columnMapping",
-            ReaderFeatures::DeleteionVecotrs => "deletionVectors",
+            ReaderFeatures::DeletionVectors => "deletionVectors",
             ReaderFeatures::TimestampWithoutTimezone => "timestampNtz",
             ReaderFeatures::V2Checkpoint => "v2Checkpoint",
             ReaderFeatures::Other(f) => f,
@@ -264,7 +270,7 @@ pub enum WriterFeatures {
     /// ID Columns
     IdentityColumns,
     /// Deletion vectors for merge, update, delete
-    DeleteionVecotrs,
+    DeletionVectors,
     /// Row tracking on tables
     RowTracking,
     /// timestamps without timezone support
@@ -291,7 +297,7 @@ impl Into<usize> for WriterFeatures {
             WriterFeatures::ChangeDataFeed | WriterFeatures::GeneratedColumns => 4,
             WriterFeatures::ColumnMapping => 5,
             WriterFeatures::IdentityColumns
-            | WriterFeatures::DeleteionVecotrs
+            | WriterFeatures::DeletionVectors
             | WriterFeatures::RowTracking
             | WriterFeatures::TimestampWithoutTimezone
             | WriterFeatures::DomainMetadata
@@ -303,7 +309,13 @@ impl Into<usize> for WriterFeatures {
 
 impl From<String> for WriterFeatures {
     fn from(value: String) -> Self {
-        match value.as_str() {
+        value.as_str().into()
+    }
+}
+
+impl From<&str> for WriterFeatures {
+    fn from(value: &str) -> Self {
+        match value {
             "appendOnly" => WriterFeatures::AppendOnly,
             "invariants" => WriterFeatures::Invariants,
             "checkConstraints" => WriterFeatures::CheckConstraints,
@@ -311,7 +323,7 @@ impl From<String> for WriterFeatures {
             "generatedColumns" => WriterFeatures::GeneratedColumns,
             "columnMapping" => WriterFeatures::ColumnMapping,
             "identityColumns" => WriterFeatures::IdentityColumns,
-            "deletionVectors" => WriterFeatures::DeleteionVecotrs,
+            "deletionVectors" => WriterFeatures::DeletionVectors,
             "rowTracking" => WriterFeatures::RowTracking,
             "timestampNtz" => WriterFeatures::TimestampWithoutTimezone,
             "domainMetadata" => WriterFeatures::DomainMetadata,
@@ -332,7 +344,7 @@ impl AsRef<str> for WriterFeatures {
             WriterFeatures::GeneratedColumns => "generatedColumns",
             WriterFeatures::ColumnMapping => "columnMapping",
             WriterFeatures::IdentityColumns => "identityColumns",
-            WriterFeatures::DeleteionVecotrs => "deletionVectors",
+            WriterFeatures::DeletionVectors => "deletionVectors",
             WriterFeatures::RowTracking => "rowTracking",
             WriterFeatures::TimestampWithoutTimezone => "timestampNtz",
             WriterFeatures::DomainMetadata => "domainMetadata",
@@ -361,7 +373,7 @@ impl From<&parquet::record::Field> for WriterFeatures {
                 "generatedColumns" => WriterFeatures::GeneratedColumns,
                 "columnMapping" => WriterFeatures::ColumnMapping,
                 "identityColumns" => WriterFeatures::IdentityColumns,
-                "deletionVectors" => WriterFeatures::DeleteionVecotrs,
+                "deletionVectors" => WriterFeatures::DeletionVectors,
                 "rowTracking" => WriterFeatures::RowTracking,
                 "timestampNtz" => WriterFeatures::TimestampWithoutTimezone,
                 "domainMetadata" => WriterFeatures::DomainMetadata,
