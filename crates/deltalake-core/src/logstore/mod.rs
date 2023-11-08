@@ -112,19 +112,6 @@ pub trait LogStore: Sync + Send {
     /// original scheme, host and path with invalid characters replaced.
     fn object_store_url(&self) -> ObjectStoreUrl;
 
-    /// Deletes object by `paths`.
-    async fn delete_batch(&self, paths: &[Path]) -> ObjectStoreResult<()> {
-        let object_store = self.object_store();
-        for path in paths {
-            match object_store.delete(path).await {
-                Ok(_) => continue,
-                Err(ObjectStoreError::NotFound { .. }) => continue,
-                Err(e) => return Err(e),
-            }
-        }
-        Ok(())
-    }
-
     /// Get configuration representing configured log store.
     fn config(&self) -> &LogStoreConfig;
 }
