@@ -34,11 +34,11 @@ use deltalake_core::delta_datafusion::{DeltaPhysicalCodec, DeltaScan};
 use deltalake_core::kernel::{DataType, MapType, PrimitiveType, StructField, StructType};
 use deltalake_core::operations::create::CreateBuilder;
 use deltalake_core::protocol::SaveMode;
-use deltalake_core::storage::DeltaObjectStore;
 use deltalake_core::writer::{DeltaWriter, RecordBatchWriter};
 use deltalake_core::{
     open_table,
     operations::{write::WriteBuilder, DeltaOps},
+    storage::config::configure_log_store,
     DeltaTable, DeltaTableError,
 };
 use std::error::Error;
@@ -211,7 +211,7 @@ mod local {
         // Trying to execute the write from the input plan without providing Datafusion with a session
         // state containing the referenced object store in the registry results in an error.
         assert!(
-            WriteBuilder::new(target_table.object_store(), target_table.state.clone())
+            WriteBuilder::new(target_table.log_store(), target_table.state.clone())
                 .with_input_execution_plan(source_scan.clone())
                 .await
                 .unwrap_err()
@@ -227,19 +227,18 @@ mod local {
             .table_uri
             .clone();
         let source_location = Url::parse(&source_uri).unwrap();
-        let source_store = DeltaObjectStore::try_new(source_location, HashMap::new()).unwrap();
+        let source_store = configure_log_store(source_location, HashMap::new()).unwrap();
         let object_store_url = source_store.object_store_url();
         let source_store_url: &Url = object_store_url.as_ref();
         state
             .runtime_env()
-            .register_object_store(source_store_url, Arc::from(source_store));
+            .register_object_store(source_store_url, source_store.object_store());
 
         // Execute write to the target table with the proper state
-        let target_table =
-            WriteBuilder::new(target_table.object_store(), target_table.state.clone())
-                .with_input_execution_plan(source_scan)
-                .with_input_session_state(state)
-                .await?;
+        let target_table = WriteBuilder::new(target_table.log_store(), target_table.state.clone())
+            .with_input_execution_plan(source_scan)
+            .with_input_session_state(state)
+            .await?;
         ctx.register_table("target", Arc::new(target_table))?;
 
         // Check results

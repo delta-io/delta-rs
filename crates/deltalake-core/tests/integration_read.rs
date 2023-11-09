@@ -155,7 +155,8 @@ async fn verify_store(integration: &IntegrationContext, root_path: &str) -> Test
     let table_uri = format!("{}/{}", integration.root_uri(), root_path);
     let storage = DeltaTableBuilder::from_uri(table_uri.clone())
         .with_allow_http(true)
-        .build_storage()?;
+        .build_storage()?
+        .object_store();
 
     let files = storage.list_with_delimiter(None).await?;
     assert_eq!(

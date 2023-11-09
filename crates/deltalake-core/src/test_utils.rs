@@ -88,7 +88,7 @@ impl IntegrationContext {
             _ => DeltaTableBuilder::from_uri(store_uri)
                 .with_allow_http(true)
                 .build_storage()?
-                .storage_backend(),
+                .object_store(),
         };
 
         Ok(Self {

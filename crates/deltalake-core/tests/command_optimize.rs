@@ -298,7 +298,7 @@ async fn test_conflict_for_remove_actions() -> Result<(), Box<dyn Error>> {
 
     let operation = DeltaOperation::Delete { predicate: None };
     commit(
-        other_dt.object_store().as_ref(),
+        other_dt.log_store().as_ref(),
         &vec![Action::Remove(remove)],
         operation,
         &other_dt.state,
@@ -306,9 +306,7 @@ async fn test_conflict_for_remove_actions() -> Result<(), Box<dyn Error>> {
     )
     .await?;
 
-    let maybe_metrics = plan
-        .execute(dt.object_store(), &dt.state, 1, 20, None)
-        .await;
+    let maybe_metrics = plan.execute(dt.log_store(), &dt.state, 1, 20, None).await;
 
     assert!(maybe_metrics.is_err());
     assert_eq!(dt.version(), version + 1);
@@ -357,9 +355,7 @@ async fn test_no_conflict_for_append_actions() -> Result<(), Box<dyn Error>> {
     )
     .await?;
 
-    let metrics = plan
-        .execute(dt.object_store(), &dt.state, 1, 20, None)
-        .await?;
+    let metrics = plan.execute(dt.log_store(), &dt.state, 1, 20, None).await?;
     assert_eq!(metrics.num_files_added, 1);
     assert_eq!(metrics.num_files_removed, 2);
 
@@ -399,7 +395,7 @@ async fn test_commit_interval() -> Result<(), Box<dyn Error>> {
 
     let metrics = plan
         .execute(
-            dt.object_store(),
+            dt.log_store(),
             &dt.state,
             1,
             20,
