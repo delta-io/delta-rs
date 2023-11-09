@@ -6,18 +6,15 @@ use std::sync::Arc;
 
 use arrow_arith::boolean::{and, is_null, not, or};
 use arrow_arith::numeric::{add, div, mul, sub};
-use arrow_array::RecordBatch as ColumnarBatch;
 use arrow_array::{
     Array, ArrayRef, BinaryArray, BooleanArray, Date32Array, Decimal128Array, Float32Array,
     Int32Array, RecordBatch, StringArray, TimestampMicrosecondArray,
 };
 use arrow_ord::cmp::{eq, gt, gt_eq, lt, lt_eq, neq};
 
-use super::ExpressionEvaluator;
 use crate::kernel::error::{DeltaResult, Error};
 use crate::kernel::expressions::{scalars::Scalar, Expression};
 use crate::kernel::expressions::{BinaryOperator, UnaryOperator};
-use crate::kernel::schema::SchemaRef;
 
 // TODO leverage scalars / Datum
 
@@ -43,7 +40,10 @@ impl Scalar {
     }
 }
 
-fn evaluate_expression(expression: &Expression, batch: &RecordBatch) -> DeltaResult<ArrayRef> {
+pub(crate) fn evaluate_expression(
+    expression: &Expression,
+    batch: &RecordBatch,
+) -> DeltaResult<ArrayRef> {
     match expression {
         Expression::Literal(scalar) => Ok(scalar.to_array(batch.num_rows())),
         Expression::Column(name) => batch
@@ -163,20 +163,6 @@ fn evaluate_expression(expression: &Expression, batch: &RecordBatch) -> DeltaRes
                 }
             }
         }
-    }
-}
-
-#[derive(Debug)]
-/// Expression evaluator based on arrow compute kernels.
-pub struct ArrowExpressionEvaluator {
-    _input_schema: SchemaRef,
-    expression: Box<Expression>,
-}
-
-impl ExpressionEvaluator for ArrowExpressionEvaluator {
-    fn evaluate(&self, batch: &ColumnarBatch) -> DeltaResult<ColumnarBatch> {
-        let _result = evaluate_expression(&self.expression, batch)?;
-        todo!()
     }
 }
 

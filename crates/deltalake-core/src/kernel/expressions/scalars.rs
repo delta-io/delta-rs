@@ -8,7 +8,7 @@ use std::{
 use crate::kernel::schema::{DataType, PrimitiveType};
 
 /// A single value, which can be null. Used for representing literal values
-/// in [Expressions][crate::expressions::Expression].
+/// in [Expressions][crate::kernel::expressions::Expression].
 #[derive(Debug, Clone, PartialEq)]
 pub enum Scalar {
     /// A 32-bit integer.
