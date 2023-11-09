@@ -3,6 +3,7 @@
 pub mod actions;
 #[cfg(all(feature = "arrow", feature = "parquet"))]
 pub mod arrow;
+pub mod client;
 pub mod error;
 pub mod expressions;
 pub mod schema;
