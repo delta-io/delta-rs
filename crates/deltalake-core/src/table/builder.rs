@@ -11,8 +11,9 @@ use url::Url;
 
 use super::DeltaTable;
 use crate::errors::{DeltaResult, DeltaTableError};
-use crate::storage::config::StorageOptions;
-use crate::storage::{DeltaObjectStore, ObjectStoreRef};
+use crate::logstore::default_logstore::DefaultLogStore;
+use crate::logstore::{LogStoreConfig, LogStoreRef};
+use crate::storage::config::{self, StorageOptions};
 
 #[allow(dead_code)]
 #[derive(Debug, thiserror::Error)]
@@ -243,18 +244,24 @@ impl DeltaTableBuilder {
     }
 
     /// Build a delta storage backend for the given config
-    pub fn build_storage(self) -> DeltaResult<ObjectStoreRef> {
+    pub fn build_storage(self) -> DeltaResult<LogStoreRef> {
         match self.options.storage_backend {
-            Some((storage, location)) => Ok(Arc::new(DeltaObjectStore::new(
-                storage,
-                ensure_table_uri(location.as_str())?,
-            ))),
+            Some((storage, location)) => {
+                let location = ensure_table_uri(location.as_str())?;
+                Ok(Arc::new(DefaultLogStore::new(
+                    Arc::new(storage),
+                    LogStoreConfig {
+                        location,
+                        options: HashMap::new().into(),
+                    },
+                )))
+            }
             None => {
                 let location = ensure_table_uri(&self.options.table_uri)?;
-                Ok(Arc::new(DeltaObjectStore::try_new(
+                Ok(config::configure_log_store(
                     location,
                     self.storage_options(),
-                )?))
+                )?)
             }
         }
     }

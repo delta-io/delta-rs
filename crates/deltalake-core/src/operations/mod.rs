@@ -107,60 +107,60 @@ impl DeltaOps {
     /// ```
     #[must_use]
     pub fn create(self) -> CreateBuilder {
-        CreateBuilder::default().with_object_store(self.0.object_store())
+        CreateBuilder::default().with_log_store(self.0.log_store)
     }
 
     /// Load data from a DeltaTable
     #[cfg(feature = "datafusion")]
     #[must_use]
     pub fn load(self) -> LoadBuilder {
-        LoadBuilder::new(self.0.object_store(), self.0.state)
+        LoadBuilder::new(self.0.log_store, self.0.state)
     }
 
     /// Write data to Delta table
     #[cfg(feature = "datafusion")]
     #[must_use]
     pub fn write(self, batches: impl IntoIterator<Item = RecordBatch>) -> WriteBuilder {
-        WriteBuilder::new(self.0.object_store(), self.0.state).with_input_batches(batches)
+        WriteBuilder::new(self.0.log_store, self.0.state).with_input_batches(batches)
     }
 
     /// Vacuum stale files from delta table
     #[must_use]
     pub fn vacuum(self) -> VacuumBuilder {
-        VacuumBuilder::new(self.0.object_store(), self.0.state)
+        VacuumBuilder::new(self.0.log_store, self.0.state)
     }
 
     /// Audit active files with files present on the filesystem
     #[must_use]
     pub fn filesystem_check(self) -> FileSystemCheckBuilder {
-        FileSystemCheckBuilder::new(self.0.object_store(), self.0.state)
+        FileSystemCheckBuilder::new(self.0.log_store, self.0.state)
     }
 
     /// Audit active files with files present on the filesystem
     #[cfg(all(feature = "arrow", feature = "parquet"))]
     #[must_use]
     pub fn optimize<'a>(self) -> OptimizeBuilder<'a> {
-        OptimizeBuilder::new(self.0.object_store(), self.0.state)
+        OptimizeBuilder::new(self.0.log_store, self.0.state)
     }
 
     /// Delete data from Delta table
     #[cfg(feature = "datafusion")]
     #[must_use]
     pub fn delete(self) -> DeleteBuilder {
-        DeleteBuilder::new(self.0.object_store(), self.0.state)
+        DeleteBuilder::new(self.0.log_store, self.0.state)
     }
 
     /// Update data from Delta table
     #[cfg(feature = "datafusion")]
     #[must_use]
     pub fn update(self) -> UpdateBuilder {
-        UpdateBuilder::new(self.0.object_store(), self.0.state)
+        UpdateBuilder::new(self.0.log_store, self.0.state)
     }
 
     /// Restore delta table to a specified version or datetime
     #[must_use]
     pub fn restore(self) -> RestoreBuilder {
-        RestoreBuilder::new(self.0.object_store(), self.0.state)
+        RestoreBuilder::new(self.0.log_store, self.0.state)
     }
 
     /// Update data from Delta table
@@ -171,12 +171,7 @@ impl DeltaOps {
         source: datafusion::prelude::DataFrame,
         predicate: E,
     ) -> MergeBuilder {
-        MergeBuilder::new(
-            self.0.object_store(),
-            self.0.state,
-            predicate.into(),
-            source,
-        )
+        MergeBuilder::new(self.0.log_store, self.0.state, predicate.into(), source)
     }
 }
 

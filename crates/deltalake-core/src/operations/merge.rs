@@ -68,10 +68,10 @@ use super::transaction::commit;
 use crate::delta_datafusion::expr::{fmt_expr_to_sql, parse_predicate_expression};
 use crate::delta_datafusion::{register_store, DeltaScanBuilder};
 use crate::kernel::{Action, Remove};
+use crate::logstore::LogStoreRef;
 use crate::operations::datafusion_utils::MetricObserverExec;
 use crate::operations::write::write_execution_plan;
 use crate::protocol::{DeltaOperation, MergePredicate};
-use crate::storage::{DeltaObjectStore, ObjectStoreRef};
 use crate::table::state::DeltaTableState;
 use crate::{DeltaResult, DeltaTable, DeltaTableError};
 
@@ -107,7 +107,7 @@ pub struct MergeBuilder {
     /// The source data
     source: DataFrame,
     /// Delta object store for handling data files
-    object_store: Arc<DeltaObjectStore>,
+    log_store: LogStoreRef,
     /// Datafusion session state relevant for executing the input plan
     state: Option<SessionState>,
     /// Properties passed to underlying parquet writer for when files are rewritten
@@ -122,7 +122,7 @@ pub struct MergeBuilder {
 impl MergeBuilder {
     /// Create a new [`MergeBuilder`]
     pub fn new<E: Into<Expression>>(
-        object_store: ObjectStoreRef,
+        log_store: LogStoreRef,
         snapshot: DeltaTableState,
         predicate: E,
         source: DataFrame,
@@ -132,7 +132,7 @@ impl MergeBuilder {
             predicate,
             source,
             snapshot,
-            object_store,
+            log_store,
             source_alias: None,
             target_alias: None,
             state: None,
@@ -561,7 +561,7 @@ pub struct MergeMetrics {
 async fn execute(
     predicate: Expression,
     source: DataFrame,
-    object_store: ObjectStoreRef,
+    log_store: LogStoreRef,
     snapshot: &DeltaTableState,
     state: SessionState,
     writer_properties: Option<WriterProperties>,
@@ -590,7 +590,7 @@ async fn execute(
     // predicates also need to be considered when pruning
 
     let target = Arc::new(
-        DeltaScanBuilder::new(snapshot, object_store.clone(), &state)
+        DeltaScanBuilder::new(snapshot, log_store.clone(), &state)
             .with_schema(snapshot.input_schema()?)
             .build()
             .await?,
@@ -1126,7 +1126,7 @@ async fn execute(
         state.clone(),
         projection.clone(),
         table_partition_cols.clone(),
-        object_store.clone(),
+        log_store.object_store().clone(),
         Some(snapshot.table_config().target_file_size() as usize),
         None,
         writer_properties,
@@ -1188,7 +1188,7 @@ async fn execute(
             not_matched_by_source_predicates: not_match_source_operations,
         };
         version = commit(
-            object_store.as_ref(),
+            log_store.as_ref(),
             &actions,
             operation,
             snapshot,
@@ -1212,7 +1212,7 @@ impl std::future::IntoFuture for MergeBuilder {
                 let session = SessionContext::new();
 
                 // If a user provides their own their DF state then they must register the store themselves
-                register_store(this.object_store.clone(), session.runtime_env());
+                register_store(this.log_store.clone(), session.runtime_env());
 
                 session.state()
             });
@@ -1220,7 +1220,7 @@ impl std::future::IntoFuture for MergeBuilder {
             let ((actions, version), metrics) = execute(
                 this.predicate,
                 this.source,
-                this.object_store.clone(),
+                this.log_store.clone(),
                 &this.snapshot,
                 state,
                 this.writer_properties,
@@ -1236,7 +1236,7 @@ impl std::future::IntoFuture for MergeBuilder {
 
             this.snapshot
                 .merge(DeltaTableState::from_actions(actions, version)?, true, true);
-            let table = DeltaTable::new_with_state(this.object_store, this.snapshot);
+            let table = DeltaTable::new_with_state(this.log_store, this.snapshot);
 
             Ok((table, metrics))
         })

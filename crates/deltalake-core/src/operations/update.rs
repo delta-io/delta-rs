@@ -49,8 +49,8 @@ use super::write::write_execution_plan;
 use crate::delta_datafusion::expr::fmt_expr_to_sql;
 use crate::delta_datafusion::{find_files, register_store, DeltaScanBuilder};
 use crate::kernel::{Action, Remove};
+use crate::logstore::LogStoreRef;
 use crate::protocol::DeltaOperation;
-use crate::storage::{DeltaObjectStore, ObjectStoreRef};
 use crate::table::state::DeltaTableState;
 use crate::{DeltaResult, DeltaTable, DeltaTableError};
 
@@ -64,7 +64,7 @@ pub struct UpdateBuilder {
     /// A snapshot of the table's state
     snapshot: DeltaTableState,
     /// Delta object store for handling data files
-    object_store: Arc<DeltaObjectStore>,
+    log_store: LogStoreRef,
     /// Datafusion session state relevant for executing the input plan
     state: Option<SessionState>,
     /// Properties passed to underlying parquet writer for when files are rewritten
@@ -95,12 +95,12 @@ pub struct UpdateMetrics {
 
 impl UpdateBuilder {
     /// Create a new ['UpdateBuilder']
-    pub fn new(object_store: ObjectStoreRef, snapshot: DeltaTableState) -> Self {
+    pub fn new(log_store: LogStoreRef, snapshot: DeltaTableState) -> Self {
         Self {
             predicate: None,
             updates: HashMap::new(),
             snapshot,
-            object_store,
+            log_store,
             state: None,
             writer_properties: None,
             app_metadata: None,
@@ -164,7 +164,7 @@ impl UpdateBuilder {
 async fn execute(
     predicate: Option<Expression>,
     updates: HashMap<Column, Expression>,
-    object_store: ObjectStoreRef,
+    log_store: LogStoreRef,
     snapshot: &DeltaTableState,
     state: SessionState,
     writer_properties: Option<WriterProperties>,
@@ -213,7 +213,7 @@ async fn execute(
     let table_partition_cols = current_metadata.partition_columns.clone();
 
     let scan_start = Instant::now();
-    let candidates = find_files(snapshot, object_store.clone(), &state, predicate.clone()).await?;
+    let candidates = find_files(snapshot, log_store.clone(), &state, predicate.clone()).await?;
     metrics.scan_time_ms = Instant::now().duration_since(scan_start).as_millis() as u64;
 
     if candidates.candidates.is_empty() {
@@ -225,7 +225,7 @@ async fn execute(
     let execution_props = state.execution_props();
     // For each rewrite evaluate the predicate and then modify each expression
     // to either compute the new value or obtain the old one then write these batches
-    let scan = DeltaScanBuilder::new(snapshot, object_store.clone(), &state)
+    let scan = DeltaScanBuilder::new(snapshot, log_store.clone(), &state)
         .with_files(&candidates.candidates)
         .build()
         .await?;
@@ -357,7 +357,7 @@ async fn execute(
         state.clone(),
         projection.clone(),
         table_partition_cols.clone(),
-        object_store.clone(),
+        log_store.object_store().clone(),
         Some(snapshot.table_config().target_file_size() as usize),
         None,
         writer_properties,
@@ -407,7 +407,7 @@ async fn execute(
         predicate: Some(fmt_expr_to_sql(&predicate)?),
     };
     version = commit(
-        object_store.as_ref(),
+        log_store.as_ref(),
         &actions,
         operation,
         snapshot,
@@ -430,7 +430,7 @@ impl std::future::IntoFuture for UpdateBuilder {
                 let session = SessionContext::new();
 
                 // If a user provides their own their DF state then they must register the store themselves
-                register_store(this.object_store.clone(), session.runtime_env());
+                register_store(this.log_store.clone(), session.runtime_env());
 
                 session.state()
             });
@@ -438,7 +438,7 @@ impl std::future::IntoFuture for UpdateBuilder {
             let ((actions, version), metrics) = execute(
                 this.predicate,
                 this.updates,
-                this.object_store.clone(),
+                this.log_store.clone(),
                 &this.snapshot,
                 state,
                 this.writer_properties,
@@ -449,7 +449,7 @@ impl std::future::IntoFuture for UpdateBuilder {
 
             this.snapshot
                 .merge(DeltaTableState::from_actions(actions, version)?, true, true);
-            let table = DeltaTable::new_with_state(this.object_store, this.snapshot);
+            let table = DeltaTable::new_with_state(this.log_store, this.snapshot);
 
             Ok((table, metrics))
         })
