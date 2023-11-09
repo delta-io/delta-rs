@@ -10,7 +10,7 @@ use super::super::schema::{ArrayType, DataType, MapType, PrimitiveType, StructFi
 
 pub mod checkpoint;
 pub mod schemas;
-// pub mod snapshot;
+pub mod snapshot;
 
 impl TryFrom<&StructType> for ArrowSchema {
     type Error = ArrowError;

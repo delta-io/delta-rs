@@ -28,9 +28,12 @@ pub(crate) struct FileMeta {
     pub size: usize,
 }
 
+/// A file paths defined in the delta log
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum LogPath {
+pub enum LogPath {
+    /// Path relkative to the table root
     ObjectStore(Path),
+    /// fully qualified url for file path
     Url(Url),
 }
 
@@ -58,23 +61,29 @@ impl LogPath {
     }
 
     pub(crate) fn is_checkpoint_file(&self) -> bool {
-        self.filename()
-            .map(|name| CHECKPOINT_FILE_PATTERN.captures(name).is_some())
-            .unwrap_or(false)
+        self.filename().map(is_checkpoint_file).unwrap_or(false)
     }
 
     pub(crate) fn is_commit_file(&self) -> bool {
-        self.filename()
-            .map(|name| DELTA_FILE_PATTERN.captures(name).is_some())
-            .unwrap_or(false)
+        self.filename().map(is_commit_file).unwrap_or(false)
     }
 
     /// Parse the version number assuming a commit json or checkpoint parquet file
     pub(crate) fn commit_version(&self) -> Option<i64> {
-        self.filename()
-            .and_then(|f| f.split_once('.'))
-            .and_then(|(name, _)| name.parse().ok())
+        self.filename().and_then(commit_version)
     }
+}
+
+pub(crate) fn is_checkpoint_file(path: &str) -> bool {
+    CHECKPOINT_FILE_PATTERN.captures(path).is_some()
+}
+
+pub(crate) fn is_commit_file(path: &str) -> bool {
+    DELTA_FILE_PATTERN.captures(path).is_some()
+}
+
+pub(crate) fn commit_version(path: &str) -> Option<i64> {
+    path.split_once('.').and_then(|(name, _)| name.parse().ok())
 }
 
 // impl<'a> AsRef<Url> for LogPath<'a> {
