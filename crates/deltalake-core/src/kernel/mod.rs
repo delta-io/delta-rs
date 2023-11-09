@@ -1,6 +1,7 @@
 //! Kernel module
 
 pub mod actions;
+pub mod client;
 pub mod error;
 pub mod expressions;
 pub mod schema;

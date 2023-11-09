@@ -20,6 +20,7 @@ features = ["azure", "datafusion", "gcs", "glue", "hdfs", "json", "python", "s3"
 [dependencies]
 # arrow
 arrow = { workspace = true, optional = true }
+arrow-arith = { workspace = true, optional = true }
 arrow-array = { workspace = true, optional = true }
 arrow-buffer = { workspace = true, optional = true }
 arrow-cast = { workspace = true, optional = true }
@@ -136,6 +137,7 @@ criterion = "0.5"
 azure = ["object_store/azure"]
 arrow = [
     "dep:arrow",
+    "arrow-arith",
     "arrow-array",
     "arrow-cast",
     "arrow-ord",
