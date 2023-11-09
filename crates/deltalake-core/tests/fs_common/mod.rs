@@ -5,7 +5,8 @@ use deltalake_core::kernel::{
 use deltalake_core::operations::create::CreateBuilder;
 use deltalake_core::operations::transaction::commit;
 use deltalake_core::protocol::{DeltaOperation, SaveMode};
-use deltalake_core::storage::{DeltaObjectStore, GetResult, ObjectStoreResult};
+use deltalake_core::storage::config::configure_store;
+use deltalake_core::storage::{GetResult, ObjectStoreResult};
 use deltalake_core::DeltaTable;
 use object_store::path::Path as StorePath;
 use object_store::ObjectStore;
@@ -13,6 +14,7 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
+use std::sync::Arc;
 use url::Url;
 use uuid::Uuid;
 
@@ -119,7 +121,7 @@ pub async fn commit_actions(
     operation: DeltaOperation,
 ) -> i64 {
     let version = commit(
-        table.object_store().as_ref(),
+        table.log_store().as_ref(),
         &actions,
         operation,
         &table.state,
@@ -133,7 +135,7 @@ pub async fn commit_actions(
 
 #[derive(Debug)]
 pub struct SlowStore {
-    inner: DeltaObjectStore,
+    inner: Arc<dyn ObjectStore>,
 }
 impl std::fmt::Display for SlowStore {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -147,8 +149,9 @@ impl SlowStore {
         location: Url,
         options: impl Into<deltalake_core::storage::config::StorageOptions> + Clone,
     ) -> deltalake_core::DeltaResult<Self> {
+        let mut options = options.into();
         Ok(Self {
-            inner: DeltaObjectStore::try_new(location, options).unwrap(),
+            inner: configure_store(&location, &mut options).unwrap(),
         })
     }
 }

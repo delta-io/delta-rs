@@ -146,7 +146,14 @@ pub trait DeltaWriter<T> {
             partition_by,
             predicate: None,
         };
-        let version = commit(table.storage.as_ref(), &adds, operation, &table.state, None).await?;
+        let version = commit(
+            table.log_store.as_ref(),
+            &adds,
+            operation,
+            &table.state,
+            None,
+        )
+        .await?;
         table.update().await?;
         Ok(version)
     }
