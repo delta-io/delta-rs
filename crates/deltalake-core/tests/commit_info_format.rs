@@ -22,7 +22,7 @@ async fn test_operational_parameters() -> Result<(), Box<dyn Error>> {
     };
 
     commit(
-        table.object_store().as_ref(),
+        table.log_store().as_ref(),
         &actions,
         operation,
         &table.state,

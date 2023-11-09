@@ -168,7 +168,7 @@ impl Worker {
             default_row_commit_version: None,
         })];
         let version = commit(
-            self.table.object_store().as_ref(),
+            self.table.log_store().as_ref(),
             &actions,
             operation,
             &self.table.state,

@@ -7,7 +7,7 @@ use datafusion::physical_plan::{ExecutionPlan, SendableRecordBatchStream};
 use futures::future::BoxFuture;
 
 use crate::errors::{DeltaResult, DeltaTableError};
-use crate::storage::DeltaObjectStore;
+use crate::logstore::LogStoreRef;
 use crate::table::state::DeltaTableState;
 use crate::DeltaTable;
 
@@ -16,17 +16,17 @@ pub struct LoadBuilder {
     /// A snapshot of the to-be-loaded table's state
     snapshot: DeltaTableState,
     /// Delta object store for handling data files
-    store: Arc<DeltaObjectStore>,
+    log_store: LogStoreRef,
     /// A sub-selection of columns to be loaded
     columns: Option<Vec<String>>,
 }
 
 impl LoadBuilder {
     /// Create a new [`LoadBuilder`]
-    pub fn new(store: Arc<DeltaObjectStore>, snapshot: DeltaTableState) -> Self {
+    pub fn new(log_store: LogStoreRef, snapshot: DeltaTableState) -> Self {
         Self {
             snapshot,
-            store,
+            log_store,
             columns: None,
         }
     }
@@ -46,7 +46,7 @@ impl std::future::IntoFuture for LoadBuilder {
         let this = self;
 
         Box::pin(async move {
-            let table = DeltaTable::new_with_state(this.store, this.snapshot);
+            let table = DeltaTable::new_with_state(this.log_store, this.snapshot);
             let schema = table.state.arrow_schema()?;
             let projection = this
                 .columns

@@ -23,7 +23,7 @@ use crate::kernel::{
     Action, Add as AddAction, DataType, Metadata, PrimitiveType, Protocol, StructField, StructType,
     Txn,
 };
-use crate::storage::DeltaObjectStore;
+use crate::logstore::LogStore;
 use crate::table::state::DeltaTableState;
 use crate::table::{CheckPoint, CheckPointBuilder};
 use crate::{open_table_with_version, DeltaTable};
@@ -70,7 +70,7 @@ pub const CHECKPOINT_RECORD_BATCH_SIZE: usize = 5000;
 
 /// Creates checkpoint at current table version
 pub async fn create_checkpoint(table: &DeltaTable) -> Result<(), ProtocolError> {
-    create_checkpoint_for(table.version(), table.get_state(), table.storage.as_ref()).await?;
+    create_checkpoint_for(table.version(), table.get_state(), table.log_store.as_ref()).await?;
     Ok(())
 }
 
@@ -81,7 +81,7 @@ pub async fn cleanup_metadata(table: &DeltaTable) -> Result<usize, ProtocolError
         Utc::now().timestamp_millis() - table.get_state().log_retention_millis();
     cleanup_expired_logs_for(
         table.version(),
-        table.storage.as_ref(),
+        table.log_store.as_ref(),
         log_retention_timestamp,
     )
     .await
@@ -98,7 +98,7 @@ pub async fn create_checkpoint_from_table_uri_and_cleanup(
     let table = open_table_with_version(table_uri, version)
         .await
         .map_err(|err| ProtocolError::Generic(err.to_string()))?;
-    create_checkpoint_for(version, table.get_state(), table.storage.as_ref()).await?;
+    create_checkpoint_for(version, table.get_state(), table.log_store.as_ref()).await?;
 
     let enable_expired_log_cleanup =
         cleanup.unwrap_or_else(|| table.get_state().enable_expired_log_cleanup());
@@ -115,27 +115,28 @@ pub async fn create_checkpoint_from_table_uri_and_cleanup(
 pub async fn create_checkpoint_for(
     version: i64,
     state: &DeltaTableState,
-    storage: &DeltaObjectStore,
+    log_store: &dyn LogStore,
 ) -> Result<(), ProtocolError> {
     // TODO: checkpoints _can_ be multi-part... haven't actually found a good reference for
     // an appropriate split point yet though so only writing a single part currently.
     // See https://github.com/delta-io/delta-rs/issues/288
-    let last_checkpoint_path = storage.log_path().child("_last_checkpoint");
+    let last_checkpoint_path = log_store.log_path().child("_last_checkpoint");
 
     debug!("Writing parquet bytes to checkpoint buffer.");
     let (checkpoint, parquet_bytes) = parquet_bytes_from_state(state)?;
 
     let file_name = format!("{version:020}.checkpoint.parquet");
-    let checkpoint_path = storage.log_path().child(file_name);
+    let checkpoint_path = log_store.log_path().child(file_name);
 
+    let object_store = log_store.object_store();
     debug!("Writing checkpoint to {:?}.", checkpoint_path);
-    storage.put(&checkpoint_path, parquet_bytes).await?;
+    object_store.put(&checkpoint_path, parquet_bytes).await?;
 
     let last_checkpoint_content: Value = serde_json::to_value(checkpoint)?;
     let last_checkpoint_content = bytes::Bytes::from(serde_json::to_vec(&last_checkpoint_content)?);
 
     debug!("Writing _last_checkpoint to {:?}.", last_checkpoint_path);
-    storage
+    object_store
         .put(&last_checkpoint_path, last_checkpoint_content)
         .await?;
 
@@ -146,7 +147,7 @@ pub async fn create_checkpoint_for(
 /// and less than the specified version.
 pub async fn cleanup_expired_logs_for(
     until_version: i64,
-    storage: &DeltaObjectStore,
+    log_store: &dyn LogStore,
     cutoff_timestamp: i64,
 ) -> Result<usize, ProtocolError> {
     lazy_static! {
@@ -157,10 +158,11 @@ pub async fn cleanup_expired_logs_for(
     // Feed a stream of candidate deletion files directly into the delete_stream
     // function to try to improve the speed of cleanup and reduce the need for
     // intermediate memory.
-    let deleted = storage
+    let object_store = log_store.object_store();
+    let deleted = object_store
         .delete_stream(
-            storage
-                .list(Some(storage.log_path()))
+            object_store
+                .list(Some(log_store.log_path()))
                 .await?
                 // This predicate function will filter out any locations that don't
                 // match the given timestamp range

@@ -44,8 +44,9 @@ use super::{transaction::commit, CreateBuilder};
 use crate::delta_datafusion::DeltaDataChecker;
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::{Action, Add, Remove, StructType};
+use crate::logstore::LogStoreRef;
 use crate::protocol::{DeltaOperation, SaveMode};
-use crate::storage::{DeltaObjectStore, ObjectStoreRef};
+use crate::storage::ObjectStoreRef;
 use crate::table::state::DeltaTableState;
 use crate::writer::record_batch::divide_by_partition_values;
 use crate::writer::utils::PartitionPath;
@@ -90,7 +91,7 @@ pub struct WriteBuilder {
     /// A snapshot of the to-be-loaded table's state
     snapshot: DeltaTableState,
     /// Delta object store for handling data files
-    store: Arc<DeltaObjectStore>,
+    log_store: LogStoreRef,
     /// The input plan
     input: Option<Arc<dyn ExecutionPlan>>,
     /// Datafusion session state relevant for executing the input plan
@@ -117,10 +118,10 @@ pub struct WriteBuilder {
 
 impl WriteBuilder {
     /// Create a new [`WriteBuilder`]
-    pub fn new(store: Arc<DeltaObjectStore>, snapshot: DeltaTableState) -> Self {
+    pub fn new(log_store: LogStoreRef, snapshot: DeltaTableState) -> Self {
         Self {
             snapshot,
-            store,
+            log_store,
             input: None,
             state: None,
             mode: SaveMode::Append,
@@ -210,7 +211,7 @@ impl WriteBuilder {
     }
 
     async fn check_preconditions(&self) -> DeltaResult<Vec<Action>> {
-        match self.store.is_delta_table_location().await? {
+        match self.log_store.is_delta_table_location().await? {
             true => {
                 let min_writer = self.snapshot.min_writer_version();
                 if min_writer > MAX_SUPPORTED_WRITER_VERSION {
@@ -218,7 +219,7 @@ impl WriteBuilder {
                 } else {
                     match self.mode {
                         SaveMode::ErrorIfExists => {
-                            Err(WriteError::AlreadyExists(self.store.root_uri()).into())
+                            Err(WriteError::AlreadyExists(self.log_store.root_uri()).into())
                         }
                         _ => Ok(vec![]),
                     }
@@ -236,7 +237,7 @@ impl WriteBuilder {
                     Err(WriteError::MissingData)
                 }?;
                 let mut builder = CreateBuilder::new()
-                    .with_object_store(self.store.clone())
+                    .with_log_store(self.log_store.clone())
                     .with_columns(schema.fields().clone());
                 if let Some(partition_columns) = self.partition_columns.as_ref() {
                     builder = builder.with_partition_columns(partition_columns.clone())
@@ -356,7 +357,7 @@ impl std::future::IntoFuture for WriteBuilder {
                     let schema = batches[0].schema();
                     let table_schema = this
                         .snapshot
-                        .physical_arrow_schema(this.store.clone())
+                        .physical_arrow_schema(this.log_store.object_store().clone())
                         .await
                         .or_else(|_| this.snapshot.arrow_schema())
                         .unwrap_or(schema.clone());
@@ -418,7 +419,7 @@ impl std::future::IntoFuture for WriteBuilder {
                 state,
                 plan,
                 partition_columns.clone(),
-                this.store.clone(),
+                this.log_store.object_store().clone(),
                 this.target_file_size,
                 this.write_batch_size,
                 this.writer_properties,
@@ -468,7 +469,7 @@ impl std::future::IntoFuture for WriteBuilder {
             };
 
             let version = commit(
-                this.store.as_ref(),
+                this.log_store.as_ref(),
                 &actions,
                 DeltaOperation::Write {
                     mode: this.mode,
@@ -492,7 +493,7 @@ impl std::future::IntoFuture for WriteBuilder {
 
             // TODO should we build checkpoints based on config?
 
-            Ok(DeltaTable::new_with_state(this.store, this.snapshot))
+            Ok(DeltaTable::new_with_state(this.log_store, this.snapshot))
         })
     }
 }
