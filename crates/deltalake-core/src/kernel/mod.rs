@@ -1,6 +1,7 @@
 //! Kernel module
 
 pub mod actions;
+#[cfg(feature = "arrow")]
 pub mod client;
 pub mod error;
 pub mod expressions;
