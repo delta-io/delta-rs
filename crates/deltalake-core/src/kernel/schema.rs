@@ -156,7 +156,7 @@ impl StructField {
         let phys_name = self.get_config_value(&ColumnMetadataKey::ColumnMappingPhysicalName);
         match phys_name {
             None => &self.name,
-            Some(MetadataValue::String(s)) => &s,
+            Some(MetadataValue::String(s)) => s,
             _ => panic!("Unexpected value for physical name"),
         }
     }
