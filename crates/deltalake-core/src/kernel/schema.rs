@@ -151,6 +151,17 @@ impl StructField {
     }
 
     #[inline]
+    /// Returns the phyiscal name
+    pub fn physical_name(&self) -> &String {
+        let phys_name = return self.get_config_value(&ColumnMetadataKey::ColumnMappingPhysicalName);
+        match phys_name {
+            None => &self.name,
+            Some(MetadataValue::String(s)) => &s,
+            _ => panic!("Unexpected value for physical name")
+        }
+    }
+
+    #[inline]
     /// Returns the data type of the column
     pub const fn data_type(&self) -> &DataType {
         &self.data_type
@@ -194,7 +205,7 @@ impl StructType {
             .fields()
             .iter()
             .enumerate()
-            .find(|(_, b)| b.name() == name)
+            .find(|(_, b)|  b.name() == name)
             .ok_or_else(|| {
                 let valid_fields: Vec<_> = self.fields.iter().map(|f| f.name()).collect();
                 Error::Schema(format!(
