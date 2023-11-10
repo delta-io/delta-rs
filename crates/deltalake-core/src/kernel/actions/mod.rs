@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 
 #[cfg(all(feature = "arrow", feature = "parquet"))]
 pub(crate) mod arrow;
+pub(crate) mod schemas;
 mod serde_path;
 pub(crate) mod types;
 
