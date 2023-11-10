@@ -1,14 +1,23 @@
 #![allow(dead_code)]
 
 use std::cmp::Ordering;
+use std::sync::Arc;
 
 use arrow_array::RecordBatch;
-use futures::stream::{StreamExt, TryStreamExt};
+use arrow_json::reader::{Decoder, ReaderBuilder};
+use arrow_schema::ArrowError;
+use arrow_select::concat::concat_batches;
+use bytes::{Buf, Bytes};
+use futures::stream::{Stream, StreamExt, TryStreamExt};
 use object_store::path::Path;
 use object_store::{Error as ObjectStoreError, ObjectStore};
+// use parquet::arrow::async_reader::ParquetObjectReader;
+// use parquet::arrow::{ParquetRecordBatchStreamBuilder, ProjectionMask};
 use serde::{Deserialize, Serialize};
+use std::task::{ready, Poll};
 
 use super::checkpoint::{parse_action, parse_actions};
+use super::schemas::get_log_schema;
 use crate::kernel::error::{DeltaResult, Error};
 use crate::kernel::{Action, ActionType, Add, Metadata, Protocol, StructType};
 use crate::storage::path::{commit_version, is_checkpoint_file, is_commit_file, FileMeta, LogPath};
@@ -61,11 +70,12 @@ impl TableStateArrow {
 
     pub async fn load(
         table_root: LogPath,
-        object_store: &dyn ObjectStore,
+        object_store: Arc<dyn ObjectStore>,
         version: Option<i64>,
     ) -> DeltaResult<Self> {
-        let (log_segment, version) = LogSegment::create(&table_root, object_store, version).await?;
-        Self::try_new(version, log_segment.load().await?)
+        let (log_segment, version) =
+            LogSegment::create(&table_root, object_store.as_ref(), version).await?;
+        Self::try_new(version, log_segment.load(object_store, None).await?)
     }
 }
 
@@ -80,15 +90,17 @@ impl Snapshot for TableStateArrow {
         self.version
     }
 
+    /// Table [`Metadata`] at this [`Snapshot`]'s version.
     fn metadata(&self) -> DeltaResult<Metadata> {
         Ok(self.metadata.clone())
     }
 
-    /// Table [`Schema`] at this [`Snapshot`]s version.
+    /// Table [`Schema`](crate::kernel::schema::StructType) at this [`Snapshot`]'s version.
     fn schema(&self) -> DeltaResult<StructType> {
         self.metadata()?.schema()
     }
 
+    /// Table [`Protocol`] at this [`Snapshot`]'s version.
     fn protocol(&self) -> DeltaResult<Protocol> {
         Ok(self.protocol.clone())
     }
@@ -102,13 +114,16 @@ impl Snapshot for TableStateArrow {
         ))
     }
 
-    /// Well known table configuration
+    /// Well known table [configuration](crate::table::config::TableConfig).
     fn table_config(&self) -> TableConfig<'_> {
         TableConfig(&self.metadata.configuration)
     }
 }
 
 const LAST_CHECKPOINT_FILE_NAME: &str = "_last_checkpoint";
+const LOG_FOLDER_NAME: &str = "_delta_log";
+// const SIDECAR_FOLDER_NAME: &str = "_sidecars";
+// const CDC_FOLDER_NAME: &str = "_change_data";
 
 #[derive(Debug)]
 pub(crate) struct LogSegment {
@@ -125,7 +140,7 @@ impl LogSegment {
         object_store: &dyn ObjectStore,
         version: Option<i64>,
     ) -> DeltaResult<(Self, i64)> {
-        let log_url = table_root.child("_delta_log/").unwrap();
+        let log_url = table_root.child(LOG_FOLDER_NAME).unwrap();
         let log_path = match log_url {
             LogPath::ObjectStore(log_path) => log_path,
             LogPath::Url(_) => return Err(Error::Generic("Url handling not yet supported".into())),
@@ -136,10 +151,13 @@ impl LogSegment {
             read_last_checkpoint(object_store, &log_path).await?,
             version,
         ) {
+            (Some(cp), None) => {
+                list_log_files_with_checkpoint(&cp, object_store, &log_path).await?
+            }
             (Some(cp), Some(version)) if cp.version >= version => {
                 list_log_files_with_checkpoint(&cp, object_store, &log_path).await?
             }
-            _ => list_log_files(object_store, &log_path).await?,
+            _ => list_log_files(object_store, &log_path, version).await?,
         };
 
         // remove all files above requested version
@@ -181,8 +199,46 @@ impl LogSegment {
         self.commit_files.iter()
     }
 
-    pub async fn load(&self) -> DeltaResult<RecordBatch> {
-        todo!()
+    pub async fn load(
+        &self,
+        object_store: Arc<dyn ObjectStore>,
+        buffer_size: Option<usize>,
+    ) -> DeltaResult<RecordBatch> {
+        let buffer_size = buffer_size.unwrap_or_else(num_cpus::get);
+        let byte_stream = futures::stream::iter(self.commit_files())
+            .map(|file| {
+                let store = object_store.clone();
+                async move {
+                    let path = match file.location {
+                        LogPath::ObjectStore(ref path) => path.clone(),
+                        LogPath::Url(_) => {
+                            return Err(Error::Generic("Url handling not yet supported".into()))
+                        }
+                    };
+                    let data = store
+                        .get(&path)
+                        .await
+                        .map_err(|e| Error::from(e))?
+                        .bytes()
+                        .await
+                        .map_err(|e| Error::from(e))?;
+
+                    Ok(data)
+                }
+            })
+            .buffered(buffer_size);
+
+        let log_schema = Arc::new(get_log_schema());
+        let decoder = ReaderBuilder::new(log_schema.clone()).build_decoder()?;
+
+        let commit_batch = decode_commit_file_stream(decoder, byte_stream)?
+            .try_collect::<Vec<_>>()
+            .await?;
+        let batch = concat_batches(&log_schema, &commit_batch)?;
+
+        // let checkpoint_stream = ParquetRecordBatchStreamBuilder::new(input);
+
+        return Ok(batch);
     }
 
     // Read a stream of log data from this log segment.
@@ -219,6 +275,36 @@ impl LogSegment {
     //
     //     Ok(batches)
     // }
+}
+
+fn decode_commit_file_stream<S: Stream<Item = DeltaResult<Bytes>> + Unpin>(
+    mut decoder: Decoder,
+    mut input: S,
+) -> DeltaResult<impl Stream<Item = Result<RecordBatch, ArrowError>>> {
+    let mut buffered = Bytes::new();
+    Ok(futures::stream::poll_fn(move |cx| {
+        loop {
+            if buffered.is_empty() {
+                buffered = match ready!(input.poll_next_unpin(cx)) {
+                    Some(Ok(b)) => b,
+                    Some(Err(e)) => {
+                        return Poll::Ready(Some(Err(ArrowError::ExternalError(Box::new(e)))))
+                    }
+                    None => break,
+                };
+            }
+            let decoded = match decoder.decode(buffered.as_ref()) {
+                Ok(decoded) => decoded,
+                Err(e) => return Poll::Ready(Some(Err(e))),
+            };
+            let read = buffered.len();
+            buffered.advance(decoded);
+            if decoded != read {
+                break;
+            }
+        }
+        Poll::Ready(decoder.flush().transpose())
+    }))
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -331,10 +417,11 @@ async fn list_log_files_with_checkpoint(
 async fn list_log_files(
     fs_client: &dyn ObjectStore,
     log_root: &Path,
+    max_version: Option<i64>,
 ) -> DeltaResult<(Vec<FileMeta>, Vec<FileMeta>)> {
-    let version_prefix = format!("{:020}", 0);
-    let start_from = log_root.child(version_prefix);
+    let start_from = Path::from(format!("{:020}", 0));
 
+    let max_version = max_version.unwrap_or(i64::MAX);
     let mut max_checkpoint_version = -1_i64;
     let mut commit_files = Vec::new();
     let mut checkpoint_files = Vec::with_capacity(10);
@@ -344,22 +431,24 @@ async fn list_log_files(
 
     while let Some(maybe_meta) = files.next().await {
         let meta = maybe_meta?;
-        if is_checkpoint_file(meta.location.filename().unwrap_or_default()) {
-            let version =
-                commit_version(meta.location.filename().unwrap_or_default()).unwrap_or(0) as i64;
-            match version.cmp(&max_checkpoint_version) {
-                Ordering::Greater => {
-                    max_checkpoint_version = version;
-                    checkpoint_files.clear();
-                    checkpoint_files.push(meta);
+        let filename = meta.location.filename().unwrap_or_default();
+        let version = commit_version(filename).unwrap_or(0) as i64;
+        if version <= max_version {
+            if is_commit_file(filename) {
+                commit_files.push(meta);
+            } else if is_checkpoint_file(filename) {
+                match version.cmp(&max_checkpoint_version) {
+                    Ordering::Greater => {
+                        max_checkpoint_version = version;
+                        checkpoint_files.clear();
+                        checkpoint_files.push(meta);
+                    }
+                    Ordering::Equal => {
+                        checkpoint_files.push(meta);
+                    }
+                    _ => {}
                 }
-                Ordering::Equal => {
-                    checkpoint_files.push(meta);
-                }
-                _ => {}
             }
-        } else if is_commit_file(meta.location.filename().unwrap_or_default()) {
-            commit_files.push(meta);
         }
     }
 
@@ -393,14 +482,13 @@ async fn list_log_files(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     use std::path::PathBuf;
     use std::sync::Arc;
 
     use object_store::local::LocalFileSystem;
     use object_store::path::Path;
 
+    use super::*;
     use crate::kernel::schema::StructType;
 
     #[tokio::test]
@@ -410,33 +498,7 @@ mod tests {
         let url = Path::from_filesystem_path(path).unwrap();
         let store = Arc::new(LocalFileSystem::new());
 
-        let snapshot = TableStateArrow::load(LogPath::ObjectStore(url), store.as_ref(), Some(1))
-            .await
-            .unwrap();
-
-        let protocol = snapshot.protocol().unwrap();
-        let expected = Protocol {
-            min_reader_version: 3,
-            min_writer_version: 7,
-            reader_features: Some(vec!["deletionVectors".into()].into_iter().collect()),
-            writer_features: Some(vec!["deletionVectors".into()].into_iter().collect()),
-        };
-        assert_eq!(protocol, expected);
-
-        let schema_string = r#"{"type":"struct","fields":[{"name":"value","type":"integer","nullable":true,"metadata":{}}]}"#;
-        let expected: StructType = serde_json::from_str(schema_string).unwrap();
-        let schema = snapshot.schema().unwrap();
-        assert_eq!(schema, expected);
-    }
-
-    #[tokio::test]
-    async fn test_new_snapshot() {
-        let path =
-            std::fs::canonicalize(PathBuf::from("./tests/data/table-with-dv-small/")).unwrap();
-        let url = Path::from_filesystem_path(path).unwrap();
-        let store = Arc::new(LocalFileSystem::new());
-
-        let snapshot = TableStateArrow::load(LogPath::ObjectStore(url), store.as_ref(), Some(1))
+        let snapshot = TableStateArrow::load(LogPath::ObjectStore(url), store.clone(), Some(1))
             .await
             .unwrap();
 
@@ -477,11 +539,15 @@ mod tests {
         let location = Path::from_filesystem_path(path).unwrap();
         let store = Arc::new(LocalFileSystem::new());
 
-        let (log_segment, _) =
-            LogSegment::create(&LogPath::ObjectStore(location), store.as_ref(), Some(1))
-                .await
-                .unwrap();
+        let (log_segment, version) = LogSegment::create(
+            &LogPath::ObjectStore(location.clone()),
+            store.as_ref(),
+            Some(3),
+        )
+        .await
+        .unwrap();
 
+        assert_eq!(version, 3);
         assert_eq!(log_segment.checkpoint_files.len(), 1);
         assert_eq!(
             log_segment.checkpoint_files[0].location.commit_version(),
@@ -491,6 +557,19 @@ mod tests {
         assert_eq!(
             log_segment.commit_files[0].location.commit_version(),
             Some(3)
+        );
+
+        let (log_segment, version) =
+            LogSegment::create(&LogPath::ObjectStore(location), store.as_ref(), Some(1))
+                .await
+                .unwrap();
+
+        assert_eq!(version, 1);
+        assert_eq!(log_segment.checkpoint_files.len(), 0);
+        assert_eq!(log_segment.commit_files.len(), 2);
+        assert_eq!(
+            log_segment.commit_files[0].location.commit_version(),
+            Some(1)
         );
     }
 }

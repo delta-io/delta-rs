@@ -265,7 +265,7 @@ async fn get_latest_version(log_store: &dyn LogStore, current_version: i64) -> D
             return Err(DeltaTableError::not_a_table(log_store.root_uri()));
         }
 
-        Ok::<i64, DeltaTableError>(max_version)
+        Ok(max_version)
     }
     .await?;
     Ok(version)
