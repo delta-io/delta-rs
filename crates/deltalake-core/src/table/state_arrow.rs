@@ -171,7 +171,11 @@ impl DeltaTableState {
             .partition_columns
             .iter()
             .map(|name| {
-                let physical_name = metadata.schema.field_with_name(name).unwrap().physical_name();
+                let physical_name = metadata
+                    .schema
+                    .field_with_name(name)
+                    .unwrap()
+                    .physical_name();
                 (physical_name, name)
             })
             .collect::<HashMap<&String, &String>>();
@@ -180,10 +184,16 @@ impl DeltaTableState {
         for action in self.files() {
             for (name, maybe_value) in action.partition_values.iter() {
                 let logical_name = physical_name_to_logical_name.get(name).unwrap();
-                if let Some(value) = maybe_value {                
-                    builders.get_mut(logical_name.as_str()).unwrap().append_value(value);
+                if let Some(value) = maybe_value {
+                    builders
+                        .get_mut(logical_name.as_str())
+                        .unwrap()
+                        .append_value(value);
                 } else {
-                    builders.get_mut(logical_name.as_str()).unwrap().append_null();
+                    builders
+                        .get_mut(logical_name.as_str())
+                        .unwrap()
+                        .append_null();
                 }
             }
         }

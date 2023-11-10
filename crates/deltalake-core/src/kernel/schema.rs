@@ -157,7 +157,7 @@ impl StructField {
         match phys_name {
             None => &self.name,
             Some(MetadataValue::String(s)) => &s,
-            _ => panic!("Unexpected value for physical name")
+            _ => panic!("Unexpected value for physical name"),
         }
     }
 
@@ -205,7 +205,7 @@ impl StructType {
             .fields()
             .iter()
             .enumerate()
-            .find(|(_, b)|  b.name() == name)
+            .find(|(_, b)| b.name() == name)
             .ok_or_else(|| {
                 let valid_fields: Vec<_> = self.fields.iter().map(|f| f.name()).collect();
                 Error::Schema(format!(
