@@ -802,7 +802,7 @@ class DeltaTable:
     def cleanup_metadata(self) -> None:
         """
         Delete expired log files before current version from table. The table log retention is based on
-        the `configuration.logRetentionDuration` value.
+        the `configuration.logRetentionDuration` value, 30 days by default.
         """
         self._table.cleanup_metadata()
 
