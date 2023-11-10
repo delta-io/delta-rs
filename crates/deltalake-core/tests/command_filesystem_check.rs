@@ -75,7 +75,7 @@ async fn test_filesystem_check(storage: StorageIntegration) -> TestResult {
     let remove = table.state.all_tombstones().get(file).unwrap();
     assert!(remove.data_change);
 
-    // An additonal run should return an empty list of orphaned actions
+    // An additional run should return an empty list of orphaned actions
     let op = DeltaOps::from(table);
     let (table, metrics) = op.filesystem_check().await?;
     assert_eq!(version + 1, table.state.version());
@@ -147,7 +147,7 @@ async fn test_filesystem_check_fails_for_concurrent_delete() -> TestResult {
 
 #[tokio::test]
 #[serial]
-#[ignore = "should this actually fail? with conflcit resolution, we are re-trying again."]
+#[ignore = "should this actually fail? with conflict resolution, we are re-trying again."]
 async fn test_filesystem_check_outdated() -> TestResult {
     // Validate failure when a non dry only executes on the latest version
     let context = IntegrationContext::new(StorageIntegration::Local)?;

@@ -29,11 +29,11 @@ use crate::errors::DeltaTableError;
 use crate::kernel::{Add, StructType};
 use crate::table::builder::DeltaTableBuilder;
 use crate::table::DeltaTableMetaData;
-use crate::{storage::DeltaObjectStore, DeltaTable};
+use crate::DeltaTable;
 
 /// Writes messages to a delta lake table.
 pub struct RecordBatchWriter {
-    storage: Arc<DeltaObjectStore>,
+    storage: Arc<dyn ObjectStore>,
     arrow_schema_ref: Arc<ArrowSchema>,
     writer_properties: WriterProperties,
     partition_columns: Vec<String>,
@@ -56,7 +56,8 @@ impl RecordBatchWriter {
     ) -> Result<Self, DeltaTableError> {
         let storage = DeltaTableBuilder::from_uri(table_uri)
             .with_storage_options(storage_options.unwrap_or_default())
-            .build_storage()?;
+            .build_storage()?
+            .object_store();
 
         // Initialize writer properties for the underlying arrow writer
         let writer_properties = WriterProperties::builder()
@@ -89,7 +90,7 @@ impl RecordBatchWriter {
             .build();
 
         Ok(Self {
-            storage: table.storage.clone(),
+            storage: table.object_store(),
             arrow_schema_ref,
             writer_properties,
             partition_columns,

@@ -221,7 +221,7 @@ impl Model for AtomicRenameSys {
                 WriterState::RepairRenameReturned => {
                     match writer.rename_err {
                         Some(RenameErr::AlreadyExists) => {
-                            // already reapired by other writer
+                            // already repaired by other writer
                             // TODO: still need to perform the delete cleanup?
                             actions.push(Action::UpdateLockData(wid));
                         }
@@ -456,7 +456,7 @@ impl Model for AtomicRenameSys {
                 if state.blob_store_deleted(src) {
                     let mut writer = &mut state.writer_ctx[wid];
                     // source object cleaned by up another worker's repair, it's not a real
-                    // conflict, save to assume the rename was successfull
+                    // conflict, save to assume the rename was successful
                     writer.state = WriterState::Shutdown;
                 } else {
                     let mut writer = &mut state.writer_ctx[wid];

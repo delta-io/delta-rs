@@ -28,7 +28,7 @@ pub async fn copy_table(
         .with_storage_options(to_options.unwrap_or_default())
         .with_allow_http(allow_http)
         .build_storage()?;
-    sync_stores(from_store, to_store).await
+    sync_stores(from_store.object_store(), to_store.object_store()).await
 }
 
 /// Synchronize the contents of two object stores

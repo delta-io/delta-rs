@@ -1,7 +1,7 @@
 #![allow(unused)]
 use std::collections::HashMap;
 
-use super::{prepare_commit, try_commit_transaction};
+use super::prepare_commit;
 use crate::kernel::{
     Action, Add, CommitInfo, DataType, Metadata, PrimitiveType, Protocol, Remove, StructField,
     StructType,
@@ -121,7 +121,7 @@ pub async fn create_initialized_table(
     partition_cols: &[String],
     configuration: Option<HashMap<String, Option<String>>>,
 ) -> DeltaTable {
-    let storage = DeltaTableBuilder::from_uri("memory://")
+    let log_store = DeltaTableBuilder::from_uri("memory://")
         .build_storage()
         .unwrap();
     let table_schema = StructType::new(vec![
@@ -161,11 +161,19 @@ pub async fn create_initialized_table(
         ),
     };
     let actions = init_table_actions(None);
-    let prepared_commit = prepare_commit(storage.as_ref(), &operation, &actions, &state, None)
+    let prepared_commit = prepare_commit(
+        log_store.object_store().as_ref(),
+        &operation,
+        &actions,
+        &state,
+        None,
+    )
+    .await
+    .unwrap();
+
+    log_store
+        .write_commit_entry(0, &prepared_commit)
         .await
         .unwrap();
-    try_commit_transaction(storage.as_ref(), &prepared_commit, 0)
-        .await
-        .unwrap();
-    DeltaTable::new_with_state(storage, state)
+    DeltaTable::new_with_state(log_store, state)
 }

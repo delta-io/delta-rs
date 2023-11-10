@@ -26,7 +26,7 @@ use std::mem::take;
 
 use crate::errors::DeltaResult;
 use crate::kernel::{Add, CommitInfo, Metadata, Protocol, Remove};
-use crate::storage::ObjectStoreRef;
+use crate::logstore::LogStore;
 use crate::table::CheckPoint;
 use crate::table::DeltaTableMetaData;
 
@@ -601,14 +601,15 @@ pub enum OutputMode {
 }
 
 pub(crate) async fn get_last_checkpoint(
-    object_store: &ObjectStoreRef,
+    log_store: &dyn LogStore,
 ) -> Result<CheckPoint, ProtocolError> {
     let last_checkpoint_path = Path::from_iter(["_delta_log", "_last_checkpoint"]);
     debug!("loading checkpoint from {last_checkpoint_path}");
+    let object_store = log_store.object_store();
     match object_store.get(&last_checkpoint_path).await {
         Ok(data) => Ok(serde_json::from_slice(&data.bytes().await?)?),
         Err(ObjectStoreError::NotFound { .. }) => {
-            match find_latest_check_point_for_version(object_store, i64::MAX).await {
+            match find_latest_check_point_for_version(log_store, i64::MAX).await {
                 Ok(Some(cp)) => Ok(cp),
                 _ => Err(ProtocolError::CheckpointNotFound),
             }
@@ -618,7 +619,7 @@ pub(crate) async fn get_last_checkpoint(
 }
 
 pub(crate) async fn find_latest_check_point_for_version(
-    object_store: &ObjectStoreRef,
+    log_store: &dyn LogStore,
     version: i64,
 ) -> Result<Option<CheckPoint>, ProtocolError> {
     lazy_static! {
@@ -629,7 +630,8 @@ pub(crate) async fn find_latest_check_point_for_version(
     }
 
     let mut cp: Option<CheckPoint> = None;
-    let mut stream = object_store.list(Some(object_store.log_path())).await?;
+    let object_store = log_store.object_store();
+    let mut stream = object_store.list(Some(log_store.log_path())).await?;
 
     while let Some(obj_meta) = stream.next().await {
         // Exit early if any objects can't be listed.
