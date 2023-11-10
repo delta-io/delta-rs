@@ -92,7 +92,7 @@ pub(crate) fn commit_version(path: &str) -> Option<i64> {
 //     }
 // }
 
-impl<'a> AsRef<str> for LogPath {
+impl AsRef<str> for LogPath {
     fn as_ref(&self) -> &str {
         match self {
             LogPath::ObjectStore(p) => p.as_ref(),

@@ -46,19 +46,17 @@ impl TableStateArrow {
     pub fn try_new(version: i64, actions: RecordBatch) -> DeltaResult<Self> {
         let metadata = parse_action(&actions, &ActionType::Metadata)?
             .next()
-            .map(|a| match a {
+            .and_then(|a| match a {
                 Action::Metadata(m) => Some(m),
                 _ => None,
             })
-            .flatten()
             .ok_or(Error::Generic("expected metadata".into()))?;
         let protocol = parse_action(&actions, &ActionType::Protocol)?
             .next()
-            .map(|a| match a {
+            .and_then(|a| match a {
                 Action::Protocol(p) => Some(p),
                 _ => None,
             })
-            .flatten()
             .ok_or(Error::Generic("expected protocol".into()))?;
         Ok(Self {
             version,
@@ -218,10 +216,10 @@ impl LogSegment {
                     let data = store
                         .get(&path)
                         .await
-                        .map_err(|e| Error::from(e))?
+                        .map_err(Error::from)?
                         .bytes()
                         .await
-                        .map_err(|e| Error::from(e))?;
+                        .map_err(Error::from)?;
 
                     Ok(data)
                 }
@@ -238,7 +236,7 @@ impl LogSegment {
 
         // let checkpoint_stream = ParquetRecordBatchStreamBuilder::new(input);
 
-        return Ok(batch);
+        Ok(batch)
     }
 
     // Read a stream of log data from this log segment.
@@ -309,7 +307,7 @@ fn decode_commit_file_stream<S: Stream<Item = DeltaResult<Bytes>> + Unpin>(
 
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct CheckpointMetadata {
+pub struct LastCheckpoint {
     /// The version of the table when the last checkpoint was made.
     pub version: i64,
     /// The number of actions that are stored in the checkpoint.
@@ -332,7 +330,7 @@ pub struct CheckpointMetadata {
 async fn read_last_checkpoint(
     object_store: &dyn ObjectStore,
     log_root: &Path,
-) -> DeltaResult<Option<CheckpointMetadata>> {
+) -> DeltaResult<Option<LastCheckpoint>> {
     let file_path = log_root.child(LAST_CHECKPOINT_FILE_NAME);
     match object_store.get(&file_path).await {
         Ok(data) => Ok(Some(serde_json::from_slice(&data.bytes().await?)?)),
@@ -343,7 +341,7 @@ async fn read_last_checkpoint(
 
 /// List all log files after a given checkpoint.
 async fn list_log_files_with_checkpoint(
-    cp: &CheckpointMetadata,
+    cp: &LastCheckpoint,
     fs_client: &dyn ObjectStore,
     log_root: &Path,
 ) -> DeltaResult<(Vec<FileMeta>, Vec<FileMeta>)> {
@@ -356,12 +354,7 @@ async fn list_log_files_with_checkpoint(
         .try_collect::<Vec<_>>()
         .await?
         .into_iter()
-        .filter_map(
-            |m| match commit_version(m.location.filename().unwrap_or_default()) {
-                Some(_) => Some(m),
-                None => None,
-            },
-        )
+        .filter_map(|m| commit_version(m.location.filename().unwrap_or_default()).map(|_| m))
         .collect::<Vec<_>>();
 
     let mut commit_files = files
@@ -465,7 +458,7 @@ async fn list_log_files(
 
     let commit_files = commit_files
         .into_iter()
-        .filter(|f| f.location.commit_version().unwrap_or(0) as i64 > max_checkpoint_version)
+        .filter(|f| f.location.commit_version().unwrap_or(0) > max_checkpoint_version)
         .collect::<Vec<_>>();
 
     let checkpoint_files = checkpoint_files

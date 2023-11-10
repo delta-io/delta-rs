@@ -32,8 +32,6 @@ pub enum ActionType {
     Protocol,
     /// modify the data in a table by removing individual logical files
     Remove,
-    /// The Row ID high-water mark tracks the largest ID that has been assigned to a row in the table.
-    RowIdHighWaterMark,
     /// Transactional information
     Txn,
 }

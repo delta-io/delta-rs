@@ -15,7 +15,6 @@ impl ActionType {
             Self::Metadata => get_root("metaData", self.arrow_fields()),
             Self::Protocol => get_root("protocol", self.arrow_fields()),
             Self::Remove => get_root("remove", self.arrow_fields()),
-            Self::RowIdHighWaterMark => get_root("rowIdHighWaterMark", self.arrow_fields()),
             Self::Txn => get_root("txn", self.arrow_fields()),
         }
     }
@@ -30,7 +29,6 @@ impl ActionType {
             Self::Metadata => metadata_fields(),
             Self::Protocol => protocol_fields(),
             Self::Remove => remove_fields(),
-            Self::RowIdHighWaterMark => watermark_fields(),
             Self::Txn => txn_fields(),
         }
     }
@@ -48,7 +46,6 @@ pub fn get_log_schema() -> Schema {
             ActionType::Metadata.arrow_field(),
             ActionType::Protocol.arrow_field(),
             ActionType::Remove.arrow_field(),
-            ActionType::RowIdHighWaterMark.arrow_field(),
             ActionType::Txn.arrow_field(),
         ]),
         metadata: Default::default(),
@@ -205,10 +202,6 @@ fn txn_fields() -> Vec<Field> {
         Field::new("version", DataType::Int64, true),
         Field::new("lastUpdated", DataType::Int64, true),
     ])
-}
-
-fn watermark_fields() -> Vec<Field> {
-    Vec::from_iter([Field::new("highWaterMark", DataType::Int64, true)])
 }
 
 fn commit_info_fields() -> Vec<Field> {
