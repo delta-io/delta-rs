@@ -39,6 +39,12 @@ from ._internal import batch_distinct
 from ._internal import convert_to_deltalake as _convert_to_deltalake
 from ._internal import write_new_deltalake as _write_new_deltalake
 from .exceptions import DeltaProtocolError, TableNotFoundError
+from .schema import (
+    convert_pyarrow_dataset,
+    convert_pyarrow_recordbatch,
+    convert_pyarrow_recordbatchreader,
+    convert_pyarrow_table,
+)
 from .table import MAX_SUPPORTED_WRITER_VERSION, DeltaTable
 
 try:
@@ -159,12 +165,6 @@ def write_deltalake(
         partition_filters: the partition filters that will be used for partition overwrite.
         large_dtypes: If True, the data schema is kept in large_dtypes, has no effect on pandas dataframe input
     """
-    from .schema import (
-        convert_pyarrow_dataset,
-        convert_pyarrow_recordbatch,
-        convert_pyarrow_recordbatchreader,
-        convert_pyarrow_table,
-    )
 
     table, table_uri = try_get_table_and_table_uri(table_or_uri, storage_options)
 
