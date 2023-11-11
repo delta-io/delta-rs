@@ -313,12 +313,30 @@ def test_write_dataset(
     assert DeltaTable(tmp_path).to_pyarrow_table() == sample_data
 
 
+def test_write_dataset_large_types(
+    tmp_path: pathlib.Path, existing_table: DeltaTable, sample_data: pa.Table
+):
+    dataset = existing_table.to_pyarrow_dataset()
+
+    write_deltalake(tmp_path, dataset, mode="overwrite", large_dtypes=True)
+    assert DeltaTable(tmp_path).to_pyarrow_table() == sample_data
+
+
 def test_write_table(
     tmp_path: pathlib.Path, existing_table: DeltaTable, sample_data: pa.Table
 ):
     dataset = existing_table.to_pyarrow_table()
 
     write_deltalake(tmp_path, dataset, mode="overwrite")
+    assert DeltaTable(tmp_path).to_pyarrow_table() == sample_data
+
+
+def test_write_table_large_dtypes(
+    tmp_path: pathlib.Path, existing_table: DeltaTable, sample_data: pa.Table
+):
+    dataset = existing_table.to_pyarrow_table()
+
+    write_deltalake(tmp_path, dataset, mode="overwrite", large_dtypes=True)
     assert DeltaTable(tmp_path).to_pyarrow_table() == sample_data
 
 
@@ -332,6 +350,16 @@ def test_write_recordbatch(
     assert DeltaTable(tmp_path).to_pyarrow_table() == sample_data
 
 
+def test_write_recordbatch_large_dtypes(
+    tmp_path: pathlib.Path, existing_table: DeltaTable, sample_data: pa.Table
+):
+    batch = existing_table.to_pyarrow_table().to_batches()
+    print(len(batch))
+
+    write_deltalake(tmp_path, batch[0], mode="overwrite", large_dtypes=True)
+    assert DeltaTable(tmp_path).to_pyarrow_table() == sample_data
+
+
 def test_write_recordbatchreader(
     tmp_path: pathlib.Path, existing_table: DeltaTable, sample_data: pa.Table
 ):
@@ -341,6 +369,18 @@ def test_write_recordbatchreader(
     )
 
     write_deltalake(tmp_path, reader, mode="overwrite")
+    assert DeltaTable(tmp_path).to_pyarrow_table() == sample_data
+
+
+def test_write_recordbatchreader_large_dtypes(
+    tmp_path: pathlib.Path, existing_table: DeltaTable, sample_data: pa.Table
+):
+    batches = existing_table.to_pyarrow_dataset().to_batches()
+    reader = RecordBatchReader.from_batches(
+        existing_table.to_pyarrow_dataset().schema, batches
+    )
+
+    write_deltalake(tmp_path, reader, mode="overwrite", large_dtypes=True)
     assert DeltaTable(tmp_path).to_pyarrow_table() == sample_data
 
 

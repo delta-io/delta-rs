@@ -111,7 +111,7 @@ def convert_pyarrow_table(data: pa.Table, large_dtypes: bool) -> pa.RecordBatchR
 def convert_pyarrow_dataset(
     data: ds.Dataset, large_dtypes: bool
 ) -> pa.RecordBatchReader:
-    """Converts a PyArrow table to a PyArrow RecordBatchReader with a compatible delta schema"""
+    """Converts a PyArrow dataset to a PyArrow RecordBatchReader, schema is kept aside and used during write"""
     schema = _convert_pa_schema_to_delta(data.schema, large_dtypes=large_dtypes)
-    data = data.replace_schema(schema).scanner().to_reader()
+    data = data.scanner().to_reader()
     return data, schema
