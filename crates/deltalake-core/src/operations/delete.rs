@@ -135,7 +135,7 @@ async fn excute_non_empty_expr(
     // For each identified file perform a parquet scan + filter + limit (1) + count.
     // If returned count is not zero then append the file to be rewritten and removed from the log. Otherwise do nothing to the file.
 
-    let input_schema = snapshot.input_schema()?;
+    let input_schema = snapshot.arrow_schema(false)?;
     let input_dfschema: DFSchema = input_schema.clone().as_ref().clone().try_into()?;
 
     let table_partition_cols = snapshot

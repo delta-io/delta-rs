@@ -58,6 +58,7 @@ use url::Url;
 
 pub(crate) use self::scan::DeltaScanBuilder;
 
+use self::pruning::DatafusionExt;
 use self::scan::{DeltaScan, DeltaScanConfig, DeltaScanConfigBuilder};
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::{Add, Invariant};
@@ -104,10 +105,10 @@ pub(crate) fn register_store(store: LogStoreRef, env: Arc<RuntimeEnv>) {
 }
 
 pub(crate) fn logical_schema(
-    snapshot: &DeltaTableState,
+    snapshot: &dyn DatafusionExt,
     scan_config: &DeltaScanConfig,
 ) -> DeltaResult<SchemaRef> {
-    let input_schema = snapshot.input_schema()?;
+    let input_schema = snapshot.arrow_schema(false)?;
     let mut fields = Vec::new();
     for field in input_schema.fields.iter() {
         fields.push(field.to_owned());
@@ -131,7 +132,7 @@ impl TableProvider for DeltaTable {
     }
 
     fn schema(&self) -> Arc<ArrowSchema> {
-        self.state.arrow_schema().unwrap()
+        self.state.arrow_schema(true).unwrap()
     }
 
     fn table_type(&self) -> TableType {

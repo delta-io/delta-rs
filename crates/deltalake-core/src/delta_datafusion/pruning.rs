@@ -8,12 +8,14 @@ use arrow_schema::{
     SchemaRef as ArrowSchemaRef, TimeUnit,
 };
 use datafusion::datasource::physical_plan::wrap_partition_type_in_dict;
+use datafusion::execution::context::SessionState;
 use datafusion::physical_optimizer::pruning::{PruningPredicate, PruningStatistics};
 use datafusion::physical_plan::{ColumnStatistics, Statistics};
 use datafusion_common::scalar::ScalarValue;
-use datafusion_common::Column;
+use datafusion_common::{Column, DFSchema};
 use datafusion_expr::Expr;
 
+use super::expr::parse_predicate_expression;
 use super::{
     get_null_of_arrow_type, left_larger_than_right, logical_expr_to_physical_expr,
     to_correct_scalar_value, to_scalar_value,
@@ -31,9 +33,15 @@ pub trait DatafusionExt {
 
     /// Return statistics for Datafusion Table
     fn datafusion_table_statistics(&self) -> Statistics;
+
+    /// Parse an expression string into a datafusion [`Expr`]
+    fn parse_predicate_expression(&self, expr: &str, df_state: &SessionState) -> DeltaResult<Expr> {
+        let schema = DFSchema::try_from(self.arrow_schema(true)?.as_ref().to_owned())?;
+        parse_predicate_expression(&schema, expr, df_state)
+    }
 }
 
-impl<S: Snapshot + PruningStatistics> DatafusionExt for S {
+impl<S: Snapshot> DatafusionExt for S {
     fn arrow_schema(&self, wrap_partitions: bool) -> DeltaResult<ArrowSchemaRef> {
         let meta = self.metadata()?;
         let fields = meta
@@ -344,7 +352,7 @@ impl DeltaTableState {
                     .zip(fields)
                     .map(|(col_states, field)| {
                         let dt = self
-                            .arrow_schema()
+                            .arrow_schema(true)
                             .unwrap()
                             .field_with_name(field.name())
                             .unwrap()
@@ -590,8 +598,11 @@ impl PruningStatistics for DeltaTableState {
     /// Note: the returned array must contain `num_containers()` rows
     fn min_values(&self, column: &Column) -> Option<ArrayRef> {
         let partition_columns = &self.current_metadata()?.partition_columns;
-        let container =
-            AddContainer::new(self.files(), partition_columns, self.arrow_schema().ok()?);
+        let container = AddContainer::new(
+            self.files(),
+            partition_columns,
+            self.arrow_schema(true).ok()?,
+        );
         container.min_values(column)
     }
 
@@ -599,8 +610,11 @@ impl PruningStatistics for DeltaTableState {
     /// Note: the returned array must contain `num_containers()` rows.
     fn max_values(&self, column: &Column) -> Option<ArrayRef> {
         let partition_columns = &self.current_metadata()?.partition_columns;
-        let container =
-            AddContainer::new(self.files(), partition_columns, self.arrow_schema().ok()?);
+        let container = AddContainer::new(
+            self.files(),
+            partition_columns,
+            self.arrow_schema(true).ok()?,
+        );
         container.max_values(column)
     }
 
@@ -616,8 +630,11 @@ impl PruningStatistics for DeltaTableState {
     /// Note: the returned array must contain `num_containers()` rows.
     fn null_counts(&self, column: &Column) -> Option<ArrayRef> {
         let partition_columns = &self.current_metadata()?.partition_columns;
-        let container =
-            AddContainer::new(self.files(), partition_columns, self.arrow_schema().ok()?);
+        let container = AddContainer::new(
+            self.files(),
+            partition_columns,
+            self.arrow_schema(true).ok()?,
+        );
         container.null_counts(column)
     }
 }

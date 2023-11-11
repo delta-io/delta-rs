@@ -70,7 +70,7 @@ impl DeltaScanConfigBuilder {
 
     /// Build a DeltaScanConfig and ensure no column name conflicts occur during downstream processing
     pub fn build(&self, snapshot: &DeltaTableState) -> DeltaResult<DeltaScanConfig> {
-        let input_schema = snapshot.input_schema()?;
+        let input_schema = snapshot.arrow_schema(false)?;
         let mut file_column_name = None;
         let mut column_names: HashSet<&String> = HashSet::new();
         for field in input_schema.fields.iter() {

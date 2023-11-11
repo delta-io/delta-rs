@@ -21,11 +21,11 @@ use crate::table::state::DeltaTableState;
 
 impl DeltaTableState {
     /// Get the table schema as an [`ArrowSchemaRef`]
-    pub fn arrow_schema(&self) -> DeltaResult<ArrowSchemaRef> {
-        self._arrow_schema(true)
-    }
+    // pub fn arrow_schema(&self) -> DeltaResult<ArrowSchemaRef> {
+    //     self._arrow_schema(true)
+    // }
 
-    fn _arrow_schema(&self, wrap_partitions: bool) -> DeltaResult<ArrowSchemaRef> {
+    pub fn arrow_schema(&self, wrap_partitions: bool) -> DeltaResult<ArrowSchemaRef> {
         let meta = self.current_metadata().ok_or(DeltaTableError::NoMetadata)?;
         let fields = meta
             .schema
@@ -63,10 +63,6 @@ impl DeltaTableState {
         Ok(Arc::new(ArrowSchema::new(fields)))
     }
 
-    pub(crate) fn input_schema(&self) -> DeltaResult<ArrowSchemaRef> {
-        self._arrow_schema(false)
-    }
-
     /// Iterate over all files in the log matching a predicate
     pub fn files_matching_predicate(
         &self,
@@ -75,8 +71,8 @@ impl DeltaTableState {
         if let Some(Some(predicate)) =
             (!filters.is_empty()).then_some(conjunction(filters.iter().cloned()))
         {
-            let expr = logical_expr_to_physical_expr(&predicate, self.arrow_schema()?.as_ref());
-            let pruning_predicate = PruningPredicate::try_new(expr, self.arrow_schema()?)?;
+            let expr = logical_expr_to_physical_expr(&predicate, self.arrow_schema(true)?.as_ref());
+            let pruning_predicate = PruningPredicate::try_new(expr, self.arrow_schema(true)?)?;
             Ok(Either::Left(
                 self.files()
                     .iter()
@@ -102,7 +98,7 @@ impl DeltaTableState {
         expr: impl AsRef<str>,
         df_state: &SessionState,
     ) -> DeltaResult<Expr> {
-        let schema = DFSchema::try_from(self.arrow_schema()?.as_ref().to_owned())?;
+        let schema = DFSchema::try_from(self.arrow_schema(true)?.as_ref().to_owned())?;
         parse_predicate_expression(&schema, expr, df_state)
     }
 
@@ -124,7 +120,7 @@ impl DeltaTableState {
                 .clone();
 
             let table_schema = Arc::new(ArrowSchema::new(
-                self.arrow_schema()?
+                self.arrow_schema(true)?
                     .fields
                     .clone()
                     .into_iter()
@@ -142,7 +138,7 @@ impl DeltaTableState {
 
             Ok(table_schema)
         } else {
-            self.arrow_schema()
+            self.arrow_schema(true)
         }
     }
 }

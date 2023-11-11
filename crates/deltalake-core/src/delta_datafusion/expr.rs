@@ -516,7 +516,7 @@ mod test {
                         &arrow_schema::DataType::Utf8,
                         &table
                             .state
-                            .input_schema()
+                            .arrow_schema(false)
                             .unwrap()
                             .as_ref()
                             .to_owned()

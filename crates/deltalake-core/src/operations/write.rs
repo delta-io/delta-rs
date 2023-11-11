@@ -258,7 +258,7 @@ pub(crate) async fn write_execution_plan(
         .unwrap_or_default();
 
     // Use input schema to prevent wrapping partitions columns into a dictionary.
-    let schema = snapshot.input_schema().unwrap_or(plan.schema());
+    let schema = snapshot.arrow_schema(false).unwrap_or(plan.schema());
 
     let checker = DeltaDataChecker::new(invariants);
 
@@ -350,7 +350,7 @@ impl std::future::IntoFuture for WriteBuilder {
                         .snapshot
                         .physical_arrow_schema(this.log_store.object_store().clone())
                         .await
-                        .or_else(|_| this.snapshot.arrow_schema())
+                        .or_else(|_| this.snapshot.arrow_schema(true))
                         .unwrap_or(schema.clone());
 
                     if !can_cast_batch(schema.fields(), table_schema.fields()) {

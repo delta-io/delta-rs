@@ -591,7 +591,7 @@ async fn execute(
 
     let target = Arc::new(
         DeltaScanBuilder::new(snapshot, log_store.clone(), &state)
-            .with_schema(snapshot.input_schema()?)
+            .with_schema(snapshot.arrow_schema(false)?)
             .build()
             .await?,
     );

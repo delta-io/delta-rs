@@ -467,7 +467,7 @@ impl<'a> ConflictChecker<'a> {
                     &self.txn_info.read_predicates,
                     self.txn_info.read_whole_table(),
                 ) {
-                    let arrow_schema = self.txn_info.read_snapshot.arrow_schema().map_err(|err| {
+                    let arrow_schema = self.txn_info.read_snapshot.arrow_schema(true).map_err(|err| {
                         CommitConflictError::CorruptedState {
                             source: Box::new(err),
                         }

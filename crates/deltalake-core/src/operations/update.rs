@@ -232,7 +232,7 @@ async fn execute(
     let scan = Arc::new(scan);
 
     // Create a projection for a new column with the predicate evaluated
-    let input_schema = snapshot.input_schema()?;
+    let input_schema = snapshot.arrow_schema(false)?;
 
     let mut fields = Vec::new();
     for field in input_schema.fields.iter() {
