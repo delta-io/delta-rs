@@ -304,6 +304,34 @@ def test_write_iterator(
     assert DeltaTable(tmp_path).to_pyarrow_table() == sample_data
 
 
+def test_write_dataset(
+    tmp_path: pathlib.Path, existing_table: DeltaTable, sample_data: pa.Table
+):
+    dataset = existing_table.to_pyarrow_dataset()
+
+    write_deltalake(tmp_path, dataset, mode="overwrite")
+    assert DeltaTable(tmp_path).to_pyarrow_table() == sample_data
+
+
+def test_write_table(
+    tmp_path: pathlib.Path, existing_table: DeltaTable, sample_data: pa.Table
+):
+    dataset = existing_table.to_pyarrow_table()
+
+    write_deltalake(tmp_path, dataset, mode="overwrite")
+    assert DeltaTable(tmp_path).to_pyarrow_table() == sample_data
+
+
+def test_write_recordbatch(
+    tmp_path: pathlib.Path, existing_table: DeltaTable, sample_data: pa.Table
+):
+    batch = existing_table.to_pyarrow_table().to_batches()
+    print(len(batch))
+
+    write_deltalake(tmp_path, batch[0], mode="overwrite")
+    assert DeltaTable(tmp_path).to_pyarrow_table() == sample_data
+
+
 def test_write_recordbatchreader(
     tmp_path: pathlib.Path, existing_table: DeltaTable, sample_data: pa.Table
 ):

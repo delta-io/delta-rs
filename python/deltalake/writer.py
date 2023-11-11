@@ -160,6 +160,7 @@ def write_deltalake(
         large_dtypes: If True, the data schema is kept in large_dtypes, has no effect on pandas dataframe input
     """
     from .schema import (
+        convert_pyarrow_dataset,
         convert_pyarrow_recordbatch,
         convert_pyarrow_recordbatchreader,
         convert_pyarrow_table,
@@ -178,7 +179,7 @@ def write_deltalake(
     elif isinstance(data, pa.Table):
         data, delta_schema = convert_pyarrow_table(data, large_dtypes)
     elif isinstance(data, ds.Dataset):
-        data, delta_schema = convert_pyarrow_table(data.to_table(), large_dtypes)
+        data, delta_schema = convert_pyarrow_dataset(data, large_dtypes)
     elif _has_pandas and isinstance(data, pd.DataFrame):
         if schema is not None:
             data = pa.Table.from_pandas(data, schema=schema)

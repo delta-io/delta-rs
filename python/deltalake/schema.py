@@ -1,6 +1,7 @@
 from typing import TYPE_CHECKING, Union
 
 import pyarrow as pa
+import pyarrow.dataset as ds
 
 if TYPE_CHECKING:
     pass
@@ -94,14 +95,21 @@ def convert_pyarrow_recordbatch(
 ) -> pa.RecordBatchReader:
     """Converts a PyArrow RecordBatch to a PyArrow RecordBatchReader with a compatible delta schema"""
     schema = _convert_pa_schema_to_delta(data.schema, large_dtypes=large_dtypes)
-    data = pa.Table.from_batches(data).cast(schema).to_batches()
+    data = pa.Table.from_batches([data]).cast(schema).to_reader()
     return data, schema
 
 
-def convert_pyarrow_table(
-    data: pa.RecordBatch, large_dtypes: bool
-) -> pa.RecordBatchReader:
+def convert_pyarrow_table(data: pa.Table, large_dtypes: bool) -> pa.RecordBatchReader:
     """Converts a PyArrow table to a PyArrow RecordBatchReader with a compatible delta schema"""
     schema = _convert_pa_schema_to_delta(data.schema, large_dtypes=large_dtypes)
     data = data.cast(schema).to_reader()
+    return data, schema
+
+
+def convert_pyarrow_dataset(
+    data: ds.Dataset, large_dtypes: bool
+) -> pa.RecordBatchReader:
+    """Converts a PyArrow table to a PyArrow RecordBatchReader with a compatible delta schema"""
+    schema = _convert_pa_schema_to_delta(data.schema, large_dtypes=large_dtypes)
+    data = data.replace_schema(schema).scanner().to_reader()
     return data, schema
