@@ -37,8 +37,8 @@ use super::transaction::commit;
 use crate::crate_version;
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::Action;
+use crate::logstore::{LogStore, LogStoreRef};
 use crate::protocol::DeltaOperation;
-use crate::storage::DeltaObjectStore;
 use crate::table::state::DeltaTableState;
 use crate::DeltaTable;
 
@@ -82,7 +82,7 @@ pub struct VacuumBuilder {
     /// A snapshot of the to-be-vacuumed table's state
     snapshot: DeltaTableState,
     /// Delta object store for handling data files
-    store: Arc<DeltaObjectStore>,
+    log_store: LogStoreRef,
     /// Period of stale files allowed.
     retention_period: Option<Duration>,
     /// Validate the retention period is not below the retention period configured in the table
@@ -125,10 +125,10 @@ pub struct VacuumEndOperationMetrics {
 /// Methods to specify various vacuum options and to execute the operation
 impl VacuumBuilder {
     /// Create a new [`VacuumBuilder`]
-    pub fn new(store: Arc<DeltaObjectStore>, snapshot: DeltaTableState) -> Self {
+    pub fn new(log_store: LogStoreRef, snapshot: DeltaTableState) -> Self {
         VacuumBuilder {
             snapshot,
-            store,
+            log_store,
             retention_period: None,
             enforce_retention_duration: true,
             dry_run: false,
@@ -184,8 +184,11 @@ impl VacuumBuilder {
 
         let mut files_to_delete = vec![];
         let mut file_sizes = vec![];
-        let mut all_files = self.store.list(None).await.map_err(DeltaTableError::from)?;
-
+        let object_store = self.log_store.object_store();
+        let mut all_files = object_store
+            .list(None)
+            .await
+            .map_err(DeltaTableError::from)?;
         let partition_columns = &self
             .snapshot
             .current_metadata()
@@ -227,7 +230,7 @@ impl std::future::IntoFuture for VacuumBuilder {
             let plan = this.create_vacuum_plan().await?;
             if this.dry_run {
                 return Ok((
-                    DeltaTable::new_with_state(this.store, this.snapshot),
+                    DeltaTable::new_with_state(this.log_store, this.snapshot),
                     VacuumMetrics {
                         files_deleted: plan.files_to_delete.iter().map(|f| f.to_string()).collect(),
                         dry_run: true,
@@ -235,9 +238,11 @@ impl std::future::IntoFuture for VacuumBuilder {
                 ));
             }
 
-            let metrics = plan.execute(&this.store, &this.snapshot).await?;
+            let metrics = plan
+                .execute(this.log_store.as_ref(), &this.snapshot)
+                .await?;
             Ok((
-                DeltaTable::new_with_state(this.store, this.snapshot),
+                DeltaTable::new_with_state(this.log_store, this.snapshot),
                 metrics,
             ))
         })
@@ -262,7 +267,7 @@ impl VacuumPlan {
     /// Execute the vacuum plan and delete files from underlying storage
     pub async fn execute(
         self,
-        store: &DeltaObjectStore,
+        store: &dyn LogStore,
         snapshot: &DeltaTableState,
     ) -> Result<VacuumMetrics, DeltaTableError> {
         if self.files_to_delete.is_empty() {
@@ -311,6 +316,7 @@ impl VacuumPlan {
             .boxed();
 
         let files_deleted = store
+            .object_store()
             .delete_stream(locations)
             .map(|res| match res {
                 Ok(path) => Ok(path.to_string()),
@@ -395,7 +401,7 @@ mod tests {
     async fn vacuum_delta_8_0_table() {
         let table = open_table("./tests/data/delta-0.8.0").await.unwrap();
 
-        let result = VacuumBuilder::new(table.object_store(), table.state.clone())
+        let result = VacuumBuilder::new(table.log_store, table.state.clone())
             .with_retention_period(Duration::hours(1))
             .with_dry_run(true)
             .await;
@@ -403,7 +409,7 @@ mod tests {
         assert!(result.is_err());
 
         let table = open_table("./tests/data/delta-0.8.0").await.unwrap();
-        let (table, result) = VacuumBuilder::new(table.object_store(), table.state)
+        let (table, result) = VacuumBuilder::new(table.log_store, table.state)
             .with_retention_period(Duration::hours(0))
             .with_dry_run(true)
             .with_enforce_retention_duration(false)
@@ -415,7 +421,7 @@ mod tests {
             vec!["part-00001-911a94a2-43f6-4acb-8620-5e68c2654989-c000.snappy.parquet"]
         );
 
-        let (table, result) = VacuumBuilder::new(table.object_store(), table.state)
+        let (table, result) = VacuumBuilder::new(table.log_store, table.state)
             .with_retention_period(Duration::hours(169))
             .with_dry_run(true)
             .await
@@ -432,7 +438,7 @@ mod tests {
             .as_secs()
             / 3600;
         let empty: Vec<String> = Vec::new();
-        let (_table, result) = VacuumBuilder::new(table.object_store(), table.state)
+        let (_table, result) = VacuumBuilder::new(table.log_store, table.state)
             .with_retention_period(Duration::hours(retention_hours as i64))
             .with_dry_run(true)
             .await

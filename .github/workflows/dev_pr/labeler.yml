@@ -1,11 +1,3 @@
-rust:
-  - delta-inspect/**/*
-  - proofs/**/*
-  - rust/**/*
-
-binding/python:
-  - python/**/*
-
 ci:
   - .github/**.*
 
@@ -16,17 +8,23 @@ documentation:
   - CONTRIBUTING.md
   - python/docs/**/*
 
-storage/aws:
-  - aws/**/*
-
 delta-inspect:
   - delta-inspect/**/*
-
-binding/rust:
-  - rust/**/*
 
 proofs:
   - proofs/**/*
 
 tlaplus:
   - tlaplus/**/*
+
+binding/python:
+  - python/**/*
+
+binding/rust:
+  - crates/**/*
+
+crate/core:
+  - crates/deltalake-core/**/*
+
+crate/sql:
+  - crates/deltalake-sql/**/*

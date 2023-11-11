@@ -2,10 +2,10 @@
 
 use bytes::Bytes;
 use deltalake_core::kernel::{Action, Add, Remove, StructType};
+use deltalake_core::logstore::LogStore;
 use deltalake_core::operations::create::CreateBuilder;
 use deltalake_core::operations::transaction::commit;
 use deltalake_core::protocol::{DeltaOperation, SaveMode};
-use deltalake_core::storage::DeltaObjectStore;
 use deltalake_core::DeltaTable;
 use deltalake_core::DeltaTableBuilder;
 use object_store::{path::Path, ObjectStore};
@@ -28,7 +28,7 @@ pub mod s3;
 pub struct TestContext {
     /// The main table under test
     pub table: Option<DeltaTable>,
-    pub backend: Option<Arc<DeltaObjectStore>>,
+    pub backend: Option<Arc<dyn LogStore>>,
     /// The configuration used to create the backend.
     pub config: HashMap<String, String>,
     /// An object when it is dropped will clean up any temporary resources created for the test
@@ -55,7 +55,7 @@ impl TestContext {
         }
     }
 
-    pub fn get_storage(&mut self) -> Arc<DeltaObjectStore> {
+    pub fn get_storage(&mut self) -> Arc<dyn LogStore> {
         if self.backend.is_none() {
             self.backend = Some(self.new_storage())
         }
@@ -63,7 +63,7 @@ impl TestContext {
         self.backend.as_ref().unwrap().clone()
     }
 
-    fn new_storage(&self) -> Arc<DeltaObjectStore> {
+    fn new_storage(&self) -> Arc<dyn LogStore> {
         let config = self.config.clone();
         let uri = config.get("URI").unwrap().to_string();
         DeltaTableBuilder::from_uri(uri)
@@ -82,9 +82,9 @@ impl TestContext {
             .iter()
             .map(|s| s.to_string())
             .collect::<Vec<String>>();
-        let backend = self.new_storage();
+        let log_store = self.new_storage();
         CreateBuilder::new()
-            .with_object_store(backend)
+            .with_log_store(log_store)
             .with_table_name("delta-rs_test_table")
             .with_comment("Table created by delta-rs tests")
             .with_columns(schema.fields().clone())
@@ -149,7 +149,7 @@ pub async fn add_file(
         };
         let actions = vec![Action::Add(add)];
         commit(
-            table.object_store().as_ref(),
+            table.log_store().as_ref(),
             &actions,
             operation,
             &table.state,
@@ -187,7 +187,7 @@ pub async fn remove_file(
     let operation = DeltaOperation::Delete { predicate: None };
     let actions = vec![Action::Remove(remove)];
     commit(
-        table.object_store().as_ref(),
+        table.log_store().as_ref(),
         &actions,
         operation,
         &table.state,

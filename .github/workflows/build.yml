@@ -139,11 +139,11 @@ jobs:
 
       - name: Run tests with rustls (default)
         run: |
-          cargo test -p deltalake --features integration_test,azure,s3,gcs,datafusion
+          cargo test --features integration_test,azure,s3,gcs,datafusion
 
       - name: Run tests with native-tls
         run: |
-          cargo test -p deltalake --no-default-features --features integration_test,s3-native-tls,datafusion
+          cargo test --no-default-features --features integration_test,s3-native-tls,datafusion
 
   parquet2_test:
     runs-on: ubuntu-latest
