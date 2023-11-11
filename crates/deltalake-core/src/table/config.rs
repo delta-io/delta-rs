@@ -11,6 +11,7 @@ use crate::errors::DeltaTableError;
 /// <https://docs.delta.io/latest/table-properties.html#delta-table-properties-reference>
 /// <https://learn.microsoft.com/en-us/azure/databricks/delta/table-properties>
 #[derive(PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum DeltaConfigKey {
     /// true for this Delta table to be append-only. If append-only,
     /// existing records cannot be deleted, and existing values cannot be updated.
@@ -100,6 +101,9 @@ pub enum DeltaConfigKey {
 
     /// The target file size in bytes or higher units for file tuning. For example, 104857600 (bytes) or 100mb.
     TuneFileSizesForRewrites,
+
+    /// 'classic' for classic Delta Lake checkpoints. 'v2' for v2 checkpoints.
+    CheckpointPolicy,
 }
 
 impl AsRef<str> for DeltaConfigKey {
@@ -111,6 +115,7 @@ impl AsRef<str> for DeltaConfigKey {
             Self::AutoOptimizeOptimizeWrite => "delta.autoOptimize.optimizeWrite",
             Self::CheckpointWriteStatsAsJson => "delta.checkpoint.writeStatsAsJson",
             Self::CheckpointWriteStatsAsStruct => "delta.checkpoint.writeStatsAsStruct",
+            Self::CheckpointPolicy => "delta.checkpointPolicy",
             Self::ColumnMappingMode => "delta.columnMapping.mode",
             Self::DataSkippingNumIndexedCols => "delta.dataSkippingNumIndexedCols",
             Self::DeletedFileRetentionDuration => "delta.deletedFileRetentionDuration",
@@ -140,6 +145,7 @@ impl FromStr for DeltaConfigKey {
             "delta.autoOptimize.optimizeWrite" => Ok(Self::AutoOptimizeOptimizeWrite),
             "delta.checkpoint.writeStatsAsJson" => Ok(Self::CheckpointWriteStatsAsJson),
             "delta.checkpoint.writeStatsAsStruct" => Ok(Self::CheckpointWriteStatsAsStruct),
+            "delta.checkpointPolicy" => Ok(Self::CheckpointPolicy),
             "delta.columnMapping.mode" => Ok(Self::ColumnMappingMode),
             "delta.dataSkippingNumIndexedCols" => Ok(Self::DataSkippingNumIndexedCols),
             "delta.deletedFileRetentionDuration" | "deletedFileRetentionDuration" => {

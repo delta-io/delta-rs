@@ -132,10 +132,7 @@ impl TryFrom<&DataType> for ArrowDataType {
                     }
                     PrimitiveType::Timestamp => {
                         // Issue: https://github.com/delta-io/delta/issues/643
-                        Ok(ArrowDataType::Timestamp(
-                            TimeUnit::Microsecond,
-                            Some("UTC".into()),
-                        ))
+                        Ok(ArrowDataType::Timestamp(TimeUnit::Microsecond, None))
                     }
                 }
             }
