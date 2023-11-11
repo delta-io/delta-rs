@@ -12,8 +12,8 @@ use serde::{Deserialize, Serialize};
 
 use super::config::TableConfig;
 use crate::errors::DeltaTableError;
-use crate::kernel::arrow::snapshot::Snapshot;
 use crate::kernel::error::DeltaResult;
+use crate::kernel::snapshot::Snapshot;
 use crate::kernel::{
     Action, Add, CommitInfo, DataType, DomainMetadata, ReaderFeatures, Remove, StructType,
     WriterFeatures,

@@ -20,30 +20,10 @@ use std::task::{ready, Poll};
 use super::checkpoint::{parse_action, parse_actions};
 use super::schemas::get_log_schema;
 use crate::kernel::error::{DeltaResult, Error};
+use crate::kernel::snapshot::Snapshot;
 use crate::kernel::{Action, ActionType, Add, Metadata, Protocol, StructType};
 use crate::storage::path::{commit_version, is_checkpoint_file, is_commit_file, FileMeta, LogPath};
 use crate::table::config::TableConfig;
-
-/// A snapshot of a Delta table at a given version.
-pub trait Snapshot: std::fmt::Display + Send + Sync + std::fmt::Debug + 'static {
-    /// The version of the table at this [`Snapshot`].
-    fn version(&self) -> i64;
-
-    /// Table [`Schema`](crate::kernel::schema::StructType) at this [`Snapshot`]'s version.
-    fn schema(&self) -> Option<&StructType>;
-
-    /// Table [`Metadata`] at this [`Snapshot`]'s version.
-    fn metadata(&self) -> DeltaResult<Metadata>;
-
-    /// Table [`Protocol`] at this [`Snapshot`]'s version.
-    fn protocol(&self) -> DeltaResult<Protocol>;
-
-    /// Iterator over the [`Add`] actions at this [`Snapshot`]'s version.
-    fn files(&self) -> DeltaResult<Box<dyn Iterator<Item = Add> + '_>>;
-
-    /// Well known table [configuration](crate::table::config::TableConfig).
-    fn table_config(&self) -> TableConfig<'_>;
-}
 
 /// A [`Snapshot`] that is dynamically typed.
 pub type DynSnapshot = dyn Snapshot;
