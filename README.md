@@ -32,7 +32,7 @@
   <a href="https://pypi.python.org/pypi/deltalake">
     <img alt="Deltalake" src="https://img.shields.io/pypi/pyversions/deltalake.svg?style=flat-square&color=00ADD4&logo=python">
   </a>
-  <a target="_blank" href="https://join.slack.com/t/delta-users/shared_invite/zt-23h0xwez7-wDTm43ZVEW2ZcbKn6Bc8Fg">
+  <a target="_blank" href="https://go.delta.io/slack">
     <img alt="#delta-rs in the Delta Lake Slack workspace" src="https://img.shields.io/badge/slack-delta-blue.svg?logo=slack&style=flat-square&color=F75101">
   </a>
 </p>
@@ -105,7 +105,7 @@ You can also try Delta Lake docker at [DockerHub](https://go.delta.io/dockerhub)
 We encourage you to reach out, and are [committed](https://github.com/delta-io/delta-rs/blob/main/CODE_OF_CONDUCT.md)
 to provide a welcoming community.
 
-- [Join us in our Slack workspace](https://join.slack.com/t/delta-users/shared_invite/zt-23h0xwez7-wDTm43ZVEW2ZcbKn6Bc8Fg)
+- [Join us in our Slack workspace](https://go.delta.io/slack)
 - [Report an issue](https://github.com/delta-io/delta-rs/issues/new?template=bug_report.md)
 - Looking to contribute? See our [good first issues](https://github.com/delta-io/delta-rs/contribute).
 
@@ -152,8 +152,8 @@ of features outlined in the Delta [protocol][protocol] is also [tracked](#protoc
 | Delete - predicates   |         ![done]          |       ![done]       | Delete data based on a predicate            |
 | Optimize - compaction |         ![done]          |       ![done]       | Harmonize the size of data file             |
 | Optimize - Z-order    |         ![done]          |       ![done]       | Place similar data into the same file       |
-| Merge                 | [![semi-done]][merge-rs] | [![open]][merge-py] | Merge two tables (limited to full re-write) |
-| FS check              |         ![done]          |                     | Remove corrupted files from table           |
+| Merge                 | [![semi-done]][merge-rs] | [![semi-done]][merge-py] | Merge two tables (limited to full re-write) |
+| FS check              |         ![done]          |       ![done]       | Remove corrupted files from table           |
 
 ### Protocol Support Level
 

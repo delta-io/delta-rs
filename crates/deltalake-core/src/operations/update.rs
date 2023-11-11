@@ -41,21 +41,18 @@ use datafusion_physical_expr::{
 use futures::future::BoxFuture;
 use parquet::file::properties::WriterProperties;
 use serde::Serialize;
-use serde_json::{Map, Value};
+use serde_json::Value;
 
-use crate::{
-    delta_datafusion::{expr::fmt_expr_to_sql, find_files, register_store, DeltaScanBuilder},
-    protocol::{Action, DeltaOperation, Remove},
-    storage::{DeltaObjectStore, ObjectStoreRef},
-    table::state::DeltaTableState,
-    DeltaResult, DeltaTable, DeltaTableError,
-};
-
-use super::{
-    datafusion_utils::{Expression, MetricObserverExec},
-    transaction::commit,
-    write::write_execution_plan,
-};
+use super::datafusion_utils::{Expression, MetricObserverExec};
+use super::transaction::commit;
+use super::write::write_execution_plan;
+use crate::delta_datafusion::expr::fmt_expr_to_sql;
+use crate::delta_datafusion::{find_files, register_store, DeltaScanBuilder};
+use crate::kernel::{Action, Remove};
+use crate::logstore::LogStoreRef;
+use crate::protocol::DeltaOperation;
+use crate::table::state::DeltaTableState;
+use crate::{DeltaResult, DeltaTable, DeltaTableError};
 
 /// Updates records in the Delta Table.
 /// See this module's documentation for more information
@@ -67,13 +64,13 @@ pub struct UpdateBuilder {
     /// A snapshot of the table's state
     snapshot: DeltaTableState,
     /// Delta object store for handling data files
-    object_store: Arc<DeltaObjectStore>,
+    log_store: LogStoreRef,
     /// Datafusion session state relevant for executing the input plan
     state: Option<SessionState>,
     /// Properties passed to underlying parquet writer for when files are rewritten
     writer_properties: Option<WriterProperties>,
     /// Additional metadata to be added to commit
-    app_metadata: Option<Map<String, serde_json::Value>>,
+    app_metadata: Option<HashMap<String, serde_json::Value>>,
     /// safe_cast determines how data types that do not match the underlying table are handled
     /// By default an error is returned
     safe_cast: bool,
@@ -98,12 +95,12 @@ pub struct UpdateMetrics {
 
 impl UpdateBuilder {
     /// Create a new ['UpdateBuilder']
-    pub fn new(object_store: ObjectStoreRef, snapshot: DeltaTableState) -> Self {
+    pub fn new(log_store: LogStoreRef, snapshot: DeltaTableState) -> Self {
         Self {
             predicate: None,
             updates: HashMap::new(),
             snapshot,
-            object_store,
+            log_store,
             state: None,
             writer_properties: None,
             app_metadata: None,
@@ -117,7 +114,7 @@ impl UpdateBuilder {
         self
     }
 
-    /// Perform an additonal update expression during the operaton
+    /// Perform an additional update expression during the operaton
     pub fn with_update<S: Into<Column>, E: Into<Expression>>(
         mut self,
         column: S,
@@ -138,7 +135,7 @@ impl UpdateBuilder {
         mut self,
         metadata: impl IntoIterator<Item = (String, serde_json::Value)>,
     ) -> Self {
-        self.app_metadata = Some(Map::from_iter(metadata));
+        self.app_metadata = Some(HashMap::from_iter(metadata));
         self
     }
 
@@ -167,11 +164,11 @@ impl UpdateBuilder {
 async fn execute(
     predicate: Option<Expression>,
     updates: HashMap<Column, Expression>,
-    object_store: ObjectStoreRef,
+    log_store: LogStoreRef,
     snapshot: &DeltaTableState,
     state: SessionState,
     writer_properties: Option<WriterProperties>,
-    app_metadata: Option<Map<String, Value>>,
+    app_metadata: Option<HashMap<String, Value>>,
     safe_cast: bool,
 ) -> DeltaResult<((Vec<Action>, i64), UpdateMetrics)> {
     // Validate the predicate and update expressions.
@@ -216,7 +213,7 @@ async fn execute(
     let table_partition_cols = current_metadata.partition_columns.clone();
 
     let scan_start = Instant::now();
-    let candidates = find_files(snapshot, object_store.clone(), &state, predicate.clone()).await?;
+    let candidates = find_files(snapshot, log_store.clone(), &state, predicate.clone()).await?;
     metrics.scan_time_ms = Instant::now().duration_since(scan_start).as_millis() as u64;
 
     if candidates.candidates.is_empty() {
@@ -228,7 +225,7 @@ async fn execute(
     let execution_props = state.execution_props();
     // For each rewrite evaluate the predicate and then modify each expression
     // to either compute the new value or obtain the old one then write these batches
-    let scan = DeltaScanBuilder::new(snapshot, object_store.clone(), &state)
+    let scan = DeltaScanBuilder::new(snapshot, log_store.clone(), &state)
         .with_files(&candidates.candidates)
         .build()
         .await?;
@@ -360,7 +357,7 @@ async fn execute(
         state.clone(),
         projection.clone(),
         table_partition_cols.clone(),
-        object_store.clone(),
+        log_store.object_store().clone(),
         Some(snapshot.table_config().target_file_size() as usize),
         None,
         writer_properties,
@@ -384,13 +381,13 @@ async fn execute(
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_millis() as i64;
-    let mut actions: Vec<Action> = add_actions.into_iter().map(Action::add).collect();
+    let mut actions: Vec<Action> = add_actions.into_iter().map(Action::Add).collect();
 
     metrics.num_added_files = actions.len();
     metrics.num_removed_files = candidates.candidates.len();
 
     for action in candidates.candidates {
-        actions.push(Action::remove(Remove {
+        actions.push(Action::Remove(Remove {
             path: action.path,
             deletion_timestamp: Some(deletion_timestamp),
             data_change: true,
@@ -399,6 +396,8 @@ async fn execute(
             size: Some(action.size),
             deletion_vector: action.deletion_vector,
             tags: None,
+            base_row_id: None,
+            default_row_commit_version: None,
         }))
     }
 
@@ -408,7 +407,7 @@ async fn execute(
         predicate: Some(fmt_expr_to_sql(&predicate)?),
     };
     version = commit(
-        object_store.as_ref(),
+        log_store.as_ref(),
         &actions,
         operation,
         snapshot,
@@ -431,7 +430,7 @@ impl std::future::IntoFuture for UpdateBuilder {
                 let session = SessionContext::new();
 
                 // If a user provides their own their DF state then they must register the store themselves
-                register_store(this.object_store.clone(), session.runtime_env());
+                register_store(this.log_store.clone(), session.runtime_env());
 
                 session.state()
             });
@@ -439,7 +438,7 @@ impl std::future::IntoFuture for UpdateBuilder {
             let ((actions, version), metrics) = execute(
                 this.predicate,
                 this.updates,
-                this.object_store.clone(),
+                this.log_store.clone(),
                 &this.snapshot,
                 state,
                 this.writer_properties,
@@ -450,7 +449,7 @@ impl std::future::IntoFuture for UpdateBuilder {
 
             this.snapshot
                 .merge(DeltaTableState::from_actions(actions, version)?, true, true);
-            let table = DeltaTable::new_with_state(this.object_store, this.snapshot);
+            let table = DeltaTable::new_with_state(this.log_store, this.snapshot);
 
             Ok((table, metrics))
         })
@@ -461,9 +460,9 @@ impl std::future::IntoFuture for UpdateBuilder {
 mod tests {
     use crate::operations::DeltaOps;
     use crate::writer::test_utils::datafusion::get_data;
+    use crate::writer::test_utils::datafusion::write_batch;
     use crate::writer::test_utils::{
         get_arrow_schema, get_delta_schema, get_record_batch, setup_table_with_configuration,
-        write_batch,
     };
     use crate::DeltaConfigKey;
     use crate::DeltaTable;
@@ -480,7 +479,7 @@ mod tests {
 
         let table = DeltaOps::new_in_memory()
             .create()
-            .with_columns(table_schema.get_fields().clone())
+            .with_columns(table_schema.fields().clone())
             .with_partition_columns(partitions.unwrap_or_default())
             .await
             .unwrap();

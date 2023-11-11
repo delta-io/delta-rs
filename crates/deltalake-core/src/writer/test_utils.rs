@@ -7,11 +7,11 @@ use arrow::compute::take;
 use arrow_array::{Int32Array, Int64Array, RecordBatch, StringArray, StructArray, UInt32Array};
 use arrow_schema::{DataType, Field, Schema as ArrowSchema};
 
-use crate::operations::{create::CreateBuilder, DeltaOps};
-use crate::schema::{Schema, SchemaTypeStruct};
+use crate::kernel::{DataType as DeltaDataType, PrimitiveType, StructField, StructType};
+use crate::operations::create::CreateBuilder;
+use crate::operations::DeltaOps;
 use crate::table::DeltaTableMetaData;
-use crate::writer::SaveMode;
-use crate::{DeltaConfigKey, DeltaTable, DeltaTableBuilder, SchemaDataType, SchemaField};
+use crate::{DeltaConfigKey, DeltaTable, DeltaTableBuilder};
 
 pub type TestResult = Result<(), Box<dyn std::error::Error + 'static>>;
 
@@ -47,14 +47,6 @@ pub fn get_record_batch(part: Option<String>, with_null: bool) -> RecordBatch {
         Some(_) => RecordBatch::try_new(schema, vec![str_values, int_values]).unwrap(),
         _ => RecordBatch::try_new(schema, vec![str_values, int_values, mod_values]).unwrap(),
     }
-}
-
-pub async fn write_batch(table: DeltaTable, batch: RecordBatch) -> DeltaTable {
-    DeltaOps(table)
-        .write(vec![batch.clone()])
-        .with_save_mode(SaveMode::Append)
-        .await
-        .expect("Failed to append")
 }
 
 pub fn get_arrow_schema(part: &Option<String>) -> Arc<ArrowSchema> {
@@ -140,25 +132,22 @@ fn data_without_null() -> (Int32Array, StringArray, StringArray) {
     (base_int, base_str, base_mod)
 }
 
-pub fn get_delta_schema() -> Schema {
-    Schema::new(vec![
-        SchemaField::new(
+pub fn get_delta_schema() -> StructType {
+    StructType::new(vec![
+        StructField::new(
             "id".to_string(),
-            SchemaDataType::primitive("string".to_string()),
+            DeltaDataType::Primitive(PrimitiveType::String),
             true,
-            HashMap::new(),
         ),
-        SchemaField::new(
+        StructField::new(
             "value".to_string(),
-            SchemaDataType::primitive("integer".to_string()),
+            DeltaDataType::Primitive(PrimitiveType::Integer),
             true,
-            HashMap::new(),
         ),
-        SchemaField::new(
+        StructField::new(
             "modified".to_string(),
-            SchemaDataType::primitive("string".to_string()),
+            DeltaDataType::Primitive(PrimitiveType::String),
             true,
-            HashMap::new(),
         ),
     ])
 }
@@ -259,36 +248,31 @@ pub fn get_record_batch_with_nested_struct() -> RecordBatch {
     .unwrap()
 }
 
-pub fn get_delta_schema_with_nested_struct() -> Schema {
-    Schema::new(vec![
-        SchemaField::new(
+pub fn get_delta_schema_with_nested_struct() -> StructType {
+    StructType::new(vec![
+        StructField::new(
             "id".to_string(),
-            SchemaDataType::primitive("string".to_string()),
+            DeltaDataType::Primitive(PrimitiveType::String),
             true,
-            HashMap::new(),
         ),
-        SchemaField::new(
+        StructField::new(
             "value".to_string(),
-            SchemaDataType::primitive("integer".to_string()),
+            DeltaDataType::Primitive(PrimitiveType::Integer),
             true,
-            HashMap::new(),
         ),
-        SchemaField::new(
+        StructField::new(
             "modified".to_string(),
-            SchemaDataType::primitive("string".to_string()),
+            DeltaDataType::Primitive(PrimitiveType::String),
             true,
-            HashMap::new(),
         ),
-        SchemaField::new(
+        StructField::new(
             String::from("nested"),
-            SchemaDataType::r#struct(SchemaTypeStruct::new(vec![SchemaField::new(
+            DeltaDataType::Struct(Box::new(StructType::new(vec![StructField::new(
                 String::from("count"),
-                SchemaDataType::primitive(String::from("integer")),
+                DeltaDataType::Primitive(PrimitiveType::Integer),
                 true,
-                Default::default(),
-            )])),
+            )]))),
             true,
-            Default::default(),
         ),
     ])
 }
@@ -300,7 +284,7 @@ pub async fn setup_table_with_configuration(
     let table_schema = get_delta_schema();
     DeltaOps::new_in_memory()
         .create()
-        .with_columns(table_schema.get_fields().clone())
+        .with_columns(table_schema.fields().clone())
         .with_configuration_property(key, value)
         .await
         .expect("Failed to create table")
@@ -323,7 +307,7 @@ pub async fn create_initialized_table(partition_cols: &[String]) -> DeltaTable {
         .with_location(table_path.to_str().unwrap())
         .with_table_name("test-table")
         .with_comment("A table for running tests")
-        .with_columns(table_schema.get_fields().clone())
+        .with_columns(table_schema.fields().clone())
         .with_partition_columns(partition_cols)
         .await
         .unwrap()
@@ -331,13 +315,15 @@ pub async fn create_initialized_table(partition_cols: &[String]) -> DeltaTable {
 
 #[cfg(feature = "datafusion")]
 pub mod datafusion {
+    use crate::operations::DeltaOps;
+    use crate::writer::SaveMode;
     use crate::DeltaTable;
     use arrow_array::RecordBatch;
     use datafusion::prelude::SessionContext;
     use std::sync::Arc;
 
     pub async fn get_data(table: &DeltaTable) -> Vec<RecordBatch> {
-        let table = DeltaTable::new_with_state(table.object_store(), table.state.clone());
+        let table = DeltaTable::new_with_state(table.log_store.clone(), table.state.clone());
         let ctx = SessionContext::new();
         ctx.register_table("test", Arc::new(table)).unwrap();
         ctx.sql("select * from test")
@@ -346,5 +332,13 @@ pub mod datafusion {
             .collect()
             .await
             .unwrap()
+    }
+
+    pub async fn write_batch(table: DeltaTable, batch: RecordBatch) -> DeltaTable {
+        DeltaOps(table)
+            .write(vec![batch.clone()])
+            .with_save_mode(SaveMode::Append)
+            .await
+            .expect("Failed to append")
     }
 }

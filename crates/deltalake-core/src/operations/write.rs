@@ -37,16 +37,16 @@ use datafusion::physical_plan::{memory::MemoryExec, ExecutionPlan};
 use futures::future::BoxFuture;
 use futures::StreamExt;
 use parquet::file::properties::WriterProperties;
-use serde_json::Map;
 
 use super::writer::{DeltaWriter, WriterConfig};
 use super::MAX_SUPPORTED_WRITER_VERSION;
 use super::{transaction::commit, CreateBuilder};
 use crate::delta_datafusion::DeltaDataChecker;
 use crate::errors::{DeltaResult, DeltaTableError};
-use crate::protocol::{Action, Add, DeltaOperation, Remove, SaveMode};
-use crate::schema::Schema;
-use crate::storage::{DeltaObjectStore, ObjectStoreRef};
+use crate::kernel::{Action, Add, Remove, StructType};
+use crate::logstore::LogStoreRef;
+use crate::protocol::{DeltaOperation, SaveMode};
+use crate::storage::ObjectStoreRef;
 use crate::table::state::DeltaTableState;
 use crate::writer::record_batch::divide_by_partition_values;
 use crate::writer::utils::PartitionPath;
@@ -91,7 +91,7 @@ pub struct WriteBuilder {
     /// A snapshot of the to-be-loaded table's state
     snapshot: DeltaTableState,
     /// Delta object store for handling data files
-    store: Arc<DeltaObjectStore>,
+    log_store: LogStoreRef,
     /// The input plan
     input: Option<Arc<dyn ExecutionPlan>>,
     /// Datafusion session state relevant for executing the input plan
@@ -113,15 +113,15 @@ pub struct WriteBuilder {
     /// Parquet writer properties
     writer_properties: Option<WriterProperties>,
     /// Additional metadata to be added to commit
-    app_metadata: Option<Map<String, serde_json::Value>>,
+    app_metadata: Option<HashMap<String, serde_json::Value>>,
 }
 
 impl WriteBuilder {
     /// Create a new [`WriteBuilder`]
-    pub fn new(store: Arc<DeltaObjectStore>, snapshot: DeltaTableState) -> Self {
+    pub fn new(log_store: LogStoreRef, snapshot: DeltaTableState) -> Self {
         Self {
             snapshot,
-            store,
+            log_store,
             input: None,
             state: None,
             mode: SaveMode::Append,
@@ -206,12 +206,12 @@ impl WriteBuilder {
         mut self,
         metadata: impl IntoIterator<Item = (String, serde_json::Value)>,
     ) -> Self {
-        self.app_metadata = Some(Map::from_iter(metadata));
+        self.app_metadata = Some(HashMap::from_iter(metadata));
         self
     }
 
     async fn check_preconditions(&self) -> DeltaResult<Vec<Action>> {
-        match self.store.is_delta_table_location().await? {
+        match self.log_store.is_delta_table_location().await? {
             true => {
                 let min_writer = self.snapshot.min_writer_version();
                 if min_writer > MAX_SUPPORTED_WRITER_VERSION {
@@ -219,14 +219,14 @@ impl WriteBuilder {
                 } else {
                     match self.mode {
                         SaveMode::ErrorIfExists => {
-                            Err(WriteError::AlreadyExists(self.store.root_uri()).into())
+                            Err(WriteError::AlreadyExists(self.log_store.root_uri()).into())
                         }
                         _ => Ok(vec![]),
                     }
                 }
             }
             false => {
-                let schema: Schema = if let Some(plan) = &self.input {
+                let schema: StructType = if let Some(plan) = &self.input {
                     Ok(plan.schema().try_into()?)
                 } else if let Some(batches) = &self.batches {
                     if batches.is_empty() {
@@ -237,8 +237,8 @@ impl WriteBuilder {
                     Err(WriteError::MissingData)
                 }?;
                 let mut builder = CreateBuilder::new()
-                    .with_object_store(self.store.clone())
-                    .with_columns(schema.get_fields().clone());
+                    .with_log_store(self.log_store.clone())
+                    .with_columns(schema.fields().clone());
                 if let Some(partition_columns) = self.partition_columns.as_ref() {
                     builder = builder.with_partition_columns(partition_columns.clone())
                 }
@@ -357,7 +357,7 @@ impl std::future::IntoFuture for WriteBuilder {
                     let schema = batches[0].schema();
                     let table_schema = this
                         .snapshot
-                        .physical_arrow_schema(this.store.clone())
+                        .physical_arrow_schema(this.log_store.object_store().clone())
                         .await
                         .or_else(|_| this.snapshot.arrow_schema())
                         .unwrap_or(schema.clone());
@@ -419,14 +419,14 @@ impl std::future::IntoFuture for WriteBuilder {
                 state,
                 plan,
                 partition_columns.clone(),
-                this.store.clone(),
+                this.log_store.object_store().clone(),
                 this.target_file_size,
                 this.write_batch_size,
                 this.writer_properties,
                 this.safe_cast,
             )
             .await?;
-            actions.extend(add_actions.into_iter().map(Action::add));
+            actions.extend(add_actions.into_iter().map(Action::Add));
 
             // Collect remove actions if we are overwriting the table
             if matches!(this.mode, SaveMode::Overwrite) {
@@ -437,7 +437,7 @@ impl std::future::IntoFuture for WriteBuilder {
                     .as_millis() as i64;
 
                 let to_remove_action = |add: &Add| {
-                    Action::remove(Remove {
+                    Action::Remove(Remove {
                         path: add.path.clone(),
                         deletion_timestamp: Some(deletion_timestamp),
                         data_change: true,
@@ -447,6 +447,8 @@ impl std::future::IntoFuture for WriteBuilder {
                         // TODO add file metadata to remove action (tags missing)
                         tags: None,
                         deletion_vector: add.deletion_vector.clone(),
+                        base_row_id: add.base_row_id,
+                        default_row_commit_version: add.default_row_commit_version,
                     })
                 };
 
@@ -467,7 +469,7 @@ impl std::future::IntoFuture for WriteBuilder {
             };
 
             let version = commit(
-                this.store.as_ref(),
+                this.log_store.as_ref(),
                 &actions,
                 DeltaOperation::Write {
                     mode: this.mode,
@@ -491,7 +493,7 @@ impl std::future::IntoFuture for WriteBuilder {
 
             // TODO should we build checkpoints based on config?
 
-            Ok(DeltaTable::new_with_state(this.store, this.snapshot))
+            Ok(DeltaTable::new_with_state(this.log_store, this.snapshot))
         })
     }
 }
@@ -565,9 +567,10 @@ mod tests {
     use crate::operations::{collect_sendable_stream, DeltaOps};
     use crate::protocol::SaveMode;
     use crate::writer::test_utils::datafusion::get_data;
+    use crate::writer::test_utils::datafusion::write_batch;
     use crate::writer::test_utils::{
         get_delta_schema, get_delta_schema_with_nested_struct, get_record_batch,
-        get_record_batch_with_nested_struct, setup_table_with_configuration, write_batch,
+        get_record_batch_with_nested_struct, setup_table_with_configuration,
     };
     use crate::DeltaConfigKey;
     use arrow::datatypes::Field;
@@ -598,14 +601,14 @@ mod tests {
 
         let table = DeltaOps::new_in_memory()
             .create()
-            .with_columns(table_schema.get_fields().clone())
+            .with_columns(table_schema.fields().clone())
             .await
             .unwrap();
         assert_eq!(table.version(), 0);
         assert_eq!(table.state.commit_infos().len(), 1);
 
         // write some data
-        let metadata = Map::from_iter(vec![("k1".to_string(), json!("v1.1"))]);
+        let metadata = HashMap::from_iter(vec![("k1".to_string(), json!("v1.1"))]);
         let mut table = DeltaOps(table)
             .write(vec![batch.clone()])
             .with_save_mode(SaveMode::Append)
@@ -622,12 +625,13 @@ mod tests {
                 .clone()
                 .into_iter()
                 .filter(|(k, _)| k != "clientVersion")
-                .collect::<Map<String, Value>>(),
+                .collect::<HashMap<String, Value>>(),
             metadata
         );
 
         // append some data
-        let metadata: Map<String, Value> = Map::from_iter(vec![("k1".to_string(), json!("v1.2"))]);
+        let metadata: HashMap<String, Value> =
+            HashMap::from_iter(vec![("k1".to_string(), json!("v1.2"))]);
         let mut table = DeltaOps(table)
             .write(vec![batch.clone()])
             .with_save_mode(SaveMode::Append)
@@ -644,12 +648,13 @@ mod tests {
                 .clone()
                 .into_iter()
                 .filter(|(k, _)| k != "clientVersion")
-                .collect::<Map<String, Value>>(),
+                .collect::<HashMap<String, Value>>(),
             metadata
         );
 
         // overwrite table
-        let metadata: Map<String, Value> = Map::from_iter(vec![("k2".to_string(), json!("v2.1"))]);
+        let metadata: HashMap<String, Value> =
+            HashMap::from_iter(vec![("k2".to_string(), json!("v2.1"))]);
         let mut table = DeltaOps(table)
             .write(vec![batch])
             .with_save_mode(SaveMode::Overwrite)
@@ -666,7 +671,7 @@ mod tests {
                 .clone()
                 .into_iter()
                 .filter(|(k, _)| k != "clientVersion")
-                .collect::<Map<String, Value>>(),
+                .collect::<HashMap<String, Value>>(),
             metadata
         );
     }
@@ -806,7 +811,7 @@ mod tests {
     #[tokio::test]
     async fn test_check_invariants() {
         let batch = get_record_batch(None, false);
-        let schema: Schema = serde_json::from_value(json!({
+        let schema: StructType = serde_json::from_value(json!({
             "type": "struct",
             "fields": [
                 {"name": "id", "type": "string", "nullable": true, "metadata": {}},
@@ -820,7 +825,7 @@ mod tests {
         let table = DeltaOps::new_in_memory()
             .create()
             .with_save_mode(SaveMode::ErrorIfExists)
-            .with_columns(schema.get_fields().clone())
+            .with_columns(schema.fields().clone())
             .await
             .unwrap();
         assert_eq!(table.version(), 0);
@@ -828,7 +833,7 @@ mod tests {
         let table = DeltaOps(table).write(vec![batch.clone()]).await.unwrap();
         assert_eq!(table.version(), 1);
 
-        let schema: Schema = serde_json::from_value(json!({
+        let schema: StructType = serde_json::from_value(json!({
             "type": "struct",
             "fields": [
                 {"name": "id", "type": "string", "nullable": true, "metadata": {}},
@@ -842,7 +847,7 @@ mod tests {
         let table = DeltaOps::new_in_memory()
             .create()
             .with_save_mode(SaveMode::ErrorIfExists)
-            .with_columns(schema.get_fields().clone())
+            .with_columns(schema.fields().clone())
             .await
             .unwrap();
         assert_eq!(table.version(), 0);
@@ -858,7 +863,7 @@ mod tests {
 
         let table = DeltaOps::new_in_memory()
             .create()
-            .with_columns(table_schema.get_fields().clone())
+            .with_columns(table_schema.fields().clone())
             .await
             .unwrap();
         assert_eq!(table.version(), 0);

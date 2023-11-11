@@ -10,9 +10,10 @@ use parquet2::read::decompress;
 use parquet2::read::get_page_iterator;
 use parquet2::read::levels::get_bit_width;
 
-use super::{ProtocolError, ReaderFeatures, WriterFeatures};
-use crate::protocol::{Action, Add, CommitInfo, MetaData, Protocol, Remove, Txn};
-use crate::schema::Guid;
+use super::ProtocolError;
+use crate::kernel::{
+    Action, Add, CommitInfo, Metadata, Protocol, ReaderFeatures, Remove, Txn, WriterFeatures,
+};
 use boolean::for_each_boolean_field_value;
 use map::for_each_map_field_value;
 use primitive::for_each_primitive_field_value;
@@ -138,12 +139,12 @@ impl ActionVariant for Add {
     type Variant = Add;
 
     fn default_action() -> Action {
-        Action::add(Self::default())
+        Action::Add(Self::default())
     }
 
     fn try_mut_from_action(a: &mut Action) -> Result<&mut Self, ParseError> {
         match a {
-            Action::add(v) => Ok(v),
+            Action::Add(v) => Ok(v),
             _ => Err(ParseError::Generic(format!(
                 "expect Add action, got: {:?}",
                 a
@@ -156,7 +157,7 @@ impl ActionVariant for Remove {
     type Variant = Remove;
 
     fn default_action() -> Action {
-        Action::remove(Self {
+        Action::Remove(Self {
             data_change: true,
             extended_file_metadata: Some(false),
             ..Default::default()
@@ -165,7 +166,7 @@ impl ActionVariant for Remove {
 
     fn try_mut_from_action(a: &mut Action) -> Result<&mut Self, ParseError> {
         match a {
-            Action::remove(v) => Ok(v),
+            Action::Remove(v) => Ok(v),
             _ => Err(ParseError::Generic(format!(
                 "expect remove action, got: {:?}",
                 a
@@ -174,16 +175,16 @@ impl ActionVariant for Remove {
     }
 }
 
-impl ActionVariant for MetaData {
-    type Variant = MetaData;
+impl ActionVariant for Metadata {
+    type Variant = Metadata;
 
     fn default_action() -> Action {
-        Action::metaData(Self::default())
+        Action::Metadata(Self::default())
     }
 
     fn try_mut_from_action(a: &mut Action) -> Result<&mut Self, ParseError> {
         match a {
-            Action::metaData(v) => Ok(v),
+            Action::Metadata(v) => Ok(v),
             _ => Err(ParseError::Generic(format!(
                 "expect metadata action, got: {:?}",
                 a
@@ -196,12 +197,12 @@ impl ActionVariant for Txn {
     type Variant = Txn;
 
     fn default_action() -> Action {
-        Action::txn(Self::default())
+        Action::Txn(Self::default())
     }
 
     fn try_mut_from_action(a: &mut Action) -> Result<&mut Self, ParseError> {
         match a {
-            Action::txn(v) => Ok(v),
+            Action::Txn(v) => Ok(v),
             _ => Err(ParseError::Generic(format!(
                 "expect txn action, got: {:?}",
                 a
@@ -214,12 +215,12 @@ impl ActionVariant for Protocol {
     type Variant = Protocol;
 
     fn default_action() -> Action {
-        Action::protocol(Self::default())
+        Action::Protocol(Self::default())
     }
 
     fn try_mut_from_action(a: &mut Action) -> Result<&mut Self, ParseError> {
         match a {
-            Action::protocol(v) => Ok(v),
+            Action::Protocol(v) => Ok(v),
             _ => Err(ParseError::Generic(format!(
                 "expect protocol action, got: {:?}",
                 a
@@ -232,12 +233,12 @@ impl ActionVariant for CommitInfo {
     type Variant = CommitInfo;
 
     fn default_action() -> Action {
-        Action::commitInfo(CommitInfo::default())
+        Action::CommitInfo(CommitInfo::default())
     }
 
     fn try_mut_from_action(a: &mut Action) -> Result<&mut Self, ParseError> {
         match a {
-            Action::commitInfo(v) => Ok(v),
+            Action::CommitInfo(v) => Ok(v),
             _ => Err(ParseError::Generic(format!(
                 "expect commitInfo action, got: {:?}",
                 a
@@ -334,7 +335,7 @@ fn deserialize_add_column_page(
                 },
             )?;
         }
-        // FIXME suport partitionValueParsed
+        // FIXME support partitionValueParsed
         "dataChange" => {
             for_each_boolean_field_value(
                 actions,
@@ -419,7 +420,7 @@ fn deserialize_remove_column_page(
                 |action: &mut Remove, v: i64| action.size = Some(v),
             )?;
         }
-        // FIXME suport partitionValueParsed
+        // FIXME support partitionValueParsed
         "partitionValues" => {
             for_each_map_field_value(
                 &field[1..],
@@ -485,7 +486,7 @@ fn deserialize_metadata_column_page(
                 page,
                 dict,
                 descriptor,
-                |action: &mut MetaData, v: Guid| action.id = v,
+                |action: &mut Metadata, v: String| action.id = v,
             )?;
         }
         "name" => {
@@ -494,7 +495,7 @@ fn deserialize_metadata_column_page(
                 page,
                 dict,
                 descriptor,
-                |action: &mut MetaData, v: String| action.name = Some(v),
+                |action: &mut Metadata, v: String| action.name = Some(v),
             )?;
         }
         "description" => {
@@ -503,7 +504,7 @@ fn deserialize_metadata_column_page(
                 page,
                 dict,
                 descriptor,
-                |action: &mut MetaData, v: String| action.description = Some(v),
+                |action: &mut Metadata, v: String| action.description = Some(v),
             )?;
         }
         "format" => {
@@ -515,7 +516,7 @@ fn deserialize_metadata_column_page(
                         page,
                         dict,
                         descriptor,
-                        |action: &mut MetaData, v: String| action.format.provider = v,
+                        |action: &mut Metadata, v: String| action.format.provider = v,
                     )?;
                 }
                 "options" => {
@@ -526,7 +527,7 @@ fn deserialize_metadata_column_page(
                         dict,
                         descriptor,
                         &mut state.metadata_fromat_options,
-                        |action: &mut MetaData, v: (Vec<String>, Vec<Option<String>>)| {
+                        |action: &mut Metadata, v: (Vec<String>, Vec<Option<String>>)| {
                             action.format.options = hashmap_from_kvpairs(v.0, v.1);
                         },
                     )?;
@@ -545,7 +546,7 @@ fn deserialize_metadata_column_page(
                 page,
                 dict,
                 descriptor,
-                |action: &mut MetaData, v: String| action.schema_string = v,
+                |action: &mut Metadata, v: String| action.schema_string = v,
             )?;
         }
         "partitionColumns" => {
@@ -554,7 +555,7 @@ fn deserialize_metadata_column_page(
                 page,
                 dict,
                 descriptor,
-                |action: &mut MetaData, v: Vec<String>| action.partition_columns = v,
+                |action: &mut Metadata, v: Vec<String>| action.partition_columns = v,
             )?;
         }
         "createdTime" => {
@@ -563,7 +564,7 @@ fn deserialize_metadata_column_page(
                 page,
                 dict,
                 descriptor,
-                |action: &mut MetaData, v: i64| action.created_time = Some(v),
+                |action: &mut Metadata, v: i64| action.created_time = Some(v),
             )?;
         }
         "configuration" => {
@@ -574,7 +575,7 @@ fn deserialize_metadata_column_page(
                 dict,
                 descriptor,
                 &mut state.metadata_configuration,
-                |action: &mut MetaData, v: (Vec<String>, Vec<Option<String>>)| {
+                |action: &mut Metadata, v: (Vec<String>, Vec<Option<String>>)| {
                     action.configuration = hashmap_from_kvpairs(v.0, v.1);
                 },
             )?;
@@ -762,20 +763,20 @@ mod tests {
         for row_group in meta_data.row_groups {
             let actions = actions_from_row_group(row_group, &mut reader).unwrap();
             match &actions[0] {
-                Action::protocol(protocol) => {
+                Action::Protocol(protocol) => {
                     assert_eq!(protocol.min_reader_version, 1,);
                     assert_eq!(protocol.min_writer_version, 2,);
                 }
                 _ => panic!("expect protocol action"),
             }
             match &actions[1] {
-                Action::metaData(meta_data) => {
+                Action::Metadata(meta_data) => {
                     assert_eq!(meta_data.id, "22ef18ba-191c-4c36-a606-3dad5cdf3830");
                     assert_eq!(meta_data.name, None);
                     assert_eq!(meta_data.description, None);
                     assert_eq!(
                         meta_data.format,
-                        crate::protocol::Format::new("parquet".to_string(), None),
+                        crate::kernel::Format::new("parquet".to_string(), None),
                     );
                     assert_eq!(meta_data.schema_string, "{\"type\":\"struct\",\"fields\":[{\"name\":\"value\",\"type\":\"integer\",\"nullable\":true,\"metadata\":{}}]}");
                     assert_eq!(meta_data.partition_columns.len(), 0);
@@ -786,7 +787,7 @@ mod tests {
             }
 
             match &actions[2] {
-                Action::txn(txn) => {
+                Action::Txn(txn) => {
                     assert_eq!(txn.app_id, "e4a20b59-dd0e-4c50-b074-e8ae4786df30");
                     assert_eq!(txn.version, 0);
                     assert_eq!(txn.last_updated, Some(1564524299648));
@@ -794,7 +795,7 @@ mod tests {
                 _ => panic!("expect txn action, got: {:?}", &actions[1]),
             }
             match &actions[3] {
-                Action::remove(remove) => {
+                Action::Remove(remove) => {
                     assert_eq!(
                         remove.path,
                         "part-00000-512e1537-8aaa-4193-b8b4-bef3de0de409-c000.snappy.parquet"
@@ -809,7 +810,7 @@ mod tests {
                 _ => panic!("expect remove action, got: {:?}", &actions[2]),
             }
             match &actions[9] {
-                Action::add(add_action) => {
+                Action::Add(add_action) => {
                     assert_eq!(
                         add_action.path,
                         "part-00001-c373a5bd-85f0-4758-815e-7eb62007a15c-c000.snappy.parquet"
@@ -837,20 +838,20 @@ mod tests {
         for row_group in metadata.row_groups {
             let actions = actions_from_row_group(row_group, &mut reader).unwrap();
             match &actions[0] {
-                Action::protocol(protocol) => {
+                Action::Protocol(protocol) => {
                     assert_eq!(protocol.min_reader_version, 1,);
                     assert_eq!(protocol.min_writer_version, 2,);
                 }
                 _ => panic!("expect protocol action"),
             }
             match &actions[1] {
-                Action::metaData(meta_data) => {
+                Action::Metadata(meta_data) => {
                     assert_eq!(meta_data.id, "94ba8468-c676-4468-b326-adde3ab9dcd2");
                     assert_eq!(meta_data.name, None);
                     assert_eq!(meta_data.description, None);
                     assert_eq!(
                         meta_data.format,
-                        crate::protocol::Format::new("parquet".to_string(), None),
+                        crate::kernel::Format::new("parquet".to_string(), None),
                     );
                     assert_eq!(
                         meta_data.schema_string,
@@ -864,7 +865,7 @@ mod tests {
             }
 
             match &actions[2] {
-                Action::add(add_action) => {
+                Action::Add(add_action) => {
                     assert_eq!(add_action.path, "f62d8868-d952-4f9d-8bb2-fd4e011ebf36");
                     assert_eq!(add_action.size, 100);
                     assert_eq!(add_action.modification_time, 1661662807080);
@@ -880,7 +881,7 @@ mod tests {
                 _ => panic!("expect add action, got: {:?}", &actions[9]),
             }
             match &actions[3] {
-                Action::add(add_action) => {
+                Action::Add(add_action) => {
                     assert_eq!(add_action.path, "8ac7d8e1-daab-48ef-9d05-ec22fb4b0d2f");
                     assert_eq!(add_action.size, 100);
                     assert_eq!(add_action.modification_time, 1661662807097);

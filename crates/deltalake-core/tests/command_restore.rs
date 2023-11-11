@@ -2,12 +2,12 @@
 
 use arrow::datatypes::Schema as ArrowSchema;
 use arrow_array::{Int32Array, RecordBatch};
-use arrow_schema::{DataType, Field};
+use arrow_schema::{DataType as ArrowDataType, Field};
 use chrono::{DateTime, NaiveDateTime, TimeZone, Utc};
+use deltalake_core::kernel::{DataType, PrimitiveType, StructField};
 use deltalake_core::protocol::SaveMode;
-use deltalake_core::{DeltaOps, DeltaTable, SchemaDataType, SchemaField};
+use deltalake_core::{DeltaOps, DeltaTable};
 use rand::Rng;
-use std::collections::HashMap;
 use std::error::Error;
 use std::fs;
 use std::sync::Arc;
@@ -21,17 +21,15 @@ struct Context {
 
 async fn setup_test() -> Result<Context, Box<dyn Error>> {
     let columns = vec![
-        SchemaField::new(
+        StructField::new(
             "id".to_string(),
-            SchemaDataType::primitive("integer".to_string()),
+            DataType::Primitive(PrimitiveType::Integer),
             true,
-            HashMap::new(),
         ),
-        SchemaField::new(
+        StructField::new(
             "value".to_string(),
-            SchemaDataType::primitive("integer".to_string()),
+            DataType::Primitive(PrimitiveType::Integer),
             true,
-            HashMap::new(),
         ),
     ];
 
@@ -77,8 +75,8 @@ fn get_record_batch() -> RecordBatch {
     }
 
     let schema = ArrowSchema::new(vec![
-        Field::new("id", DataType::Int32, true),
-        Field::new("value", DataType::Int32, true),
+        Field::new("id", ArrowDataType::Int32, true),
+        Field::new("value", ArrowDataType::Int32, true),
     ]);
 
     let id_array = Int32Array::from(id_vec);

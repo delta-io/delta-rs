@@ -13,7 +13,7 @@ use parquet::file::properties::WriterProperties;
 
 use crate::crate_version;
 use crate::errors::{DeltaResult, DeltaTableError};
-use crate::protocol::Add;
+use crate::kernel::Add;
 use crate::storage::ObjectStoreRef;
 use crate::writer::record_batch::{divide_by_partition_values, PartitionResult};
 use crate::writer::stats::create_add;
@@ -406,9 +406,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_write_partition() {
-        let object_store = DeltaTableBuilder::from_uri("memory://")
+        let log_store = DeltaTableBuilder::from_uri("memory://")
             .build_storage()
             .unwrap();
+        let object_store = log_store.object_store();
         let batch = get_record_batch(None, false);
 
         // write single un-partitioned batch
@@ -439,12 +440,13 @@ mod tests {
 
         let object_store = DeltaTableBuilder::from_uri("memory://")
             .build_storage()
-            .unwrap();
+            .unwrap()
+            .object_store();
         let properties = WriterProperties::builder()
             .set_max_row_group_size(1024)
             .build();
         // configure small target file size and and row group size so we can observe multiple files written
-        let mut writer = get_writer(object_store.clone(), &batch, Some(properties), Some(10_000));
+        let mut writer = get_writer(object_store, &batch, Some(properties), Some(10_000));
         writer.write(&batch).await.unwrap();
 
         // check that we have written more then once file, and no more then 1 is below target size

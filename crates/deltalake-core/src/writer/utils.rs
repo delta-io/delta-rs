@@ -165,7 +165,7 @@ pub fn record_batch_from_message(
 // a happy middle-road might be to compute stats for partition columns only on the initial write since we should validate partition values anyway, and compute additional stats later (at checkpoint time perhaps?).
 // also this does not currently support nested partition columns and many other data types.
 // TODO is this comment still valid, since we should be sure now, that the arrays where this
-// gets aplied have a single unique value
+// gets applied have a single unique value
 pub(crate) fn stringified_partition_value(
     arr: &Arc<dyn Array>,
 ) -> Result<Option<String>, DeltaWriterError> {

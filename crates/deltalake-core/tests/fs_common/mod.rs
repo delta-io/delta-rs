@@ -1,15 +1,20 @@
 use chrono::Utc;
+use deltalake_core::kernel::{
+    Action, Add, DataType, PrimitiveType, Remove, StructField, StructType,
+};
 use deltalake_core::operations::create::CreateBuilder;
 use deltalake_core::operations::transaction::commit;
-use deltalake_core::protocol::{Action, Add, DeltaOperation, Remove, SaveMode};
-use deltalake_core::storage::{DeltaObjectStore, GetResult, ObjectStoreResult};
-use deltalake_core::{DeltaTable, Schema, SchemaDataType, SchemaField};
+use deltalake_core::protocol::{DeltaOperation, SaveMode};
+use deltalake_core::storage::config::configure_store;
+use deltalake_core::storage::{GetResult, ObjectStoreResult};
+use deltalake_core::DeltaTable;
 use object_store::path::Path as StorePath;
 use object_store::ObjectStore;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
+use std::sync::Arc;
 use url::Url;
 use uuid::Uuid;
 
@@ -36,14 +41,14 @@ pub async fn create_table_from_json(
     std::fs::create_dir_all(path).unwrap();
     std::fs::remove_dir_all(path).unwrap();
     std::fs::create_dir_all(path).unwrap();
-    let schema: Schema = serde_json::from_value(schema).unwrap();
+    let schema: StructType = serde_json::from_value(schema).unwrap();
     let config: HashMap<String, Option<String>> = serde_json::from_value(config).unwrap();
     create_test_table(path, schema, partition_columns, config).await
 }
 
 pub async fn create_test_table(
     path: &str,
-    schema: Schema,
+    schema: StructType,
     partition_columns: Vec<&str>,
     config: HashMap<String, Option<String>>,
 ) -> DeltaTable {
@@ -51,7 +56,7 @@ pub async fn create_test_table(
         .with_location(path)
         .with_table_name("test-table")
         .with_comment("A table for running tests")
-        .with_columns(schema.get_fields().clone())
+        .with_columns(schema.fields().clone())
         .with_partition_columns(partition_columns)
         .with_configuration(config)
         .await
@@ -66,11 +71,10 @@ pub async fn create_table(
     fs::create_dir_all(&log_dir).unwrap();
     cleanup_dir_except(log_dir, vec![]);
 
-    let schema = Schema::new(vec![SchemaField::new(
+    let schema = StructType::new(vec![StructField::new(
         "id".to_string(),
-        SchemaDataType::primitive("integer".to_string()),
+        DataType::Primitive(PrimitiveType::Integer),
         true,
-        HashMap::new(),
     )]);
 
     create_test_table(path, schema, Vec::new(), config.unwrap_or_default()).await
@@ -88,6 +92,8 @@ pub fn add(offset_millis: i64) -> Add {
         stats_parsed: None,
         tags: None,
         deletion_vector: None,
+        base_row_id: None,
+        default_row_commit_version: None,
     }
 }
 
@@ -97,13 +103,13 @@ pub async fn commit_add(table: &mut DeltaTable, add: &Add) -> i64 {
         partition_by: None,
         predicate: None,
     };
-    commit_actions(table, vec![Action::add(add.clone())], operation).await
+    commit_actions(table, vec![Action::Add(add.clone())], operation).await
 }
 
 pub async fn commit_removes(table: &mut DeltaTable, removes: Vec<&Remove>) -> i64 {
     let vec = removes
         .iter()
-        .map(|r| Action::remove((*r).clone()))
+        .map(|r| Action::Remove((*r).clone()))
         .collect();
     let operation = DeltaOperation::Delete { predicate: None };
     commit_actions(table, vec, operation).await
@@ -115,7 +121,7 @@ pub async fn commit_actions(
     operation: DeltaOperation,
 ) -> i64 {
     let version = commit(
-        table.object_store().as_ref(),
+        table.log_store().as_ref(),
         &actions,
         operation,
         &table.state,
@@ -129,7 +135,7 @@ pub async fn commit_actions(
 
 #[derive(Debug)]
 pub struct SlowStore {
-    inner: DeltaObjectStore,
+    inner: Arc<dyn ObjectStore>,
 }
 impl std::fmt::Display for SlowStore {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -143,8 +149,9 @@ impl SlowStore {
         location: Url,
         options: impl Into<deltalake_core::storage::config::StorageOptions> + Clone,
     ) -> deltalake_core::DeltaResult<Self> {
+        let mut options = options.into();
         Ok(Self {
-            inner: DeltaObjectStore::try_new(location, options).unwrap(),
+            inner: configure_store(&location, &mut options).unwrap(),
         })
     }
 }

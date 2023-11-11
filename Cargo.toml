@@ -30,12 +30,12 @@ arrow-select = { version = "48" }
 parquet = { version = "48" }
 
 # datafusion
-datafusion = { git = "https://github.com/apache/arrow-datafusion" }
-datafusion-expr = { git = "https://github.com/apache/arrow-datafusion" }
-datafusion-common = {  git = "https://github.com/apache/arrow-datafusion" }
-datafusion-proto =  {  git = "https://github.com/apache/arrow-datafusion" }
-datafusion-sql =  {  git = "https://github.com/apache/arrow-datafusion" }
-datafusion-physical-expr =  {  git = "https://github.com/apache/arrow-datafusion" }
+datafusion = { git = "https://github.com/apache/arrow-datafusion.git" }
+datafusion-expr = { git = "https://github.com/apache/arrow-datafusion.git" }
+datafusion-common = { git = "https://github.com/apache/arrow-datafusion.git" }
+datafusion-proto = { git = "https://github.com/apache/arrow-datafusion.git" }
+datafusion-sql = { git = "https://github.com/apache/arrow-datafusion.git" }
+datafusion-physical-expr = { git = "https://github.com/apache/arrow-datafusion.git" }
 
 # serde
 serde = { version = "1", features = ["derive"] }

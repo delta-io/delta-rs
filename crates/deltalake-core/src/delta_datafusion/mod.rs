@@ -71,11 +71,12 @@ use serde::{Deserialize, Serialize};
 use url::Url;
 
 use crate::errors::{DeltaResult, DeltaTableError};
-use crate::protocol::{self, Add, ColumnCountStat, ColumnValueStat};
-use crate::storage::ObjectStoreRef;
+use crate::kernel::{Add, DataType as DeltaDataType, Invariant, PrimitiveType};
+use crate::logstore::LogStoreRef;
+use crate::protocol::{ColumnCountStat, ColumnValueStat};
 use crate::table::builder::ensure_table_uri;
 use crate::table::state::DeltaTableState;
-use crate::{open_table, open_table_with_storage_options, DeltaTable, Invariant, SchemaDataType};
+use crate::{open_table, open_table_with_storage_options, DeltaTable};
 
 const PATH_COLUMN: &str = "__delta_rs_path";
 
@@ -235,16 +236,14 @@ fn get_prune_stats(table: &DeltaTable, column: &Column, get_max: bool) -> Option
     let field = table
         .get_schema()
         .ok()
-        .map(|s| s.get_field_with_name(&column.name).ok())??;
+        .map(|s| s.field_with_name(&column.name).ok())??;
 
     // See issue 1214. Binary type does not support natural order which is required for Datafusion to prune
-    if let SchemaDataType::primitive(t) = &field.get_type() {
-        if t == "binary" {
-            return None;
-        }
+    if let DeltaDataType::Primitive(PrimitiveType::Binary) = &field.data_type() {
+        return None;
     }
 
-    let data_type = field.get_type().try_into().ok()?;
+    let data_type = field.data_type().try_into().ok()?;
     let partition_columns = &table.get_metadata().ok()?.partition_columns;
 
     let values = table.get_state().files().iter().map(|add| {
@@ -342,10 +341,10 @@ impl PruningStatistics for DeltaTable {
 
 // each delta table must register a specific object store, since paths are internally
 // handled relative to the table root.
-pub(crate) fn register_store(store: ObjectStoreRef, env: Arc<RuntimeEnv>) {
+pub(crate) fn register_store(store: LogStoreRef, env: Arc<RuntimeEnv>) {
     let object_store_url = store.object_store_url();
     let url: &Url = object_store_url.as_ref();
-    env.register_object_store(url, store);
+    env.register_object_store(url, store.object_store());
 }
 
 pub(crate) fn logical_schema(
@@ -370,7 +369,7 @@ pub(crate) fn logical_schema(
 }
 
 #[derive(Debug, Clone, Default)]
-/// Used to specify if additonal metadata columns are exposed to the user
+/// Used to specify if additional metadata columns are exposed to the user
 pub struct DeltaScanConfigBuilder {
     /// Include the source path for each record. The name of this column is determine by `file_column_name`
     include_file_column: bool,
@@ -443,7 +442,7 @@ impl DeltaScanConfigBuilder {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
-/// Include additonal metadata columns during a [`DeltaScan`]
+/// Include additional metadata columns during a [`DeltaScan`]
 pub struct DeltaScanConfig {
     /// Include the source path for each record
     pub file_column_name: Option<String>,
@@ -452,7 +451,7 @@ pub struct DeltaScanConfig {
 #[derive(Debug)]
 pub(crate) struct DeltaScanBuilder<'a> {
     snapshot: &'a DeltaTableState,
-    object_store: ObjectStoreRef,
+    log_store: LogStoreRef,
     filter: Option<Expr>,
     state: &'a SessionState,
     projection: Option<&'a Vec<usize>>,
@@ -465,12 +464,12 @@ pub(crate) struct DeltaScanBuilder<'a> {
 impl<'a> DeltaScanBuilder<'a> {
     pub fn new(
         snapshot: &'a DeltaTableState,
-        object_store: ObjectStoreRef,
+        log_store: LogStoreRef,
         state: &'a SessionState,
     ) -> Self {
         DeltaScanBuilder {
             snapshot,
-            object_store,
+            log_store,
             filter: None,
             state,
             files: None,
@@ -517,7 +516,7 @@ impl<'a> DeltaScanBuilder<'a> {
             Some(schema) => schema,
             None => {
                 self.snapshot
-                    .physical_arrow_schema(self.object_store.clone())
+                    .physical_arrow_schema(self.log_store.object_store())
                     .await?
             }
         };
@@ -629,7 +628,7 @@ impl<'a> DeltaScanBuilder<'a> {
             .create_physical_plan(
                 self.state,
                 FileScanConfig {
-                    object_store_url: self.object_store.object_store_url(),
+                    object_store_url: self.log_store.object_store_url(),
                     file_schema,
                     file_groups: file_groups.into_values().collect(),
                     statistics: stats,
@@ -644,9 +643,7 @@ impl<'a> DeltaScanBuilder<'a> {
             .await?;
 
         Ok(DeltaScan {
-            table_uri: ensure_table_uri(self.object_store.root_uri())?
-                .as_str()
-                .into(),
+            table_uri: ensure_table_uri(self.log_store.root_uri())?.as_str().into(),
             parquet_scan: scan,
             config,
             logical_schema,
@@ -683,10 +680,10 @@ impl TableProvider for DeltaTable {
         filters: &[Expr],
         limit: Option<usize>,
     ) -> DataFusionResult<Arc<dyn ExecutionPlan>> {
-        register_store(self.object_store(), session.runtime_env().clone());
+        register_store(self.log_store(), session.runtime_env().clone());
         let filter_expr = conjunction(filters.iter().cloned());
 
-        let scan = DeltaScanBuilder::new(&self.state, self.object_store(), session)
+        let scan = DeltaScanBuilder::new(&self.state, self.log_store(), session)
             .with_projection(projection)
             .with_limit(limit)
             .with_filter(filter_expr)
@@ -708,10 +705,10 @@ impl TableProvider for DeltaTable {
     }
 }
 
-/// A Delta table provider that enables additonal metadata columns to be included during the scan
+/// A Delta table provider that enables additional metadata columns to be included during the scan
 pub struct DeltaTableProvider {
     snapshot: DeltaTableState,
-    store: ObjectStoreRef,
+    log_store: LogStoreRef,
     config: DeltaScanConfig,
     schema: Arc<ArrowSchema>,
 }
@@ -720,13 +717,13 @@ impl DeltaTableProvider {
     /// Build a DeltaTableProvider
     pub fn try_new(
         snapshot: DeltaTableState,
-        store: ObjectStoreRef,
+        log_store: LogStoreRef,
         config: DeltaScanConfig,
     ) -> DeltaResult<Self> {
         Ok(DeltaTableProvider {
             schema: logical_schema(&snapshot, &config)?,
             snapshot,
-            store,
+            log_store,
             config,
         })
     }
@@ -761,10 +758,10 @@ impl TableProvider for DeltaTableProvider {
         filters: &[Expr],
         limit: Option<usize>,
     ) -> DataFusionResult<Arc<dyn ExecutionPlan>> {
-        register_store(self.store.clone(), session.runtime_env().clone());
+        register_store(self.log_store.clone(), session.runtime_env().clone());
         let filter_expr = conjunction(filters.iter().cloned());
 
-        let scan = DeltaScanBuilder::new(&self.snapshot, self.store.clone(), session)
+        let scan = DeltaScanBuilder::new(&self.snapshot, self.log_store.clone(), session)
             .with_projection(projection)
             .with_limit(limit)
             .with_filter(filter_expr)
@@ -917,7 +914,7 @@ pub(crate) fn get_null_of_arrow_type(t: &ArrowDataType) -> DeltaResult<ScalarVal
 }
 
 pub(crate) fn partitioned_file_from_action(
-    action: &protocol::Add,
+    action: &Add,
     partition_columns: &[String],
     schema: &ArrowSchema,
 ) -> PartitionedFile {
@@ -975,7 +972,7 @@ fn parse_timestamp(
         &ArrowDataType::Timestamp(TimeUnit::Microsecond, None),
     )?;
     let cast_arr = cast_with_options(
-        &time_micro.to_array(),
+        &time_micro.to_array()?,
         field_dt,
         &CastOptions {
             safe: false,
@@ -1341,7 +1338,7 @@ fn join_batches_with_add_actions(
 /// Determine which files contain a record that statisfies the predicate
 pub(crate) async fn find_files_scan<'a>(
     snapshot: &DeltaTableState,
-    store: ObjectStoreRef,
+    log_store: LogStoreRef,
     state: &SessionState,
     expression: Expr,
 ) -> DeltaResult<Vec<Add>> {
@@ -1368,7 +1365,7 @@ pub(crate) async fn find_files_scan<'a>(
     // Add path column
     used_columns.push(logical_schema.index_of(scan_config.file_column_name.as_ref().unwrap())?);
 
-    let scan = DeltaScanBuilder::new(snapshot, store.clone(), state)
+    let scan = DeltaScanBuilder::new(snapshot, log_store, state)
         .with_filter(Some(expression.clone()))
         .with_projection(Some(&used_columns))
         .with_scan_config(scan_config)
@@ -1459,7 +1456,7 @@ pub(crate) async fn scan_memory_table(
 /// Finds files in a snapshot that match the provided predicate.
 pub async fn find_files<'a>(
     snapshot: &DeltaTableState,
-    object_store: ObjectStoreRef,
+    log_store: LogStoreRef,
     state: &SessionState,
     predicate: Option<Expr>,
 ) -> DeltaResult<FindFiles> {
@@ -1487,8 +1484,7 @@ pub async fn find_files<'a>(
                 })
             } else {
                 let candidates =
-                    find_files_scan(snapshot, object_store.clone(), state, predicate.to_owned())
-                        .await?;
+                    find_files_scan(snapshot, log_store, state, predicate.to_owned()).await?;
 
                 Ok(FindFiles {
                     candidates,
@@ -1598,7 +1594,7 @@ mod tests {
         let mut partition_values = std::collections::HashMap::new();
         partition_values.insert("month".to_string(), Some("1".to_string()));
         partition_values.insert("year".to_string(), Some("2015".to_string()));
-        let action = protocol::Add {
+        let action = Add {
             path: "year=2015/month=1/part-00000-4dcb50d3-d017-450c-9df7-a7257dbd3c5d-c000.snappy.parquet".to_string(),
             size: 10644,
             partition_values,
@@ -1609,6 +1605,8 @@ mod tests {
             deletion_vector: None,
             stats_parsed: None,
             tags: None,
+            base_row_id: None,
+            default_row_commit_version: None,
         };
         let schema = ArrowSchema::new(vec![
             Field::new("year", ArrowDataType::Int64, true),
@@ -1731,7 +1729,8 @@ mod tests {
             .build(&table.state)
             .unwrap();
 
-        let provider = DeltaTableProvider::try_new(table.state, table.storage, config).unwrap();
+        let log_store = table.log_store();
+        let provider = DeltaTableProvider::try_new(table.state, log_store, config).unwrap();
         let ctx = SessionContext::new();
         ctx.register_table("test", Arc::new(provider)).unwrap();
 
@@ -1761,7 +1760,7 @@ mod tests {
 
         let table = crate::DeltaOps::new_in_memory()
             .create()
-            .with_columns(get_delta_schema().get_fields().clone())
+            .with_columns(get_delta_schema().fields().clone())
             .with_partition_columns(["modified", "id"])
             .await
             .unwrap();
@@ -1790,7 +1789,8 @@ mod tests {
 
         let config = DeltaScanConfigBuilder::new().build(&table.state).unwrap();
 
-        let provider = DeltaTableProvider::try_new(table.state, table.storage, config).unwrap();
+        let log_store = table.log_store();
+        let provider = DeltaTableProvider::try_new(table.state, log_store, config).unwrap();
         let ctx = SessionContext::new();
         ctx.register_table("test", Arc::new(provider)).unwrap();
 

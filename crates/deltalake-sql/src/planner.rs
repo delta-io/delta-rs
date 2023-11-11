@@ -95,6 +95,7 @@ mod tests {
     use datafusion_expr::logical_plan::builder::LogicalTableSource;
     use datafusion_expr::{AggregateUDF, ScalarUDF, TableSource};
     use datafusion_sql::TableReference;
+    use datafusion_common::Result as DataFusionResult;
 
     use crate::parser::DeltaParser;
 
@@ -131,6 +132,10 @@ mod tests {
                     name.table()
                 ))),
             }
+        }
+
+        fn get_table_source(&self, _name: TableReference) -> DataFusionResult<Arc<dyn TableSource>> {
+            unimplemented!("TODO")
         }
 
         fn get_function_meta(&self, _name: &str) -> Option<Arc<ScalarUDF>> {

@@ -17,11 +17,11 @@
 //!     .await?;
 //! ````
 
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
-use crate::delta_datafusion::expr::fmt_expr_to_sql;
-use crate::protocol::{Action, Add, Remove};
+use crate::logstore::LogStoreRef;
 use datafusion::execution::context::{SessionContext, SessionState};
 use datafusion::physical_expr::create_physical_expr;
 use datafusion::physical_plan::filter::FilterExec;
@@ -32,35 +32,35 @@ use datafusion_common::DFSchema;
 use futures::future::BoxFuture;
 use parquet::file::properties::WriterProperties;
 use serde::Serialize;
-use serde_json::Map;
 use serde_json::Value;
 
+use crate::delta_datafusion::expr::fmt_expr_to_sql;
 use crate::delta_datafusion::{find_files, register_store, DeltaScanBuilder};
 use crate::errors::{DeltaResult, DeltaTableError};
+use crate::kernel::{Action, Add, Remove};
 use crate::operations::transaction::commit;
 use crate::operations::write::write_execution_plan;
 use crate::protocol::DeltaOperation;
-use crate::storage::{DeltaObjectStore, ObjectStoreRef};
 use crate::table::state::DeltaTableState;
 use crate::DeltaTable;
 
 use super::datafusion_utils::Expression;
 
 /// Delete Records from the Delta Table.
-/// See this module's documentaiton for more information
+/// See this module's documentation for more information
 pub struct DeleteBuilder {
     /// Which records to delete
     predicate: Option<Expression>,
     /// A snapshot of the table's state
     snapshot: DeltaTableState,
     /// Delta object store for handling data files
-    store: Arc<DeltaObjectStore>,
+    log_store: LogStoreRef,
     /// Datafusion session state relevant for executing the input plan
     state: Option<SessionState>,
     /// Properties passed to underlying parquet writer for when files are rewritten
     writer_properties: Option<WriterProperties>,
     /// Additional metadata to be added to commit
-    app_metadata: Option<Map<String, serde_json::Value>>,
+    app_metadata: Option<HashMap<String, serde_json::Value>>,
 }
 
 #[derive(Default, Debug, Serialize)]
@@ -84,11 +84,11 @@ pub struct DeleteMetrics {
 
 impl DeleteBuilder {
     /// Create a new [`DeleteBuilder`]
-    pub fn new(object_store: ObjectStoreRef, snapshot: DeltaTableState) -> Self {
+    pub fn new(log_store: LogStoreRef, snapshot: DeltaTableState) -> Self {
         Self {
             predicate: None,
             snapshot,
-            store: object_store,
+            log_store,
             state: None,
             app_metadata: None,
             writer_properties: None,
@@ -112,7 +112,7 @@ impl DeleteBuilder {
         mut self,
         metadata: impl IntoIterator<Item = (String, serde_json::Value)>,
     ) -> Self {
-        self.app_metadata = Some(Map::from_iter(metadata));
+        self.app_metadata = Some(HashMap::from_iter(metadata));
         self
     }
 
@@ -125,7 +125,7 @@ impl DeleteBuilder {
 
 async fn excute_non_empty_expr(
     snapshot: &DeltaTableState,
-    object_store: ObjectStoreRef,
+    log_store: LogStoreRef,
     state: &SessionState,
     expression: &Expr,
     metrics: &mut DeleteMetrics,
@@ -144,7 +144,7 @@ async fn excute_non_empty_expr(
         .partition_columns
         .clone();
 
-    let scan = DeltaScanBuilder::new(snapshot, object_store.clone(), state)
+    let scan = DeltaScanBuilder::new(snapshot, log_store.clone(), state)
         .with_files(rewrite)
         .build()
         .await?;
@@ -167,7 +167,7 @@ async fn excute_non_empty_expr(
         state.clone(),
         filter.clone(),
         table_partition_cols.clone(),
-        object_store.clone(),
+        log_store.object_store(),
         Some(snapshot.table_config().target_file_size() as usize),
         None,
         writer_properties,
@@ -187,17 +187,17 @@ async fn excute_non_empty_expr(
 
 async fn execute(
     predicate: Option<Expr>,
-    object_store: ObjectStoreRef,
+    log_store: LogStoreRef,
     snapshot: &DeltaTableState,
     state: SessionState,
     writer_properties: Option<WriterProperties>,
-    app_metadata: Option<Map<String, Value>>,
+    app_metadata: Option<HashMap<String, Value>>,
 ) -> DeltaResult<((Vec<Action>, i64), DeleteMetrics)> {
     let exec_start = Instant::now();
     let mut metrics = DeleteMetrics::default();
 
     let scan_start = Instant::now();
-    let candidates = find_files(snapshot, object_store.clone(), &state, predicate.clone()).await?;
+    let candidates = find_files(snapshot, log_store.clone(), &state, predicate.clone()).await?;
     metrics.scan_time_ms = Instant::now().duration_since(scan_start).as_micros();
 
     let predicate = predicate.unwrap_or(Expr::Literal(ScalarValue::Boolean(Some(true))));
@@ -208,7 +208,7 @@ async fn execute(
         let write_start = Instant::now();
         let add = excute_non_empty_expr(
             snapshot,
-            object_store.clone(),
+            log_store.clone(),
             &state,
             &predicate,
             &mut metrics,
@@ -226,21 +226,23 @@ async fn execute(
         .unwrap()
         .as_millis() as i64;
 
-    let mut actions: Vec<Action> = add.into_iter().map(Action::add).collect();
+    let mut actions: Vec<Action> = add.into_iter().map(Action::Add).collect();
     let mut version = snapshot.version();
     metrics.num_removed_files = remove.len();
     metrics.num_added_files = actions.len();
 
     for action in remove {
-        actions.push(Action::remove(Remove {
+        actions.push(Action::Remove(Remove {
             path: action.path,
             deletion_timestamp: Some(deletion_timestamp),
             data_change: true,
             extended_file_metadata: Some(true),
             partition_values: Some(action.partition_values),
             size: Some(action.size),
-            deletion_vector: None,
+            deletion_vector: action.deletion_vector,
             tags: None,
+            base_row_id: action.base_row_id,
+            default_row_commit_version: action.default_row_commit_version,
         }))
     }
 
@@ -252,7 +254,7 @@ async fn execute(
             predicate: Some(fmt_expr_to_sql(&predicate)?),
         };
         version = commit(
-            object_store.as_ref(),
+            log_store.as_ref(),
             &actions,
             operation,
             snapshot,
@@ -276,7 +278,7 @@ impl std::future::IntoFuture for DeleteBuilder {
                 let session = SessionContext::new();
 
                 // If a user provides their own their DF state then they must register the store themselves
-                register_store(this.store.clone(), session.runtime_env());
+                register_store(this.log_store.clone(), session.runtime_env());
 
                 session.state()
             });
@@ -293,7 +295,7 @@ impl std::future::IntoFuture for DeleteBuilder {
 
             let ((actions, version), metrics) = execute(
                 predicate,
-                this.store.clone(),
+                this.log_store.clone(),
                 &this.snapshot,
                 state,
                 this.writer_properties,
@@ -303,7 +305,7 @@ impl std::future::IntoFuture for DeleteBuilder {
 
             this.snapshot
                 .merge(DeltaTableState::from_actions(actions, version)?, true, true);
-            let table = DeltaTable::new_with_state(this.store, this.snapshot);
+            let table = DeltaTable::new_with_state(this.log_store, this.snapshot);
 
             Ok((table, metrics))
         })
@@ -315,9 +317,9 @@ mod tests {
     use crate::operations::DeltaOps;
     use crate::protocol::*;
     use crate::writer::test_utils::datafusion::get_data;
+    use crate::writer::test_utils::datafusion::write_batch;
     use crate::writer::test_utils::{
         get_arrow_schema, get_delta_schema, get_record_batch, setup_table_with_configuration,
-        write_batch,
     };
     use crate::DeltaConfigKey;
     use crate::DeltaTable;
@@ -334,7 +336,7 @@ mod tests {
 
         let table = DeltaOps::new_in_memory()
             .create()
-            .with_columns(table_schema.get_fields().clone())
+            .with_columns(table_schema.fields().clone())
             .with_partition_columns(partitions.unwrap_or_default())
             .await
             .unwrap();

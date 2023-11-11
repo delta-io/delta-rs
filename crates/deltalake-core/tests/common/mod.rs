@@ -1,12 +1,13 @@
 #![allow(dead_code, unused_variables)]
 
 use bytes::Bytes;
+use deltalake_core::kernel::{Action, Add, Remove, StructType};
+use deltalake_core::logstore::LogStore;
 use deltalake_core::operations::create::CreateBuilder;
 use deltalake_core::operations::transaction::commit;
-use deltalake_core::protocol::{self, Add, DeltaOperation, Remove, SaveMode};
-use deltalake_core::storage::DeltaObjectStore;
+use deltalake_core::protocol::{DeltaOperation, SaveMode};
+use deltalake_core::DeltaTable;
 use deltalake_core::DeltaTableBuilder;
-use deltalake_core::{DeltaTable, Schema};
 use object_store::{path::Path, ObjectStore};
 use std::any::Any;
 use std::collections::HashMap;
@@ -27,7 +28,7 @@ pub mod s3;
 pub struct TestContext {
     /// The main table under test
     pub table: Option<DeltaTable>,
-    pub backend: Option<Arc<DeltaObjectStore>>,
+    pub backend: Option<Arc<dyn LogStore>>,
     /// The configuration used to create the backend.
     pub config: HashMap<String, String>,
     /// An object when it is dropped will clean up any temporary resources created for the test
@@ -54,7 +55,7 @@ impl TestContext {
         }
     }
 
-    pub fn get_storage(&mut self) -> Arc<DeltaObjectStore> {
+    pub fn get_storage(&mut self) -> Arc<dyn LogStore> {
         if self.backend.is_none() {
             self.backend = Some(self.new_storage())
         }
@@ -62,7 +63,7 @@ impl TestContext {
         self.backend.as_ref().unwrap().clone()
     }
 
-    fn new_storage(&self) -> Arc<DeltaObjectStore> {
+    fn new_storage(&self) -> Arc<dyn LogStore> {
         let config = self.config.clone();
         let uri = config.get("URI").unwrap().to_string();
         DeltaTableBuilder::from_uri(uri)
@@ -74,19 +75,19 @@ impl TestContext {
     //Create and set a new table from the provided schema
     pub async fn create_table_from_schema(
         &mut self,
-        schema: Schema,
+        schema: StructType,
         partitions: &[&str],
     ) -> DeltaTable {
         let p = partitions
             .iter()
             .map(|s| s.to_string())
             .collect::<Vec<String>>();
-        let backend = self.new_storage();
+        let log_store = self.new_storage();
         CreateBuilder::new()
-            .with_object_store(backend)
+            .with_log_store(log_store)
             .with_table_name("delta-rs_test_table")
             .with_comment("Table created by delta-rs tests")
-            .with_columns(schema.get_fields().clone())
+            .with_columns(schema.fields().clone())
             .with_partition_columns(p)
             .await
             .unwrap()
@@ -133,16 +134,22 @@ pub async fn add_file(
             modification_time: create_time,
             partition_values: part_values,
             data_change: true,
-            ..Default::default()
+            stats: None,
+            stats_parsed: None,
+            partition_values_parsed: None,
+            tags: None,
+            default_row_commit_version: None,
+            base_row_id: None,
+            deletion_vector: None,
         };
         let operation = DeltaOperation::Write {
             mode: SaveMode::Append,
             partition_by: None,
             predicate: None,
         };
-        let actions = vec![protocol::Action::add(add)];
+        let actions = vec![Action::Add(add)];
         commit(
-            table.object_store().as_ref(),
+            table.log_store().as_ref(),
             &actions,
             operation,
             &table.state,
@@ -170,12 +177,17 @@ pub async fn remove_file(
         deletion_timestamp: Some(deletion_timestamp),
         partition_values: Some(part_values),
         data_change: true,
-        ..Default::default()
+        extended_file_metadata: None,
+        size: None,
+        deletion_vector: None,
+        default_row_commit_version: None,
+        base_row_id: None,
+        tags: None,
     };
     let operation = DeltaOperation::Delete { predicate: None };
-    let actions = vec![protocol::Action::remove(remove)];
+    let actions = vec![Action::Remove(remove)];
     commit(
-        table.object_store().as_ref(),
+        table.log_store().as_ref(),
         &actions,
         operation,
         &table.state,

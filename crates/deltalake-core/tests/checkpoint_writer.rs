@@ -211,7 +211,7 @@ mod checkpoints_with_tombstones {
     use super::*;
     use ::object_store::path::Path as ObjectStorePath;
     use chrono::Utc;
-    use deltalake_core::protocol::*;
+    use deltalake_core::kernel::*;
     use deltalake_core::table::config::DeltaConfigKey;
     use deltalake_core::*;
     use maplit::hashmap;
@@ -346,6 +346,8 @@ mod checkpoints_with_tombstones {
                 size: None,
                 tags: None,
                 deletion_vector: None,
+                base_row_id: None,
+                default_row_commit_version: None,
             })
             .collect();
 
@@ -357,8 +359,8 @@ mod checkpoints_with_tombstones {
         let actions = removes
             .iter()
             .cloned()
-            .map(Action::remove)
-            .chain(std::iter::once(Action::add(add.clone())))
+            .map(Action::Remove)
+            .chain(std::iter::once(Action::Add(add.clone())))
             .collect();
         let operation = DeltaOperation::Optimize {
             predicate: None,
@@ -389,7 +391,7 @@ mod checkpoints_with_tombstones {
         let actions = actions
             .iter()
             .filter_map(|a| match a {
-                Action::remove(r) => Some(r.clone()),
+                Action::Remove(r) => Some(r.clone()),
                 _ => None,
             })
             .collect();
@@ -408,6 +410,8 @@ mod checkpoints_with_tombstones {
             size: Some(100),
             tags: None,
             deletion_vector: None,
+            base_row_id: None,
+            default_row_commit_version: None,
         }
     }
 

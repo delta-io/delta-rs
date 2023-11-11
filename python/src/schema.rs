@@ -6,15 +6,14 @@ use deltalake::arrow::datatypes::{
 };
 use deltalake::arrow::error::ArrowError;
 use deltalake::arrow::pyarrow::PyArrowType;
-use deltalake::schema::{
-    Schema, SchemaDataType, SchemaField, SchemaTypeArray, SchemaTypeMap, SchemaTypeStruct,
+use deltalake::kernel::{
+    ArrayType as DeltaArrayType, DataType, MapType as DeltaMapType, PrimitiveType as DeltaPrimitve,
+    StructField, StructType as DeltaStructType,
 };
-use lazy_static::lazy_static;
 use pyo3::exceptions::{PyException, PyNotImplementedError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::IntoPyDict;
 use pyo3::{PyRef, PyResult};
-use regex::Regex;
 use std::collections::HashMap;
 
 // PyO3 doesn't yet support converting classes with inheritance with Python
@@ -23,55 +22,30 @@ use std::collections::HashMap;
 // See: https://github.com/PyO3/pyo3/issues/1836
 
 // Decimal is separate special case, since it has parameters
-const VALID_PRIMITIVE_TYPES: [&str; 11] = [
-    "string",
-    "long",
-    "integer",
-    "short",
-    "byte",
-    "float",
-    "double",
-    "boolean",
-    "binary",
-    "date",
-    "timestamp",
-];
 
-fn try_parse_decimal_type(data_type: &str) -> Option<(usize, usize)> {
-    lazy_static! {
-        static ref DECIMAL_REGEX: Regex = Regex::new(r"\((\d{1,2}),(\d{1,2})\)").unwrap();
-    }
-    let extract = DECIMAL_REGEX.captures(data_type)?;
-    let precision = extract
-        .get(1)
-        .and_then(|v| v.as_str().parse::<usize>().ok())?;
-    let scale = extract
-        .get(2)
-        .and_then(|v| v.as_str().parse::<usize>().ok())?;
-    Some((precision, scale))
-}
-
-fn schema_type_to_python(schema_type: SchemaDataType, py: Python) -> PyResult<PyObject> {
+fn schema_type_to_python(schema_type: DataType, py: Python) -> PyResult<PyObject> {
     match schema_type {
-        SchemaDataType::primitive(data_type) => Ok((PrimitiveType::new(data_type)?).into_py(py)),
-        SchemaDataType::array(array_type) => {
-            let array_type: ArrayType = array_type.into();
+        DataType::Primitive(data_type) => {
+            Ok((PrimitiveType::new(data_type.to_string())?).into_py(py))
+        }
+        DataType::Array(array_type) => {
+            let array_type: ArrayType = (*array_type).into();
             Ok(array_type.into_py(py))
         }
-        SchemaDataType::map(map_type) => {
-            let map_type: MapType = map_type.into();
+        DataType::Map(map_type) => {
+            let map_type: MapType = (*map_type).into();
             Ok(map_type.into_py(py))
         }
-        SchemaDataType::r#struct(struct_type) => {
-            let struct_type: StructType = struct_type.into();
+        DataType::Struct(struct_type) => {
+            let struct_type: StructType = (*struct_type).into();
             Ok(struct_type.into_py(py))
         }
     }
 }
 
-fn python_type_to_schema(ob: PyObject, py: Python) -> PyResult<SchemaDataType> {
+fn python_type_to_schema(ob: PyObject, py: Python) -> PyResult<DataType> {
     if let Ok(data_type) = ob.extract::<PrimitiveType>(py) {
-        return Ok(SchemaDataType::primitive(data_type.inner_type));
+        return Ok(DataType::Primitive(data_type.inner_type));
     }
     if let Ok(array_type) = ob.extract::<ArrayType>(py) {
         return Ok(array_type.into());
@@ -85,7 +59,7 @@ fn python_type_to_schema(ob: PyObject, py: Python) -> PyResult<SchemaDataType> {
     if let Ok(raw_primitive) = ob.extract::<String>(py) {
         // Pass through PrimitiveType::new() to do validation
         return PrimitiveType::new(raw_primitive)
-            .map(|data_type| SchemaDataType::primitive(data_type.inner_type));
+            .map(|data_type| DataType::Primitive(data_type.inner_type));
     }
     Err(PyValueError::new_err("Invalid data type"))
 }
@@ -93,14 +67,14 @@ fn python_type_to_schema(ob: PyObject, py: Python) -> PyResult<SchemaDataType> {
 #[pyclass(module = "deltalake._internal")]
 #[derive(Clone)]
 pub struct PrimitiveType {
-    inner_type: String,
+    inner_type: DeltaPrimitve,
 }
 
-impl TryFrom<SchemaDataType> for PrimitiveType {
+impl TryFrom<DataType> for PrimitiveType {
     type Error = PyErr;
-    fn try_from(value: SchemaDataType) -> PyResult<Self> {
+    fn try_from(value: DataType) -> PyResult<Self> {
         match value {
-            SchemaDataType::primitive(type_name) => Self::new(type_name),
+            DataType::Primitive(type_name) => Self::new(type_name.to_string()),
             _ => Err(PyTypeError::new_err("Type is not primitive")),
         }
     }
@@ -111,34 +85,41 @@ impl PrimitiveType {
     #[new]
     #[pyo3(signature = (data_type))]
     fn new(data_type: String) -> PyResult<Self> {
-        if data_type.starts_with("decimal") {
-            if try_parse_decimal_type(&data_type).is_none() {
-                Err(PyValueError::new_err(format!(
-                    "invalid decimal type: {data_type}"
-                )))
-            } else {
-                Ok(Self {
-                    inner_type: data_type,
-                })
-            }
-        } else if !VALID_PRIMITIVE_TYPES
-            .iter()
-            .any(|&valid| data_type == valid)
-        {
-            Err(PyValueError::new_err(format!(
-                "data_type must be one of decimal(<precision>, <scale>), {}.",
-                VALID_PRIMITIVE_TYPES.join(", ")
-            )))
-        } else {
-            Ok(Self {
-                inner_type: data_type,
-            })
-        }
+        let data_type: DeltaPrimitve = serde_json::from_str(&format!("\"{data_type}\""))
+            .map_err(|_| PyValueError::new_err(format!("invalid type string: {data_type}")))?;
+
+        Ok(Self {
+            inner_type: data_type,
+        })
+
+        // if data_type.starts_with("decimal") {
+        //     if try_parse_decimal_type(&data_type).is_none() {
+        //         Err(PyValueError::new_err(format!(
+        //             "invalid decimal type: {data_type}"
+        //         )))
+        //     } else {
+        //         Ok(Self {
+        //             inner_type: data_type,
+        //         })
+        //     }
+        // } else if !VALID_PRIMITIVE_TYPES
+        //     .iter()
+        //     .any(|&valid| data_type == valid)
+        // {
+        //     Err(PyValueError::new_err(format!(
+        //         "data_type must be one of decimal(<precision>, <scale>), {}.",
+        //         VALID_PRIMITIVE_TYPES.join(", ")
+        //     )))
+        // } else {
+        //     Ok(Self {
+        //         inner_type: data_type,
+        //     })
+        // }
     }
 
     #[getter]
     fn get_type(&self) -> PyResult<String> {
-        Ok(self.inner_type.clone())
+        Ok(self.inner_type.to_string())
     }
 
     fn __richcmp__(&self, other: PrimitiveType, cmp: pyo3::basic::CompareOp) -> PyResult<bool> {
@@ -157,14 +138,14 @@ impl PrimitiveType {
 
     #[pyo3(text_signature = "($self)")]
     fn to_json(&self) -> PyResult<String> {
-        let inner_type = SchemaDataType::primitive(self.inner_type.clone());
+        let inner_type = DataType::Primitive(self.inner_type.clone());
         serde_json::to_string(&inner_type).map_err(|err| PyException::new_err(err.to_string()))
     }
 
     #[staticmethod]
     #[pyo3(text_signature = "(type_json)")]
     fn from_json(type_json: String) -> PyResult<Self> {
-        let data_type: SchemaDataType = serde_json::from_str(&type_json)
+        let data_type: DataType = serde_json::from_str(&type_json)
             .map_err(|err| PyValueError::new_err(err.to_string()))?;
 
         data_type.try_into()
@@ -172,7 +153,7 @@ impl PrimitiveType {
 
     #[pyo3(text_signature = "($self)")]
     fn to_pyarrow(&self) -> PyResult<PyArrowType<ArrowDataType>> {
-        let inner_type = SchemaDataType::primitive(self.inner_type.clone());
+        let inner_type = DataType::Primitive(self.inner_type.clone());
         Ok(PyArrowType((&inner_type).try_into().map_err(
             |err: ArrowError| PyException::new_err(err.to_string()),
         )?))
@@ -181,7 +162,7 @@ impl PrimitiveType {
     #[pyo3(text_signature = "(data_type)")]
     #[staticmethod]
     fn from_pyarrow(data_type: PyArrowType<ArrowDataType>) -> PyResult<Self> {
-        let inner_type: SchemaDataType = (&data_type.0)
+        let inner_type: DataType = (&data_type.0)
             .try_into()
             .map_err(|err: ArrowError| PyException::new_err(err.to_string()))?;
 
@@ -192,26 +173,28 @@ impl PrimitiveType {
 #[pyclass(module = "deltalake._internal")]
 #[derive(Clone)]
 pub struct ArrayType {
-    inner_type: SchemaTypeArray,
+    inner_type: DeltaArrayType,
 }
 
-impl From<SchemaTypeArray> for ArrayType {
-    fn from(inner_type: SchemaTypeArray) -> Self {
+impl From<DeltaArrayType> for ArrayType {
+    fn from(inner_type: DeltaArrayType) -> Self {
         Self { inner_type }
     }
 }
 
-impl From<ArrayType> for SchemaDataType {
-    fn from(arr: ArrayType) -> SchemaDataType {
-        SchemaDataType::array(arr.inner_type)
+impl From<ArrayType> for DataType {
+    fn from(arr: ArrayType) -> DataType {
+        DataType::Array(Box::new(arr.inner_type))
     }
 }
 
-impl TryFrom<SchemaDataType> for ArrayType {
+impl TryFrom<DataType> for ArrayType {
     type Error = PyErr;
-    fn try_from(value: SchemaDataType) -> PyResult<Self> {
+    fn try_from(value: DataType) -> PyResult<Self> {
         match value {
-            SchemaDataType::array(inner_type) => Ok(Self { inner_type }),
+            DataType::Array(inner_type) => Ok(Self {
+                inner_type: *inner_type,
+            }),
             _ => Err(PyTypeError::new_err("Type is not an array")),
         }
     }
@@ -222,18 +205,15 @@ impl ArrayType {
     #[new]
     #[pyo3(signature = (element_type, contains_null = true))]
     fn new(element_type: PyObject, contains_null: bool, py: Python) -> PyResult<Self> {
-        let inner_type = SchemaTypeArray::new(
-            Box::new(python_type_to_schema(element_type, py)?),
-            contains_null,
-        );
+        let inner_type =
+            DeltaArrayType::new(python_type_to_schema(element_type, py)?, contains_null);
         Ok(Self { inner_type })
     }
 
     fn __repr__(&self, py: Python) -> PyResult<String> {
-        let type_repr: String =
-            schema_type_to_python(self.inner_type.get_element_type().clone(), py)?
-                .call_method0(py, "__repr__")?
-                .extract(py)?;
+        let type_repr: String = schema_type_to_python(self.inner_type.element_type().clone(), py)?
+            .call_method0(py, "__repr__")?
+            .extract(py)?;
         Ok(format!(
             "ArrayType({}, contains_null={})",
             type_repr,
@@ -262,7 +242,7 @@ impl ArrayType {
 
     #[getter]
     fn element_type(&self, py: Python) -> PyResult<PyObject> {
-        schema_type_to_python(self.inner_type.get_element_type().to_owned(), py)
+        schema_type_to_python(self.inner_type.element_type().to_owned(), py)
     }
 
     #[getter]
@@ -278,7 +258,7 @@ impl ArrayType {
     #[staticmethod]
     #[pyo3(text_signature = "(type_json)")]
     fn from_json(type_json: String) -> PyResult<Self> {
-        let data_type: SchemaDataType = serde_json::from_str(&type_json)
+        let data_type: DataType = serde_json::from_str(&type_json)
             .map_err(|err| PyValueError::new_err(err.to_string()))?;
 
         data_type.try_into()
@@ -287,7 +267,7 @@ impl ArrayType {
     #[pyo3(text_signature = "($self)")]
     fn to_pyarrow(&self) -> PyResult<PyArrowType<ArrowDataType>> {
         Ok(PyArrowType(
-            (&SchemaDataType::array(self.inner_type.clone()))
+            (&DataType::Array(Box::new(self.inner_type.clone())))
                 .try_into()
                 .map_err(|err: ArrowError| PyException::new_err(err.to_string()))?,
         ))
@@ -296,7 +276,7 @@ impl ArrayType {
     #[staticmethod]
     #[pyo3(text_signature = "(data_type)")]
     fn from_pyarrow(data_type: PyArrowType<ArrowDataType>) -> PyResult<Self> {
-        let inner_type: SchemaDataType = (&data_type.0)
+        let inner_type: DataType = (&data_type.0)
             .try_into()
             .map_err(|err: ArrowError| PyException::new_err(err.to_string()))?;
 
@@ -307,26 +287,28 @@ impl ArrayType {
 #[pyclass(module = "deltalake._internal")]
 #[derive(Clone)]
 pub struct MapType {
-    inner_type: SchemaTypeMap,
+    inner_type: DeltaMapType,
 }
 
-impl From<SchemaTypeMap> for MapType {
-    fn from(inner_type: SchemaTypeMap) -> Self {
+impl From<DeltaMapType> for MapType {
+    fn from(inner_type: DeltaMapType) -> Self {
         Self { inner_type }
     }
 }
 
-impl From<MapType> for SchemaDataType {
-    fn from(map: MapType) -> SchemaDataType {
-        SchemaDataType::map(map.inner_type)
+impl From<MapType> for DataType {
+    fn from(map: MapType) -> DataType {
+        DataType::Map(Box::new(map.inner_type))
     }
 }
 
-impl TryFrom<SchemaDataType> for MapType {
+impl TryFrom<DataType> for MapType {
     type Error = PyErr;
-    fn try_from(value: SchemaDataType) -> PyResult<Self> {
+    fn try_from(value: DataType) -> PyResult<Self> {
         match value {
-            SchemaDataType::map(inner_type) => Ok(Self { inner_type }),
+            DataType::Map(inner_type) => Ok(Self {
+                inner_type: *inner_type,
+            }),
             _ => Err(PyTypeError::new_err("Type is not a map")),
         }
     }
@@ -342,27 +324,26 @@ impl MapType {
         value_contains_null: bool,
         py: Python,
     ) -> PyResult<Self> {
-        let inner_type = SchemaTypeMap::new(
-            Box::new(python_type_to_schema(key_type, py)?),
-            Box::new(python_type_to_schema(value_type, py)?),
+        let inner_type = DeltaMapType::new(
+            python_type_to_schema(key_type, py)?,
+            python_type_to_schema(value_type, py)?,
             value_contains_null,
         );
         Ok(Self { inner_type })
     }
 
     fn __repr__(&self, py: Python) -> PyResult<String> {
-        let key_repr: String = schema_type_to_python(self.inner_type.get_key_type().clone(), py)?
+        let key_repr: String = schema_type_to_python(self.inner_type.key_type().clone(), py)?
             .call_method0(py, "__repr__")?
             .extract(py)?;
-        let value_repr: String =
-            schema_type_to_python(self.inner_type.get_value_type().clone(), py)?
-                .call_method0(py, "__repr__")?
-                .extract(py)?;
+        let value_repr: String = schema_type_to_python(self.inner_type.value_type().clone(), py)?
+            .call_method0(py, "__repr__")?
+            .extract(py)?;
         Ok(format!(
             "MapType({}, {}, value_contains_null={})",
             key_repr,
             value_repr,
-            if self.inner_type.get_value_contains_null() {
+            if self.inner_type.value_contains_null() {
                 "True"
             } else {
                 "False"
@@ -387,17 +368,17 @@ impl MapType {
 
     #[getter]
     fn key_type(&self, py: Python) -> PyResult<PyObject> {
-        schema_type_to_python(self.inner_type.get_key_type().to_owned(), py)
+        schema_type_to_python(self.inner_type.key_type().to_owned(), py)
     }
 
     #[getter]
     fn value_type(&self, py: Python) -> PyResult<PyObject> {
-        schema_type_to_python(self.inner_type.get_value_type().to_owned(), py)
+        schema_type_to_python(self.inner_type.value_type().to_owned(), py)
     }
 
     #[getter]
     fn value_contains_null(&self, py: Python) -> PyResult<PyObject> {
-        Ok(self.inner_type.get_value_contains_null().into_py(py))
+        Ok(self.inner_type.value_contains_null().into_py(py))
     }
 
     #[pyo3(text_signature = "($self)")]
@@ -408,7 +389,7 @@ impl MapType {
     #[staticmethod]
     #[pyo3(text_signature = "(type_json)")]
     fn from_json(type_json: String) -> PyResult<Self> {
-        let data_type: SchemaDataType = serde_json::from_str(&type_json)
+        let data_type: DataType = serde_json::from_str(&type_json)
             .map_err(|err| PyValueError::new_err(err.to_string()))?;
 
         data_type.try_into()
@@ -417,7 +398,7 @@ impl MapType {
     #[pyo3(text_signature = "($self)")]
     fn to_pyarrow(&self) -> PyResult<PyArrowType<ArrowDataType>> {
         Ok(PyArrowType(
-            (&SchemaDataType::map(self.inner_type.clone()))
+            (&DataType::Map(Box::new(self.inner_type.clone())))
                 .try_into()
                 .map_err(|err: ArrowError| PyException::new_err(err.to_string()))?,
         ))
@@ -426,7 +407,7 @@ impl MapType {
     #[staticmethod]
     #[pyo3(text_signature = "(data_type)")]
     fn from_pyarrow(data_type: PyArrowType<ArrowDataType>) -> PyResult<Self> {
-        let inner_type: SchemaDataType = (&data_type.0)
+        let inner_type: DataType = (&data_type.0)
             .try_into()
             .map_err(|err: ArrowError| PyException::new_err(err.to_string()))?;
 
@@ -437,7 +418,7 @@ impl MapType {
 #[pyclass(module = "deltalake._internal")]
 #[derive(Clone)]
 pub struct Field {
-    inner: SchemaField,
+    inner: StructField,
 }
 
 #[pymethods]
@@ -466,19 +447,20 @@ impl Field {
             HashMap::new()
         };
 
-        Ok(Self {
-            inner: SchemaField::new(name, ty, nullable, metadata),
-        })
+        let mut inner = StructField::new(name, ty, nullable);
+        inner = inner.with_metadata(metadata);
+
+        Ok(Self { inner })
     }
 
     #[getter]
     fn name(&self) -> String {
-        self.inner.get_name().to_string()
+        self.inner.name().to_string()
     }
 
     #[getter]
     fn get_type(&self, py: Python) -> PyResult<PyObject> {
-        schema_type_to_python(self.inner.get_type().clone(), py)
+        schema_type_to_python(self.inner.data_type().clone(), py)
     }
 
     #[getter]
@@ -489,17 +471,17 @@ impl Field {
     #[getter]
     fn metadata(&self, py: Python) -> PyResult<PyObject> {
         let json_loads = PyModule::import(py, "json")?.getattr("loads")?;
-        let metadata_json: String = serde_json::to_string(self.inner.get_metadata())
+        let metadata_json: String = serde_json::to_string(self.inner.metadata())
             .map_err(|err| PyValueError::new_err(err.to_string()))?;
         Ok(json_loads.call1((metadata_json,))?.to_object(py))
     }
 
     fn __repr__(&self, py: Python) -> PyResult<String> {
-        let type_repr: String = schema_type_to_python(self.inner.get_type().clone(), py)?
+        let type_repr: String = schema_type_to_python(self.inner.data_type().clone(), py)?
             .call_method0(py, "__repr__")?
             .extract(py)?;
 
-        let metadata = self.inner.get_metadata();
+        let metadata = self.inner.metadata();
         let maybe_metadata = if metadata.is_empty() {
             "".to_string()
         } else {
@@ -511,7 +493,7 @@ impl Field {
         };
         Ok(format!(
             "Field({}, {}, nullable={}{})",
-            self.inner.get_name(),
+            self.inner.name(),
             type_repr,
             if self.inner.is_nullable() {
                 "True"
@@ -540,7 +522,7 @@ impl Field {
     #[staticmethod]
     #[pyo3(text_signature = "(field_json)")]
     fn from_json(field_json: String) -> PyResult<Self> {
-        let field: SchemaField = serde_json::from_str(&field_json)
+        let field: StructField = serde_json::from_str(&field_json)
             .map_err(|err| PyValueError::new_err(err.to_string()))?;
 
         Ok(Self { inner: field })
@@ -557,7 +539,7 @@ impl Field {
     #[pyo3(text_signature = "(field)")]
     fn from_pyarrow(field: PyArrowType<ArrowField>) -> PyResult<Self> {
         Ok(Self {
-            inner: SchemaField::try_from(&field.0)
+            inner: StructField::try_from(&field.0)
                 .map_err(|err: ArrowError| PyException::new_err(err.to_string()))?,
         })
     }
@@ -566,26 +548,28 @@ impl Field {
 #[pyclass(subclass, module = "deltalake._internal")]
 #[derive(Clone)]
 pub struct StructType {
-    inner_type: SchemaTypeStruct,
+    inner_type: DeltaStructType,
 }
 
-impl From<SchemaTypeStruct> for StructType {
-    fn from(inner_type: SchemaTypeStruct) -> Self {
+impl From<DeltaStructType> for StructType {
+    fn from(inner_type: DeltaStructType) -> Self {
         Self { inner_type }
     }
 }
 
-impl From<StructType> for SchemaDataType {
-    fn from(str: StructType) -> SchemaDataType {
-        SchemaDataType::r#struct(str.inner_type)
+impl From<StructType> for DataType {
+    fn from(str: StructType) -> DataType {
+        DataType::Struct(Box::new(str.inner_type))
     }
 }
 
-impl TryFrom<SchemaDataType> for StructType {
+impl TryFrom<DataType> for StructType {
     type Error = PyErr;
-    fn try_from(value: SchemaDataType) -> PyResult<Self> {
+    fn try_from(value: DataType) -> PyResult<Self> {
         match value {
-            SchemaDataType::r#struct(inner_type) => Ok(Self { inner_type }),
+            DataType::Struct(inner_type) => Ok(Self {
+                inner_type: *inner_type,
+            }),
             _ => Err(PyTypeError::new_err("Type is not a struct")),
         }
     }
@@ -594,18 +578,18 @@ impl TryFrom<SchemaDataType> for StructType {
 impl StructType {
     #[new]
     fn new(fields: Vec<PyRef<Field>>) -> Self {
-        let fields: Vec<SchemaField> = fields
+        let fields: Vec<StructField> = fields
             .into_iter()
             .map(|field| field.inner.clone())
             .collect();
-        let inner_type = SchemaTypeStruct::new(fields);
+        let inner_type = DeltaStructType::new(fields);
         Self { inner_type }
     }
 
     fn __repr__(&self, py: Python) -> PyResult<String> {
         let inner_data: Vec<String> = self
             .inner_type
-            .get_fields()
+            .fields()
             .iter()
             .map(|field| {
                 let field = Field {
@@ -636,7 +620,7 @@ impl StructType {
     #[getter]
     fn fields(&self) -> Vec<Field> {
         self.inner_type
-            .get_fields()
+            .fields()
             .iter()
             .map(|field| Field {
                 inner: field.clone(),
@@ -652,7 +636,7 @@ impl StructType {
     #[staticmethod]
     #[pyo3(text_signature = "(type_json)")]
     fn from_json(type_json: String) -> PyResult<Self> {
-        let data_type: SchemaDataType = serde_json::from_str(&type_json)
+        let data_type: DataType = serde_json::from_str(&type_json)
             .map_err(|err| PyValueError::new_err(err.to_string()))?;
 
         data_type.try_into()
@@ -661,7 +645,7 @@ impl StructType {
     #[pyo3(text_signature = "($self)")]
     fn to_pyarrow(&self) -> PyResult<PyArrowType<ArrowDataType>> {
         Ok(PyArrowType(
-            (&SchemaDataType::r#struct(self.inner_type.clone()))
+            (&DataType::Struct(Box::new(self.inner_type.clone())))
                 .try_into()
                 .map_err(|err: ArrowError| PyException::new_err(err.to_string()))?,
         ))
@@ -670,7 +654,7 @@ impl StructType {
     #[staticmethod]
     #[pyo3(text_signature = "(data_type)")]
     fn from_pyarrow(data_type: PyArrowType<ArrowDataType>) -> PyResult<Self> {
-        let inner_type: SchemaDataType = (&data_type.0)
+        let inner_type: DataType = (&data_type.0)
             .try_into()
             .map_err(|err: ArrowError| PyException::new_err(err.to_string()))?;
 
@@ -678,9 +662,9 @@ impl StructType {
     }
 }
 
-pub fn schema_to_pyobject(schema: &Schema, py: Python) -> PyResult<PyObject> {
+pub fn schema_to_pyobject(schema: &DeltaStructType, py: Python) -> PyResult<PyObject> {
     let fields: Vec<Field> = schema
-        .get_fields()
+        .fields()
         .iter()
         .map(|field| Field {
             inner: field.clone(),
@@ -714,11 +698,11 @@ impl PySchema {
     #[new]
     #[pyo3(signature = (fields))]
     fn new(fields: Vec<PyRef<Field>>) -> PyResult<(Self, StructType)> {
-        let fields: Vec<SchemaField> = fields
+        let fields: Vec<StructField> = fields
             .into_iter()
             .map(|field| field.inner.clone())
             .collect();
-        let inner_type = SchemaTypeStruct::new(fields);
+        let inner_type = DeltaStructType::new(fields);
         Ok((Self {}, StructType { inner_type }))
     }
 
@@ -726,7 +710,7 @@ impl PySchema {
         let super_ = self_.as_ref();
         let inner_data: Vec<String> = super_
             .inner_type
-            .get_fields()
+            .fields()
             .iter()
             .map(|field| {
                 let field = Field {
@@ -836,7 +820,7 @@ impl PySchema {
     #[staticmethod]
     #[pyo3(text_signature = "(data_type)")]
     fn from_pyarrow(data_type: PyArrowType<ArrowSchema>, py: Python) -> PyResult<PyObject> {
-        let inner_type: SchemaTypeStruct = (&data_type.0)
+        let inner_type: DeltaStructType = (&data_type.0)
             .try_into()
             .map_err(|err: ArrowError| PyException::new_err(err.to_string()))?;
 
@@ -852,11 +836,19 @@ impl PySchema {
     #[staticmethod]
     #[pyo3(text_signature = "(schema_json)")]
     fn from_json(schema_json: String, py: Python) -> PyResult<Py<Self>> {
-        let data_type: SchemaDataType = serde_json::from_str(&schema_json)
+        let data_type: DataType = serde_json::from_str(&schema_json)
             .map_err(|err| PyValueError::new_err(err.to_string()))?;
 
-        if let SchemaDataType::r#struct(inner_type) = data_type {
-            Py::new(py, (Self {}, StructType { inner_type }))
+        if let DataType::Struct(inner_type) = data_type {
+            Py::new(
+                py,
+                (
+                    Self {},
+                    StructType {
+                        inner_type: *inner_type,
+                    },
+                ),
+            )
         } else {
             Err(PyTypeError::new_err("Type is not a struct"))
         }

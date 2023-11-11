@@ -1,8 +1,9 @@
 #![allow(dead_code)]
 mod fs_common;
 
+use deltalake_core::kernel::Action;
 use deltalake_core::operations::transaction::commit;
-use deltalake_core::protocol::{Action, DeltaOperation, SaveMode};
+use deltalake_core::protocol::{DeltaOperation, SaveMode};
 use serde_json::json;
 use std::error::Error;
 use tempdir::TempDir;
@@ -13,7 +14,7 @@ async fn test_operational_parameters() -> Result<(), Box<dyn Error>> {
     let mut table = fs_common::create_table(path.path().to_str().unwrap(), None).await;
 
     let add = fs_common::add(0);
-    let actions = vec![Action::add(add)];
+    let actions = vec![Action::Add(add)];
     let operation = DeltaOperation::Write {
         mode: SaveMode::Append,
         partition_by: Some(vec!["some_partition".to_string()]),
@@ -21,7 +22,7 @@ async fn test_operational_parameters() -> Result<(), Box<dyn Error>> {
     };
 
     commit(
-        table.object_store().as_ref(),
+        table.log_store().as_ref(),
         &actions,
         operation,
         &table.state,

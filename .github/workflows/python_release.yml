@@ -114,6 +114,10 @@ jobs:
           target: aarch64-unknown-linux-gnu
           command: publish
           args: --skip-existing -m python/Cargo.toml --no-sdist ${{ env.FEATURES_FLAG }}
+          before-script-linux: |
+            # We can remove this once we upgrade to 2_28.
+            # https://github.com/briansmith/ring/issues/1728
+            export CFLAGS_aarch64_unknown_linux_gnu="-D__ARM_ARCH=8"
 
   release-docs:
     needs:
@@ -127,38 +131,11 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v3
+      - name: Trigger the docs release event
+        uses: peter-evans/repository-dispatch@v2
         with:
-          fetch-depth: 0 # fetch full history for gh-pages branch checkout
-      - name: Install minimal stable with clippy and rustfmt
-        uses: actions-rs/toolchain@v1
-        with:
-          profile: default
-          toolchain: stable
-          override: true
-
-      - name: Build and install deltalake
-        run: |
-          make install MATURIN_EXTRA_ARGS="--manylinux off"
-
-      - name: Build Sphinx documentation
-        run: |
-          make build-documentation
-          mv docs/build ~/build
-
-          echo "Configuring git..."
-          git config --global user.name 'Github Action'
-          git config --global user.email 'deltars@users.noreply.github.com'
-          git remote set-url origin https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/$GITHUB_REPOSITORY
-
-          echo "Commit to gh-pages branch..."
-          git reset --hard HEAD
-          git clean -d -fx .
-          git checkout gh-pages
-          cd ..
-          cp -avr ~/build/html/.  ./python
-          PUSHED_TAG=${GITHUB_REF##*/}
-          git status
-          git add ./python
-          git commit -m "doc update for tag `${PUSHED_TAG}`"
-          git push origin gh-pages
+          event-type: release-docs
+          client-payload: >
+            {
+              "tag": "${{ github.ref_name }}"
+            }

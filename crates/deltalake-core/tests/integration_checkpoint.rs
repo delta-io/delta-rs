@@ -2,11 +2,10 @@
 
 use chrono::Utc;
 use deltalake_core::checkpoints::{cleanup_expired_logs_for, create_checkpoint};
+use deltalake_core::kernel::{DataType, PrimitiveType};
 use deltalake_core::test_utils::{IntegrationContext, StorageIntegration, TestResult};
 use deltalake_core::writer::{DeltaWriter, JsonWriter};
-use deltalake_core::{
-    errors::DeltaResult, DeltaOps, DeltaTableBuilder, ObjectStore, SchemaDataType,
-};
+use deltalake_core::{errors::DeltaResult, DeltaOps, DeltaTableBuilder, ObjectStore};
 use object_store::path::Path;
 use serde_json::json;
 use serial_test::serial;
@@ -60,15 +59,12 @@ async fn cleanup_metadata_hdfs_test() -> TestResult {
 // test to run longer but reliable
 async fn cleanup_metadata_test(context: &IntegrationContext) -> TestResult {
     let table_uri = context.root_uri();
-    let object_store = DeltaTableBuilder::from_uri(table_uri)
+    let log_store = DeltaTableBuilder::from_uri(table_uri)
         .with_allow_http(true)
         .build_storage()?;
+    let object_store = log_store.object_store();
 
-    let log_path = |version| {
-        object_store
-            .log_path()
-            .child(format!("{:020}.json", version))
-    };
+    let log_path = |version| log_store.log_path().child(format!("{:020}.json", version));
 
     // we don't need to actually populate files with content as cleanup works only with file's metadata
     object_store
@@ -99,7 +95,7 @@ async fn cleanup_metadata_test(context: &IntegrationContext) -> TestResult {
     assert!(retention_timestamp > v1time.timestamp_millis());
     assert!(retention_timestamp < v2time.timestamp_millis());
 
-    let removed = cleanup_expired_logs_for(3, object_store.as_ref(), retention_timestamp).await?;
+    let removed = cleanup_expired_logs_for(3, log_store.as_ref(), retention_timestamp).await?;
 
     assert_eq!(removed, 2);
     assert!(object_store.head(&log_path(0)).await.is_err());
@@ -121,7 +117,7 @@ async fn test_issue_1420_cleanup_expired_logs_for() -> DeltaResult<()> {
         .create()
         .with_column(
             "id",
-            SchemaDataType::primitive("integer".to_string()),
+            DataType::Primitive(PrimitiveType::Integer),
             false,
             None,
         )
@@ -143,7 +139,7 @@ async fn test_issue_1420_cleanup_expired_logs_for() -> DeltaResult<()> {
     // Should delete v1 but not v2 or v2.checkpoint.parquet
     cleanup_expired_logs_for(
         table.version(),
-        table.object_store().as_ref(),
+        table.log_store().as_ref(),
         ts.timestamp_millis(),
     )
     .await?;
@@ -185,7 +181,7 @@ async fn test_issue_1420_cleanup_expired_logs_for() -> DeltaResult<()> {
 
     cleanup_expired_logs_for(
         table.version(),
-        table.object_store().as_ref(),
+        table.log_store().as_ref(),
         ts.timestamp_millis(),
     )
     .await?;

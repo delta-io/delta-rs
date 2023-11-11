@@ -37,12 +37,13 @@ use parquet::basic::{Compression, ZstdLevel};
 use parquet::errors::ParquetError;
 use parquet::file::properties::WriterProperties;
 use serde::{Deserialize, Serialize};
-use serde_json::Map;
 
 use super::transaction::commit;
 use super::writer::{PartitionWriter, PartitionWriterConfig};
 use crate::errors::{DeltaResult, DeltaTableError};
-use crate::protocol::{self, Action, DeltaOperation};
+use crate::kernel::{Action, Remove};
+use crate::logstore::LogStoreRef;
+use crate::protocol::DeltaOperation;
 use crate::storage::ObjectStoreRef;
 use crate::table::state::DeltaTableState;
 use crate::writer::utils::arrow_schema_without_partitions;
@@ -155,7 +156,7 @@ pub struct OptimizeBuilder<'a> {
     /// A snapshot of the to-be-optimized table's state
     snapshot: DeltaTableState,
     /// Delta object store for handling data files
-    store: ObjectStoreRef,
+    log_store: LogStoreRef,
     /// Filters to select specific table partitions to be optimized
     filters: &'a [PartitionFilter],
     /// Desired file size after bin-packing files
@@ -177,10 +178,10 @@ pub struct OptimizeBuilder<'a> {
 
 impl<'a> OptimizeBuilder<'a> {
     /// Create a new [`OptimizeBuilder`]
-    pub fn new(store: ObjectStoreRef, snapshot: DeltaTableState) -> Self {
+    pub fn new(log_store: LogStoreRef, snapshot: DeltaTableState) -> Self {
         Self {
             snapshot,
-            store,
+            log_store,
             filters: &[],
             target_size: None,
             writer_properties: None,
@@ -274,14 +275,14 @@ impl<'a> std::future::IntoFuture for OptimizeBuilder<'a> {
             )?;
             let metrics = plan
                 .execute(
-                    this.store.clone(),
+                    this.log_store.clone(),
                     &this.snapshot,
                     this.max_concurrent_tasks,
                     this.max_spill_size,
                     this.min_commit_interval,
                 )
                 .await?;
-            let mut table = DeltaTable::new_with_state(this.store, this.snapshot);
+            let mut table = DeltaTable::new_with_state(this.log_store, this.snapshot);
             table.update().await?;
             Ok((table, metrics))
         })
@@ -311,7 +312,7 @@ fn create_remove(
     let deletion_time = SystemTime::now().duration_since(UNIX_EPOCH).unwrap();
     let deletion_time = deletion_time.as_millis() as i64;
 
-    Ok(Action::remove(protocol::Remove {
+    Ok(Action::Remove(Remove {
         path: path.to_string(),
         deletion_timestamp: Some(deletion_time),
         data_change: false,
@@ -320,6 +321,8 @@ fn create_remove(
         size: Some(size),
         deletion_vector: None,
         tags: None,
+        base_row_id: None,
+        default_row_commit_version: None,
     }))
 }
 
@@ -450,7 +453,7 @@ impl MergePlan {
             partial_metrics.files_added.max = std::cmp::max(partial_metrics.files_added.max, size);
             partial_metrics.files_added.min = std::cmp::min(partial_metrics.files_added.min, size);
 
-            Action::add(add)
+            Action::Add(add)
         });
         partial_actions.extend(add_actions);
 
@@ -582,7 +585,7 @@ impl MergePlan {
     /// Perform the operations outlined in the plan.
     pub async fn execute(
         mut self,
-        object_store: ObjectStoreRef,
+        log_store: LogStoreRef,
         snapshot: &DeltaTableState,
         max_concurrent_tasks: usize,
         #[allow(unused_variables)] // used behind a feature flag
@@ -605,7 +608,7 @@ impl MergePlan {
                     for file in files.iter() {
                         debug!("  file {}", file.location);
                     }
-                    let object_store_ref = object_store.clone();
+                    let object_store_ref = log_store.object_store().clone();
                     let batch_stream = futures::stream::iter(files.clone())
                         .then(move |file| {
                             let object_store_ref = object_store_ref.clone();
@@ -623,7 +626,7 @@ impl MergePlan {
                         self.task_parameters.clone(),
                         partition,
                         files,
-                        object_store.clone(),
+                        log_store.object_store().clone(),
                         futures::future::ready(Ok(batch_stream)),
                     ));
                     util::flatten_join_error(rewrite_result)
@@ -633,13 +636,15 @@ impl MergePlan {
                 #[cfg(not(feature = "datafusion"))]
                 let exec_context = Arc::new(zorder::ZOrderExecContext::new(
                     zorder_columns,
-                    object_store.clone(),
+                    log_store.object_store().clone(),
                     // If there aren't enough bins to use all threads, then instead
                     // use threads within the bins. This is important for the case where
                     // the table is un-partitioned, in which case the entire table is just
                     // one big bin.
                     bins.len() <= num_cpus::get(),
                 ));
+                let object_store = log_store.object_store().clone();
+
                 #[cfg(feature = "datafusion")]
                 let exec_context = Arc::new(zorder::ZOrderExecContext::new(
                     zorder_columns,
@@ -647,7 +652,6 @@ impl MergePlan {
                     max_spill_size,
                 )?);
                 let task_parameters = self.task_parameters.clone();
-                let object_store = object_store.clone();
                 futures::stream::iter(bins)
                     .map(move |(partition, files)| {
                         let batch_stream = Self::read_zorder(files.clone(), exec_context.clone());
@@ -669,7 +673,7 @@ impl MergePlan {
 
         let mut stream = stream.buffer_unordered(max_concurrent_tasks);
 
-        let mut table = DeltaTable::new_with_state(object_store.clone(), snapshot.clone());
+        let mut table = DeltaTable::new_with_state(log_store.clone(), snapshot.clone());
 
         // Actions buffered so far. These will be flushed either at the end
         // or when we reach the commit interval.
@@ -703,7 +707,7 @@ impl MergePlan {
                 last_commit = now;
 
                 buffered_metrics.preserve_insertion_order = true;
-                let mut metadata = Map::new();
+                let mut metadata = HashMap::new();
                 metadata.insert("readVersion".to_owned(), self.read_table_version.into());
                 let maybe_map_metrics = serde_json::to_value(std::mem::replace(
                     &mut buffered_metrics,
@@ -718,7 +722,7 @@ impl MergePlan {
                 //// TODO: Check for remove actions on optimized partitions. If a
                 //// optimized partition was updated then abort the commit. Requires (#593).
                 commit(
-                    table.object_store().as_ref(),
+                    table.log_store.as_ref(),
                     &actions,
                     self.task_parameters.input_parameters.clone().into(),
                     table.get_state(),
@@ -791,12 +795,14 @@ pub fn create_merge_plan(
 
     let input_parameters = OptimizeInput { target_size };
     let file_schema = arrow_schema_without_partitions(
-        &Arc::new(<ArrowSchema as TryFrom<&crate::schema::Schema>>::try_from(
-            &snapshot
-                .current_metadata()
-                .ok_or(DeltaTableError::NoMetadata)?
-                .schema,
-        )?),
+        &Arc::new(
+            <ArrowSchema as TryFrom<&crate::kernel::StructType>>::try_from(
+                &snapshot
+                    .current_metadata()
+                    .ok_or(DeltaTableError::NoMetadata)?
+                    .schema,
+            )?,
+        ),
         partitions_keys,
     );
 
@@ -943,9 +949,9 @@ fn build_zorder_plan(
         .current_metadata()
         .unwrap()
         .schema
-        .get_fields()
+        .fields()
         .iter()
-        .map(|field| field.get_name().to_string())
+        .map(|field| field.name().to_string())
         .collect_vec();
     let unknown_columns = zorder_columns
         .iter()
@@ -1174,10 +1180,10 @@ pub(super) mod zorder {
                 .ok_or(DataFusionError::NotImplemented(
                     "z-order on zero columns.".to_string(),
                 ))?;
-            let columns = columns
+            let columns: Vec<ArrayRef> = columns
                 .iter()
                 .map(|col| col.clone().into_array(length))
-                .collect_vec();
+                .try_collect()?;
             let array = zorder_key(&columns)?;
             Ok(ColumnarValue::Array(array))
         }

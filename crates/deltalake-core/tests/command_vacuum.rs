@@ -1,9 +1,9 @@
 use chrono::Duration;
 use common::clock::TestClock;
 use common::TestContext;
+use deltalake_core::kernel::StructType;
 use deltalake_core::operations::vacuum::Clock;
 use deltalake_core::operations::DeltaOps;
-use deltalake_core::Schema;
 use object_store::{path::Path, Error as ObjectStoreError, ObjectStore};
 use serde_json::json;
 use std::sync::Arc;
@@ -11,7 +11,7 @@ use std::sync::Arc;
 mod common;
 
 /// Basic schema
-pub fn get_xy_date_schema() -> Schema {
+pub fn get_xy_date_schema() -> StructType {
     serde_json::from_value(json!({
       "type": "struct",
       "fields": [
@@ -24,8 +24,8 @@ pub fn get_xy_date_schema() -> Schema {
 }
 
 /// Schema that contains a column prefiexed with _
-pub fn get_vacuum_underscore_schema() -> Schema {
-    serde_json::from_value::<Schema>(json!({
+pub fn get_vacuum_underscore_schema() -> StructType {
+    serde_json::from_value::<StructType>(json!({
       "type": "struct",
       "fields": [
         {"name": "x", "type": "integer", "nullable": false, "metadata": {}},
@@ -297,6 +297,6 @@ async fn test_non_managed_files() {
 
 async fn is_deleted(context: &mut TestContext, path: &Path) -> bool {
     let backend = context.get_storage();
-    let res = backend.head(path).await;
+    let res = backend.object_store().head(path).await;
     matches!(res, Err(ObjectStoreError::NotFound { .. }))
 }

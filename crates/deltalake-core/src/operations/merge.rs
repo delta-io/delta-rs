@@ -61,21 +61,19 @@ use datafusion_physical_expr::{create_physical_expr, expressions, PhysicalExpr};
 use futures::future::BoxFuture;
 use parquet::file::properties::WriterProperties;
 use serde::Serialize;
-use serde_json::{Map, Value};
+use serde_json::Value;
 
 use super::datafusion_utils::{into_expr, maybe_into_expr, Expression};
 use super::transaction::commit;
 use crate::delta_datafusion::expr::{fmt_expr_to_sql, parse_predicate_expression};
 use crate::delta_datafusion::{register_store, DeltaScanBuilder};
+use crate::kernel::{Action, Remove};
+use crate::logstore::LogStoreRef;
 use crate::operations::datafusion_utils::MetricObserverExec;
-use crate::{
-    operations::write::write_execution_plan,
-    storage::{DeltaObjectStore, ObjectStoreRef},
-    DeltaResult, DeltaTable, DeltaTableError,
-};
-
-use crate::protocol::{Action, DeltaOperation, MergePredicate, Remove};
+use crate::operations::write::write_execution_plan;
+use crate::protocol::{DeltaOperation, MergePredicate};
 use crate::table::state::DeltaTableState;
+use crate::{DeltaResult, DeltaTable, DeltaTableError};
 
 const OPERATION_COLUMN: &str = "__delta_rs_operation";
 const DELETE_COLUMN: &str = "__delta_rs_delete";
@@ -109,13 +107,13 @@ pub struct MergeBuilder {
     /// The source data
     source: DataFrame,
     /// Delta object store for handling data files
-    object_store: Arc<DeltaObjectStore>,
+    log_store: LogStoreRef,
     /// Datafusion session state relevant for executing the input plan
     state: Option<SessionState>,
     /// Properties passed to underlying parquet writer for when files are rewritten
     writer_properties: Option<WriterProperties>,
     /// Additional metadata to be added to commit
-    app_metadata: Option<Map<String, serde_json::Value>>,
+    app_metadata: Option<HashMap<String, serde_json::Value>>,
     /// safe_cast determines how data types that do not match the underlying table are handled
     /// By default an error is returned
     safe_cast: bool,
@@ -124,7 +122,7 @@ pub struct MergeBuilder {
 impl MergeBuilder {
     /// Create a new [`MergeBuilder`]
     pub fn new<E: Into<Expression>>(
-        object_store: ObjectStoreRef,
+        log_store: LogStoreRef,
         snapshot: DeltaTableState,
         predicate: E,
         source: DataFrame,
@@ -134,7 +132,7 @@ impl MergeBuilder {
             predicate,
             source,
             snapshot,
-            object_store,
+            log_store,
             source_alias: None,
             target_alias: None,
             state: None,
@@ -343,7 +341,7 @@ impl MergeBuilder {
         mut self,
         metadata: impl IntoIterator<Item = (String, serde_json::Value)>,
     ) -> Self {
-        self.app_metadata = Some(Map::from_iter(metadata));
+        self.app_metadata = Some(HashMap::from_iter(metadata));
         self
     }
 
@@ -563,11 +561,11 @@ pub struct MergeMetrics {
 async fn execute(
     predicate: Expression,
     source: DataFrame,
-    object_store: ObjectStoreRef,
+    log_store: LogStoreRef,
     snapshot: &DeltaTableState,
     state: SessionState,
     writer_properties: Option<WriterProperties>,
-    app_metadata: Option<Map<String, Value>>,
+    app_metadata: Option<HashMap<String, Value>>,
     safe_cast: bool,
     source_alias: Option<String>,
     target_alias: Option<String>,
@@ -592,7 +590,7 @@ async fn execute(
     // predicates also need to be considered when pruning
 
     let target = Arc::new(
-        DeltaScanBuilder::new(snapshot, object_store.clone(), &state)
+        DeltaScanBuilder::new(snapshot, log_store.clone(), &state)
             .with_schema(snapshot.input_schema()?)
             .build()
             .await?,
@@ -843,7 +841,7 @@ async fn execute(
     let mut projection_map = HashMap::new();
     let mut f = project_schema_df.fields().clone();
 
-    for delta_field in snapshot.schema().unwrap().get_fields() {
+    for delta_field in snapshot.schema().unwrap().fields() {
         let mut when_expr = Vec::with_capacity(operations_size);
         let mut then_expr = Vec::with_capacity(operations_size);
 
@@ -853,7 +851,7 @@ async fn execute(
             }),
             None => TableReference::none(),
         };
-        let name = delta_field.get_name();
+        let name = delta_field.name();
         let column = Column::new(qualifier.clone(), name);
         let field = project_schema_df.field_with_name(qualifier.as_ref(), name)?;
 
@@ -882,8 +880,8 @@ async fn execute(
             state.execution_props(),
         )?;
 
-        projection_map.insert(delta_field.get_name(), expressions.len());
-        let name = "__delta_rs_c_".to_owned() + delta_field.get_name();
+        projection_map.insert(delta_field.name(), expressions.len());
+        let name = "__delta_rs_c_".to_owned() + delta_field.name();
 
         f.push(DFField::new_unqualified(
             &name,
@@ -1128,7 +1126,7 @@ async fn execute(
         state.clone(),
         projection.clone(),
         table_partition_cols.clone(),
-        object_store.clone(),
+        log_store.object_store().clone(),
         Some(snapshot.table_config().target_file_size() as usize),
         None,
         writer_properties,
@@ -1143,12 +1141,12 @@ async fn execute(
         .unwrap()
         .as_millis() as i64;
 
-    let mut actions: Vec<Action> = add_actions.into_iter().map(Action::add).collect();
+    let mut actions: Vec<Action> = add_actions.into_iter().map(Action::Add).collect();
     metrics.num_target_files_added = actions.len();
 
     for action in snapshot.files() {
         metrics.num_target_files_removed += 1;
-        actions.push(Action::remove(Remove {
+        actions.push(Action::Remove(Remove {
             path: action.path.clone(),
             deletion_timestamp: Some(deletion_timestamp),
             data_change: true,
@@ -1157,6 +1155,8 @@ async fn execute(
             deletion_vector: action.deletion_vector.clone(),
             size: Some(action.size),
             tags: None,
+            base_row_id: action.base_row_id,
+            default_row_commit_version: action.default_row_commit_version,
         }))
     }
 
@@ -1188,7 +1188,7 @@ async fn execute(
             not_matched_by_source_predicates: not_match_source_operations,
         };
         version = commit(
-            object_store.as_ref(),
+            log_store.as_ref(),
             &actions,
             operation,
             snapshot,
@@ -1212,7 +1212,7 @@ impl std::future::IntoFuture for MergeBuilder {
                 let session = SessionContext::new();
 
                 // If a user provides their own their DF state then they must register the store themselves
-                register_store(this.object_store.clone(), session.runtime_env());
+                register_store(this.log_store.clone(), session.runtime_env());
 
                 session.state()
             });
@@ -1220,7 +1220,7 @@ impl std::future::IntoFuture for MergeBuilder {
             let ((actions, version), metrics) = execute(
                 this.predicate,
                 this.source,
-                this.object_store.clone(),
+                this.log_store.clone(),
                 &this.snapshot,
                 state,
                 this.writer_properties,
@@ -1236,7 +1236,7 @@ impl std::future::IntoFuture for MergeBuilder {
 
             this.snapshot
                 .merge(DeltaTableState::from_actions(actions, version)?, true, true);
-            let table = DeltaTable::new_with_state(this.object_store, this.snapshot);
+            let table = DeltaTable::new_with_state(this.log_store, this.snapshot);
 
             Ok((table, metrics))
         })
@@ -1270,7 +1270,7 @@ mod tests {
 
         let table = DeltaOps::new_in_memory()
             .create()
-            .with_columns(table_schema.get_fields().clone())
+            .with_columns(table_schema.fields().clone())
             .with_partition_columns(partitions.unwrap_or_default())
             .await
             .unwrap();

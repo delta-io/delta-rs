@@ -4,9 +4,8 @@ use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::iter::Iterator;
 
-use arrow::datatypes::Schema as ArrowSchema;
-use arrow::error::ArrowError;
 use arrow::json::ReaderBuilder;
+use arrow_schema::{ArrowError, Schema as ArrowSchema};
 
 use chrono::{Datelike, Utc};
 use futures::{StreamExt, TryStreamExt};
@@ -18,10 +17,13 @@ use parquet::errors::ParquetError;
 use regex::Regex;
 use serde_json::Value;
 
-use super::{time_utils, Action, Add as AddAction, MetaData, Protocol, ProtocolError, Txn};
-use crate::arrow_convert::delta_log_schema_for_table;
-use crate::schema::*;
-use crate::storage::DeltaObjectStore;
+use super::{time_utils, ProtocolError};
+use crate::kernel::actions::arrow::delta_log_schema_for_table;
+use crate::kernel::{
+    Action, Add as AddAction, DataType, Metadata, PrimitiveType, Protocol, StructField, StructType,
+    Txn,
+};
+use crate::logstore::LogStore;
 use crate::table::state::DeltaTableState;
 use crate::table::{CheckPoint, CheckPointBuilder};
 use crate::{open_table_with_version, DeltaTable};
@@ -68,7 +70,7 @@ pub const CHECKPOINT_RECORD_BATCH_SIZE: usize = 5000;
 
 /// Creates checkpoint at current table version
 pub async fn create_checkpoint(table: &DeltaTable) -> Result<(), ProtocolError> {
-    create_checkpoint_for(table.version(), table.get_state(), table.storage.as_ref()).await?;
+    create_checkpoint_for(table.version(), table.get_state(), table.log_store.as_ref()).await?;
     Ok(())
 }
 
@@ -79,7 +81,7 @@ pub async fn cleanup_metadata(table: &DeltaTable) -> Result<usize, ProtocolError
         Utc::now().timestamp_millis() - table.get_state().log_retention_millis();
     cleanup_expired_logs_for(
         table.version(),
-        table.storage.as_ref(),
+        table.log_store.as_ref(),
         log_retention_timestamp,
     )
     .await
@@ -96,7 +98,7 @@ pub async fn create_checkpoint_from_table_uri_and_cleanup(
     let table = open_table_with_version(table_uri, version)
         .await
         .map_err(|err| ProtocolError::Generic(err.to_string()))?;
-    create_checkpoint_for(version, table.get_state(), table.storage.as_ref()).await?;
+    create_checkpoint_for(version, table.get_state(), table.log_store.as_ref()).await?;
 
     let enable_expired_log_cleanup =
         cleanup.unwrap_or_else(|| table.get_state().enable_expired_log_cleanup());
@@ -113,27 +115,28 @@ pub async fn create_checkpoint_from_table_uri_and_cleanup(
 pub async fn create_checkpoint_for(
     version: i64,
     state: &DeltaTableState,
-    storage: &DeltaObjectStore,
+    log_store: &dyn LogStore,
 ) -> Result<(), ProtocolError> {
     // TODO: checkpoints _can_ be multi-part... haven't actually found a good reference for
     // an appropriate split point yet though so only writing a single part currently.
     // See https://github.com/delta-io/delta-rs/issues/288
-    let last_checkpoint_path = storage.log_path().child("_last_checkpoint");
+    let last_checkpoint_path = log_store.log_path().child("_last_checkpoint");
 
     debug!("Writing parquet bytes to checkpoint buffer.");
     let (checkpoint, parquet_bytes) = parquet_bytes_from_state(state)?;
 
     let file_name = format!("{version:020}.checkpoint.parquet");
-    let checkpoint_path = storage.log_path().child(file_name);
+    let checkpoint_path = log_store.log_path().child(file_name);
 
+    let object_store = log_store.object_store();
     debug!("Writing checkpoint to {:?}.", checkpoint_path);
-    storage.put(&checkpoint_path, parquet_bytes).await?;
+    object_store.put(&checkpoint_path, parquet_bytes).await?;
 
     let last_checkpoint_content: Value = serde_json::to_value(checkpoint)?;
     let last_checkpoint_content = bytes::Bytes::from(serde_json::to_vec(&last_checkpoint_content)?);
 
     debug!("Writing _last_checkpoint to {:?}.", last_checkpoint_path);
-    storage
+    object_store
         .put(&last_checkpoint_path, last_checkpoint_content)
         .await?;
 
@@ -144,7 +147,7 @@ pub async fn create_checkpoint_for(
 /// and less than the specified version.
 pub async fn cleanup_expired_logs_for(
     until_version: i64,
-    storage: &DeltaObjectStore,
+    log_store: &dyn LogStore,
     cutoff_timestamp: i64,
 ) -> Result<usize, ProtocolError> {
     lazy_static! {
@@ -155,10 +158,11 @@ pub async fn cleanup_expired_logs_for(
     // Feed a stream of candidate deletion files directly into the delete_stream
     // function to try to improve the speed of cleanup and reduce the need for
     // intermediate memory.
-    let deleted = storage
+    let object_store = log_store.object_store();
+    let deleted = object_store
         .delete_stream(
-            storage
-                .list(Some(storage.log_path()))
+            object_store
+                .list(Some(log_store.log_path()))
                 .await?
                 // This predicate function will filter out any locations that don't
                 // match the given timestamp range
@@ -201,8 +205,11 @@ fn parquet_bytes_from_state(
     let partition_col_data_types = current_metadata.get_partition_col_data_types();
 
     // Collect a map of paths that require special stats conversion.
-    let mut stats_conversions: Vec<(SchemaPath, SchemaDataType)> = Vec::new();
-    collect_stats_conversions(&mut stats_conversions, current_metadata.schema.get_fields());
+    let mut stats_conversions: Vec<(SchemaPath, DataType)> = Vec::new();
+    collect_stats_conversions(
+        &mut stats_conversions,
+        current_metadata.schema.fields().as_slice(),
+    );
 
     let mut tombstones = state.unexpired_tombstones().cloned().collect::<Vec<_>>();
 
@@ -226,14 +233,14 @@ fn parquet_bytes_from_state(
     }
 
     // protocol
-    let jsons = std::iter::once(Action::protocol(Protocol {
+    let jsons = std::iter::once(Action::Protocol(Protocol {
         min_reader_version: state.min_reader_version(),
         min_writer_version: state.min_writer_version(),
         writer_features: None,
         reader_features: None,
     }))
     // metaData
-    .chain(std::iter::once(Action::metaData(MetaData::try_from(
+    .chain(std::iter::once(Action::Metadata(Metadata::try_from(
         current_metadata.clone(),
     )?)))
     // txns
@@ -242,7 +249,7 @@ fn parquet_bytes_from_state(
             .app_transaction_version()
             .iter()
             .map(|(app_id, version)| {
-                Action::txn(Txn {
+                Action::Txn(Txn {
                     app_id: app_id.clone(),
                     version: *version,
                     last_updated: None,
@@ -259,7 +266,7 @@ fn parquet_bytes_from_state(
             r.extended_file_metadata = Some(false);
         }
 
-        Action::remove(r)
+        Action::Remove(r)
     }))
     .map(|a| serde_json::to_value(a).map_err(ProtocolError::from))
     // adds
@@ -269,7 +276,7 @@ fn parquet_bytes_from_state(
 
     // Create the arrow schema that represents the Checkpoint parquet file.
     let arrow_schema = delta_log_schema_for_table(
-        <ArrowSchema as TryFrom<&Schema>>::try_from(&current_metadata.schema)?,
+        <ArrowSchema as TryFrom<&StructType>>::try_from(&current_metadata.schema)?,
         current_metadata.partition_columns.as_slice(),
         use_extended_remove_schema,
     );
@@ -299,10 +306,10 @@ fn parquet_bytes_from_state(
 
 fn checkpoint_add_from_state(
     add: &AddAction,
-    partition_col_data_types: &[(&str, &SchemaDataType)],
-    stats_conversions: &[(SchemaPath, SchemaDataType)],
+    partition_col_data_types: &[(&String, &DataType)],
+    stats_conversions: &[(SchemaPath, DataType)],
 ) -> Result<Value, ProtocolError> {
-    let mut v = serde_json::to_value(Action::add(add.clone()))
+    let mut v = serde_json::to_value(Action::Add(add.clone()))
         .map_err(|err| ArrowError::JsonError(err.to_string()))?;
 
     v["add"]["dataChange"] = Value::Bool(false);
@@ -348,24 +355,27 @@ fn checkpoint_add_from_state(
 
 fn typed_partition_value_from_string(
     string_value: &str,
-    data_type: &SchemaDataType,
+    data_type: &DataType,
 ) -> Result<Value, ProtocolError> {
     match data_type {
-        SchemaDataType::primitive(primitive_type) => match primitive_type.as_str() {
-            "string" | "binary" => Ok(string_value.to_owned().into()),
-            "long" | "integer" | "short" | "byte" => Ok(string_value
+        DataType::Primitive(primitive_type) => match primitive_type {
+            PrimitiveType::String | PrimitiveType::Binary => Ok(string_value.to_owned().into()),
+            PrimitiveType::Long
+            | PrimitiveType::Integer
+            | PrimitiveType::Short
+            | PrimitiveType::Byte => Ok(string_value
                 .parse::<i64>()
                 .map_err(|_| CheckpointError::PartitionValueNotParseable(string_value.to_owned()))?
                 .into()),
-            "boolean" => Ok(string_value
+            PrimitiveType::Boolean => Ok(string_value
                 .parse::<bool>()
                 .map_err(|_| CheckpointError::PartitionValueNotParseable(string_value.to_owned()))?
                 .into()),
-            "float" | "double" => Ok(string_value
+            PrimitiveType::Float | PrimitiveType::Double => Ok(string_value
                 .parse::<f64>()
                 .map_err(|_| CheckpointError::PartitionValueNotParseable(string_value.to_owned()))?
                 .into()),
-            "date" => {
+            PrimitiveType::Date => {
                 let d = chrono::naive::NaiveDate::parse_from_str(string_value, "%Y-%m-%d")
                     .map_err(|_| {
                         CheckpointError::PartitionValueNotParseable(string_value.to_owned())
@@ -373,7 +383,7 @@ fn typed_partition_value_from_string(
                 // day 0 is 1970-01-01 (719163 days from ce)
                 Ok((d.num_days_from_ce() - 719_163).into())
             }
-            "timestamp" => {
+            PrimitiveType::Timestamp => {
                 let ts =
                     chrono::naive::NaiveDateTime::parse_from_str(string_value, "%Y-%m-%d %H:%M:%S")
                         .map_err(|_| {
@@ -395,7 +405,7 @@ fn typed_partition_value_from_string(
 
 fn typed_partition_value_from_option_string(
     string_value: &Option<String>,
-    data_type: &SchemaDataType,
+    data_type: &DataType,
 ) -> Result<Value, ProtocolError> {
     match string_value {
         Some(s) => {
@@ -409,10 +419,7 @@ fn typed_partition_value_from_option_string(
     }
 }
 
-fn collect_stats_conversions(
-    paths: &mut Vec<(SchemaPath, SchemaDataType)>,
-    fields: &[SchemaField],
-) {
+fn collect_stats_conversions(paths: &mut Vec<(SchemaPath, DataType)>, fields: &[StructField]) {
     let mut _path = SchemaPath::new();
     fields
         .iter()
@@ -421,20 +428,18 @@ fn collect_stats_conversions(
 
 fn collect_field_conversion(
     current_path: &mut SchemaPath,
-    all_paths: &mut Vec<(SchemaPath, SchemaDataType)>,
-    field: &SchemaField,
+    all_paths: &mut Vec<(SchemaPath, DataType)>,
+    field: &StructField,
 ) {
-    match field.get_type() {
-        SchemaDataType::primitive(type_name) => {
-            if let "timestamp" = type_name.as_str() {
-                let mut key_path = current_path.clone();
-                key_path.push(field.get_name().to_owned());
-                all_paths.push((key_path, field.get_type().to_owned()));
-            }
+    match field.data_type() {
+        DataType::Primitive(PrimitiveType::Timestamp) => {
+            let mut key_path = current_path.clone();
+            key_path.push(field.name().to_owned());
+            all_paths.push((key_path, field.data_type().to_owned()));
         }
-        SchemaDataType::r#struct(struct_field) => {
-            let struct_fields = struct_field.get_fields();
-            current_path.push(field.get_name().to_owned());
+        DataType::Struct(struct_field) => {
+            let struct_fields = struct_field.fields();
+            current_path.push(field.name().to_owned());
             struct_fields
                 .iter()
                 .for_each(|f| collect_field_conversion(current_path, all_paths, f));
@@ -447,11 +452,11 @@ fn collect_field_conversion(
 fn apply_stats_conversion(
     context: &mut serde_json::Map<String, Value>,
     path: &[String],
-    data_type: &SchemaDataType,
+    data_type: &DataType,
 ) {
     if path.len() == 1 {
         match data_type {
-            SchemaDataType::primitive(type_name) if type_name == "timestamp" => {
+            DataType::Primitive(PrimitiveType::Timestamp) => {
                 let v = context.get_mut(&path[0]);
 
                 if let Some(v) = v {
@@ -488,7 +493,7 @@ mod tests {
             string_value,
             typed_partition_value_from_option_string(
                 &Some("Hello World!".to_string()),
-                &SchemaDataType::primitive("string".to_string()),
+                &DataType::Primitive(PrimitiveType::String),
             )
             .unwrap()
         );
@@ -498,7 +503,7 @@ mod tests {
             bool_value,
             typed_partition_value_from_option_string(
                 &Some("true".to_string()),
-                &SchemaDataType::primitive("boolean".to_string()),
+                &DataType::Primitive(PrimitiveType::Boolean),
             )
             .unwrap()
         );
@@ -508,7 +513,7 @@ mod tests {
             number_value,
             typed_partition_value_from_option_string(
                 &Some("42".to_string()),
-                &SchemaDataType::primitive("integer".to_string()),
+                &DataType::Primitive(PrimitiveType::Integer),
             )
             .unwrap()
         );
@@ -525,7 +530,7 @@ mod tests {
                 date_value,
                 typed_partition_value_from_option_string(
                     &Some(s.to_string()),
-                    &SchemaDataType::primitive("date".to_string()),
+                    &DataType::Primitive(PrimitiveType::Date),
                 )
                 .unwrap()
             );
@@ -543,7 +548,7 @@ mod tests {
                 timestamp_value,
                 typed_partition_value_from_option_string(
                     &Some(s.to_string()),
-                    &SchemaDataType::primitive("timestamp".to_string()),
+                    &DataType::Primitive(PrimitiveType::Timestamp),
                 )
                 .unwrap()
             );
@@ -554,7 +559,7 @@ mod tests {
             binary_value,
             typed_partition_value_from_option_string(
                 &Some("₁₂₃₄".to_string()),
-                &SchemaDataType::primitive("binary".to_string()),
+                &DataType::Primitive(PrimitiveType::Binary),
             )
             .unwrap()
         );
@@ -566,7 +571,7 @@ mod tests {
             Value::Null,
             typed_partition_value_from_option_string(
                 &None,
-                &SchemaDataType::primitive("integer".to_string()),
+                &DataType::Primitive(PrimitiveType::Integer),
             )
             .unwrap()
         );
@@ -576,7 +581,7 @@ mod tests {
             Value::Null,
             typed_partition_value_from_option_string(
                 &Some("".to_string()),
-                &SchemaDataType::primitive("integer".to_string()),
+                &DataType::Primitive(PrimitiveType::Integer),
             )
             .unwrap()
         );
@@ -584,8 +589,8 @@ mod tests {
 
     #[test]
     fn collect_stats_conversions_test() {
-        let delta_schema: Schema = serde_json::from_value(SCHEMA.clone()).unwrap();
-        let fields = delta_schema.get_fields();
+        let delta_schema: StructType = serde_json::from_value(SCHEMA.clone()).unwrap();
+        let fields = delta_schema.fields();
         let mut paths = Vec::new();
 
         collect_stats_conversions(&mut paths, fields.as_slice());
@@ -594,14 +599,14 @@ mod tests {
         assert_eq!(
             (
                 vec!["some_struct".to_string(), "struct_timestamp".to_string()],
-                SchemaDataType::primitive("timestamp".to_string())
+                DataType::Primitive(PrimitiveType::Timestamp)
             ),
             paths[0]
         );
         assert_eq!(
             (
                 vec!["some_timestamp".to_string()],
-                SchemaDataType::primitive("timestamp".to_string())
+                DataType::Primitive(PrimitiveType::Timestamp)
             ),
             paths[1]
         );
@@ -616,22 +621,22 @@ mod tests {
         apply_stats_conversion(
             min_values,
             &["some_struct".to_string(), "struct_string".to_string()],
-            &SchemaDataType::primitive("string".to_string()),
+            &DataType::Primitive(PrimitiveType::String),
         );
         apply_stats_conversion(
             min_values,
             &["some_struct".to_string(), "struct_timestamp".to_string()],
-            &SchemaDataType::primitive("timestamp".to_string()),
+            &DataType::Primitive(PrimitiveType::Timestamp),
         );
         apply_stats_conversion(
             min_values,
             &["some_string".to_string()],
-            &SchemaDataType::primitive("string".to_string()),
+            &DataType::Primitive(PrimitiveType::String),
         );
         apply_stats_conversion(
             min_values,
             &["some_timestamp".to_string()],
-            &SchemaDataType::primitive("timestamp".to_string()),
+            &DataType::Primitive(PrimitiveType::Timestamp),
         );
 
         let max_values = stats.get_mut("maxValues").unwrap().as_object_mut().unwrap();
@@ -639,22 +644,22 @@ mod tests {
         apply_stats_conversion(
             max_values,
             &["some_struct".to_string(), "struct_string".to_string()],
-            &SchemaDataType::primitive("string".to_string()),
+            &DataType::Primitive(PrimitiveType::String),
         );
         apply_stats_conversion(
             max_values,
             &["some_struct".to_string(), "struct_timestamp".to_string()],
-            &SchemaDataType::primitive("timestamp".to_string()),
+            &DataType::Primitive(PrimitiveType::Timestamp),
         );
         apply_stats_conversion(
             max_values,
             &["some_string".to_string()],
-            &SchemaDataType::primitive("string".to_string()),
+            &DataType::Primitive(PrimitiveType::String),
         );
         apply_stats_conversion(
             max_values,
             &["some_timestamp".to_string()],
-            &SchemaDataType::primitive("timestamp".to_string()),
+            &DataType::Primitive(PrimitiveType::Timestamp),
         );
 
         // minValues
