@@ -30,7 +30,7 @@ use datafusion_proto::bytes::{
 };
 use url::Url;
 
-use deltalake_core::delta_datafusion::{DeltaPhysicalCodec, DeltaScan};
+use deltalake_core::delta_datafusion::{scan::DeltaScan, DeltaPhysicalCodec};
 use deltalake_core::kernel::{DataType, MapType, PrimitiveType, StructField, StructType};
 use deltalake_core::operations::create::CreateBuilder;
 use deltalake_core::protocol::SaveMode;

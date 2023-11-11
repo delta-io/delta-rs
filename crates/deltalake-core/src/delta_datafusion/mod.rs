@@ -21,12 +21,10 @@
 //! ```
 
 use std::any::Any;
-use std::collections::{HashMap, HashSet};
-use std::convert::TryFrom;
-use std::fmt::{self, Debug};
+use std::collections::HashMap;
+use std::fmt::Debug;
 use std::sync::Arc;
 
-use arrow::array::ArrayRef;
 use arrow::compute::{cast_with_options, CastOptions};
 use arrow::datatypes::DataType;
 use arrow::datatypes::{DataType as ArrowDataType, Schema as ArrowSchema, SchemaRef, TimeUnit};
@@ -36,28 +34,18 @@ use arrow_array::types::UInt16Type;
 use arrow_array::{DictionaryArray, StringArray};
 use arrow_schema::Field;
 use async_trait::async_trait;
-use chrono::{NaiveDateTime, TimeZone, Utc};
-use datafusion::datasource::file_format::{parquet::ParquetFormat, FileFormat};
-use datafusion::datasource::physical_plan::{
-    wrap_partition_type_in_dict, wrap_partition_value_in_dict, FileScanConfig,
-};
 use datafusion::datasource::provider::TableProviderFactory;
-use datafusion::datasource::{listing::PartitionedFile, MemTable, TableProvider, TableType};
+use datafusion::datasource::{MemTable, TableProvider, TableType};
 use datafusion::execution::context::{SessionContext, SessionState, TaskContext};
 use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::execution::FunctionRegistry;
 use datafusion::optimizer::utils::conjunction;
-use datafusion::physical_expr::PhysicalSortExpr;
-use datafusion::physical_optimizer::pruning::{PruningPredicate, PruningStatistics};
 use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::limit::LocalLimitExec;
-use datafusion::physical_plan::{
-    ColumnStatistics, DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning,
-    SendableRecordBatchStream, Statistics,
-};
+use datafusion::physical_plan::{ExecutionPlan, Statistics};
 use datafusion_common::scalar::ScalarValue;
 use datafusion_common::tree_node::{TreeNode, TreeNodeVisitor, VisitRecursion};
-use datafusion_common::{Column, DataFusionError, Result as DataFusionResult, ToDFSchema};
+use datafusion_common::{DataFusionError, Result as DataFusionResult, ToDFSchema};
 use datafusion_expr::expr::{ScalarFunction, ScalarUDF};
 use datafusion_expr::logical_plan::CreateExternalTable;
 use datafusion_expr::{col, Expr, Extension, LogicalPlan, TableProviderFilterPushDown, Volatility};
@@ -65,21 +53,23 @@ use datafusion_physical_expr::execution_props::ExecutionProps;
 use datafusion_physical_expr::{create_physical_expr, PhysicalExpr};
 use datafusion_proto::logical_plan::LogicalExtensionCodec;
 use datafusion_proto::physical_plan::PhysicalExtensionCodec;
-use object_store::ObjectMeta;
 use serde::{Deserialize, Serialize};
 use url::Url;
 
+pub(crate) use self::scan::DeltaScanBuilder;
+
+use self::scan::{DeltaScan, DeltaScanConfig, DeltaScanConfigBuilder};
 use crate::errors::{DeltaResult, DeltaTableError};
-use crate::kernel::{Add, DataType as DeltaDataType, Invariant, PrimitiveType};
+use crate::kernel::{Add, Invariant};
 use crate::logstore::LogStoreRef;
-use crate::protocol::{self};
-use crate::table::builder::ensure_table_uri;
 use crate::table::state::DeltaTableState;
 use crate::{open_table, open_table_with_storage_options, DeltaTable};
 
 const PATH_COLUMN: &str = "__delta_rs_path";
 
 pub mod expr;
+pub mod pruning;
+pub mod scan;
 
 impl From<DeltaTableError> for DataFusionError {
     fn from(err: DeltaTableError) -> Self {
@@ -102,256 +92,6 @@ impl From<DataFusionError> for DeltaTableError {
             DataFusionError::ParquetError(source) => DeltaTableError::Parquet { source },
             _ => DeltaTableError::Generic(err.to_string()),
         }
-    }
-}
-
-impl DeltaTableState {
-    /// Return statistics for Datafusion Table
-    pub fn datafusion_table_statistics(&self) -> Statistics {
-        let stats = self
-            .files()
-            .iter()
-            .try_fold(
-                Statistics {
-                    num_rows: Some(0),
-                    total_byte_size: Some(0),
-                    column_statistics: Some(vec![
-                        ColumnStatistics {
-                            null_count: Some(0),
-                            max_value: None,
-                            min_value: None,
-                            distinct_count: None
-                        };
-                        self.schema().unwrap().fields().len()
-                    ]),
-                    is_exact: true,
-                },
-                |acc, action| {
-                    let new_stats = action
-                        .get_stats()
-                        .unwrap_or_else(|_| Some(protocol::Stats::default()))?;
-                    Some(Statistics {
-                        num_rows: acc
-                            .num_rows
-                            .map(|rows| rows + new_stats.num_records as usize),
-                        total_byte_size: acc
-                            .total_byte_size
-                            .map(|total_size| total_size + action.size as usize),
-                        column_statistics: acc.column_statistics.map(|col_stats| {
-                            self.schema()
-                                .unwrap()
-                                .fields()
-                                .iter()
-                                .zip(col_stats)
-                                .map(|(field, stats)| {
-                                    let null_count = new_stats
-                                        .null_count
-                                        .get(field.name())
-                                        .and_then(|x| {
-                                            let null_count_acc = stats.null_count?;
-                                            let null_count = x.as_value()? as usize;
-                                            Some(null_count_acc + null_count)
-                                        })
-                                        .or(stats.null_count);
-
-                                    let max_value = new_stats
-                                        .max_values
-                                        .get(field.name())
-                                        .and_then(|x| {
-                                            let old_stats = stats.clone();
-                                            let max_value = to_scalar_value(x.as_value()?);
-
-                                            match (max_value, old_stats.max_value) {
-                                                (Some(max_value), Some(old_max_value)) => {
-                                                    if left_larger_than_right(
-                                                        old_max_value.clone(),
-                                                        max_value.clone(),
-                                                    )? {
-                                                        Some(old_max_value)
-                                                    } else {
-                                                        Some(max_value)
-                                                    }
-                                                }
-                                                (Some(max_value), None) => Some(max_value),
-                                                (None, old) => old,
-                                            }
-                                        })
-                                        .or_else(|| stats.max_value.clone());
-
-                                    let min_value = new_stats
-                                        .min_values
-                                        .get(field.name())
-                                        .and_then(|x| {
-                                            let old_stats = stats.clone();
-                                            let min_value = to_scalar_value(x.as_value()?);
-
-                                            match (min_value, old_stats.min_value) {
-                                                (Some(min_value), Some(old_min_value)) => {
-                                                    if left_larger_than_right(
-                                                        min_value.clone(),
-                                                        old_min_value.clone(),
-                                                    )? {
-                                                        Some(old_min_value)
-                                                    } else {
-                                                        Some(min_value)
-                                                    }
-                                                }
-                                                (Some(min_value), None) => Some(min_value),
-                                                (None, old) => old,
-                                            }
-                                        })
-                                        .or_else(|| stats.min_value.clone());
-
-                                    ColumnStatistics {
-                                        null_count,
-                                        max_value,
-                                        min_value,
-                                        distinct_count: None, // TODO: distinct
-                                    }
-                                })
-                                .collect()
-                        }),
-                        is_exact: true,
-                    })
-                },
-            )
-            .unwrap_or_default();
-
-        // Convert column max/min scalar values to correct types based on arrow types.
-        Statistics {
-            is_exact: true,
-            num_rows: stats.num_rows,
-            total_byte_size: stats.total_byte_size,
-            column_statistics: stats.column_statistics.map(|col_stats| {
-                let fields = self.schema().unwrap().fields();
-                col_stats
-                    .iter()
-                    .zip(fields)
-                    .map(|(col_states, field)| {
-                        let dt = self
-                            .arrow_schema()
-                            .unwrap()
-                            .field_with_name(field.name())
-                            .unwrap()
-                            .data_type()
-                            .clone();
-                        ColumnStatistics {
-                            null_count: col_states.null_count,
-                            max_value: col_states
-                                .max_value
-                                .as_ref()
-                                .and_then(|scalar| correct_scalar_value_type(scalar.clone(), &dt)),
-                            min_value: col_states
-                                .min_value
-                                .as_ref()
-                                .and_then(|scalar| correct_scalar_value_type(scalar.clone(), &dt)),
-                            distinct_count: col_states.distinct_count,
-                        }
-                    })
-                    .collect()
-            }),
-        }
-    }
-}
-
-// TODO: Collapse with operations/transaction/state.rs method of same name
-fn get_prune_stats(table: &DeltaTable, column: &Column, get_max: bool) -> Option<ArrayRef> {
-    let field = table
-        .get_schema()
-        .ok()
-        .map(|s| s.field_with_name(&column.name).ok())??;
-
-    // See issue 1214. Binary type does not support natural order which is required for Datafusion to prune
-    if let DeltaDataType::Primitive(PrimitiveType::Binary) = &field.data_type() {
-        return None;
-    }
-
-    let data_type = field.data_type().try_into().ok()?;
-    let partition_columns = &table.get_metadata().ok()?.partition_columns;
-
-    let values = table.get_state().files().iter().map(|add| {
-        if partition_columns.contains(&column.name) {
-            let value = add.partition_values.get(&column.name).unwrap();
-            let value = match value {
-                Some(v) => serde_json::Value::String(v.to_string()),
-                None => serde_json::Value::Null,
-            };
-            to_correct_scalar_value(&value, &data_type).unwrap_or(
-                get_null_of_arrow_type(&data_type).expect("Could not determine null type"),
-            )
-        } else if let Ok(Some(statistics)) = add.get_stats() {
-            let values = if get_max {
-                statistics.max_values
-            } else {
-                statistics.min_values
-            };
-
-            values
-                .get(&column.name)
-                .and_then(|f| to_correct_scalar_value(f.as_value()?, &data_type))
-                .unwrap_or(
-                    get_null_of_arrow_type(&data_type).expect("Could not determine null type"),
-                )
-        } else {
-            // No statistics available
-            get_null_of_arrow_type(&data_type).expect("Could not determine null type")
-        }
-    });
-    ScalarValue::iter_to_array(values).ok()
-}
-
-impl PruningStatistics for DeltaTable {
-    /// return the minimum values for the named column, if known.
-    /// Note: the returned array must contain `num_containers()` rows
-    fn min_values(&self, column: &Column) -> Option<ArrayRef> {
-        get_prune_stats(self, column, false)
-    }
-
-    /// return the maximum values for the named column, if known.
-    /// Note: the returned array must contain `num_containers()` rows.
-    fn max_values(&self, column: &Column) -> Option<ArrayRef> {
-        get_prune_stats(self, column, true)
-    }
-
-    /// return the number of containers (e.g. row groups) being
-    /// pruned with these statistics
-    fn num_containers(&self) -> usize {
-        self.get_state().files().len()
-    }
-
-    /// return the number of null values for the named column as an
-    /// `Option<UInt64Array>`.
-    ///
-    /// Note: the returned array must contain `num_containers()` rows.
-    fn null_counts(&self, column: &Column) -> Option<ArrayRef> {
-        let partition_columns = &self.get_metadata().ok()?.partition_columns;
-
-        let values = self.get_state().files().iter().map(|add| {
-            if let Ok(Some(statistics)) = add.get_stats() {
-                if partition_columns.contains(&column.name) {
-                    let value = add.partition_values.get(&column.name).unwrap();
-                    match value {
-                        Some(_) => ScalarValue::UInt64(Some(0)),
-                        None => ScalarValue::UInt64(Some(statistics.num_records as u64)),
-                    }
-                } else {
-                    statistics
-                        .null_count
-                        .get(&column.name)
-                        .map(|f| ScalarValue::UInt64(f.as_value().map(|val| val as u64)))
-                        .unwrap_or(ScalarValue::UInt64(None))
-                }
-            } else if partition_columns.contains(&column.name) {
-                let value = add.partition_values.get(&column.name).unwrap();
-                match value {
-                    Some(_) => ScalarValue::UInt64(Some(0)),
-                    None => ScalarValue::UInt64(None),
-                }
-            } else {
-                ScalarValue::UInt64(None)
-            }
-        });
-        ScalarValue::iter_to_array(values).ok()
     }
 }
 
@@ -382,277 +122,6 @@ pub(crate) fn logical_schema(
     }
 
     Ok(Arc::new(ArrowSchema::new(fields)))
-}
-
-#[derive(Debug, Clone, Default)]
-/// Used to specify if additional metadata columns are exposed to the user
-pub struct DeltaScanConfigBuilder {
-    /// Include the source path for each record. The name of this column is determine by `file_column_name`
-    include_file_column: bool,
-    /// Column name that contains the source path.
-    ///
-    /// If include_file_column is true and the name is None then it will be auto-generated
-    /// Otherwise the user provided name will be used
-    file_column_name: Option<String>,
-}
-
-impl DeltaScanConfigBuilder {
-    /// Construct a new instance of `DeltaScanConfigBuilder`
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Indicate that a column containing a records file path is included.
-    /// Column name is generated and can be determined once this Config is built
-    pub fn with_file_column(mut self, include: bool) -> Self {
-        self.include_file_column = include;
-        self.file_column_name = None;
-        self
-    }
-
-    /// Indicate that a column containing a records file path is included and column name is user defined.
-    pub fn with_file_column_name<S: ToString>(mut self, name: &S) -> Self {
-        self.file_column_name = Some(name.to_string());
-        self.include_file_column = true;
-        self
-    }
-
-    /// Build a DeltaScanConfig and ensure no column name conflicts occur during downstream processing
-    pub fn build(&self, snapshot: &DeltaTableState) -> DeltaResult<DeltaScanConfig> {
-        let input_schema = snapshot.input_schema()?;
-        let mut file_column_name = None;
-        let mut column_names: HashSet<&String> = HashSet::new();
-        for field in input_schema.fields.iter() {
-            column_names.insert(field.name());
-        }
-
-        if self.include_file_column {
-            match &self.file_column_name {
-                Some(name) => {
-                    if column_names.contains(name) {
-                        return Err(DeltaTableError::Generic(format!(
-                            "Unable to add file path column since column with name {} exits",
-                            name
-                        )));
-                    }
-
-                    file_column_name = Some(name.to_owned())
-                }
-                None => {
-                    let prefix = PATH_COLUMN;
-                    let mut idx = 0;
-                    let mut name = prefix.to_owned();
-
-                    while column_names.contains(&name) {
-                        idx += 1;
-                        name = format!("{}_{}", prefix, idx);
-                    }
-
-                    file_column_name = Some(name);
-                }
-            }
-        }
-
-        Ok(DeltaScanConfig { file_column_name })
-    }
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-/// Include additional metadata columns during a [`DeltaScan`]
-pub struct DeltaScanConfig {
-    /// Include the source path for each record
-    pub file_column_name: Option<String>,
-}
-
-#[derive(Debug)]
-pub(crate) struct DeltaScanBuilder<'a> {
-    snapshot: &'a DeltaTableState,
-    log_store: LogStoreRef,
-    filter: Option<Expr>,
-    state: &'a SessionState,
-    projection: Option<&'a Vec<usize>>,
-    limit: Option<usize>,
-    files: Option<&'a [Add]>,
-    config: DeltaScanConfig,
-    schema: Option<SchemaRef>,
-}
-
-impl<'a> DeltaScanBuilder<'a> {
-    pub fn new(
-        snapshot: &'a DeltaTableState,
-        log_store: LogStoreRef,
-        state: &'a SessionState,
-    ) -> Self {
-        DeltaScanBuilder {
-            snapshot,
-            log_store,
-            filter: None,
-            state,
-            files: None,
-            projection: None,
-            limit: None,
-            config: DeltaScanConfig::default(),
-            schema: None,
-        }
-    }
-
-    pub fn with_filter(mut self, filter: Option<Expr>) -> Self {
-        self.filter = filter;
-        self
-    }
-
-    pub fn with_files(mut self, files: &'a [Add]) -> Self {
-        self.files = Some(files);
-        self
-    }
-
-    pub fn with_projection(mut self, projection: Option<&'a Vec<usize>>) -> Self {
-        self.projection = projection;
-        self
-    }
-
-    pub fn with_limit(mut self, limit: Option<usize>) -> Self {
-        self.limit = limit;
-        self
-    }
-
-    pub fn with_scan_config(mut self, config: DeltaScanConfig) -> Self {
-        self.config = config;
-        self
-    }
-
-    pub fn with_schema(mut self, schema: SchemaRef) -> Self {
-        self.schema = Some(schema);
-        self
-    }
-
-    pub async fn build(self) -> DeltaResult<DeltaScan> {
-        let config = self.config;
-        let schema = match self.schema {
-            Some(schema) => schema,
-            None => {
-                self.snapshot
-                    .physical_arrow_schema(self.log_store.object_store())
-                    .await?
-            }
-        };
-        let logical_schema = logical_schema(self.snapshot, &config)?;
-
-        let logical_schema = if let Some(used_columns) = self.projection {
-            let mut fields = vec![];
-            for idx in used_columns {
-                fields.push(logical_schema.field(*idx).to_owned());
-            }
-            Arc::new(ArrowSchema::new(fields))
-        } else {
-            logical_schema
-        };
-
-        let logical_filter = self
-            .filter
-            .map(|expr| logical_expr_to_physical_expr(&expr, &logical_schema));
-
-        // Perform Pruning of files to scan
-        let files = match self.files {
-            Some(files) => files.to_owned(),
-            None => {
-                if let Some(predicate) = &logical_filter {
-                    let pruning_predicate =
-                        PruningPredicate::try_new(predicate.clone(), logical_schema.clone())?;
-                    let files_to_prune = pruning_predicate.prune(self.snapshot)?;
-                    self.snapshot
-                        .files()
-                        .iter()
-                        .zip(files_to_prune.into_iter())
-                        .filter_map(
-                            |(action, keep)| {
-                                if keep {
-                                    Some(action.to_owned())
-                                } else {
-                                    None
-                                }
-                            },
-                        )
-                        .collect()
-                } else {
-                    self.snapshot.files().to_owned()
-                }
-            }
-        };
-
-        // TODO we group files together by their partition values. If the table is partitioned
-        // and partitions are somewhat evenly distributed, probably not the worst choice ...
-        // However we may want to do some additional balancing in case we are far off from the above.
-        let mut file_groups: HashMap<Vec<ScalarValue>, Vec<PartitionedFile>> = HashMap::new();
-
-        let table_partition_cols = &self
-            .snapshot
-            .current_metadata()
-            .ok_or(DeltaTableError::NoMetadata)?
-            .partition_columns;
-
-        for action in files.iter() {
-            let mut part = partitioned_file_from_action(action, table_partition_cols, &schema);
-
-            if config.file_column_name.is_some() {
-                part.partition_values
-                    .push(wrap_partition_value_in_dict(ScalarValue::Utf8(Some(
-                        action.path.clone(),
-                    ))));
-            }
-
-            file_groups
-                .entry(part.partition_values.clone())
-                .or_default()
-                .push(part);
-        }
-
-        let file_schema = Arc::new(ArrowSchema::new(
-            schema
-                .fields()
-                .iter()
-                .filter(|f| !table_partition_cols.contains(f.name()))
-                .cloned()
-                .collect::<Vec<arrow::datatypes::FieldRef>>(),
-        ));
-
-        let mut table_partition_cols = table_partition_cols
-            .iter()
-            .map(|c| Ok((c.to_owned(), schema.field_with_name(c)?.data_type().clone())))
-            .collect::<Result<Vec<_>, ArrowError>>()?;
-
-        if let Some(file_column_name) = &config.file_column_name {
-            table_partition_cols.push((
-                file_column_name.clone(),
-                wrap_partition_type_in_dict(DataType::Utf8),
-            ));
-        }
-
-        let scan = ParquetFormat::new()
-            .create_physical_plan(
-                self.state,
-                FileScanConfig {
-                    object_store_url: self.log_store.object_store_url(),
-                    file_schema,
-                    file_groups: file_groups.into_values().collect(),
-                    statistics: self.snapshot.datafusion_table_statistics(),
-                    projection: self.projection.cloned(),
-                    limit: self.limit,
-                    table_partition_cols,
-                    output_ordering: vec![],
-                    infinite_source: false,
-                },
-                logical_filter.as_ref(),
-            )
-            .await?;
-
-        Ok(DeltaScan {
-            table_uri: ensure_table_uri(self.log_store.root_uri())?.as_str().into(),
-            parquet_scan: scan,
-            config,
-            logical_schema,
-        })
-    }
 }
 
 #[async_trait]
@@ -788,74 +257,6 @@ impl TableProvider for DeltaTableProvider {
     }
 }
 
-// TODO: this will likely also need to perform column mapping later when we support reader protocol v2
-/// A wrapper for parquet scans
-#[derive(Debug)]
-pub struct DeltaScan {
-    /// The URL of the ObjectStore root
-    pub table_uri: String,
-    /// Column that contains an index that maps to the original metadata Add
-    pub config: DeltaScanConfig,
-    /// The parquet scan to wrap
-    pub parquet_scan: Arc<dyn ExecutionPlan>,
-    /// The schema of the table to be used when evaluating expressions
-    pub logical_schema: Arc<ArrowSchema>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct DeltaScanWire {
-    pub table_uri: String,
-    pub config: DeltaScanConfig,
-    pub logical_schema: Arc<ArrowSchema>,
-}
-
-impl DisplayAs for DeltaScan {
-    fn fmt_as(&self, _t: DisplayFormatType, f: &mut fmt::Formatter) -> std::fmt::Result {
-        write!(f, "DeltaScan")
-    }
-}
-
-impl ExecutionPlan for DeltaScan {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn schema(&self) -> SchemaRef {
-        self.parquet_scan.schema()
-    }
-
-    fn output_partitioning(&self) -> Partitioning {
-        self.parquet_scan.output_partitioning()
-    }
-
-    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
-        self.parquet_scan.output_ordering()
-    }
-
-    fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
-        vec![self.parquet_scan.clone()]
-    }
-
-    fn with_new_children(
-        self: Arc<Self>,
-        children: Vec<Arc<dyn ExecutionPlan>>,
-    ) -> DataFusionResult<Arc<dyn ExecutionPlan>> {
-        ExecutionPlan::with_new_children(self.parquet_scan.clone(), children)
-    }
-
-    fn execute(
-        &self,
-        partition: usize,
-        context: Arc<TaskContext>,
-    ) -> DataFusionResult<SendableRecordBatchStream> {
-        self.parquet_scan.execute(partition, context)
-    }
-
-    fn statistics(&self) -> Statistics {
-        self.parquet_scan.statistics()
-    }
-}
-
 pub(crate) fn get_null_of_arrow_type(t: &ArrowDataType) -> DeltaResult<ScalarValue> {
     match t {
         ArrowDataType::Null => Ok(ScalarValue::Null),
@@ -914,50 +315,6 @@ pub(crate) fn get_null_of_arrow_type(t: &ArrowDataType) -> DeltaResult<ScalarVal
             "Unsupported data type for Delta Lake {}",
             t
         ))),
-    }
-}
-
-pub(crate) fn partitioned_file_from_action(
-    action: &Add,
-    partition_columns: &[String],
-    schema: &ArrowSchema,
-) -> PartitionedFile {
-    let partition_values = partition_columns
-        .iter()
-        .map(|part| {
-            action
-                .partition_values
-                .get(part)
-                .map(|val| {
-                    schema
-                        .field_with_name(part)
-                        .map(|field| match val {
-                            Some(value) => to_correct_scalar_value(
-                                &serde_json::Value::String(value.to_string()),
-                                field.data_type(),
-                            )
-                            .unwrap_or(ScalarValue::Null),
-                            None => get_null_of_arrow_type(field.data_type())
-                                .unwrap_or(ScalarValue::Null),
-                        })
-                        .unwrap_or(ScalarValue::Null)
-                })
-                .unwrap_or(ScalarValue::Null)
-        })
-        .collect::<Vec<_>>();
-
-    let ts_secs = action.modification_time / 1000;
-    let ts_ns = (action.modification_time % 1000) * 1_000_000;
-    let last_modified =
-        Utc.from_utc_datetime(&NaiveDateTime::from_timestamp_opt(ts_secs, ts_ns as u32).unwrap());
-    PartitionedFile {
-        object_meta: ObjectMeta {
-            last_modified,
-            ..action.try_into().unwrap()
-        },
-        partition_values,
-        range: None,
-        extensions: None,
     }
 }
 
@@ -1028,83 +385,6 @@ pub(crate) fn to_correct_scalar_value(
             }
             _ => Some(ScalarValue::try_from_string(other.to_string(), field_dt).ok()?),
         },
-    }
-}
-
-fn correct_scalar_value_type(value: ScalarValue, field_dt: &ArrowDataType) -> Option<ScalarValue> {
-    match field_dt {
-        ArrowDataType::Int64 => {
-            let raw_value = i64::try_from(value).ok()?;
-            Some(ScalarValue::from(raw_value))
-        }
-        ArrowDataType::Int32 => {
-            let raw_value = i64::try_from(value).ok()? as i32;
-            Some(ScalarValue::from(raw_value))
-        }
-        ArrowDataType::Int16 => {
-            let raw_value = i64::try_from(value).ok()? as i16;
-            Some(ScalarValue::from(raw_value))
-        }
-        ArrowDataType::Int8 => {
-            let raw_value = i64::try_from(value).ok()? as i8;
-            Some(ScalarValue::from(raw_value))
-        }
-        ArrowDataType::Float32 => {
-            let raw_value = f64::try_from(value).ok()? as f32;
-            Some(ScalarValue::from(raw_value))
-        }
-        ArrowDataType::Float64 => {
-            let raw_value = f64::try_from(value).ok()?;
-            Some(ScalarValue::from(raw_value))
-        }
-        ArrowDataType::Utf8 => match value {
-            ScalarValue::Utf8(val) => Some(ScalarValue::Utf8(val)),
-            _ => None,
-        },
-        ArrowDataType::LargeUtf8 => match value {
-            ScalarValue::Utf8(val) => Some(ScalarValue::LargeUtf8(val)),
-            _ => None,
-        },
-        ArrowDataType::Boolean => {
-            let raw_value = bool::try_from(value).ok()?;
-            Some(ScalarValue::from(raw_value))
-        }
-        ArrowDataType::Decimal128(_, _) => {
-            let raw_value = f64::try_from(value).ok()?;
-            Some(ScalarValue::from(raw_value))
-        }
-        ArrowDataType::Decimal256(_, _) => {
-            let raw_value = f64::try_from(value).ok()?;
-            Some(ScalarValue::from(raw_value))
-        }
-        ArrowDataType::Date32 => {
-            let raw_value = i64::try_from(value).ok()? as i32;
-            Some(ScalarValue::Date32(Some(raw_value)))
-        }
-        ArrowDataType::Date64 => {
-            let raw_value = i64::try_from(value).ok()?;
-            Some(ScalarValue::Date64(Some(raw_value)))
-        }
-        ArrowDataType::Timestamp(TimeUnit::Nanosecond, None) => {
-            let raw_value = i64::try_from(value).ok()?;
-            Some(ScalarValue::TimestampNanosecond(Some(raw_value), None))
-        }
-        ArrowDataType::Timestamp(TimeUnit::Microsecond, None) => {
-            let raw_value = i64::try_from(value).ok()?;
-            Some(ScalarValue::TimestampMicrosecond(Some(raw_value), None))
-        }
-        ArrowDataType::Timestamp(TimeUnit::Millisecond, None) => {
-            let raw_value = i64::try_from(value).ok()?;
-            Some(ScalarValue::TimestampMillisecond(Some(raw_value), None))
-        }
-        _ => {
-            log::error!(
-                "Scalar value of arrow type unimplemented for {:?} and {:?}",
-                value,
-                field_dt
-            );
-            None
-        }
     }
 }
 
@@ -1204,6 +484,13 @@ impl DeltaDataChecker {
             Ok(())
         }
     }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct DeltaScanWire {
+    pub table_uri: String,
+    pub config: DeltaScanConfig,
+    pub logical_schema: Arc<ArrowSchema>,
 }
 
 /// A codec for deltalake physical plans
@@ -1626,12 +913,10 @@ mod tests {
     use crate::writer::test_utils::get_delta_schema;
     use arrow::array::StructArray;
     use arrow::datatypes::{DataType, Field, Schema};
-    use chrono::{TimeZone, Utc};
     use datafusion::assert_batches_sorted_eq;
     use datafusion::physical_plan::empty::EmptyExec;
     use datafusion_proto::physical_plan::AsExecutionPlan;
     use datafusion_proto::protobuf;
-    use object_store::path::Path;
     use serde_json::json;
     use std::ops::Deref;
 
@@ -1779,46 +1064,6 @@ mod tests {
         for (left, right) in incorrect_reference_pairs {
             assert_eq!(left_larger_than_right(left, right), None);
         }
-    }
-
-    #[test]
-    fn test_partitioned_file_from_action() {
-        let mut partition_values = std::collections::HashMap::new();
-        partition_values.insert("month".to_string(), Some("1".to_string()));
-        partition_values.insert("year".to_string(), Some("2015".to_string()));
-        let action = Add {
-            path: "year=2015/month=1/part-00000-4dcb50d3-d017-450c-9df7-a7257dbd3c5d-c000.snappy.parquet".to_string(),
-            size: 10644,
-            partition_values,
-            modification_time: 1660497727833,
-            partition_values_parsed: None,
-            data_change: true,
-            stats: None,
-            deletion_vector: None,
-            stats_parsed: None,
-            tags: None,
-            base_row_id: None,
-            default_row_commit_version: None,
-        };
-        let schema = ArrowSchema::new(vec![
-            Field::new("year", ArrowDataType::Int64, true),
-            Field::new("month", ArrowDataType::Int64, true),
-        ]);
-
-        let part_columns = vec!["year".to_string(), "month".to_string()];
-        let file = partitioned_file_from_action(&action, &part_columns, &schema);
-        let ref_file = PartitionedFile {
-            object_meta: object_store::ObjectMeta {
-                location: Path::from("year=2015/month=1/part-00000-4dcb50d3-d017-450c-9df7-a7257dbd3c5d-c000.snappy.parquet".to_string()), 
-                last_modified: Utc.timestamp_millis_opt(1660497727833).unwrap(),
-                size: 10644,
-                e_tag: None
-            },
-            partition_values: [ScalarValue::Int64(Some(2015)), ScalarValue::Int64(Some(1))].to_vec(),
-            range: None,
-            extensions: None,
-        };
-        assert_eq!(file.partition_values, ref_file.partition_values)
     }
 
     #[tokio::test]

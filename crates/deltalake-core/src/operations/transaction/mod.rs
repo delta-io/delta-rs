@@ -77,6 +77,10 @@ pub enum TransactionError {
     /// Error returned when reader features are required but not specified
     #[error("Reader features must be specified for reader version >= 3")]
     ReaderFeaturesRequired,
+
+    /// Error returned when the transaction is not valid
+    #[error("Kernel Error: {0}")]
+    Kernel(#[from] crate::kernel::error::Error),
 }
 
 impl From<TransactionError> for DeltaTableError {

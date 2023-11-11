@@ -4,6 +4,7 @@ use lazy_static::lazy_static;
 use once_cell::sync::Lazy;
 
 use super::TransactionError;
+use crate::kernel::snapshot::Snapshot;
 use crate::kernel::{Action, ReaderFeatures, WriterFeatures};
 use crate::table::state::DeltaTableState;
 
@@ -69,12 +70,12 @@ impl ProtocolChecker {
     }
 
     /// Check if delta-rs can read form the given delta table.
-    pub fn can_read_from(&self, snapshot: &DeltaTableState) -> Result<(), TransactionError> {
-        let required_features: Option<&HashSet<ReaderFeatures>> =
-            match snapshot.min_reader_version() {
+    pub fn can_read_from(&self, snapshot: &dyn Snapshot) -> Result<(), TransactionError> {
+        let required_features: Option<HashSet<ReaderFeatures>> =
+            match snapshot.protocol()?.min_reader_version {
                 0 | 1 => None,
-                2 => Some(&READER_V2),
-                _ => snapshot.reader_features(),
+                2 => Some(READER_V2.clone()),
+                _ => snapshot.protocol()?.reader_features,
             };
         if let Some(features) = required_features {
             let mut diff = features.difference(&self.reader_features).peekable();
