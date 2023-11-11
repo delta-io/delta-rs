@@ -54,7 +54,9 @@ def _convert_pa_schema_to_delta(
         elif isinstance(dtype, pa.StructType):
             return struct_to_delta_dtype(dtype)
         elif isinstance(dtype, pa.TimestampType):
-            return pa.timestamp("us")
+            return pa.timestamp(
+                "us"
+            )  # TODO(ion): propagate also timezone information during writeonce we can properly read TZ in delta schema
         try:
             return dtype_map[dtype]
         except KeyError:

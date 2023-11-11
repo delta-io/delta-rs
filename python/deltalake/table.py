@@ -20,6 +20,7 @@ from typing import (
 )
 
 import pyarrow
+import pyarrow.dataset as ds
 import pyarrow.fs as pa_fs
 from pyarrow.dataset import (
     Expression,
@@ -600,6 +601,7 @@ class DeltaTable:
             pyarrow.Table,
             pyarrow.RecordBatch,
             pyarrow.RecordBatchReader,
+            ds.Dataset,
             "pandas.DataFrame",
         ],
         predicate: str,
@@ -625,6 +627,7 @@ class DeltaTable:
         checker = _DeltaDataChecker(invariants)
 
         from .schema import (
+            convert_pyarrow_dataset,
             convert_pyarrow_recordbatch,
             convert_pyarrow_recordbatchreader,
             convert_pyarrow_table,
@@ -640,6 +643,8 @@ class DeltaTable:
             )  # TODO(ion): set to True once MERGE uses logical plan
         elif isinstance(source, pyarrow.Table):
             source, schema = convert_pyarrow_table(source, large_dtypes=False)
+        elif isinstance(source, ds.Dataset):
+            source, schema = convert_pyarrow_dataset(source, large_dtypes=False)
         elif isinstance(source, pandas.DataFrame):
             source, schema = convert_pyarrow_table(
                 pyarrow.Table.from_pandas(source), large_dtypes=False
