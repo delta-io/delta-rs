@@ -28,14 +28,19 @@ use crate::table::config::TableConfig;
 pub trait Snapshot: std::fmt::Display + Send + Sync + std::fmt::Debug + 'static {
     /// The version of the table at this [`Snapshot`].
     fn version(&self) -> i64;
+
     /// Table [`Schema`](crate::kernel::schema::StructType) at this [`Snapshot`]'s version.
-    fn schema(&self) -> DeltaResult<StructType>;
+    fn schema(&self) -> Option<&StructType>;
+
     /// Table [`Metadata`] at this [`Snapshot`]'s version.
     fn metadata(&self) -> DeltaResult<Metadata>;
+
     /// Table [`Protocol`] at this [`Snapshot`]'s version.
     fn protocol(&self) -> DeltaResult<Protocol>;
+
     /// Iterator over the [`Add`] actions at this [`Snapshot`]'s version.
     fn files(&self) -> DeltaResult<Box<dyn Iterator<Item = Add> + '_>>;
+
     /// Well known table [configuration](crate::table::config::TableConfig).
     fn table_config(&self) -> TableConfig<'_>;
 }
@@ -49,6 +54,7 @@ pub struct TableStateArrow {
     version: i64,
     actions: RecordBatch,
     metadata: Metadata,
+    schema: StructType,
     protocol: Protocol,
 }
 
@@ -69,11 +75,13 @@ impl TableStateArrow {
                 _ => None,
             })
             .ok_or(Error::Generic("expected protocol".into()))?;
+        let schema = serde_json::from_str(&metadata.schema_string)?;
         Ok(Self {
             version,
             actions,
             metadata,
             protocol,
+            schema,
         })
     }
 
@@ -106,8 +114,8 @@ impl Snapshot for TableStateArrow {
     }
 
     /// Table [`Schema`](crate::kernel::schema::StructType) at this [`Snapshot`]'s version.
-    fn schema(&self) -> DeltaResult<StructType> {
-        self.metadata()?.schema()
+    fn schema(&self) -> Option<&StructType> {
+        Some(&self.schema)
     }
 
     /// Table [`Protocol`] at this [`Snapshot`]'s version.
@@ -520,7 +528,7 @@ mod tests {
         let schema_string = r#"{"type":"struct","fields":[{"name":"value","type":"integer","nullable":true,"metadata":{}}]}"#;
         let expected: StructType = serde_json::from_str(schema_string).unwrap();
         let schema = snapshot.schema().unwrap();
-        assert_eq!(schema, expected);
+        assert_eq!(schema, &expected);
     }
 
     #[tokio::test]

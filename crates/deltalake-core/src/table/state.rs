@@ -12,6 +12,8 @@ use serde::{Deserialize, Serialize};
 
 use super::config::TableConfig;
 use crate::errors::DeltaTableError;
+use crate::kernel::arrow::snapshot::Snapshot;
+use crate::kernel::error::DeltaResult;
 use crate::kernel::{
     Action, Add, CommitInfo, DataType, DomainMetadata, ReaderFeatures, Remove, StructType,
     WriterFeatures,
@@ -52,6 +54,75 @@ pub struct DeltaTableState {
     // retention period for log entries in milli-seconds
     log_retention_millis: i64,
     enable_expired_log_cleanup: bool,
+}
+
+impl std::fmt::Display for DeltaTableState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:?}", self.schema())
+    }
+}
+
+impl Snapshot for DeltaTableState {
+    fn version(&self) -> i64 {
+        self.version
+    }
+
+    fn schema(&self) -> Option<&StructType> {
+        self.schema()
+    }
+
+    fn files(&self) -> DeltaResult<Box<dyn Iterator<Item = Add> + '_>> {
+        Ok(Box::new(self.files().clone().into_iter()))
+    }
+
+    fn table_config(&self) -> TableConfig<'_> {
+        self.table_config()
+    }
+
+    fn protocol(&self) -> DeltaResult<crate::kernel::Protocol> {
+        Ok(crate::kernel::Protocol {
+            min_reader_version: self.min_reader_version,
+            min_writer_version: self.min_writer_version,
+            reader_features: self.reader_features.clone(),
+            writer_features: self.writer_features.clone(),
+        })
+    }
+
+    fn metadata(&self) -> DeltaResult<crate::kernel::Metadata> {
+        Ok(crate::kernel::Metadata {
+            id: self
+                .current_metadata
+                .as_ref()
+                .map(|m| m.id.clone())
+                .unwrap_or("00000000-0000-0000-0000-000000000000".into()),
+            name: self.current_metadata.as_ref().and_then(|m| m.name.clone()),
+            description: self
+                .current_metadata
+                .as_ref()
+                .and_then(|m| m.description.clone()),
+            format: self
+                .current_metadata
+                .as_ref()
+                .map(|m| m.format.clone())
+                .unwrap_or_default(),
+            schema_string: self
+                .current_metadata
+                .as_ref()
+                .map(|m| serde_json::to_string(&m.schema).unwrap())
+                .unwrap_or_default(),
+            partition_columns: self
+                .current_metadata
+                .as_ref()
+                .map(|m| m.partition_columns.clone())
+                .unwrap_or_default(),
+            configuration: self
+                .current_metadata
+                .as_ref()
+                .map(|m| m.configuration.clone())
+                .unwrap_or_default(),
+            created_time: self.current_metadata.as_ref().and_then(|m| m.created_time),
+        })
+    }
 }
 
 impl DeltaTableState {
