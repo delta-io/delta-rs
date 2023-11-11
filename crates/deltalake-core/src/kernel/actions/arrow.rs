@@ -12,6 +12,9 @@ pub mod checkpoint;
 pub mod schemas;
 pub mod snapshot;
 
+const MAP_KEYS_NAME: &str = "keys";
+const MAP_VALUES_NAME: &str = "values";
+
 impl TryFrom<&StructType> for ArrowSchema {
     type Error = ArrowError;
 
@@ -68,9 +71,9 @@ impl TryFrom<&MapType> for ArrowField {
             "entries",
             ArrowDataType::Struct(
                 vec![
-                    ArrowField::new("key", ArrowDataType::try_from(a.key_type())?, false),
+                    ArrowField::new(MAP_KEYS_NAME, ArrowDataType::try_from(a.key_type())?, false),
                     ArrowField::new(
-                        "value",
+                        MAP_VALUES_NAME,
                         ArrowDataType::try_from(a.value_type())?,
                         a.value_contains_null(),
                     ),
@@ -127,7 +130,10 @@ impl TryFrom<&DataType> for ArrowDataType {
                     }
                     PrimitiveType::Timestamp => {
                         // Issue: https://github.com/delta-io/delta/issues/643
-                        Ok(ArrowDataType::Timestamp(TimeUnit::Microsecond, None))
+                        Ok(ArrowDataType::Timestamp(
+                            TimeUnit::Microsecond,
+                            Some("UTC".into()),
+                        ))
                     }
                 }
             }
@@ -147,12 +153,12 @@ impl TryFrom<&DataType> for ArrowDataType {
                     ArrowDataType::Struct(
                         vec![
                             ArrowField::new(
-                                "keys",
+                                MAP_KEYS_NAME,
                                 <ArrowDataType as TryFrom<&DataType>>::try_from(m.key_type())?,
                                 false,
                             ),
                             ArrowField::new(
-                                "values",
+                                MAP_VALUES_NAME,
                                 <ArrowDataType as TryFrom<&DataType>>::try_from(m.value_type())?,
                                 m.value_contains_null(),
                             ),
@@ -784,7 +790,7 @@ mod tests {
         let timestamp_field = DataType::Primitive(PrimitiveType::Timestamp);
         assert_eq!(
             <ArrowDataType as TryFrom<&DataType>>::try_from(&timestamp_field).unwrap(),
-            ArrowDataType::Timestamp(TimeUnit::Microsecond, None)
+            ArrowDataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into()))
         );
     }
 

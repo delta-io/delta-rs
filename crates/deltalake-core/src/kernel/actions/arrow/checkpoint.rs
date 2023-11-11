@@ -6,7 +6,7 @@ use std::str::FromStr;
 
 use arrow_array::{
     BooleanArray, Int32Array, Int64Array, ListArray, MapArray, RecordBatch, StringArray,
-    StructArray,
+    StructArray, TimestampMicrosecondArray,
 };
 use arrow_json::ReaderBuilder;
 use arrow_schema::SchemaRef as ArrowSchemaRef;
@@ -247,7 +247,8 @@ fn parse_action_protocol(arr: &StructArray) -> DeltaResult<Box<dyn Iterator<Item
 fn parse_actions_add(arr: &StructArray) -> DeltaResult<Box<dyn Iterator<Item = Action> + '_>> {
     let paths = cast_struct_column::<StringArray>(arr, "path")?;
     let sizes = cast_struct_column::<Int64Array>(arr, "size")?;
-    let modification_times = cast_struct_column::<Int64Array>(arr, "modificationTime")?;
+    let modification_times =
+        cast_struct_column::<TimestampMicrosecondArray>(arr, "modificationTime")?;
     let data_changes = cast_struct_column::<BooleanArray>(arr, "dataChange")?;
     let partition_values = cast_struct_column::<MapArray>(arr, "partitionValues")?
         .iter()
@@ -348,7 +349,7 @@ fn parse_actions_remove(arr: &StructArray) -> DeltaResult<Box<dyn Iterator<Item 
     let data_changes = cast_struct_column::<BooleanArray>(arr, "dataChange")?;
 
     let deletion_timestamps =
-        if let Ok(ts) = cast_struct_column::<Int64Array>(arr, "deletionTimestamp") {
+        if let Ok(ts) = cast_struct_column::<TimestampMicrosecondArray>(arr, "deletionTimestamp") {
             Either::Left(ts.into_iter())
         } else {
             Either::Right(std::iter::repeat(None).take(data_changes.len()))
@@ -515,8 +516,13 @@ fn cast_struct_column<T: 'static>(arr: &StructArray, name: impl AsRef<str>) -> D
 }
 
 fn struct_array_to_map(arr: &StructArray) -> DeltaResult<HashMap<String, Option<String>>> {
-    let keys = cast_struct_column::<StringArray>(arr, "key")?;
-    let values = cast_struct_column::<StringArray>(arr, "value")?;
+    if arr.fields().len() != 2 {
+        return Err(Error::UnexpectedColumnType(
+            "Error parsing map: expected struct array with 2 fields".into(),
+        ));
+    }
+    let keys = cast_struct_column::<StringArray>(arr, arr.fields()[0].name())?;
+    let values = cast_struct_column::<StringArray>(arr, arr.fields()[1].name())?;
     Ok(keys
         .into_iter()
         .zip(values)
@@ -558,6 +564,7 @@ mod tests {
         });
         assert_eq!(action[0], expected)
     }
+
     #[test]
     fn test_parse_metadata() {
         let batch = action_batch();

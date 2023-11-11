@@ -24,7 +24,7 @@ lazy_static! {
                             DataType::string(),
                             true,
                         ))),
-                        false,
+                        true,
                     ),
                 ]))),
                 false,
@@ -71,7 +71,7 @@ lazy_static! {
     static ref COMMIT_INFO_FIELD: StructField = StructField::new(
         "commitInfo",
         DataType::Struct(Box::new(StructType::new(vec![
-            StructField::new("timestamp", DataType::long(), false),
+            StructField::new("timestamp", DataType::timestamp(), false),
             StructField::new("operation", DataType::string(), false),
             StructField::new("isolationLevel", DataType::string(), true),
             StructField::new("isBlindAppend", DataType::boolean(), true),
@@ -103,39 +103,13 @@ lazy_static! {
         "add",
         DataType::Struct(Box::new(StructType::new(vec![
             StructField::new("path", DataType::string(), false),
-            StructField::new(
-                "partitionValues",
-                DataType::Map(Box::new(MapType::new(
-                    DataType::string(),
-                    DataType::string(),
-                    true,
-                ))),
-                false,
-            ),
+            partition_values_field(),
             StructField::new("size", DataType::long(), false),
             StructField::new("modificationTime", DataType::timestamp(), false),
             StructField::new("dataChange", DataType::boolean(), false),
             StructField::new("stats", DataType::string(), true),
-            StructField::new(
-                "tags",
-                DataType::Map(Box::new(MapType::new(
-                    DataType::string(),
-                    DataType::string(),
-                    true,
-                ))),
-                true,
-            ),
-            StructField::new(
-                "deletionVector",
-                DataType::Struct(Box::new(StructType::new(vec![
-                    StructField::new("storageType", DataType::string(), false),
-                    StructField::new("pathOrInlineDv", DataType::string(), false),
-                    StructField::new("offset", DataType::integer(), true),
-                    StructField::new("sizeInBytes", DataType::integer(), false),
-                    StructField::new("cardinality", DataType::long(), false),
-                ]))),
-                true,
-            ),
+            tags_field(),
+            deletion_vector_field(),
             StructField::new("baseRowId", DataType::long(), true),
             StructField::new("defaultRowCommitVersion", DataType::long(), true),
         ]))),
@@ -149,25 +123,22 @@ lazy_static! {
             StructField::new("deletionTimestamp", DataType::timestamp(), true),
             StructField::new("dataChange", DataType::boolean(), false),
             StructField::new("extendedFileMetadata", DataType::boolean(), true),
+            partition_values_field(),
             StructField::new("size", DataType::long(), true),
-            StructField::new(
-                "partitionValues",
-                DataType::Map(Box::new(MapType::new(
-                    DataType::string(),
-                    DataType::string(),
-                    true,
-                ))),
-                true,
-            ),
-            StructField::new(
-                "tags",
-                DataType::Map(Box::new(MapType::new(
-                    DataType::string(),
-                    DataType::string(),
-                    true,
-                ))),
-                true,
-            ),
+            StructField::new("stats", DataType::string(), true),
+            tags_field(),
+            deletion_vector_field(),
+            StructField::new("baseRowId", DataType::long(), true),
+            StructField::new("defaultRowCommitVersion", DataType::long(), true),
+        ]))),
+        true,
+    );
+    static ref REMOVE_FIELD_CHECKPOINT: StructField = StructField::new(
+        "remove",
+        DataType::Struct(Box::new(StructType::new(vec![
+            StructField::new("path", DataType::string(), false),
+            StructField::new("deletionTimestamp", DataType::timestamp(), true),
+            StructField::new("dataChange", DataType::boolean(), false),
         ]))),
         true,
     );
@@ -176,26 +147,10 @@ lazy_static! {
         "cdc",
         DataType::Struct(Box::new(StructType::new(vec![
             StructField::new("path", DataType::string(), false),
-            StructField::new(
-                "partitionValues",
-                DataType::Map(Box::new(MapType::new(
-                    DataType::string(),
-                    DataType::string(),
-                    true,
-                ))),
-                false,
-            ),
+            partition_values_field(),
             StructField::new("size", DataType::long(), false),
             StructField::new("dataChange", DataType::boolean(), false),
-            StructField::new(
-                "tags",
-                DataType::Map(Box::new(MapType::new(
-                    DataType::string(),
-                    DataType::string(),
-                    true,
-                ))),
-                true,
-            ),
+            tags_field(),
         ]))),
         true,
     );
@@ -227,6 +182,65 @@ lazy_static! {
         ]))),
         true,
     );
+    // https://github.com/delta-io/delta/blob/master/PROTOCOL.md#checkpoint-metadata
+    static ref CHECKPOINT_METADATA_FIELD: StructField = StructField::new(
+        "checkpointMetadata",
+        DataType::Struct(Box::new(StructType::new(vec![
+            StructField::new("flavor", DataType::string(), false),
+            tags_field(),
+        ]))),
+        true,
+    );
+    // https://github.com/delta-io/delta/blob/master/PROTOCOL.md#sidecar-file-information
+    static ref SIDECAR_FIELD: StructField = StructField::new(
+        "sidecar",
+        DataType::Struct(Box::new(StructType::new(vec![
+            StructField::new("path", DataType::string(), false),
+            StructField::new("sizeInBytes", DataType::long(), false),
+            StructField::new("modificationTime", DataType::timestamp(), false),
+            StructField::new("type", DataType::string(), false),
+            tags_field(),
+        ]))),
+        true,
+    );
+}
+
+fn tags_field() -> StructField {
+    StructField::new(
+        "tags",
+        DataType::Map(Box::new(MapType::new(
+            DataType::string(),
+            DataType::string(),
+            true,
+        ))),
+        true,
+    )
+}
+
+fn partition_values_field() -> StructField {
+    StructField::new(
+        "partitionValues",
+        DataType::Map(Box::new(MapType::new(
+            DataType::string(),
+            DataType::string(),
+            true,
+        ))),
+        false,
+    )
+}
+
+fn deletion_vector_field() -> StructField {
+    StructField::new(
+        "deletionVector",
+        DataType::Struct(Box::new(StructType::new(vec![
+            StructField::new("storageType", DataType::string(), false),
+            StructField::new("pathOrInlineDv", DataType::string(), false),
+            StructField::new("offset", DataType::integer(), true),
+            StructField::new("sizeInBytes", DataType::integer(), false),
+            StructField::new("cardinality", DataType::long(), false),
+        ]))),
+        true,
+    )
 }
 
 impl ActionType {
@@ -241,6 +255,8 @@ impl ActionType {
             Self::Cdc => &CDC_FIELD,
             Self::Txn => &TXN_FIELD,
             Self::DomainMetadata => &DOMAIN_METADATA_FIELD,
+            Self::CheckpointMetadata => &CHECKPOINT_METADATA_FIELD,
+            Self::Sidecar => &SIDECAR_FIELD,
         }
     }
 }

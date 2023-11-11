@@ -787,11 +787,11 @@ pub struct DomainMetadata {
 /// This action is only allowed in checkpoints following V2 spec. It describes the details about the checkpoint.
 pub struct CheckpointMetadata {
     /// The flavor of the V2 checkpoint. Allowed values: "flat".
-    flavor: String,
+    pub flavor: String,
 
     /// Map containing any additional metadata about the v2 spec checkpoint.
     #[serde(skip_serializing_if = "Option::is_none")]
-    tags: Option<HashMap<String, Option<String>>>,
+    pub tags: Option<HashMap<String, Option<String>>>,
 }
 
 /// The sidecar action references a sidecar file which provides some of the checkpoint's file actions.
@@ -816,7 +816,7 @@ pub struct Sidecar {
 
     /// Map containing any additional metadata about the checkpoint sidecar file.
     #[serde(skip_serializing_if = "Option::is_none")]
-    tags: Option<HashMap<String, Option<String>>>,
+    pub tags: Option<HashMap<String, Option<String>>>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]

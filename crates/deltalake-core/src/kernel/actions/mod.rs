@@ -34,6 +34,10 @@ pub enum ActionType {
     Remove,
     /// Transactional information
     Txn,
+    /// Checkpoint metadata
+    CheckpointMetadata,
+    /// Sidecar
+    Sidecar,
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Deserialize, Serialize)]

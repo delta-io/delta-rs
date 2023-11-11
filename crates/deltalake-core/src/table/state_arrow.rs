@@ -708,7 +708,23 @@ fn json_value_to_array_general<'a>(
                 .map(|value| value.and_then(|value| value.as_str().map(|value| value.as_bytes())))
                 .collect_vec(),
         ))),
+        // TODO should this actually be the type for timestamp without timezone?
         DataType::Timestamp(TimeUnit::Microsecond, None) => {
+            Ok(Arc::new(TimestampMicrosecondArray::from(
+                values
+                    .map(|value| {
+                        value.and_then(|value| {
+                            value.as_str().and_then(TimestampMicrosecondType::parse)
+                        })
+                    })
+                    .collect_vec(),
+            )))
+        }
+        DataType::Timestamp(TimeUnit::Microsecond, Some(tz))
+            if tz.eq_ignore_ascii_case("utc")
+                || tz.eq_ignore_ascii_case("+00:00")
+                || tz.eq_ignore_ascii_case("-00:00") =>
+        {
             Ok(Arc::new(TimestampMicrosecondArray::from(
                 values
                     .map(|value| {
