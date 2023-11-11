@@ -88,9 +88,10 @@ ignore = ["E501"]
 known-first-party = ["deltalake"]
 
 [tool.pytest.ini_options]
-addopts = "--cov=deltalake -v -m 'not integration and not benchmark'"
+addopts = "--cov=deltalake -v -m 'not integration and not benchmark' --doctest-modules --doctest-glob='*.rst'"
 testpaths = [
     "tests",
+    "docs",
 ]
 markers = [
     "integration: marks tests as integration tests (deselect with '-m \"not integration\"')",

@@ -12,6 +12,7 @@
 #
 import os
 import sys
+import pathlib
 
 import toml
 
@@ -24,7 +25,8 @@ def get_release_version() -> str:
 
     :return:
     """
-    cargo_content = toml.load("../../Cargo.toml")
+    cargo_path = pathlib.Path(__file__).parent.parent.parent / "Cargo.toml"
+    cargo_content = toml.load(str(cargo_path))
     return cargo_content["package"]["version"]
 
 
