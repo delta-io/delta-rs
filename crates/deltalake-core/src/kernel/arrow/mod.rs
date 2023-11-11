@@ -789,7 +789,7 @@ mod tests {
         let timestamp_field = DataType::Primitive(PrimitiveType::Timestamp);
         assert_eq!(
             <ArrowDataType as TryFrom<&DataType>>::try_from(&timestamp_field).unwrap(),
-            ArrowDataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into()))
+            ArrowDataType::Timestamp(TimeUnit::Microsecond, None)
         );
     }
 
