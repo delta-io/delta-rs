@@ -1,24 +1,20 @@
 use std::sync::Arc;
 
-use arrow::array::ArrayRef;
-use arrow::datatypes::{
+use arrow_schema::{
     DataType, Field as ArrowField, Schema as ArrowSchema, SchemaRef as ArrowSchemaRef,
 };
 use datafusion::datasource::physical_plan::wrap_partition_type_in_dict;
 use datafusion::execution::context::SessionState;
 use datafusion::optimizer::utils::conjunction;
-use datafusion::physical_optimizer::pruning::{PruningPredicate, PruningStatistics};
-use datafusion_common::scalar::ScalarValue;
-use datafusion_common::{Column, DFSchema};
+use datafusion::physical_optimizer::pruning::PruningPredicate;
+use datafusion_common::DFSchema;
 use datafusion_expr::Expr;
 use itertools::Either;
 use object_store::ObjectStore;
 use parquet::arrow::async_reader::{ParquetObjectReader, ParquetRecordBatchStreamBuilder};
 
 use crate::delta_datafusion::expr::parse_predicate_expression;
-use crate::delta_datafusion::{
-    get_null_of_arrow_type, logical_expr_to_physical_expr, to_correct_scalar_value,
-};
+use crate::delta_datafusion::logical_expr_to_physical_expr;
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::Add;
 use crate::table::state::DeltaTableState;
@@ -148,180 +144,6 @@ impl DeltaTableState {
         } else {
             self.arrow_schema()
         }
-    }
-}
-
-pub struct AddContainer<'a> {
-    inner: &'a Vec<Add>,
-    partition_columns: &'a Vec<String>,
-    schema: ArrowSchemaRef,
-}
-
-impl<'a> AddContainer<'a> {
-    /// Create a new instance of [`AddContainer`]
-    pub fn new(
-        adds: &'a Vec<Add>,
-        partition_columns: &'a Vec<String>,
-        schema: ArrowSchemaRef,
-    ) -> Self {
-        Self {
-            inner: adds,
-            partition_columns,
-            schema,
-        }
-    }
-
-    pub fn get_prune_stats(&self, column: &Column, get_max: bool) -> Option<ArrayRef> {
-        let (_, field) = self.schema.column_with_name(&column.name)?;
-
-        // See issue 1214. Binary type does not support natural order which is required for Datafusion to prune
-        if field.data_type() == &DataType::Binary {
-            return None;
-        }
-
-        let data_type = field.data_type();
-
-        let values = self.inner.iter().map(|add| {
-            if self.partition_columns.contains(&column.name) {
-                let value = add.partition_values.get(&column.name).unwrap();
-                let value = match value {
-                    Some(v) => serde_json::Value::String(v.to_string()),
-                    None => serde_json::Value::Null,
-                };
-                to_correct_scalar_value(&value, data_type).unwrap_or(
-                    get_null_of_arrow_type(data_type).expect("Could not determine null type"),
-                )
-            } else if let Ok(Some(statistics)) = add.get_stats() {
-                let values = if get_max {
-                    statistics.max_values
-                } else {
-                    statistics.min_values
-                };
-
-                values
-                    .get(&column.name)
-                    .and_then(|f| to_correct_scalar_value(f.as_value()?, data_type))
-                    .unwrap_or(
-                        get_null_of_arrow_type(data_type).expect("Could not determine null type"),
-                    )
-            } else {
-                get_null_of_arrow_type(data_type).expect("Could not determine null type")
-            }
-        });
-        ScalarValue::iter_to_array(values).ok()
-    }
-
-    /// Get an iterator of add actions / files, that MAY contain data matching the predicate.
-    ///
-    /// Expressions are evaluated for file statistics, essentially column-wise min max bounds,
-    /// so evaluating expressions is inexact. However, excluded files are guaranteed (for a correct log)
-    /// to not contain matches by the predicate expression.
-    pub fn predicate_matches(&self, predicate: Expr) -> DeltaResult<impl Iterator<Item = &Add>> {
-        let expr = logical_expr_to_physical_expr(&predicate, &self.schema);
-        let pruning_predicate = PruningPredicate::try_new(expr, self.schema.clone())?;
-        Ok(self
-            .inner
-            .iter()
-            .zip(pruning_predicate.prune(self)?)
-            .filter_map(
-                |(action, keep_file)| {
-                    if keep_file {
-                        Some(action)
-                    } else {
-                        None
-                    }
-                },
-            ))
-    }
-}
-
-impl<'a> PruningStatistics for AddContainer<'a> {
-    /// return the minimum values for the named column, if known.
-    /// Note: the returned array must contain `num_containers()` rows
-    fn min_values(&self, column: &Column) -> Option<ArrayRef> {
-        self.get_prune_stats(column, false)
-    }
-
-    /// return the maximum values for the named column, if known.
-    /// Note: the returned array must contain `num_containers()` rows.
-    fn max_values(&self, column: &Column) -> Option<ArrayRef> {
-        self.get_prune_stats(column, true)
-    }
-
-    /// return the number of containers (e.g. row groups) being
-    /// pruned with these statistics
-    fn num_containers(&self) -> usize {
-        self.inner.len()
-    }
-
-    /// return the number of null values for the named column as an
-    /// `Option<UInt64Array>`.
-    ///
-    /// Note: the returned array must contain `num_containers()` rows.
-    fn null_counts(&self, column: &Column) -> Option<ArrayRef> {
-        let values = self.inner.iter().map(|add| {
-            if let Ok(Some(statistics)) = add.get_stats() {
-                if self.partition_columns.contains(&column.name) {
-                    let value = add.partition_values.get(&column.name).unwrap();
-                    match value {
-                        Some(_) => ScalarValue::UInt64(Some(0)),
-                        None => ScalarValue::UInt64(Some(statistics.num_records as u64)),
-                    }
-                } else {
-                    statistics
-                        .null_count
-                        .get(&column.name)
-                        .map(|f| ScalarValue::UInt64(f.as_value().map(|val| val as u64)))
-                        .unwrap_or(ScalarValue::UInt64(None))
-                }
-            } else if self.partition_columns.contains(&column.name) {
-                let value = add.partition_values.get(&column.name).unwrap();
-                match value {
-                    Some(_) => ScalarValue::UInt64(Some(0)),
-                    None => ScalarValue::UInt64(None),
-                }
-            } else {
-                ScalarValue::UInt64(None)
-            }
-        });
-        ScalarValue::iter_to_array(values).ok()
-    }
-}
-
-impl PruningStatistics for DeltaTableState {
-    /// return the minimum values for the named column, if known.
-    /// Note: the returned array must contain `num_containers()` rows
-    fn min_values(&self, column: &Column) -> Option<ArrayRef> {
-        let partition_columns = &self.current_metadata()?.partition_columns;
-        let container =
-            AddContainer::new(self.files(), partition_columns, self.arrow_schema().ok()?);
-        container.min_values(column)
-    }
-
-    /// return the maximum values for the named column, if known.
-    /// Note: the returned array must contain `num_containers()` rows.
-    fn max_values(&self, column: &Column) -> Option<ArrayRef> {
-        let partition_columns = &self.current_metadata()?.partition_columns;
-        let container =
-            AddContainer::new(self.files(), partition_columns, self.arrow_schema().ok()?);
-        container.max_values(column)
-    }
-
-    /// return the number of containers (e.g. row groups) being
-    /// pruned with these statistics
-    fn num_containers(&self) -> usize {
-        self.files().len()
-    }
-
-    /// return the number of null values for the named column as an
-    /// `Option<UInt64Array>`.
-    ///
-    /// Note: the returned array must contain `num_containers()` rows.
-    fn null_counts(&self, column: &Column) -> Option<ArrayRef> {
-        let partition_columns = &self.current_metadata()?.partition_columns;
-        let container =
-            AddContainer::new(self.files(), partition_columns, self.arrow_schema().ok()?);
-        container.null_counts(column)
     }
 }
 

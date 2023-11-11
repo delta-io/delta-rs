@@ -13,7 +13,7 @@ use crate::table::config::IsolationLevel;
 use crate::table::state::DeltaTableState;
 
 #[cfg(feature = "datafusion")]
-use super::state::AddContainer;
+use crate::delta_datafusion::pruning::AddContainer;
 #[cfg(feature = "datafusion")]
 use datafusion_expr::Expr;
 #[cfg(feature = "datafusion")]
