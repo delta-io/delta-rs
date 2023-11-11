@@ -1,3 +1,5 @@
+//! Conversions between Delta and Arrow data types
+
 use std::sync::Arc;
 
 use arrow_schema::{
@@ -6,7 +8,7 @@ use arrow_schema::{
 };
 use lazy_static::lazy_static;
 
-use super::super::schema::{ArrayType, DataType, MapType, PrimitiveType, StructField, StructType};
+use super::schema::{ArrayType, DataType, MapType, PrimitiveType, StructField, StructType};
 
 pub mod checkpoint;
 pub mod schemas;

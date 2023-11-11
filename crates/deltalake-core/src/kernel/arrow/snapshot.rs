@@ -1,4 +1,5 @@
 #![allow(dead_code)]
+//! Snapshot of a Delta table.
 
 use std::cmp::Ordering;
 use std::sync::Arc;
@@ -23,18 +24,27 @@ use crate::kernel::{Action, ActionType, Add, Metadata, Protocol, StructType};
 use crate::storage::path::{commit_version, is_checkpoint_file, is_commit_file, FileMeta, LogPath};
 use crate::table::config::TableConfig;
 
+/// A snapshot of a Delta table at a given version.
 pub trait Snapshot: std::fmt::Display + Send + Sync + std::fmt::Debug + 'static {
+    /// The version of the table at this [`Snapshot`].
     fn version(&self) -> i64;
+    /// Table [`Schema`](crate::kernel::schema::StructType) at this [`Snapshot`]'s version.
     fn schema(&self) -> DeltaResult<StructType>;
+    /// Table [`Metadata`] at this [`Snapshot`]'s version.
     fn metadata(&self) -> DeltaResult<Metadata>;
+    /// Table [`Protocol`] at this [`Snapshot`]'s version.
     fn protocol(&self) -> DeltaResult<Protocol>;
+    /// Iterator over the [`Add`] actions at this [`Snapshot`]'s version.
     fn files(&self) -> DeltaResult<Box<dyn Iterator<Item = Add> + '_>>;
+    /// Well known table [configuration](crate::table::config::TableConfig).
     fn table_config(&self) -> TableConfig<'_>;
 }
 
+/// A [`Snapshot`] that is dynamically typed.
 pub type DynSnapshot = dyn Snapshot;
 
 #[derive(Debug)]
+/// A [`Snapshot`] that is backed by an Arrow [`RecordBatch`].
 pub struct TableStateArrow {
     version: i64,
     actions: RecordBatch,
@@ -43,6 +53,7 @@ pub struct TableStateArrow {
 }
 
 impl TableStateArrow {
+    /// Create a new [`Snapshot`] from a [`RecordBatch`].
     pub fn try_new(version: i64, actions: RecordBatch) -> DeltaResult<Self> {
         let metadata = parse_action(&actions, &ActionType::Metadata)?
             .next()
@@ -66,6 +77,7 @@ impl TableStateArrow {
         })
     }
 
+    /// Load a [`Snapshot`] from a given [`LogPath`].
     pub async fn load(
         table_root: LogPath,
         object_store: Arc<dyn ObjectStore>,
@@ -305,6 +317,7 @@ fn decode_commit_file_stream<S: Stream<Item = DeltaResult<Bytes>> + Unpin>(
     }))
 }
 
+/// The last checkpoint file.
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LastCheckpoint {

@@ -1,4 +1,5 @@
 #![allow(dead_code)]
+//! This module contains the logic to handle the delta log actions represented as recod batches
 
 use std::collections::{HashMap, HashSet};
 use std::io::Cursor;
@@ -22,6 +23,7 @@ use crate::kernel::{
     StorageType,
 };
 
+/// Parse a JSON strings into a RecordBatch of delta actions
 pub fn parse_json(
     json_strings: StringArray,
     output_schema: ArrowSchemaRef,

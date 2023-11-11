@@ -1,3 +1,5 @@
+//! Arrow schemas for the delta log
+
 use arrow_schema::{Field, Fields, Schema};
 use lazy_static::lazy_static;
 

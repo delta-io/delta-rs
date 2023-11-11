@@ -1,6 +1,8 @@
 //! Kernel module
 
 pub mod actions;
+#[cfg(all(feature = "arrow", feature = "parquet"))]
+pub mod arrow;
 #[cfg(feature = "arrow")]
 pub mod client;
 pub mod error;
