@@ -19,7 +19,7 @@ pub trait Snapshot: std::fmt::Display + Send + Sync + std::fmt::Debug + 'static 
     fn protocol(&self) -> DeltaResult<Protocol>;
 
     /// Iterator over the [`Add`] actions at this [`Snapshot`]'s version.
-    fn files(&self) -> DeltaResult<Box<dyn Iterator<Item = Add> + '_>>;
+    fn files(&self) -> DeltaResult<Box<dyn Iterator<Item = Add> + Send + '_>>;
 
     /// Well known table [configuration](crate::table::config::TableConfig).
     fn table_config(&self) -> TableConfig<'_>;

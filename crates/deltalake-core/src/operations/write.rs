@@ -41,7 +41,7 @@ use parquet::file::properties::WriterProperties;
 use super::transaction::PROTOCOL;
 use super::writer::{DeltaWriter, WriterConfig};
 use super::{transaction::commit, CreateBuilder};
-use crate::delta_datafusion::DeltaDataChecker;
+use crate::delta_datafusion::{pruning::physical_arrow_schema, DeltaDataChecker};
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::{Action, Add, Remove, StructType};
 use crate::logstore::LogStoreRef;
@@ -346,12 +346,13 @@ impl std::future::IntoFuture for WriteBuilder {
                     Err(WriteError::MissingData)
                 } else {
                     let schema = batches[0].schema();
-                    let table_schema = this
-                        .snapshot
-                        .physical_arrow_schema(this.log_store.object_store().clone())
-                        .await
-                        .or_else(|_| this.snapshot.arrow_schema(true))
-                        .unwrap_or(schema.clone());
+                    let table_schema = physical_arrow_schema(
+                        &this.snapshot,
+                        this.log_store.object_store().clone(),
+                    )
+                    .await
+                    .or_else(|_| this.snapshot.arrow_schema(true))
+                    .unwrap_or(schema.clone());
 
                     if !can_cast_batch(schema.fields(), table_schema.fields()) {
                         return Err(DeltaTableError::Generic(

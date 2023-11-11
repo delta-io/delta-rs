@@ -41,14 +41,14 @@ pub struct TableStateArrow {
 impl TableStateArrow {
     /// Create a new [`Snapshot`] from a [`RecordBatch`].
     pub fn try_new(version: i64, actions: RecordBatch) -> DeltaResult<Self> {
-        let metadata = parse_action(&actions, &ActionType::Metadata)?
+        let metadata = parse_action(&actions, ActionType::Metadata)?
             .next()
             .and_then(|a| match a {
                 Action::Metadata(m) => Some(m),
                 _ => None,
             })
             .ok_or(Error::Generic("expected metadata".into()))?;
-        let protocol = parse_action(&actions, &ActionType::Protocol)?
+        let protocol = parse_action(&actions, ActionType::Protocol)?
             .next()
             .and_then(|a| match a {
                 Action::Protocol(p) => Some(p),
@@ -103,9 +103,9 @@ impl Snapshot for TableStateArrow {
         Ok(self.protocol.clone())
     }
 
-    fn files(&self) -> DeltaResult<Box<dyn Iterator<Item = Add> + '_>> {
+    fn files(&self) -> DeltaResult<Box<dyn Iterator<Item = Add> + Send + '_>> {
         Ok(Box::new(
-            parse_actions(&self.actions, &[ActionType::Add])?.filter_map(|it| match it {
+            parse_actions(&self.actions, vec![ActionType::Add])?.filter_map(|it| match it {
                 Action::Add(add) => Some(add),
                 _ => None,
             }),

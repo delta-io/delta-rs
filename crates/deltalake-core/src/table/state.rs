@@ -71,7 +71,7 @@ impl Snapshot for DeltaTableState {
         self.schema()
     }
 
-    fn files(&self) -> DeltaResult<Box<dyn Iterator<Item = Add> + '_>> {
+    fn files(&self) -> DeltaResult<Box<dyn Iterator<Item = Add> + Send + '_>> {
         Ok(Box::new(self.files().clone().into_iter()))
     }
 

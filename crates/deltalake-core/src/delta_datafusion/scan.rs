@@ -27,6 +27,7 @@ use datafusion_expr::Expr;
 use object_store::ObjectMeta;
 use serde::{Deserialize, Serialize};
 
+use super::pruning::physical_arrow_schema;
 use super::{get_null_of_arrow_type, to_correct_scalar_value};
 use super::{logical_expr_to_physical_expr, logical_schema, PATH_COLUMN};
 use crate::errors::{DeltaResult, DeltaTableError};
@@ -181,11 +182,7 @@ impl<'a> DeltaScanBuilder<'a> {
         let config = self.config;
         let schema = match self.schema {
             Some(schema) => schema,
-            None => {
-                self.snapshot
-                    .physical_arrow_schema(self.log_store.object_store())
-                    .await?
-            }
+            None => physical_arrow_schema(self.snapshot, self.log_store.object_store()).await?,
         };
         let logical_schema = logical_schema(self.snapshot, &config)?;
 

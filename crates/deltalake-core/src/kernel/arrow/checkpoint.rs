@@ -49,11 +49,11 @@ pub fn parse_json(
     Ok(concat_batches(&output_schema, &batches)?)
 }
 
-#[fix_hidden_lifetime_bug]
-pub(crate) fn parse_actions<'a>(
+// #[fix_hidden_lifetime_bug]
+pub(crate) fn parse_actions(
     batch: &RecordBatch,
-    types: impl IntoIterator<Item = &'a ActionType>,
-) -> DeltaResult<impl Iterator<Item = Action>> {
+    types: Vec<ActionType>,
+) -> DeltaResult<impl Iterator<Item = Action> + Send + '_> {
     Ok(types
         .into_iter()
         .filter_map(|action| parse_action(batch, action).ok())
@@ -63,8 +63,8 @@ pub(crate) fn parse_actions<'a>(
 #[fix_hidden_lifetime_bug]
 pub(crate) fn parse_action(
     batch: &RecordBatch,
-    action_type: &ActionType,
-) -> DeltaResult<impl Iterator<Item = Action>> {
+    action_type: ActionType,
+) -> DeltaResult<impl Iterator<Item = Action> + Send> {
     let column_name = match action_type {
         ActionType::Metadata => "metaData",
         ActionType::Protocol => "protocol",
@@ -91,7 +91,9 @@ pub(crate) fn parse_action(
     }
 }
 
-fn parse_action_metadata(arr: &StructArray) -> DeltaResult<Box<dyn Iterator<Item = Action>>> {
+fn parse_action_metadata(
+    arr: &StructArray,
+) -> DeltaResult<Box<dyn Iterator<Item = Action> + Send>> {
     let ids = cast_struct_column::<StringArray>(arr, "id")?;
     let schema_strings = cast_struct_column::<StringArray>(arr, "schemaString")?;
     let metadata = ids
@@ -181,7 +183,9 @@ fn parse_action_metadata(arr: &StructArray) -> DeltaResult<Box<dyn Iterator<Item
     Ok(Box::new(std::iter::once(Action::Metadata(metadata))))
 }
 
-fn parse_action_protocol(arr: &StructArray) -> DeltaResult<Box<dyn Iterator<Item = Action>>> {
+fn parse_action_protocol(
+    arr: &StructArray,
+) -> DeltaResult<Box<dyn Iterator<Item = Action> + Send>> {
     let min_reader = cast_struct_column::<Int32Array>(arr, "minReaderVersion")?;
     let min_writer = cast_struct_column::<Int32Array>(arr, "minWriterVersion")?;
     let protocol = min_reader
@@ -246,7 +250,9 @@ fn parse_action_protocol(arr: &StructArray) -> DeltaResult<Box<dyn Iterator<Item
     Ok(Box::new(std::iter::once(Action::Protocol(protocol))))
 }
 
-fn parse_actions_add(arr: &StructArray) -> DeltaResult<Box<dyn Iterator<Item = Action> + '_>> {
+fn parse_actions_add(
+    arr: &StructArray,
+) -> DeltaResult<Box<dyn Iterator<Item = Action> + Send + '_>> {
     let paths = cast_struct_column::<StringArray>(arr, "path")?;
     let sizes = cast_struct_column::<Int64Array>(arr, "size")?;
     let modification_times =
@@ -346,7 +352,9 @@ fn parse_actions_add(arr: &StructArray) -> DeltaResult<Box<dyn Iterator<Item = A
     Ok(Box::new(zipped.flatten().map(Action::Add)))
 }
 
-fn parse_actions_remove(arr: &StructArray) -> DeltaResult<Box<dyn Iterator<Item = Action> + '_>> {
+fn parse_actions_remove(
+    arr: &StructArray,
+) -> DeltaResult<Box<dyn Iterator<Item = Action> + Send + '_>> {
     let paths = cast_struct_column::<StringArray>(arr, "path")?;
     let data_changes = cast_struct_column::<BooleanArray>(arr, "dataChange")?;
 
@@ -460,7 +468,7 @@ fn parse_actions_remove(arr: &StructArray) -> DeltaResult<Box<dyn Iterator<Item 
 
 fn parse_dv(
     arr: &StructArray,
-) -> DeltaResult<impl Iterator<Item = Option<DeletionVectorDescriptor>> + '_> {
+) -> DeltaResult<impl Iterator<Item = Option<DeletionVectorDescriptor>> + Send + '_> {
     let storage_types = cast_struct_column::<StringArray>(arr, "storageType")?;
     let paths_or_inlines = cast_struct_column::<StringArray>(arr, "pathOrInlineDv")?;
     let sizes_in_bytes = cast_struct_column::<Int32Array>(arr, "sizeInBytes")?;
@@ -555,7 +563,7 @@ mod tests {
     #[test]
     fn test_parse_protocol() {
         let batch = action_batch();
-        let action = parse_action(&batch, &ActionType::Protocol)
+        let action = parse_action(&batch, ActionType::Protocol)
             .unwrap()
             .collect::<Vec<_>>();
         let expected = Action::Protocol(Protocol {
@@ -570,7 +578,7 @@ mod tests {
     #[test]
     fn test_parse_metadata() {
         let batch = action_batch();
-        let action = parse_action(&batch, &ActionType::Metadata)
+        let action = parse_action(&batch, ActionType::Metadata)
             .unwrap()
             .collect::<Vec<_>>();
         let configuration = HashMap::from_iter([
@@ -613,7 +621,7 @@ mod tests {
         let output_schema = Arc::new(get_log_schema());
         let batch = parse_json(json_strings, output_schema).unwrap();
 
-        let actions = parse_action(&batch, &ActionType::Add)
+        let actions = parse_action(&batch, ActionType::Add)
             .unwrap()
             .collect::<Vec<_>>();
         println!("{:?}", actions)

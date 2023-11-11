@@ -14,6 +14,8 @@ use datafusion::physical_plan::{ColumnStatistics, Statistics};
 use datafusion_common::scalar::ScalarValue;
 use datafusion_common::{Column, DFSchema};
 use datafusion_expr::Expr;
+use object_store::ObjectStore;
+use parquet::arrow::async_reader::{ParquetObjectReader, ParquetRecordBatchStreamBuilder};
 
 use super::expr::parse_predicate_expression;
 use super::{
@@ -27,7 +29,8 @@ use crate::protocol::Stats;
 use crate::table::state::DeltaTableState;
 
 /// Extension trait to implement datafusion helpers for DeltaTable
-pub trait DatafusionExt {
+#[async_trait::async_trait]
+pub trait DatafusionExt: Send + Sync + 'static {
     /// Get the table schema as an [`ArrowSchemaRef`]
     fn arrow_schema(&self, wrap_partitions: bool) -> DeltaResult<ArrowSchemaRef>;
 
@@ -38,6 +41,47 @@ pub trait DatafusionExt {
     fn parse_predicate_expression(&self, expr: &str, df_state: &SessionState) -> DeltaResult<Expr> {
         let schema = DFSchema::try_from(self.arrow_schema(true)?.as_ref().to_owned())?;
         parse_predicate_expression(&schema, expr, df_state)
+    }
+}
+
+/// Get the physical table schema.
+///
+/// This will construct a schema derived from the parquet schema of the latest data file,
+/// and fields for partition columns from the schema defined in table meta data.
+pub async fn physical_arrow_schema<T: Snapshot + DatafusionExt>(
+    snapshot: &T,
+    object_store: Arc<dyn ObjectStore>,
+) -> DeltaResult<ArrowSchemaRef> {
+    if let Some(add) = snapshot.files()?.max_by_key(|obj| obj.modification_time) {
+        let file_meta = add.try_into()?;
+        let file_reader = ParquetObjectReader::new(object_store, file_meta);
+        let file_schema = ParquetRecordBatchStreamBuilder::new(file_reader)
+            .await?
+            .build()?
+            .schema()
+            .clone();
+
+        let table_schema = Arc::new(ArrowSchema::new(
+            snapshot
+                .arrow_schema(true)?
+                .fields
+                .clone()
+                .into_iter()
+                .map(|field| {
+                    // field is an &Arc<Field>
+                    let owned_field: ArrowField = field.as_ref().clone();
+                    file_schema
+                        .field_with_name(field.name())
+                        // yielded with &Field
+                        .cloned()
+                        .unwrap_or(owned_field)
+                })
+                .collect::<Vec<ArrowField>>(),
+        ));
+
+        Ok(table_schema)
+    } else {
+        snapshot.arrow_schema(true)
     }
 }
 
