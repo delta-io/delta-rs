@@ -80,16 +80,25 @@ def _convert_pa_schema_to_delta(
     return pa.schema([pa.field(f.name, dtype_to_delta_dtype(f.type)) for f in schema])
 
 
+def _cast_schema_to_recordbatchreader(
+    reader: pa.RecordBatchReader, schema: pa.schema
+) -> pa.RecordBatch:
+    """Creates recordbatch generator."""
+    for batch in reader:
+        yield pa.Table.from_batches([batch]).cast(schema).to_batches()[0]
+
+
 def convert_pyarrow_recordbatchreader(
     data: pa.RecordBatchReader, large_dtypes: bool
 ) -> pa.RecordBatchReader:
     """Converts a PyArrow RecordBatchReader to a PyArrow RecordBatchReader with a compatible delta schema"""
     schema = _convert_pa_schema_to_delta(data.schema, large_dtypes=large_dtypes)
+
     data = pa.RecordBatchReader.from_batches(
         schema,
-        data.read_all().cast(schema).to_batches(),
+        _cast_schema_to_recordbatchreader(data, schema),
     )
-    return data, schema
+    return data
 
 
 def convert_pyarrow_recordbatch(
@@ -98,20 +107,20 @@ def convert_pyarrow_recordbatch(
     """Converts a PyArrow RecordBatch to a PyArrow RecordBatchReader with a compatible delta schema"""
     schema = _convert_pa_schema_to_delta(data.schema, large_dtypes=large_dtypes)
     data = pa.Table.from_batches([data]).cast(schema).to_reader()
-    return data, schema
+    return data
 
 
 def convert_pyarrow_table(data: pa.Table, large_dtypes: bool) -> pa.RecordBatchReader:
     """Converts a PyArrow table to a PyArrow RecordBatchReader with a compatible delta schema"""
     schema = _convert_pa_schema_to_delta(data.schema, large_dtypes=large_dtypes)
     data = data.cast(schema).to_reader()
-    return data, schema
+    return data
 
 
 def convert_pyarrow_dataset(
     data: ds.Dataset, large_dtypes: bool
 ) -> pa.RecordBatchReader:
-    """Converts a PyArrow dataset to a PyArrow RecordBatchReader, schema is kept aside and used during write"""
-    schema = _convert_pa_schema_to_delta(data.schema, large_dtypes=large_dtypes)
+    """Converts a PyArrow dataset to a PyArrow RecordBatchReader with a compatible delta schema"""
     data = data.scanner().to_reader()
-    return data, schema
+    data = convert_pyarrow_recordbatchreader(data, large_dtypes)
+    return data

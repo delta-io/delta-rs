@@ -173,20 +173,18 @@ def write_deltalake(
         table.update_incremental()
 
     if isinstance(data, RecordBatchReader):
-        data, delta_schema = convert_pyarrow_recordbatchreader(data, large_dtypes)
+        data = convert_pyarrow_recordbatchreader(data, large_dtypes)
     elif isinstance(data, pa.RecordBatch):
-        data, delta_schema = convert_pyarrow_recordbatch(data, large_dtypes)
+        data = convert_pyarrow_recordbatch(data, large_dtypes)
     elif isinstance(data, pa.Table):
-        data, delta_schema = convert_pyarrow_table(data, large_dtypes)
+        data = convert_pyarrow_table(data, large_dtypes)
     elif isinstance(data, ds.Dataset):
-        data, delta_schema = convert_pyarrow_dataset(data, large_dtypes)
+        data = convert_pyarrow_dataset(data, large_dtypes)
     elif _has_pandas and isinstance(data, pd.DataFrame):
         if schema is not None:
             data = pa.Table.from_pandas(data, schema=schema)
         else:
-            data, delta_schema = convert_pyarrow_table(
-                pa.Table.from_pandas(data), False
-            )
+            data = convert_pyarrow_table(pa.Table.from_pandas(data), False)
     elif isinstance(data, Iterable):
         if schema is None:
             raise ValueError("You must provide schema if data is Iterable")
@@ -196,7 +194,7 @@ def write_deltalake(
         )
 
     if schema is None:
-        schema = delta_schema
+        schema = data.schema
 
     if filesystem is not None:
         raise NotImplementedError("Filesystem support is not yet implemented.  #570")

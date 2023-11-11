@@ -634,19 +634,17 @@ class DeltaTable:
         )
 
         if isinstance(source, pyarrow.RecordBatchReader):
-            source, schema = convert_pyarrow_recordbatchreader(
-                source, large_dtypes=False
-            )
+            source = convert_pyarrow_recordbatchreader(source, large_dtypes=False)
         elif isinstance(source, pyarrow.RecordBatch):
-            source, schema = convert_pyarrow_recordbatch(
+            source = convert_pyarrow_recordbatch(
                 source, large_dtypes=False
             )  # TODO(ion): set to True once MERGE uses logical plan
         elif isinstance(source, pyarrow.Table):
-            source, schema = convert_pyarrow_table(source, large_dtypes=False)
+            source = convert_pyarrow_table(source, large_dtypes=False)
         elif isinstance(source, ds.Dataset):
-            source, schema = convert_pyarrow_dataset(source, large_dtypes=False)
+            source = convert_pyarrow_dataset(source, large_dtypes=False)
         elif isinstance(source, pandas.DataFrame):
-            source, schema = convert_pyarrow_table(
+            source = convert_pyarrow_table(
                 pyarrow.Table.from_pandas(source), large_dtypes=False
             )
         else:
@@ -659,7 +657,7 @@ class DeltaTable:
             return batch
 
         source = pyarrow.RecordBatchReader.from_batches(
-            schema, (validate_batch(batch) for batch in source)
+            source.schema, (validate_batch(batch) for batch in source)
         )
 
         return TableMerger(
