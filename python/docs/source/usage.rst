@@ -269,24 +269,51 @@ such as creation time, size, and statistics. You can get a data frame of
 the add actions data using :meth:`DeltaTable.get_add_actions`:
 
 .. code-block:: python
-
+    
+    >>> from pprint import pprint
     >>> from deltalake import DeltaTable
     >>> dt = DeltaTable("../crates/deltalake-core/tests/data/delta-0.8.0")
-    >>> dt.get_add_actions(flatten=True).to_pandas()
-                                                    path  size_bytes   modification_time  data_change  num_records  null_count.value  min.value  max.value
-    0  part-00000-c9b90f86-73e6-46c8-93ba-ff6bfaf892a...         440 2021-03-06 15:16:07         True            2                 0          0          2
-    1  part-00000-04ec9591-0b73-459e-8d18-ba5711d6cbe...         440 2021-03-06 15:16:16         True            2                 0          2          4
+    >>> pprint(dt.get_add_actions(flatten=True).to_pylist())
+    [{'data_change': True,
+      'max.value': 2,
+      'min.value': 0,
+      'modification_time': datetime.datetime(2021, 3, 6, 15, 16, 7),
+      'null_count.value': 0,
+      'num_records': 2,
+      'path': 'part-00000-c9b90f86-73e6-46c8-93ba-ff6bfaf892a1-c000.snappy.parquet',
+      'size_bytes': 440},
+     {'data_change': True,
+      'max.value': 4,
+      'min.value': 2,
+      'modification_time': datetime.datetime(2021, 3, 6, 15, 16, 16),
+      'null_count.value': 0,
+      'num_records': 2,
+      'path': 'part-00000-04ec9591-0b73-459e-8d18-ba5711d6cbe1-c000.snappy.parquet',
+      'size_bytes': 440}]
 
 This works even with past versions of the table:
 
 .. code-block:: python
 
+    >>> from pprint import pprint
     >>> dt = DeltaTable("../crates/deltalake-core/tests/data/delta-0.8.0", version=0)
-    >>> dt.get_add_actions(flatten=True).to_pandas()
-                                                    path  size_bytes   modification_time  data_change  num_records  null_count.value  min.value  max.value
-    0  part-00000-c9b90f86-73e6-46c8-93ba-ff6bfaf892a...         440 2021-03-06 15:16:07         True            2                 0          0          2
-    1  part-00001-911a94a2-43f6-4acb-8620-5e68c265498...         445 2021-03-06 15:16:07         True            3                 0          2          4
-
+    >>> pprint(dt.get_add_actions(flatten=True).to_pylist())
+    [{'data_change': True,
+      'max.value': 2,
+      'min.value': 0,
+      'modification_time': datetime.datetime(2021, 3, 6, 15, 16, 7),
+      'null_count.value': 0,
+      'num_records': 2,
+      'path': 'part-00000-c9b90f86-73e6-46c8-93ba-ff6bfaf892a1-c000.snappy.parquet',
+      'size_bytes': 440},
+     {'data_change': True,
+      'max.value': 4,
+      'min.value': 2,
+      'modification_time': datetime.datetime(2021, 3, 6, 15, 16, 7),
+      'null_count.value': 0,
+      'num_records': 3,
+      'path': 'part-00001-911a94a2-43f6-4acb-8620-5e68c2654989-c000.snappy.parquet',
+      'size_bytes': 445}]
 
 Querying Delta Tables
 ---------------------
@@ -689,5 +716,5 @@ concurrent operation was performed on the table, restore will fail.
 .. code-block:: python
 
     >>> dt = DeltaTable("../crates/deltalake-core/tests/data/simple_table")
-    >>> dt.restore(1)
+    >>> dt.restore(1) # doctest: +SKIP
     {'numRemovedFile': 5, 'numRestoredFile': 22}
