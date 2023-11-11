@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, Union
+from typing import TYPE_CHECKING, Generator, Union
 
 import pyarrow as pa
 import pyarrow.dataset as ds
@@ -82,7 +82,7 @@ def _convert_pa_schema_to_delta(
 
 def _cast_schema_to_recordbatchreader(
     reader: pa.RecordBatchReader, schema: pa.schema
-) -> pa.RecordBatch:
+) -> Generator[pa.RecordBatch, None, None]:
     """Creates recordbatch generator."""
     for batch in reader:
         yield pa.Table.from_batches([batch]).cast(schema).to_batches()[0]
