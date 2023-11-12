@@ -461,8 +461,8 @@ only list the files to be deleted. Pass ``dry_run=False`` to actually delete fil
 .. code-block:: python
 
     >>> dt = DeltaTable("../crates/deltalake-core/tests/data/simple_table")
-    >>> dt.vacuum()[:3]
-    ['part-00006-46f2ff20-eb5d-4dda-8498-7bfb2940713b-c000.snappy.parquet', 'part-00190-8ac0ae67-fb1d-461d-a3d3-8dc112766ff5-c000.snappy.parquet', 'part-00164-bf40481c-4afd-4c02-befa-90f056c2d77a-c000.snappy.parquet']
+    >>> sorted(dt.vacuum())[:3]
+    ['part-00000-a72b1fb3-f2df-41fe-a8f0-e65b746382dd-c000.snappy.parquet', 'part-00000-a922ea3b-ffc2-4ca1-9074-a278c24c4449-c000.snappy.parquet', 'part-00000-f17fcbf5-e0dc-40ba-adae-ce66d1fcaef6-c000.snappy.parquet']
     >>> dt.vacuum(dry_run=False) # Don't run this unless you are sure! # doctest: +SKIP 
 
 Optimizing tables
@@ -481,13 +481,26 @@ For just file compaction, use the :meth:`TableOptimizer.compact` method:
 
 .. code-block:: python
 
+    >>> from pprint import pprint
     >>> dt = DeltaTable("../crates/deltalake-core/tests/data/simple_table")
-    >>> dt.optimize.compact() # doctest: +SKIP
-    {'numFilesAdded': 1, 'numFilesRemoved': 5,
-     'filesAdded': {'min': 555, 'max': 555, 'avg': 555.0, 'totalFiles': 1, 'totalSize': 555},
-     'filesRemoved': {'min': 262, 'max': 429, 'avg': 362.2, 'totalFiles': 5, 'totalSize': 1811},
-     'partitionsOptimized': 1, 'numBatches': 1, 'totalConsideredFiles': 5,
-     'totalFilesSkipped': 0, 'preserveInsertionOrder': True}
+    >>> pprint(dt.optimize.compact())
+    {'filesAdded': {'avg': 574.0,
+                    'max': 574,
+                    'min': 574,
+                    'totalFiles': 1,
+                    'totalSize': 574},
+     'filesRemoved': {'avg': 362.2,
+                      'max': 429,
+                      'min': 262,
+                      'totalFiles': 5,
+                      'totalSize': 1811},
+     'numBatches': 3,
+     'numFilesAdded': 1,
+     'numFilesRemoved': 5,
+     'partitionsOptimized': 1,
+     'preserveInsertionOrder': True,
+     'totalConsideredFiles': 5,
+     'totalFilesSkipped': 0}
 
 For improved data skipping, use the :meth:`TableOptimizer.z_order` method. This
 is slower than just file compaction, but can improve performance for queries that
@@ -495,13 +508,26 @@ filter on multiple columns at once.
 
 .. code-block:: python
 
+    from pprint import pprint
     >>> dt = DeltaTable("../crates/deltalake-core/tests/data/COVID-19_NYT")
-    >>> dt.optimize.z_order(["date", "county"]) # doctest: +SKIP
-    {'numFilesAdded': 1, 'numFilesRemoved': 8,
-     'filesAdded': {'min': 2473439, 'max': 2473439, 'avg': 2473439.0, 'totalFiles': 1, 'totalSize': 2473439},
-     'filesRemoved': {'min': 325440, 'max': 895702, 'avg': 773810.625, 'totalFiles': 8, 'totalSize': 6190485},
-     'partitionsOptimized': 0, 'numBatches': 1, 'totalConsideredFiles': 8,
-     'totalFilesSkipped': 0, 'preserveInsertionOrder': True}
+    >>> pprint(dt.optimize.z_order(["date", "county"]))
+    {'filesAdded': {'avg': 3438197.0,
+                    'max': 3438197,
+                    'min': 3438197,
+                    'totalFiles': 1,
+                    'totalSize': 3438197},
+     'filesRemoved': {'avg': 773810.625,
+                      'max': 895702,
+                      'min': 325440,
+                      'totalFiles': 8,
+                      'totalSize': 6190485},
+     'numBatches': 136,
+     'numFilesAdded': 1,
+     'numFilesRemoved': 8,
+     'partitionsOptimized': 0,
+     'preserveInsertionOrder': True,
+     'totalConsideredFiles': 8,
+     'totalFilesSkipped': 0}
 
 Writing Delta Tables
 --------------------
@@ -517,7 +543,7 @@ DataFrame, a PyArrow Table, or an iterator of PyArrow Record Batches.
     >>> import pandas as pd
     >>> from deltalake import write_deltalake
     >>> df = pd.DataFrame({'x': [1, 2, 3]})
-    >>> write_deltalake('path/to/table', df) # doctest: +SKIP
+    >>> write_deltalake('path/to/table1', df)
 
 .. note::
     :py:func:`write_deltalake` accepts a Pandas DataFrame, but will convert it to
@@ -530,8 +556,8 @@ to append pass in ``mode='append'``:
 
 .. code-block:: python
 
-    >>> write_deltalake('path/to/table', df, mode='overwrite') # doctest: +SKIP
-    >>> write_deltalake('path/to/table', df, mode='append') # doctest: +SKIP
+    >>> write_deltalake('path/to/table1', df, mode='overwrite')
+    >>> write_deltalake('path/to/table1', df, mode='append')
 
 :py:meth:`write_deltalake` will raise :py:exc:`ValueError` if the schema of
 the data passed to it differs from the existing table's schema. If you wish to
@@ -603,15 +629,18 @@ Update all the rows for the column "processed" to the value True.
 
     >>> import pandas as pd
     >>> from deltalake import write_deltalake, DeltaTable
-    >>> df = pd.DataFrame({'x': [1, 2, 3], 'deleted': [False, False, False]})
-    >>> write_deltalake('path/to/table', df) # doctest: +SKIP
-    >>> dt = DeltaTable('path/to/table') # doctest: +SKIP
-    >>> dt.update({"processed": "True"}) # doctest: +SKIP
-    >>> dt.to_pandas() # doctest: +SKIP
-      x       processed
-    0       1       True
-    1       2       True
-    2       3       True
+    >>> df = pd.DataFrame({'x': [1, 2, 3], 'processed': [False, False, False]})
+    >>> write_deltalake('path/to/table2', df)
+    >>> dt = DeltaTable('path/to/table2')
+    >>> dt.update({"processed": "True"})
+    <class 'str'> <class 'str'>
+    {'num_added_files': 1, 'num_removed_files': 1, 'num_updated_rows': 3, 'num_copied_rows': 0, 'execution_time_ms': ..., 'scan_time_ms': ...}
+    >>> dt.to_pandas()
+       x  processed
+    0  1       True
+    1  2       True
+    2  3       True
+
 
 .. note::
     :meth:`DeltaTable.update` predicates and updates are all in string format. The predicates and expressions,
@@ -624,17 +653,20 @@ True where x = 3
 
     >>> from deltalake import write_deltalake, DeltaTable
     >>> df = pd.DataFrame({'x': [1, 2, 3], 'deleted': [False, False, False]})
-    >>> write_deltalake('path/to/table', df) # doctest: +SKIP
-    >>> dt = DeltaTable('path/to/table') # doctest: +SKIP
+    >>> write_deltalake('path/to/table3', df)
+    >>> dt = DeltaTable('path/to/table3')
     >>> dt.update( 
     ...    updates={"deleted": "True"},
     ...    predicate= 'x = 3',
-    ... ) # doctest: +SKIP
-    >>> dt.to_pandas() # doctest: +SKIP
-      x       deleted
-    0       1       False
-    1       2       False
-    2       3       True
+    ... )
+    <class 'str'> <class 'str'>
+    {'num_added_files': 1, 'num_removed_files': 1, 'num_updated_rows': 1, 'num_copied_rows': 2, 'execution_time_ms': ..., 'scan_time_ms': ...}
+    >>> dt.to_pandas()
+       x  deleted
+    0  1    False
+    1  2    False
+    2  3     True
+
 
 
 Overwriting a partition
@@ -650,13 +682,13 @@ the method will raise an error.
 
     >>> from deltalake import write_deltalake
     >>> df = pd.DataFrame({'x': [1, 2, 3], 'y': ['a', 'a', 'b']})
-    >>> write_deltalake('path/to/table', df, partition_by=['y']) # doctest: +SKIP
+    >>> write_deltalake('path/to/table4', df, partition_by=['y'])
 
-    >>> table = DeltaTable('path/to/table') # doctest: +SKIP
+    >>> table = DeltaTable('path/to/table4')
     >>> df2 = pd.DataFrame({'x': [100], 'y': ['b']}) 
-    >>> write_deltalake(table, df2, partition_filters=[('y', '=', 'b')], mode="overwrite") # doctest: +SKIP
+    >>> write_deltalake(table, df2, partition_filters=[('y', '=', 'b')], mode="overwrite")
 
-    >>> table.to_pandas() # doctest: +SKIP
+    >>> table.to_pandas()
          x  y
     0    1  a
     1    2  a
@@ -681,13 +713,13 @@ the clause will remove all files from the table.
 
     >>> from deltalake import DeltaTable, write_deltalake
     >>> df = pd.DataFrame({'a': [1, 2, 3], 'to_delete': [False, False, True]})
-    >>> write_deltalake('path/to/table', df) # doctest: +SKIP
+    >>> write_deltalake('path/to/table5', df)
 
-    >>> table = DeltaTable('path/to/table') # doctest: +SKIP
-    >>> table.delete(predicate="to_delete = true") # doctest: +SKIP
-    {'num_added_files': 1, 'num_removed_files': 1, 'num_deleted_rows': 1, 'num_copied_rows': 2, 'execution_time_ms': 11081, 'scan_time_ms': 3721, 'rewrite_time_ms': 7}
+    >>> table = DeltaTable('path/to/table5')
+    >>> table.delete(predicate="to_delete = true")
+    {'num_added_files': 1, 'num_removed_files': 1, 'num_deleted_rows': 1, 'num_copied_rows': 2, 'execution_time_ms': ..., 'scan_time_ms': ..., 'rewrite_time_ms': ...}
 
-    >>> table.to_pandas() # doctest: +SKIP
+    >>> table.to_pandas()
        a  to_delete
     0  1      False
     1  2      False
@@ -716,5 +748,5 @@ concurrent operation was performed on the table, restore will fail.
 .. code-block:: python
 
     >>> dt = DeltaTable("../crates/deltalake-core/tests/data/simple_table")
-    >>> dt.restore(1) # doctest: +SKIP
-    {'numRemovedFile': 5, 'numRestoredFile': 22}
+    >>> dt.restore(1)
+    {'numRemovedFile': 1, 'numRestoredFile': 22}
