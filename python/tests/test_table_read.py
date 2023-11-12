@@ -118,9 +118,7 @@ def test_read_simple_table_file_sizes_failure():
         x: [-1 for item in x] if x == "size_bytes" else y
         for x, y in add_actions.items()
     }
-    dt.get_add_actions = lambda: SimpleNamespace(
-        to_pydict=lambda: add_actions_modified
-    )  # type:ignore
+    dt.get_add_actions = lambda: SimpleNamespace(to_pydict=lambda: add_actions_modified)  # type:ignore
 
     with pytest.raises(OSError, match="Cannot seek past end of file."):
         dt.to_pyarrow_dataset().to_table().to_pydict()
