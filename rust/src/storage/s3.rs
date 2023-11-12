@@ -3,7 +3,7 @@
 use super::utils::str_is_truthy;
 use crate::table::builder::{s3_storage_options, str_option};
 use bytes::Bytes;
-use dynamodb_lock::{DynamoError, LockClient, LockItem, DEFAULT_MAX_RETRY_ACQUIRE_LOCK_ATTEMPTS};
+use dynamodb_lock::{DynamoError, LockClient, LockItem};
 use futures::stream::BoxStream;
 use object_store::path::Path;
 use object_store::{
@@ -23,6 +23,7 @@ use std::time::Duration;
 use tokio::io::AsyncWrite;
 
 const STORE_NAME: &str = "DeltaS3ObjectStore";
+const DEFAULT_MAX_RETRY_ACQUIRE_LOCK_ATTEMPTS: u32 = 1_000;
 
 /// Error raised by storage lock client
 #[derive(thiserror::Error, Debug)]
@@ -535,10 +536,11 @@ fn try_create_lock_client(options: &S3StorageOptions) -> Result<Option<S3LockCli
                 ),
                 false => rusoto_dynamodb::DynamoDbClient::new(options.region.clone()),
             };
-            let lock_client = dynamodb_lock::DynamoDbLockClient::new(
-                dynamodb_client,
-                dynamodb_lock::DynamoDbOptions::from_map(options.extra_opts.clone()),
-            );
+            let lock_client = dynamodb_lock::DynamoDbLockClient::for_region(options.region.clone())
+                .with_client(dynamodb_client)
+                .with_options(dynamodb_lock::DynamoDbOptions::from_map(
+                    options.extra_opts.clone(),
+                ));
             Ok(Some(S3LockClient {
                 lock_client: Box::new(lock_client),
             }))
