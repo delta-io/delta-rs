@@ -42,18 +42,12 @@ pub struct DeltaTableState {
     commit_infos: Vec<CommitInfo>,
     // Domain metadatas provided by the system or user
     domain_metadatas: Vec<DomainMetadata>,
+    // last txn version for each app id
     app_transaction_version: HashMap<String, i64>,
-    min_reader_version: i32,
-    min_writer_version: i32,
-    reader_features: Option<HashSet<ReaderFeatures>>,
-    writer_features: Option<HashSet<WriterFeatures>>,
     // table metadata corresponding to current version
     current_metadata: Option<DeltaTableMetaData>,
-    // retention period for tombstones in milli-seconds
-    tombstone_retention_millis: i64,
-    // retention period for log entries in milli-seconds
-    log_retention_millis: i64,
-    enable_expired_log_cleanup: bool,
+    // protocol information corresponding to current version
+    current_protocol: Option<crate::kernel::Protocol>,
 }
 
 impl std::fmt::Display for DeltaTableState {
@@ -80,12 +74,7 @@ impl Snapshot for DeltaTableState {
     }
 
     fn protocol(&self) -> DeltaResult<crate::kernel::Protocol> {
-        Ok(crate::kernel::Protocol {
-            min_reader_version: self.min_reader_version,
-            min_writer_version: self.min_writer_version,
-            reader_features: self.reader_features.clone(),
-            writer_features: self.writer_features.clone(),
-        })
+        todo!()
     }
 
     fn metadata(&self) -> DeltaResult<crate::kernel::Metadata> {
@@ -244,21 +233,6 @@ impl DeltaTableState {
         &self.commit_infos
     }
 
-    /// Retention of tombstone in milliseconds.
-    pub fn tombstone_retention_millis(&self) -> i64 {
-        self.tombstone_retention_millis
-    }
-
-    /// Retention of logs in milliseconds.
-    pub fn log_retention_millis(&self) -> i64 {
-        self.log_retention_millis
-    }
-
-    /// Whether to clean up expired checkpoints and delta logs.
-    pub fn enable_expired_log_cleanup(&self) -> bool {
-        self.enable_expired_log_cleanup
-    }
-
     /// Full list of tombstones (remove actions) representing files removed from table state).
     pub fn all_tombstones(&self) -> &HashSet<Remove> {
         &self.tombstones
@@ -267,7 +241,11 @@ impl DeltaTableState {
     /// List of unexpired tombstones (remove actions) representing files removed from table state.
     /// The retention period is set by `deletedFileRetentionDuration` with default value of 1 week.
     pub fn unexpired_tombstones(&self) -> impl Iterator<Item = &Remove> {
-        let retention_timestamp = Utc::now().timestamp_millis() - self.tombstone_retention_millis;
+        let retention_timestamp = Utc::now().timestamp_millis()
+            - self
+                .table_config()
+                .deleted_file_retention_duration()
+                .as_millis() as i64;
         self.tombstones
             .iter()
             .filter(move |t| t.deletion_timestamp.unwrap_or(0) > retention_timestamp)
@@ -296,22 +274,32 @@ impl DeltaTableState {
 
     /// The min reader version required by the protocol.
     pub fn min_reader_version(&self) -> i32 {
-        self.min_reader_version
+        self.current_protocol
+            .as_ref()
+            .map(|p| p.min_reader_version.clone())
+            .unwrap_or(0)
     }
 
     /// The min writer version required by the protocol.
     pub fn min_writer_version(&self) -> i32 {
-        self.min_writer_version
+        self.current_protocol
+            .as_ref()
+            .map(|p| p.min_writer_version.clone())
+            .unwrap_or(0)
     }
 
     /// Current supported reader features
     pub fn reader_features(&self) -> Option<&HashSet<ReaderFeatures>> {
-        self.reader_features.as_ref()
+        self.current_protocol
+            .as_ref()
+            .and_then(|p| p.reader_features.as_ref())
     }
 
     /// Current supported writer features
     pub fn writer_features(&self) -> Option<&HashSet<WriterFeatures>> {
-        self.writer_features.as_ref()
+        self.current_protocol
+            .as_ref()
+            .and_then(|p| p.writer_features.as_ref())
     }
 
     /// The most recent metadata of the table.
@@ -370,23 +358,11 @@ impl DeltaTableState {
             self.files.append(&mut new_state.files);
         }
 
-        if new_state.min_reader_version > 0 {
-            self.min_reader_version = new_state.min_reader_version;
-            self.min_writer_version = new_state.min_writer_version;
-        }
-
-        if new_state.min_writer_version >= 5 {
-            self.writer_features = new_state.writer_features;
-        }
-
-        if new_state.min_reader_version >= 3 {
-            self.reader_features = new_state.reader_features;
+        if new_state.current_protocol.is_some() {
+            self.current_protocol = new_state.current_protocol.take();
         }
 
         if new_state.current_metadata.is_some() {
-            self.tombstone_retention_millis = new_state.tombstone_retention_millis;
-            self.log_retention_millis = new_state.log_retention_millis;
-            self.enable_expired_log_cleanup = new_state.enable_expired_log_cleanup;
             self.current_metadata = new_state.current_metadata.take();
         }
 
@@ -430,20 +406,10 @@ impl DeltaTableState {
                 }
             }
             Action::Protocol(v) => {
-                self.min_reader_version = v.min_reader_version;
-                self.min_writer_version = v.min_writer_version;
-                self.reader_features = v.reader_features;
-                self.writer_features = v.writer_features;
+                self.current_protocol = Some(v);
             }
             Action::Metadata(v) => {
-                let md = DeltaTableMetaData::try_from(v)?;
-                let table_config = TableConfig(&md.configuration);
-                self.tombstone_retention_millis =
-                    table_config.deleted_file_retention_duration().as_millis() as i64;
-                self.log_retention_millis =
-                    table_config.log_retention_duration().as_millis() as i64;
-                self.enable_expired_log_cleanup = table_config.enable_expired_log_cleanup();
-                self.current_metadata = Some(md);
+                self.current_metadata = Some(DeltaTableMetaData::try_from(v)?);
             }
             Action::Txn(v) => {
                 *self
@@ -515,14 +481,8 @@ mod tests {
             commit_infos: vec![],
             domain_metadatas: vec![],
             app_transaction_version: Default::default(),
-            min_reader_version: 0,
-            min_writer_version: 0,
-            reader_features: None,
-            writer_features: None,
             current_metadata: None,
-            tombstone_retention_millis: 0,
-            log_retention_millis: 0,
-            enable_expired_log_cleanup: false,
+            current_protocol: None,
         };
         let bytes = serde_json::to_vec(&expected).unwrap();
         let actual: DeltaTableState = serde_json::from_slice(&bytes).unwrap();
@@ -541,15 +501,9 @@ mod tests {
             commit_infos: vec![],
             domain_metadatas: vec![],
             tombstones: HashSet::new(),
-            current_metadata: None,
-            min_reader_version: 1,
-            min_writer_version: 1,
-            reader_features: None,
-            writer_features: None,
             app_transaction_version,
-            tombstone_retention_millis: 0,
-            log_retention_millis: 0,
-            enable_expired_log_cleanup: true,
+            current_metadata: None,
+            current_protocol: None,
         };
 
         let txn_action = Action::Txn(Txn {
