@@ -53,8 +53,8 @@ format: ## Format the code
 	$(info --- Rust format ---)
 	cargo fmt
 	$(info --- Python format ---)
-	black .
 	ruff . --fix
+	ruff format .
 
 .PHONY: check-rust
 check-rust: ## Run check on Rust
@@ -65,9 +65,9 @@ check-rust: ## Run check on Rust
 
 .PHONY: check-python
 check-python: ## Run check on Python
-	$(info Check Python black)
-	black --check --diff .
-	$(info Check Python ruff)
+	$(info Check Python format)
+	ruff format --check --diff .
+	$(info Check Python linting)
 	ruff check .
 	$(info Check Python mypy)
 	mypy
