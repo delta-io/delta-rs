@@ -38,6 +38,7 @@ from deltalake.schema import delta_arrow_schema_from_pandas
 
 from ._internal import DeltaDataChecker as _DeltaDataChecker
 from ._internal import batch_distinct
+from ._internal import convert_to_deltalake as _convert_to_deltalake
 from ._internal import write_new_deltalake as _write_new_deltalake
 from .exceptions import DeltaProtocolError, TableNotFoundError
 from .table import MAX_SUPPORTED_WRITER_VERSION, DeltaTable
@@ -389,6 +390,38 @@ def write_deltalake(
             partition_filters,
         )
         table.update_incremental()
+
+
+def convert_to_deltalake(
+    uri: Union[str, Path],
+    mode: Literal["error", "append", "overwrite", "ignore"] = "error",
+    partition_by: Optional[Dict[str, str]] = None,
+    partition_strategy: Optional[Literal["hive"]] = None,
+    name: Optional[str] = None,
+    description: Optional[str] = None,
+    configuration: Optional[Mapping[str, Optional[str]]] = None,
+    storage_options: Optional[Dict[str, str]] = None,
+    custom_metadata: Optional[Dict[str, str]] = None,
+) -> None:
+    """Currently only parquet is supported. Converts parquet dataset to delta table."""
+    if partition_strategy != "hive":
+        raise ValueError(
+            "Currently only `hive` partition strategy is supported to be converted."
+        )
+
+    _convert_to_deltalake(
+        str(uri),
+        mode,
+        partition_by,
+        partition_strategy,
+        name,
+        description,
+        configuration,
+        storage_options,
+        custom_metadata,
+    )
+
+    return
 
 
 def __enforce_append_only(
