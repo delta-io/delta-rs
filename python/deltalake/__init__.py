@@ -7,3 +7,4 @@ from .schema import Schema as Schema
 from .table import DeltaTable as DeltaTable
 from .table import Metadata as Metadata
 from .writer import write_deltalake as write_deltalake
+from .writer import convert_to_deltalake as convert_to_deltalake
