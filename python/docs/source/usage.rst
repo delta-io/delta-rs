@@ -484,16 +484,7 @@ For just file compaction, use the :meth:`TableOptimizer.compact` method:
     >>> from pprint import pprint
     >>> dt = DeltaTable("../crates/deltalake-core/tests/data/simple_table")
     >>> pprint(dt.optimize.compact())
-    {'filesAdded': {'avg': 574.0,
-                    'max': 574,
-                    'min': 574,
-                    'totalFiles': 1,
-                    'totalSize': 574},
-     'filesRemoved': {'avg': 362.2,
-                      'max': 429,
-                      'min': 262,
-                      'totalFiles': 5,
-                      'totalSize': 1811},
+    {...
      'numBatches': 3,
      'numFilesAdded': 1,
      'numFilesRemoved': 5,
@@ -508,19 +499,10 @@ filter on multiple columns at once.
 
 .. code-block:: python
 
-    from pprint import pprint
+    >>> from pprint import pprint
     >>> dt = DeltaTable("../crates/deltalake-core/tests/data/COVID-19_NYT")
     >>> pprint(dt.optimize.z_order(["date", "county"]))
-    {'filesAdded': {'avg': 3438197.0,
-                    'max': 3438197,
-                    'min': 3438197,
-                    'totalFiles': 1,
-                    'totalSize': 3438197},
-     'filesRemoved': {'avg': 773810.625,
-                      'max': 895702,
-                      'min': 325440,
-                      'totalFiles': 8,
-                      'totalSize': 6190485},
+    {...
      'numBatches': 136,
      'numFilesAdded': 1,
      'numFilesRemoved': 8,

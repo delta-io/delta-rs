@@ -92,6 +92,7 @@ addopts = "--cov=deltalake -v -m 'not integration and not benchmark' --doctest-m
 testpaths = [
     "tests",
     "docs",
+    "deltalake",
 ]
 markers = [
     "integration: marks tests as integration tests (deselect with '-m \"not integration\"')",
