@@ -737,7 +737,6 @@ mod tests {
             .with_update("value", col("value") + lit(1))
             .await
             .unwrap();
-
         assert_eq!(table.version(), 1);
         assert_eq!(table.get_file_uris().count(), 1);
         assert_eq!(metrics.num_added_files, 1);
