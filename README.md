@@ -152,8 +152,8 @@ of features outlined in the Delta [protocol][protocol] is also [tracked](#protoc
 | Delete - predicates   |         ![done]          |       ![done]       | Delete data based on a predicate            |
 | Optimize - compaction |         ![done]          |       ![done]       | Harmonize the size of data file             |
 | Optimize - Z-order    |         ![done]          |       ![done]       | Place similar data into the same file       |
-| Merge                 | [![semi-done]][merge-rs] | [![open]][merge-py] | Merge two tables (limited to full re-write) |
-| FS check              |         ![done]          |                     | Remove corrupted files from table           |
+| Merge                 | [![semi-done]][merge-rs] | [![semi-done]][merge-py] | Merge two tables (limited to full re-write) |
+| FS check              |         ![done]          |       ![done]       | Remove corrupted files from table           |
 
 ### Protocol Support Level
 
