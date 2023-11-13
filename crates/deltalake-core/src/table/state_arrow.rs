@@ -176,9 +176,9 @@ impl DeltaTableState {
                     .field_with_name(name)
                     .unwrap()
                     .physical_name();
-                (physical_name, name)
+                (physical_name, name.as_str())
             })
-            .collect::<HashMap<&String, &String>>();
+            .collect::<HashMap<&str, &str>>();
 
         // Append values
         for action in self.files() {
