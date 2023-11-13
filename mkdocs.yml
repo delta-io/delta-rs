@@ -24,6 +24,7 @@ nav:
     - Querying a Delta Table: usage/querying-delta-tables.md
     - Managing a Delta Table: usage/managing-tables.md
     - Writing Delta Tables: usage/writing-delta-tables.md
+    - Small file compaction: usage/small-file-compaction-with-optimize.md
   - API Reference:
     - api/delta_table.md
     - api/schema.md
