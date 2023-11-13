@@ -167,7 +167,7 @@ impl StructField {
     }
 
     /// Returns the phyiscal name
-    pub fn physical_name(&self) -> &String {
+    pub fn physical_name(&self) -> &str {
         let phys_name = self.get_config_value(&ColumnMetadataKey::ColumnMappingPhysicalName);
         match phys_name {
             None => &self.name,
