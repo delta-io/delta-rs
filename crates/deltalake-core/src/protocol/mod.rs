@@ -1083,6 +1083,50 @@ mod tests {
         }
 
         #[tokio::test]
+        async fn test_with_column_mapping() {
+            // test table with stats
+            let path = "./tests/data/table_with_column_mapping";
+            let table = crate::open_table(path).await.unwrap();
+            let actions = table.get_state().add_actions_table(true).unwrap();
+            let expected_columns: Vec<(&str, ArrayRef)> = vec![
+                (
+                    "path",
+                    Arc::new(array::StringArray::from(vec![
+                        "eZ/part-00000-b4c49156-0583-4cb3-b128-6a34a2efe3ea.c000.zstd.parquet",
+                        "rz/part-00001-34d11693-ea51-4072-b8af-1cfbdecbf8c6.c000.zstd.parquet",
+                    ])),
+                ),
+                (
+                    "partitionValues.Company Very Short",
+                    Arc::new(array::StringArray::from(vec!["bme", "bms"])),
+                ),
+                (
+                    "size_bytes",
+                    Arc::new(array::Int64Array::from(vec![625, 717])),
+                ),
+                (
+                    "modification_time",
+                    Arc::new(arrow::array::TimestampMillisecondArray::from(vec![
+                        1699870213000,
+                        1699870213000,
+                    ])),
+                ),
+                (
+                    "data_change",
+                    Arc::new(array::BooleanArray::from(vec![true, true])),
+                ),
+                ("num_records", Arc::new(array::Int64Array::from(vec![1, 4]))),
+                (
+                    "null_count.value",
+                    Arc::new(array::Int64Array::from(vec![0, 0])),
+                ),
+            ];
+            let expected = RecordBatch::try_from_iter(expected_columns.clone()).unwrap();
+
+            assert_eq!(expected, actions);
+        }
+
+        #[tokio::test]
         async fn test_with_stats() {
             // test table with stats
             let path = "./tests/data/delta-0.8.0";
