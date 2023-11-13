@@ -1,6 +1,8 @@
 //! Delta table schema
 
+use std::borrow::Borrow;
 use std::fmt::Formatter;
+use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 use std::{collections::HashMap, fmt::Display};
 
@@ -109,6 +111,20 @@ pub struct StructField {
     /// A JSON map containing information about this column
     pub metadata: HashMap<String, MetadataValue>,
 }
+
+impl Hash for StructField {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.name.hash(state);
+    }
+}
+
+impl Borrow<str> for StructField {
+    fn borrow(&self) -> &str {
+        self.name.as_ref()
+    }
+}
+
+impl Eq for StructField {}
 
 impl StructField {
     /// Creates a new field

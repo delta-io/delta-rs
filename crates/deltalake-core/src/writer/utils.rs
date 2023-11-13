@@ -27,8 +27,8 @@ use uuid::Uuid;
 
 use crate::errors::DeltaResult;
 use crate::writer::DeltaWriterError;
+use crate::NULL_PARTITION_VALUE_DATA_PATH;
 
-const NULL_PARTITION_VALUE_DATA_PATH: &str = "__HIVE_DEFAULT_PARTITION__";
 const PARTITION_DATE_FORMAT: &str = "%Y-%m-%d";
 const PARTITION_DATETIME_FORMAT: &str = "%Y-%m-%d %H:%M:%S";
 
