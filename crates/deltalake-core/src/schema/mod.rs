@@ -42,8 +42,10 @@ impl Invariant {
 // https://github.com/delta-io/delta/blob/master/PROTOCOL.md#Schema-Serialization-Format
 #[derive(Serialize, Deserialize, PartialEq, Debug, Default, Clone)]
 pub struct SchemaTypeStruct {
-    r#type: Cow<'static, str>,
-    fields: Vec<SchemaField>,
+    /// the type of the schema struct
+    pub r#type: Cow<'static, str>,
+    /// the schema fields
+    pub fields: Vec<SchemaField>,
 }
 
 impl SchemaTypeStruct {

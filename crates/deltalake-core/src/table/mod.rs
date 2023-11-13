@@ -336,7 +336,7 @@ impl DeltaTable {
     ///
     /// NOTE: This is for advanced users. If you don't know why you need to use this method,
     /// please call one of the `open_table` helper methods instead.
-    pub(crate) fn new_with_state(storage: ObjectStoreRef, state: DeltaTableState) -> Self {
+    pub fn new_with_state(storage: ObjectStoreRef, state: DeltaTableState) -> Self {
         Self {
             state,
             storage,

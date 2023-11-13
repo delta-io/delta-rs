@@ -33,11 +33,14 @@ const PARTITION_DATE_FORMAT: &str = "%Y-%m-%d";
 const PARTITION_DATETIME_FORMAT: &str = "%Y-%m-%d %H:%M:%S";
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
-pub(crate) struct PartitionPath {
+/// The partition path
+pub struct PartitionPath {
+    /// the path
     path: String,
 }
 
 impl PartitionPath {
+    /// Create a new partition path from a hashmap of partition columns and values
     pub fn from_hashmap(
         partition_columns: &[String],
         partition_values: &HashMap<String, Option<String>>,
