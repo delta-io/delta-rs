@@ -1098,7 +1098,7 @@ mod tests {
                 ),
                 (
                     "size_bytes",
-                    Arc::new(array::Int64Array::from(vec![625, 717])),
+                    Arc::new(array::Int64Array::from(vec![686, 717])),
                 ),
                 (
                     "modification_time",
@@ -1112,19 +1112,19 @@ mod tests {
                     Arc::new(array::BooleanArray::from(vec![true, true])),
                 ),
                 (
-                    "partitionValues.Company Very Short",
+                    "partition.Company Very Short",
                     Arc::new(array::StringArray::from(vec!["bme", "bms"])),
                 ),
                 ("num_records", Arc::new(array::Int64Array::from(vec![1, 4]))),
                 (
                     "null_count.Company Very Short",
-                    Arc::new(array::Int64Array::from(vec![0, 0])),
+                    Arc::new(array::NullArray::new(2)),
                 ),
                 ("min.Company Very Short", Arc::new(array::NullArray::new(2))),
                 ("max.Company Very Short", Arc::new(array::NullArray::new(2))),
                 (
                     "null_count.Super Name",
-                    Arc::new(array::Int64Array::from(vec![0, 0])),
+                    Arc::new(array::NullArray::new(2)),
                 ),
                 ("min.Super Name", Arc::new(array::NullArray::new(2))),
                 ("max.Super Name", Arc::new(array::NullArray::new(2))),
