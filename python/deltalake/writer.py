@@ -19,6 +19,7 @@ from typing import (
     Union,
 )
 from urllib.parse import unquote
+from hashlib import md5
 
 from deltalake.fs import DeltaStorageHandler
 
@@ -61,6 +62,10 @@ class AddAction:
     data_change: bool
     stats: str
 
+def _hash_schema(schema: pa.Schema) -> str:
+    dict_schema = dict(zip(schema.names, [str(pa_types) for pa_types in schema.types]))
+    hash_dt_schema = md5(json.dumps(dict_schema, sort_keys=True).encode('utf-8')).hexdigest()
+    return hash_dt_schema
 
 def write_deltalake(
     table_or_uri: Union[str, Path, DeltaTable],
@@ -195,7 +200,11 @@ def write_deltalake(
         partition_by = [partition_by]
 
     if table:  # already exists
-        if schema != table.schema().to_pyarrow(as_large_types=large_dtypes) and not (
+
+        hash_table_schema = _hash_schema(table.schema().to_pyarrow(as_large_types=large_dtypes))
+        hash_schema_provided = _hash_schema(schema)
+        
+        if hash_schema_provided != hash_table_schema and not (
             mode == "overwrite" and overwrite_schema
         ):
             raise ValueError(
