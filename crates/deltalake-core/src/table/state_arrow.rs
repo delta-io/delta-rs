@@ -183,15 +183,15 @@ impl DeltaTableState {
         // Append values
         for action in self.files() {
             for (name, maybe_value) in action.partition_values.iter() {
-                let logical_name = physical_name_to_logical_name.get(name).unwrap();
+                let logical_name = physical_name_to_logical_name.get(name.as_str()).unwrap();
                 if let Some(value) = maybe_value {
                     builders
-                        .get_mut(logical_name.as_str())
+                        .get_mut(logical_name)
                         .unwrap()
                         .append_value(value);
                 } else {
                     builders
-                        .get_mut(logical_name.as_str())
+                        .get_mut(logical_name)
                         .unwrap()
                         .append_null();
                 }
