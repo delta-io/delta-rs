@@ -1084,7 +1084,7 @@ mod tests {
 
         #[tokio::test]
         async fn test_with_column_mapping() {
-            // test table with stats
+            // test table with column mapping and partitions
             let path = "./tests/data/table_with_column_mapping";
             let table = crate::open_table(path).await.unwrap();
             let actions = table.get_state().add_actions_table(true).unwrap();
