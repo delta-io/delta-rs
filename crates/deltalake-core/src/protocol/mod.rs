@@ -1122,10 +1122,7 @@ mod tests {
                 ),
                 ("min.Company Very Short", Arc::new(array::NullArray::new(2))),
                 ("max.Company Very Short", Arc::new(array::NullArray::new(2))),
-                (
-                    "null_count.Super Name",
-                    Arc::new(array::NullArray::new(2)),
-                ),
+                ("null_count.Super Name", Arc::new(array::NullArray::new(2))),
                 ("min.Super Name", Arc::new(array::NullArray::new(2))),
                 ("max.Super Name", Arc::new(array::NullArray::new(2))),
                 (
