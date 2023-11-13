@@ -16,8 +16,9 @@
 //! ```rust ignore
 //! let table = open_table("../path/to/table")?;
 //! let (table, metrics) = DeltaOps(table)
-//!     .merge(source, col("id").eq(col("source.id")))
+//!     .merge(source, col("target.id").eq(col("source.id")))
 //!     .with_source_alias("source")
+//!     .with_target_alias("target")
 //!     .when_matched_update(|update| {
 //!         update
 //!             .update("value", col("source.value") + lit(1))
@@ -38,13 +39,14 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use arrow_schema::SchemaRef;
 use datafusion::error::Result as DataFusionResult;
+use datafusion::logical_expr::build_join_schema;
 use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion::{
     execution::context::SessionState,
     physical_plan::{
         filter::FilterExec,
         joins::{
-            utils::{build_join_schema, JoinFilter},
+            utils::{build_join_schema as physical_build_join_schema, JoinFilter},
             NestedLoopJoinExec,
         },
         metrics::{MetricBuilder, MetricsSet},
@@ -53,22 +55,27 @@ use datafusion::{
     },
     prelude::{DataFrame, SessionContext},
 };
-use datafusion_common::{Column, DFSchema, ScalarValue};
+use datafusion_common::{Column, DFField, DFSchema, ScalarValue, TableReference};
 use datafusion_expr::{col, conditional_expressions::CaseBuilder, lit, when, Expr, JoinType};
 use datafusion_physical_expr::{create_physical_expr, expressions, PhysicalExpr};
 use futures::future::BoxFuture;
 use parquet::file::properties::WriterProperties;
+use serde::Serialize;
 use serde_json::{Map, Value};
 
 use super::datafusion_utils::{into_expr, maybe_into_expr, Expression};
 use super::transaction::commit;
-use crate::delta_datafusion::{parquet_scan_from_actions, register_store};
+use crate::delta_datafusion::expr::{fmt_expr_to_sql, parse_predicate_expression};
+use crate::delta_datafusion::{register_store, DeltaScanBuilder};
 use crate::operations::datafusion_utils::MetricObserverExec;
-use crate::operations::write::write_execution_plan;
+use crate::{
+    operations::write::write_execution_plan,
+    storage::{DeltaObjectStore, ObjectStoreRef},
+    DeltaResult, DeltaTable, DeltaTableError,
+};
+
 use crate::protocol::{Action, DeltaOperation, MergePredicate, Remove};
-use crate::storage::{DeltaObjectStore, ObjectStoreRef};
 use crate::table::state::DeltaTableState;
-use crate::{DeltaResult, DeltaTable, DeltaTableError};
 
 const OPERATION_COLUMN: &str = "__delta_rs_operation";
 const DELETE_COLUMN: &str = "__delta_rs_delete";
@@ -88,13 +95,15 @@ pub struct MergeBuilder {
     /// The join predicate
     predicate: Expression,
     /// Operations to perform when a source record and target record match
-    match_operations: Vec<MergeOperation>,
+    match_operations: Vec<MergeOperationConfig>,
     /// Operations to perform on source records when they do not pair with a target record
-    not_match_operations: Vec<MergeOperation>,
+    not_match_operations: Vec<MergeOperationConfig>,
     /// Operations to perform on target records when they do not pair with a source record
-    not_match_source_operations: Vec<MergeOperation>,
+    not_match_source_operations: Vec<MergeOperationConfig>,
     ///Prefix the source columns with a user provided prefix
     source_alias: Option<String>,
+    ///Prefix target columns with a user provided prefix
+    target_alias: Option<String>,
     /// A snapshot of the table's state. AKA the target table in the operation
     snapshot: DeltaTableState,
     /// The source data
@@ -114,18 +123,20 @@ pub struct MergeBuilder {
 
 impl MergeBuilder {
     /// Create a new [`MergeBuilder`]
-    pub fn new(
+    pub fn new<E: Into<Expression>>(
         object_store: ObjectStoreRef,
         snapshot: DeltaTableState,
-        predicate: Expression,
+        predicate: E,
         source: DataFrame,
     ) -> Self {
+        let predicate = predicate.into();
         Self {
             predicate,
             source,
             snapshot,
             object_store,
             source_alias: None,
+            target_alias: None,
             state: None,
             app_metadata: None,
             writer_properties: None,
@@ -149,8 +160,9 @@ impl MergeBuilder {
     /// ```rust ignore
     /// let table = open_table("../path/to/table")?;
     /// let (table, metrics) = DeltaOps(table)
-    ///     .merge(source, col("id").eq(col("source.id")))
+    ///     .merge(source, col("target.id").eq(col("source.id")))
     ///     .with_source_alias("source")
+    ///     .with_target_alias("target")
     ///     .when_matched_update(|update| {
     ///         update
     ///             .predicate(col("source.value").lt(lit(0)))
@@ -169,12 +181,8 @@ impl MergeBuilder {
         F: FnOnce(UpdateBuilder) -> UpdateBuilder,
     {
         let builder = builder(UpdateBuilder::default());
-        let op = MergeOperation::try_new(
-            &self.snapshot,
-            builder.predicate,
-            builder.updates,
-            OperationType::Update,
-        )?;
+        let op =
+            MergeOperationConfig::new(builder.predicate, builder.updates, OperationType::Update)?;
         self.match_operations.push(op);
         Ok(self)
     }
@@ -190,8 +198,9 @@ impl MergeBuilder {
     /// ```rust ignore
     /// let table = open_table("../path/to/table")?;
     /// let (table, metrics) = DeltaOps(table)
-    ///     .merge(source, col("id").eq(col("source.id")))
+    ///     .merge(source, col("target.id").eq(col("source.id")))
     ///     .with_source_alias("source")
+    ///     .with_target_alias("target")
     ///     .when_matched_delete(|delete| {
     ///         delete.predicate(col("source.delete"))
     ///     })?
@@ -202,8 +211,7 @@ impl MergeBuilder {
         F: FnOnce(DeleteBuilder) -> DeleteBuilder,
     {
         let builder = builder(DeleteBuilder::default());
-        let op = MergeOperation::try_new(
-            &self.snapshot,
+        let op = MergeOperationConfig::new(
             builder.predicate,
             HashMap::default(),
             OperationType::Delete,
@@ -223,8 +231,9 @@ impl MergeBuilder {
     /// ```rust ignore
     /// let table = open_table("../path/to/table")?;
     /// let (table, metrics) = DeltaOps(table)
-    ///     .merge(source, col("id").eq(col("source.id")))
+    ///     .merge(source, col("target.id").eq(col("source.id")))
     ///     .with_source_alias("source")
+    ///     .with_target_alias("target")
     ///     .when_not_matched_insert(|insert| {
     ///         insert
     ///             .set("id", col("source.id"))
@@ -238,12 +247,7 @@ impl MergeBuilder {
         F: FnOnce(InsertBuilder) -> InsertBuilder,
     {
         let builder = builder(InsertBuilder::default());
-        let op = MergeOperation::try_new(
-            &self.snapshot,
-            builder.predicate,
-            builder.set,
-            OperationType::Insert,
-        )?;
+        let op = MergeOperationConfig::new(builder.predicate, builder.set, OperationType::Insert)?;
         self.not_match_operations.push(op);
         Ok(self)
     }
@@ -262,8 +266,9 @@ impl MergeBuilder {
     /// ```rust ignore
     /// let table = open_table("../path/to/table")?;
     /// let (table, metrics) = DeltaOps(table)
-    ///     .merge(source, col("id").eq(col("source.id")))
+    ///     .merge(source, col("target.id").eq(col("source.id")))
     ///     .with_source_alias("source")
+    ///     .with_target_alias("target")
     ///     .when_not_matched_by_source_update(|update| {
     ///         update
     ///             .update("active", lit(false))
@@ -276,12 +281,8 @@ impl MergeBuilder {
         F: FnOnce(UpdateBuilder) -> UpdateBuilder,
     {
         let builder = builder(UpdateBuilder::default());
-        let op = MergeOperation::try_new(
-            &self.snapshot,
-            builder.predicate,
-            builder.updates,
-            OperationType::Update,
-        )?;
+        let op =
+            MergeOperationConfig::new(builder.predicate, builder.updates, OperationType::Update)?;
         self.not_match_source_operations.push(op);
         Ok(self)
     }
@@ -297,8 +298,9 @@ impl MergeBuilder {
     /// ```rust ignore
     /// let table = open_table("../path/to/table")?;
     /// let (table, metrics) = DeltaOps(table)
-    ///     .merge(source, col("id").eq(col("source.id")))
+    ///     .merge(source, col("target.id").eq(col("source.id")))
     ///     .with_source_alias("source")
+    ///     .with_target_alias("target")
     ///     .when_not_matched_by_source_delete(|delete| {
     ///         delete
     ///     })?
@@ -309,8 +311,7 @@ impl MergeBuilder {
         F: FnOnce(DeleteBuilder) -> DeleteBuilder,
     {
         let builder = builder(DeleteBuilder::default());
-        let op = MergeOperation::try_new(
-            &self.snapshot,
+        let op = MergeOperationConfig::new(
             builder.predicate,
             HashMap::default(),
             OperationType::Delete,
@@ -322,6 +323,12 @@ impl MergeBuilder {
     /// Rename columns in the source dataset to have a prefix of `alias`.`original column name`
     pub fn with_source_alias<S: ToString>(mut self, alias: S) -> Self {
         self.source_alias = Some(alias.to_string());
+        self
+    }
+
+    /// Rename columns in the target dataset to have a prefix of `alias`.`original column name`
+    pub fn with_target_alias<S: ToString>(mut self, alias: S) -> Self {
+        self.target_alias = Some(alias.to_string());
         self
     }
 
@@ -437,6 +444,15 @@ enum OperationType {
     Copy,
 }
 
+//Encapsute the User's Merge configuration for later processing
+struct MergeOperationConfig {
+    /// Which records to update
+    predicate: Option<Expression>,
+    /// How to update columns in a record that match the predicate
+    operations: HashMap<Column, Expression>,
+    r#type: OperationType,
+}
+
 struct MergeOperation {
     /// Which records to update
     predicate: Option<Expr>,
@@ -446,28 +462,77 @@ struct MergeOperation {
 }
 
 impl MergeOperation {
-    pub fn try_new(
-        snapshot: &DeltaTableState,
+    fn try_from(
+        config: MergeOperationConfig,
+        schema: &DFSchema,
+        state: &SessionState,
+        target_alias: &Option<String>,
+    ) -> DeltaResult<MergeOperation> {
+        let mut ops = HashMap::with_capacity(config.operations.capacity());
+
+        for (column, expression) in config.operations.into_iter() {
+            // Normalize the column name to contain the target alias. If a table reference was provided ensure it's the target.
+            let column = match target_alias {
+                Some(alias) => {
+                    let r = TableReference::bare(alias.to_owned());
+                    match column {
+                        Column {
+                            relation: None,
+                            name,
+                        } => Column {
+                            relation: Some(r),
+                            name,
+                        },
+                        Column {
+                            relation: Some(TableReference::Bare { table }),
+                            name,
+                        } => {
+                            if table.eq(alias) {
+                                Column {
+                                    relation: Some(r),
+                                    name,
+                                }
+                            } else {
+                                return Err(DeltaTableError::Generic(
+                                    format!("Table alias '{table}' in column reference '{table}.{name}' unknown. Hint: You must reference the Delta Table with alias '{alias}'.")
+                                ));
+                            }
+                        }
+                        _ => {
+                            return Err(DeltaTableError::Generic(
+                                "Column must reference column in Delta table".into(),
+                            ))
+                        }
+                    }
+                }
+                None => column,
+            };
+            ops.insert(column, into_expr(expression, schema, state)?);
+        }
+
+        Ok(MergeOperation {
+            predicate: maybe_into_expr(config.predicate, schema, state)?,
+            operations: ops,
+            r#type: config.r#type,
+        })
+    }
+}
+
+impl MergeOperationConfig {
+    pub fn new(
         predicate: Option<Expression>,
         operations: HashMap<Column, Expression>,
         r#type: OperationType,
     ) -> DeltaResult<Self> {
-        let predicate = maybe_into_expr(predicate, snapshot)?;
-        let mut _operations = HashMap::new();
-
-        for (column, expr) in operations {
-            _operations.insert(column, into_expr(expr, snapshot)?);
-        }
-
-        Ok(MergeOperation {
+        Ok(MergeOperationConfig {
             predicate,
-            operations: _operations,
+            operations,
             r#type,
         })
     }
 }
 
-#[derive(Default)]
+#[derive(Default, Serialize)]
 /// Metrics for the Merge Operation
 pub struct MergeMetrics {
     /// Number of rows in the source data
@@ -505,9 +570,10 @@ async fn execute(
     app_metadata: Option<Map<String, Value>>,
     safe_cast: bool,
     source_alias: Option<String>,
-    match_operations: Vec<MergeOperation>,
-    not_match_target_operations: Vec<MergeOperation>,
-    not_match_source_operations: Vec<MergeOperation>,
+    target_alias: Option<String>,
+    match_operations: Vec<MergeOperationConfig>,
+    not_match_target_operations: Vec<MergeOperationConfig>,
+    not_match_source_operations: Vec<MergeOperationConfig>,
 ) -> DeltaResult<((Vec<Action>, i64), MergeMetrics)> {
     let mut metrics = MergeMetrics::default();
     let exec_start = Instant::now();
@@ -515,13 +581,6 @@ async fn execute(
     let current_metadata = snapshot
         .current_metadata()
         .ok_or(DeltaTableError::NoMetadata)?;
-
-    let predicate = match predicate {
-        Expression::DataFusion(expr) => expr,
-        Expression::String(s) => snapshot.parse_predicate_expression(s)?,
-    };
-
-    let schema = snapshot.input_schema()?;
 
     // TODO: Given the join predicate, remove any expression that involve the
     // source table and keep expressions that only involve the target table.
@@ -532,17 +591,12 @@ async fn execute(
     // If the user specified any not_source_match operations then those
     // predicates also need to be considered when pruning
 
-    let target = parquet_scan_from_actions(
-        snapshot,
-        object_store.clone(),
-        snapshot.files(),
-        &schema,
-        None,
-        &state,
-        None,
-        None,
-    )
-    .await?;
+    let target = Arc::new(
+        DeltaScanBuilder::new(snapshot, object_store.clone(), &state)
+            .with_schema(snapshot.input_schema()?)
+            .build()
+            .await?,
+    );
 
     let source = source.create_physical_plan().await?;
 
@@ -555,16 +609,10 @@ async fn execute(
     let mut expressions: Vec<(Arc<dyn PhysicalExpr>, String)> = Vec::new();
     let source_schema = source_count.schema();
 
-    let source_prefix = source_alias
-        .map(|mut s| {
-            s.push('.');
-            s
-        })
-        .unwrap_or_default();
     for (i, field) in source_schema.fields().into_iter().enumerate() {
         expressions.push((
             Arc::new(expressions::Column::new(field.name(), i)),
-            source_prefix.clone() + field.name(),
+            field.name().clone(),
         ));
     }
     expressions.push((
@@ -595,15 +643,54 @@ async fn execute(
     let target = Arc::new(CoalescePartitionsExec::new(target));
     let source = Arc::new(CoalescePartitionsExec::new(source));
 
-    let join_schema = build_join_schema(&source.schema(), &target.schema(), &JoinType::Full);
+    let source_schema = match &source_alias {
+        Some(alias) => {
+            DFSchema::try_from_qualified_schema(TableReference::bare(alias), &source.schema())?
+        }
+        None => DFSchema::try_from(source.schema().as_ref().to_owned())?,
+    };
+
+    let target_schema = match &target_alias {
+        Some(alias) => {
+            DFSchema::try_from_qualified_schema(TableReference::bare(alias), &target.schema())?
+        }
+        None => DFSchema::try_from(target.schema().as_ref().to_owned())?,
+    };
+
+    let join_schema_df = build_join_schema(&source_schema, &target_schema, &JoinType::Full)?;
+
+    let join_schema =
+        physical_build_join_schema(&source.schema(), &target.schema(), &JoinType::Full);
+    let (join_schema, join_order) = (join_schema.0, join_schema.1);
+
+    let predicate = match predicate {
+        Expression::DataFusion(expr) => expr,
+        Expression::String(s) => parse_predicate_expression(&join_schema_df, s, &state)?,
+    };
+
+    let match_operations: Vec<MergeOperation> = match_operations
+        .into_iter()
+        .map(|op| MergeOperation::try_from(op, &join_schema_df, &state, &target_alias))
+        .collect::<Result<Vec<MergeOperation>, DeltaTableError>>()?;
+
+    let not_match_target_operations: Vec<MergeOperation> = not_match_target_operations
+        .into_iter()
+        .map(|op| MergeOperation::try_from(op, &join_schema_df, &state, &target_alias))
+        .collect::<Result<Vec<MergeOperation>, DeltaTableError>>()?;
+
+    let not_match_source_operations: Vec<MergeOperation> = not_match_source_operations
+        .into_iter()
+        .map(|op| MergeOperation::try_from(op, &join_schema_df, &state, &target_alias))
+        .collect::<Result<Vec<MergeOperation>, DeltaTableError>>()?;
+
     let predicate_expr = create_physical_expr(
         &predicate,
-        &join_schema.0.clone().try_into()?,
-        &join_schema.0,
+        &join_schema_df,
+        &join_schema,
         state.execution_props(),
     )?;
 
-    let join_filter = JoinFilter::new(predicate_expr, join_schema.1, join_schema.0);
+    let join_filter = JoinFilter::new(predicate_expr, join_order, join_schema);
     let join: Arc<dyn ExecutionPlan> = Arc::new(NestedLoopJoinExec::try_new(
         source.clone(),
         target.clone(),
@@ -675,7 +762,10 @@ async fn execute(
             };
 
             let action_type = action_type.to_string();
-            let predicate = op.predicate.map(|expr| expr.display_name().unwrap());
+            let predicate = op
+                .predicate
+                .map(|expr| fmt_expr_to_sql(&expr))
+                .transpose()?;
 
             predicates.push(MergePredicate {
                 action_type,
@@ -725,12 +815,20 @@ async fn execute(
 
     let case = create_physical_expr(
         &case,
-        &join.schema().as_ref().to_owned().try_into()?,
+        &join_schema_df,
         &join.schema(),
         state.execution_props(),
     )?;
     expressions.push((case, OPERATION_COLUMN.to_owned()));
     let projection = Arc::new(ProjectionExec::try_new(expressions, join.clone())?);
+
+    let mut f = join_schema_df.fields().to_owned();
+    f.push(DFField::new_unqualified(
+        OPERATION_COLUMN,
+        arrow_schema::DataType::Int64,
+        false,
+    ));
+    let project_schema_df = DFSchema::new_with_metadata(f, HashMap::new())?;
 
     // Project again and include the original table schema plus a column to mark if row needs to be filtered before write
     let mut expressions: Vec<(Arc<dyn PhysicalExpr>, String)> = Vec::new();
@@ -743,15 +841,27 @@ async fn execute(
     }
 
     let mut projection_map = HashMap::new();
-    for field in snapshot.schema().unwrap().get_fields() {
+    let mut f = project_schema_df.fields().clone();
+
+    for delta_field in snapshot.schema().unwrap().get_fields() {
         let mut when_expr = Vec::with_capacity(operations_size);
         let mut then_expr = Vec::with_capacity(operations_size);
 
+        let qualifier = match &target_alias {
+            Some(alias) => Some(TableReference::Bare {
+                table: alias.to_owned().into(),
+            }),
+            None => TableReference::none(),
+        };
+        let name = delta_field.get_name();
+        let column = Column::new(qualifier.clone(), name);
+        let field = project_schema_df.field_with_name(qualifier.as_ref(), name)?;
+
         for (idx, (operations, _)) in ops.iter().enumerate() {
             let op = operations
-                .get(&field.get_name().to_owned().into())
+                .get(&column)
                 .map(|expr| expr.to_owned())
-                .unwrap_or(col(field.get_name()));
+                .unwrap_or_else(|| col(column.clone()));
 
             when_expr.push(lit(idx as i32));
             then_expr.push(op);
@@ -767,13 +877,20 @@ async fn execute(
 
         let case = create_physical_expr(
             &case,
-            &projection.schema().as_ref().to_owned().try_into()?,
+            &project_schema_df,
             &projection.schema(),
             state.execution_props(),
         )?;
 
-        projection_map.insert(field.get_name(), expressions.len());
-        expressions.push((case, "__delta_rs_c_".to_owned() + field.get_name()));
+        projection_map.insert(delta_field.get_name(), expressions.len());
+        let name = "__delta_rs_c_".to_owned() + delta_field.get_name();
+
+        f.push(DFField::new_unqualified(
+            &name,
+            field.data_type().clone(),
+            true,
+        ));
+        expressions.push((case, name));
     }
 
     let mut insert_when = Vec::with_capacity(ops.len());
@@ -858,7 +975,7 @@ async fn execute(
     }
 
     let schema = projection.schema();
-    let input_dfschema = schema.as_ref().to_owned().try_into()?;
+    let input_dfschema = project_schema_df;
     expressions.push((
         build_case(
             delete_when,
@@ -868,6 +985,11 @@ async fn execute(
             &state,
         )?,
         DELETE_COLUMN.to_owned(),
+    ));
+    f.push(DFField::new_unqualified(
+        DELETE_COLUMN,
+        arrow_schema::DataType::Boolean,
+        true,
     ));
 
     expressions.push((
@@ -880,6 +1002,12 @@ async fn execute(
         )?,
         TARGET_INSERT_COLUMN.to_owned(),
     ));
+    f.push(DFField::new_unqualified(
+        TARGET_INSERT_COLUMN,
+        arrow_schema::DataType::Boolean,
+        true,
+    ));
+
     expressions.push((
         build_case(
             update_when,
@@ -890,6 +1018,12 @@ async fn execute(
         )?,
         TARGET_UPDATE_COLUMN.to_owned(),
     ));
+    f.push(DFField::new_unqualified(
+        TARGET_UPDATE_COLUMN,
+        arrow_schema::DataType::Boolean,
+        true,
+    ));
+
     expressions.push((
         build_case(
             target_delete_when,
@@ -900,6 +1034,12 @@ async fn execute(
         )?,
         TARGET_DELETE_COLUMN.to_owned(),
     ));
+    f.push(DFField::new_unqualified(
+        TARGET_DELETE_COLUMN,
+        arrow_schema::DataType::Boolean,
+        true,
+    ));
+
     expressions.push((
         build_case(
             copy_when,
@@ -909,6 +1049,11 @@ async fn execute(
             &state,
         )?,
         TARGET_COPY_COLUMN.to_owned(),
+    ));
+    f.push(DFField::new_unqualified(
+        TARGET_COPY_COLUMN,
+        arrow_schema::DataType::Boolean,
+        true,
     ));
 
     let projection = Arc::new(ProjectionExec::try_new(expressions, projection.clone())?);
@@ -948,9 +1093,11 @@ async fn execute(
             );
     }));
 
+    let write_schema_df = DFSchema::new_with_metadata(f, HashMap::new())?;
+
     let write_predicate = create_physical_expr(
         &(col(DELETE_COLUMN).is_false()),
-        &target_count_plan.schema().as_ref().to_owned().try_into()?,
+        &write_schema_df,
         &target_count_plan.schema(),
         state.execution_props(),
     )?;
@@ -1035,7 +1182,7 @@ async fn execute(
     // Do not make a commit when there are zero updates to the state
     if !actions.is_empty() {
         let operation = DeltaOperation::Merge {
-            predicate: Some(predicate.canonical_name()),
+            predicate: Some(fmt_expr_to_sql(&predicate)?),
             matched_predicates: match_operations,
             not_matched_predicates: not_match_target_operations,
             not_matched_by_source_predicates: not_match_source_operations,
@@ -1080,6 +1227,7 @@ impl std::future::IntoFuture for MergeBuilder {
                 this.app_metadata,
                 this.safe_cast,
                 this.source_alias,
+                this.target_alias,
                 this.match_operations,
                 this.not_match_operations,
                 this.not_match_source_operations,
@@ -1107,11 +1255,14 @@ mod tests {
     use arrow::datatypes::Schema as ArrowSchema;
     use arrow::record_batch::RecordBatch;
     use datafusion::assert_batches_sorted_eq;
+    use datafusion::prelude::DataFrame;
     use datafusion::prelude::SessionContext;
     use datafusion_expr::col;
     use datafusion_expr::lit;
     use serde_json::json;
     use std::sync::Arc;
+
+    use super::MergeMetrics;
 
     async fn setup_table(partitions: Option<Vec<&str>>) -> DeltaTable {
         let table_schema = get_delta_schema();
@@ -1149,8 +1300,7 @@ mod tests {
             .unwrap()
     }
 
-    #[tokio::test]
-    async fn test_merge() {
+    async fn setup() -> (DeltaTable, DataFrame) {
         let schema = get_arrow_schema(&None);
         let table = setup_table(None).await;
 
@@ -1173,32 +1323,10 @@ mod tests {
         )
         .unwrap();
         let source = ctx.read_batch(batch).unwrap();
+        (table, source)
+    }
 
-        let (mut table, metrics) = DeltaOps(table)
-            .merge(source, col("id").eq(col("source.id")))
-            .with_source_alias("source")
-            .when_matched_update(|update| {
-                update
-                    .update("value", col("source.value"))
-                    .update("modified", col("source.modified"))
-            })
-            .unwrap()
-            .when_not_matched_by_source_update(|update| {
-                update
-                    .predicate(col("value").eq(lit(1)))
-                    .update("value", col("value") + lit(1))
-            })
-            .unwrap()
-            .when_not_matched_insert(|insert| {
-                insert
-                    .set("id", col("source.id"))
-                    .set("value", col("source.value"))
-                    .set("modified", col("source.modified"))
-            })
-            .unwrap()
-            .await
-            .unwrap();
-
+    async fn assert_merge(table: DeltaTable, metrics: MergeMetrics) {
         assert_eq!(table.version(), 2);
         assert_eq!(table.get_file_uris().count(), 1);
         assert_eq!(metrics.num_target_files_added, 1);
@@ -1209,24 +1337,6 @@ mod tests {
         assert_eq!(metrics.num_target_rows_deleted, 0);
         assert_eq!(metrics.num_output_rows, 5);
         assert_eq!(metrics.num_source_rows, 3);
-
-        let commit_info = table.history(None).await.unwrap();
-        let last_commit = &commit_info[commit_info.len() - 1];
-        let parameters = last_commit.operation_parameters.clone().unwrap();
-        assert_eq!(parameters["predicate"], json!("id = source.id"));
-        assert_eq!(
-            parameters["matchedPredicates"],
-            json!(r#"[{"actionType":"update"}]"#)
-        );
-        assert_eq!(
-            parameters["notMatchedPredicates"],
-            json!(r#"[{"actionType":"insert"}]"#)
-        );
-        // Todo: Expected this predicate to actually be 'value = 1'. Predicate should contain a valid sql expression
-        assert_eq!(
-            parameters["notMatchedBySourcePredicates"],
-            json!(r#"[{"actionType":"update","predicate":"value = Int32(1)"}]"#)
-        );
 
         let expected = vec![
             "+----+-------+------------+",
@@ -1241,6 +1351,225 @@ mod tests {
         ];
         let actual = get_data(&table).await;
         assert_batches_sorted_eq!(&expected, &actual);
+    }
+
+    #[tokio::test]
+    async fn test_merge() {
+        let (table, source) = setup().await;
+
+        let (mut table, metrics) = DeltaOps(table)
+            .merge(source, col("target.id").eq(col("source.id")))
+            .with_source_alias("source")
+            .with_target_alias("target")
+            .when_matched_update(|update| {
+                update
+                    .update("value", col("source.value"))
+                    .update("modified", col("source.modified"))
+            })
+            .unwrap()
+            .when_not_matched_by_source_update(|update| {
+                update
+                    .predicate(col("target.value").eq(lit(1)))
+                    .update("value", col("target.value") + lit(1))
+            })
+            .unwrap()
+            .when_not_matched_insert(|insert| {
+                insert
+                    .set("id", col("source.id"))
+                    .set("value", col("source.value"))
+                    .set("modified", col("source.modified"))
+            })
+            .unwrap()
+            .await
+            .unwrap();
+
+        let commit_info = table.history(None).await.unwrap();
+        let last_commit = &commit_info[commit_info.len() - 1];
+        let parameters = last_commit.operation_parameters.clone().unwrap();
+        assert_eq!(parameters["predicate"], json!("target.id = source.id"));
+        assert_eq!(
+            parameters["matchedPredicates"],
+            json!(r#"[{"actionType":"update"}]"#)
+        );
+        assert_eq!(
+            parameters["notMatchedPredicates"],
+            json!(r#"[{"actionType":"insert"}]"#)
+        );
+        assert_eq!(
+            parameters["notMatchedBySourcePredicates"],
+            json!(r#"[{"actionType":"update","predicate":"target.value = 1"}]"#)
+        );
+
+        assert_merge(table, metrics).await;
+    }
+
+    #[tokio::test]
+    async fn test_merge_str() {
+        // Validate that users can use string predicates
+        // Also validates that update and set operations can contain the target alias
+        let (table, source) = setup().await;
+
+        let (mut table, metrics) = DeltaOps(table)
+            .merge(source, "target.id = source.id")
+            .with_source_alias("source")
+            .with_target_alias("target")
+            .when_matched_update(|update| {
+                update
+                    .update("target.value", "source.value")
+                    .update("modified", "source.modified")
+            })
+            .unwrap()
+            .when_not_matched_by_source_update(|update| {
+                update
+                    .predicate("target.value = arrow_cast(1, 'Int32')")
+                    .update("value", "target.value + cast(1 as int)")
+            })
+            .unwrap()
+            .when_not_matched_insert(|insert| {
+                insert
+                    .set("target.id", "source.id")
+                    .set("value", "source.value")
+                    .set("modified", "source.modified")
+            })
+            .unwrap()
+            .await
+            .unwrap();
+
+        let commit_info = table.history(None).await.unwrap();
+        let last_commit = &commit_info[commit_info.len() - 1];
+        let parameters = last_commit.operation_parameters.clone().unwrap();
+        assert_eq!(parameters["predicate"], json!("target.id = source.id"));
+        assert_eq!(
+            parameters["matchedPredicates"],
+            json!(r#"[{"actionType":"update"}]"#)
+        );
+        assert_eq!(
+            parameters["notMatchedPredicates"],
+            json!(r#"[{"actionType":"insert"}]"#)
+        );
+        assert_eq!(
+            parameters["notMatchedBySourcePredicates"],
+            json!(
+                r#"[{"actionType":"update","predicate":"target.value = arrow_cast(1, 'Int32')"}]"#
+            )
+        );
+
+        assert_merge(table, metrics).await;
+    }
+
+    #[tokio::test]
+    async fn test_merge_no_alias() {
+        // Validate merge can be used without specifying an alias
+        let (table, source) = setup().await;
+
+        let source = source
+            .with_column_renamed("id", "source_id")
+            .unwrap()
+            .with_column_renamed("value", "source_value")
+            .unwrap()
+            .with_column_renamed("modified", "source_modified")
+            .unwrap();
+
+        let (table, metrics) = DeltaOps(table)
+            .merge(source, "id = source_id")
+            .when_matched_update(|update| {
+                update
+                    .update("value", "source_value")
+                    .update("modified", "source_modified")
+            })
+            .unwrap()
+            .when_not_matched_by_source_update(|update| {
+                update
+                    .predicate("value = arrow_cast(1, 'Int32')")
+                    .update("value", "value + cast(1 as int)")
+            })
+            .unwrap()
+            .when_not_matched_insert(|insert| {
+                insert
+                    .set("id", "source_id")
+                    .set("value", "source_value")
+                    .set("modified", "source_modified")
+            })
+            .unwrap()
+            .await
+            .unwrap();
+
+        assert_merge(table, metrics).await;
+    }
+
+    #[tokio::test]
+    async fn test_merge_with_alias_mix() {
+        // Validate merge can be used with an alias and unambiguous column references
+        // I.E users should be able to specify an alias and still reference columns without using that alias when there is no ambiguity
+        let (table, source) = setup().await;
+
+        let source = source
+            .with_column_renamed("id", "source_id")
+            .unwrap()
+            .with_column_renamed("value", "source_value")
+            .unwrap()
+            .with_column_renamed("modified", "source_modified")
+            .unwrap();
+
+        let (table, metrics) = DeltaOps(table)
+            .merge(source, "id = source_id")
+            .with_target_alias("target")
+            .when_matched_update(|update| {
+                update
+                    .update("value", "source_value")
+                    .update("modified", "source_modified")
+            })
+            .unwrap()
+            .when_not_matched_by_source_update(|update| {
+                update
+                    .predicate("value = arrow_cast(1, 'Int32')")
+                    .update("value", "target.value + cast(1 as int)")
+            })
+            .unwrap()
+            .when_not_matched_insert(|insert| {
+                insert
+                    .set("id", "source_id")
+                    .set("target.value", "source_value")
+                    .set("modified", "source_modified")
+            })
+            .unwrap()
+            .await
+            .unwrap();
+
+        assert_merge(table, metrics).await;
+    }
+
+    #[tokio::test]
+    async fn test_merge_failures() {
+        // Validate target columns cannot be from the source
+        let (table, source) = setup().await;
+        let res = DeltaOps(table)
+            .merge(source, col("target.id").eq(col("source.id")))
+            .with_source_alias("source")
+            .with_target_alias("target")
+            .when_matched_update(|update| {
+                update
+                    .update("source.value", "source.value")
+                    .update("modified", "source.modified")
+            })
+            .unwrap()
+            .await;
+        assert!(res.is_err());
+
+        // Validate failure when aliases are the same
+        let (table, source) = setup().await;
+        let res = DeltaOps(table)
+            .merge(source, col("target.id").eq(col("source.id")))
+            .with_source_alias("source")
+            .with_target_alias("source")
+            .when_matched_update(|update| {
+                update
+                    .update("target.value", "source.value")
+                    .update("modified", "source.modified")
+            })
+            .unwrap()
+            .await;
+        assert!(res.is_err())
     }
 
     #[tokio::test]
@@ -1272,11 +1601,12 @@ mod tests {
         let (table, metrics) = DeltaOps(table)
             .merge(
                 source,
-                col("id")
+                col("target.id")
                     .eq(col("source.id"))
-                    .and(col("modified").eq(lit("2021-02-02"))),
+                    .and(col("target.modified").eq(lit("2021-02-02"))),
             )
             .with_source_alias("source")
+            .with_target_alias("target")
             .when_matched_update(|update| {
                 update
                     .update("value", col("source.value"))
@@ -1285,14 +1615,14 @@ mod tests {
             .unwrap()
             .when_not_matched_by_source_update(|update| {
                 update
-                    .predicate(col("value").eq(lit(1)))
-                    .update("value", col("value") + lit(1))
+                    .predicate(col("target.value").eq(lit(1)))
+                    .update("value", col("target.value") + lit(1))
             })
             .unwrap()
             .when_not_matched_by_source_update(|update| {
                 update
-                    .predicate(col("modified").eq(lit("2021-02-01")))
-                    .update("value", col("value") - lit(1))
+                    .predicate(col("target.modified").eq(lit("2021-02-01")))
+                    .update("value", col("target.value") - lit(1))
             })
             .unwrap()
             .when_not_matched_insert(|insert| {
@@ -1360,8 +1690,9 @@ mod tests {
         let source = ctx.read_batch(batch).unwrap();
 
         let (mut table, metrics) = DeltaOps(table)
-            .merge(source, col("id").eq(col("source.id")))
+            .merge(source, col("target.id").eq(col("source.id")))
             .with_source_alias("source")
+            .with_target_alias("target")
             .when_matched_delete(|delete| delete)
             .unwrap()
             .await
@@ -1381,7 +1712,7 @@ mod tests {
         let commit_info = table.history(None).await.unwrap();
         let last_commit = &commit_info[commit_info.len() - 1];
         let parameters = last_commit.operation_parameters.clone().unwrap();
-        assert_eq!(parameters["predicate"], json!("id = source.id"));
+        assert_eq!(parameters["predicate"], json!("target.id = source.id"));
         assert_eq!(
             parameters["matchedPredicates"],
             json!(r#"[{"actionType":"delete"}]"#)
@@ -1423,8 +1754,9 @@ mod tests {
         let source = ctx.read_batch(batch).unwrap();
 
         let (mut table, metrics) = DeltaOps(table)
-            .merge(source, col("id").eq(col("source.id")))
+            .merge(source, col("target.id").eq(col("source.id")))
             .with_source_alias("source")
+            .with_target_alias("target")
             .when_matched_delete(|delete| delete.predicate(col("source.value").lt_eq(lit(10))))
             .unwrap()
             .await
@@ -1444,10 +1776,10 @@ mod tests {
         let commit_info = table.history(None).await.unwrap();
         let last_commit = &commit_info[commit_info.len() - 1];
         let parameters = last_commit.operation_parameters.clone().unwrap();
-        assert_eq!(parameters["predicate"], json!("id = source.id"));
+        assert_eq!(parameters["predicate"], json!("target.id = source.id"));
         assert_eq!(
             parameters["matchedPredicates"],
-            json!(r#"[{"actionType":"delete","predicate":"source.value <= Int32(10)"}]"#)
+            json!(r#"[{"actionType":"delete","predicate":"source.value <= 10"}]"#)
         );
 
         let expected = vec![
@@ -1491,8 +1823,9 @@ mod tests {
         let source = ctx.read_batch(batch).unwrap();
 
         let (mut table, metrics) = DeltaOps(table)
-            .merge(source, col("id").eq(col("source.id")))
+            .merge(source, col("target.id").eq(col("source.id")))
             .with_source_alias("source")
+            .with_target_alias("target")
             .when_not_matched_by_source_delete(|delete| delete)
             .unwrap()
             .await
@@ -1512,7 +1845,7 @@ mod tests {
         let commit_info = table.history(None).await.unwrap();
         let last_commit = &commit_info[commit_info.len() - 1];
         let parameters = last_commit.operation_parameters.clone().unwrap();
-        assert_eq!(parameters["predicate"], json!("id = source.id"));
+        assert_eq!(parameters["predicate"], json!("target.id = source.id"));
         assert_eq!(
             parameters["notMatchedBySourcePredicates"],
             json!(r#"[{"actionType":"delete"}]"#)
@@ -1553,10 +1886,11 @@ mod tests {
         let source = ctx.read_batch(batch).unwrap();
 
         let (mut table, metrics) = DeltaOps(table)
-            .merge(source, col("id").eq(col("source.id")))
+            .merge(source, col("target.id").eq(col("source.id")))
             .with_source_alias("source")
+            .with_target_alias("target")
             .when_not_matched_by_source_delete(|delete| {
-                delete.predicate(col("modified").gt(lit("2021-02-01")))
+                delete.predicate(col("target.modified").gt(lit("2021-02-01")))
             })
             .unwrap()
             .await
@@ -1576,10 +1910,10 @@ mod tests {
         let commit_info = table.history(None).await.unwrap();
         let last_commit = &commit_info[commit_info.len() - 1];
         let parameters = last_commit.operation_parameters.clone().unwrap();
-        assert_eq!(parameters["predicate"], json!("id = source.id"));
+        assert_eq!(parameters["predicate"], json!("target.id = source.id"));
         assert_eq!(
             parameters["notMatchedBySourcePredicates"],
-            json!(r#"[{"actionType":"delete","predicate":"modified > Utf8(\"2021-02-01\")"}]"#)
+            json!(r#"[{"actionType":"delete","predicate":"target.modified > '2021-02-01'"}]"#)
         );
 
         let expected = vec![

@@ -415,8 +415,8 @@ impl DeltaTable {
 
         Ok(())
     }
-
-    async fn get_latest_version(&mut self) -> Result<i64, DeltaTableError> {
+    /// returns the latest available version of the table
+    pub async fn get_latest_version(&mut self) -> Result<i64, DeltaTableError> {
         let version_start = match get_last_checkpoint(&self.storage).await {
             Ok(last_check_point) => last_check_point.version,
             Err(ProtocolError::CheckpointNotFound) => {
@@ -710,8 +710,8 @@ impl DeltaTable {
     /// Obtain Add actions for files that match the filter
     pub fn get_active_add_actions_by_partitions<'a>(
         &'a self,
-        filters: &'a [PartitionFilter<'a, &'a str>],
-    ) -> Result<impl Iterator<Item = &'a Add> + '_, DeltaTableError> {
+        filters: &'a [PartitionFilter],
+    ) -> Result<impl Iterator<Item = &Add> + '_, DeltaTableError> {
         self.state.get_active_add_actions_by_partitions(filters)
     }
 
@@ -719,7 +719,7 @@ impl DeltaTable {
     /// `PartitionFilter`s.
     pub fn get_files_by_partitions(
         &self,
-        filters: &[PartitionFilter<&str>],
+        filters: &[PartitionFilter],
     ) -> Result<Vec<Path>, DeltaTableError> {
         Ok(self
             .get_active_add_actions_by_partitions(filters)?
@@ -736,7 +736,7 @@ impl DeltaTable {
     /// Return the file uris as strings for the partition(s)
     pub fn get_file_uris_by_partitions(
         &self,
-        filters: &[PartitionFilter<&str>],
+        filters: &[PartitionFilter],
     ) -> Result<Vec<String>, DeltaTableError> {
         let files = self.get_files_by_partitions(filters)?;
         Ok(files

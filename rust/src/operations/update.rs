@@ -40,10 +40,11 @@ use datafusion_physical_expr::{
 };
 use futures::future::BoxFuture;
 use parquet::file::properties::WriterProperties;
+use serde::Serialize;
 use serde_json::{Map, Value};
 
 use crate::{
-    delta_datafusion::{find_files, parquet_scan_from_actions, register_store},
+    delta_datafusion::{expr::fmt_expr_to_sql, find_files, register_store, DeltaScanBuilder},
     protocol::{Action, DeltaOperation, Remove},
     storage::{DeltaObjectStore, ObjectStoreRef},
     table::state::DeltaTableState,
@@ -78,7 +79,7 @@ pub struct UpdateBuilder {
     safe_cast: bool,
 }
 
-#[derive(Default)]
+#[derive(Default, Serialize)]
 /// Metrics collected during the Update operation
 pub struct UpdateMetrics {
     /// Number of files added.
@@ -194,7 +195,7 @@ async fn execute(
     let predicate = match predicate {
         Some(predicate) => match predicate {
             Expression::DataFusion(expr) => Some(expr),
-            Expression::String(s) => Some(snapshot.parse_predicate_expression(s)?),
+            Expression::String(s) => Some(snapshot.parse_predicate_expression(s, &state)?),
         },
         None => None,
     };
@@ -203,7 +204,9 @@ async fn execute(
         .into_iter()
         .map(|(key, expr)| match expr {
             Expression::DataFusion(e) => Ok((key, e)),
-            Expression::String(s) => snapshot.parse_predicate_expression(s).map(|e| (key, e)),
+            Expression::String(s) => snapshot
+                .parse_predicate_expression(s, &state)
+                .map(|e| (key, e)),
         })
         .collect::<Result<HashMap<Column, Expr>, _>>()?;
 
@@ -211,17 +214,9 @@ async fn execute(
         .current_metadata()
         .ok_or(DeltaTableError::NoMetadata)?;
     let table_partition_cols = current_metadata.partition_columns.clone();
-    let schema = snapshot.arrow_schema()?;
 
     let scan_start = Instant::now();
-    let candidates = find_files(
-        snapshot,
-        object_store.clone(),
-        schema.clone(),
-        &state,
-        predicate.clone(),
-    )
-    .await?;
+    let candidates = find_files(snapshot, object_store.clone(), &state, predicate.clone()).await?;
     metrics.scan_time_ms = Instant::now().duration_since(scan_start).as_millis() as u64;
 
     if candidates.candidates.is_empty() {
@@ -233,17 +228,11 @@ async fn execute(
     let execution_props = state.execution_props();
     // For each rewrite evaluate the predicate and then modify each expression
     // to either compute the new value or obtain the old one then write these batches
-    let parquet_scan = parquet_scan_from_actions(
-        snapshot,
-        object_store.clone(),
-        &candidates.candidates,
-        &schema,
-        None,
-        &state,
-        None,
-        None,
-    )
-    .await?;
+    let scan = DeltaScanBuilder::new(snapshot, object_store.clone(), &state)
+        .with_files(&candidates.candidates)
+        .build()
+        .await?;
+    let scan = Arc::new(scan);
 
     // Create a projection for a new column with the predicate evaluated
     let input_schema = snapshot.input_schema()?;
@@ -262,7 +251,7 @@ async fn execute(
     let input_dfschema: DFSchema = input_schema.as_ref().clone().try_into()?;
 
     let mut expressions: Vec<(Arc<dyn PhysicalExpr>, String)> = Vec::new();
-    let scan_schema = parquet_scan.schema();
+    let scan_schema = scan.schema();
     for (i, field) in scan_schema.fields().into_iter().enumerate() {
         expressions.push((
             Arc::new(expressions::Column::new(field.name(), i)),
@@ -286,7 +275,7 @@ async fn execute(
     expressions.push((predicate_expr, "__delta_rs_update_predicate".to_string()));
 
     let projection_predicate: Arc<dyn ExecutionPlan> =
-        Arc::new(ProjectionExec::try_new(expressions, parquet_scan)?);
+        Arc::new(ProjectionExec::try_new(expressions, scan)?);
 
     let count_plan = Arc::new(MetricObserverExec::new(
         projection_predicate.clone(),
@@ -416,7 +405,7 @@ async fn execute(
     metrics.execution_time_ms = Instant::now().duration_since(exec_start).as_millis() as u64;
 
     let operation = DeltaOperation::Update {
-        predicate: Some(predicate.canonical_name()),
+        predicate: Some(fmt_expr_to_sql(&predicate)?),
     };
     version = commit(
         object_store.as_ref(),
@@ -481,6 +470,7 @@ mod tests {
     use arrow_array::Int32Array;
     use datafusion::assert_batches_sorted_eq;
     use datafusion::prelude::*;
+    use serde_json::json;
     use std::sync::Arc;
 
     async fn setup_table(partitions: Option<Vec<&str>>) -> DeltaTable {
@@ -603,7 +593,7 @@ mod tests {
         assert_eq!(table.version(), 1);
         assert_eq!(table.get_file_uris().count(), 1);
 
-        let (table, metrics) = DeltaOps(table)
+        let (mut table, metrics) = DeltaOps(table)
             .update()
             .with_predicate(col("modified").eq(lit("2021-02-03")))
             .with_update("modified", lit("2023-05-14"))
@@ -616,6 +606,11 @@ mod tests {
         assert_eq!(metrics.num_removed_files, 1);
         assert_eq!(metrics.num_updated_rows, 2);
         assert_eq!(metrics.num_copied_rows, 2);
+
+        let commit_info = table.history(None).await.unwrap();
+        let last_commit = &commit_info[commit_info.len() - 1];
+        let parameters = last_commit.operation_parameters.clone().unwrap();
+        assert_eq!(parameters["predicate"], json!("modified = '2021-02-03'"));
 
         let expected = vec![
             "+----+-------+------------+",

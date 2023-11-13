@@ -20,6 +20,7 @@
 use std::sync::Arc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
+use crate::delta_datafusion::expr::fmt_expr_to_sql;
 use crate::protocol::{Action, Add, Remove};
 use datafusion::execution::context::{SessionContext, SessionState};
 use datafusion::physical_expr::create_physical_expr;
@@ -30,11 +31,11 @@ use datafusion_common::scalar::ScalarValue;
 use datafusion_common::DFSchema;
 use futures::future::BoxFuture;
 use parquet::file::properties::WriterProperties;
+use serde::Serialize;
 use serde_json::Map;
 use serde_json::Value;
 
-use crate::delta_datafusion::find_files;
-use crate::delta_datafusion::{parquet_scan_from_actions, register_store};
+use crate::delta_datafusion::{find_files, register_store, DeltaScanBuilder};
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::operations::transaction::commit;
 use crate::operations::write::write_execution_plan;
@@ -62,7 +63,7 @@ pub struct DeleteBuilder {
     app_metadata: Option<Map<String, serde_json::Value>>,
 }
 
-#[derive(Default, Debug)]
+#[derive(Default, Debug, Serialize)]
 /// Metrics for the Delete Operation
 pub struct DeleteMetrics {
     /// Number of files added
@@ -115,7 +116,7 @@ impl DeleteBuilder {
         self
     }
 
-    /// Writer properties passed to parquet writer for when fiiles are rewritten
+    /// Writer properties passed to parquet writer for when files are rewritten
     pub fn with_writer_properties(mut self, writer_properties: WriterProperties) -> Self {
         self.writer_properties = Some(writer_properties);
         self
@@ -134,7 +135,6 @@ async fn excute_non_empty_expr(
     // For each identified file perform a parquet scan + filter + limit (1) + count.
     // If returned count is not zero then append the file to be rewritten and removed from the log. Otherwise do nothing to the file.
 
-    let schema = snapshot.arrow_schema()?;
     let input_schema = snapshot.input_schema()?;
     let input_dfschema: DFSchema = input_schema.clone().as_ref().clone().try_into()?;
 
@@ -144,17 +144,11 @@ async fn excute_non_empty_expr(
         .partition_columns
         .clone();
 
-    let parquet_scan = parquet_scan_from_actions(
-        snapshot,
-        object_store.clone(),
-        rewrite,
-        &schema,
-        None,
-        state,
-        None,
-        None,
-    )
-    .await?;
+    let scan = DeltaScanBuilder::new(snapshot, object_store.clone(), state)
+        .with_files(rewrite)
+        .build()
+        .await?;
+    let scan = Arc::new(scan);
 
     // Apply the negation of the filter and rewrite files
     let negated_expression = Expr::Not(Box::new(Expr::IsTrue(Box::new(expression.clone()))));
@@ -166,7 +160,7 @@ async fn excute_non_empty_expr(
         state.execution_props(),
     )?;
     let filter: Arc<dyn ExecutionPlan> =
-        Arc::new(FilterExec::try_new(predicate_expr, parquet_scan.clone())?);
+        Arc::new(FilterExec::try_new(predicate_expr, scan.clone())?);
 
     let add_actions = write_execution_plan(
         snapshot,
@@ -181,7 +175,7 @@ async fn excute_non_empty_expr(
     )
     .await?;
 
-    let read_records = parquet_scan.metrics().and_then(|m| m.output_rows());
+    let read_records = scan.parquet_scan.metrics().and_then(|m| m.output_rows());
     let filter_records = filter.metrics().and_then(|m| m.output_rows());
     metrics.num_copied_rows = filter_records;
     metrics.num_deleted_rows = read_records
@@ -201,17 +195,9 @@ async fn execute(
 ) -> DeltaResult<((Vec<Action>, i64), DeleteMetrics)> {
     let exec_start = Instant::now();
     let mut metrics = DeleteMetrics::default();
-    let schema = snapshot.arrow_schema()?;
 
     let scan_start = Instant::now();
-    let candidates = find_files(
-        snapshot,
-        object_store.clone(),
-        schema.clone(),
-        &state,
-        predicate.clone(),
-    )
-    .await?;
+    let candidates = find_files(snapshot, object_store.clone(), &state, predicate.clone()).await?;
     metrics.scan_time_ms = Instant::now().duration_since(scan_start).as_micros();
 
     let predicate = predicate.unwrap_or(Expr::Literal(ScalarValue::Boolean(Some(true))));
@@ -263,7 +249,7 @@ async fn execute(
     // Do not make a commit when there are zero updates to the state
     if !actions.is_empty() {
         let operation = DeltaOperation::Delete {
-            predicate: Some(predicate.canonical_name()),
+            predicate: Some(fmt_expr_to_sql(&predicate)?),
         };
         version = commit(
             object_store.as_ref(),
@@ -298,7 +284,9 @@ impl std::future::IntoFuture for DeleteBuilder {
             let predicate = match this.predicate {
                 Some(predicate) => match predicate {
                     Expression::DataFusion(expr) => Some(expr),
-                    Expression::String(s) => Some(this.snapshot.parse_predicate_expression(s)?),
+                    Expression::String(s) => {
+                        Some(this.snapshot.parse_predicate_expression(s, &state)?)
+                    }
                 },
                 None => None,
             };
@@ -335,6 +323,7 @@ mod tests {
     use arrow::record_batch::RecordBatch;
     use datafusion::assert_batches_sorted_eq;
     use datafusion::prelude::*;
+    use serde_json::json;
     use std::sync::Arc;
 
     async fn setup_table(partitions: Option<Vec<&str>>) -> DeltaTable {
@@ -456,7 +445,7 @@ mod tests {
         assert_eq!(table.version(), 2);
         assert_eq!(table.get_file_uris().count(), 2);
 
-        let (table, metrics) = DeltaOps(table)
+        let (mut table, metrics) = DeltaOps(table)
             .delete()
             .with_predicate(col("value").eq(lit(1)))
             .await
@@ -469,6 +458,11 @@ mod tests {
         assert!(metrics.scan_time_ms > 0);
         assert_eq!(metrics.num_deleted_rows, Some(1));
         assert_eq!(metrics.num_copied_rows, Some(3));
+
+        let commit_info = table.history(None).await.unwrap();
+        let last_commit = &commit_info[commit_info.len() - 1];
+        let parameters = last_commit.operation_parameters.clone().unwrap();
+        assert_eq!(parameters["predicate"], json!("value = 1"));
 
         let expected = vec![
             "+----+-------+------------+",

@@ -17,13 +17,13 @@ classifiers = [
     "Programming Language :: Python :: 3.11"
 ]
 dependencies = [
-    "pyarrow>=8,<=12",
+    "pyarrow>=8,<13",
     'typing-extensions;python_version<"3.8"',
 ]
 
 [project.optional-dependencies]
 pandas = [
-    "pandas<2"
+    "pandas"
 ]
 devel = [
     "mypy",

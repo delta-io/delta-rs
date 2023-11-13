@@ -205,15 +205,17 @@ mod datafusion_utils {
     use arrow_schema::SchemaRef;
     use datafusion::arrow::record_batch::RecordBatch;
     use datafusion::error::Result as DataFusionResult;
+    use datafusion::execution::context::SessionState;
     use datafusion::physical_plan::DisplayAs;
     use datafusion::physical_plan::{
         metrics::{ExecutionPlanMetricsSet, MetricsSet},
         ExecutionPlan, RecordBatchStream, SendableRecordBatchStream,
     };
+    use datafusion_common::DFSchema;
     use datafusion_expr::Expr;
     use futures::{Stream, StreamExt};
 
-    use crate::{table::state::DeltaTableState, DeltaResult};
+    use crate::{delta_datafusion::expr::parse_predicate_expression, DeltaResult};
 
     /// Used to represent user input of either a Datafusion expression or string expression
     pub enum Expression {
@@ -240,19 +242,24 @@ mod datafusion_utils {
         }
     }
 
-    pub(crate) fn into_expr(expr: Expression, snapshot: &DeltaTableState) -> DeltaResult<Expr> {
+    pub(crate) fn into_expr(
+        expr: Expression,
+        schema: &DFSchema,
+        df_state: &SessionState,
+    ) -> DeltaResult<Expr> {
         match expr {
             Expression::DataFusion(expr) => Ok(expr),
-            Expression::String(s) => snapshot.parse_predicate_expression(s),
+            Expression::String(s) => parse_predicate_expression(schema, s, df_state),
         }
     }
 
     pub(crate) fn maybe_into_expr(
         expr: Option<Expression>,
-        snapshot: &DeltaTableState,
+        schema: &DFSchema,
+        df_state: &SessionState,
     ) -> DeltaResult<Option<Expr>> {
         Ok(match expr {
-            Some(predicate) => Some(into_expr(predicate, snapshot)?),
+            Some(predicate) => Some(into_expr(predicate, schema, df_state)?),
             None => None,
         })
     }

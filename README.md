@@ -57,7 +57,7 @@ API that lets you query, inspect, and operate your Delta Lake with ease.
 
 - [Quick Start](#quick-start)
 - [Get Involved](#get-involved)
-- [Integartions](#integrations)
+- [Integrations](#integrations)
 - [Features](#features)
 
 ## Quick Start
@@ -138,22 +138,22 @@ of features outlined in the Delta [protocol][protocol] is also [tracked](#protoc
 | S3 - R2              |        ![done]        |        ![done]        | requires lock for concurrent writes |
 | Azure Blob           |        ![done]        |        ![done]        |                                     |
 | Azure ADLS Gen2      |        ![done]        |        ![done]        |                                     |
-| Microsoft OneLake    | ![done] | ![done] |                                     |
+| Microsoft OneLake    |        ![done]        |        ![done]        |                                     |
 | Google Cloud Storage |        ![done]        |        ![done]        |                                     |
 
 ### Supported Operations
 
-| Operation             |        Rust         |       Python        | Description                           |
-| --------------------- | :-----------------: | :-----------------: | ------------------------------------- |
-| Create                |       ![done]       |       ![done]       | Create a new table                    |
-| Read                  |       ![done]       |       ![done]       | Read data from a table                |
-| Vacuum                |       ![done]       |       ![done]       | Remove unused files and log entries   |
-| Delete - partitions   |                     |       ![done]       | Delete a table partition              |
-| Delete - predicates   |       ![done]       |                     | Delete data based on a predicate      |
-| Optimize - compaction |       ![done]       |       ![done]       | Harmonize the size of data file       |
-| Optimize - Z-order    |       ![done]       |       ![done]       | Place similar data into the same file |
-| Merge                 | [![semi-done]][merge-rs]| [![open]][merge-py] |    Merge two tables (limited to full re-write)                                   |
-| FS check              |       ![done]       |                     | Remove corrupted files from table     |
+| Operation             |          Rust            |        Python       | Description                                 |
+| --------------------- | :----------------------: | :-----------------: | ------------------------------------------- |
+| Create                |         ![done]          |       ![done]       | Create a new table                          |
+| Read                  |         ![done]          |       ![done]       | Read data from a table                      |
+| Vacuum                |         ![done]          |       ![done]       | Remove unused files and log entries         |
+| Delete - partitions   |                          |       ![done]       | Delete a table partition                    |
+| Delete - predicates   |         ![done]          |       ![done]       | Delete data based on a predicate            |
+| Optimize - compaction |         ![done]          |       ![done]       | Harmonize the size of data file             |
+| Optimize - Z-order    |         ![done]          |       ![done]       | Place similar data into the same file       |
+| Merge                 | [![semi-done]][merge-rs] | [![open]][merge-py] | Merge two tables (limited to full re-write) |
+| FS check              |         ![done]          |                     | Remove corrupted files from table           |
 
 ### Protocol Support Level
 
@@ -172,7 +172,7 @@ of features outlined in the Delta [protocol][protocol] is also [tracked](#protoc
 
 | Reader Version | Requirement                         | Status |
 | -------------- | ----------------------------------- | ------ |
-| Version 2      | Column Mapping                     |        |
+| Version 2      | Column Mapping                      |        |
 | Version 3      | Table Features (requires reader V7) |        |
 
 [datafusion]: https://github.com/apache/arrow-datafusion

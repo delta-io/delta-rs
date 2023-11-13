@@ -157,7 +157,7 @@ pub struct OptimizeBuilder<'a> {
     /// Delta object store for handling data files
     store: ObjectStoreRef,
     /// Filters to select specific table partitions to be optimized
-    filters: &'a [PartitionFilter<'a, &'a str>],
+    filters: &'a [PartitionFilter],
     /// Desired file size after bin-packing files
     target_size: Option<i64>,
     /// Properties passed to underlying parquet writer
@@ -200,7 +200,7 @@ impl<'a> OptimizeBuilder<'a> {
     }
 
     /// Only optimize files that return true for the specified partition filter
-    pub fn with_filters(mut self, filters: &'a [PartitionFilter<'a, &'a str>]) -> Self {
+    pub fn with_filters(mut self, filters: &'a [PartitionFilter]) -> Self {
         self.filters = filters;
         self
     }
@@ -769,7 +769,7 @@ impl PartitionTuples {
 pub fn create_merge_plan(
     optimize_type: OptimizeType,
     snapshot: &DeltaTableState,
-    filters: &[PartitionFilter<'_, &str>],
+    filters: &[PartitionFilter],
     target_size: Option<i64>,
     writer_properties: WriterProperties,
 ) -> Result<MergePlan, DeltaTableError> {
@@ -860,7 +860,7 @@ impl IntoIterator for MergeBin {
 fn build_compaction_plan(
     snapshot: &DeltaTableState,
     partition_keys: &[String],
-    filters: &[PartitionFilter<'_, &str>],
+    filters: &[PartitionFilter],
     target_size: i64,
 ) -> Result<(OptimizeOperations, Metrics), DeltaTableError> {
     let mut metrics = Metrics::default();
@@ -923,7 +923,7 @@ fn build_zorder_plan(
     zorder_columns: Vec<String>,
     snapshot: &DeltaTableState,
     partition_keys: &[String],
-    filters: &[PartitionFilter<'_, &str>],
+    filters: &[PartitionFilter],
 ) -> Result<(OptimizeOperations, Metrics), DeltaTableError> {
     if zorder_columns.is_empty() {
         return Err(DeltaTableError::Generic(
@@ -1140,7 +1140,7 @@ pub(super) mod zorder {
                 runtime.register_object_store(&Url::parse("delta-rs://").unwrap(), object_store);
 
                 use url::Url;
-                let ctx = SessionContext::with_config_rt(SessionConfig::default(), runtime);
+                let ctx = SessionContext::new_with_config_rt(SessionConfig::default(), runtime);
                 ctx.register_udf(datafusion::zorder_key_udf());
                 Ok(Self { columns, ctx })
             }
@@ -1204,7 +1204,7 @@ pub(super) mod zorder {
             ));
         }
 
-        // We are taking 128 bits from each value. Shorter values will be padded.
+        // We are taking 128 bits (16 bytes) from each value. Shorter values will be padded.
         let value_size: usize = columns.len() * 16;
 
         // Initialize with zeros
@@ -1242,7 +1242,7 @@ pub(super) mod zorder {
         out: &mut Vec<u8>,
     ) -> Result<(), ArrowError> {
         // Convert array to rows
-        let mut converter = RowConverter::new(vec![SortField::new(input.data_type().clone())])?;
+        let converter = RowConverter::new(vec![SortField::new(input.data_type().clone())])?;
         let rows = converter.convert_columns(&[input])?;
 
         for (row_i, row) in rows.iter().enumerate() {
@@ -1287,10 +1287,14 @@ pub(super) mod zorder {
 
     #[cfg(test)]
     mod test {
+        use ::datafusion::assert_batches_eq;
         use arrow_array::{
-            cast::as_generic_binary_array, new_empty_array, StringArray, UInt8Array,
+            cast::as_generic_binary_array, new_empty_array, Int32Array, StringArray, UInt8Array,
         };
+        use arrow_ord::sort::sort_to_indices;
         use arrow_schema::DataType;
+        use arrow_select::take::take;
+        use rand::Rng;
 
         use super::*;
 
@@ -1335,27 +1339,96 @@ pub(super) mod zorder {
             dbg!(data);
             assert_eq!(data.value_data().len(), 3 * 16 * 3);
             assert!(data.iter().all(|x| x.unwrap().len() == 3 * 16));
+        }
 
-            // This value is mostly filled in since it has a large string
-            assert_eq!(
-                data.value(0),
-                [
-                    28, 0, 0, 133, 128, 13, 130, 0, 9, 128, 4, 9, 128, 32, 9, 2, 0, 9, 130, 4, 1,
-                    16, 32, 9, 18, 32, 9, 16, 36, 1, 0, 0, 1, 2, 0, 8, 0, 0, 1, 144, 4, 9, 2, 0, 9,
-                    128, 32, 9,
-                ]
-            );
+        #[test]
+        fn test_order() {
+            let int: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5]));
+            let str: ArrayRef = Arc::new(StringArray::from(vec![
+                Some("a"),
+                Some("x"),
+                Some("a"),
+                Some("x"),
+                None,
+            ]));
+            let int_large: ArrayRef = Arc::new(Int32Array::from(vec![10000, 2000, 300, 40, 5]));
+            let batch = RecordBatch::try_from_iter(vec![
+                ("int", int),
+                ("str", str),
+                ("int_large", int_large),
+            ])
+            .unwrap();
 
-            // This value only has short strings, so it's largely zeros
-            assert_eq!(
-                data.value(1)[0..12],
-                [28u8, 0u8, 0u8, 26, 129, 13, 2, 0, 9, 128, 32, 9]
-            );
-            assert_eq!(data.value(1)[12..], [0; (3 * 16) - 12]);
+            let expected_1 = vec![
+                "+-----+-----+-----------+",
+                "| int | str | int_large |",
+                "+-----+-----+-----------+",
+                "| 1   | a   | 10000     |",
+                "| 2   | x   | 2000      |",
+                "| 3   | a   | 300       |",
+                "| 4   | x   | 40        |",
+                "| 5   |     | 5         |",
+                "+-----+-----+-----------+",
+            ];
+            let expected_2 = vec![
+                "+-----+-----+-----------+",
+                "| int | str | int_large |",
+                "+-----+-----+-----------+",
+                "| 5   |     | 5         |",
+                "| 1   | a   | 10000     |",
+                "| 3   | a   | 300       |",
+                "| 2   | x   | 2000      |",
+                "| 4   | x   | 40        |",
+                "+-----+-----+-----------+",
+            ];
+            let expected_3 = vec![
+                "+-----+-----+-----------+",
+                "| int | str | int_large |",
+                "+-----+-----+-----------+",
+                "| 5   |     | 5         |",
+                "| 4   | x   | 40        |",
+                "| 2   | x   | 2000      |",
+                "| 3   | a   | 300       |",
+                "| 1   | a   | 10000     |",
+                "+-----+-----+-----------+",
+            ];
 
-            // Last value is all nulls, so mostly zeros
-            assert_eq!(data.value(2)[0..1], [2u8]);
-            assert_eq!(data.value(2)[1..], [0; (3 * 16) - 1]);
+            let expected = vec![expected_1, expected_2, expected_3];
+
+            let indices = Int32Array::from(shuffled_indices().to_vec());
+            let shuffled_columns = batch
+                .columns()
+                .iter()
+                .map(|c| take(c, &indices, None).unwrap())
+                .collect::<Vec<_>>();
+            let shuffled_batch = RecordBatch::try_new(batch.schema(), shuffled_columns).unwrap();
+
+            for i in 1..=batch.num_columns() {
+                let columns = (0..i)
+                    .map(|idx| shuffled_batch.column(idx).clone())
+                    .collect::<Vec<_>>();
+
+                let order_keys = zorder_key(&columns).unwrap();
+                let indices = sort_to_indices(order_keys.as_ref(), None, None).unwrap();
+                let sorted_columns = shuffled_batch
+                    .columns()
+                    .iter()
+                    .map(|c| take(c, &indices, None).unwrap())
+                    .collect::<Vec<_>>();
+                let sorted_batch = RecordBatch::try_new(batch.schema(), sorted_columns).unwrap();
+
+                assert_batches_eq!(expected[i - 1], &[sorted_batch]);
+            }
+        }
+
+        fn shuffled_indices() -> [i32; 5] {
+            let mut rng = rand::thread_rng();
+            let mut array = [0, 1, 2, 3, 4];
+            for i in (1..array.len()).rev() {
+                let j = rng.gen_range(0..=i);
+                array.swap(i, j);
+            }
+            array
         }
     }
 }
