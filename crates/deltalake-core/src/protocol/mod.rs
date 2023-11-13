@@ -1097,10 +1097,6 @@ mod tests {
                     ])),
                 ),
                 (
-                    "partitionValues.Company Very Short",
-                    Arc::new(array::StringArray::from(vec!["bme", "bms"])),
-                ),
-                (
                     "size_bytes",
                     Arc::new(array::Int64Array::from(vec![625, 717])),
                 ),
@@ -1115,10 +1111,47 @@ mod tests {
                     "data_change",
                     Arc::new(array::BooleanArray::from(vec![true, true])),
                 ),
+                (
+                    "partitionValues.Company Very Short",
+                    Arc::new(array::StringArray::from(vec!["bme", "bms"])),
+                ),
                 ("num_records", Arc::new(array::Int64Array::from(vec![1, 4]))),
                 (
-                    "null_count.value",
+                    "null_count.Company Very Short",
                     Arc::new(array::Int64Array::from(vec![0, 0])),
+                ),
+                ("min.Company Very Short", Arc::new(array::NullArray::new(2))),
+                ("max.Company Very Short", Arc::new(array::NullArray::new(2))),
+                (
+                    "null_count.Super Name",
+                    Arc::new(array::Int64Array::from(vec![0, 0])),
+                ),
+                ("min.Super Name", Arc::new(array::NullArray::new(2))),
+                ("max.Super Name", Arc::new(array::NullArray::new(2))),
+                (
+                    "tags.INSERTION_TIME",
+                    Arc::new(array::StringArray::from(vec![
+                        "1699870213000000",
+                        "1699870213000001",
+                    ])),
+                ),
+                (
+                    "tags.MAX_INSERTION_TIME",
+                    Arc::new(array::StringArray::from(vec![
+                        "1699870213000000",
+                        "1699870213000001",
+                    ])),
+                ),
+                (
+                    "tags.MIN_INSERTION_TIME",
+                    Arc::new(array::StringArray::from(vec![
+                        "1699870213000000",
+                        "1699870213000001",
+                    ])),
+                ),
+                (
+                    "tags.OPTIMIZE_TARGET_SIZE",
+                    Arc::new(array::StringArray::from(vec!["33554432", "33554432"])),
                 ),
             ];
             let expected = RecordBatch::try_from_iter(expected_columns.clone()).unwrap();
