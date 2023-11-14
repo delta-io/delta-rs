@@ -1092,19 +1092,19 @@ mod tests {
                 (
                     "path",
                     Arc::new(array::StringArray::from(vec![
-                        "eZ/part-00000-b4c49156-0583-4cb3-b128-6a34a2efe3ea.c000.zstd.parquet",
-                        "rz/part-00001-34d11693-ea51-4072-b8af-1cfbdecbf8c6.c000.zstd.parquet",
+                        "BH/part-00000-4d6e745c-8e04-48d9-aa60-438228358f1a.c000.zstd.parquet",
+                        "8v/part-00001-69b4a452-aeac-4ffa-bf5c-a0c2833d05eb.c000.zstd.parquet",
                     ])),
                 ),
                 (
                     "size_bytes",
-                    Arc::new(array::Int64Array::from(vec![686, 717])),
+                    Arc::new(array::Int64Array::from(vec![890, 810])),
                 ),
                 (
                     "modification_time",
                     Arc::new(arrow::array::TimestampMillisecondArray::from(vec![
-                        1699870213000,
-                        1699870213000,
+                        1699946088000,
+                        1699946088000,
                     ])),
                 ),
                 (
@@ -1113,9 +1113,9 @@ mod tests {
                 ),
                 (
                     "partition.Company Very Short",
-                    Arc::new(array::StringArray::from(vec!["bme", "bms"])),
+                    Arc::new(array::StringArray::from(vec!["BMS", "BME"])),
                 ),
-                ("num_records", Arc::new(array::Int64Array::from(vec![1, 4]))),
+                ("num_records", Arc::new(array::Int64Array::from(vec![4, 1]))),
                 (
                     "null_count.Company Very Short",
                     Arc::new(array::NullArray::new(2)),
@@ -1128,22 +1128,22 @@ mod tests {
                 (
                     "tags.INSERTION_TIME",
                     Arc::new(array::StringArray::from(vec![
-                        "1699870213000000",
-                        "1699870213000001",
+                        "1699946088000000",
+                        "1699946088000001",
                     ])),
                 ),
                 (
                     "tags.MAX_INSERTION_TIME",
                     Arc::new(array::StringArray::from(vec![
-                        "1699870213000000",
-                        "1699870213000001",
+                        "1699946088000000",
+                        "1699946088000001",
                     ])),
                 ),
                 (
                     "tags.MIN_INSERTION_TIME",
                     Arc::new(array::StringArray::from(vec![
-                        "1699870213000000",
-                        "1699870213000001",
+                        "1699946088000000",
+                        "1699946088000001",
                     ])),
                 ),
                 (
