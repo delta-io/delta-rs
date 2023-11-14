@@ -172,7 +172,7 @@ impl StructField {
         match phys_name {
             None => &self.name,
             Some(MetadataValue::String(s)) => s,
-            _ => panic!("Unexpected value for physical name"),
+            Some(MetadataValue::Number(_)) => panic!("Unexpected type for physical name"), // Number makes no sense here and is against the spec
         }
     }
 
