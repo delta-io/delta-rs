@@ -125,6 +125,10 @@ mod tests {
 
     impl ContextProvider for TestSchemaProvider {
         fn get_table_provider(&self, name: TableReference) -> DFResult<Arc<dyn TableSource>> {
+            self.get_table_source(name)
+        }
+
+        fn get_table_source(&self, name: TableReference) -> DFResult<Arc<dyn TableSource>> {
             match self.tables.get(name.table()) {
                 Some(table) => Ok(table.clone()),
                 _ => Err(DataFusionError::Plan(format!(
@@ -132,10 +136,6 @@ mod tests {
                     name.table()
                 ))),
             }
-        }
-
-        fn get_table_source(&self, _name: TableReference) -> DataFusionResult<Arc<dyn TableSource>> {
-            unimplemented!("TODO")
         }
 
         fn get_function_meta(&self, _name: &str) -> Option<Arc<ScalarUDF>> {
