@@ -1,8 +1,6 @@
 use std::sync::Arc;
 
-use arrow_schema::{
-    DataType, Field as ArrowField, Schema as ArrowSchema, SchemaRef as ArrowSchemaRef,
-};
+use arrow_schema::{DataType, Field, Schema, SchemaRef};
 use datafusion::datasource::physical_plan::wrap_partition_type_in_dict;
 use datafusion::execution::context::SessionState;
 use datafusion::optimizer::utils::conjunction;
@@ -18,8 +16,8 @@ use crate::kernel::Add;
 use crate::table::state::DeltaTableState;
 
 impl DeltaTableState {
-    /// Get the table schema as an [`ArrowSchemaRef`]
-    pub fn arrow_schema(&self, wrap_partitions: bool) -> DeltaResult<ArrowSchemaRef> {
+    /// Get the table schema as an [`SchemaRef`]
+    pub fn arrow_schema(&self, wrap_partitions: bool) -> DeltaResult<SchemaRef> {
         let meta = self.current_metadata().ok_or(DeltaTableError::NoMetadata)?;
         let fields = meta
             .schema
@@ -33,7 +31,7 @@ impl DeltaTableState {
                     .iter()
                     .filter(|f| meta.partition_columns.contains(&f.name().to_string()))
                     .map(|f| {
-                        let field = ArrowField::try_from(f)?;
+                        let field = Field::try_from(f)?;
                         let corrected = if wrap_partitions {
                             match field.data_type() {
                                 // Only dictionary-encode types that may be large
@@ -52,9 +50,9 @@ impl DeltaTableState {
                         Ok(field.with_data_type(corrected))
                     }),
             )
-            .collect::<Result<Vec<ArrowField>, _>>()?;
+            .collect::<Result<Vec<Field>, _>>()?;
 
-        Ok(Arc::new(ArrowSchema::new(fields)))
+        Ok(Arc::new(Schema::new(fields)))
     }
 
     /// Iterate over all files in the log matching a predicate
