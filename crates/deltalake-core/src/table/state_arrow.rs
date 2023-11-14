@@ -173,7 +173,7 @@ impl DeltaTableState {
             .map(|name| {
                 let physical_name = metadata
                     .schema
-                    .field_with_name(name)
+                    .field_with_name(name) // Field must exist as it's mentioned in partition_columns. partition_columns are logical names
                     .unwrap()
                     .physical_name();
                 (physical_name, name.as_str())
