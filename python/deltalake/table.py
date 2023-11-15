@@ -799,6 +799,13 @@ class DeltaTable:
     def create_checkpoint(self) -> None:
         self._table.create_checkpoint()
 
+    def cleanup_metadata(self) -> None:
+        """
+        Delete expired log files before current version from table. The table log retention is based on
+        the `configuration.logRetentionDuration` value, 30 days by default.
+        """
+        self._table.cleanup_metadata()
+
     def __stringify_partition_values(
         self, partition_filters: Optional[List[Tuple[str, str, Any]]]
     ) -> Optional[List[Tuple[str, str, Union[str, List[str]]]]]:
