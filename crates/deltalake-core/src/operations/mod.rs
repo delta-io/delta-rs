@@ -14,6 +14,8 @@ use crate::errors::{DeltaResult, DeltaTableError};
 use crate::table::builder::DeltaTableBuilder;
 use crate::DeltaTable;
 
+#[cfg(all(feature = "arrow", feature = "parquet"))]
+pub mod convert_to_delta;
 pub mod create;
 pub mod filesystem_check;
 #[cfg(all(feature = "arrow", feature = "parquet"))]
