@@ -195,22 +195,32 @@ impl VacuumBuilder {
             .ok_or(DeltaTableError::NoMetadata)?
             .partition_columns;
 
+        // A set containing the absolute paths to managed files
         let managed_files = self
             .snapshot
             .files()
             .iter()
-            .map(|a| a.path.clone())
-            .chain(
-                self.snapshot
-                    .all_tombstones()
-                    .iter()
-                    .map(|r| r.path.clone()),
-            )
+            .map(|a| {
+                if is_absolute_path(&a.path) {
+                    a.path.clone()
+                } else {
+                    format!("{}{}", self.log_store.root_uri(), a.path)
+                }
+            })
+            .chain(self.snapshot.all_tombstones().iter().map(|r| {
+                if is_absolute_path(&r.path) {
+                    r.path.clone()
+                } else {
+                    format!("{}{}", self.log_store.root_uri(), r.path)
+                }
+            }))
             .chain(self.snapshot.files().iter().filter_map(|a| {
                 return if let Some(deletion_vector) = &a.deletion_vector {
-                    if let Ok(parent) = &Url::parse(self.log_store.root_uri().as_str()) {
-                        if let Ok(dv_absolut_path) = deletion_vector.absolute_path(&parent) {
-                            Some(dv_absolut_path?.to_string())
+                    if let Ok(parent) =
+                        &Url::parse(&format!("file://{}", self.log_store.root_uri().as_str()))
+                    {
+                        if let Ok(dv_absolute_path) = deletion_vector.absolute_path(&parent) {
+                            Some(dv_absolute_path?.path().to_string())
                         } else {
                             None
                         }
@@ -231,7 +241,7 @@ impl VacuumBuilder {
                 continue;
             }
 
-            if managed_files.contains(obj_meta.location.as_ref()) {
+            if self.is_file_managed(&managed_files, &obj_meta.location) {
                 if !expired_tombstones.contains(obj_meta.location.as_ref()) {
                     continue;
                 }
@@ -252,6 +262,16 @@ impl VacuumBuilder {
             default_retention_millis: min_retention.num_milliseconds(),
             specified_retention_millis: Some(retention_period.num_milliseconds()),
         })
+    }
+
+    /// Whether a file is contained within the set of managed files.
+    fn is_file_managed(&self, managed_files: &HashSet<String>, file: &Path) -> bool {
+        return if is_absolute_path(file.as_ref()) {
+            managed_files.contains(file.as_ref())
+        } else {
+            let path = format!("{}{}", self.log_store.root_uri(), file.as_ref());
+            managed_files.contains(&path)
+        };
     }
 }
 
@@ -283,6 +303,11 @@ impl std::future::IntoFuture for VacuumBuilder {
             ))
         })
     }
+}
+
+fn is_absolute_path(path: &str) -> bool {
+    let path = std::path::Path::new(path);
+    return path.is_absolute();
 }
 
 /// Encapsulate which files are to be deleted and the parameters used to make that decision
