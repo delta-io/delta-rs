@@ -173,6 +173,9 @@ impl DeltaTableState {
             .iter()
             .map(|name| -> Result<_, DeltaTableError> {
                 if column_mapping_mode == ColumnMappingMode::None {
+                    // per spec one should ignore the physical name if mapping mode is None
+                    // If Mapping mode is Id, the partitions are still stored by their physical name
+                    // (however no known implementation does support column mapping mode=id as of 2023-11)
                     return Ok((name.as_str(), name.as_str()));
                 }
                 let physical_name = metadata
