@@ -140,6 +140,14 @@ def write_new_deltalake(
     configuration: Optional[Mapping[str, Optional[str]]],
     storage_options: Optional[Dict[str, str]],
 ) -> None: ...
+def write_to_deltalake(
+    table_uri: str,
+    data: pyarrow.RecordBatchReader,
+    partition_by: List[str],
+    mode: str,
+    max_rows_per_group: int,
+    storage_options: Optional[Dict[str, str]],
+) -> None: ...
 def batch_distinct(batch: pyarrow.RecordBatch) -> pyarrow.RecordBatch: ...
 
 # Can't implement inheritance (see note in src/schema.rs), so this is next
