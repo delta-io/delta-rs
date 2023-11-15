@@ -1150,7 +1150,7 @@ fn write_to_deltalake(
     // name: Option<String>,
     // description: Option<String>,
     // configuration: Option<HashMap<String, Option<String>>>,
-    // overwrite_schema: bool,
+    overwrite_schema: bool,
     storage_options: Option<HashMap<String, String>>,
 ) -> PyResult<()> {
 
@@ -1171,6 +1171,7 @@ fn write_to_deltalake(
     let builder = table
         .write(batches)
         .with_save_mode(mode)
+        .with_overwrite_schema(overwrite_schema)
         .with_write_batch_size(max_rows_per_group as usize)
         .with_partition_columns(partition_by);
     

@@ -103,6 +103,8 @@ pub struct WriteBuilder {
     write_batch_size: Option<usize>,
     /// RecordBatches to be written into the table
     batches: Option<Vec<RecordBatch>>,
+    /// whether to overwrite the schema
+    overwrite_schema: bool,
     /// how to handle cast failures, either return NULL (safe=true) or return ERR (safe=false)
     safe_cast: bool,
     /// Parquet writer properties
@@ -126,6 +128,7 @@ impl WriteBuilder {
             write_batch_size: None,
             batches: None,
             safe_cast: false,
+            overwrite_schema: false,
             writer_properties: None,
             app_metadata: None,
         }
@@ -134,6 +137,12 @@ impl WriteBuilder {
     /// Specify the behavior when a table exists at location
     pub fn with_save_mode(mut self, save_mode: SaveMode) -> Self {
         self.mode = save_mode;
+        self
+    }
+
+    /// Add overwrite_schema
+    pub fn with_overwrite_schema(mut self, overwrite_schema: bool) -> Self {
+        self.overwrite_schema = overwrite_schema;
         self
     }
 
@@ -353,9 +362,9 @@ impl std::future::IntoFuture for WriteBuilder {
                         .or_else(|_| this.snapshot.arrow_schema())
                         .unwrap_or(schema.clone());
 
-                    if !can_cast_batch(schema.fields(), table_schema.fields()) {
+                    if !can_cast_batch(schema.fields(), table_schema.fields()) && !this.overwrite_schema {
                         return Err(DeltaTableError::Generic(
-                            "Updating table schema not yet implemented".to_string(),
+                            "Schema of data does not match table schema".to_string(),
                         ));
                     };
 

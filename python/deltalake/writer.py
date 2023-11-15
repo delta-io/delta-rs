@@ -91,7 +91,7 @@ def write_deltalake(
     storage_options: Optional[Dict[str, str]] = None,
     partition_filters: Optional[List[Tuple[str, str, Any]]] = None,
     large_dtypes: bool = False,
-    engine: Literal['pyarrow', 'rust'] = 'pyarrow',
+    engine: Literal["pyarrow", "rust"] = "pyarrow",
 ) -> None:
     """Write to a Delta Lake table
 
@@ -167,9 +167,7 @@ def write_deltalake(
         storage_options = table._storage_options or {}
         storage_options.update(storage_options or {})
 
-    
-    if engine == 'pyarrow':
-        
+    if engine == "pyarrow":
         if _has_pandas and isinstance(data, pd.DataFrame):
             if schema is not None:
                 data = pa.Table.from_pandas(data, schema=schema)
@@ -189,9 +187,9 @@ def write_deltalake(
                 schema = data.schema
 
         if filesystem is not None:
-            raise NotImplementedError("Filesystem support is not yet implemented.  #570")
-
-
+            raise NotImplementedError(
+                "Filesystem support is not yet implemented.  #570"
+            )
 
         filesystem = pa_fs.PyFileSystem(DeltaStorageHandler(table_uri, storage_options))
 
@@ -201,9 +199,9 @@ def write_deltalake(
             partition_by = [partition_by]
 
         if table:  # already exists
-            if schema != table.schema().to_pyarrow(as_large_types=large_dtypes) and not (
-                mode == "overwrite" and overwrite_schema
-            ):
+            if schema != table.schema().to_pyarrow(
+                as_large_types=large_dtypes
+            ) and not (mode == "overwrite" and overwrite_schema):
                 raise ValueError(
                     "Schema of data does not match table schema\n"
                     f"Data schema:\n{schema}\nTable Schema:\n{table.schema().to_pyarrow(as_large_types=large_dtypes)}"
@@ -249,7 +247,9 @@ def write_deltalake(
                     ]
                 )
             else:
-                partition_schema = pa.schema([schema.field(name) for name in partition_by])
+                partition_schema = pa.schema(
+                    [schema.field(name) for name in partition_by]
+                )
             partitioning = ds.partitioning(partition_schema, flavor="hive")
         else:
             partitioning = None
@@ -402,8 +402,10 @@ def write_deltalake(
             partition_by=partition_by,
             mode=mode,
             max_rows_per_group=max_rows_per_group,
-            storage_options=storage_options
-            )
+            overwrite_schema=overwrite_schema,
+            storage_options=storage_options,
+        )
+
 
 def __enforce_append_only(
     table: Optional[DeltaTable],

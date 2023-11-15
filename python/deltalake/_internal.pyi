@@ -146,6 +146,7 @@ def write_to_deltalake(
     partition_by: List[str],
     mode: str,
     max_rows_per_group: int,
+    overwrite_schema: bool,
     storage_options: Optional[Dict[str, str]],
 ) -> None: ...
 def batch_distinct(batch: pyarrow.RecordBatch) -> pyarrow.RecordBatch: ...
