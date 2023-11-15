@@ -53,6 +53,7 @@ impl From<Value> for MetadataValue {
 #[derive(Debug)]
 #[allow(missing_docs)]
 pub enum ColumnMetadataKey {
+    ColumnMappingMode,
     ColumnMappingId,
     ColumnMappingPhysicalName,
     GenerationExpression,
@@ -66,6 +67,7 @@ pub enum ColumnMetadataKey {
 impl AsRef<str> for ColumnMetadataKey {
     fn as_ref(&self) -> &str {
         match self {
+            Self::ColumnMappingMode => "delta.columnMapping.mode",
             Self::ColumnMappingId => "delta.columnMapping.id",
             Self::ColumnMappingPhysicalName => "delta.columnMapping.physicalName",
             Self::GenerationExpression => "delta.generationExpression",
@@ -166,13 +168,17 @@ impl StructField {
         self.nullable
     }
 
-    /// Returns the phyiscal name
-    pub fn physical_name(&self) -> &str {
+    /// Returns the physical name of the column
+    /// Equals the name if column mapping is not enabled on table
+    pub fn physical_name(&self) -> Result<&str, Error> {
+        // Even on mapping type id the physical name should be there for partitions
         let phys_name = self.get_config_value(&ColumnMetadataKey::ColumnMappingPhysicalName);
         match phys_name {
-            None => &self.name,
-            Some(MetadataValue::String(s)) => s,
-            Some(MetadataValue::Number(_)) => panic!("Unexpected type for physical name"), // Number makes no sense here and is against the spec
+            None => Ok(&self.name),
+            Some(MetadataValue::String(s)) => Ok(s),
+            Some(MetadataValue::Number(_)) => Err(Error::MetadataError(
+                "Unexpected type for physical name".to_string(),
+            )),
         }
     }
 

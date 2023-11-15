@@ -170,22 +170,28 @@ impl DeltaTableState {
         let physical_name_to_logical_name = metadata
             .partition_columns
             .iter()
-            .map(|name| {
+            .map(|name| -> Result<_, DeltaTableError> {
                 let physical_name = metadata
                     .schema
-                    .field_with_name(name) // Field must exist as it's mentioned in partition_columns. partition_columns are logical names
-                    .unwrap()
-                    .physical_name();
-                (physical_name, name.as_str())
+                    .field_with_name(name)
+                    .or(Err(DeltaTableError::MetadataError(format!(
+                        "Invalid partition column {0}",
+                        name
+                    ))))?
+                    .physical_name()
+                    .map_err(|e| DeltaTableError::Kernel { source: e })?;
+                Ok((physical_name, name.as_str()))
             })
-            .collect::<HashMap<&str, &str>>();
-
+            .collect::<Result<HashMap<&str, &str>, DeltaTableError>>()?;
         // Append values
         for action in self.files() {
             for (name, maybe_value) in action.partition_values.iter() {
-                let logical_name = physical_name_to_logical_name.get(name.as_str()).unwrap();
+                let logical_name = physical_name_to_logical_name.get(name.as_str()).ok_or(
+                    DeltaTableError::MetadataError(format!("Invalid partition column {0}", name)),
+                )?;
                 if let Some(value) = maybe_value {
                     builders.get_mut(logical_name).unwrap().append_value(value);
+                // Unwrap is safe here since the name exists in the mapping where we check validity already
                 } else {
                     builders.get_mut(logical_name).unwrap().append_null();
                 }

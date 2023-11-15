@@ -65,6 +65,9 @@ pub enum Error {
         /// Invariant expression.
         line: String,
     },
+
+    #[error("Table metadata is invalid: {0}")]
+    MetadataError(String),
 }
 
 #[cfg(feature = "object_store")]
