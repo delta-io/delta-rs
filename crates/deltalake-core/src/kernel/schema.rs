@@ -53,7 +53,6 @@ impl From<Value> for MetadataValue {
 #[derive(Debug)]
 #[allow(missing_docs)]
 pub enum ColumnMetadataKey {
-    ColumnMappingMode,
     ColumnMappingId,
     ColumnMappingPhysicalName,
     GenerationExpression,
@@ -67,7 +66,6 @@ pub enum ColumnMetadataKey {
 impl AsRef<str> for ColumnMetadataKey {
     fn as_ref(&self) -> &str {
         match self {
-            Self::ColumnMappingMode => "delta.columnMapping.mode",
             Self::ColumnMappingId => "delta.columnMapping.id",
             Self::ColumnMappingPhysicalName => "delta.columnMapping.physicalName",
             Self::GenerationExpression => "delta.generationExpression",
