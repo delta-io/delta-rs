@@ -1165,13 +1165,10 @@ fn write_to_deltalake(
 
     // let schema: StructType = (&schema.0).try_into().map_err(PythonError::from)?;
 
-
     let options = storage_options.clone().unwrap_or_default();
-    let table = DeltaTableBuilder::from_uri(table_uri).with_storage_options(options);
-    
-    let table = table.build().map_err(PythonError::from)?;
+    let table = rt()?.block_on(DeltaOps::try_from_uri_with_storage_options(&table_uri, options)).map_err(PythonError::from)?;
 
-    let builder = DeltaOps(table)
+    let builder = table
         .write(batches)
         .with_save_mode(mode)
         .with_write_batch_size(max_rows_per_group as usize)

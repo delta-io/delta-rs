@@ -7,6 +7,7 @@
 //! with a [data stream][datafusion::physical_plan::SendableRecordBatchStream],
 //! if the operation returns data as well.
 
+use std::collections::{HashMap};
 use self::create::CreateBuilder;
 use self::filesystem_check::FileSystemCheckBuilder;
 use self::vacuum::VacuumBuilder;
@@ -65,6 +66,18 @@ impl DeltaOps {
     /// ```
     pub async fn try_from_uri(uri: impl AsRef<str>) -> DeltaResult<Self> {
         let mut table = DeltaTableBuilder::from_uri(uri).build()?;
+        // We allow for uninitialized locations, since we may want to create the table
+        match table.load().await {
+            Ok(_) => Ok(table.into()),
+            Err(DeltaTableError::NotATable(_)) => Ok(table.into()),
+            Err(err) => Err(err),
+        }
+    }
+    
+
+    /// try from uri with storage options
+    pub async fn try_from_uri_with_storage_options(uri: impl AsRef<str>, storage_options: HashMap<String, String>) -> DeltaResult<Self> {
+        let mut table = DeltaTableBuilder::from_uri(uri).with_storage_options(storage_options).build()?;
         // We allow for uninitialized locations, since we may want to create the table
         match table.load().await {
             Ok(_) => Ok(table.into()),
