@@ -17,6 +17,7 @@ use arrow_schema::{DataType, Field, Fields, TimeUnit};
 use itertools::Itertools;
 
 use super::state::DeltaTableState;
+use super::ColumnMappingMode;
 use crate::errors::DeltaTableError;
 use crate::kernel::{DataType as DeltaDataType, StructType};
 use crate::protocol::{ColumnCountStat, ColumnValueStat, Stats};
@@ -145,7 +146,7 @@ impl DeltaTableState {
         flatten: bool,
     ) -> Result<arrow::record_batch::RecordBatch, DeltaTableError> {
         let metadata = self.current_metadata().ok_or(DeltaTableError::NoMetadata)?;
-
+        let column_mapping_mode = metadata.get_column_mapping_mode()?;
         let partition_column_types: Vec<arrow::datatypes::DataType> = metadata
             .partition_columns
             .iter()
@@ -171,6 +172,9 @@ impl DeltaTableState {
             .partition_columns
             .iter()
             .map(|name| -> Result<_, DeltaTableError> {
+                if column_mapping_mode == ColumnMappingMode::None {
+                    return Ok((name.as_str(), name.as_str()));
+                }
                 let physical_name = metadata
                     .schema
                     .field_with_name(name)

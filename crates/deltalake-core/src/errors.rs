@@ -214,6 +214,9 @@ pub enum DeltaTableError {
 
     #[error("Table metadata is invalid: {0}")]
     MetadataError(String),
+
+    #[error("Column Mapping Mode not supported: {0}")]
+    InvalidColumnMappingMode(String),
 }
 
 impl From<object_store::path::Error> for DeltaTableError {
