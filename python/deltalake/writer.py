@@ -176,14 +176,8 @@ def write_deltalake(
         table.update_incremental()
 
     if engine == "rust":
-        # Easier to do this check in Python than rust
         if table is not None and mode == "ignore":
             return
-        ### COMMENTS ###
-        # - Don't check partition columns if they are the same, this is done on the rust side implicility
-        # - Consolidate the recordbatch reader part with the new update
-        # - Add overwrite schema functionality in rust writer
-        # - Figure out how to add name, description and configuration to the correct metadata in transaction
 
         if isinstance(data, RecordBatchReader):
             batch_iter = data
