@@ -167,16 +167,65 @@ def write_deltalake(
         storage_options = table._storage_options or {}
         storage_options.update(storage_options or {})
 
-    if engine == "pyarrow":
+    __enforce_append_only(table=table, configuration=configuration, mode=mode)
+
+    if isinstance(partition_by, str):
+        partition_by = [partition_by]
+
+    if table:
+        table.update_incremental()
+
+    if engine == "rust":
+        # Easier to do this check in Python than rust
+        if table is not None and mode == "ignore":
+            return
+        ### COMMENTS ###
+        # - Don't check partition columns if they are the same, this is done on the rust side implicility
+        # - Consolidate the recordbatch reader part with the new update
+        # - Add overwrite schema functionality in rust writer
+        # - Figure out how to add name, description and configuration to the correct metadata in transaction
+
+        if isinstance(data, RecordBatchReader):
+            batch_iter = data
+        elif isinstance(data, pa.RecordBatch):
+            batch_iter = [data]
+        elif isinstance(data, pa.Table):
+            batch_iter = data.to_reader()
+        elif isinstance(data, ds.Dataset):
+            batch_iter = data.scanner().to_reader()
+        elif isinstance(data, pd.DataFrame):
+            batch_iter = pa.Table.from_pandas(data).to_reader()
+        else:
+            batch_iter = data
+
+        if schema is None:
+            if isinstance(batch_iter, RecordBatchReader):
+                schema = batch_iter.schema
+            elif isinstance(batch_iter, Iterable):
+                raise ValueError("You must provide schema if data is Iterable")
+
+        data = RecordBatchReader.from_batches(schema, (batch for batch in batch_iter))
+        _write_to_deltalake(
+            table_uri=table_uri,
+            data=data,
+            partition_by=partition_by,
+            mode=mode,
+            max_rows_per_group=max_rows_per_group,
+            overwrite_schema=overwrite_schema,
+            name=name,
+            description=description,
+            configuration=configuration,
+            storage_options=storage_options,
+        )
+        if table:
+            table.update_incremental()
+
+    elif engine == "pyarrow":
         if _has_pandas and isinstance(data, pd.DataFrame):
             if schema is not None:
                 data = pa.Table.from_pandas(data, schema=schema)
             else:
                 data, schema = delta_arrow_schema_from_pandas(data)
-
-        # We need to write against the latest table version
-        if table:
-            table.update_incremental()
 
         if schema is None:
             if isinstance(data, RecordBatchReader):
@@ -193,11 +242,6 @@ def write_deltalake(
 
         filesystem = pa_fs.PyFileSystem(DeltaStorageHandler(table_uri, storage_options))
 
-        __enforce_append_only(table=table, configuration=configuration, mode=mode)
-
-        if isinstance(partition_by, str):
-            partition_by = [partition_by]
-
         if table:  # already exists
             if schema != table.schema().to_pyarrow(
                 as_large_types=large_dtypes
@@ -206,7 +250,6 @@ def write_deltalake(
                     "Schema of data does not match table schema\n"
                     f"Data schema:\n{schema}\nTable Schema:\n{table.schema().to_pyarrow(as_large_types=large_dtypes)}"
                 )
-
             if mode == "error":
                 raise AssertionError("DeltaTable already exists.")
             elif mode == "ignore":
@@ -396,15 +439,7 @@ def write_deltalake(
             )
             table.update_incremental()
     else:
-        _write_to_deltalake(
-            table_uri=table_uri,
-            data=data.to_reader(),
-            partition_by=partition_by,
-            mode=mode,
-            max_rows_per_group=max_rows_per_group,
-            overwrite_schema=overwrite_schema,
-            storage_options=storage_options,
-        )
+        raise ValueError("Only `pyarrow` or `rust` are valid inputs for the engine.")
 
 
 def __enforce_append_only(

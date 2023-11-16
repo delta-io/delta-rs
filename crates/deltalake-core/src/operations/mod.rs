@@ -77,7 +77,9 @@ impl DeltaOps {
 
     /// try from uri with storage options
     pub async fn try_from_uri_with_storage_options(uri: impl AsRef<str>, storage_options: HashMap<String, String>) -> DeltaResult<Self> {
-        let mut table = DeltaTableBuilder::from_uri(uri).with_storage_options(storage_options).build()?;
+        let mut table = DeltaTableBuilder::from_uri(uri)
+            .with_storage_options(storage_options)
+            .build()?;
         // We allow for uninitialized locations, since we may want to create the table
         match table.load().await {
             Ok(_) => Ok(table.into()),

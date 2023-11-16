@@ -143,10 +143,13 @@ def write_new_deltalake(
 def write_to_deltalake(
     table_uri: str,
     data: pyarrow.RecordBatchReader,
-    partition_by: List[str],
+    partition_by: Optional[List[str]],
     mode: str,
     max_rows_per_group: int,
     overwrite_schema: bool,
+    name: Optional[str],
+    description: Optional[str],
+    configuration: Optional[Mapping[str, Optional[str]]],
     storage_options: Optional[Dict[str, str]],
 ) -> None: ...
 def batch_distinct(batch: pyarrow.RecordBatch) -> pyarrow.RecordBatch: ...

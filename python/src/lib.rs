@@ -43,6 +43,7 @@ use deltalake::DeltaTableBuilder;
 use pyo3::exceptions::{PyIOError, PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyFrozenSet, PyType};
+use serde_json::Value;
 
 use crate::error::DeltaProtocolError;
 use crate::error::PythonError;
@@ -1140,41 +1141,58 @@ impl From<&PyAddAction> for Add {
 fn write_to_deltalake(
     table_uri: String,
     data: PyArrowType<ArrowArrayStreamReader>,
-    // schema: Option<PyArrowType<ArrowSchema>>,
-    partition_by: Vec<String>, // or Vec<String>
+    // schema: Option<PyArrowType<ArrowSchema>>, // maybe do the schema casting on python side
     mode: String,
-    // max_partitions: i64,
-    // max_rows_per_file: i64,
-    // min_rows_per_group: i64,
     max_rows_per_group: i64,
-    // name: Option<String>,
-    // description: Option<String>,
-    // configuration: Option<HashMap<String, Option<String>>>,
     overwrite_schema: bool,
+    partition_by: Option<Vec<String>>,
+    name: Option<String>,
+    description: Option<String>,
+    configuration: Option<HashMap<String, Option<String>>>,
     storage_options: Option<HashMap<String, String>>,
 ) -> PyResult<()> {
-
-    // let schema = data.0.schema();
     let batches = data.0.map(|batch| batch.unwrap()).collect::<Vec<_>>();
-    // let batches = data.0;
+    let save_mode = save_mode_from_str(&mode)?;
 
-    let mode = save_mode_from_str(&mode)?;
-    // let new_schema: StructType = (&schema.0).try_into().map_err(PythonError::from)?;
+    let mut metadata: HashMap<String, Value> = HashMap::new();
 
-    // let existing_schema = self._table.get_schema().map_err(PythonError::from)?;
+    if let Some(name) = name {
+        metadata.insert("name".to_string(), name.into());
+    }
 
-    // let schema: StructType = (&schema.0).try_into().map_err(PythonError::from)?;
+    if let Some(description) = description {
+        metadata.insert("description".to_string(), description.into());
+    }
 
+    if let Some(configuration) = configuration {
+        metadata.insert("configuration".to_string(), json!(configuration));
+    }
+
+    // // This should be done when the table can not be loaded ...
+    // match save_mode {
+    //     SaveMode::Ignore => {
+    //         return Ok(())
+    //     }
+    //     _ => ()
+    // }
     let options = storage_options.clone().unwrap_or_default();
-    let table = rt()?.block_on(DeltaOps::try_from_uri_with_storage_options(&table_uri, options)).map_err(PythonError::from)?;
+    let table = rt()?
+        .block_on(DeltaOps::try_from_uri_with_storage_options(
+            &table_uri, options,
+        ))
+        .map_err(PythonError::from)?;
 
-    let builder = table
+    let mut builder = table
         .write(batches)
-        .with_save_mode(mode)
+        .with_save_mode(save_mode)
         .with_overwrite_schema(overwrite_schema)
-        .with_write_batch_size(max_rows_per_group as usize)
-        .with_partition_columns(partition_by);
-    
+        .with_metadata(metadata)
+        .with_write_batch_size(max_rows_per_group as usize);
+
+    if let Some(partition_columns) = partition_by {
+        builder = builder.with_partition_columns(partition_columns);
+    }
+
     rt()?
         .block_on(builder.into_future())
         .map_err(PythonError::from)?;
@@ -1182,9 +1200,7 @@ fn write_to_deltalake(
     Ok(())
 }
 
-
-
-
+use serde_json::json;
 #[pyfunction]
 #[allow(clippy::too_many_arguments)]
 fn write_new_deltalake(
