@@ -43,7 +43,6 @@ use deltalake::DeltaTableBuilder;
 use pyo3::exceptions::{PyIOError, PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyFrozenSet, PyType};
-use serde_json::Value;
 
 use crate::error::DeltaProtocolError;
 use crate::error::PythonError;
@@ -1141,40 +1140,18 @@ impl From<&PyAddAction> for Add {
 fn write_to_deltalake(
     table_uri: String,
     data: PyArrowType<ArrowArrayStreamReader>,
-    // schema: Option<PyArrowType<ArrowSchema>>, // maybe do the schema casting on python side
     mode: String,
     max_rows_per_group: i64,
     overwrite_schema: bool,
     partition_by: Option<Vec<String>>,
-    name: Option<String>,
-    description: Option<String>,
-    configuration: Option<HashMap<String, Option<String>>>,
+    _name: Option<String>,
+    _description: Option<String>,
+    _configuration: Option<HashMap<String, Option<String>>>,
     storage_options: Option<HashMap<String, String>>,
 ) -> PyResult<()> {
     let batches = data.0.map(|batch| batch.unwrap()).collect::<Vec<_>>();
     let save_mode = save_mode_from_str(&mode)?;
 
-    let mut metadata: HashMap<String, Value> = HashMap::new();
-
-    if let Some(name) = name {
-        metadata.insert("name".to_string(), name.into());
-    }
-
-    if let Some(description) = description {
-        metadata.insert("description".to_string(), description.into());
-    }
-
-    if let Some(configuration) = configuration {
-        metadata.insert("configuration".to_string(), json!(configuration));
-    }
-
-    // // This should be done when the table can not be loaded ...
-    // match save_mode {
-    //     SaveMode::Ignore => {
-    //         return Ok(())
-    //     }
-    //     _ => ()
-    // }
     let options = storage_options.clone().unwrap_or_default();
     let table = rt()?
         .block_on(DeltaOps::try_from_uri_with_storage_options(
@@ -1186,7 +1163,6 @@ fn write_to_deltalake(
         .write(batches)
         .with_save_mode(save_mode)
         .with_overwrite_schema(overwrite_schema)
-        .with_metadata(metadata)
         .with_write_batch_size(max_rows_per_group as usize);
 
     if let Some(partition_columns) = partition_by {
@@ -1200,7 +1176,6 @@ fn write_to_deltalake(
     Ok(())
 }
 
-use serde_json::json;
 #[pyfunction]
 #[allow(clippy::too_many_arguments)]
 fn write_new_deltalake(

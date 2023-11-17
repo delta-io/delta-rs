@@ -38,8 +38,8 @@ from deltalake.schema import delta_arrow_schema_from_pandas
 
 from ._internal import DeltaDataChecker as _DeltaDataChecker
 from ._internal import batch_distinct
-from ._internal import write_new_deltalake as _write_new_deltalake
-from ._internal import write_to_deltalake as _write_to_deltalake
+from ._internal import write_new_deltalake as write_deltalake_pyarrow
+from ._internal import write_to_deltalake as write_deltalake_rust
 from .exceptions import DeltaProtocolError, TableNotFoundError
 from .table import MAX_SUPPORTED_WRITER_VERSION, DeltaTable
 
@@ -179,6 +179,11 @@ def write_deltalake(
         if table is not None and mode == "ignore":
             return
 
+        if mode == "overwrite" and overwrite_schema:
+            raise NotImplementedError(
+                "The rust engine writer does not yet support schema evolution."
+            )
+
         if isinstance(data, RecordBatchReader):
             batch_iter = data
         elif isinstance(data, pa.RecordBatch):
@@ -188,7 +193,10 @@ def write_deltalake(
         elif isinstance(data, ds.Dataset):
             batch_iter = data.scanner().to_reader()
         elif isinstance(data, pd.DataFrame):
-            batch_iter = pa.Table.from_pandas(data).to_reader()
+            if schema is not None:
+                batch_iter = pa.Table.from_pandas(data, schema).to_reader()
+            else:
+                batch_iter = pa.Table.from_pandas(data).to_reader()
         else:
             batch_iter = data
 
@@ -199,16 +207,16 @@ def write_deltalake(
                 raise ValueError("You must provide schema if data is Iterable")
 
         data = RecordBatchReader.from_batches(schema, (batch for batch in batch_iter))
-        _write_to_deltalake(
+        write_deltalake_rust(
             table_uri=table_uri,
             data=data,
             partition_by=partition_by,
             mode=mode,
             max_rows_per_group=max_rows_per_group,
             overwrite_schema=overwrite_schema,
-            name=name,
-            description=description,
-            configuration=configuration,
+            _name=name,
+            _description=description,
+            _configuration=configuration,
             storage_options=storage_options,
         )
         if table:
@@ -412,7 +420,7 @@ def write_deltalake(
         )
 
         if table is None:
-            _write_new_deltalake(
+            write_deltalake_pyarrow(
                 table_uri,
                 schema,
                 add_actions,
