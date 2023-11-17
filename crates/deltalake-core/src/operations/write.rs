@@ -38,8 +38,8 @@ use futures::future::BoxFuture;
 use futures::StreamExt;
 use parquet::file::properties::WriterProperties;
 
+use super::transaction::PROTOCOL;
 use super::writer::{DeltaWriter, WriterConfig};
-use super::MAX_SUPPORTED_WRITER_VERSION;
 use super::{transaction::commit, CreateBuilder};
 use crate::delta_datafusion::DeltaDataChecker;
 use crate::errors::{DeltaResult, DeltaTableError};
@@ -60,16 +60,11 @@ enum WriteError {
     #[error("Failed to execute write task: {source}")]
     WriteTask { source: tokio::task::JoinError },
 
-    #[error("Delta-rs does not support writer version requirement: {0}")]
-    UnsupportedWriterVersion(i32),
-
     #[error("A table already exists at: {0}")]
     AlreadyExists(String),
 
     #[error(
-        "Specified table partitioning does not match table partitioning: expected: {:?}, got: {:?}",
-        expected,
-        got
+        "Specified table partitioning does not match table partitioning: expected: {expected:?}, got: {got:?}",
     )]
     PartitionColumnMismatch {
         expected: Vec<String>,
@@ -213,16 +208,12 @@ impl WriteBuilder {
     async fn check_preconditions(&self) -> DeltaResult<Vec<Action>> {
         match self.log_store.is_delta_table_location().await? {
             true => {
-                let min_writer = self.snapshot.min_writer_version();
-                if min_writer > MAX_SUPPORTED_WRITER_VERSION {
-                    Err(WriteError::UnsupportedWriterVersion(min_writer).into())
-                } else {
-                    match self.mode {
-                        SaveMode::ErrorIfExists => {
-                            Err(WriteError::AlreadyExists(self.log_store.root_uri()).into())
-                        }
-                        _ => Ok(vec![]),
+                PROTOCOL.can_write_to(&self.snapshot)?;
+                match self.mode {
+                    SaveMode::ErrorIfExists => {
+                        Err(WriteError::AlreadyExists(self.log_store.root_uri()).into())
                     }
+                    _ => Ok(vec![]),
                 }
             }
             false => {

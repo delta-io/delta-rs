@@ -14,9 +14,6 @@ name = "deltalake"
 crate-type = ["cdylib"]
 doc = false
 
-[package.metadata.maturin]
-name = "deltalake._internal"
-
 [dependencies]
 # arrow
 arrow-schema = { workspace = true, features = ["serde"] }
@@ -42,8 +39,8 @@ tokio = { workspace = true, features = ["rt-multi-thread"] }
 reqwest = { version = "*", features = ["native-tls-vendored"] }
 
 [dependencies.pyo3]
-version = "0.19"
-features = ["extension-module", "abi3", "abi3-py37"]
+version = "0.20"
+features = ["extension-module", "abi3", "abi3-py38"]
 
 [dependencies.deltalake]
 path = "../crates/deltalake"

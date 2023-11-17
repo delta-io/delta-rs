@@ -35,13 +35,15 @@ jobs:
         with:
           src: docs/src/python
 
-  build:
+  build-deploy:
     needs:
       [
         lint,
         markdown-link-check,
       ]
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v3
 
