@@ -6,6 +6,7 @@ use crate::kernel::{
     Action, Add, CommitInfo, DataType, Metadata, PrimitiveType, Protocol, Remove, StructField,
     StructType,
 };
+use crate::operations::transaction::PROTOCOL;
 use crate::protocol::{DeltaOperation, SaveMode};
 use crate::table::state::DeltaTableState;
 use crate::table::DeltaTableMetaData;
@@ -49,8 +50,8 @@ pub fn create_remove_action(path: impl Into<String>, data_change: bool) -> Actio
 
 pub fn create_protocol_action(max_reader: Option<i32>, max_writer: Option<i32>) -> Action {
     let protocol = Protocol {
-        min_reader_version: max_reader.unwrap_or(crate::operations::MAX_SUPPORTED_READER_VERSION),
-        min_writer_version: max_writer.unwrap_or(crate::operations::MAX_SUPPORTED_WRITER_VERSION),
+        min_reader_version: max_reader.unwrap_or(PROTOCOL.default_reader_version()),
+        min_writer_version: max_writer.unwrap_or(PROTOCOL.default_writer_version()),
         writer_features: None,
         reader_features: None,
     };
@@ -165,7 +166,6 @@ pub async fn create_initialized_table(
         log_store.object_store().as_ref(),
         &operation,
         &actions,
-        &state,
         None,
     )
     .await

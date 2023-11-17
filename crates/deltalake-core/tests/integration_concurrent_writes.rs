@@ -69,7 +69,7 @@ async fn prepare_table(
 
     assert_eq!(0, table.version());
     assert_eq!(1, table.get_min_reader_version());
-    assert_eq!(1, table.get_min_writer_version());
+    assert_eq!(2, table.get_min_writer_version());
     assert_eq!(0, table.get_files().len());
 
     Ok((table, table_uri))
