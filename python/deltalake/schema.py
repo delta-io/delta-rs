@@ -77,7 +77,7 @@ def _convert_pa_schema_to_delta(
         fields_cast = [pa.field(f.name, dtype_to_delta_dtype(f.type)) for f in fields]
         return pa.struct(fields_cast)
 
-    return pa.schema([pa.field(f.name, dtype_to_delta_dtype(f.type)) for f in schema])
+    return pa.schema([f.with_type(dtype_to_delta_dtype(f.type)) for f in schema])
 
 
 def _cast_schema_to_recordbatchreader(
