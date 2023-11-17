@@ -283,9 +283,7 @@ mod local {
     #[tokio::test]
     async fn test_datafusion_stats() -> Result<()> {
         // Validate a table that contains statisitics for all files
-        let table = open_table("./tests/data/delta-0.8.0")
-            .await
-            .unwrap();
+        let table = open_table("./tests/data/delta-0.8.0").await.unwrap();
         let statistics = table.state.datafusion_table_statistics()?;
 
         assert_eq!(statistics.num_rows, Precision::Exact(4_usize),);
@@ -324,9 +322,7 @@ mod local {
         assert_batches_sorted_eq!(&expected, &actual);
 
         // Validate a table that does not contain column statisitics
-        let table = open_table("./tests/data/delta-0.2.0")
-            .await
-            .unwrap();
+        let table = open_table("./tests/data/delta-0.2.0").await.unwrap();
         let statistics = table.state.datafusion_table_statistics()?;
 
         assert_eq!(statistics.num_rows, Precision::Absent);
