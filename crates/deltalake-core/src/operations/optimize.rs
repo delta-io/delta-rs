@@ -1185,10 +1185,10 @@ pub(super) mod zorder {
                 .ok_or(DataFusionError::NotImplemented(
                     "z-order on zero columns.".to_string(),
                 ))?;
-            let columns = columns
+            let columns: Vec<ArrayRef> = columns
                 .iter()
                 .map(|col| col.clone().into_array(length))
-                .collect_vec();
+                .try_collect()?;
             let array = zorder_key(&columns)?;
             Ok(ColumnarValue::Array(array))
         }
