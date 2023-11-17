@@ -128,8 +128,6 @@ jobs:
         release-pypi-windows,
       ]
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
     steps:
       - name: Trigger the docs release event
         uses: peter-evans/repository-dispatch@v2
