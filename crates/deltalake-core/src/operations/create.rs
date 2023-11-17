@@ -7,8 +7,7 @@ use std::sync::Arc;
 use futures::future::BoxFuture;
 use serde_json::{Map, Value};
 
-use super::transaction::commit;
-use super::{MAX_SUPPORTED_READER_VERSION, MAX_SUPPORTED_WRITER_VERSION};
+use super::transaction::{commit, PROTOCOL};
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::{Action, DataType, Metadata, Protocol, StructField, StructType};
 use crate::logstore::{LogStore, LogStoreRef};
@@ -245,8 +244,8 @@ impl CreateBuilder {
                 _ => unreachable!(),
             })
             .unwrap_or_else(|| Protocol {
-                min_reader_version: MAX_SUPPORTED_READER_VERSION,
-                min_writer_version: MAX_SUPPORTED_WRITER_VERSION,
+                min_reader_version: PROTOCOL.default_reader_version(),
+                min_writer_version: PROTOCOL.default_writer_version(),
                 writer_features: None,
                 reader_features: None,
             });
@@ -391,8 +390,14 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(table.version(), 0);
-        assert_eq!(table.get_min_reader_version(), MAX_SUPPORTED_READER_VERSION);
-        assert_eq!(table.get_min_writer_version(), MAX_SUPPORTED_WRITER_VERSION);
+        assert_eq!(
+            table.get_min_reader_version(),
+            PROTOCOL.default_reader_version()
+        );
+        assert_eq!(
+            table.get_min_writer_version(),
+            PROTOCOL.default_writer_version()
+        );
         assert_eq!(table.schema().unwrap(), &schema);
 
         // check we can overwrite default settings via adding actions

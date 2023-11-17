@@ -44,7 +44,7 @@ use serde::Serialize;
 use serde_json::Value;
 
 use super::datafusion_utils::{Expression, MetricObserverExec};
-use super::transaction::commit;
+use super::transaction::{commit, PROTOCOL};
 use super::write::write_execution_plan;
 use crate::delta_datafusion::expr::fmt_expr_to_sql;
 use crate::delta_datafusion::{find_files, register_store, DeltaScanBuilder};
@@ -426,6 +426,8 @@ impl std::future::IntoFuture for UpdateBuilder {
         let mut this = self;
 
         Box::pin(async move {
+            PROTOCOL.can_write_to(&this.snapshot)?;
+
             let state = this.state.unwrap_or_else(|| {
                 let session = SessionContext::new();
 

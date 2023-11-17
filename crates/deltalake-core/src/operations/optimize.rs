@@ -38,7 +38,7 @@ use parquet::errors::ParquetError;
 use parquet::file::properties::WriterProperties;
 use serde::{Deserialize, Serialize};
 
-use super::transaction::commit;
+use super::transaction::{commit, PROTOCOL};
 use super::writer::{PartitionWriter, PartitionWriterConfig};
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::{Action, Remove};
@@ -260,6 +260,8 @@ impl<'a> std::future::IntoFuture for OptimizeBuilder<'a> {
         let this = self;
 
         Box::pin(async move {
+            PROTOCOL.can_write_to(&this.snapshot)?;
+
             let writer_properties = this.writer_properties.unwrap_or_else(|| {
                 WriterProperties::builder()
                     .set_compression(Compression::ZSTD(ZstdLevel::try_new(4).unwrap()))

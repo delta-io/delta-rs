@@ -64,7 +64,7 @@ use serde::Serialize;
 use serde_json::Value;
 
 use super::datafusion_utils::{into_expr, maybe_into_expr, Expression};
-use super::transaction::commit;
+use super::transaction::{commit, PROTOCOL};
 use crate::delta_datafusion::expr::{fmt_expr_to_sql, parse_predicate_expression};
 use crate::delta_datafusion::{register_store, DeltaScanBuilder};
 use crate::kernel::{Action, Remove};
@@ -1208,6 +1208,8 @@ impl std::future::IntoFuture for MergeBuilder {
         let mut this = self;
 
         Box::pin(async move {
+            PROTOCOL.can_write_to(&this.snapshot)?;
+
             let state = this.state.unwrap_or_else(|| {
                 let session = SessionContext::new();
 
