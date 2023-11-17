@@ -6,6 +6,7 @@ use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion::physical_plan::{ExecutionPlan, SendableRecordBatchStream};
 use futures::future::BoxFuture;
 
+use super::transaction::PROTOCOL;
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::logstore::LogStoreRef;
 use crate::table::state::DeltaTableState;
@@ -46,6 +47,8 @@ impl std::future::IntoFuture for LoadBuilder {
         let this = self;
 
         Box::pin(async move {
+            PROTOCOL.can_read_from(&this.snapshot)?;
+
             let table = DeltaTable::new_with_state(this.log_store, this.snapshot);
             let schema = table.state.arrow_schema()?;
             let projection = this

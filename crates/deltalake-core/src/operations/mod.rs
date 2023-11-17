@@ -50,11 +50,6 @@ pub mod write;
 #[cfg(all(feature = "arrow", feature = "parquet"))]
 pub mod writer;
 
-/// Maximum supported writer version
-pub const MAX_SUPPORTED_WRITER_VERSION: i32 = 1;
-/// Maximum supported reader version
-pub const MAX_SUPPORTED_READER_VERSION: i32 = 1;
-
 /// High level interface for executing commands against a DeltaTable
 pub struct DeltaOps(pub DeltaTable);
 
@@ -208,7 +203,7 @@ mod datafusion_utils {
         metrics::{ExecutionPlanMetricsSet, MetricsSet},
         ExecutionPlan, RecordBatchStream, SendableRecordBatchStream,
     };
-    use datafusion_common::DFSchema;
+    use datafusion_common::{DFSchema, Statistics};
     use datafusion_expr::Expr;
     use futures::{Stream, StreamExt};
 
@@ -334,7 +329,7 @@ mod datafusion_utils {
             }))
         }
 
-        fn statistics(&self) -> datafusion_common::Statistics {
+        fn statistics(&self) -> DataFusionResult<Statistics> {
             self.parent.statistics()
         }
 
