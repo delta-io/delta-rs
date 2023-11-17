@@ -1,0 +1,5066 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+      
+      
+        <link rel="canonical" href="https://github.com/delta-io/delta-rs/api/delta_table/">
+      
+      
+        <link rel="prev" href="../../usage/writing-delta-tables/">
+      
+      
+        <link rel="next" href="../schema/">
+      
+      
+      <link rel="icon" href="../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.5.3, mkdocs-material-9.4.5">
+    
+    
+      
+        <title>DeltaTable - Delta Lake Documentation</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.6a10b989.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/_markdown_exec_ansi.css">
+    
+      <link rel="stylesheet" href="../../assets/_mkdocstrings.css">
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce((e,_)=>(e<<5)-e+_.charCodeAt(0),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+    
+  </head>
+  
+  
+    <body dir="ltr">
+  
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&"object"==typeof palette.color)for(var key of Object.keys(palette.color))document.body.setAttribute("data-md-color-"+key,palette.color[key])</script>
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#deltatable" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow md-header--lifted" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../.." title="Delta Lake Documentation" class="md-header__button md-logo" aria-label="Delta Lake Documentation" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54Z"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3V6m0 5h18v2H3v-2m0 5h18v2H3v-2Z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            Delta Lake Documentation
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              DeltaTable
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+    
+    
+      <label class="md-header__button md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.516 6.516 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5Z"/></svg>
+      </label>
+      <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.516 6.516 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5Z"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11h12Z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12 19 6.41Z"/></svg>
+        </button>
+      </nav>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/delta-io/delta-rs" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.4.2 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2023 Fonticons, Inc.--><path d="M439.55 236.05 244 40.45a28.87 28.87 0 0 0-40.81 0l-40.66 40.63 51.52 51.52c27.06-9.14 52.68 16.77 43.39 43.68l49.66 49.66c34.23-11.8 61.18 31 35.47 56.69-26.49 26.49-70.21-2.87-56-37.34L240.22 199v121.85c25.3 12.54 22.26 41.85 9.08 55a34.34 34.34 0 0 1-48.55 0c-17.57-17.6-11.07-46.91 11.25-56v-123c-20.8-8.51-24.6-30.74-18.64-45L142.57 101 8.45 235.14a28.86 28.86 0 0 0 0 40.81l195.61 195.6a28.86 28.86 0 0 0 40.8 0l194.69-194.69a28.86 28.86 0 0 0 0-40.81z"/></svg>
+  </div>
+  <div class="md-source__repository">
+    delta-io/delta-rs
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+    
+      
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../.." class="md-tabs__link">
+        
+  
+    
+  
+  Home
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../installation/" class="md-tabs__link">
+        
+  
+    
+  
+  Installation
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../usage/" class="md-tabs__link">
+          
+  
+  Usage
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+    
+  
+  
+    
+    
+      <li class="md-tabs__item md-tabs__item--active">
+        <a href="./" class="md-tabs__link">
+          
+  
+  API Reference
+
+        </a>
+      </li>
+    
+  
+
+      
+    </ul>
+  </div>
+</nav>
+    
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="Delta Lake Documentation" class="md-nav__button md-logo" aria-label="Delta Lake Documentation" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54Z"/></svg>
+
+    </a>
+    Delta Lake Documentation
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/delta-io/delta-rs" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.4.2 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2023 Fonticons, Inc.--><path d="M439.55 236.05 244 40.45a28.87 28.87 0 0 0-40.81 0l-40.66 40.63 51.52 51.52c27.06-9.14 52.68 16.77 43.39 43.68l49.66 49.66c34.23-11.8 61.18 31 35.47 56.69-26.49 26.49-70.21-2.87-56-37.34L240.22 199v121.85c25.3 12.54 22.26 41.85 9.08 55a34.34 34.34 0 0 1-48.55 0c-17.57-17.6-11.07-46.91 11.25-56v-123c-20.8-8.51-24.6-30.74-18.64-45L142.57 101 8.45 235.14a28.86 28.86 0 0 0 0 40.81l195.61 195.6a28.86 28.86 0 0 0 40.8 0l194.69-194.69a28.86 28.86 0 0 0 0-40.81z"/></svg>
+  </div>
+  <div class="md-source__repository">
+    delta-io/delta-rs
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Home
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../installation/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Installation
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+    
+    
+    
+    
+    
+      
+      
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="">
+            
+  
+  <span class="md-ellipsis">
+    Usage
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            Usage
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../usage/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Overview
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../usage/loading-table/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Loading a Delta Table
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../usage/examining-table/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Examining a Delta Table
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../usage/querying-delta-tables/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Querying a Delta Table
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../usage/managing-tables/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Managing a Delta Table
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../usage/writing-delta-tables/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Writing Delta Tables
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+    
+    
+    
+    
+    
+      
+      
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="">
+            
+  
+  <span class="md-ellipsis">
+    API Reference
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            API Reference
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+    
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  <span class="md-ellipsis">
+    DeltaTable
+  </span>
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  <span class="md-ellipsis">
+    DeltaTable
+  </span>
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#deltalake.table.DeltaTable" class="md-nav__link">
+    DeltaTable
+  </a>
+  
+    <nav class="md-nav" aria-label="DeltaTable">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#deltalake.table.DeltaTable.cleanup_metadata" class="md-nav__link">
+    cleanup_metadata()
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#deltalake.table.DeltaTable.delete" class="md-nav__link">
+    delete()
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#deltalake.table.DeltaTable.file_uris" class="md-nav__link">
+    file_uris()
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#deltalake.table.DeltaTable.files" class="md-nav__link">
+    files()
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#deltalake.table.DeltaTable.from_data_catalog" class="md-nav__link">
+    from_data_catalog()
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#deltalake.table.DeltaTable.get_add_actions" class="md-nav__link">
+    get_add_actions()
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#deltalake.table.DeltaTable.history" class="md-nav__link">
+    history()
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#deltalake.table.DeltaTable.load_version" class="md-nav__link">
+    load_version()
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#deltalake.table.DeltaTable.load_with_datetime" class="md-nav__link">
+    load_with_datetime()
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#deltalake.table.DeltaTable.merge" class="md-nav__link">
+    merge()
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#deltalake.table.DeltaTable.metadata" class="md-nav__link">
+    metadata()
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#deltalake.table.DeltaTable.protocol" class="md-nav__link">
+    protocol()
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#deltalake.table.DeltaTable.repair" class="md-nav__link">
+    repair()
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#deltalake.table.DeltaTable.restore" class="md-nav__link">
+    restore()
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#deltalake.table.DeltaTable.schema" class="md-nav__link">
+    schema()
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#deltalake.table.DeltaTable.to_pandas" class="md-nav__link">
+    to_pandas()
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#deltalake.table.DeltaTable.to_pyarrow_dataset" class="md-nav__link">
+    to_pyarrow_dataset()
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#deltalake.table.DeltaTable.to_pyarrow_table" class="md-nav__link">
+    to_pyarrow_table()
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#deltalake.table.DeltaTable.update" class="md-nav__link">
+    update()
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#deltalake.table.DeltaTable.update_incremental" class="md-nav__link">
+    update_incremental()
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#deltalake.table.DeltaTable.vacuum" class="md-nav__link">
+    vacuum()
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#deltalake.table.DeltaTable.version" class="md-nav__link">
+    version()
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#deltalake.table.Metadata" class="md-nav__link">
+    Metadata
+  </a>
+  
+    <nav class="md-nav" aria-label="Metadata">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#deltalake.table.Metadata.configuration" class="md-nav__link">
+    configuration
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#deltalake.table.Metadata.created_time" class="md-nav__link">
+    created_time
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#deltalake.table.Metadata.description" class="md-nav__link">
+    description
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#deltalake.table.Metadata.id" class="md-nav__link">
+    id
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#deltalake.table.Metadata.name" class="md-nav__link">
+    name
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#deltalake.table.Metadata.partition_columns" class="md-nav__link">
+    partition_columns
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#deltalake.table.TableMerger" class="md-nav__link">
+    TableMerger
+  </a>
+  
+    <nav class="md-nav" aria-label="TableMerger">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#deltalake.table.TableMerger.execute" class="md-nav__link">
+    execute()
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#deltalake.table.TableMerger.when_matched_delete" class="md-nav__link">
+    when_matched_delete()
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#deltalake.table.TableMerger.when_matched_update" class="md-nav__link">
+    when_matched_update()
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#deltalake.table.TableMerger.when_matched_update_all" class="md-nav__link">
+    when_matched_update_all()
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#deltalake.table.TableMerger.when_not_matched_by_source_delete" class="md-nav__link">
+    when_not_matched_by_source_delete()
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#deltalake.table.TableMerger.when_not_matched_by_source_update" class="md-nav__link">
+    when_not_matched_by_source_update()
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#deltalake.table.TableMerger.when_not_matched_insert" class="md-nav__link">
+    when_not_matched_insert()
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#deltalake.table.TableMerger.when_not_matched_insert_all" class="md-nav__link">
+    when_not_matched_insert_all()
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#deltalake.table.TableMerger.with_writer_properties" class="md-nav__link">
+    with_writer_properties()
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#deltalake.table.TableOptimizer" class="md-nav__link">
+    TableOptimizer
+  </a>
+  
+    <nav class="md-nav" aria-label="TableOptimizer">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#deltalake.table.TableOptimizer.compact" class="md-nav__link">
+    compact()
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#deltalake.table.TableOptimizer.z_order" class="md-nav__link">
+    z_order()
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#writing-delta-tables" class="md-nav__link">
+    Writing Delta Tables
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../schema/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Schema
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../storage/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Storage
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#deltalake.table.DeltaTable" class="md-nav__link">
+    DeltaTable
+  </a>
+  
+    <nav class="md-nav" aria-label="DeltaTable">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#deltalake.table.DeltaTable.cleanup_metadata" class="md-nav__link">
+    cleanup_metadata()
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#deltalake.table.DeltaTable.delete" class="md-nav__link">
+    delete()
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#deltalake.table.DeltaTable.file_uris" class="md-nav__link">
+    file_uris()
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#deltalake.table.DeltaTable.files" class="md-nav__link">
+    files()
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#deltalake.table.DeltaTable.from_data_catalog" class="md-nav__link">
+    from_data_catalog()
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#deltalake.table.DeltaTable.get_add_actions" class="md-nav__link">
+    get_add_actions()
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#deltalake.table.DeltaTable.history" class="md-nav__link">
+    history()
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#deltalake.table.DeltaTable.load_version" class="md-nav__link">
+    load_version()
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#deltalake.table.DeltaTable.load_with_datetime" class="md-nav__link">
+    load_with_datetime()
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#deltalake.table.DeltaTable.merge" class="md-nav__link">
+    merge()
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#deltalake.table.DeltaTable.metadata" class="md-nav__link">
+    metadata()
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#deltalake.table.DeltaTable.protocol" class="md-nav__link">
+    protocol()
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#deltalake.table.DeltaTable.repair" class="md-nav__link">
+    repair()
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#deltalake.table.DeltaTable.restore" class="md-nav__link">
+    restore()
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#deltalake.table.DeltaTable.schema" class="md-nav__link">
+    schema()
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#deltalake.table.DeltaTable.to_pandas" class="md-nav__link">
+    to_pandas()
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#deltalake.table.DeltaTable.to_pyarrow_dataset" class="md-nav__link">
+    to_pyarrow_dataset()
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#deltalake.table.DeltaTable.to_pyarrow_table" class="md-nav__link">
+    to_pyarrow_table()
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#deltalake.table.DeltaTable.update" class="md-nav__link">
+    update()
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#deltalake.table.DeltaTable.update_incremental" class="md-nav__link">
+    update_incremental()
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#deltalake.table.DeltaTable.vacuum" class="md-nav__link">
+    vacuum()
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#deltalake.table.DeltaTable.version" class="md-nav__link">
+    version()
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#deltalake.table.Metadata" class="md-nav__link">
+    Metadata
+  </a>
+  
+    <nav class="md-nav" aria-label="Metadata">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#deltalake.table.Metadata.configuration" class="md-nav__link">
+    configuration
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#deltalake.table.Metadata.created_time" class="md-nav__link">
+    created_time
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#deltalake.table.Metadata.description" class="md-nav__link">
+    description
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#deltalake.table.Metadata.id" class="md-nav__link">
+    id
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#deltalake.table.Metadata.name" class="md-nav__link">
+    name
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#deltalake.table.Metadata.partition_columns" class="md-nav__link">
+    partition_columns
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#deltalake.table.TableMerger" class="md-nav__link">
+    TableMerger
+  </a>
+  
+    <nav class="md-nav" aria-label="TableMerger">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#deltalake.table.TableMerger.execute" class="md-nav__link">
+    execute()
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#deltalake.table.TableMerger.when_matched_delete" class="md-nav__link">
+    when_matched_delete()
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#deltalake.table.TableMerger.when_matched_update" class="md-nav__link">
+    when_matched_update()
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#deltalake.table.TableMerger.when_matched_update_all" class="md-nav__link">
+    when_matched_update_all()
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#deltalake.table.TableMerger.when_not_matched_by_source_delete" class="md-nav__link">
+    when_not_matched_by_source_delete()
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#deltalake.table.TableMerger.when_not_matched_by_source_update" class="md-nav__link">
+    when_not_matched_by_source_update()
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#deltalake.table.TableMerger.when_not_matched_insert" class="md-nav__link">
+    when_not_matched_insert()
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#deltalake.table.TableMerger.when_not_matched_insert_all" class="md-nav__link">
+    when_not_matched_insert_all()
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#deltalake.table.TableMerger.with_writer_properties" class="md-nav__link">
+    with_writer_properties()
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#deltalake.table.TableOptimizer" class="md-nav__link">
+    TableOptimizer
+  </a>
+  
+    <nav class="md-nav" aria-label="TableOptimizer">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#deltalake.table.TableOptimizer.compact" class="md-nav__link">
+    compact()
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#deltalake.table.TableOptimizer.z_order" class="md-nav__link">
+    z_order()
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#writing-delta-tables" class="md-nav__link">
+    Writing Delta Tables
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+  
+  
+
+
+<h1 id="deltatable">DeltaTable</h1>
+
+
+<div class="doc doc-object doc-module">
+
+
+
+
+  <div class="doc doc-contents first">
+
+  
+
+  <div class="doc doc-children">
+
+
+
+
+
+
+
+
+<div class="doc doc-object doc-class">
+
+
+
+
+<h3 id="deltalake.table.DeltaTable" class="doc doc-heading">
+          <span class="doc doc-object-name doc-class-name">DeltaTable</span>
+
+  
+  <span class="doc doc-labels">
+      <small class="doc doc-label doc-label-dataclass"><code>dataclass</code></small>
+  </span>
+
+</h3>
+<div class="doc-signature highlight"><pre><span></span><code><span class="n">DeltaTable</span><span class="p">(</span><span class="n">table_uri</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Path</span><span class="p">],</span> <span class="n">version</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">storage_options</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">without_files</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span> <span class="n">log_buffer_size</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span>
+</code></pre></div>
+
+  <div class="doc doc-contents ">
+
+  
+      <p>Represents a Delta Table</p>
+  
+      <p>Create the Delta Table from a path with an optional version.
+Multiple StorageBackends are currently supported: AWS S3, Azure Data Lake Storage Gen2, Google Cloud Storage (GCS) and local URI.
+Depending on the storage backend used, you could provide options values using the <code>storage_options</code> parameter.</p>
+
+
+
+  <p><strong>Parameters:</strong></p>
+  <table>
+    <thead>
+      <tr>
+        <th>Name</th>
+        <th>Type</th>
+        <th>Description</th>
+        <th>Default</th>
+      </tr>
+    </thead>
+    <tbody>
+        <tr>
+          <td><code>table_uri</code></td>
+          <td>
+                <code><span title="typing.Union">Union</span>[str, <span title="pathlib.Path">Path</span>]</code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>the path of the DeltaTable</p>
+            </div>
+          </td>
+          <td>
+              <em>required</em>
+          </td>
+        </tr>
+        <tr>
+          <td><code>version</code></td>
+          <td>
+                <code><span title="typing.Optional">Optional</span>[int]</code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>version of the DeltaTable</p>
+            </div>
+          </td>
+          <td>
+                <code>None</code>
+          </td>
+        </tr>
+        <tr>
+          <td><code>storage_options</code></td>
+          <td>
+                <code><span title="typing.Optional">Optional</span>[<span title="typing.Dict">Dict</span>[str, str]]</code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>a dictionary of the options to use for the storage backend</p>
+            </div>
+          </td>
+          <td>
+                <code>None</code>
+          </td>
+        </tr>
+        <tr>
+          <td><code>without_files</code></td>
+          <td>
+                <code>bool</code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>If True, will load table without tracking files.
+                Some append-only applications might have no need of tracking any files. So, the
+                DeltaTable will be loaded with a significant memory reduction.</p>
+            </div>
+          </td>
+          <td>
+                <code>False</code>
+          </td>
+        </tr>
+        <tr>
+          <td><code>log_buffer_size</code></td>
+          <td>
+                <code><span title="typing.Optional">Optional</span>[int]</code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>Number of files to buffer when reading the commit log. A positive integer.
+                Setting a value greater than 1 results in concurrent calls to the storage api.
+                This can decrease latency if there are many files in the log since the last checkpoint,
+                but will also increase memory usage. Possible rate limits of the storage backend should
+                also be considered for optimal performance. Defaults to 4 * number of cpus.</p>
+            </div>
+          </td>
+          <td>
+                <code>None</code>
+          </td>
+        </tr>
+    </tbody>
+  </table>
+
+
+  
+
+  <div class="doc doc-children">
+
+
+
+
+
+
+
+
+
+
+<div class="doc doc-object doc-function">
+
+
+
+
+<h4 id="deltalake.table.DeltaTable.cleanup_metadata" class="doc doc-heading">
+          <span class="doc doc-object-name doc-function-name">cleanup_metadata</span>
+
+
+</h4>
+<div class="doc-signature highlight"><pre><span></span><code><span class="n">cleanup_metadata</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span>
+</code></pre></div>
+
+  <div class="doc doc-contents ">
+  
+      <p>Delete expired log files before current version from table. The table log retention is based on
+the <code>configuration.logRetentionDuration</code> value, 30 days by default.</p>
+
+  </div>
+
+</div>
+
+
+<div class="doc doc-object doc-function">
+
+
+
+
+<h4 id="deltalake.table.DeltaTable.delete" class="doc doc-heading">
+          <span class="doc doc-object-name doc-function-name">delete</span>
+
+
+</h4>
+<div class="doc-signature highlight"><pre><span></span><code><span class="n">delete</span><span class="p">(</span><span class="n">predicate</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]</span>
+</code></pre></div>
+
+  <div class="doc doc-contents ">
+  
+      <p>Delete records from a Delta Table that statisfy a predicate.</p>
+<p>When a predicate is not provided then all records are deleted from the Delta
+Table. Otherwise a scan of the Delta table is performed to mark any files
+that contain records that satisfy the predicate. Once files are determined
+they are rewritten without the records.</p>
+
+
+
+  <p><strong>Parameters:</strong></p>
+  <table>
+    <thead>
+      <tr>
+        <th>Name</th>
+        <th>Type</th>
+        <th>Description</th>
+        <th>Default</th>
+      </tr>
+    </thead>
+    <tbody>
+        <tr>
+          <td><code>predicate</code></td>
+          <td>
+                <code><span title="typing.Optional">Optional</span>[str]</code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>a SQL where clause. If not passed, will delete all rows.</p>
+            </div>
+          </td>
+          <td>
+                <code>None</code>
+          </td>
+        </tr>
+    </tbody>
+  </table>
+
+
+
+  <p><strong>Returns:</strong></p>
+  <table>
+    <thead>
+      <tr>
+        <th>Type</th>
+        <th>Description</th>
+      </tr>
+    </thead>
+    <tbody>
+        <tr>
+          <td>
+                <code><span title="typing.Dict">Dict</span>[str, <span title="typing.Any">Any</span>]</code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>the metrics from delete.</p>
+            </div>
+          </td>
+        </tr>
+    </tbody>
+  </table>
+
+  </div>
+
+</div>
+
+
+<div class="doc doc-object doc-function">
+
+
+
+
+<h4 id="deltalake.table.DeltaTable.file_uris" class="doc doc-heading">
+          <span class="doc doc-object-name doc-function-name">file_uris</span>
+
+
+</h4>
+<div class="doc-signature highlight"><pre><span></span><code><span class="n">file_uris</span><span class="p">(</span><span class="n">partition_filters</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">List</span><span class="p">[</span><span class="n">Tuple</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">List</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span>
+</code></pre></div>
+
+  <div class="doc doc-contents ">
+  
+      <p>Get the list of files as absolute URIs, including the scheme (e.g. "s3://").</p>
+<p>Local files will be just plain absolute paths, without a scheme. (That is,
+no 'file://' prefix.)</p>
+<p>Use the partition_filters parameter to retrieve a subset of files that match the
+given filters.</p>
+
+
+
+  <p><strong>Parameters:</strong></p>
+  <table>
+    <thead>
+      <tr>
+        <th>Name</th>
+        <th>Type</th>
+        <th>Description</th>
+        <th>Default</th>
+      </tr>
+    </thead>
+    <tbody>
+        <tr>
+          <td><code>partition_filters</code></td>
+          <td>
+                <code><span title="typing.Optional">Optional</span>[<span title="typing.List">List</span>[<span title="typing.Tuple">Tuple</span>[str, str, <span title="typing.Any">Any</span>]]]</code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>the partition filters that will be used for getting the matched files</p>
+            </div>
+          </td>
+          <td>
+                <code>None</code>
+          </td>
+        </tr>
+    </tbody>
+  </table>
+
+
+
+  <p><strong>Returns:</strong></p>
+  <table>
+    <thead>
+      <tr>
+        <th>Type</th>
+        <th>Description</th>
+      </tr>
+    </thead>
+    <tbody>
+        <tr>
+          <td>
+                <code><span title="typing.List">List</span>[str]</code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>list of the .parquet files with an absolute URI referenced for the current version of the DeltaTable</p>
+            </div>
+          </td>
+        </tr>
+    </tbody>
+  </table>
+      <p>Predicates are expressed in disjunctive normal form (DNF), like [("x", "=", "a"), ...].
+DNF allows arbitrary boolean logical combinations of single partition predicates.
+The innermost tuples each describe a single partition predicate. The list of inner
+predicates is interpreted as a conjunction (AND), forming a more selective and
+multiple partition predicates. Each tuple has format: (key, op, value) and compares
+the key with the value. The supported op are: <code>=</code>, <code>!=</code>, <code>in</code>, and <code>not in</code>. If
+the op is in or not in, the value must be a collection such as a list, a set or a tuple.
+The supported type for value is str. Use empty string <code>''</code> for Null partition value.</p>
+<p>Examples:
+<div class="highlight"><pre><span></span><code>(&quot;x&quot;, &quot;=&quot;, &quot;a&quot;)
+(&quot;x&quot;, &quot;!=&quot;, &quot;a&quot;)
+(&quot;y&quot;, &quot;in&quot;, [&quot;a&quot;, &quot;b&quot;, &quot;c&quot;])
+(&quot;z&quot;, &quot;not in&quot;, [&quot;a&quot;,&quot;b&quot;])
+</code></pre></div></p>
+
+  </div>
+
+</div>
+
+
+<div class="doc doc-object doc-function">
+
+
+
+
+<h4 id="deltalake.table.DeltaTable.files" class="doc doc-heading">
+          <span class="doc doc-object-name doc-function-name">files</span>
+
+
+</h4>
+<div class="doc-signature highlight"><pre><span></span><code><span class="n">files</span><span class="p">(</span><span class="n">partition_filters</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">List</span><span class="p">[</span><span class="n">Tuple</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">List</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span>
+</code></pre></div>
+
+  <div class="doc doc-contents ">
+  
+      <p>Get the .parquet files of the DeltaTable.</p>
+<p>The paths are as they are saved in the delta log, which may either be
+relative to the table root or absolute URIs.</p>
+
+
+
+  <p><strong>Parameters:</strong></p>
+  <table>
+    <thead>
+      <tr>
+        <th>Name</th>
+        <th>Type</th>
+        <th>Description</th>
+        <th>Default</th>
+      </tr>
+    </thead>
+    <tbody>
+        <tr>
+          <td><code>partition_filters</code></td>
+          <td>
+                <code><span title="typing.Optional">Optional</span>[<span title="typing.List">List</span>[<span title="typing.Tuple">Tuple</span>[str, str, <span title="typing.Any">Any</span>]]]</code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>the partition filters that will be used for
+                getting the matched files</p>
+            </div>
+          </td>
+          <td>
+                <code>None</code>
+          </td>
+        </tr>
+    </tbody>
+  </table>
+
+
+
+  <p><strong>Returns:</strong></p>
+  <table>
+    <thead>
+      <tr>
+        <th>Type</th>
+        <th>Description</th>
+      </tr>
+    </thead>
+    <tbody>
+        <tr>
+          <td>
+                <code><span title="typing.List">List</span>[str]</code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>list of the .parquet files referenced for the current version of the DeltaTable</p>
+            </div>
+          </td>
+        </tr>
+    </tbody>
+  </table>
+      <p>Predicates are expressed in disjunctive normal form (DNF), like [("x", "=", "a"), ...].
+DNF allows arbitrary boolean logical combinations of single partition predicates.
+The innermost tuples each describe a single partition predicate. The list of inner
+predicates is interpreted as a conjunction (AND), forming a more selective and
+multiple partition predicates. Each tuple has format: (key, op, value) and compares
+the key with the value. The supported op are: <code>=</code>, <code>!=</code>, <code>in</code>, and <code>not in</code>. If
+the op is in or not in, the value must be a collection such as a list, a set or a tuple.
+The supported type for value is str. Use empty string <code>''</code> for Null partition value.</p>
+<p>Examples:
+<div class="highlight"><pre><span></span><code>(&quot;x&quot;, &quot;=&quot;, &quot;a&quot;)
+(&quot;x&quot;, &quot;!=&quot;, &quot;a&quot;)
+(&quot;y&quot;, &quot;in&quot;, [&quot;a&quot;, &quot;b&quot;, &quot;c&quot;])
+(&quot;z&quot;, &quot;not in&quot;, [&quot;a&quot;,&quot;b&quot;])
+</code></pre></div></p>
+
+  </div>
+
+</div>
+
+
+<div class="doc doc-object doc-function">
+
+
+
+
+<h4 id="deltalake.table.DeltaTable.from_data_catalog" class="doc doc-heading">
+          <span class="doc doc-object-name doc-function-name">from_data_catalog</span>
+
+  
+  <span class="doc doc-labels">
+      <small class="doc doc-label doc-label-classmethod"><code>classmethod</code></small>
+  </span>
+
+</h4>
+<div class="doc-signature highlight"><pre><span></span><code><span class="n">from_data_catalog</span><span class="p">(</span><span class="n">data_catalog</span><span class="p">:</span> <span class="n">DataCatalog</span><span class="p">,</span> <span class="n">database_name</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">table_name</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">data_catalog_id</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">version</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">log_buffer_size</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">DeltaTable</span>
+</code></pre></div>
+
+  <div class="doc doc-contents ">
+  
+      <p>Create the Delta Table from a Data Catalog.</p>
+
+
+
+  <p><strong>Parameters:</strong></p>
+  <table>
+    <thead>
+      <tr>
+        <th>Name</th>
+        <th>Type</th>
+        <th>Description</th>
+        <th>Default</th>
+      </tr>
+    </thead>
+    <tbody>
+        <tr>
+          <td><code>data_catalog</code></td>
+          <td>
+                <code><a class="autorefs autorefs-internal" title="deltalake.data_catalog.DataCatalog" href="../schema/#deltalake.data_catalog.DataCatalog">DataCatalog</a></code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>the Catalog to use for getting the storage location of the Delta Table</p>
+            </div>
+          </td>
+          <td>
+              <em>required</em>
+          </td>
+        </tr>
+        <tr>
+          <td><code>database_name</code></td>
+          <td>
+                <code>str</code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>the database name inside the Data Catalog</p>
+            </div>
+          </td>
+          <td>
+              <em>required</em>
+          </td>
+        </tr>
+        <tr>
+          <td><code>table_name</code></td>
+          <td>
+                <code>str</code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>the table name inside the Data Catalog</p>
+            </div>
+          </td>
+          <td>
+              <em>required</em>
+          </td>
+        </tr>
+        <tr>
+          <td><code>data_catalog_id</code></td>
+          <td>
+                <code><span title="typing.Optional">Optional</span>[str]</code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>the identifier of the Data Catalog</p>
+            </div>
+          </td>
+          <td>
+                <code>None</code>
+          </td>
+        </tr>
+        <tr>
+          <td><code>version</code></td>
+          <td>
+                <code><span title="typing.Optional">Optional</span>[int]</code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>version of the DeltaTable</p>
+            </div>
+          </td>
+          <td>
+                <code>None</code>
+          </td>
+        </tr>
+        <tr>
+          <td><code>log_buffer_size</code></td>
+          <td>
+                <code><span title="typing.Optional">Optional</span>[int]</code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>Number of files to buffer when reading the commit log. A positive integer.
+                Setting a value greater than 1 results in concurrent calls to the storage api.
+                This can decrease latency if there are many files in the log since the last checkpoint,
+                but will also increase memory usage. Possible rate limits of the storage backend should
+                also be considered for optimal performance. Defaults to 4 * number of cpus.</p>
+            </div>
+          </td>
+          <td>
+                <code>None</code>
+          </td>
+        </tr>
+    </tbody>
+  </table>
+
+  </div>
+
+</div>
+
+
+<div class="doc doc-object doc-function">
+
+
+
+
+<h4 id="deltalake.table.DeltaTable.get_add_actions" class="doc doc-heading">
+          <span class="doc doc-object-name doc-function-name">get_add_actions</span>
+
+
+</h4>
+<div class="doc-signature highlight"><pre><span></span><code><span class="n">get_add_actions</span><span class="p">(</span><span class="n">flatten</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">pyarrow</span><span class="o">.</span><span class="n">RecordBatch</span>
+</code></pre></div>
+
+  <div class="doc doc-contents ">
+  
+      <p>Return a dataframe with all current add actions.</p>
+<p>Add actions represent the files that currently make up the table. This
+data is a low-level representation parsed from the transaction log.</p>
+
+
+
+  <p><strong>Parameters:</strong></p>
+  <table>
+    <thead>
+      <tr>
+        <th>Name</th>
+        <th>Type</th>
+        <th>Description</th>
+        <th>Default</th>
+      </tr>
+    </thead>
+    <tbody>
+        <tr>
+          <td><code>flatten</code></td>
+          <td>
+                <code>bool</code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>whether to flatten the schema. Partition values columns are
+        given the prefix <code>partition.</code>, statistics (null_count, min, and max) are
+        given the prefix <code>null_count.</code>, <code>min.</code>, and <code>max.</code>, and tags the
+        prefix <code>tags.</code>. Nested field names are concatenated with <code>.</code>.</p>
+            </div>
+          </td>
+          <td>
+                <code>False</code>
+          </td>
+        </tr>
+    </tbody>
+  </table>
+
+
+
+  <p><strong>Returns:</strong></p>
+  <table>
+    <thead>
+      <tr>
+        <th>Type</th>
+        <th>Description</th>
+      </tr>
+    </thead>
+    <tbody>
+        <tr>
+          <td>
+                <code><a class="autorefs autorefs-external" title="pyarrow.RecordBatch" href="https://arrow.apache.org/docs/python/generated/pyarrow.RecordBatch.html#pyarrow.RecordBatch">RecordBatch</a></code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>a PyArrow RecordBatch containing the add action data.</p>
+            </div>
+          </td>
+        </tr>
+    </tbody>
+  </table>
+      <p>Example:
+<div class="highlight"><pre><span></span><code>from deltalake import DeltaTable, write_deltalake
+import pyarrow as pa
+data = pa.table({&quot;x&quot;: [1, 2, 3], &quot;y&quot;: [4, 5, 6]})
+write_deltalake(&quot;tmp&quot;, data, partition_by=[&quot;x&quot;])
+dt = DeltaTable(&quot;tmp&quot;)
+dt.get_add_actions().to_pandas()
+</code></pre></div>
+<div class="highlight"><pre><span></span><code>path                                                size_bytes       modification_time  data_change partition_values  num_records null_count       min       max
+0  x=2/0-91820cbf-f698-45fb-886d-5d5f5669530b-0.p...         565 1970-01-20 08:40:08.071         True         {&#39;x&#39;: 2}            1   {&#39;y&#39;: 0}  {&#39;y&#39;: 5}  {&#39;y&#39;: 5}
+1  x=3/0-91820cbf-f698-45fb-886d-5d5f5669530b-0.p...         565 1970-01-20 08:40:08.071         True         {&#39;x&#39;: 3}            1   {&#39;y&#39;: 0}  {&#39;y&#39;: 6}  {&#39;y&#39;: 6}
+2  x=1/0-91820cbf-f698-45fb-886d-5d5f5669530b-0.p...         565 1970-01-20 08:40:08.071         True         {&#39;x&#39;: 1}            1   {&#39;y&#39;: 0}  {&#39;y&#39;: 4}  {&#39;y&#39;: 4}
+</code></pre></div></p>
+<p><div class="highlight"><pre><span></span><code>dt.get_add_actions(flatten=True).to_pandas()
+</code></pre></div>
+<div class="highlight"><pre><span></span><code>path                                                size_bytes       modification_time  data_change  partition.x  num_records  null_count.y  min.y  max.y
+0  x=2/0-91820cbf-f698-45fb-886d-5d5f5669530b-0.p...         565 1970-01-20 08:40:08.071         True            2            1             0      5      5
+1  x=3/0-91820cbf-f698-45fb-886d-5d5f5669530b-0.p...         565 1970-01-20 08:40:08.071         True            3            1             0      6      6
+2  x=1/0-91820cbf-f698-45fb-886d-5d5f5669530b-0.p...         565 1970-01-20 08:40:08.071         True            1            1             0      4      4
+</code></pre></div></p>
+
+  </div>
+
+</div>
+
+
+<div class="doc doc-object doc-function">
+
+
+
+
+<h4 id="deltalake.table.DeltaTable.history" class="doc doc-heading">
+          <span class="doc doc-object-name doc-function-name">history</span>
+
+
+</h4>
+<div class="doc-signature highlight"><pre><span></span><code><span class="n">history</span><span class="p">(</span><span class="n">limit</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">List</span><span class="p">[</span><span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]]</span>
+</code></pre></div>
+
+  <div class="doc doc-contents ">
+  
+      <p>Run the history command on the DeltaTable.
+The operations are returned in reverse chronological order.</p>
+
+
+
+  <p><strong>Parameters:</strong></p>
+  <table>
+    <thead>
+      <tr>
+        <th>Name</th>
+        <th>Type</th>
+        <th>Description</th>
+        <th>Default</th>
+      </tr>
+    </thead>
+    <tbody>
+        <tr>
+          <td><code>limit</code></td>
+          <td>
+                <code><span title="typing.Optional">Optional</span>[int]</code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>the commit info limit to return</p>
+            </div>
+          </td>
+          <td>
+                <code>None</code>
+          </td>
+        </tr>
+    </tbody>
+  </table>
+
+
+
+  <p><strong>Returns:</strong></p>
+  <table>
+    <thead>
+      <tr>
+        <th>Type</th>
+        <th>Description</th>
+      </tr>
+    </thead>
+    <tbody>
+        <tr>
+          <td>
+                <code><span title="typing.List">List</span>[<span title="typing.Dict">Dict</span>[str, <span title="typing.Any">Any</span>]]</code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>list of the commit infos registered in the transaction log</p>
+            </div>
+          </td>
+        </tr>
+    </tbody>
+  </table>
+
+  </div>
+
+</div>
+
+
+<div class="doc doc-object doc-function">
+
+
+
+
+<h4 id="deltalake.table.DeltaTable.load_version" class="doc doc-heading">
+          <span class="doc doc-object-name doc-function-name">load_version</span>
+
+
+</h4>
+<div class="doc-signature highlight"><pre><span></span><code><span class="n">load_version</span><span class="p">(</span><span class="n">version</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span>
+</code></pre></div>
+
+  <div class="doc doc-contents ">
+  
+      <p>Load a DeltaTable with a specified version.</p>
+
+
+
+  <p><strong>Parameters:</strong></p>
+  <table>
+    <thead>
+      <tr>
+        <th>Name</th>
+        <th>Type</th>
+        <th>Description</th>
+        <th>Default</th>
+      </tr>
+    </thead>
+    <tbody>
+        <tr>
+          <td><code>version</code></td>
+          <td>
+                <code>int</code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>the identifier of the version of the DeltaTable to load</p>
+            </div>
+          </td>
+          <td>
+              <em>required</em>
+          </td>
+        </tr>
+    </tbody>
+  </table>
+
+  </div>
+
+</div>
+
+
+<div class="doc doc-object doc-function">
+
+
+
+
+<h4 id="deltalake.table.DeltaTable.load_with_datetime" class="doc doc-heading">
+          <span class="doc doc-object-name doc-function-name">load_with_datetime</span>
+
+
+</h4>
+<div class="doc-signature highlight"><pre><span></span><code><span class="n">load_with_datetime</span><span class="p">(</span><span class="n">datetime_string</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span>
+</code></pre></div>
+
+  <div class="doc doc-contents ">
+  
+      <p>Time travel Delta table to the latest version that's created at or before provided <code>datetime_string</code> argument.
+The <code>datetime_string</code> argument should be an RFC 3339 and ISO 8601 date and time string.</p>
+
+
+
+  <p><strong>Parameters:</strong></p>
+  <table>
+    <thead>
+      <tr>
+        <th>Name</th>
+        <th>Type</th>
+        <th>Description</th>
+        <th>Default</th>
+      </tr>
+    </thead>
+    <tbody>
+        <tr>
+          <td><code>datetime_string</code></td>
+          <td>
+                <code>str</code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>the identifier of the datetime point of the DeltaTable to load</p>
+            </div>
+          </td>
+          <td>
+              <em>required</em>
+          </td>
+        </tr>
+    </tbody>
+  </table>
+      <p>Examples:
+<div class="highlight"><pre><span></span><code>&quot;2018-01-26T18:30:09Z&quot;
+&quot;2018-12-19T16:39:57-08:00&quot;
+&quot;2018-01-26T18:30:09.453+00:00&quot;
+</code></pre></div></p>
+
+  </div>
+
+</div>
+
+
+<div class="doc doc-object doc-function">
+
+
+
+
+<h4 id="deltalake.table.DeltaTable.merge" class="doc doc-heading">
+          <span class="doc doc-object-name doc-function-name">merge</span>
+
+
+</h4>
+<div class="doc-signature highlight"><pre><span></span><code><span class="n">merge</span><span class="p">(</span><span class="n">source</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="n">pyarrow</span><span class="o">.</span><span class="n">Table</span><span class="p">,</span> <span class="n">pyarrow</span><span class="o">.</span><span class="n">RecordBatch</span><span class="p">,</span> <span class="n">pyarrow</span><span class="o">.</span><span class="n">RecordBatchReader</span><span class="p">],</span> <span class="n">predicate</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">source_alias</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">target_alias</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">error_on_type_mismatch</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">TableMerger</span>
+</code></pre></div>
+
+  <div class="doc doc-contents ">
+  
+      <p>Pass the source data which you want to merge on the target delta table, providing a
+predicate in SQL query like format. You can also specify on what to do when the underlying data types do not
+match the underlying table.</p>
+
+
+
+  <p><strong>Parameters:</strong></p>
+  <table>
+    <thead>
+      <tr>
+        <th>Name</th>
+        <th>Type</th>
+        <th>Description</th>
+        <th>Default</th>
+      </tr>
+    </thead>
+    <tbody>
+        <tr>
+          <td><code>source</code></td>
+          <td>
+                <code><a class="autorefs autorefs-external" title="pyarrow.Table" href="https://arrow.apache.org/docs/python/generated/pyarrow.Table.html#pyarrow.Table">Table</a> | <a class="autorefs autorefs-external" title="pyarrow.RecordBatch" href="https://arrow.apache.org/docs/python/generated/pyarrow.RecordBatch.html#pyarrow.RecordBatch">RecordBatch</a> | <a class="autorefs autorefs-external" title="pyarrow.RecordBatchReader" href="https://arrow.apache.org/docs/python/generated/pyarrow.RecordBatchReader.html#pyarrow.RecordBatchReader">RecordBatchReader</a></code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>source data</p>
+            </div>
+          </td>
+          <td>
+              <em>required</em>
+          </td>
+        </tr>
+        <tr>
+          <td><code>predicate</code></td>
+          <td>
+                <code>str</code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>SQL like predicate on how to merge</p>
+            </div>
+          </td>
+          <td>
+              <em>required</em>
+          </td>
+        </tr>
+        <tr>
+          <td><code>source_alias</code></td>
+          <td>
+                <code>str</code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>Alias for the source table</p>
+            </div>
+          </td>
+          <td>
+                <code>None</code>
+          </td>
+        </tr>
+        <tr>
+          <td><code>target_alias</code></td>
+          <td>
+                <code>str</code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>Alias for the target table</p>
+            </div>
+          </td>
+          <td>
+                <code>None</code>
+          </td>
+        </tr>
+        <tr>
+          <td><code>error_on_type_mismatch</code></td>
+          <td>
+                <code>bool</code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>specify if merge will return error if data types are mismatching :default = True</p>
+            </div>
+          </td>
+          <td>
+                <code>True</code>
+          </td>
+        </tr>
+    </tbody>
+  </table>
+
+
+
+  <p><strong>Returns:</strong></p>
+  <table>
+    <thead>
+      <tr>
+<th>Name</th>        <th>Type</th>
+        <th>Description</th>
+      </tr>
+    </thead>
+    <tbody>
+        <tr>
+<td><code>TableMerger</code></td>          <td>
+                <code><a class="autorefs autorefs-internal" title="deltalake.table.TableMerger" href="#deltalake.table.TableMerger">TableMerger</a></code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>TableMerger Object</p>
+            </div>
+          </td>
+        </tr>
+    </tbody>
+  </table>
+
+  </div>
+
+</div>
+
+
+<div class="doc doc-object doc-function">
+
+
+
+
+<h4 id="deltalake.table.DeltaTable.metadata" class="doc doc-heading">
+          <span class="doc doc-object-name doc-function-name">metadata</span>
+
+
+</h4>
+<div class="doc-signature highlight"><pre><span></span><code><span class="n">metadata</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="n">Metadata</span>
+</code></pre></div>
+
+  <div class="doc doc-contents ">
+  
+      <p>Get the current metadata of the DeltaTable.</p>
+
+
+
+  <p><strong>Returns:</strong></p>
+  <table>
+    <thead>
+      <tr>
+        <th>Type</th>
+        <th>Description</th>
+      </tr>
+    </thead>
+    <tbody>
+        <tr>
+          <td>
+                <code><a class="autorefs autorefs-internal" title="deltalake.table.Metadata" href="#deltalake.table.Metadata">Metadata</a></code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>the current Metadata registered in the transaction log</p>
+            </div>
+          </td>
+        </tr>
+    </tbody>
+  </table>
+
+  </div>
+
+</div>
+
+
+<div class="doc doc-object doc-function">
+
+
+
+
+<h4 id="deltalake.table.DeltaTable.protocol" class="doc doc-heading">
+          <span class="doc doc-object-name doc-function-name">protocol</span>
+
+
+</h4>
+<div class="doc-signature highlight"><pre><span></span><code><span class="n">protocol</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="n">ProtocolVersions</span>
+</code></pre></div>
+
+  <div class="doc doc-contents ">
+  
+      <p>Get the reader and writer protocol versions of the DeltaTable.</p>
+
+
+
+  <p><strong>Returns:</strong></p>
+  <table>
+    <thead>
+      <tr>
+        <th>Type</th>
+        <th>Description</th>
+      </tr>
+    </thead>
+    <tbody>
+        <tr>
+          <td>
+                <code><span title="deltalake.table.ProtocolVersions">ProtocolVersions</span></code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>the current ProtocolVersions registered in the transaction log</p>
+            </div>
+          </td>
+        </tr>
+    </tbody>
+  </table>
+
+  </div>
+
+</div>
+
+
+<div class="doc doc-object doc-function">
+
+
+
+
+<h4 id="deltalake.table.DeltaTable.repair" class="doc doc-heading">
+          <span class="doc doc-object-name doc-function-name">repair</span>
+
+
+</h4>
+<div class="doc-signature highlight"><pre><span></span><code><span class="n">repair</span><span class="p">(</span><span class="n">dry_run</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]</span>
+</code></pre></div>
+
+  <div class="doc doc-contents ">
+  
+      <p>Repair the Delta Table by auditing active files that do not exist in the underlying
+filesystem and removes them. This can be useful when there are accidental deletions or corrupted files.</p>
+<p>Active files are ones that have an add action in the log, but no corresponding remove action.
+This operation creates a new FSCK transaction containing a remove action for each of the missing
+or corrupted files.</p>
+
+
+
+  <p><strong>Parameters:</strong></p>
+  <table>
+    <thead>
+      <tr>
+        <th>Name</th>
+        <th>Type</th>
+        <th>Description</th>
+        <th>Default</th>
+      </tr>
+    </thead>
+    <tbody>
+        <tr>
+          <td><code>dry_run</code></td>
+          <td>
+                <code>bool</code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>when activated, list only the files, otherwise add remove actions to transaction log. Defaults to False.</p>
+            </div>
+          </td>
+          <td>
+                <code>False</code>
+          </td>
+        </tr>
+    </tbody>
+  </table>
+      <p>Returns:
+    The metrics from repair (FSCK) action.</p>
+<p>Examples:
+<div class="highlight"><pre><span></span><code>from deltalake import DeltaTable
+dt = DeltaTable(&#39;TEST&#39;)
+dt.repair(dry_run=False)
+</code></pre></div>
+Results in
+<div class="highlight"><pre><span></span><code>{&#39;dry_run&#39;: False, &#39;files_removed&#39;: [&#39;6-0d084325-6885-4847-b008-82c1cf30674c-0.parquet&#39;, 5-4fba1d3e-3e20-4de1-933d-a8e13ac59f53-0.parquet&#39;]}
+</code></pre></div></p>
+
+  </div>
+
+</div>
+
+
+<div class="doc doc-object doc-function">
+
+
+
+
+<h4 id="deltalake.table.DeltaTable.restore" class="doc doc-heading">
+          <span class="doc doc-object-name doc-function-name">restore</span>
+
+
+</h4>
+<div class="doc-signature highlight"><pre><span></span><code><span class="n">restore</span><span class="p">(</span><span class="n">target</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="n">datetime</span><span class="p">,</span> <span class="nb">str</span><span class="p">],</span> <span class="o">*</span><span class="p">,</span> <span class="n">ignore_missing_files</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span> <span class="n">protocol_downgrade_allowed</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]</span>
+</code></pre></div>
+
+  <div class="doc doc-contents ">
+  
+      <p>Run the Restore command on the Delta Table: restore table to a given version or datetime.</p>
+
+
+
+  <p><strong>Parameters:</strong></p>
+  <table>
+    <thead>
+      <tr>
+        <th>Name</th>
+        <th>Type</th>
+        <th>Description</th>
+        <th>Default</th>
+      </tr>
+    </thead>
+    <tbody>
+        <tr>
+          <td><code>target</code></td>
+          <td>
+                <code><span title="typing.Union">Union</span>[int, <span title="datetime.datetime">datetime</span>, str]</code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>the expected version will restore, which represented by int, date str or datetime.</p>
+            </div>
+          </td>
+          <td>
+              <em>required</em>
+          </td>
+        </tr>
+        <tr>
+          <td><code>ignore_missing_files</code></td>
+          <td>
+                <code>bool</code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>whether the operation carry on when some data files missing.</p>
+            </div>
+          </td>
+          <td>
+                <code>False</code>
+          </td>
+        </tr>
+        <tr>
+          <td><code>protocol_downgrade_allowed</code></td>
+          <td>
+                <code>bool</code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>whether the operation when protocol version upgraded.</p>
+            </div>
+          </td>
+          <td>
+                <code>False</code>
+          </td>
+        </tr>
+    </tbody>
+  </table>
+
+
+
+  <p><strong>Returns:</strong></p>
+  <table>
+    <thead>
+      <tr>
+        <th>Type</th>
+        <th>Description</th>
+      </tr>
+    </thead>
+    <tbody>
+        <tr>
+          <td>
+                <code><span title="typing.Dict">Dict</span>[str, <span title="typing.Any">Any</span>]</code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>the metrics from restore.</p>
+            </div>
+          </td>
+        </tr>
+    </tbody>
+  </table>
+
+  </div>
+
+</div>
+
+
+<div class="doc doc-object doc-function">
+
+
+
+
+<h4 id="deltalake.table.DeltaTable.schema" class="doc doc-heading">
+          <span class="doc doc-object-name doc-function-name">schema</span>
+
+
+</h4>
+<div class="doc-signature highlight"><pre><span></span><code><span class="n">schema</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="n">Schema</span>
+</code></pre></div>
+
+  <div class="doc doc-contents ">
+  
+      <p>Get the current schema of the DeltaTable.</p>
+
+
+
+  <p><strong>Returns:</strong></p>
+  <table>
+    <thead>
+      <tr>
+        <th>Type</th>
+        <th>Description</th>
+      </tr>
+    </thead>
+    <tbody>
+        <tr>
+          <td>
+                <code><a class="autorefs autorefs-internal" title="deltalake.schema.Schema" href="../schema/#deltalake.schema.Schema">Schema</a></code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>the current Schema registered in the transaction log</p>
+            </div>
+          </td>
+        </tr>
+    </tbody>
+  </table>
+
+  </div>
+
+</div>
+
+
+<div class="doc doc-object doc-function">
+
+
+
+
+<h4 id="deltalake.table.DeltaTable.to_pandas" class="doc doc-heading">
+          <span class="doc doc-object-name doc-function-name">to_pandas</span>
+
+
+</h4>
+<div class="doc-signature highlight"><pre><span></span><code><span class="n">to_pandas</span><span class="p">(</span><span class="n">partitions</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">List</span><span class="p">[</span><span class="n">Tuple</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">columns</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">List</span><span class="p">[</span><span class="nb">str</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">filesystem</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Union</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">pa_fs</span><span class="o">.</span><span class="n">FileSystem</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">filters</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">FilterType</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">pandas</span><span class="o">.</span><span class="n">DataFrame</span>
+</code></pre></div>
+
+  <div class="doc doc-contents ">
+  
+      <p>Build a pandas dataframe using data from the DeltaTable.</p>
+
+
+
+  <p><strong>Parameters:</strong></p>
+  <table>
+    <thead>
+      <tr>
+        <th>Name</th>
+        <th>Type</th>
+        <th>Description</th>
+        <th>Default</th>
+      </tr>
+    </thead>
+    <tbody>
+        <tr>
+          <td><code>partitions</code></td>
+          <td>
+                <code><span title="typing.Optional">Optional</span>[<span title="typing.List">List</span>[<span title="typing.Tuple">Tuple</span>[str, str, <span title="typing.Any">Any</span>]]]</code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>A list of partition filters, see help(DeltaTable.files_by_partitions) for filter syntax</p>
+            </div>
+          </td>
+          <td>
+                <code>None</code>
+          </td>
+        </tr>
+        <tr>
+          <td><code>columns</code></td>
+          <td>
+                <code><span title="typing.Optional">Optional</span>[<span title="typing.List">List</span>[str]]</code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>The columns to project. This can be a list of column names to include (order and duplicates will be preserved)</p>
+            </div>
+          </td>
+          <td>
+                <code>None</code>
+          </td>
+        </tr>
+        <tr>
+          <td><code>filesystem</code></td>
+          <td>
+                <code><span title="typing.Optional">Optional</span>[<span title="typing.Union">Union</span>[str, <span title="pyarrow.FileSystem">FileSystem</span>]]</code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>A concrete implementation of the Pyarrow FileSystem or a fsspec-compatible interface. If None, the first file path will be used to determine the right FileSystem</p>
+            </div>
+          </td>
+          <td>
+                <code>None</code>
+          </td>
+        </tr>
+        <tr>
+          <td><code>filters</code></td>
+          <td>
+                <code><span title="typing.Optional">Optional</span>[<span title="deltalake.table.FilterType">FilterType</span>]</code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>A disjunctive normal form (DNF) predicate for filtering rows. If you pass a filter you do not need to pass <code>partitions</code></p>
+            </div>
+          </td>
+          <td>
+                <code>None</code>
+          </td>
+        </tr>
+    </tbody>
+  </table>
+
+  </div>
+
+</div>
+
+
+<div class="doc doc-object doc-function">
+
+
+
+
+<h4 id="deltalake.table.DeltaTable.to_pyarrow_dataset" class="doc doc-heading">
+          <span class="doc doc-object-name doc-function-name">to_pyarrow_dataset</span>
+
+
+</h4>
+<div class="doc-signature highlight"><pre><span></span><code><span class="n">to_pyarrow_dataset</span><span class="p">(</span><span class="n">partitions</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">List</span><span class="p">[</span><span class="n">Tuple</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">filesystem</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Union</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">pa_fs</span><span class="o">.</span><span class="n">FileSystem</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">parquet_read_options</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">ParquetReadOptions</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">pyarrow</span><span class="o">.</span><span class="n">dataset</span><span class="o">.</span><span class="n">Dataset</span>
+</code></pre></div>
+
+  <div class="doc doc-contents ">
+  
+      <p>Build a PyArrow Dataset using data from the DeltaTable.</p>
+
+
+
+  <p><strong>Parameters:</strong></p>
+  <table>
+    <thead>
+      <tr>
+        <th>Name</th>
+        <th>Type</th>
+        <th>Description</th>
+        <th>Default</th>
+      </tr>
+    </thead>
+    <tbody>
+        <tr>
+          <td><code>partitions</code></td>
+          <td>
+                <code><span title="typing.Optional">Optional</span>[<span title="typing.List">List</span>[<span title="typing.Tuple">Tuple</span>[str, str, <span title="typing.Any">Any</span>]]]</code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>A list of partition filters, see help(DeltaTable.files_by_partitions) for filter syntax</p>
+            </div>
+          </td>
+          <td>
+                <code>None</code>
+          </td>
+        </tr>
+        <tr>
+          <td><code>filesystem</code></td>
+          <td>
+                <code><span title="typing.Optional">Optional</span>[<span title="typing.Union">Union</span>[str, <span title="pyarrow.FileSystem">FileSystem</span>]]</code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>A concrete implementation of the Pyarrow FileSystem or a fsspec-compatible interface. If None, the first file path will be used to determine the right FileSystem</p>
+            </div>
+          </td>
+          <td>
+                <code>None</code>
+          </td>
+        </tr>
+        <tr>
+          <td><code>parquet_read_options</code></td>
+          <td>
+                <code><span title="typing.Optional">Optional</span>[<a class="autorefs autorefs-external" title="pyarrow.dataset.ParquetReadOptions" href="https://arrow.apache.org/docs/python/generated/pyarrow.dataset.ParquetReadOptions.html#pyarrow.dataset.ParquetReadOptions">ParquetReadOptions</a>]</code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>Optional read options for Parquet. Use this to handle INT96 to timestamp conversion for edge cases like 0001-01-01 or 9999-12-31</p>
+            </div>
+          </td>
+          <td>
+                <code>None</code>
+          </td>
+        </tr>
+    </tbody>
+  </table>
+      <p>More info: https://arrow.apache.org/docs/python/generated/pyarrow.dataset.ParquetReadOptions.html</p>
+
+
+
+  <p><strong>Returns:</strong></p>
+  <table>
+    <thead>
+      <tr>
+        <th>Type</th>
+        <th>Description</th>
+      </tr>
+    </thead>
+    <tbody>
+        <tr>
+          <td>
+                <code><a class="autorefs autorefs-external" title="pyarrow.dataset.Dataset" href="https://arrow.apache.org/docs/python/generated/pyarrow.dataset.Dataset.html#pyarrow.dataset.Dataset">Dataset</a></code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>the PyArrow dataset in PyArrow</p>
+            </div>
+          </td>
+        </tr>
+    </tbody>
+  </table>
+
+  </div>
+
+</div>
+
+
+<div class="doc doc-object doc-function">
+
+
+
+
+<h4 id="deltalake.table.DeltaTable.to_pyarrow_table" class="doc doc-heading">
+          <span class="doc doc-object-name doc-function-name">to_pyarrow_table</span>
+
+
+</h4>
+<div class="doc-signature highlight"><pre><span></span><code><span class="n">to_pyarrow_table</span><span class="p">(</span><span class="n">partitions</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">List</span><span class="p">[</span><span class="n">Tuple</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">columns</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">List</span><span class="p">[</span><span class="nb">str</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">filesystem</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Union</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">pa_fs</span><span class="o">.</span><span class="n">FileSystem</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">filters</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">FilterType</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">pyarrow</span><span class="o">.</span><span class="n">Table</span>
+</code></pre></div>
+
+  <div class="doc doc-contents ">
+  
+      <p>Build a PyArrow Table using data from the DeltaTable.</p>
+
+
+
+  <p><strong>Parameters:</strong></p>
+  <table>
+    <thead>
+      <tr>
+        <th>Name</th>
+        <th>Type</th>
+        <th>Description</th>
+        <th>Default</th>
+      </tr>
+    </thead>
+    <tbody>
+        <tr>
+          <td><code>partitions</code></td>
+          <td>
+                <code><span title="typing.Optional">Optional</span>[<span title="typing.List">List</span>[<span title="typing.Tuple">Tuple</span>[str, str, <span title="typing.Any">Any</span>]]]</code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>A list of partition filters, see help(DeltaTable.files_by_partitions) for filter syntax</p>
+            </div>
+          </td>
+          <td>
+                <code>None</code>
+          </td>
+        </tr>
+        <tr>
+          <td><code>columns</code></td>
+          <td>
+                <code><span title="typing.Optional">Optional</span>[<span title="typing.List">List</span>[str]]</code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>The columns to project. This can be a list of column names to include (order and duplicates will be preserved)</p>
+            </div>
+          </td>
+          <td>
+                <code>None</code>
+          </td>
+        </tr>
+        <tr>
+          <td><code>filesystem</code></td>
+          <td>
+                <code><span title="typing.Optional">Optional</span>[<span title="typing.Union">Union</span>[str, <span title="pyarrow.FileSystem">FileSystem</span>]]</code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>A concrete implementation of the Pyarrow FileSystem or a fsspec-compatible interface. If None, the first file path will be used to determine the right FileSystem</p>
+            </div>
+          </td>
+          <td>
+                <code>None</code>
+          </td>
+        </tr>
+        <tr>
+          <td><code>filters</code></td>
+          <td>
+                <code><span title="typing.Optional">Optional</span>[<span title="deltalake.table.FilterType">FilterType</span>]</code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>A disjunctive normal form (DNF) predicate for filtering rows. If you pass a filter you do not need to pass <code>partitions</code></p>
+            </div>
+          </td>
+          <td>
+                <code>None</code>
+          </td>
+        </tr>
+    </tbody>
+  </table>
+
+  </div>
+
+</div>
+
+
+<div class="doc doc-object doc-function">
+
+
+
+
+<h4 id="deltalake.table.DeltaTable.update" class="doc doc-heading">
+          <span class="doc doc-object-name doc-function-name">update</span>
+
+
+</h4>
+<div class="doc-signature highlight"><pre><span></span><code><span class="n">update</span><span class="p">(</span><span class="n">updates</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">new_values</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Union</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="nb">float</span><span class="p">,</span> <span class="nb">str</span><span class="p">,</span> <span class="n">datetime</span><span class="p">,</span> <span class="nb">bool</span><span class="p">,</span> <span class="n">List</span><span class="p">[</span><span class="n">Any</span><span class="p">]]]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">predicate</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">writer_properties</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">int</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">error_on_type_mismatch</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]</span>
+</code></pre></div>
+
+  <div class="doc doc-contents ">
+  
+      <p><code>UPDATE</code> records in the Delta Table that matches an optional predicate. Either updates or new_values needs
+to be passed for it to execute.</p>
+
+
+
+  <p><strong>Parameters:</strong></p>
+  <table>
+    <thead>
+      <tr>
+        <th>Name</th>
+        <th>Type</th>
+        <th>Description</th>
+        <th>Default</th>
+      </tr>
+    </thead>
+    <tbody>
+        <tr>
+          <td><code>updates</code></td>
+          <td>
+                <code><span title="typing.Optional">Optional</span>[<span title="typing.Dict">Dict</span>[str, str]]</code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>a mapping of column name to update SQL expression.</p>
+            </div>
+          </td>
+          <td>
+                <code>None</code>
+          </td>
+        </tr>
+        <tr>
+          <td><code>new_values</code></td>
+          <td>
+                <code><span title="typing.Optional">Optional</span>[<span title="typing.Dict">Dict</span>[str, <span title="typing.Union">Union</span>[int, float, str, <span title="datetime.datetime">datetime</span>, bool, <span title="typing.List">List</span>[<span title="typing.Any">Any</span>]]]]</code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>a mapping of column name to python datatype.</p>
+            </div>
+          </td>
+          <td>
+                <code>None</code>
+          </td>
+        </tr>
+        <tr>
+          <td><code>predicate</code></td>
+          <td>
+                <code><span title="typing.Optional">Optional</span>[str]</code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>a logical expression, defaults to None</p>
+            </div>
+          </td>
+          <td>
+                <code>None</code>
+          </td>
+        </tr>
+        <tr>
+          <td><code>writer_properties</code></td>
+          <td>
+                <code><span title="typing.Optional">Optional</span>[<span title="typing.Dict">Dict</span>[str, int]]</code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>Pass writer properties to the Rust parquet writer, see options https://arrow.apache.org/rust/parquet/file/properties/struct.WriterProperties.html,
+only the following fields are supported: <code>data_page_size_limit</code>, <code>dictionary_page_size_limit</code>,
+<code>data_page_row_count_limit</code>, <code>write_batch_size</code>, <code>max_row_group_size</code>.</p>
+            </div>
+          </td>
+          <td>
+                <code>None</code>
+          </td>
+        </tr>
+        <tr>
+          <td><code>error_on_type_mismatch</code></td>
+          <td>
+                <code>bool</code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>specify if update will return error if data types are mismatching :default = True</p>
+            </div>
+          </td>
+          <td>
+                <code>True</code>
+          </td>
+        </tr>
+    </tbody>
+  </table>
+
+
+
+  <p><strong>Returns:</strong></p>
+  <table>
+    <thead>
+      <tr>
+        <th>Type</th>
+        <th>Description</th>
+      </tr>
+    </thead>
+    <tbody>
+        <tr>
+          <td>
+                <code><span title="typing.Dict">Dict</span>[str, <span title="typing.Any">Any</span>]</code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>the metrics from update</p>
+            </div>
+          </td>
+        </tr>
+    </tbody>
+  </table>
+      <p>Examples:</p>
+<p>Update some row values with SQL predicate. This is equivalent to <code>UPDATE table SET deleted = true WHERE id = '5'</code></p>
+<div class="highlight"><pre><span></span><code>from deltalake import DeltaTable
+dt = DeltaTable(&quot;tmp&quot;)
+dt.update(predicate=&quot;id = &#39;5&#39;&quot;, updates = {&quot;deleted&quot;: &#39;True&#39;})
+</code></pre></div>
+<p>Update all row values. This is equivalent to
+<code>UPDATE table SET deleted = true, id = concat(id, '_old')</code>.
+<div class="highlight"><pre><span></span><code>from deltalake import DeltaTable
+dt = DeltaTable(&quot;tmp&quot;)
+dt.update(updates = {&quot;deleted&quot;: &#39;True&#39;, &quot;id&quot;: &quot;concat(id, &#39;_old&#39;)&quot;})
+</code></pre></div></p>
+<p>To use Python objects instead of SQL strings, use the <code>new_values</code> parameter
+instead of the <code>updates</code> parameter. For example, this is equivalent to
+<code>UPDATE table SET price = 150.10 WHERE id = '5'</code>
+<div class="highlight"><pre><span></span><code>from deltalake import DeltaTable
+dt = DeltaTable(&quot;tmp&quot;)
+dt.update(predicate=&quot;id = &#39;5&#39;&quot;, new_values = {&quot;price&quot;: 150.10})
+</code></pre></div></p>
+
+  </div>
+
+</div>
+
+
+<div class="doc doc-object doc-function">
+
+
+
+
+<h4 id="deltalake.table.DeltaTable.update_incremental" class="doc doc-heading">
+          <span class="doc doc-object-name doc-function-name">update_incremental</span>
+
+
+</h4>
+<div class="doc-signature highlight"><pre><span></span><code><span class="n">update_incremental</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span>
+</code></pre></div>
+
+  <div class="doc doc-contents ">
+  
+      <p>Updates the DeltaTable to the latest version by incrementally applying
+newer versions.</p>
+
+  </div>
+
+</div>
+
+
+<div class="doc doc-object doc-function">
+
+
+
+
+<h4 id="deltalake.table.DeltaTable.vacuum" class="doc doc-heading">
+          <span class="doc doc-object-name doc-function-name">vacuum</span>
+
+
+</h4>
+<div class="doc-signature highlight"><pre><span></span><code><span class="n">vacuum</span><span class="p">(</span><span class="n">retention_hours</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">dry_run</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span> <span class="n">enforce_retention_duration</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">List</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span>
+</code></pre></div>
+
+  <div class="doc doc-contents ">
+  
+      <p>Run the Vacuum command on the Delta Table: list and delete files no longer referenced by the Delta table and are older than the retention threshold.</p>
+
+
+
+  <p><strong>Parameters:</strong></p>
+  <table>
+    <thead>
+      <tr>
+        <th>Name</th>
+        <th>Type</th>
+        <th>Description</th>
+        <th>Default</th>
+      </tr>
+    </thead>
+    <tbody>
+        <tr>
+          <td><code>retention_hours</code></td>
+          <td>
+                <code><span title="typing.Optional">Optional</span>[int]</code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>the retention threshold in hours, if none then the value from <code>configuration.deletedFileRetentionDuration</code> is used or default of 1 week otherwise.</p>
+            </div>
+          </td>
+          <td>
+                <code>None</code>
+          </td>
+        </tr>
+        <tr>
+          <td><code>dry_run</code></td>
+          <td>
+                <code>bool</code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>when activated, list only the files, delete otherwise</p>
+            </div>
+          </td>
+          <td>
+                <code>True</code>
+          </td>
+        </tr>
+        <tr>
+          <td><code>enforce_retention_duration</code></td>
+          <td>
+                <code>bool</code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>when disabled, accepts retention hours smaller than the value from <code>configuration.deletedFileRetentionDuration</code>.</p>
+            </div>
+          </td>
+          <td>
+                <code>True</code>
+          </td>
+        </tr>
+    </tbody>
+  </table>
+
+
+
+  <p><strong>Returns:</strong></p>
+  <table>
+    <thead>
+      <tr>
+        <th>Type</th>
+        <th>Description</th>
+      </tr>
+    </thead>
+    <tbody>
+        <tr>
+          <td>
+                <code><span title="typing.List">List</span>[str]</code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>the list of files no longer referenced by the Delta Table and are older than the retention threshold.</p>
+            </div>
+          </td>
+        </tr>
+    </tbody>
+  </table>
+
+  </div>
+
+</div>
+
+
+<div class="doc doc-object doc-function">
+
+
+
+
+<h4 id="deltalake.table.DeltaTable.version" class="doc doc-heading">
+          <span class="doc doc-object-name doc-function-name">version</span>
+
+
+</h4>
+<div class="doc-signature highlight"><pre><span></span><code><span class="n">version</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="nb">int</span>
+</code></pre></div>
+
+  <div class="doc doc-contents ">
+  
+      <p>Get the version of the DeltaTable.</p>
+
+
+
+  <p><strong>Returns:</strong></p>
+  <table>
+    <thead>
+      <tr>
+        <th>Type</th>
+        <th>Description</th>
+      </tr>
+    </thead>
+    <tbody>
+        <tr>
+          <td>
+                <code>int</code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>The current version of the DeltaTable</p>
+            </div>
+          </td>
+        </tr>
+    </tbody>
+  </table>
+
+  </div>
+
+</div>
+
+
+
+  </div>
+
+  </div>
+
+</div>
+
+<div class="doc doc-object doc-class">
+
+
+
+
+<h3 id="deltalake.table.Metadata" class="doc doc-heading">
+          <span class="doc doc-object-name doc-class-name">Metadata</span>
+
+  
+  <span class="doc doc-labels">
+      <small class="doc doc-label doc-label-dataclass"><code>dataclass</code></small>
+  </span>
+
+</h3>
+<div class="doc-signature highlight"><pre><span></span><code><span class="n">Metadata</span><span class="p">(</span><span class="n">table</span><span class="p">:</span> <span class="n">RawDeltaTable</span><span class="p">)</span>
+</code></pre></div>
+
+  <div class="doc doc-contents ">
+
+  
+      <p>Create a Metadata instance.</p>
+
+
+  
+
+  <div class="doc doc-children">
+
+
+
+
+
+
+
+<div class="doc doc-object doc-attribute">
+
+
+
+
+<h4 id="deltalake.table.Metadata.configuration" class="doc doc-heading">
+          <span class="doc doc-object-name doc-attribute-name">configuration</span>
+
+  
+  <span class="doc doc-labels">
+      <small class="doc doc-label doc-label-property"><code>property</code></small>
+  </span>
+
+</h4>
+<div class="doc-signature highlight"><pre><span></span><code><span class="n">configuration</span><span class="p">:</span> <span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">]</span>
+</code></pre></div>
+
+  <div class="doc doc-contents ">
+  
+      <p>Return the DeltaTable properties.</p>
+  </div>
+
+</div>
+
+<div class="doc doc-object doc-attribute">
+
+
+
+
+<h4 id="deltalake.table.Metadata.created_time" class="doc doc-heading">
+          <span class="doc doc-object-name doc-attribute-name">created_time</span>
+
+  
+  <span class="doc doc-labels">
+      <small class="doc doc-label doc-label-property"><code>property</code></small>
+  </span>
+
+</h4>
+<div class="doc-signature highlight"><pre><span></span><code><span class="n">created_time</span><span class="p">:</span> <span class="nb">int</span>
+</code></pre></div>
+
+  <div class="doc doc-contents ">
+  
+      <p>Return The time when this metadata action is created, in milliseconds since the Unix epoch of the DeltaTable.</p>
+  </div>
+
+</div>
+
+<div class="doc doc-object doc-attribute">
+
+
+
+
+<h4 id="deltalake.table.Metadata.description" class="doc doc-heading">
+          <span class="doc doc-object-name doc-attribute-name">description</span>
+
+  
+  <span class="doc doc-labels">
+      <small class="doc doc-label doc-label-property"><code>property</code></small>
+  </span>
+
+</h4>
+<div class="doc-signature highlight"><pre><span></span><code><span class="n">description</span><span class="p">:</span> <span class="nb">str</span>
+</code></pre></div>
+
+  <div class="doc doc-contents ">
+  
+      <p>Return the user-provided description of the DeltaTable.</p>
+  </div>
+
+</div>
+
+<div class="doc doc-object doc-attribute">
+
+
+
+
+<h4 id="deltalake.table.Metadata.id" class="doc doc-heading">
+          <span class="doc doc-object-name doc-attribute-name">id</span>
+
+  
+  <span class="doc doc-labels">
+      <small class="doc doc-label doc-label-property"><code>property</code></small>
+  </span>
+
+</h4>
+<div class="doc-signature highlight"><pre><span></span><code><span class="nb">id</span><span class="p">:</span> <span class="nb">int</span>
+</code></pre></div>
+
+  <div class="doc doc-contents ">
+  
+      <p>Return the unique identifier of the DeltaTable.</p>
+  </div>
+
+</div>
+
+<div class="doc doc-object doc-attribute">
+
+
+
+
+<h4 id="deltalake.table.Metadata.name" class="doc doc-heading">
+          <span class="doc doc-object-name doc-attribute-name">name</span>
+
+  
+  <span class="doc doc-labels">
+      <small class="doc doc-label doc-label-property"><code>property</code></small>
+  </span>
+
+</h4>
+<div class="doc-signature highlight"><pre><span></span><code><span class="n">name</span><span class="p">:</span> <span class="nb">str</span>
+</code></pre></div>
+
+  <div class="doc doc-contents ">
+  
+      <p>Return the user-provided identifier of the DeltaTable.</p>
+  </div>
+
+</div>
+
+<div class="doc doc-object doc-attribute">
+
+
+
+
+<h4 id="deltalake.table.Metadata.partition_columns" class="doc doc-heading">
+          <span class="doc doc-object-name doc-attribute-name">partition_columns</span>
+
+  
+  <span class="doc doc-labels">
+      <small class="doc doc-label doc-label-property"><code>property</code></small>
+  </span>
+
+</h4>
+<div class="doc-signature highlight"><pre><span></span><code><span class="n">partition_columns</span><span class="p">:</span> <span class="n">List</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span>
+</code></pre></div>
+
+  <div class="doc doc-contents ">
+  
+      <p>Return an array containing the names of the partitioned columns of the DeltaTable.</p>
+  </div>
+
+</div>
+
+
+
+
+
+  </div>
+
+  </div>
+
+</div>
+
+<div class="doc doc-object doc-class">
+
+
+
+
+<h3 id="deltalake.table.TableMerger" class="doc doc-heading">
+          <span class="doc doc-object-name doc-class-name">TableMerger</span>
+
+
+</h3>
+<div class="doc-signature highlight"><pre><span></span><code><span class="n">TableMerger</span><span class="p">(</span><span class="n">table</span><span class="p">:</span> <span class="n">DeltaTable</span><span class="p">,</span> <span class="n">source</span><span class="p">:</span> <span class="n">pyarrow</span><span class="o">.</span><span class="n">RecordBatchReader</span><span class="p">,</span> <span class="n">predicate</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">source_alias</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">target_alias</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">safe_cast</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">)</span>
+</code></pre></div>
+
+  <div class="doc doc-contents ">
+
+  
+      <p>API for various table <code>MERGE</code> commands.</p>
+
+
+  
+
+  <div class="doc doc-children">
+
+
+
+
+
+
+
+
+
+
+<div class="doc doc-object doc-function">
+
+
+
+
+<h4 id="deltalake.table.TableMerger.execute" class="doc doc-heading">
+          <span class="doc doc-object-name doc-function-name">execute</span>
+
+
+</h4>
+<div class="doc-signature highlight"><pre><span></span><code><span class="n">execute</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]</span>
+</code></pre></div>
+
+  <div class="doc doc-contents ">
+  
+      <p>Executes <code>MERGE</code> with the previously provided settings in Rust with Apache Datafusion query engine.</p>
+
+
+
+  <p><strong>Returns:</strong></p>
+  <table>
+    <thead>
+      <tr>
+        <th>Type</th>
+        <th>Description</th>
+      </tr>
+    </thead>
+    <tbody>
+        <tr>
+          <td>
+                <code><span title="typing.Dict">Dict</span>[str, <span title="typing.Any">Any</span>]</code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>Dict[str, Any]: metrics</p>
+            </div>
+          </td>
+        </tr>
+    </tbody>
+  </table>
+
+  </div>
+
+</div>
+
+
+<div class="doc doc-object doc-function">
+
+
+
+
+<h4 id="deltalake.table.TableMerger.when_matched_delete" class="doc doc-heading">
+          <span class="doc doc-object-name doc-function-name">when_matched_delete</span>
+
+
+</h4>
+<div class="doc-signature highlight"><pre><span></span><code><span class="n">when_matched_delete</span><span class="p">(</span><span class="n">predicate</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">TableMerger</span>
+</code></pre></div>
+
+  <div class="doc doc-contents ">
+  
+      <p>Delete a matched row from the table only if the given <code>predicate</code> (if specified) is
+true for the matched row. If not specified it deletes all matches.</p>
+
+
+
+  <p><strong>Parameters:</strong></p>
+  <table>
+    <thead>
+      <tr>
+        <th>Name</th>
+        <th>Type</th>
+        <th>Description</th>
+        <th>Default</th>
+      </tr>
+    </thead>
+    <tbody>
+        <tr>
+          <td><code>predicate</code></td>
+          <td>
+                <code>(str | None, <span title="typing.Optional">Optional</span>)</code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>SQL like predicate on when to delete. Defaults to None.</p>
+            </div>
+          </td>
+          <td>
+                <code>None</code>
+          </td>
+        </tr>
+    </tbody>
+  </table>
+
+
+
+  <p><strong>Returns:</strong></p>
+  <table>
+    <thead>
+      <tr>
+<th>Name</th>        <th>Type</th>
+        <th>Description</th>
+      </tr>
+    </thead>
+    <tbody>
+        <tr>
+<td><code>TableMerger</code></td>          <td>
+                <code><a class="autorefs autorefs-internal" title="deltalake.table.TableMerger" href="#deltalake.table.TableMerger">TableMerger</a></code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>TableMerger Object</p>
+            </div>
+          </td>
+        </tr>
+    </tbody>
+  </table>
+      <p>Examples:</p>
+<p>Delete on a predicate
+<div class="highlight"><pre><span></span><code>from deltalake import DeltaTable
+import pyarrow as pa
+data = pa.table({&quot;x&quot;: [1, 2, 3], &quot;y&quot;: [4, 5, 6]})
+dt = DeltaTable(&quot;tmp&quot;)
+(             dt.merge(                 source=data,                 predicate=&#39;target.x = source.x&#39;,                 source_alias=&#39;source&#39;,                 target_alias=&#39;target&#39;)             .when_matched_delete(                 predicate = &quot;source.deleted = true&quot;)             .execute()         ```
+Delete all records that were matched
+</code></pre></div>
+from deltalake import DeltaTable
+import pyarrow as pa
+data = pa.table({"x": [1, 2, 3], "y": [4, 5, 6]})
+dt = DeltaTable("tmp")
+(             dt.merge(                 source=data,                 predicate='target.x = source.x',                 source_alias='source',                 target_alias='target')               .when_matched_delete()              .execute()         ```</p>
+
+  </div>
+
+</div>
+
+
+<div class="doc doc-object doc-function">
+
+
+
+
+<h4 id="deltalake.table.TableMerger.when_matched_update" class="doc doc-heading">
+          <span class="doc doc-object-name doc-function-name">when_matched_update</span>
+
+
+</h4>
+<div class="doc-signature highlight"><pre><span></span><code><span class="n">when_matched_update</span><span class="p">(</span><span class="n">updates</span><span class="p">:</span> <span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">],</span> <span class="n">predicate</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">TableMerger</span>
+</code></pre></div>
+
+  <div class="doc doc-contents ">
+  
+      <p>Update a matched table row based on the rules defined by <code>updates</code>.
+If a <code>predicate</code> is specified, then it must evaluate to true for the row to be updated.</p>
+
+
+
+  <p><strong>Parameters:</strong></p>
+  <table>
+    <thead>
+      <tr>
+        <th>Name</th>
+        <th>Type</th>
+        <th>Description</th>
+        <th>Default</th>
+      </tr>
+    </thead>
+    <tbody>
+        <tr>
+          <td><code>updates</code></td>
+          <td>
+                <code>dict</code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>a mapping of column name to update SQL expression.</p>
+            </div>
+          </td>
+          <td>
+              <em>required</em>
+          </td>
+        </tr>
+        <tr>
+          <td><code>predicate</code></td>
+          <td>
+                <code>(str | None, <span title="typing.Optional">Optional</span>)</code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>SQL like predicate on when to update. Defaults to None.</p>
+            </div>
+          </td>
+          <td>
+                <code>None</code>
+          </td>
+        </tr>
+    </tbody>
+  </table>
+
+
+
+  <p><strong>Returns:</strong></p>
+  <table>
+    <thead>
+      <tr>
+<th>Name</th>        <th>Type</th>
+        <th>Description</th>
+      </tr>
+    </thead>
+    <tbody>
+        <tr>
+<td><code>TableMerger</code></td>          <td>
+                <code><a class="autorefs autorefs-internal" title="deltalake.table.TableMerger" href="#deltalake.table.TableMerger">TableMerger</a></code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>TableMerger Object</p>
+            </div>
+          </td>
+        </tr>
+    </tbody>
+  </table>
+      <p>Examples:
+<div class="highlight"><pre><span></span><code>from deltalake import DeltaTable
+import pyarrow as pa
+data = pa.table({&quot;x&quot;: [1, 2, 3], &quot;y&quot;: [4, 5, 6]})
+dt = DeltaTable(&quot;tmp&quot;)
+(             dt.merge(                 source=data,                 predicate=&quot;target.x = source.x&quot;,                 source_alias=&quot;source&quot;,                 target_alias=&quot;target&quot;)             .when_matched_update(updates={&quot;x&quot;: &quot;source.x&quot;, &quot;y&quot;: &quot;source.y&quot;})             .execute()         )
+</code></pre></div></p>
+
+  </div>
+
+</div>
+
+
+<div class="doc doc-object doc-function">
+
+
+
+
+<h4 id="deltalake.table.TableMerger.when_matched_update_all" class="doc doc-heading">
+          <span class="doc doc-object-name doc-function-name">when_matched_update_all</span>
+
+
+</h4>
+<div class="doc-signature highlight"><pre><span></span><code><span class="n">when_matched_update_all</span><span class="p">(</span><span class="n">predicate</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">TableMerger</span>
+</code></pre></div>
+
+  <div class="doc doc-contents ">
+  
+      <p>Updating all source fields to target fields, source and target are required to have the same field names. 
+If a <code>predicate</code> is specified, then it must evaluate to true for the row to be updated.</p>
+
+
+
+  <p><strong>Parameters:</strong></p>
+  <table>
+    <thead>
+      <tr>
+        <th>Name</th>
+        <th>Type</th>
+        <th>Description</th>
+        <th>Default</th>
+      </tr>
+    </thead>
+    <tbody>
+        <tr>
+          <td><code>predicate</code></td>
+          <td>
+                <code>(str | None, <span title="typing.Optional">Optional</span>)</code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>SQL like predicate on when to update all columns. Defaults to None.</p>
+            </div>
+          </td>
+          <td>
+                <code>None</code>
+          </td>
+        </tr>
+    </tbody>
+  </table>
+
+
+
+  <p><strong>Returns:</strong></p>
+  <table>
+    <thead>
+      <tr>
+<th>Name</th>        <th>Type</th>
+        <th>Description</th>
+      </tr>
+    </thead>
+    <tbody>
+        <tr>
+<td><code>TableMerger</code></td>          <td>
+                <code><a class="autorefs autorefs-internal" title="deltalake.table.TableMerger" href="#deltalake.table.TableMerger">TableMerger</a></code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>TableMerger Object</p>
+            </div>
+          </td>
+        </tr>
+    </tbody>
+  </table>
+      <p>Examples:</p>
+<div class="highlight"><pre><span></span><code>from deltalake import DeltaTable
+import pyarrow as pa
+data = pa.table({&quot;x&quot;: [1, 2, 3], &quot;y&quot;: [4, 5, 6]})
+dt = DeltaTable(&quot;tmp&quot;)
+(            dt.merge(                 source=data,                 predicate=&#39;target.x = source.x&#39;,                 source_alias=&#39;source&#39;,                 target_alias=&#39;target&#39;)              .when_matched_update_all()             .execute()             )
+</code></pre></div>
+
+  </div>
+
+</div>
+
+
+<div class="doc doc-object doc-function">
+
+
+
+
+<h4 id="deltalake.table.TableMerger.when_not_matched_by_source_delete" class="doc doc-heading">
+          <span class="doc doc-object-name doc-function-name">when_not_matched_by_source_delete</span>
+
+
+</h4>
+<div class="doc-signature highlight"><pre><span></span><code><span class="n">when_not_matched_by_source_delete</span><span class="p">(</span><span class="n">predicate</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">TableMerger</span>
+</code></pre></div>
+
+  <div class="doc doc-contents ">
+  
+      <p>Delete a target row that has no matches in the source from the table only if the given
+<code>predicate</code> (if specified) is true for the target row.</p>
+
+
+
+  <p><strong>Parameters:</strong></p>
+  <table>
+    <thead>
+      <tr>
+        <th>Name</th>
+        <th>Type</th>
+        <th>Description</th>
+        <th>Default</th>
+      </tr>
+    </thead>
+    <tbody>
+        <tr>
+          <td><code>predicate</code></td>
+          <td>
+                <code>(str | None, <span title="typing.Optional">Optional</span>)</code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>SQL like predicate on when to delete when not matched by source. Defaults to None.</p>
+            </div>
+          </td>
+          <td>
+                <code>None</code>
+          </td>
+        </tr>
+    </tbody>
+  </table>
+
+
+
+  <p><strong>Returns:</strong></p>
+  <table>
+    <thead>
+      <tr>
+<th>Name</th>        <th>Type</th>
+        <th>Description</th>
+      </tr>
+    </thead>
+    <tbody>
+        <tr>
+<td><code>TableMerger</code></td>          <td>
+                <code><a class="autorefs autorefs-internal" title="deltalake.table.TableMerger" href="#deltalake.table.TableMerger">TableMerger</a></code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>TableMerger Object</p>
+            </div>
+          </td>
+        </tr>
+    </tbody>
+  </table>
+
+  </div>
+
+</div>
+
+
+<div class="doc doc-object doc-function">
+
+
+
+
+<h4 id="deltalake.table.TableMerger.when_not_matched_by_source_update" class="doc doc-heading">
+          <span class="doc doc-object-name doc-function-name">when_not_matched_by_source_update</span>
+
+
+</h4>
+<div class="doc-signature highlight"><pre><span></span><code><span class="n">when_not_matched_by_source_update</span><span class="p">(</span><span class="n">updates</span><span class="p">:</span> <span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">],</span> <span class="n">predicate</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">TableMerger</span>
+</code></pre></div>
+
+  <div class="doc doc-contents ">
+  
+      <p>Update a target row that has no matches in the source based on the rules defined by <code>updates</code>.
+If a <code>predicate</code> is specified, then it must evaluate to true for the row to be updated.</p>
+
+
+
+  <p><strong>Parameters:</strong></p>
+  <table>
+    <thead>
+      <tr>
+        <th>Name</th>
+        <th>Type</th>
+        <th>Description</th>
+        <th>Default</th>
+      </tr>
+    </thead>
+    <tbody>
+        <tr>
+          <td><code>updates</code></td>
+          <td>
+                <code>dict</code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>a mapping of column name to update SQL expression.</p>
+            </div>
+          </td>
+          <td>
+              <em>required</em>
+          </td>
+        </tr>
+        <tr>
+          <td><code>predicate</code></td>
+          <td>
+                <code>(str | None, <span title="typing.Optional">Optional</span>)</code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>SQL like predicate on when to update. Defaults to None.</p>
+            </div>
+          </td>
+          <td>
+                <code>None</code>
+          </td>
+        </tr>
+    </tbody>
+  </table>
+
+
+
+  <p><strong>Returns:</strong></p>
+  <table>
+    <thead>
+      <tr>
+<th>Name</th>        <th>Type</th>
+        <th>Description</th>
+      </tr>
+    </thead>
+    <tbody>
+        <tr>
+<td><code>TableMerger</code></td>          <td>
+                <code><a class="autorefs autorefs-internal" title="deltalake.table.TableMerger" href="#deltalake.table.TableMerger">TableMerger</a></code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>TableMerger Object</p>
+            </div>
+          </td>
+        </tr>
+    </tbody>
+  </table>
+      <p><code>from deltalake import DeltaTable
+import pyarrow as pa
+data = pa.table({"x": [1, 2, 3], "y": [4, 5, 6]})
+dt = DeltaTable("tmp")
+(             dt.merge(                 source=data,                 predicate='target.x = source.x',                 source_alias='source',                 target_alias='target')             .when_not_matched_by_source_update(                 predicate = "y &gt; 3",                 updates = {"y": "0"})             .execute()             )</code></p>
+
+  </div>
+
+</div>
+
+
+<div class="doc doc-object doc-function">
+
+
+
+
+<h4 id="deltalake.table.TableMerger.when_not_matched_insert" class="doc doc-heading">
+          <span class="doc doc-object-name doc-function-name">when_not_matched_insert</span>
+
+
+</h4>
+<div class="doc-signature highlight"><pre><span></span><code><span class="n">when_not_matched_insert</span><span class="p">(</span><span class="n">updates</span><span class="p">:</span> <span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">],</span> <span class="n">predicate</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">TableMerger</span>
+</code></pre></div>
+
+  <div class="doc doc-contents ">
+  
+      <p>Insert a new row to the target table based on the rules defined by <code>updates</code>. If a
+<code>predicate</code> is specified, then it must evaluate to true for the new row to be inserted.</p>
+
+
+
+  <p><strong>Parameters:</strong></p>
+  <table>
+    <thead>
+      <tr>
+        <th>Name</th>
+        <th>Type</th>
+        <th>Description</th>
+        <th>Default</th>
+      </tr>
+    </thead>
+    <tbody>
+        <tr>
+          <td><code>updates</code></td>
+          <td>
+                <code>dict</code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>a mapping of column name to insert SQL expression.</p>
+            </div>
+          </td>
+          <td>
+              <em>required</em>
+          </td>
+        </tr>
+        <tr>
+          <td><code>predicate</code></td>
+          <td>
+                <code>(str | None, <span title="typing.Optional">Optional</span>)</code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>SQL like predicate on when to insert. Defaults to None.</p>
+            </div>
+          </td>
+          <td>
+                <code>None</code>
+          </td>
+        </tr>
+    </tbody>
+  </table>
+
+
+
+  <p><strong>Returns:</strong></p>
+  <table>
+    <thead>
+      <tr>
+<th>Name</th>        <th>Type</th>
+        <th>Description</th>
+      </tr>
+    </thead>
+    <tbody>
+        <tr>
+<td><code>TableMerger</code></td>          <td>
+                <code><a class="autorefs autorefs-internal" title="deltalake.table.TableMerger" href="#deltalake.table.TableMerger">TableMerger</a></code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>TableMerger Object</p>
+            </div>
+          </td>
+        </tr>
+    </tbody>
+  </table>
+      <p>Examples:</p>
+<div class="highlight"><pre><span></span><code>from deltalake import DeltaTable
+import pyarrow as pa
+data = pa.table({&quot;x&quot;: [1, 2, 3], &quot;y&quot;: [4, 5, 6]})
+dt = DeltaTable(&quot;tmp&quot;)
+(             dt.merge(                 source=data,                 predicate=&#39;target.x = source.x&#39;,                 source_alias=&#39;source&#39;,                 target_alias=&#39;target&#39;)             .when_not_matched_insert(                  updates = {                      &quot;x&quot;: &quot;source.x&quot;,                      &quot;y&quot;: &quot;source.y&quot;,                          })             .execute()                 )
+</code></pre></div>
+
+  </div>
+
+</div>
+
+
+<div class="doc doc-object doc-function">
+
+
+
+
+<h4 id="deltalake.table.TableMerger.when_not_matched_insert_all" class="doc doc-heading">
+          <span class="doc doc-object-name doc-function-name">when_not_matched_insert_all</span>
+
+
+</h4>
+<div class="doc-signature highlight"><pre><span></span><code><span class="n">when_not_matched_insert_all</span><span class="p">(</span><span class="n">predicate</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">TableMerger</span>
+</code></pre></div>
+
+  <div class="doc doc-contents ">
+  
+      <p>Insert a new row to the target table, updating all source fields to target fields. Source and target are 
+required to have the same field names. If a <code>predicate</code> is specified, then it must evaluate to true for 
+the new row to be inserted.</p>
+
+
+
+  <p><strong>Parameters:</strong></p>
+  <table>
+    <thead>
+      <tr>
+        <th>Name</th>
+        <th>Type</th>
+        <th>Description</th>
+        <th>Default</th>
+      </tr>
+    </thead>
+    <tbody>
+        <tr>
+          <td><code>predicate</code></td>
+          <td>
+                <code>(str | None, <span title="typing.Optional">Optional</span>)</code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>SQL like predicate on when to insert. Defaults to None.</p>
+            </div>
+          </td>
+          <td>
+                <code>None</code>
+          </td>
+        </tr>
+    </tbody>
+  </table>
+
+
+
+  <p><strong>Returns:</strong></p>
+  <table>
+    <thead>
+      <tr>
+<th>Name</th>        <th>Type</th>
+        <th>Description</th>
+      </tr>
+    </thead>
+    <tbody>
+        <tr>
+<td><code>TableMerger</code></td>          <td>
+                <code><a class="autorefs autorefs-internal" title="deltalake.table.TableMerger" href="#deltalake.table.TableMerger">TableMerger</a></code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>TableMerger Object</p>
+            </div>
+          </td>
+        </tr>
+    </tbody>
+  </table>
+      <p>Examples:</p>
+<div class="highlight"><pre><span></span><code>from deltalake import DeltaTable
+import pyarrow as pa
+data = pa.table({&quot;x&quot;: [1, 2, 3], &quot;y&quot;: [4, 5, 6]})
+dt = DeltaTable(&quot;tmp&quot;)
+(             dt             .merge(                 source=data,                 predicate=&#39;target.x = source.x&#39;,                 source_alias=&#39;source&#39;,                 target_alias=&#39;target&#39;)             .when_not_matched_insert_all()             .execute()              )
+</code></pre></div>
+
+  </div>
+
+</div>
+
+
+<div class="doc doc-object doc-function">
+
+
+
+
+<h4 id="deltalake.table.TableMerger.with_writer_properties" class="doc doc-heading">
+          <span class="doc doc-object-name doc-function-name">with_writer_properties</span>
+
+
+</h4>
+<div class="doc-signature highlight"><pre><span></span><code><span class="n">with_writer_properties</span><span class="p">(</span><span class="n">data_page_size_limit</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">dictionary_page_size_limit</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">data_page_row_count_limit</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">write_batch_size</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">max_row_group_size</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">TableMerger</span>
+</code></pre></div>
+
+  <div class="doc doc-contents ">
+  
+      <p>Pass writer properties to the Rust parquet writer, see options https://arrow.apache.org/rust/parquet/file/properties/struct.WriterProperties.html:</p>
+
+
+
+  <p><strong>Parameters:</strong></p>
+  <table>
+    <thead>
+      <tr>
+        <th>Name</th>
+        <th>Type</th>
+        <th>Description</th>
+        <th>Default</th>
+      </tr>
+    </thead>
+    <tbody>
+        <tr>
+          <td><code>data_page_size_limit</code></td>
+          <td>
+                <code>(int | None, <span title="typing.Optional">Optional</span>)</code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>Limit DataPage size to this in bytes. Defaults to None.</p>
+            </div>
+          </td>
+          <td>
+                <code>None</code>
+          </td>
+        </tr>
+        <tr>
+          <td><code>dictionary_page_size_limit</code></td>
+          <td>
+                <code>(int | None, <span title="typing.Optional">Optional</span>)</code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>Limit the size of each DataPage to store dicts to this amount in bytes. Defaults to None.</p>
+            </div>
+          </td>
+          <td>
+                <code>None</code>
+          </td>
+        </tr>
+        <tr>
+          <td><code>data_page_row_count_limit</code></td>
+          <td>
+                <code>(int | None, <span title="typing.Optional">Optional</span>)</code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>Limit the number of rows in each DataPage. Defaults to None.</p>
+            </div>
+          </td>
+          <td>
+                <code>None</code>
+          </td>
+        </tr>
+        <tr>
+          <td><code>write_batch_size</code></td>
+          <td>
+                <code>(int | None, <span title="typing.Optional">Optional</span>)</code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>Splits internally to smaller batch size. Defaults to None.</p>
+            </div>
+          </td>
+          <td>
+                <code>None</code>
+          </td>
+        </tr>
+        <tr>
+          <td><code>max_row_group_size</code></td>
+          <td>
+                <code>(int | None, <span title="typing.Optional">Optional</span>)</code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>Max number of rows in row group. Defaults to None.</p>
+            </div>
+          </td>
+          <td>
+                <code>None</code>
+          </td>
+        </tr>
+    </tbody>
+  </table>
+
+
+
+  <p><strong>Returns:</strong></p>
+  <table>
+    <thead>
+      <tr>
+<th>Name</th>        <th>Type</th>
+        <th>Description</th>
+      </tr>
+    </thead>
+    <tbody>
+        <tr>
+<td><code>TableMerger</code></td>          <td>
+                <code><a class="autorefs autorefs-internal" title="deltalake.table.TableMerger" href="#deltalake.table.TableMerger">TableMerger</a></code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>TableMerger Object</p>
+            </div>
+          </td>
+        </tr>
+    </tbody>
+  </table>
+
+  </div>
+
+</div>
+
+
+
+  </div>
+
+  </div>
+
+</div>
+
+<div class="doc doc-object doc-class">
+
+
+
+
+<h3 id="deltalake.table.TableOptimizer" class="doc doc-heading">
+          <span class="doc doc-object-name doc-class-name">TableOptimizer</span>
+
+
+</h3>
+<div class="doc-signature highlight"><pre><span></span><code><span class="n">TableOptimizer</span><span class="p">(</span><span class="n">table</span><span class="p">:</span> <span class="n">DeltaTable</span><span class="p">)</span>
+</code></pre></div>
+
+  <div class="doc doc-contents ">
+
+  
+      <p>API for various table optimization commands.</p>
+
+
+  
+
+  <div class="doc doc-children">
+
+
+
+
+
+
+
+
+
+
+<div class="doc doc-object doc-function">
+
+
+
+
+<h4 id="deltalake.table.TableOptimizer.compact" class="doc doc-heading">
+          <span class="doc doc-object-name doc-function-name">compact</span>
+
+
+</h4>
+<div class="doc-signature highlight"><pre><span></span><code><span class="n">compact</span><span class="p">(</span><span class="n">partition_filters</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">FilterType</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">target_size</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">max_concurrent_tasks</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">min_commit_interval</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Union</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="n">timedelta</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]</span>
+</code></pre></div>
+
+  <div class="doc doc-contents ">
+  
+      <p>Compacts small files to reduce the total number of files in the table.</p>
+<p>This operation is idempotent; if run twice on the same table (assuming it has
+not been updated) it will do nothing the second time.</p>
+<p>If this operation happens concurrently with any operations other than append,
+it will fail.</p>
+
+
+
+  <p><strong>Parameters:</strong></p>
+  <table>
+    <thead>
+      <tr>
+        <th>Name</th>
+        <th>Type</th>
+        <th>Description</th>
+        <th>Default</th>
+      </tr>
+    </thead>
+    <tbody>
+        <tr>
+          <td><code>partition_filters</code></td>
+          <td>
+                <code><span title="typing.Optional">Optional</span>[<span title="deltalake.table.FilterType">FilterType</span>]</code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>the partition filters that will be used for getting the matched files</p>
+            </div>
+          </td>
+          <td>
+                <code>None</code>
+          </td>
+        </tr>
+        <tr>
+          <td><code>target_size</code></td>
+          <td>
+                <code><span title="typing.Optional">Optional</span>[int]</code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>desired file size after bin-packing files, in bytes. If not
+            provided, will attempt to read the table configuration value <code>delta.targetFileSize</code>.
+            If that value isn't set, will use default value of 256MB.</p>
+            </div>
+          </td>
+          <td>
+                <code>None</code>
+          </td>
+        </tr>
+        <tr>
+          <td><code>max_concurrent_tasks</code></td>
+          <td>
+                <code><span title="typing.Optional">Optional</span>[int]</code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>the maximum number of concurrent tasks to use for
+                    file compaction. Defaults to number of CPUs. More concurrent tasks can make compaction
+                    faster, but will also use more memory.</p>
+            </div>
+          </td>
+          <td>
+                <code>None</code>
+          </td>
+        </tr>
+        <tr>
+          <td><code>min_commit_interval</code></td>
+          <td>
+                <code><span title="typing.Optional">Optional</span>[<span title="typing.Union">Union</span>[int, <span title="datetime.timedelta">timedelta</span>]]</code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>minimum interval in seconds or as timedeltas before a new commit is
+                    created. Interval is useful for long running executions. Set to 0 or timedelta(0), if you
+                    want a commit per partition.</p>
+            </div>
+          </td>
+          <td>
+                <code>None</code>
+          </td>
+        </tr>
+    </tbody>
+  </table>
+
+
+
+  <p><strong>Returns:</strong></p>
+  <table>
+    <thead>
+      <tr>
+        <th>Type</th>
+        <th>Description</th>
+      </tr>
+    </thead>
+    <tbody>
+        <tr>
+          <td>
+                <code><span title="typing.Dict">Dict</span>[str, <span title="typing.Any">Any</span>]</code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>the metrics from optimize</p>
+            </div>
+          </td>
+        </tr>
+    </tbody>
+  </table>
+      <p>Example:
+<div class="highlight"><pre><span></span><code># Use a timedelta object to specify the seconds, minutes or hours of the interval.
+from deltalake import DeltaTable
+from datetime import timedelta
+dt = DeltaTable(&quot;tmp&quot;)
+time_delta = timedelta(minutes=10)
+dt.optimize.z_order([&quot;timestamp&quot;], min_commit_interval=time_delta)
+</code></pre></div></p>
+
+  </div>
+
+</div>
+
+
+<div class="doc doc-object doc-function">
+
+
+
+
+<h4 id="deltalake.table.TableOptimizer.z_order" class="doc doc-heading">
+          <span class="doc doc-object-name doc-function-name">z_order</span>
+
+
+</h4>
+<div class="doc-signature highlight"><pre><span></span><code><span class="n">z_order</span><span class="p">(</span><span class="n">columns</span><span class="p">:</span> <span class="n">Iterable</span><span class="p">[</span><span class="nb">str</span><span class="p">],</span> <span class="n">partition_filters</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">FilterType</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">target_size</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">max_concurrent_tasks</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">max_spill_size</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">20</span> <span class="o">*</span> <span class="mi">1024</span> <span class="o">*</span> <span class="mi">1024</span> <span class="o">*</span> <span class="mi">1024</span><span class="p">,</span> <span class="n">min_commit_interval</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Union</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="n">timedelta</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]</span>
+</code></pre></div>
+
+  <div class="doc doc-contents ">
+  
+      <p>Reorders the data using a Z-order curve to improve data skipping.</p>
+<p>This also performs compaction, so the same parameters as compact() apply.</p>
+
+
+
+  <p><strong>Parameters:</strong></p>
+  <table>
+    <thead>
+      <tr>
+        <th>Name</th>
+        <th>Type</th>
+        <th>Description</th>
+        <th>Default</th>
+      </tr>
+    </thead>
+    <tbody>
+        <tr>
+          <td><code>columns</code></td>
+          <td>
+                <code><span title="typing.Iterable">Iterable</span>[str]</code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>the columns to use for Z-ordering. There must be at least one column.
+        partition_filters: the partition filters that will be used for getting the matched files</p>
+            </div>
+          </td>
+          <td>
+              <em>required</em>
+          </td>
+        </tr>
+        <tr>
+          <td><code>target_size</code></td>
+          <td>
+                <code><span title="typing.Optional">Optional</span>[int]</code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>desired file size after bin-packing files, in bytes. If not
+            provided, will attempt to read the table configuration value <code>delta.targetFileSize</code>.
+            If that value isn't set, will use default value of 256MB.</p>
+            </div>
+          </td>
+          <td>
+                <code>None</code>
+          </td>
+        </tr>
+        <tr>
+          <td><code>max_concurrent_tasks</code></td>
+          <td>
+                <code><span title="typing.Optional">Optional</span>[int]</code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>the maximum number of concurrent tasks to use for
+                    file compaction. Defaults to number of CPUs. More concurrent tasks can make compaction
+                    faster, but will also use more memory.</p>
+            </div>
+          </td>
+          <td>
+                <code>None</code>
+          </td>
+        </tr>
+        <tr>
+          <td><code>max_spill_size</code></td>
+          <td>
+                <code>int</code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>the maximum number of bytes to spill to disk. Defaults to 20GB.</p>
+            </div>
+          </td>
+          <td>
+                <code>20 * 1024 * 1024 * 1024</code>
+          </td>
+        </tr>
+        <tr>
+          <td><code>min_commit_interval</code></td>
+          <td>
+                <code><span title="typing.Optional">Optional</span>[<span title="typing.Union">Union</span>[int, <span title="datetime.timedelta">timedelta</span>]]</code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>minimum interval in seconds or as timedeltas before a new commit is
+                    created. Interval is useful for long running executions. Set to 0 or timedelta(0), if you
+                    want a commit per partition.</p>
+            </div>
+          </td>
+          <td>
+                <code>None</code>
+          </td>
+        </tr>
+    </tbody>
+  </table>
+
+
+
+  <p><strong>Returns:</strong></p>
+  <table>
+    <thead>
+      <tr>
+        <th>Type</th>
+        <th>Description</th>
+      </tr>
+    </thead>
+    <tbody>
+        <tr>
+          <td>
+                <code><span title="typing.Dict">Dict</span>[str, <span title="typing.Any">Any</span>]</code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>the metrics from optimize</p>
+            </div>
+          </td>
+        </tr>
+    </tbody>
+  </table>
+      <p>Example:
+<div class="highlight"><pre><span></span><code># Use a timedelta object to specify the seconds, minutes or hours of the interval.
+from deltalake import DeltaTable
+from datetime import timedelta
+dt = DeltaTable(&quot;tmp&quot;)
+time_delta = timedelta(minutes=10)
+dt.optimize.compact(min_commit_interval=time_delta)
+</code></pre></div></p>
+
+  </div>
+
+</div>
+
+
+
+  </div>
+
+  </div>
+
+</div>
+
+
+
+
+  </div>
+
+  </div>
+
+</div><h2 id="writing-delta-tables">Writing Delta Tables</h2>
+
+
+
+<div class="doc doc-object doc-function">
+
+
+
+
+  <div class="doc doc-contents first">
+  
+      <p>Write to a Delta Lake table</p>
+<p>If the table does not already exist, it will be created.</p>
+<p>This function only supports writer protocol version 2 currently. When
+attempting to write to an existing table with a higher min_writer_version,
+this function will throw DeltaProtocolError.</p>
+<p>Note that this function does NOT register this table in a data catalog.</p>
+<p>A locking mechanism is needed to prevent unsafe concurrent writes to a
+delta lake directory when writing to S3. DynamoDB is the only available
+locking provider at the moment in delta-rs. To enable DynamoDB as the
+locking provider, you need to set the <code>AWS_S3_LOCKING_PROVIDER</code> to 'dynamodb'
+as a storage_option or as an environment variable.</p>
+<p>Additionally, you must create a DynamoDB table with the name 'delta_rs_lock_table'
+so that it can be automatically discovered by delta-rs. Alternatively, you can
+use a table name of your choice, but you must set the <code>DYNAMO_LOCK_TABLE_NAME</code>
+variable to match your chosen table name. The required schema for the DynamoDB
+table is as follows:</p>
+<ul>
+<li>Key Schema: AttributeName=key, KeyType=HASH</li>
+<li>Attribute Definitions: AttributeName=key, AttributeType=S</li>
+</ul>
+<p>Please note that this locking mechanism is not compatible with any other
+locking mechanisms, including the one used by Spark.</p>
+
+
+
+  <p><strong>Parameters:</strong></p>
+  <table>
+    <thead>
+      <tr>
+        <th>Name</th>
+        <th>Type</th>
+        <th>Description</th>
+        <th>Default</th>
+      </tr>
+    </thead>
+    <tbody>
+        <tr>
+          <td><code>table_or_uri</code></td>
+          <td>
+                <code><span title="typing.Union">Union</span>[str, <span title="pathlib.Path">Path</span>, <a class="autorefs autorefs-internal" title="deltalake.table.DeltaTable" href="#deltalake.table.DeltaTable">DeltaTable</a>]</code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>URI of a table or a DeltaTable object.</p>
+            </div>
+          </td>
+          <td>
+              <em>required</em>
+          </td>
+        </tr>
+        <tr>
+          <td><code>data</code></td>
+          <td>
+                <code><span title="typing.Union">Union</span>[<a class="autorefs autorefs-external" title="pandas.DataFrame" href="https://pandas.pydata.org/docs/reference/api/pandas.DataFrame.html#pandas.DataFrame">DataFrame</a>, <span title="pyarrow.Dataset">Dataset</span>, <a class="autorefs autorefs-external" title="pyarrow.Table" href="https://arrow.apache.org/docs/python/generated/pyarrow.Table.html#pyarrow.Table">Table</a>, <a class="autorefs autorefs-external" title="pyarrow.RecordBatch" href="https://arrow.apache.org/docs/python/generated/pyarrow.RecordBatch.html#pyarrow.RecordBatch">RecordBatch</a>, <span title="typing.Iterable">Iterable</span>[<a class="autorefs autorefs-external" title="pyarrow.RecordBatch" href="https://arrow.apache.org/docs/python/generated/pyarrow.RecordBatch.html#pyarrow.RecordBatch">RecordBatch</a>], <a class="autorefs autorefs-external" title="pyarrow.lib.RecordBatchReader" href="https://arrow.apache.org/docs/python/generated/pyarrow.RecordBatchReader.html#pyarrow.RecordBatchReader">RecordBatchReader</a>]</code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>Data to write. If passing iterable, the schema must also be given.</p>
+            </div>
+          </td>
+          <td>
+              <em>required</em>
+          </td>
+        </tr>
+        <tr>
+          <td><code>schema</code></td>
+          <td>
+                <code><span title="typing.Optional">Optional</span>[<a class="autorefs autorefs-external" title="pyarrow.Schema" href="https://arrow.apache.org/docs/python/generated/pyarrow.Schema.html#pyarrow.Schema">Schema</a>]</code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>Optional schema to write.</p>
+            </div>
+          </td>
+          <td>
+                <code>None</code>
+          </td>
+        </tr>
+        <tr>
+          <td><code>partition_by</code></td>
+          <td>
+                <code><span title="typing.Optional">Optional</span>[<span title="typing.Union">Union</span>[<span title="typing.List">List</span>[str], str]]</code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>List of columns to partition the table by. Only required
+when creating a new table.</p>
+            </div>
+          </td>
+          <td>
+                <code>None</code>
+          </td>
+        </tr>
+        <tr>
+          <td><code>filesystem</code></td>
+          <td>
+                <code><span title="typing.Optional">Optional</span>[<span title="pyarrow.FileSystem">FileSystem</span>]</code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>Optional filesystem to pass to PyArrow. If not provided will
+be inferred from uri. The file system has to be rooted in the table root.
+Use the pyarrow.fs.SubTreeFileSystem, to adopt the root of pyarrow file systems.</p>
+            </div>
+          </td>
+          <td>
+                <code>None</code>
+          </td>
+        </tr>
+        <tr>
+          <td><code>mode</code></td>
+          <td>
+                <code><span title="typing_extensions.Literal">Literal</span>[&#39;error&#39;, &#39;append&#39;, &#39;overwrite&#39;, &#39;ignore&#39;]</code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>How to handle existing data. Default is to error if table already exists.
+If 'append', will add new data.
+If 'overwrite', will replace table with new data.
+If 'ignore', will not write anything if table already exists.</p>
+            </div>
+          </td>
+          <td>
+                <code>&#39;error&#39;</code>
+          </td>
+        </tr>
+        <tr>
+          <td><code>file_options</code></td>
+          <td>
+                <code><span title="typing.Optional">Optional</span>[<span title="pyarrow.ParquetFileWriteOptions">ParquetFileWriteOptions</span>]</code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>Optional write options for Parquet (ParquetFileWriteOptions).
+Can be provided with defaults using ParquetFileWriteOptions().make_write_options().
+Please refer to https://github.com/apache/arrow/blob/master/python/pyarrow/_dataset_parquet.pyx#L492-L533
+for the list of available options</p>
+            </div>
+          </td>
+          <td>
+                <code>None</code>
+          </td>
+        </tr>
+        <tr>
+          <td><code>max_partitions</code></td>
+          <td>
+                <code><span title="typing.Optional">Optional</span>[int]</code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>the maximum number of partitions that will be used.</p>
+            </div>
+          </td>
+          <td>
+                <code>None</code>
+          </td>
+        </tr>
+        <tr>
+          <td><code>max_open_files</code></td>
+          <td>
+                <code>int</code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>Limits the maximum number of
+files that can be left open while writing. If an attempt is made to open
+too many files then the least recently used file will be closed.
+If this setting is set too low you may end up fragmenting your
+data into many small files.</p>
+            </div>
+          </td>
+          <td>
+                <code>1024</code>
+          </td>
+        </tr>
+        <tr>
+          <td><code>max_rows_per_file</code></td>
+          <td>
+                <code>int</code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>Maximum number of rows per file.
+If greater than 0 then this will limit how many rows are placed in any single file.
+Otherwise there will be no limit and one file will be created in each output directory
+unless files need to be closed to respect max_open_files
+min_rows_per_group: Minimum number of rows per group. When the value is set,
+the dataset writer will batch incoming data and only write the row groups to the disk
+when sufficient rows have accumulated.</p>
+            </div>
+          </td>
+          <td>
+                <code>10 * 1024 * 1024</code>
+          </td>
+        </tr>
+        <tr>
+          <td><code>max_rows_per_group</code></td>
+          <td>
+                <code>int</code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>Maximum number of rows per group.
+If the value is set, then the dataset writer may split up large incoming batches into multiple row groups.
+If this value is set, then min_rows_per_group should also be set.</p>
+            </div>
+          </td>
+          <td>
+                <code>128 * 1024</code>
+          </td>
+        </tr>
+        <tr>
+          <td><code>name</code></td>
+          <td>
+                <code><span title="typing.Optional">Optional</span>[str]</code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>User-provided identifier for this table.</p>
+            </div>
+          </td>
+          <td>
+                <code>None</code>
+          </td>
+        </tr>
+        <tr>
+          <td><code>description</code></td>
+          <td>
+                <code><span title="typing.Optional">Optional</span>[str]</code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>User-provided description for this table.</p>
+            </div>
+          </td>
+          <td>
+                <code>None</code>
+          </td>
+        </tr>
+        <tr>
+          <td><code>configuration</code></td>
+          <td>
+                <code><span title="typing.Optional">Optional</span>[<span title="typing.Mapping">Mapping</span>[str, <span title="typing.Optional">Optional</span>[str]]]</code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>A map containing configuration options for the metadata action.</p>
+            </div>
+          </td>
+          <td>
+                <code>None</code>
+          </td>
+        </tr>
+        <tr>
+          <td><code>overwrite_schema</code></td>
+          <td>
+                <code>bool</code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>If True, allows updating the schema of the table.</p>
+            </div>
+          </td>
+          <td>
+                <code>False</code>
+          </td>
+        </tr>
+        <tr>
+          <td><code>storage_options</code></td>
+          <td>
+                <code><span title="typing.Optional">Optional</span>[<span title="typing.Dict">Dict</span>[str, str]]</code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>options passed to the native delta filesystem. Unused if 'filesystem' is defined.</p>
+            </div>
+          </td>
+          <td>
+                <code>None</code>
+          </td>
+        </tr>
+        <tr>
+          <td><code>partition_filters</code></td>
+          <td>
+                <code><span title="typing.Optional">Optional</span>[<span title="typing.List">List</span>[<span title="typing.Tuple">Tuple</span>[str, str, <span title="typing.Any">Any</span>]]]</code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>the partition filters that will be used for partition overwrite.</p>
+            </div>
+          </td>
+          <td>
+                <code>None</code>
+          </td>
+        </tr>
+        <tr>
+          <td><code>large_dtypes</code></td>
+          <td>
+                <code>bool</code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>If True, the table schema is checked against large_dtypes</p>
+            </div>
+          </td>
+          <td>
+                <code>False</code>
+          </td>
+        </tr>
+    </tbody>
+  </table>
+
+  </div>
+
+</div>
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+  <script>var tabs=__md_get("__tabs");if(Array.isArray(tabs))e:for(var set of document.querySelectorAll(".tabbed-set")){var tab,labels=set.querySelector(".tabbed-labels");for(tab of tabs)for(var label of labels.getElementsByTagName("label"))if(label.innerText.trim()===tab){var input=document.getElementById(label.htmlFor);input.checked=!0;continue e}}</script>
+
+        </div>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+    
+      
+      <nav class="md-footer__inner md-grid" aria-label="Footer" >
+        
+          
+          <a href="../../usage/writing-delta-tables/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Writing Delta Tables">
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11h12Z"/></svg>
+            </div>
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                Previous
+              </span>
+              <div class="md-ellipsis">
+                Writing Delta Tables
+              </div>
+            </div>
+          </a>
+        
+        
+          
+          <a href="../schema/" class="md-footer__link md-footer__link--next" aria-label="Next: Schema">
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                Next
+              </span>
+              <div class="md-ellipsis">
+                Schema
+              </div>
+            </div>
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M4 11v2h12l-5.5 5.5 1.42 1.42L19.84 12l-7.92-7.92L10.5 5.5 16 11H4Z"/></svg>
+            </div>
+          </a>
+        
+      </nav>
+    
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    <script id="__config" type="application/json">{"base": "../..", "features": ["navigation.tracking", "navigation.instant", "navigation.tabs", "navigation.tabs.sticky", "navigation.footer", "content.tabs.link"], "search": "../../assets/javascripts/workers/search.f886a092.min.js", "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.aecac24b.min.js"></script>
+      
+    
+  </body>
+</html>
