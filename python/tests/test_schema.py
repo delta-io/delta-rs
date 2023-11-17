@@ -231,6 +231,36 @@ def test_delta_schema():
             False,
         ),
         (
+            pa.schema(
+                [
+                    pa.field("some_int", pa.uint32(), nullable=True),
+                    pa.field("some_string", pa.string(), nullable=False),
+                ]
+            ),
+            pa.schema(
+                [
+                    pa.field("some_int", pa.int32(), nullable=True),
+                    pa.field("some_string", pa.string(), nullable=False),
+                ]
+            ),
+            False,
+        ),
+        (
+            pa.schema(
+                [
+                    pa.field("some_int", pa.uint32(), nullable=True),
+                    pa.field("some_string", pa.string(), nullable=False),
+                ]
+            ),
+            pa.schema(
+                [
+                    pa.field("some_int", pa.int32(), nullable=True),
+                    pa.field("some_string", pa.large_string(), nullable=False),
+                ]
+            ),
+            True,
+        ),
+        (
             pa.schema([("some_int", pa.uint32()), ("some_string", pa.string())]),
             pa.schema([("some_int", pa.int32()), ("some_string", pa.large_string())]),
             True,
