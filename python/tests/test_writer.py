@@ -353,7 +353,6 @@ def test_write_recordbatch_large_dtypes(
     tmp_path: pathlib.Path, existing_table: DeltaTable, sample_data: pa.Table
 ):
     batch = existing_table.to_pyarrow_table().to_batches()
-    print(len(batch))
 
     write_deltalake(tmp_path, batch[0], mode="overwrite", large_dtypes=True)
     assert DeltaTable(tmp_path).to_pyarrow_table() == sample_data
