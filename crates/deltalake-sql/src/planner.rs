@@ -92,10 +92,10 @@ mod tests {
     use arrow_schema::{DataType, Field, Schema};
     use datafusion_common::config::ConfigOptions;
     use datafusion_common::DataFusionError;
+    use datafusion_common::Result as DataFusionResult;
     use datafusion_expr::logical_plan::builder::LogicalTableSource;
     use datafusion_expr::{AggregateUDF, ScalarUDF, TableSource};
     use datafusion_sql::TableReference;
-    use datafusion_common::Result as DataFusionResult;
 
     use crate::parser::DeltaParser;
 
