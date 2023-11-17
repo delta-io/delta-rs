@@ -74,7 +74,7 @@ def _convert_pa_schema_to_delta(
 
     def struct_to_delta_dtype(dtype: pa.StructType) -> pa.StructType:
         fields = [dtype[i] for i in range(dtype.num_fields)]
-        fields_cast = [pa.field(f.name, dtype_to_delta_dtype(f.type)) for f in fields]
+        fields_cast = [f.with_type(dtype_to_delta_dtype(f.type)) for f in fields]
         return pa.struct(fields_cast)
 
     return pa.schema([f.with_type(dtype_to_delta_dtype(f.type)) for f in schema])
