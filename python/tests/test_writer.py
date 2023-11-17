@@ -344,7 +344,6 @@ def test_write_recordbatch(
     tmp_path: pathlib.Path, existing_table: DeltaTable, sample_data: pa.Table
 ):
     batch = existing_table.to_pyarrow_table().to_batches()
-    print(len(batch))
 
     write_deltalake(tmp_path, batch[0], mode="overwrite")
     assert DeltaTable(tmp_path).to_pyarrow_table() == sample_data
