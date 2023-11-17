@@ -283,12 +283,12 @@ mod local {
     #[tokio::test]
     async fn test_datafusion_stats() -> Result<()> {
         // Validate a table that contains statisitics for all files
-        let table = deltalake::open_table("./tests/data/delta-0.8.0")
+        let table = open_table("./tests/data/delta-0.8.0")
             .await
             .unwrap();
         let statistics = table.state.datafusion_table_statistics()?;
 
-        assert_eq!(statistics.num_rows, Precision::Exact(4 as usize),);
+        assert_eq!(statistics.num_rows, Precision::Exact(4_usize),);
 
         assert_eq!(
             statistics.total_byte_size,
@@ -324,7 +324,7 @@ mod local {
         assert_batches_sorted_eq!(&expected, &actual);
 
         // Validate a table that does not contain column statisitics
-        let table = deltalake::open_table("./tests/data/delta-0.2.0")
+        let table = open_table("./tests/data/delta-0.2.0")
             .await
             .unwrap();
         let statistics = table.state.datafusion_table_statistics()?;
@@ -362,7 +362,7 @@ mod local {
         // In particular 'new_column' contains statistics for when it
         // is introduced (10) but the commit following (11) does not contain
         // statistics for this column.
-        let table = deltalake::open_table("./tests/data/delta-1.2.1-only-struct-stats")
+        let table = open_table("./tests/data/delta-1.2.1-only-struct-stats")
             .await
             .unwrap();
         let schema = table.get_schema().unwrap();
