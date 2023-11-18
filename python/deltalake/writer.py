@@ -21,6 +21,7 @@ from typing import (
 )
 from urllib.parse import unquote
 
+from deltalake import Schema
 from deltalake.fs import DeltaStorageHandler
 
 from ._util import encode_partition_value
@@ -142,7 +143,7 @@ def write_deltalake(
         RecordBatchReader,
     ],
     *,
-    schema: Optional[pa.Schema] = None,
+    schema: Optional[Union[pa.Schema, Schema]] = None,
     partition_by: Optional[Union[List[str], str]] = None,
     filesystem: Optional[pa_fs.FileSystem] = None,
     mode: Literal["error", "append", "overwrite", "ignore"] = "error",
