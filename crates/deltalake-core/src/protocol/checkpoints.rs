@@ -18,7 +18,7 @@ use regex::Regex;
 use serde_json::Value;
 
 use super::{time_utils, ProtocolError};
-use crate::kernel::actions::arrow::delta_log_schema_for_table;
+use crate::kernel::arrow::delta_log_schema_for_table;
 use crate::kernel::{
     Action, Add as AddAction, DataType, Metadata, PrimitiveType, Protocol, StructField, StructType,
     Txn,
