@@ -1100,13 +1100,6 @@ fn save_mode_from_str(value: &str) -> PyResult<SaveMode> {
     }
 }
 
-fn partition_strategy_from_str(value: &str) -> PyResult<PartitionStrategy> {
-    match value {
-        "hive" => Ok(PartitionStrategy::Hive),
-        _ => Err(PyValueError::new_err("Invalid partition strategy provided")),
-    }
-}
-
 fn current_timestamp() -> i64 {
     let start = SystemTime::now();
     let since_the_epoch = start
@@ -1209,7 +1202,7 @@ fn convert_to_deltalake(
     }
 
     if let Some(partition_strategy) = &partition_strategy {
-        let strategy = partition_strategy_from_str(partition_strategy)?;
+        let strategy: PartitionStrategy = partition_strategy.parse().map_err(PythonError::from)?;
         builder = builder.with_partition_strategy(strategy);
     }
 
