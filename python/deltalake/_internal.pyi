@@ -142,8 +142,7 @@ def write_new_deltalake(
 ) -> None: ...
 def convert_to_deltalake(
     uri: str,
-    mode: Literal["error", "append", "overwrite", "ignore"],
-    partition_by: Optional[Dict[str, str]],
+    partition_by: Optional[pyarrow.Schema],
     partition_strategy: Optional[Literal["hive"]],
     name: Optional[str],
     description: Optional[str],

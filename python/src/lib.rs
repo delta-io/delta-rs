@@ -1193,8 +1193,7 @@ fn write_new_deltalake(
 #[allow(clippy::too_many_arguments)]
 fn convert_to_deltalake(
     uri: String,
-    // mode: &str,
-    _partition_schema: Option<Vec<String>>,
+    partition_schema: Option<PyArrowType<ArrowSchema>>,
     partition_strategy: Option<String>,
     name: Option<String>,
     description: Option<String>,
@@ -1202,13 +1201,12 @@ fn convert_to_deltalake(
     storage_options: Option<HashMap<String, String>>,
     custom_metadata: Option<HashMap<String, String>>,
 ) -> PyResult<()> {
-    // let mode = save_mode_from_str(mode)?;
     let mut builder = ConvertToDeltaBuilder::new().with_location(uri);
-    // .with_save_mode(mode);
 
-    // if let Some(part_schema) = partition_schema {
-    //     builder = builder.with_partition_schema(part_schema); // Convert type properly in struct field
-    // }
+    if let Some(part_schema) = partition_schema {
+        let schema: StructType = (&part_schema.0).try_into().map_err(PythonError::from)?;
+        builder = builder.with_partition_schema(schema.fields().clone());
+    }
 
     if let Some(partition_strategy) = &partition_strategy {
         let strategy = partition_strategy_from_str(partition_strategy)?;
