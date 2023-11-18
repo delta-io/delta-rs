@@ -16,8 +16,8 @@ theme:
     - content.tabs.link
 nav:
   - Home: index.md
-  - Installation: installation.md
   - Usage:
+    - Installation: usage/installation.md
     - Overview: usage/index.md
     - Loading a Delta Table: usage/loading-table.md
     - Examining a Delta Table: usage/examining-table.md
