@@ -18,7 +18,7 @@ from ._internal import StructType as StructType
 DataType = Union["PrimitiveType", "MapType", "StructType", "ArrayType"]
 
 
-### Inspired from Pola-rs repo - licensed with MIT License, see licenses folder.###
+### Inspired from Pola-rs repo - licensed with MIT License, see license in python/licenses/polars_license.txt.###
 def _convert_pa_schema_to_delta(
     schema: pa.schema, large_dtypes: bool = False
 ) -> pa.schema:
