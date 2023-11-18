@@ -125,7 +125,7 @@ def write_deltalake(
         table_or_uri: URI of a table or a DeltaTable object.
         data: Data to write. If passing iterable, the schema must also be given.
         schema: Optional schema to write.
-        partition_by: List of columns to partition the table by. Only required
+        partition_by: List of columns to partition the table by. Only required 
             when creating a new table.
         filesystem: Optional filesystem to pass to PyArrow. If not provided will
             be inferred from uri. The file system has to be rooted in the table root.
@@ -137,20 +137,20 @@ def write_deltalake(
         file_options: Optional write options for Parquet (ParquetFileWriteOptions).
             Can be provided with defaults using ParquetFileWriteOptions().make_write_options().
             Please refer to https://github.com/apache/arrow/blob/master/python/pyarrow/_dataset_parquet.pyx#L492-L533
-            for the list of available options
-        max_partitions: the maximum number of partitions that will be used.
+            for the list of available options. Only used in pyarrow engine.
+        max_partitions: the maximum number of partitions that will be used. Only used in pyarrow engine.
         max_open_files: Limits the maximum number of
             files that can be left open while writing. If an attempt is made to open
             too many files then the least recently used file will be closed.
             If this setting is set too low you may end up fragmenting your
-            data into many small files.
+            data into many small files. Only used in pyarrow engine.
         max_rows_per_file: Maximum number of rows per file.
             If greater than 0 then this will limit how many rows are placed in any single file.
             Otherwise there will be no limit and one file will be created in each output directory
             unless files need to be closed to respect max_open_files
             min_rows_per_group: Minimum number of rows per group. When the value is set,
             the dataset writer will batch incoming data and only write the row groups to the disk
-            when sufficient rows have accumulated.
+            when sufficient rows have accumulated. Only used in pyarrow engine.
         max_rows_per_group: Maximum number of rows per group.
             If the value is set, then the dataset writer may split up large incoming batches into multiple row groups.
             If this value is set, then min_rows_per_group should also be set.
@@ -159,7 +159,7 @@ def write_deltalake(
         configuration: A map containing configuration options for the metadata action.
         overwrite_schema: If True, allows updating the schema of the table.
         storage_options: options passed to the native delta filesystem. Unused if 'filesystem' is defined.
-        partition_filters: the partition filters that will be used for partition overwrite.
+        partition_filters: the partition filters that will be used for partition overwrite. Only used in pyarrow engine.
         large_dtypes: If True, the table schema is checked against large_dtypes
     """
     table, table_uri = try_get_table_and_table_uri(table_or_uri, storage_options)
@@ -174,7 +174,12 @@ def write_deltalake(
 
     if table:
         table.update_incremental()
-
+        if table.protocol().min_writer_version > MAX_SUPPORTED_WRITER_VERSION:
+            raise DeltaProtocolError(
+                "This table's min_writer_version is "
+                f"{table.protocol().min_writer_version}, "
+                "but this method only supports version 2."
+            )
     if engine == "rust":
         if table is not None and mode == "ignore":
             return
@@ -216,7 +221,7 @@ def write_deltalake(
             overwrite_schema=overwrite_schema,
             name=name,
             description=description,
-            _configuration=configuration,
+            configuration=configuration,
             storage_options=storage_options,
         )
         if table:
@@ -264,12 +269,6 @@ def write_deltalake(
             else:
                 partition_by = table.metadata().partition_columns
 
-            if table.protocol().min_writer_version > MAX_SUPPORTED_WRITER_VERSION:
-                raise DeltaProtocolError(
-                    "This table's min_writer_version is "
-                    f"{table.protocol().min_writer_version}, "
-                    "but this method only supports version 2."
-                )
         else:  # creating a new table
             current_version = -1
 

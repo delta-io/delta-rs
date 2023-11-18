@@ -149,7 +149,7 @@ def write_to_deltalake(
     overwrite_schema: bool,
     name: Optional[str],
     description: Optional[str],
-    _configuration: Optional[Mapping[str, Optional[str]]],
+    configuration: Optional[Mapping[str, Optional[str]]],
     storage_options: Optional[Dict[str, str]],
 ) -> None: ...
 def batch_distinct(batch: pyarrow.RecordBatch) -> pyarrow.RecordBatch: ...

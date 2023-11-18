@@ -1146,7 +1146,7 @@ fn write_to_deltalake(
     partition_by: Option<Vec<String>>,
     name: Option<String>,
     description: Option<String>,
-    _configuration: Option<HashMap<String, Option<String>>>,
+    configuration: Option<HashMap<String, Option<String>>>,
     storage_options: Option<HashMap<String, String>>,
 ) -> PyResult<()> {
     let batches = data.0.map(|batch| batch.unwrap()).collect::<Vec<_>>();
@@ -1175,6 +1175,10 @@ fn write_to_deltalake(
 
     if let Some(description) = &description {
         builder = builder.with_description(description);
+    };
+
+    if let Some(config) = configuration {
+        builder = builder.with_configuration(config);
     };
 
     rt()?

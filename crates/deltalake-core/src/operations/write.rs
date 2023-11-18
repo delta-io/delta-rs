@@ -115,8 +115,8 @@ pub struct WriteBuilder {
     name: Option<String>,
     /// Description of the table, only used when table doesn't exist yet
     description: Option<String>,
-    // /// Configurations of the delta table, only used when table doesn't exist
-    // configuration: Option<HashMap<String, Option<String>>>,
+    /// Configurations of the delta table, only used when table doesn't exist
+    configuration: HashMap<String, Option<String>>,
 }
 
 impl WriteBuilder {
@@ -139,7 +139,7 @@ impl WriteBuilder {
             app_metadata: None,
             name: None,
             description: None,
-            // configuration: None,
+            configuration: Default::default(),
         }
     }
 
@@ -236,17 +236,17 @@ impl WriteBuilder {
         self
     }
 
-    // /// Set configuration on created table
-    // pub fn with_configuration(
-    //     mut self,
-    //     configuration: impl IntoIterator<Item = (impl Into<String>, Option<impl Into<String>>)>,
-    // ) -> Self {
-    //     self.configuration = configuration
-    //         .into_iter()
-    //         .map(|(k, v)| (k.into(), v.map(|s| s.into())))
-    //         .collect();
-    //     self
-    // }
+    /// Set configuration on created table
+    pub fn with_configuration(
+        mut self,
+        configuration: impl IntoIterator<Item = (impl Into<String>, Option<impl Into<String>>)>,
+    ) -> Self {
+        self.configuration = configuration
+            .into_iter()
+            .map(|(k, v)| (k.into(), v.map(|s| s.into())))
+            .collect();
+        self
+    }
 
     async fn check_preconditions(&self) -> DeltaResult<Vec<Action>> {
         match self.log_store.is_delta_table_location().await? {
@@ -272,7 +272,8 @@ impl WriteBuilder {
                 }?;
                 let mut builder = CreateBuilder::new()
                     .with_log_store(self.log_store.clone())
-                    .with_columns(schema.fields().clone());
+                    .with_columns(schema.fields().clone())
+                    .with_configuration(self.configuration.clone());
                 if let Some(partition_columns) = self.partition_columns.as_ref() {
                     builder = builder.with_partition_columns(partition_columns.clone())
                 }
@@ -284,10 +285,6 @@ impl WriteBuilder {
                 if let Some(desc) = self.description.as_ref() {
                     builder = builder.with_comment(desc.clone());
                 };
-
-                // if let Some(config) = self.configuration.as_ref() {
-                //     builder = builder.with_configuration(config.clone());
-                // };
 
                 let (_, actions, _) = builder.into_table_and_actions()?;
                 Ok(actions)
