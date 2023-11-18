@@ -253,7 +253,7 @@ pub(crate) async fn write_execution_plan(
     safe_cast: bool,
 ) -> DeltaResult<Vec<Add>> {
     let invariants = snapshot
-        .current_metadata()
+        .metadata()
         .and_then(|meta| meta.schema.get_invariants().ok())
         .unwrap_or_default();
 
@@ -318,7 +318,7 @@ impl std::future::IntoFuture for WriteBuilder {
 
             let active_partitions = this
                 .snapshot
-                .current_metadata()
+                .metadata()
                 .map(|meta| meta.partition_columns.clone());
 
             // validate partition columns

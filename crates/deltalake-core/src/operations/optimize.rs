@@ -767,7 +767,7 @@ pub fn create_merge_plan(
     let target_size = target_size.unwrap_or_else(|| snapshot.table_config().target_file_size());
 
     let partitions_keys = &snapshot
-        .current_metadata()
+        .metadata()
         .ok_or(DeltaTableError::NoMetadata)?
         .partition_columns;
 
@@ -785,7 +785,7 @@ pub fn create_merge_plan(
         &Arc::new(
             <ArrowSchema as TryFrom<&crate::kernel::StructType>>::try_from(
                 &snapshot
-                    .current_metadata()
+                    .metadata()
                     .ok_or(DeltaTableError::NoMetadata)?
                     .schema,
             )?,
@@ -933,7 +933,7 @@ fn build_zorder_plan(
         )));
     }
     let field_names = snapshot
-        .current_metadata()
+        .metadata()
         .unwrap()
         .schema
         .fields()

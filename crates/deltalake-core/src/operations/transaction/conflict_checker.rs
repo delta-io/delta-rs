@@ -398,11 +398,11 @@ impl<'a> ConflictChecker<'a> {
         for p in self.winning_commit_summary.protocol() {
             let (win_read, curr_read) = (
                 p.min_reader_version,
-                self.txn_info.read_snapshot.min_reader_version(),
+                self.txn_info.read_snapshot.protocol().min_reader_version,
             );
             let (win_write, curr_write) = (
                 p.min_writer_version,
-                self.txn_info.read_snapshot.min_writer_version(),
+                self.txn_info.read_snapshot.protocol().min_writer_version,
             );
             if curr_read < win_read || win_write < curr_write {
                 return Err(CommitConflictError::ProtocolChanged(
@@ -475,7 +475,7 @@ impl<'a> ConflictChecker<'a> {
                     let partition_columns = &self
                         .txn_info
                         .read_snapshot
-                        .current_metadata()
+                        .metadata()
                         .ok_or(CommitConflictError::NoMetadata)?
                         .partition_columns;
                     AddContainer::new(&added_files_to_check, partition_columns, arrow_schema)

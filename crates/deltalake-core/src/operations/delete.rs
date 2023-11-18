@@ -139,7 +139,7 @@ async fn excute_non_empty_expr(
     let input_dfschema: DFSchema = input_schema.clone().as_ref().clone().try_into()?;
 
     let table_partition_cols = snapshot
-        .current_metadata()
+        .metadata()
         .ok_or(DeltaTableError::NoMetadata)?
         .partition_columns
         .clone();

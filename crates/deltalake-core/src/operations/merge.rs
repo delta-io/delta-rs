@@ -665,9 +665,7 @@ async fn execute(
     let mut metrics = MergeMetrics::default();
     let exec_start = Instant::now();
 
-    let current_metadata = snapshot
-        .current_metadata()
-        .ok_or(DeltaTableError::NoMetadata)?;
+    let current_metadata = snapshot.metadata().ok_or(DeltaTableError::NoMetadata)?;
 
     // TODO: Given the join predicate, remove any expression that involve the
     // source table and keep expressions that only involve the target table.
