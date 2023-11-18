@@ -336,21 +336,24 @@ def write_deltalake(
             except KeyError:
                 return dtype
 
-        if partition_by:
-            if PYARROW_MAJOR_VERSION < 12:
-                partition_schema = pa.schema(
-                    [
-                        pa.field(name, _large_to_normal_dtype(schema.field(name).type))
-                        for name in partition_by
-                    ]
-                )
-            else:
-                partition_schema = pa.schema(
-                    [schema.field(name) for name in partition_by]
-                )
-            partitioning = ds.partitioning(partition_schema, flavor="hive")
+    if partition_by:
+        table_schema: pa.Schema = schema
+        if PYARROW_MAJOR_VERSION < 12:
+            partition_schema = pa.schema(
+                [
+                    pa.field(
+                        name, _large_to_normal_dtype(table_schema.field(name).type)
+                    )
+                    for name in partition_by
+                ]
+            )
         else:
-            partitioning = None
+            partition_schema = pa.schema(
+                [table_schema.field(name) for name in partition_by]
+            )
+        partitioning = ds.partitioning(partition_schema, flavor="hive")
+    else:
+        partitioning = None
 
         add_actions: List[AddAction] = []
 
