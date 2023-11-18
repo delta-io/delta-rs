@@ -115,7 +115,7 @@ pub struct WriteBuilder {
     name: Option<String>,
     /// Description of the table, only used when table doesn't exist yet
     description: Option<String>,
-    /// Configurations of the delta table, only used when table doesn't exist
+    // /// Configurations of the delta table, only used when table doesn't exist
     // configuration: Option<HashMap<String, Option<String>>>,
 }
 
