@@ -125,7 +125,7 @@ def write_deltalake(
         table_or_uri: URI of a table or a DeltaTable object.
         data: Data to write. If passing iterable, the schema must also be given.
         schema: Optional schema to write.
-        partition_by: List of columns to partition the table by. Only required 
+        partition_by: List of columns to partition the table by. Only required
             when creating a new table.
         filesystem: Optional filesystem to pass to PyArrow. If not provided will
             be inferred from uri. The file system has to be rooted in the table root.
