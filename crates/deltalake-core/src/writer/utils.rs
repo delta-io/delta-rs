@@ -5,7 +5,8 @@ use std::io::Write;
 use std::sync::Arc;
 
 use arrow::array::{
-    as_boolean_array, as_generic_binary_array, as_primitive_array, as_string_array, Array,
+    as_boolean_array, as_generic_binary_array, as_largestring_array, as_primitive_array,
+    as_string_array, Array,
 };
 use arrow::datatypes::{
     DataType, Date32Type, Date64Type, Float32Type, Float64Type, Int16Type, Int32Type, Int64Type,
@@ -187,6 +188,7 @@ pub(crate) fn stringified_partition_value(
         DataType::Float32 => as_primitive_array::<Float32Type>(arr).value(0).to_string(),
         DataType::Float64 => as_primitive_array::<Float64Type>(arr).value(0).to_string(),
         DataType::Utf8 => as_string_array(arr).value(0).to_string(),
+        DataType::LargeUtf8 => as_largestring_array(arr).value(0).to_string(),
         DataType::Boolean => as_boolean_array(arr).value(0).to_string(),
         DataType::Date32 => as_primitive_array::<Date32Type>(arr)
             .value_as_date(0)
