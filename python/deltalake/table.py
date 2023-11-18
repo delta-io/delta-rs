@@ -109,7 +109,7 @@ FilterDNFType = List[FilterConjunctionType]
 FilterType = Union[FilterConjunctionType, FilterDNFType]
 
 
-def _get_parquet_rs_compression(compression: str):
+def _get_parquet_rs_compression(compression: str) -> str:
     """Returns compression into parquet-rs compression format with pyarrow default compression level"""
     if compression in ["gzip", "brotli", "zstd"]:
         compression = (

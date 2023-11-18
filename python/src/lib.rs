@@ -378,6 +378,7 @@ impl RawDeltaTable {
     }
 
     /// Run z-order variation of optimize
+    #[allow(clippy::too_many_arguments)]
     #[pyo3(signature = (z_order_columns, partition_filters = None, target_size = None, max_concurrent_tasks = None, max_spill_size = 20 * 1024 * 1024 * 1024, min_commit_interval = None, compression="snappy"))]
     pub fn z_order_optimize(
         &mut self,

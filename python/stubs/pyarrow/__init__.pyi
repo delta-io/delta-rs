@@ -26,6 +26,7 @@ float64: Any
 dictionary: Any
 timestamp: Any
 TimestampType: Any
+Codec: Any
 
 py_buffer: Callable[[bytes], Any]
 NativeFile: Any
