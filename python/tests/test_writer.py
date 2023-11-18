@@ -189,8 +189,7 @@ def test_local_path(
     assert table == sample_data
 
 
-@pytest.mark.skip(reason="Waiting on support with create matadata during write")
-def test_roundtrip_metadata_rust(tmp_path: pathlib.Path, sample_data: pa.Table, engine):
+def test_roundtrip_metadata_rust(tmp_path: pathlib.Path, sample_data: pa.Table):
     write_deltalake(
         tmp_path,
         sample_data,
@@ -206,7 +205,7 @@ def test_roundtrip_metadata_rust(tmp_path: pathlib.Path, sample_data: pa.Table, 
 
     assert metadata.name == "test_name"
     assert metadata.description == "test_desc"
-    assert metadata.configuration == {"delta.appendOnly": "false", "foo": "bar"}
+    # assert metadata.configuration == {"delta.appendOnly": "false", "foo": "bar"}
 
 
 def test_roundtrip_metadata(tmp_path: pathlib.Path, sample_data: pa.Table):

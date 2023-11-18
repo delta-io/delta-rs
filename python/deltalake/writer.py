@@ -214,8 +214,8 @@ def write_deltalake(
             mode=mode,
             max_rows_per_group=max_rows_per_group,
             overwrite_schema=overwrite_schema,
-            _name=name,
-            _description=description,
+            name=name,
+            description=description,
             _configuration=configuration,
             storage_options=storage_options,
         )

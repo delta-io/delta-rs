@@ -111,6 +111,12 @@ pub struct WriteBuilder {
     writer_properties: Option<WriterProperties>,
     /// Additional metadata to be added to commit
     app_metadata: Option<HashMap<String, serde_json::Value>>,
+    /// Name of the table, only used when table doesn't exist yet
+    name: Option<String>,
+    /// Description of the table, only used when table doesn't exist yet
+    description: Option<String>,
+    /// Configurations of the delta table, only used when table doesn't exist
+    // configuration: Option<HashMap<String, Option<String>>>,
 }
 
 impl WriteBuilder {
@@ -131,6 +137,9 @@ impl WriteBuilder {
             overwrite_schema: false,
             writer_properties: None,
             app_metadata: None,
+            name: None,
+            description: None,
+            // configuration: None,
         }
     }
 
@@ -214,6 +223,31 @@ impl WriteBuilder {
         self
     }
 
+    /// Specify the table name. Optionally qualified with
+    /// a database name [database_name.] table_name.
+    pub fn with_table_name(mut self, name: impl Into<String>) -> Self {
+        self.name = Some(name.into());
+        self
+    }
+
+    /// Comment to describe the table.
+    pub fn with_description(mut self, description: impl Into<String>) -> Self {
+        self.description = Some(description.into());
+        self
+    }
+
+    // /// Set configuration on created table
+    // pub fn with_configuration(
+    //     mut self,
+    //     configuration: impl IntoIterator<Item = (impl Into<String>, Option<impl Into<String>>)>,
+    // ) -> Self {
+    //     self.configuration = configuration
+    //         .into_iter()
+    //         .map(|(k, v)| (k.into(), v.map(|s| s.into())))
+    //         .collect();
+    //     self
+    // }
+
     async fn check_preconditions(&self) -> DeltaResult<Vec<Action>> {
         match self.log_store.is_delta_table_location().await? {
             true => {
@@ -242,6 +276,19 @@ impl WriteBuilder {
                 if let Some(partition_columns) = self.partition_columns.as_ref() {
                     builder = builder.with_partition_columns(partition_columns.clone())
                 }
+
+                if let Some(name) = self.name.as_ref() {
+                    builder = builder.with_table_name(name.clone());
+                };
+
+                if let Some(desc) = self.description.as_ref() {
+                    builder = builder.with_comment(desc.clone());
+                };
+
+                // if let Some(config) = self.configuration.as_ref() {
+                //     builder = builder.with_configuration(config.clone());
+                // };
+
                 let (_, actions, _) = builder.into_table_and_actions()?;
                 Ok(actions)
             }

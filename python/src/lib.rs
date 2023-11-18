@@ -1144,8 +1144,8 @@ fn write_to_deltalake(
     max_rows_per_group: i64,
     overwrite_schema: bool,
     partition_by: Option<Vec<String>>,
-    _name: Option<String>,
-    _description: Option<String>,
+    name: Option<String>,
+    description: Option<String>,
     _configuration: Option<HashMap<String, Option<String>>>,
     storage_options: Option<HashMap<String, String>>,
 ) -> PyResult<()> {
@@ -1168,6 +1168,14 @@ fn write_to_deltalake(
     if let Some(partition_columns) = partition_by {
         builder = builder.with_partition_columns(partition_columns);
     }
+
+    if let Some(name) = &name {
+        builder = builder.with_table_name(name);
+    };
+
+    if let Some(description) = &description {
+        builder = builder.with_description(description);
+    };
 
     rt()?
         .block_on(builder.into_future())
