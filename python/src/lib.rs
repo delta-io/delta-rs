@@ -26,7 +26,7 @@ use deltalake::datafusion::datasource::provider::TableProvider;
 use deltalake::datafusion::prelude::SessionContext;
 use deltalake::delta_datafusion::DeltaDataChecker;
 use deltalake::errors::DeltaTableError;
-use deltalake::kernel::{Action, Add, Invariant, Metadata, Remove, StructType};
+use deltalake::kernel::{Action, Add, Invariant, Remove, StructType};
 use deltalake::operations::convert_to_delta::{ConvertToDeltaBuilder, PartitionStrategy};
 use deltalake::operations::delete::DeleteBuilder;
 use deltalake::operations::filesystem_check::FileSystemCheckBuilder;
@@ -155,7 +155,7 @@ impl RawDeltaTable {
     }
 
     pub fn metadata(&self) -> PyResult<RawDeltaTableMetaData> {
-        let metadata = self._table.get_metadata().map_err(PythonError::from)?;
+        let metadata = self._table.metadata().map_err(PythonError::from)?;
         Ok(RawDeltaTableMetaData {
             id: metadata.id.clone(),
             name: metadata.name.clone(),
@@ -168,8 +168,8 @@ impl RawDeltaTable {
 
     pub fn protocol_versions(&self) -> PyResult<(i32, i32)> {
         Ok((
-            self._table.get_min_reader_version(),
-            self._table.get_min_writer_version(),
+            self._table.protocol().min_reader_version,
+            self._table.protocol().min_writer_version,
         ))
     }
 
@@ -685,15 +685,15 @@ impl RawDeltaTable {
     ) -> PyResult<&'py PyFrozenSet> {
         let column_names: HashSet<&str> = self
             ._table
-            .schema()
-            .ok_or_else(|| DeltaProtocolError::new_err("table does not yet have a schema"))?
+            .get_schema()
+            .map_err(|_| DeltaProtocolError::new_err("table does not yet have a schema"))?
             .fields()
             .iter()
             .map(|field| field.name().as_str())
             .collect();
         let partition_columns: HashSet<&str> = self
             ._table
-            .get_metadata()
+            .metadata()
             .map_err(PythonError::from)?
             .partition_columns
             .iter()
@@ -799,15 +799,11 @@ impl RawDeltaTable {
 
                 // Update metadata with new schema
                 if &schema != existing_schema {
-                    let mut metadata = self
-                        ._table
-                        .get_metadata()
-                        .map_err(PythonError::from)?
-                        .clone();
-                    metadata.schema = schema;
-                    let metadata_action = Metadata::try_from(metadata)
-                        .map_err(|_| PyValueError::new_err("Failed to reparse metadata"))?;
-                    actions.push(Action::Metadata(metadata_action));
+                    let mut metadata = self._table.metadata().map_err(PythonError::from)?.clone();
+                    metadata.schema_string = serde_json::to_string(&schema)
+                        .map_err(DeltaTableError::from)
+                        .map_err(PythonError::from)?;
+                    actions.push(Action::Metadata(metadata));
                 }
             }
             _ => {

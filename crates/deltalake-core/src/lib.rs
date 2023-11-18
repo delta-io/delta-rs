@@ -204,8 +204,8 @@ mod tests {
     async fn read_delta_2_0_table_without_version() {
         let table = crate::open_table("./tests/data/delta-0.2.0").await.unwrap();
         assert_eq!(table.version(), 3);
-        assert_eq!(table.get_min_writer_version(), 2);
-        assert_eq!(table.get_min_reader_version(), 1);
+        assert_eq!(table.protocol().min_writer_version, 2);
+        assert_eq!(table.protocol().min_reader_version, 1);
         assert_eq!(
             table.get_files(),
             vec![
@@ -251,8 +251,8 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(table.version(), 0);
-        assert_eq!(table.get_min_writer_version(), 2);
-        assert_eq!(table.get_min_reader_version(), 1);
+        assert_eq!(table.protocol().min_writer_version, 2);
+        assert_eq!(table.protocol().min_reader_version, 1);
         assert_eq!(
             table.get_files(),
             vec![
@@ -265,8 +265,8 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(table.version(), 2);
-        assert_eq!(table.get_min_writer_version(), 2);
-        assert_eq!(table.get_min_reader_version(), 1);
+        assert_eq!(table.protocol().min_writer_version, 2);
+        assert_eq!(table.protocol().min_reader_version, 1);
         assert_eq!(
             table.get_files(),
             vec![
@@ -279,8 +279,8 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(table.version(), 3);
-        assert_eq!(table.get_min_writer_version(), 2);
-        assert_eq!(table.get_min_reader_version(), 1);
+        assert_eq!(table.protocol().min_writer_version, 2);
+        assert_eq!(table.protocol().min_reader_version, 1);
         assert_eq!(
             table.get_files(),
             vec![
@@ -295,8 +295,8 @@ mod tests {
     async fn read_delta_8_0_table_without_version() {
         let table = crate::open_table("./tests/data/delta-0.8.0").await.unwrap();
         assert_eq!(table.version(), 1);
-        assert_eq!(table.get_min_writer_version(), 2);
-        assert_eq!(table.get_min_reader_version(), 1);
+        assert_eq!(table.protocol().min_writer_version, 2);
+        assert_eq!(table.protocol().min_reader_version, 1);
         assert_eq!(
             table.get_files(),
             vec![
@@ -341,8 +341,8 @@ mod tests {
     async fn read_delta_8_0_table_with_load_version() {
         let mut table = crate::open_table("./tests/data/delta-0.8.0").await.unwrap();
         assert_eq!(table.version(), 1);
-        assert_eq!(table.get_min_writer_version(), 2);
-        assert_eq!(table.get_min_reader_version(), 1);
+        assert_eq!(table.protocol().min_writer_version, 2);
+        assert_eq!(table.protocol().min_reader_version, 1);
         assert_eq!(
             table.get_files(),
             vec![
@@ -352,8 +352,8 @@ mod tests {
         );
         table.load_version(0).await.unwrap();
         assert_eq!(table.version(), 0);
-        assert_eq!(table.get_min_writer_version(), 2);
-        assert_eq!(table.get_min_reader_version(), 1);
+        assert_eq!(table.protocol().min_writer_version, 2);
+        assert_eq!(table.protocol().min_reader_version, 1);
         assert_eq!(
             table.get_files(),
             vec![

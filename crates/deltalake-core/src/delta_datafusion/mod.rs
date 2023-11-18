@@ -246,7 +246,7 @@ fn get_prune_stats(table: &DeltaTable, column: &Column, get_max: bool) -> Option
     }
 
     let data_type = field.data_type().try_into().ok()?;
-    let partition_columns = &table.get_metadata().ok()?.partition_columns;
+    let partition_columns = &table.metadata().ok()?.partition_columns;
 
     let values = table.get_state().files().iter().map(|add| {
         if partition_columns.contains(&column.name) {
@@ -310,7 +310,7 @@ impl PruningStatistics for DeltaTable {
     ///
     /// Note: the returned array must contain `num_containers()` rows.
     fn null_counts(&self, column: &Column) -> Option<ArrayRef> {
-        let partition_columns = &self.get_metadata().ok()?.partition_columns;
+        let partition_columns = &self.metadata().ok()?.partition_columns;
 
         let values = self.get_state().files().iter().map(|add| {
             if let Ok(Some(statistics)) = add.get_stats() {
