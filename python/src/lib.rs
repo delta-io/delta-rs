@@ -760,7 +760,8 @@ impl RawDeltaTable {
         schema: PyArrowType<ArrowSchema>,
         partitions_filters: Option<Vec<(&str, &str, PartitionFilterValue)>>,
     ) -> PyResult<()> {
-        let mode = save_mode_from_str(mode)?;
+        let mode = mode.parse().map_err(PythonError::from)?;
+
         let schema: StructType = (&schema.0).try_into().map_err(PythonError::from)?;
 
         let existing_schema = self._table.get_schema().map_err(PythonError::from)?;
@@ -1088,16 +1089,6 @@ fn batch_distinct(batch: PyArrowType<RecordBatch>) -> PyResult<PyArrowType<Recor
     Ok(PyArrowType(
         concat_batches(&schema, &batches).map_err(PythonError::from)?,
     ))
-}
-
-fn save_mode_from_str(value: &str) -> PyResult<SaveMode> {
-    match value {
-        "append" => Ok(SaveMode::Append),
-        "overwrite" => Ok(SaveMode::Overwrite),
-        "error" => Ok(SaveMode::ErrorIfExists),
-        "ignore" => Ok(SaveMode::Ignore),
-        _ => Err(PyValueError::new_err("Invalid save mode")),
-    }
 }
 
 fn current_timestamp() -> i64 {
