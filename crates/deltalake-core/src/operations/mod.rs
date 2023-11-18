@@ -7,13 +7,13 @@
 //! with a [data stream][datafusion::physical_plan::SendableRecordBatchStream],
 //! if the operation returns data as well.
 
-use std::collections::{HashMap};
 use self::create::CreateBuilder;
 use self::filesystem_check::FileSystemCheckBuilder;
 use self::vacuum::VacuumBuilder;
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::table::builder::DeltaTableBuilder;
 use crate::DeltaTable;
+use std::collections::HashMap;
 
 #[cfg(all(feature = "arrow", feature = "parquet"))]
 pub mod convert_to_delta;
@@ -73,10 +73,12 @@ impl DeltaOps {
             Err(err) => Err(err),
         }
     }
-    
 
     /// try from uri with storage options
-    pub async fn try_from_uri_with_storage_options(uri: impl AsRef<str>, storage_options: HashMap<String, String>) -> DeltaResult<Self> {
+    pub async fn try_from_uri_with_storage_options(
+        uri: impl AsRef<str>,
+        storage_options: HashMap<String, String>,
+    ) -> DeltaResult<Self> {
         let mut table = DeltaTableBuilder::from_uri(uri)
             .with_storage_options(storage_options)
             .build()?;

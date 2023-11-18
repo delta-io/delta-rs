@@ -362,7 +362,9 @@ impl std::future::IntoFuture for WriteBuilder {
                         .or_else(|_| this.snapshot.arrow_schema())
                         .unwrap_or(schema.clone());
 
-                    if !can_cast_batch(schema.fields(), table_schema.fields()) && !this.overwrite_schema {
+                    if !can_cast_batch(schema.fields(), table_schema.fields())
+                        && !this.overwrite_schema
+                    {
                         return Err(DeltaTableError::Generic(
                             "Schema of data does not match table schema".to_string(),
                         ));
