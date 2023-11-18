@@ -568,7 +568,7 @@ impl<'a> DeltaScanBuilder<'a> {
 
         let table_partition_cols = &self
             .snapshot
-            .current_metadata()
+            .metadata()
             .ok_or(DeltaTableError::NoMetadata)?
             .partition_columns;
 
@@ -1457,9 +1457,7 @@ pub async fn find_files<'a>(
     state: &SessionState,
     predicate: Option<Expr>,
 ) -> DeltaResult<FindFiles> {
-    let current_metadata = snapshot
-        .current_metadata()
-        .ok_or(DeltaTableError::NoMetadata)?;
+    let current_metadata = snapshot.metadata().ok_or(DeltaTableError::NoMetadata)?;
 
     match &predicate {
         Some(predicate) => {
