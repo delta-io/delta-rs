@@ -192,7 +192,7 @@ def write_deltalake(
             batch_iter = data.to_reader()
         elif isinstance(data, ds.Dataset):
             batch_iter = data.scanner().to_reader()
-        elif isinstance(data, pd.DataFrame):
+        elif _has_pandas and isinstance(data, pd.DataFrame):
             if schema is not None:
                 batch_iter = pa.Table.from_pandas(data, schema).to_reader()
             else:
