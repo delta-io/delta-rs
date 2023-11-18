@@ -351,14 +351,14 @@ impl RawDeltaTable {
         min_commit_interval: Option<u64>,
         compression: &str,
     ) -> PyResult<String> {
-        let mut compress: Compression = compression.parse().unwrap();
+        let compress: Compression = compression.parse().unwrap();
 
         let mut cmd = OptimizeBuilder::new(self._table.log_store(), self._table.state.clone())
             .with_max_concurrent_tasks(max_concurrent_tasks.unwrap_or_else(num_cpus::get))
             .with_writer_properties(
                 WriterProperties::builder()
                     .set_compression(compress)
-                    .build()
+                    .build(),
             );
         if let Some(size) = target_size {
             cmd = cmd.with_target_size(size);
@@ -389,7 +389,7 @@ impl RawDeltaTable {
         min_commit_interval: Option<u64>,
         compression: &str,
     ) -> PyResult<String> {
-        let mut compress: Compression = compression.parse().unwrap();
+        let compress: Compression = compression.parse().unwrap();
 
         let mut cmd = OptimizeBuilder::new(self._table.log_store(), self._table.state.clone())
             .with_max_concurrent_tasks(max_concurrent_tasks.unwrap_or_else(num_cpus::get))
@@ -398,7 +398,7 @@ impl RawDeltaTable {
             .with_writer_properties(
                 WriterProperties::builder()
                     .set_compression(compress)
-                    .build()
+                    .build(),
             );
         if let Some(size) = target_size {
             cmd = cmd.with_target_size(size);
