@@ -36,6 +36,7 @@ use deltalake::operations::transaction::commit;
 use deltalake::operations::update::UpdateBuilder;
 use deltalake::operations::vacuum::VacuumBuilder;
 use deltalake::parquet::basic::Compression;
+use deltalake::parquet::errors::ParquetError;
 use deltalake::parquet::file::properties::WriterProperties;
 use deltalake::partitions::PartitionFilter;
 use deltalake::protocol::{ColumnCountStat, ColumnValueStat, DeltaOperation, SaveMode, Stats};
@@ -351,7 +352,10 @@ impl RawDeltaTable {
         min_commit_interval: Option<u64>,
         compression: &str,
     ) -> PyResult<String> {
-        let compress: Compression = compression.parse().unwrap();
+        let compress: Compression = compression
+            .parse()
+            .map_err(|err: ParquetError| DeltaTableError::Generic(err.to_string()))
+            .map_err(PythonError::from)?;
 
         let mut cmd = OptimizeBuilder::new(self._table.log_store(), self._table.state.clone())
             .with_max_concurrent_tasks(max_concurrent_tasks.unwrap_or_else(num_cpus::get))
@@ -390,7 +394,10 @@ impl RawDeltaTable {
         min_commit_interval: Option<u64>,
         compression: &str,
     ) -> PyResult<String> {
-        let compress: Compression = compression.parse().unwrap();
+        let compress: Compression = compression
+            .parse()
+            .map_err(|err: ParquetError| DeltaTableError::Generic(err.to_string()))
+            .map_err(PythonError::from)?;
 
         let mut cmd = OptimizeBuilder::new(self._table.log_store(), self._table.state.clone())
             .with_max_concurrent_tasks(max_concurrent_tasks.unwrap_or_else(num_cpus::get))

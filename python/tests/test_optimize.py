@@ -1,10 +1,12 @@
 import pathlib
 from datetime import timedelta
+from typing import Literal
 
 import pyarrow as pa
 import pytest
 
 from deltalake import DeltaTable, write_deltalake
+from deltalake.exceptions import DeltaError
 
 
 @pytest.mark.parametrize("use_relative", [True, False])
@@ -68,3 +70,34 @@ def test_optimize_min_commit_interval(
     # independently. So with min_commit_interval=0, each will get its
     # own commit.
     assert dt.version() == old_version + 5
+
+
+@pytest.mark.parametrize("compression", ["snappy", "gzip", "brotli", "lz4", "zstd"])
+def test_optimize_compression(
+    tmp_path: pathlib.Path,
+    sample_data: pa.Table,
+    compression: Literal["snappy", "gzip", "brotli", "lz4", "zstd"],
+):
+    write_deltalake(tmp_path, sample_data, partition_by="utf8", mode="append")
+    write_deltalake(tmp_path, sample_data, partition_by="utf8", mode="append")
+    write_deltalake(tmp_path, sample_data, partition_by="utf8", mode="append")
+
+    dt = DeltaTable(tmp_path)
+
+    dt.optimize.compact(compression=compression)
+
+    last_action = dt.history(1)[0]
+    assert last_action["operation"] == "OPTIMIZE"
+
+
+def test_optimize_compression_unsupported(
+    tmp_path: pathlib.Path,
+    sample_data: pa.Table,
+):
+    write_deltalake(tmp_path, sample_data, partition_by="utf8", mode="append")
+    write_deltalake(tmp_path, sample_data, partition_by="utf8", mode="append")
+    write_deltalake(tmp_path, sample_data, partition_by="utf8", mode="append")
+
+    dt = DeltaTable(tmp_path)
+    with pytest.raises(DeltaError):
+        dt.optimize.compact(compression="random")
