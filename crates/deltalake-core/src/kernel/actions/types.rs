@@ -264,7 +264,7 @@ pub enum WriterFeatures {
     /// ID Columns
     IdentityColumns,
     /// Deletion vectors for merge, update, delete
-    DeleteionVecotrs,
+    DeletionVectors,
     /// Row tracking on tables
     RowTracking,
     /// timestamps without timezone support
@@ -291,7 +291,7 @@ impl Into<usize> for WriterFeatures {
             WriterFeatures::ChangeDataFeed | WriterFeatures::GeneratedColumns => 4,
             WriterFeatures::ColumnMapping => 5,
             WriterFeatures::IdentityColumns
-            | WriterFeatures::DeleteionVecotrs
+            | WriterFeatures::DeletionVectors
             | WriterFeatures::RowTracking
             | WriterFeatures::TimestampWithoutTimezone
             | WriterFeatures::DomainMetadata
@@ -311,7 +311,7 @@ impl From<String> for WriterFeatures {
             "generatedColumns" => WriterFeatures::GeneratedColumns,
             "columnMapping" => WriterFeatures::ColumnMapping,
             "identityColumns" => WriterFeatures::IdentityColumns,
-            "deletionVectors" => WriterFeatures::DeleteionVecotrs,
+            "deletionVectors" => WriterFeatures::DeletionVectors,
             "rowTracking" => WriterFeatures::RowTracking,
             "timestampNtz" => WriterFeatures::TimestampWithoutTimezone,
             "domainMetadata" => WriterFeatures::DomainMetadata,
@@ -332,7 +332,7 @@ impl AsRef<str> for WriterFeatures {
             WriterFeatures::GeneratedColumns => "generatedColumns",
             WriterFeatures::ColumnMapping => "columnMapping",
             WriterFeatures::IdentityColumns => "identityColumns",
-            WriterFeatures::DeleteionVecotrs => "deletionVectors",
+            WriterFeatures::DeletionVectors => "deletionVectors",
             WriterFeatures::RowTracking => "rowTracking",
             WriterFeatures::TimestampWithoutTimezone => "timestampNtz",
             WriterFeatures::DomainMetadata => "domainMetadata",
@@ -361,7 +361,7 @@ impl From<&parquet::record::Field> for WriterFeatures {
                 "generatedColumns" => WriterFeatures::GeneratedColumns,
                 "columnMapping" => WriterFeatures::ColumnMapping,
                 "identityColumns" => WriterFeatures::IdentityColumns,
-                "deletionVectors" => WriterFeatures::DeleteionVecotrs,
+                "deletionVectors" => WriterFeatures::DeletionVectors,
                 "rowTracking" => WriterFeatures::RowTracking,
                 "timestampNtz" => WriterFeatures::TimestampWithoutTimezone,
                 "domainMetadata" => WriterFeatures::DomainMetadata,
