@@ -79,10 +79,10 @@ impl ProtocolChecker {
     /// Check if delta-rs can read form the given delta table.
     pub fn can_read_from(&self, snapshot: &DeltaTableState) -> Result<(), TransactionError> {
         let required_features: Option<&HashSet<ReaderFeatures>> =
-            match snapshot.min_reader_version() {
+            match snapshot.protocol().min_reader_version {
                 0 | 1 => None,
                 2 => Some(&READER_V2),
-                _ => snapshot.reader_features(),
+                _ => snapshot.protocol().reader_features.as_ref(),
             };
         if let Some(features) = required_features {
             let mut diff = features.difference(&self.reader_features).peekable();
@@ -101,14 +101,14 @@ impl ProtocolChecker {
         self.can_read_from(snapshot)?;
 
         let required_features: Option<&HashSet<WriterFeatures>> =
-            match snapshot.min_writer_version() {
+            match snapshot.protocol().min_writer_version {
                 0 | 1 => None,
                 2 => Some(&WRITER_V2),
                 3 => Some(&WRITER_V3),
                 4 => Some(&WRITER_V4),
                 5 => Some(&WRITER_V5),
                 6 => Some(&WRITER_V6),
-                _ => snapshot.writer_features(),
+                _ => snapshot.protocol().writer_features.as_ref(),
             };
 
         if let Some(features) = required_features {
@@ -130,13 +130,15 @@ impl ProtocolChecker {
         self.can_write_to(snapshot)?;
 
         // https://github.com/delta-io/delta/blob/master/PROTOCOL.md#append-only-tables
-        let append_only_enabled = if snapshot.min_writer_version() < 2 {
+        let append_only_enabled = if snapshot.protocol().min_writer_version < 2 {
             false
-        } else if snapshot.min_writer_version() < 7 {
+        } else if snapshot.protocol().min_writer_version < 7 {
             snapshot.table_config().append_only()
         } else {
             snapshot
-                .writer_features()
+                .protocol()
+                .writer_features
+                .as_ref()
                 .ok_or(TransactionError::WriterFeaturesRequired)?
                 .contains(&WriterFeatures::AppendOnly)
                 && snapshot.table_config().append_only()
