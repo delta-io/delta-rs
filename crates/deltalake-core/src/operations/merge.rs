@@ -8,7 +8,7 @@
 //! specified matter.  See [`MergeBuilder`] for more information
 //!
 //! *WARNING* The current implementation rewrites the entire delta table so only
-//! use on small to medium sized tables. 
+//! use on small to medium sized tables.
 //! Enhancements tracked at #850
 //!
 //! # Example
@@ -40,7 +40,6 @@ use async_trait::async_trait;
 use datafusion::datasource::provider_as_source;
 use datafusion::error::Result as DataFusionResult;
 use datafusion::execution::context::{QueryPlanner, SessionConfig};
-use datafusion::execution::runtime_env::{RuntimeEnv, RuntimeConfig};
 use datafusion::logical_expr::build_join_schema;
 use datafusion::physical_planner::{DefaultPhysicalPlanner, ExtensionPlanner, PhysicalPlanner};
 use datafusion::{
@@ -1114,10 +1113,8 @@ impl std::future::IntoFuture for MergeBuilder {
 
             let state = this.state.unwrap_or_else(|| {
                 //TODO: Datafusion's Hashjoin has some memory issues. Running with all cores results in a OoM. Can be removed when upstream improvemetns are made.
-                let config = SessionConfig::new();
-                let runtime = Arc::new(RuntimeEnv::new(RuntimeConfig::default().with_memory_limit(34359738368, 0.80)).unwrap_or_default());
-                let session = SessionContext::new_with_config_rt(config, runtime);
-
+                let config = SessionConfig::new().with_target_partitions(1);
+                let session = SessionContext::new_with_config(config);
 
                 // If a user provides their own their DF state then they must register the store themselves
                 register_store(this.log_store.clone(), session.runtime_env());
