@@ -594,7 +594,7 @@ impl FromStr for SaveMode {
     type Err = DeltaTableError;
 
     fn from_str(s: &str) -> DeltaResult<Self> {
-        match s {
+        match s.to_ascii_lowercase().as_str() {
             "append" => Ok(SaveMode::Append),
             "overwrite" => Ok(SaveMode::Overwrite),
             "error" => Ok(SaveMode::ErrorIfExists),
