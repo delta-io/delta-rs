@@ -244,5 +244,4 @@ mod datafusion_utils {
             None => None,
         })
     }
-
 }
