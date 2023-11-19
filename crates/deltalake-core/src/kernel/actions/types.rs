@@ -274,26 +274,6 @@ pub enum WriterFeatures {
     Other(String),
 }
 
-#[allow(clippy::from_over_into)]
-impl Into<usize> for WriterFeatures {
-    fn into(self) -> usize {
-        match self {
-            WriterFeatures::Other(_) => 0,
-            WriterFeatures::AppendOnly | WriterFeatures::Invariants => 2,
-            WriterFeatures::CheckConstraints => 3,
-            WriterFeatures::ChangeDataFeed | WriterFeatures::GeneratedColumns => 4,
-            WriterFeatures::ColumnMapping => 5,
-            WriterFeatures::IdentityColumns
-            | WriterFeatures::DeletionVectors
-            | WriterFeatures::RowTracking
-            | WriterFeatures::TimestampWithoutTimezone
-            | WriterFeatures::DomainMetadata
-            | WriterFeatures::V2Checkpoint
-            | WriterFeatures::IcebergCompatV1 => 7,
-        }
-    }
-}
-
 impl From<String> for WriterFeatures {
     fn from(value: String) -> Self {
         value.as_str().into()
