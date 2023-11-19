@@ -40,7 +40,7 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use async_trait::async_trait;
 use datafusion::datasource::provider_as_source;
 use datafusion::error::Result as DataFusionResult;
-use datafusion::execution::context::QueryPlanner;
+use datafusion::execution::context::{QueryPlanner, SessionConfig};
 use datafusion::logical_expr::build_join_schema;
 use datafusion::physical_planner::{DefaultPhysicalPlanner, ExtensionPlanner, PhysicalPlanner};
 use datafusion::{
@@ -1112,7 +1112,10 @@ impl std::future::IntoFuture for MergeBuilder {
             PROTOCOL.can_write_to(&this.snapshot)?;
 
             let state = this.state.unwrap_or_else(|| {
-                let session = SessionContext::new();
+                //TODO: Datafusion's Hashjoin has some memory issues. Running with all cores results in a OoM. Can be removed when upstream improvemetns are made.
+                let config = SessionConfig::new().with_target_partitions(1);
+
+                let session = SessionContext::new_with_config(config);
 
                 // If a user provides their own their DF state then they must register the store themselves
                 register_store(this.log_store.clone(), session.runtime_env());
