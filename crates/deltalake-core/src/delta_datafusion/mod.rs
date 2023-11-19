@@ -81,6 +81,8 @@ use crate::{open_table, open_table_with_storage_options, DeltaTable};
 const PATH_COLUMN: &str = "__delta_rs_path";
 
 pub mod expr;
+pub mod physical;
+pub mod logical;
 
 impl From<DeltaTableError> for DataFusionError {
     fn from(err: DeltaTableError) -> Self {
