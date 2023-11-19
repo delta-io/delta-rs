@@ -47,7 +47,6 @@ mod common;
 
 mod local {
     use datafusion::common::stats::Precision;
-    use datafusion::common::stats::Precision;
     use deltalake_core::writer::JsonWriter;
 
     use super::*;
