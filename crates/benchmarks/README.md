@@ -21,7 +21,7 @@ Converts a TPC-DS web_returns csv into a Delta table
 Assumes the dataset is pipe delimited and records do not have a trailing delimiter
 
 ```
-cargo run --bin merge -- convert data/tpcds/web_returns.dat data/web_returns
+ cargo run --release --bin merge -- convert data/tpcds/web_returns.dat data/web_returns
 ```
 
 ### Standard
@@ -36,7 +36,7 @@ duration_ms: How long the benchmark took in ms
 data: Free field to pack any additonal data
 
 ```
-cargo run --bin merge -- standard data/web_returns 1 data/merge_results 
+ cargo run --release --bin merge -- standard data/web_returns 1 data/merge_results 
 ```
 
 ### Compare
@@ -44,12 +44,12 @@ Compare the results of two different runs.
 The a Delta table paths and the `group_id` of each run and obtain the speedup for each test case
 
 ```
-cargo run --bin merge -- compare data/benchmarks/ 1698636172801 data/benchmarks/ 1699759539902
+ cargo run --release --bin merge -- compare data/benchmarks/ 1698636172801 data/benchmarks/ 1699759539902
 ```
 
 ### Show
 Show all benchmarks results from a delta table
 
 ```
-cargo run --bin merge -- show data/benchmark
+ cargo run --release --bin merge -- show data/benchmark
 ```

@@ -622,8 +622,10 @@ async fn main() {
                     col("before_name").alias("name"),
                     col("before_duration_avg"),
                     col("after_duration_avg"),
-                    (col("after_duration_avg") / (col("before_duration_avg"))),
+                    (col("before_duration_avg") / (col("after_duration_avg"))),
                 ])
+                .unwrap()
+                .sort(vec![col("name").sort(true, true)])
                 .unwrap()
                 .show()
                 .await
