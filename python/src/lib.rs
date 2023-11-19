@@ -132,9 +132,7 @@ impl RawDeltaTable {
         catalog_options: Option<HashMap<String, String>>,
     ) -> PyResult<String> {
         let data_catalog = deltalake::data_catalog::get_data_catalog(data_catalog, catalog_options)
-            .map_err(|_| {
-                PyValueError::new_err(format!("Catalog '{}' not available.", data_catalog))
-            })?;
+            .map_err(|e| PyValueError::new_err(format!("{}", e)))?;
         let table_uri = rt()?
             .block_on(data_catalog.get_table_storage_location(
                 data_catalog_id,
