@@ -20,7 +20,7 @@ use deltalake::arrow::ffi_stream::ArrowArrayStreamReader;
 use deltalake::arrow::record_batch::RecordBatch;
 use deltalake::arrow::record_batch::RecordBatchReader;
 use deltalake::arrow::{self, datatypes::Schema as ArrowSchema};
-use deltalake::checkpoints::create_checkpoint;
+use deltalake::checkpoints::{cleanup_metadata, create_checkpoint};
 use deltalake::datafusion::datasource::memory::MemTable;
 use deltalake::datafusion::datasource::provider::TableProvider;
 use deltalake::datafusion::prelude::SessionContext;
@@ -866,6 +866,14 @@ impl RawDeltaTable {
     pub fn create_checkpoint(&self) -> PyResult<()> {
         rt()?
             .block_on(create_checkpoint(&self._table))
+            .map_err(PythonError::from)?;
+
+        Ok(())
+    }
+
+    pub fn cleanup_metadata(&self) -> PyResult<()> {
+        rt()?
+            .block_on(cleanup_metadata(&self._table))
             .map_err(PythonError::from)?;
 
         Ok(())

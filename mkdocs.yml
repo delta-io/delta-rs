@@ -16,14 +16,15 @@ theme:
     - content.tabs.link
 nav:
   - Home: index.md
-  - Installation: installation.md
   - Usage:
+    - Installation: usage/installation.md
     - Overview: usage/index.md
     - Loading a Delta Table: usage/loading-table.md
     - Examining a Delta Table: usage/examining-table.md
     - Querying a Delta Table: usage/querying-delta-tables.md
     - Managing a Delta Table: usage/managing-tables.md
     - Writing Delta Tables: usage/writing-delta-tables.md
+    - Small file compaction: usage/small-file-compaction-with-optimize.md
   - API Reference:
     - api/delta_table.md
     - api/schema.md

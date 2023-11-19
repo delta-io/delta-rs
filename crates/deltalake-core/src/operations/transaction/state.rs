@@ -188,9 +188,12 @@ impl<'a> AddContainer<'a> {
                     Some(v) => serde_json::Value::String(v.to_string()),
                     None => serde_json::Value::Null,
                 };
-                to_correct_scalar_value(&value, data_type).unwrap_or(
-                    get_null_of_arrow_type(data_type).expect("Could not determine null type"),
-                )
+                to_correct_scalar_value(&value, data_type)
+                    .ok()
+                    .flatten()
+                    .unwrap_or(
+                        get_null_of_arrow_type(data_type).expect("Could not determine null type"),
+                    )
             } else if let Ok(Some(statistics)) = add.get_stats() {
                 let values = if get_max {
                     statistics.max_values
@@ -200,7 +203,11 @@ impl<'a> AddContainer<'a> {
 
                 values
                     .get(&column.name)
-                    .and_then(|f| to_correct_scalar_value(f.as_value()?, data_type))
+                    .and_then(|f| {
+                        to_correct_scalar_value(f.as_value()?, data_type)
+                            .ok()
+                            .flatten()
+                    })
                     .unwrap_or(
                         get_null_of_arrow_type(data_type).expect("Could not determine null type"),
                     )

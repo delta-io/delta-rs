@@ -1,5 +1,5 @@
 [build-system]
-requires = ["maturin>=0.14,<0.15"]
+requires = ["maturin>=1,<2"]
 build-backend = "maturin"
 
 [project]
@@ -7,18 +7,18 @@ name = "deltalake"
 description = "Native Delta Lake Python binding based on delta-rs with Pandas integration"
 readme = "README.md"
 license = {file = "LICENSE.txt"}
-requires-python = ">=3.7"
+requires-python = ">=3.8"
 keywords = ["deltalake", "delta", "datalake", "pandas", "arrow"]
 classifiers = [
     "License :: OSI Approved :: Apache Software License",
     "Programming Language :: Python :: 3.8",
     "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
-    "Programming Language :: Python :: 3.11"
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12"
 ]
 dependencies = [
-    "pyarrow>=8",
-    'typing-extensions;python_version<"3.8"',
+    "pyarrow>=8"
 ]
 
 [project.optional-dependencies]
@@ -27,8 +27,7 @@ pandas = [
 ]
 devel = [
     "mypy",
-    "black",
-    "ruff",
+    "ruff>=0.1.5",
     "packaging>=20",
     "pytest",
     "pytest-mock",
@@ -49,6 +48,9 @@ pyspark = [
 [project.urls]
 documentation = "https://delta-io.github.io/delta-rs/"
 repository = "https://github.com/delta-io/delta-rs/tree/main/python/"
+
+[tool.maturin]
+module-name = "deltalake._internal"
 
 [tool.mypy]
 files = "deltalake/*.py"
