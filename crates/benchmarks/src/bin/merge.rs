@@ -1,5 +1,5 @@
 use std::{
-    sync::{mpsc::TryRecvError, Arc},
+    sync::Arc,
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -23,9 +23,6 @@ use deltalake_core::{
 };
 use serde_json::json;
 use tokio::time::Instant;
-
-//#[global_allocator]
-//static ALLOC: jemallocator::Jemalloc = jemallocator::Jemalloc;
 
 /* Convert web_returns dataset from TPC DS's datagen utility into a Delta table
    This table will be partitioned on `wr_returned_date_sk`
@@ -356,65 +353,6 @@ struct MergePrefArgs {
     command: Command,
 }
 
-struct MemoryStats {
-    allocated: Vec<usize>,
-    resident: Vec<usize>,
-}
-
-#[derive(Debug, Default)]
-struct Stats {
-    // Percentiles
-    min: usize,
-    p25: usize,
-    p50: usize,
-    p75: usize,
-    max: usize,
-    //Other
-    mean: f64,
-}
-
-impl Stats {
-    pub fn from(mut series: Vec<usize>) -> Stats {
-        let mut stats = Stats::default();
-        let items = series.len();
-        if items == 0 {
-            return stats;
-        }
-
-        series.sort();
-
-        stats.min = series[0];
-        stats.p25 = series[items / 4];
-        stats.p50 = series[items / 2];
-        stats.p75 = series[(items * 3) / 4];
-        stats.max = series[items - 1];
-
-        let sum = series.iter().fold(0.0, |acc, x| acc + (*x as f64));
-        stats.mean = sum / (items as f64);
-
-        stats
-    }
-}
-
-impl MemoryStats {
-    pub fn new() -> Self {
-        MemoryStats {
-            allocated: Vec::new(),
-            resident: Vec::new(),
-        }
-    }
-
-    pub fn update(&mut self) {
-        let epoch = jemalloc_ctl::epoch::mib().unwrap();
-        epoch.advance().unwrap();
-        let allocated_mib = jemalloc_ctl::stats::allocated::mib().unwrap();
-        let resident_mib = jemalloc_ctl::stats::resident::mib().unwrap();
-
-        self.allocated.push(allocated_mib.read().unwrap());
-        self.resident.push(resident_mib.read().unwrap());
-    }
-}
-
 #[tokio::main]
 async fn main() {
     match MergePrefArgs::parse().command {
@@ -427,20 +365,6 @@ async fn main() {
                 .unwrap();
         }
         Command::Bench(BenchArg { table_path, name }) => {
-            /*
-            let (tx, rx) = std::sync::mpsc::channel();
-            let handle = std::thread::spawn(move || {
-                let mut stats = MemoryStats::new();
-                while let Err(TryRecvError::Empty) = rx.try_recv() {
-                    stats.update();
-                    std::thread::sleep(std::time::Duration::from_secs(1));
-                }
-
-                stats.update();
-                stats
-            });
-            */
-
             let (merge_op, params): (
                 fn(DataFrame, DeltaTable) -> Result<MergeBuilder, DeltaTableError>,
                 MergePerfParams,
@@ -453,16 +377,6 @@ async fn main() {
             benchmark_merge_tpcds(table_path, params, merge_op)
                 .await
                 .unwrap();
-
-            /*
-            tx.send(Some(())).unwrap();
-            let stats = handle.join().unwrap();
-            let a = Stats::from(stats.allocated);
-            let r = Stats::from(stats.resident);
-
-            println!("{:?}", a);
-            println!("{:?}", r);
-            */
         }
         Command::Standard(Standard {
             delta_path,
@@ -669,25 +583,51 @@ async fn main() {
                 .unwrap();
             ctx.register_table("after", Arc::new(after_table)).unwrap();
 
-
-            let before_stats = ctx.sql(&format!("
+            let before_stats = ctx
+                .sql(&format!(
+                    "
                 select name as before_name,
                  avg(cast(duration_ms as float)) as before_duration_avg 
                 from before where group_id = {} 
                 group by name
-            ", before_group_id)).await.unwrap();
+            ",
+                    before_group_id
+                ))
+                .await
+                .unwrap();
 
-            let after_stats = ctx.sql(&format!("
+            let after_stats = ctx
+                .sql(&format!(
+                    "
                 select name as after_name,
                  avg(cast(duration_ms as float)) as after_duration_avg 
                 from after where group_id = {} 
                 group by name
-            ", after_group_id)).await.unwrap();
+            ",
+                    after_group_id
+                ))
+                .await
+                .unwrap();
 
-            before_stats.join(after_stats, datafusion_common::JoinType::Inner, &["before_name"], &["after_name"], None).unwrap()
-            .select(vec![col("before_name").alias("name"), col("before_duration_avg"), col("after_duration_avg"), (col("after_duration_avg") / (col("before_duration_avg")))]).unwrap()
-            .show().await.unwrap();
-
+            before_stats
+                .join(
+                    after_stats,
+                    datafusion_common::JoinType::Inner,
+                    &["before_name"],
+                    &["after_name"],
+                    None,
+                )
+                .unwrap()
+                .select(vec![
+                    col("before_name").alias("name"),
+                    col("before_duration_avg"),
+                    col("after_duration_avg"),
+                    (col("after_duration_avg") / (col("before_duration_avg"))),
+                ])
+                .unwrap()
+                .show()
+                .await
+                .unwrap();
         }
         Command::Show(Show { path }) => {
             let stats = DeltaTableBuilder::from_uri(path).load().await.unwrap();
