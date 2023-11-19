@@ -13,8 +13,6 @@ clap = { version = "4", features = [ "derive" ] }
 chrono = { version = "0.4.31", default-features = false, features = ["clock"] }
 tokio = { version = "1", features = ["fs", "macros", "rt", "io-util"] }
 env_logger = "0"
-jemallocator = "0.5.4"
-jemalloc-ctl = "0.5.4"
 
 # arrow
 arrow = { workspace = true }
