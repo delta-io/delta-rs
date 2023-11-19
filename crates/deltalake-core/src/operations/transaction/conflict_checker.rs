@@ -522,9 +522,8 @@ impl<'a> ConflictChecker<'a> {
             .winning_commit_summary
             .removed_files()
             .iter()
-            // TODO remove cloned
-            .cloned()
-            .find(|f| read_file_path.contains(&f.path));
+            .find(|&f| read_file_path.contains(&f.path))
+            .cloned();
         if deleted_read_overlap.is_some()
             || (!self.winning_commit_summary.removed_files().is_empty()
                 && self.txn_info.read_whole_table())

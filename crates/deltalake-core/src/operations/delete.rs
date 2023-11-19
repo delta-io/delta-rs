@@ -34,6 +34,8 @@ use parquet::file::properties::WriterProperties;
 use serde::Serialize;
 use serde_json::Value;
 
+use super::datafusion_utils::Expression;
+use super::transaction::PROTOCOL;
 use crate::delta_datafusion::expr::fmt_expr_to_sql;
 use crate::delta_datafusion::{find_files, register_store, DeltaScanBuilder};
 use crate::errors::{DeltaResult, DeltaTableError};
@@ -43,8 +45,6 @@ use crate::operations::write::write_execution_plan;
 use crate::protocol::DeltaOperation;
 use crate::table::state::DeltaTableState;
 use crate::DeltaTable;
-
-use super::datafusion_utils::Expression;
 
 /// Delete Records from the Delta Table.
 /// See this module's documentation for more information
@@ -274,6 +274,8 @@ impl std::future::IntoFuture for DeleteBuilder {
         let mut this = self;
 
         Box::pin(async move {
+            PROTOCOL.can_write_to(&this.snapshot)?;
+
             let state = this.state.unwrap_or_else(|| {
                 let session = SessionContext::new();
 

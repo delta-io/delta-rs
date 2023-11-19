@@ -41,10 +41,10 @@ The Delta Lake project aims to unlock the power of the Deltalake for as many use
 by providing native low-level APIs aimed at developers and integrators, as well as a high-level operations
 API that lets you query, inspect, and operate your Delta Lake with ease.
 
-| Source                | Downloads                         | Installation Command    | Docs            |
-| --------------------- | --------------------------------- | ----------------------- | --------------- |
-| **[PyPi][pypi]**      | [![Downloads][pypi-dl]][pypi]     | `pip install deltalake` | [Docs][py-docs] |
-| **[Crates.io][pypi]** | [![Downloads][crates-dl]][crates] | `cargo add deltalake`   | [Docs][rs-docs] |
+| Source                  | Downloads                         | Installation Command    | Docs            |
+| ----------------------- | --------------------------------- | ----------------------- | --------------- |
+| **[PyPi][pypi]**        | [![Downloads][pypi-dl]][pypi]     | `pip install deltalake` | [Docs][py-docs] |
+| **[Crates.io][crates]** | [![Downloads][crates-dl]][crates] | `cargo add deltalake`   | [Docs][rs-docs] |
 
 [pypi]: https://pypi.org/project/deltalake/
 [pypi-dl]: https://img.shields.io/pypi/dm/deltalake?style=flat-square&color=00ADD4
@@ -130,36 +130,36 @@ of features outlined in the Delta [protocol][protocol] is also [tracked](#protoc
 
 ### Cloud Integrations
 
-| Storage              |         Rust          |        Python         | Comment                             |
-| -------------------- | :-------------------: | :-------------------: | ----------------------------------- |
-| Local                |        ![done]        |        ![done]        |                                     |
-| S3 - AWS             |        ![done]        |        ![done]        | requires lock for concurrent writes |
-| S3 - MinIO           |        ![done]        |        ![done]        | requires lock for concurrent writes |
-| S3 - R2              |        ![done]        |        ![done]        | requires lock for concurrent writes |
-| Azure Blob           |        ![done]        |        ![done]        |                                     |
-| Azure ADLS Gen2      |        ![done]        |        ![done]        |                                     |
-| Microsoft OneLake    |        ![done]        |        ![done]        |                                     |
-| Google Cloud Storage |        ![done]        |        ![done]        |                                     |
+| Storage              |  Rust   | Python  | Comment                             |
+| -------------------- | :-----: | :-----: | ----------------------------------- |
+| Local                | ![done] | ![done] |                                     |
+| S3 - AWS             | ![done] | ![done] | requires lock for concurrent writes |
+| S3 - MinIO           | ![done] | ![done] | requires lock for concurrent writes |
+| S3 - R2              | ![done] | ![done] | requires lock for concurrent writes |
+| Azure Blob           | ![done] | ![done] |                                     |
+| Azure ADLS Gen2      | ![done] | ![done] |                                     |
+| Microsoft OneLake    | ![done] | ![done] |                                     |
+| Google Cloud Storage | ![done] | ![done] |                                     |
 
 ### Supported Operations
 
-| Operation             |          Rust            |        Python       | Description                                 |
-| --------------------- | :----------------------: | :-----------------: | ------------------------------------------- |
-| Create                |         ![done]          |       ![done]       | Create a new table                          |
-| Read                  |         ![done]          |       ![done]       | Read data from a table                      |
-| Vacuum                |         ![done]          |       ![done]       | Remove unused files and log entries         |
-| Delete - partitions   |                          |       ![done]       | Delete a table partition                    |
-| Delete - predicates   |         ![done]          |       ![done]       | Delete data based on a predicate            |
-| Optimize - compaction |         ![done]          |       ![done]       | Harmonize the size of data file             |
-| Optimize - Z-order    |         ![done]          |       ![done]       | Place similar data into the same file       |
+| Operation             |           Rust           |          Python          | Description                                 |
+| --------------------- | :----------------------: | :----------------------: | ------------------------------------------- |
+| Create                |         ![done]          |         ![done]          | Create a new table                          |
+| Read                  |         ![done]          |         ![done]          | Read data from a table                      |
+| Vacuum                |         ![done]          |         ![done]          | Remove unused files and log entries         |
+| Delete - partitions   |                          |         ![done]          | Delete a table partition                    |
+| Delete - predicates   |         ![done]          |         ![done]          | Delete data based on a predicate            |
+| Optimize - compaction |         ![done]          |         ![done]          | Harmonize the size of data file             |
+| Optimize - Z-order    |         ![done]          |         ![done]          | Place similar data into the same file       |
 | Merge                 | [![semi-done]][merge-rs] | [![semi-done]][merge-py] | Merge two tables (limited to full re-write) |
-| FS check              |         ![done]          |       ![done]       | Remove corrupted files from table           |
+| FS check              |         ![done]          |         ![done]          | Remove corrupted files from table           |
 
 ### Protocol Support Level
 
 | Writer Version | Requirement                                   |        Status        |
 | -------------- | --------------------------------------------- | :------------------: |
-| Version 2      | Append Only Tables                            |       ![done]  
+| Version 2      | Append Only Tables                            |       ![done]        |
 | Version 2      | Column Invariants                             |       ![done]        |
 | Version 3      | Enforce `delta.checkpoint.writeStatsAsJson`   | [![open]][writer-rs] |
 | Version 3      | Enforce `delta.checkpoint.writeStatsAsStruct` | [![open]][writer-rs] |

@@ -14,6 +14,8 @@ use crate::errors::{DeltaResult, DeltaTableError};
 use crate::table::builder::DeltaTableBuilder;
 use crate::DeltaTable;
 
+#[cfg(all(feature = "arrow", feature = "parquet"))]
+pub mod convert_to_delta;
 pub mod create;
 pub mod filesystem_check;
 #[cfg(all(feature = "arrow", feature = "parquet"))]
@@ -47,11 +49,6 @@ pub mod update;
 pub mod write;
 #[cfg(all(feature = "arrow", feature = "parquet"))]
 pub mod writer;
-
-/// Maximum supported writer version
-pub const MAX_SUPPORTED_WRITER_VERSION: i32 = 1;
-/// Maximum supported reader version
-pub const MAX_SUPPORTED_READER_VERSION: i32 = 1;
 
 /// High level interface for executing commands against a DeltaTable
 pub struct DeltaOps(pub DeltaTable);

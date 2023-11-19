@@ -19,23 +19,24 @@ debug = "line-tables-only"
 
 [workspace.dependencies]
 # arrow
-arrow = { version = "48" }
-arrow-array = { version = "48" }
-arrow-buffer = { version = "48" }
-arrow-cast = { version = "48" }
-arrow-ord = { version = "48" }
-arrow-row = { version = "48" }
-arrow-schema = { version = "48" }
-arrow-select = { version = "48" }
-parquet = { version = "48" }
+arrow = { version = "48.0.1" }
+arrow-array = { version = "48.0.1" }
+arrow-buffer = { version = "48.0.1" }
+arrow-cast = { version = "48.0.1" }
+arrow-ord = { version = "48.0.1" }
+arrow-row = { version = "48.0.1" }
+arrow-schema = { version = "48.0.1" }
+arrow-select = { version = "48.0.1" }
+parquet = { version = "48.0.1" }
 
 # datafusion
-datafusion = { git = "https://github.com/apache/arrow-datafusion.git" }
-datafusion-expr = { git = "https://github.com/apache/arrow-datafusion.git" }
-datafusion-common = { git = "https://github.com/apache/arrow-datafusion.git" }
-datafusion-proto = { git = "https://github.com/apache/arrow-datafusion.git" }
-datafusion-sql = { git = "https://github.com/apache/arrow-datafusion.git" }
-datafusion-physical-expr = { git = "https://github.com/apache/arrow-datafusion.git" }
+datafusion = { version = "33.0.0" }
+datafusion-expr = { version = "33.0.0" }
+datafusion-common = { version = "33.0.0" }
+datafusion-proto = { version = "33.0.0" }
+datafusion-sql = { version = "33.0.0" }
+datafusion-physical-expr = { version = "33.0.0" }
+
 
 # serde
 serde = { version = "1", features = ["derive"] }
