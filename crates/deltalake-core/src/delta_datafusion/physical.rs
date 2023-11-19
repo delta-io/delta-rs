@@ -36,13 +36,13 @@ impl MetricObserverExec {
         }
     }
 
-    pub fn try_new(id: String, inputs: &[Arc<dyn ExecutionPlan>], f: MetricObserverFunction) -> DataFusionResult<Arc<dyn ExecutionPlan>> {
+    pub fn try_new(
+        id: String,
+        inputs: &[Arc<dyn ExecutionPlan>],
+        f: MetricObserverFunction,
+    ) -> DataFusionResult<Arc<dyn ExecutionPlan>> {
         match inputs {
-            [input] => Ok(Arc::new(MetricObserverExec::new(
-                id,
-                input.clone(),
-                f
-            ))),
+            [input] => Ok(Arc::new(MetricObserverExec::new(id, input.clone(), f))),
             _ => Err(datafusion_common::DataFusionError::External(Box::new(
                 DeltaTableError::Generic("MetricObserverExec expects only one child".into()),
             ))),
@@ -108,7 +108,7 @@ impl ExecutionPlan for MetricObserverExec {
         }))
     }
 
-    fn statistics(&self) -> datafusion_common::Statistics {
+    fn statistics(&self) -> DataFusionResult<datafusion_common::Statistics> {
         self.parent.statistics()
     }
 

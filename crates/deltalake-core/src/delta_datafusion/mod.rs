@@ -507,11 +507,6 @@ impl<'a> DeltaScanBuilder<'a> {
         self
     }
 
-    pub fn with_schema(mut self, schema: SchemaRef) -> Self {
-        self.schema = Some(schema);
-        self
-    }
-
     pub async fn build(self) -> DeltaResult<DeltaScan> {
         let config = self.config;
         let schema = match self.schema {
