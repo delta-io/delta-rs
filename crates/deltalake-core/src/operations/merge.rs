@@ -1343,7 +1343,7 @@ mod tests {
             .unwrap()
             .when_not_matched_by_source_update(|update| {
                 update
-                    .predicate("target.value = arrow_cast(1, 'Int32')")
+                    .predicate("target.value = 1")
                     .update("value", "target.value + cast(1 as int)")
             })
             .unwrap()
@@ -1371,9 +1371,7 @@ mod tests {
         );
         assert_eq!(
             parameters["notMatchedBySourcePredicates"],
-            json!(
-                r#"[{"actionType":"update","predicate":"target.value = arrow_cast(1, 'Int32')"}]"#
-            )
+            json!(r#"[{"actionType":"update","predicate":"target.value = 1"}]"#)
         );
 
         assert_merge(table, metrics).await;
@@ -1401,9 +1399,7 @@ mod tests {
             })
             .unwrap()
             .when_not_matched_by_source_update(|update| {
-                update
-                    .predicate("value = arrow_cast(1, 'Int32')")
-                    .update("value", "value + cast(1 as int)")
+                update.predicate("value = 1").update("value", "value + 1")
             })
             .unwrap()
             .when_not_matched_insert(|insert| {
@@ -1444,8 +1440,8 @@ mod tests {
             .unwrap()
             .when_not_matched_by_source_update(|update| {
                 update
-                    .predicate("value = arrow_cast(1, 'Int32')")
-                    .update("value", "target.value + cast(1 as int)")
+                    .predicate("value = 1")
+                    .update("value", "target.value + 1")
             })
             .unwrap()
             .when_not_matched_insert(|insert| {
