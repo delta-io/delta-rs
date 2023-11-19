@@ -86,7 +86,7 @@ impl FromStr for PartitionStrategy {
     type Err = DeltaTableError;
 
     fn from_str(s: &str) -> DeltaResult<Self> {
-        match s {
+        match s.to_ascii_lowercase().as_str() {
             "hive" => Ok(PartitionStrategy::Hive),
             _ => Err(DeltaTableError::Generic(format!(
                 "Invalid partition strategy provided {}",
