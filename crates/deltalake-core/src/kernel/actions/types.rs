@@ -291,7 +291,7 @@ impl Into<usize> for WriterFeatures {
             | WriterFeatures::V2Checkpoint
             | WriterFeatures::IcebergCompatV1 => 7,
         }
-  }
+    }
 }
 
 impl From<String> for WriterFeatures {

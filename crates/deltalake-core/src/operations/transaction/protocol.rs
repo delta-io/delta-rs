@@ -154,9 +154,9 @@ impl ProtocolChecker {
         if snapshot.min_writer_version() >= 7
             && has_invariants
             && !snapshot
-            .writer_features()
-            .unwrap()
-            .contains(&WriterFeatures::Invariants)
+                .writer_features()
+                .unwrap()
+                .contains(&WriterFeatures::Invariants)
         {
             return Err(TransactionError::WriterFeaturesRequired);
         }
