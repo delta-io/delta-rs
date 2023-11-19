@@ -691,6 +691,25 @@ mod tests {
     }
 
     #[tokio::test()]
+    async fn test_version_zero_table_load() {
+        let path = "./tests/data/COVID-19_NYT";
+        let mut latest_table: DeltaTable = crate::open_table(path).await.unwrap();
+
+        let mut version_0_table = crate::open_table_with_version(path, 0).await.unwrap();
+
+        let version_0_history = version_0_table
+            .history(None)
+            .await
+            .expect("Cannot get table history");
+        let latest_table_history = latest_table
+            .history(None)
+            .await
+            .expect("Cannot get table history");
+
+        assert_eq!(latest_table_history, version_0_history);
+    }
+
+    #[tokio::test()]
     #[should_panic(expected = "does not exist or you don't have access!")]
     async fn test_fail_fast_on_not_existing_path() {
         use std::path::Path as FolderPath;
