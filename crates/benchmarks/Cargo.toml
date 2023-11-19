@@ -1,7 +1,7 @@
 [package]
 name = "delta-benchmarks"
 version = "0.0.1"
-authors = ["Qingping Hou <dave2008713@gmail.com>"]
+authors = ["David Blajda <db@davidblajda.com>"]
 homepage = "https://github.com/delta-io/delta.rs"
 license = "Apache-2.0"
 keywords = ["deltalake", "delta", "datalake"]
