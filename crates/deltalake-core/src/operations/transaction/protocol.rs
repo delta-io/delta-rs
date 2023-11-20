@@ -68,6 +68,14 @@ impl ProtocolChecker {
         2
     }
 
+    /// Check append-only at the high level (operation level)
+    pub fn check_append_only(&self, snapshot: &DeltaTableState) -> Result<(), TransactionError> {
+        if snapshot.table_config().append_only() {
+            return Err(TransactionError::DeltaTableAppendOnly);
+        }
+        Ok(())
+    }
+
     /// Check if delta-rs can read form the given delta table.
     pub fn can_read_from(&self, snapshot: &DeltaTableState) -> Result<(), TransactionError> {
         let required_features: Option<&HashSet<ReaderFeatures>> =
