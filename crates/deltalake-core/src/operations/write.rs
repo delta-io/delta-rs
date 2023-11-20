@@ -43,7 +43,7 @@ use super::writer::{DeltaWriter, WriterConfig};
 use super::{transaction::commit, CreateBuilder};
 use crate::delta_datafusion::DeltaDataChecker;
 use crate::errors::{DeltaResult, DeltaTableError};
-use crate::kernel::{Action, Add, Remove, StructType};
+use crate::kernel::{Action, Add, Metadata, Remove, StructType};
 use crate::logstore::LogStoreRef;
 use crate::protocol::{DeltaOperation, SaveMode};
 use crate::storage::ObjectStoreRef;
@@ -304,6 +304,7 @@ pub(crate) async fn write_execution_plan(
     write_batch_size: Option<usize>,
     writer_properties: Option<WriterProperties>,
     safe_cast: bool,
+    overwrite_schema: bool,
 ) -> DeltaResult<Vec<Add>> {
     let invariants = snapshot
         .current_metadata()
@@ -311,7 +312,11 @@ pub(crate) async fn write_execution_plan(
         .unwrap_or_default();
 
     // Use input schema to prevent wrapping partitions columns into a dictionary.
-    let schema = snapshot.input_schema().unwrap_or(plan.schema());
+    let schema: ArrowSchemaRef = if overwrite_schema {
+        plan.schema()
+    } else {
+        snapshot.input_schema().unwrap_or(plan.schema())
+    };
 
     let checker = DeltaDataChecker::new(invariants);
 
@@ -392,13 +397,14 @@ impl std::future::IntoFuture for WriteBuilder {
                 Ok(this.partition_columns.unwrap_or_default())
             }?;
 
+            let mut schema: ArrowSchemaRef = arrow_schema::Schema::empty().into();
             let plan = if let Some(plan) = this.input {
                 Ok(plan)
             } else if let Some(batches) = this.batches {
                 if batches.is_empty() {
                     Err(WriteError::MissingData)
                 } else {
-                    let schema = batches[0].schema();
+                    schema = batches[0].schema();
                     let table_schema = this
                         .snapshot
                         .physical_arrow_schema(this.log_store.object_store().clone())
@@ -407,7 +413,7 @@ impl std::future::IntoFuture for WriteBuilder {
                         .unwrap_or(schema.clone());
 
                     if !can_cast_batch(schema.fields(), table_schema.fields())
-                        && !this.overwrite_schema
+                        && !(this.overwrite_schema && matches!(this.mode, SaveMode::Overwrite))
                     {
                         return Err(DeltaTableError::Generic(
                             "Schema of data does not match table schema".to_string(),
@@ -445,7 +451,7 @@ impl std::future::IntoFuture for WriteBuilder {
                         vec![batches]
                     };
 
-                    Ok(Arc::new(MemoryExec::try_new(&data, schema, None)?)
+                    Ok(Arc::new(MemoryExec::try_new(&data, schema.clone(), None)?)
                         as Arc<dyn ExecutionPlan>)
                 }
             } else {
@@ -470,12 +476,32 @@ impl std::future::IntoFuture for WriteBuilder {
                 this.write_batch_size,
                 this.writer_properties,
                 this.safe_cast,
+                this.overwrite_schema,
             )
             .await?;
             actions.extend(add_actions.into_iter().map(Action::Add));
 
             // Collect remove actions if we are overwriting the table
             if matches!(this.mode, SaveMode::Overwrite) {
+                // Update metadata with new schema
+                let table_schema = this
+                    .snapshot
+                    .physical_arrow_schema(this.log_store.object_store().clone())
+                    .await
+                    .or_else(|_| this.snapshot.arrow_schema())
+                    .unwrap_or(schema.clone());
+
+                // let data_schema: StructType = schema.clone().try_into().unwrap();
+                if schema != table_schema {
+                    let mut metadata = this
+                        .snapshot
+                        .current_metadata()
+                        .ok_or(DeltaTableError::NoMetadata)?
+                        .clone();
+                    metadata.schema = schema.clone().try_into().unwrap();
+                    let metadata_action = Metadata::try_from(metadata).unwrap();
+                    actions.push(Action::Metadata(metadata_action));
+                }
                 // This should never error, since now() will always be larger than UNIX_EPOCH
                 let deletion_timestamp = SystemTime::now()
                     .duration_since(UNIX_EPOCH)

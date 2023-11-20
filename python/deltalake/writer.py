@@ -185,11 +185,6 @@ def write_deltalake(
         if table is not None and mode == "ignore":
             return
 
-        if mode == "overwrite" and overwrite_schema:
-            raise NotImplementedError(
-                "The rust engine writer does not yet support schema evolution."
-            )
-
         if isinstance(data, RecordBatchReader):
             batch_iter = data
         elif isinstance(data, pa.RecordBatch):

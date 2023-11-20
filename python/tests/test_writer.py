@@ -156,19 +156,34 @@ def test_update_schema_rust_writer(existing_table: DeltaTable):
             overwrite_schema=True,
             engine="rust",
         )
-    # TODO(ion): Remove this once we add schema overwrite support
-    with pytest.raises(NotImplementedError):
+    with pytest.raises(DeltaError):
         write_deltalake(
             existing_table,
             new_data,
             mode="overwrite",
-            overwrite_schema=True,
+            overwrite_schema=False,
             engine="rust",
         )
+    with pytest.raises(DeltaError):
+        write_deltalake(
+            existing_table,
+            new_data,
+            mode="append",
+            overwrite_schema=False,
+            engine="rust",
+        )
+    # TODO(ion): Remove this once we add schema overwrite support
+    write_deltalake(
+        existing_table,
+        new_data,
+        mode="overwrite",
+        overwrite_schema=True,
+        engine="rust",
+    )
 
-        read_data = existing_table.to_pyarrow_table()
-        assert new_data == read_data
-        assert existing_table.schema().to_pyarrow() == new_data.schema
+    read_data = existing_table.to_pyarrow_table()
+    assert new_data == read_data
+    assert existing_table.schema().to_pyarrow() == new_data.schema
 
 
 @pytest.mark.parametrize("engine", ["pyarrow", "rust"])
