@@ -27,7 +27,7 @@ use serde_json::{Map, Value};
 use std::{
     collections::{HashMap, HashSet},
     num::TryFromIntError,
-    str::Utf8Error,
+    str::{FromStr, Utf8Error},
     sync::Arc,
 };
 
@@ -80,6 +80,20 @@ pub enum PartitionStrategy {
     /// Hive-partitioning
     #[default]
     Hive,
+}
+
+impl FromStr for PartitionStrategy {
+    type Err = DeltaTableError;
+
+    fn from_str(s: &str) -> DeltaResult<Self> {
+        match s.to_ascii_lowercase().as_str() {
+            "hive" => Ok(PartitionStrategy::Hive),
+            _ => Err(DeltaTableError::Generic(format!(
+                "Invalid partition strategy provided {}",
+                s
+            ))),
+        }
+    }
 }
 
 /// Build an operation to convert a Parquet table to a [`DeltaTable`] in place

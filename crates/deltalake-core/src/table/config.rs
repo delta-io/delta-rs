@@ -11,6 +11,7 @@ use crate::errors::DeltaTableError;
 /// <https://docs.delta.io/latest/table-properties.html#delta-table-properties-reference>
 /// <https://learn.microsoft.com/en-us/azure/databricks/delta/table-properties>
 #[derive(PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum DeltaConfigKey {
     /// true for this Delta table to be append-only. If append-only,
     /// existing records cannot be deleted, and existing values cannot be updated.
@@ -100,6 +101,9 @@ pub enum DeltaConfigKey {
 
     /// The target file size in bytes or higher units for file tuning. For example, 104857600 (bytes) or 100mb.
     TuneFileSizesForRewrites,
+
+    /// 'classic' for classic Delta Lake checkpoints. 'v2' for v2 checkpoints.
+    CheckpointPolicy,
 }
 
 impl AsRef<str> for DeltaConfigKey {
@@ -111,6 +115,7 @@ impl AsRef<str> for DeltaConfigKey {
             Self::AutoOptimizeOptimizeWrite => "delta.autoOptimize.optimizeWrite",
             Self::CheckpointWriteStatsAsJson => "delta.checkpoint.writeStatsAsJson",
             Self::CheckpointWriteStatsAsStruct => "delta.checkpoint.writeStatsAsStruct",
+            Self::CheckpointPolicy => "delta.checkpointPolicy",
             Self::ColumnMappingMode => "delta.columnMapping.mode",
             Self::DataSkippingNumIndexedCols => "delta.dataSkippingNumIndexedCols",
             Self::DeletedFileRetentionDuration => "delta.deletedFileRetentionDuration",
@@ -140,6 +145,7 @@ impl FromStr for DeltaConfigKey {
             "delta.autoOptimize.optimizeWrite" => Ok(Self::AutoOptimizeOptimizeWrite),
             "delta.checkpoint.writeStatsAsJson" => Ok(Self::CheckpointWriteStatsAsJson),
             "delta.checkpoint.writeStatsAsStruct" => Ok(Self::CheckpointWriteStatsAsStruct),
+            "delta.checkpointPolicy" => Ok(Self::CheckpointPolicy),
             "delta.columnMapping.mode" => Ok(Self::ColumnMappingMode),
             "delta.dataSkippingNumIndexedCols" => Ok(Self::DataSkippingNumIndexedCols),
             "delta.deletedFileRetentionDuration" | "deletedFileRetentionDuration" => {
@@ -280,6 +286,14 @@ impl<'a> TableConfig<'a> {
             .and_then(|o| o.as_ref().and_then(|v| v.parse().ok()))
             .unwrap_or_default()
     }
+
+    /// Policy applied during chepoint creation
+    pub fn checkpoint_policy(&self) -> CheckpointPolicy {
+        self.0
+            .get(DeltaConfigKey::CheckpointPolicy.as_ref())
+            .and_then(|o| o.as_ref().and_then(|v| v.parse().ok()))
+            .unwrap_or_default()
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
@@ -333,6 +347,48 @@ impl FromStr for IsolationLevel {
             "snapshotisolation" | "snapshot_isolation" => Ok(Self::SnapshotIsolation),
             _ => Err(DeltaTableError::Generic(
                 "Invalid string for IsolationLevel".into(),
+            )),
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+/// The checkpoint policy applied when writing checkpoints
+#[serde(rename_all = "camelCase")]
+pub enum CheckpointPolicy {
+    /// classic Delta Lake checkpoints
+    Classic,
+    /// v2 checkpoints
+    V2,
+    /// unknown checkpoint policy
+    Other(String),
+}
+
+impl Default for CheckpointPolicy {
+    fn default() -> Self {
+        Self::Classic
+    }
+}
+
+impl AsRef<str> for CheckpointPolicy {
+    fn as_ref(&self) -> &str {
+        match self {
+            Self::Classic => "classic",
+            Self::V2 => "v2",
+            Self::Other(s) => s,
+        }
+    }
+}
+
+impl FromStr for CheckpointPolicy {
+    type Err = DeltaTableError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_ascii_lowercase().as_str() {
+            "classic" => Ok(Self::Classic),
+            "v2" => Ok(Self::V2),
+            _ => Err(DeltaTableError::Generic(
+                "Invalid string for CheckpointPolicy".into(),
             )),
         }
     }
