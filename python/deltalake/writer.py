@@ -38,9 +38,9 @@ from deltalake.schema import delta_arrow_schema_from_pandas
 
 from ._internal import DeltaDataChecker as _DeltaDataChecker
 from ._internal import batch_distinct
+from ._internal import convert_to_deltalake as _convert_to_deltalake
 from ._internal import write_new_deltalake as write_deltalake_pyarrow
 from ._internal import write_to_deltalake as write_deltalake_rust
-from ._internal import convert_to_deltalake as _convert_to_deltalake
 from .exceptions import DeltaProtocolError, TableNotFoundError
 from .table import MAX_SUPPORTED_WRITER_VERSION, DeltaTable
 
