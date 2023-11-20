@@ -23,9 +23,8 @@ use std::borrow::Borrow;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::mem::take;
-use std::str::FromStr;
 
-use crate::errors::{DeltaResult, DeltaTableError};
+use crate::errors::DeltaResult;
 use crate::kernel::{Add, CommitInfo, Metadata, Protocol, Remove};
 use crate::logstore::LogStore;
 use crate::table::CheckPoint;
@@ -588,23 +587,6 @@ pub enum SaveMode {
     ErrorIfExists,
     /// If files exist for the target, the operation must not proceed or change any data.
     Ignore,
-}
-
-impl FromStr for SaveMode {
-    type Err = DeltaTableError;
-
-    fn from_str(s: &str) -> DeltaResult<Self> {
-        match s.to_ascii_lowercase().as_str() {
-            "append" => Ok(SaveMode::Append),
-            "overwrite" => Ok(SaveMode::Overwrite),
-            "error" => Ok(SaveMode::ErrorIfExists),
-            "ignore" => Ok(SaveMode::Ignore),
-            _ => Err(DeltaTableError::Generic(format!(
-                "Invalid save mode provided: {}, only these are supported: ['append', 'overwrite', 'error', 'ignore']",
-                s
-            ))),
-        }
-    }
 }
 
 /// The OutputMode used in streaming operations.

@@ -81,8 +81,6 @@ use crate::{open_table, open_table_with_storage_options, DeltaTable};
 const PATH_COLUMN: &str = "__delta_rs_path";
 
 pub mod expr;
-pub mod logical;
-pub mod physical;
 
 impl From<DeltaTableError> for DataFusionError {
     fn from(err: DeltaTableError) -> Self {
@@ -353,7 +351,7 @@ pub(crate) fn logical_schema(
     snapshot: &DeltaTableState,
     scan_config: &DeltaScanConfig,
 ) -> DeltaResult<SchemaRef> {
-    let input_schema = snapshot.arrow_schema()?;
+    let input_schema = snapshot.input_schema()?;
     let mut fields = Vec::new();
     for field in input_schema.fields.iter() {
         fields.push(field.to_owned());
@@ -504,6 +502,11 @@ impl<'a> DeltaScanBuilder<'a> {
 
     pub fn with_scan_config(mut self, config: DeltaScanConfig) -> Self {
         self.config = config;
+        self
+    }
+
+    pub fn with_schema(mut self, schema: SchemaRef) -> Self {
+        self.schema = Some(schema);
         self
     }
 

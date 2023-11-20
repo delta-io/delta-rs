@@ -43,10 +43,10 @@ use parquet::file::properties::WriterProperties;
 use serde::Serialize;
 use serde_json::Value;
 
-use super::datafusion_utils::Expression;
+use super::datafusion_utils::{Expression, MetricObserverExec};
 use super::transaction::{commit, PROTOCOL};
 use super::write::write_execution_plan;
-use crate::delta_datafusion::{expr::fmt_expr_to_sql, physical::MetricObserverExec};
+use crate::delta_datafusion::expr::fmt_expr_to_sql;
 use crate::delta_datafusion::{find_files, register_store, DeltaScanBuilder};
 use crate::kernel::{Action, Remove};
 use crate::logstore::LogStoreRef;
@@ -275,7 +275,6 @@ async fn execute(
         Arc::new(ProjectionExec::try_new(expressions, scan)?);
 
     let count_plan = Arc::new(MetricObserverExec::new(
-        "update_count".into(),
         projection_predicate.clone(),
         |batch, metrics| {
             let array = batch.column_by_name("__delta_rs_update_predicate").unwrap();

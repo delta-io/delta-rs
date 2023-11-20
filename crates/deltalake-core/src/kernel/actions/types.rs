@@ -174,7 +174,7 @@ pub enum ReaderFeatures {
     /// Mapping of one column to another
     ColumnMapping,
     /// Deletion vectors for merge, update, delete
-    DeletionVectors,
+    DeleteionVecotrs,
     /// timestamps without timezone support
     #[serde(alias = "timestampNtz")]
     TimestampWithoutTimezone,
@@ -185,13 +185,26 @@ pub enum ReaderFeatures {
     Other(String),
 }
 
+#[allow(clippy::from_over_into)]
+impl Into<usize> for ReaderFeatures {
+    fn into(self) -> usize {
+        match self {
+            ReaderFeatures::Other(_) => 0,
+            ReaderFeatures::ColumnMapping => 2,
+            ReaderFeatures::DeleteionVecotrs
+            | ReaderFeatures::TimestampWithoutTimezone
+            | ReaderFeatures::V2Checkpoint => 3,
+        }
+    }
+}
+
 #[cfg(all(not(feature = "parquet2"), feature = "parquet"))]
 impl From<&parquet::record::Field> for ReaderFeatures {
     fn from(value: &parquet::record::Field) -> Self {
         match value {
             parquet::record::Field::Str(feature) => match feature.as_str() {
                 "columnMapping" => ReaderFeatures::ColumnMapping,
-                "deletionVectors" => ReaderFeatures::DeletionVectors,
+                "deletionVectors" => ReaderFeatures::DeleteionVecotrs,
                 "timestampNtz" => ReaderFeatures::TimestampWithoutTimezone,
                 "v2Checkpoint" => ReaderFeatures::V2Checkpoint,
                 f => ReaderFeatures::Other(f.to_string()),
@@ -203,15 +216,9 @@ impl From<&parquet::record::Field> for ReaderFeatures {
 
 impl From<String> for ReaderFeatures {
     fn from(value: String) -> Self {
-        value.as_str().into()
-    }
-}
-
-impl From<&str> for ReaderFeatures {
-    fn from(value: &str) -> Self {
-        match value {
+        match value.as_str() {
             "columnMapping" => ReaderFeatures::ColumnMapping,
-            "deletionVectors" => ReaderFeatures::DeletionVectors,
+            "deletionVectors" => ReaderFeatures::DeleteionVecotrs,
             "timestampNtz" => ReaderFeatures::TimestampWithoutTimezone,
             "v2Checkpoint" => ReaderFeatures::V2Checkpoint,
             f => ReaderFeatures::Other(f.to_string()),
@@ -223,7 +230,7 @@ impl AsRef<str> for ReaderFeatures {
     fn as_ref(&self) -> &str {
         match self {
             ReaderFeatures::ColumnMapping => "columnMapping",
-            ReaderFeatures::DeletionVectors => "deletionVectors",
+            ReaderFeatures::DeleteionVecotrs => "deletionVectors",
             ReaderFeatures::TimestampWithoutTimezone => "timestampNtz",
             ReaderFeatures::V2Checkpoint => "v2Checkpoint",
             ReaderFeatures::Other(f) => f,
@@ -257,7 +264,7 @@ pub enum WriterFeatures {
     /// ID Columns
     IdentityColumns,
     /// Deletion vectors for merge, update, delete
-    DeletionVectors,
+    DeleteionVecotrs,
     /// Row tracking on tables
     RowTracking,
     /// timestamps without timezone support
@@ -274,15 +281,29 @@ pub enum WriterFeatures {
     Other(String),
 }
 
-impl From<String> for WriterFeatures {
-    fn from(value: String) -> Self {
-        value.as_str().into()
+#[allow(clippy::from_over_into)]
+impl Into<usize> for WriterFeatures {
+    fn into(self) -> usize {
+        match self {
+            WriterFeatures::Other(_) => 0,
+            WriterFeatures::AppendOnly | WriterFeatures::Invariants => 2,
+            WriterFeatures::CheckConstraints => 3,
+            WriterFeatures::ChangeDataFeed | WriterFeatures::GeneratedColumns => 4,
+            WriterFeatures::ColumnMapping => 5,
+            WriterFeatures::IdentityColumns
+            | WriterFeatures::DeleteionVecotrs
+            | WriterFeatures::RowTracking
+            | WriterFeatures::TimestampWithoutTimezone
+            | WriterFeatures::DomainMetadata
+            | WriterFeatures::V2Checkpoint
+            | WriterFeatures::IcebergCompatV1 => 7,
+        }
     }
 }
 
-impl From<&str> for WriterFeatures {
-    fn from(value: &str) -> Self {
-        match value {
+impl From<String> for WriterFeatures {
+    fn from(value: String) -> Self {
+        match value.as_str() {
             "appendOnly" => WriterFeatures::AppendOnly,
             "invariants" => WriterFeatures::Invariants,
             "checkConstraints" => WriterFeatures::CheckConstraints,
@@ -290,7 +311,7 @@ impl From<&str> for WriterFeatures {
             "generatedColumns" => WriterFeatures::GeneratedColumns,
             "columnMapping" => WriterFeatures::ColumnMapping,
             "identityColumns" => WriterFeatures::IdentityColumns,
-            "deletionVectors" => WriterFeatures::DeletionVectors,
+            "deletionVectors" => WriterFeatures::DeleteionVecotrs,
             "rowTracking" => WriterFeatures::RowTracking,
             "timestampNtz" => WriterFeatures::TimestampWithoutTimezone,
             "domainMetadata" => WriterFeatures::DomainMetadata,
@@ -311,7 +332,7 @@ impl AsRef<str> for WriterFeatures {
             WriterFeatures::GeneratedColumns => "generatedColumns",
             WriterFeatures::ColumnMapping => "columnMapping",
             WriterFeatures::IdentityColumns => "identityColumns",
-            WriterFeatures::DeletionVectors => "deletionVectors",
+            WriterFeatures::DeleteionVecotrs => "deletionVectors",
             WriterFeatures::RowTracking => "rowTracking",
             WriterFeatures::TimestampWithoutTimezone => "timestampNtz",
             WriterFeatures::DomainMetadata => "domainMetadata",
@@ -340,7 +361,7 @@ impl From<&parquet::record::Field> for WriterFeatures {
                 "generatedColumns" => WriterFeatures::GeneratedColumns,
                 "columnMapping" => WriterFeatures::ColumnMapping,
                 "identityColumns" => WriterFeatures::IdentityColumns,
-                "deletionVectors" => WriterFeatures::DeletionVectors,
+                "deletionVectors" => WriterFeatures::DeleteionVecotrs,
                 "rowTracking" => WriterFeatures::RowTracking,
                 "timestampNtz" => WriterFeatures::TimestampWithoutTimezone,
                 "domainMetadata" => WriterFeatures::DomainMetadata,
@@ -400,7 +421,7 @@ impl AsRef<str> for StorageType {
 
 impl ToString for StorageType {
     fn to_string(&self) -> String {
-        self.as_ref().into()
+        self.as_ref().to_string()
     }
 }
 
@@ -429,7 +450,6 @@ pub struct DeletionVectorDescriptor {
 
     /// Start of the data for this DV in number of bytes from the beginning of the file it is stored in.
     /// Always None (absent in JSON) when `storageType = 'i'`.
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub offset: Option<i32>,
 
     /// Size of the serialized DV in bytes (raw data size, i.e. before base85 encoding, if inline).
@@ -642,11 +662,9 @@ pub struct Remove {
     pub data_change: bool,
 
     /// The time this logical file was created, as milliseconds since the epoch.
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub deletion_timestamp: Option<i64>,
 
     /// When true the fields `partition_values`, `size`, and `tags` are present
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub extended_file_metadata: Option<bool>,
 
     /// A map from partition column to value for this logical file.
@@ -668,11 +686,9 @@ pub struct Remove {
     /// Default generated Row ID of the first row in the file. The default generated Row IDs
     /// of the other rows in the file can be reconstructed by adding the physical index of the
     /// row within the file to the base Row ID
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub base_row_id: Option<i64>,
 
     /// First commit version in which an add action with the same path was committed to the table.
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub default_row_commit_version: Option<i64>,
 }
 
@@ -691,18 +707,13 @@ pub struct AddCDCFile {
     /// absolute path to a CDC file
     #[serde(with = "serde_path")]
     pub path: String,
-
     /// The size of this file in bytes
     pub size: i64,
-
     /// A map from partition column to value for this file
     pub partition_values: HashMap<String, Option<String>>,
-
     /// Should always be set to false because they do not change the underlying data of the table
     pub data_change: bool,
-
     /// Map containing metadata about this file
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub tags: Option<HashMap<String, Option<String>>>,
 }
 
@@ -713,12 +724,9 @@ pub struct AddCDCFile {
 pub struct Txn {
     /// A unique identifier for the application performing the transaction.
     pub app_id: String,
-
     /// An application-specific numeric identifier for this transaction.
     pub version: i64,
-
     /// The time when this transaction action was created in milliseconds since the Unix epoch.
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub last_updated: Option<i64>,
 }
 
@@ -731,39 +739,30 @@ pub struct CommitInfo {
     /// Timestamp in millis when the commit was created
     #[serde(skip_serializing_if = "Option::is_none")]
     pub timestamp: Option<i64>,
-
     /// Id of the user invoking the commit
     #[serde(skip_serializing_if = "Option::is_none")]
     pub user_id: Option<String>,
-
     /// Name of the user invoking the commit
     #[serde(skip_serializing_if = "Option::is_none")]
     pub user_name: Option<String>,
-
     /// The operation performed during the
     #[serde(skip_serializing_if = "Option::is_none")]
     pub operation: Option<String>,
-
     /// Parameters used for table operation
     #[serde(skip_serializing_if = "Option::is_none")]
     pub operation_parameters: Option<HashMap<String, serde_json::Value>>,
-
     /// Version of the table when the operation was started
     #[serde(skip_serializing_if = "Option::is_none")]
     pub read_version: Option<i64>,
-
     /// The isolation level of the commit
     #[serde(skip_serializing_if = "Option::is_none")]
     pub isolation_level: Option<IsolationLevel>,
-
     /// TODO
     #[serde(skip_serializing_if = "Option::is_none")]
     pub is_blind_append: Option<bool>,
-
     /// Delta engine which created the commit.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub engine_info: Option<String>,
-
     /// Additional provenance information for the commit
     #[serde(flatten, default)]
     pub info: HashMap<String, serde_json::Value>,
@@ -775,48 +774,10 @@ pub struct CommitInfo {
 pub struct DomainMetadata {
     /// Identifier for this domain (system or user-provided)
     pub domain: String,
-
     /// String containing configuration for the metadata domain
     pub configuration: String,
-
     /// When `true` the action serves as a tombstone
     pub removed: bool,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq)]
-/// This action is only allowed in checkpoints following V2 spec. It describes the details about the checkpoint.
-pub struct CheckpointMetadata {
-    /// The flavor of the V2 checkpoint. Allowed values: "flat".
-    pub flavor: String,
-
-    /// Map containing any additional metadata about the v2 spec checkpoint.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub tags: Option<HashMap<String, Option<String>>>,
-}
-
-/// The sidecar action references a sidecar file which provides some of the checkpoint's file actions.
-/// This action is only allowed in checkpoints following V2 spec.
-#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct Sidecar {
-    /// The name of the sidecar file (not a path).
-    /// The file must reside in the _delta_log/_sidecars directory.
-    pub file_name: String,
-
-    /// The size of the sidecar file in bytes
-    pub size_in_bytes: i64,
-
-    /// The time this sidecar file was created, as milliseconds since the epoch.
-    pub modification_time: i64,
-
-    /// Type of sidecar. Valid values are: "fileaction".
-    /// This could be extended in future to allow different kinds of sidecars.
-    #[serde(rename = "type")]
-    pub sidecar_type: String,
-
-    /// Map containing any additional metadata about the checkpoint sidecar file.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub tags: Option<HashMap<String, Option<String>>>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]

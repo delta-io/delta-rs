@@ -8,7 +8,8 @@
 //! specified matter.  See [`MergeBuilder`] for more information
 //!
 //! *WARNING* The current implementation rewrites the entire delta table so only
-//! use on small to medium sized tables.
+//! use on small to medium sized tables. The solution also cannot take advantage
+//! of multiple threads and is limited to a single single thread.
 //! Enhancements tracked at #850
 //!
 //! # Example
@@ -36,25 +37,27 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
-use async_trait::async_trait;
-use datafusion::datasource::provider_as_source;
+use arrow_schema::SchemaRef;
 use datafusion::error::Result as DataFusionResult;
-use datafusion::execution::context::{QueryPlanner, SessionConfig};
 use datafusion::logical_expr::build_join_schema;
-use datafusion::physical_planner::{DefaultPhysicalPlanner, ExtensionPlanner, PhysicalPlanner};
+use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion::{
     execution::context::SessionState,
     physical_plan::{
+        filter::FilterExec,
+        joins::{
+            utils::{build_join_schema as physical_build_join_schema, JoinFilter},
+            NestedLoopJoinExec,
+        },
         metrics::{MetricBuilder, MetricsSet},
+        projection::ProjectionExec,
         ExecutionPlan,
     },
     prelude::{DataFrame, SessionContext},
 };
-use datafusion_common::{Column, DFSchema, ScalarValue, TableReference};
+use datafusion_common::{Column, DFField, DFSchema, ScalarValue, TableReference};
 use datafusion_expr::{col, conditional_expressions::CaseBuilder, lit, when, Expr, JoinType};
-use datafusion_expr::{
-    Extension, LogicalPlan, LogicalPlanBuilder, UserDefinedLogicalNode, UNNAMED_TABLE,
-};
+use datafusion_physical_expr::{create_physical_expr, expressions, PhysicalExpr};
 use futures::future::BoxFuture;
 use parquet::file::properties::WriterProperties;
 use serde::Serialize;
@@ -63,18 +66,14 @@ use serde_json::Value;
 use super::datafusion_utils::{into_expr, maybe_into_expr, Expression};
 use super::transaction::{commit, PROTOCOL};
 use crate::delta_datafusion::expr::{fmt_expr_to_sql, parse_predicate_expression};
-use crate::delta_datafusion::logical::MetricObserver;
-use crate::delta_datafusion::physical::{find_metric_node, MetricObserverExec};
-use crate::delta_datafusion::{register_store, DeltaScanConfig, DeltaTableProvider};
+use crate::delta_datafusion::{register_store, DeltaScanBuilder};
 use crate::kernel::{Action, Remove};
 use crate::logstore::LogStoreRef;
+use crate::operations::datafusion_utils::MetricObserverExec;
 use crate::operations::write::write_execution_plan;
 use crate::protocol::{DeltaOperation, MergePredicate};
 use crate::table::state::DeltaTableState;
 use crate::{DeltaResult, DeltaTable, DeltaTableError};
-
-const SOURCE_COLUMN: &str = "__delta_rs_source";
-const TARGET_COLUMN: &str = "__delta_rs_target";
 
 const OPERATION_COLUMN: &str = "__delta_rs_operation";
 const DELETE_COLUMN: &str = "__delta_rs_delete";
@@ -84,15 +83,10 @@ const TARGET_DELETE_COLUMN: &str = "__delta_rs_target_delete";
 const TARGET_COPY_COLUMN: &str = "__delta_rs_target_copy";
 
 const SOURCE_COUNT_METRIC: &str = "num_source_rows";
-const TARGET_COUNT_METRIC: &str = "num_target_rows";
 const TARGET_COPY_METRIC: &str = "num_copied_rows";
 const TARGET_INSERTED_METRIC: &str = "num_target_inserted_rows";
 const TARGET_UPDATED_METRIC: &str = "num_target_updated_rows";
 const TARGET_DELETED_METRIC: &str = "num_target_deleted_rows";
-
-const SOURCE_COUNT_ID: &str = "merge_source_count";
-const TARGET_COUNT_ID: &str = "merge_target_count";
-const OUTPUT_COUNT_ID: &str = "merge_output_count";
 
 /// Merge records into a Delta Table.
 pub struct MergeBuilder {
@@ -563,89 +557,6 @@ pub struct MergeMetrics {
     pub rewrite_time_ms: u64,
 }
 
-struct MergeMetricExtensionPlanner {}
-
-#[async_trait]
-impl ExtensionPlanner for MergeMetricExtensionPlanner {
-    async fn plan_extension(
-        &self,
-        _planner: &dyn PhysicalPlanner,
-        node: &dyn UserDefinedLogicalNode,
-        _logical_inputs: &[&LogicalPlan],
-        physical_inputs: &[Arc<dyn ExecutionPlan>],
-        _session_state: &SessionState,
-    ) -> DataFusionResult<Option<Arc<dyn ExecutionPlan>>> {
-        if let Some(metric_observer) = node.as_any().downcast_ref::<MetricObserver>() {
-            if metric_observer.id.eq(SOURCE_COUNT_ID) {
-                return Ok(Some(MetricObserverExec::try_new(
-                    SOURCE_COUNT_ID.into(),
-                    physical_inputs,
-                    |batch, metrics| {
-                        MetricBuilder::new(metrics)
-                            .global_counter(SOURCE_COUNT_METRIC)
-                            .add(batch.num_rows());
-                    },
-                )?));
-            }
-
-            if metric_observer.id.eq(TARGET_COUNT_ID) {
-                return Ok(Some(MetricObserverExec::try_new(
-                    TARGET_COUNT_ID.into(),
-                    physical_inputs,
-                    |batch, metrics| {
-                        MetricBuilder::new(metrics)
-                            .global_counter(TARGET_COUNT_METRIC)
-                            .add(batch.num_rows());
-                    },
-                )?));
-            }
-
-            if metric_observer.id.eq(OUTPUT_COUNT_ID) {
-                return Ok(Some(MetricObserverExec::try_new(
-                    OUTPUT_COUNT_ID.into(),
-                    physical_inputs,
-                    |batch, metrics| {
-                        MetricBuilder::new(metrics)
-                            .global_counter(TARGET_INSERTED_METRIC)
-                            .add(
-                                batch
-                                    .column_by_name(TARGET_INSERT_COLUMN)
-                                    .unwrap()
-                                    .null_count(),
-                            );
-                        MetricBuilder::new(metrics)
-                            .global_counter(TARGET_UPDATED_METRIC)
-                            .add(
-                                batch
-                                    .column_by_name(TARGET_UPDATE_COLUMN)
-                                    .unwrap()
-                                    .null_count(),
-                            );
-                        MetricBuilder::new(metrics)
-                            .global_counter(TARGET_DELETED_METRIC)
-                            .add(
-                                batch
-                                    .column_by_name(TARGET_DELETE_COLUMN)
-                                    .unwrap()
-                                    .null_count(),
-                            );
-                        MetricBuilder::new(metrics)
-                            .global_counter(TARGET_COPY_METRIC)
-                            .add(
-                                batch
-                                    .column_by_name(TARGET_COPY_COLUMN)
-                                    .unwrap()
-                                    .null_count(),
-                            );
-                    },
-                )?));
-            }
-        }
-
-        Ok(None)
-    }
-}
-
 #[allow(clippy::too_many_arguments)]
 async fn execute(
     predicate: Expression,
@@ -678,60 +589,82 @@ async fn execute(
     // If the user specified any not_source_match operations then those
     // predicates also need to be considered when pruning
 
-    let source_name = match &source_alias {
-        Some(alias) => TableReference::bare(alias.to_string()),
-        None => TableReference::bare(UNNAMED_TABLE),
-    };
+    let target = Arc::new(
+        DeltaScanBuilder::new(snapshot, log_store.clone(), &state)
+            .with_schema(snapshot.input_schema()?)
+            .build()
+            .await?,
+    );
 
-    let target_name = match &target_alias {
-        Some(alias) => TableReference::bare(alias.to_string()),
-        None => TableReference::bare(UNNAMED_TABLE),
-    };
+    let source = source.create_physical_plan().await?;
 
-    // This is only done to provide the source columns with a correct table reference. Just renaming the columns does not work
-    let source =
-        LogicalPlanBuilder::scan(source_name, provider_as_source(source.into_view()), None)?
-            .build()?;
+    let source_count = Arc::new(MetricObserverExec::new(source, |batch, metrics| {
+        MetricBuilder::new(metrics)
+            .global_counter(SOURCE_COUNT_METRIC)
+            .add(batch.num_rows());
+    }));
 
-    let source = LogicalPlan::Extension(Extension {
-        node: Arc::new(MetricObserver {
-            id: SOURCE_COUNT_ID.into(),
-            input: source,
-        }),
-    });
+    let mut expressions: Vec<(Arc<dyn PhysicalExpr>, String)> = Vec::new();
+    let source_schema = source_count.schema();
 
-    let source = DataFrame::new(state.clone(), source);
-    let source = source.with_column(SOURCE_COLUMN, lit(true))?;
+    for (i, field) in source_schema.fields().into_iter().enumerate() {
+        expressions.push((
+            Arc::new(expressions::Column::new(field.name(), i)),
+            field.name().clone(),
+        ));
+    }
+    expressions.push((
+        Arc::new(expressions::Literal::new(true.into())),
+        "__delta_rs_source".to_owned(),
+    ));
+    let source = Arc::new(ProjectionExec::try_new(expressions, source_count.clone())?);
 
-    let target_provider = Arc::new(DeltaTableProvider::try_new(
-        snapshot.clone(),
-        log_store.clone(),
-        DeltaScanConfig::default(),
-    )?);
-    let target_provider = provider_as_source(target_provider);
-
-    let target = LogicalPlanBuilder::scan(target_name, target_provider, None)?.build()?;
-
-    // TODO: This is here to prevent predicate pushdowns. In the future we can replace this node to allow pushdowns depending on which operations are being used.
-    let target = LogicalPlan::Extension(Extension {
-        node: Arc::new(MetricObserver {
-            id: TARGET_COUNT_ID.into(),
-            input: target,
-        }),
-    });
-    let target = DataFrame::new(state.clone(), target);
-    let target = target.with_column(TARGET_COLUMN, lit(true))?;
-
-    let source_schema = source.schema();
+    let mut expressions: Vec<(Arc<dyn PhysicalExpr>, String)> = Vec::new();
     let target_schema = target.schema();
-    let join_schema_df = build_join_schema(source_schema, target_schema, &JoinType::Full)?;
+    for (i, field) in target_schema.fields().into_iter().enumerate() {
+        expressions.push((
+            Arc::new(expressions::Column::new(field.name(), i)),
+            field.name().to_owned(),
+        ));
+    }
+    expressions.push((
+        Arc::new(expressions::Literal::new(true.into())),
+        "__delta_rs_target".to_owned(),
+    ));
+    let target = Arc::new(ProjectionExec::try_new(expressions, target.clone())?);
+
+    // TODO: Currently a NestedLoopJoin is used but we should target to support SortMergeJoin
+    // This would require rewriting the join predicate to only contain equality between left and right columns and pushing some filters down
+    // Ideally it would be nice if the optimizer / planner can pick the best join so maybe explore rewriting the entire operation using logical plans.
+
+    // NLJ requires both sides to have one partition for outer joins
+    let target = Arc::new(CoalescePartitionsExec::new(target));
+    let source = Arc::new(CoalescePartitionsExec::new(source));
+
+    let source_schema = match &source_alias {
+        Some(alias) => {
+            DFSchema::try_from_qualified_schema(TableReference::bare(alias), &source.schema())?
+        }
+        None => DFSchema::try_from(source.schema().as_ref().to_owned())?,
+    };
+
+    let target_schema = match &target_alias {
+        Some(alias) => {
+            DFSchema::try_from_qualified_schema(TableReference::bare(alias), &target.schema())?
+        }
+        None => DFSchema::try_from(target.schema().as_ref().to_owned())?,
+    };
+
+    let join_schema_df = build_join_schema(&source_schema, &target_schema, &JoinType::Full)?;
+
+    let join_schema =
+        physical_build_join_schema(&source.schema(), &target.schema(), &JoinType::Full);
+    let (join_schema, join_order) = (join_schema.0, join_schema.1);
+
     let predicate = match predicate {
         Expression::DataFusion(expr) => expr,
         Expression::String(s) => parse_predicate_expression(&join_schema_df, s, &state)?,
     };
-
-    let join = source.join(target, JoinType::Full, &[], &[], Some(predicate.clone()))?;
-    let join_schema_df = join.schema().to_owned();
 
     let match_operations: Vec<MergeOperation> = match_operations
         .into_iter()
@@ -748,15 +681,40 @@ async fn execute(
         .map(|op| MergeOperation::try_from(op, &join_schema_df, &state, &target_alias))
         .collect::<Result<Vec<MergeOperation>, DeltaTableError>>()?;
 
-    let matched = col(SOURCE_COLUMN)
+    let predicate_expr = create_physical_expr(
+        &predicate,
+        &join_schema_df,
+        &join_schema,
+        state.execution_props(),
+    )?;
+
+    let join_filter = JoinFilter::new(predicate_expr, join_order, join_schema);
+    let join: Arc<dyn ExecutionPlan> = Arc::new(NestedLoopJoinExec::try_new(
+        source.clone(),
+        target.clone(),
+        Some(join_filter),
+        &datafusion_expr::JoinType::Full,
+    )?);
+
+    // Project to include __delta_rs_operation which indicates which particular operation to perform on the column.
+    let mut expressions: Vec<(Arc<dyn PhysicalExpr>, String)> = Vec::new();
+    let schema = join.schema();
+    for (i, field) in schema.fields().into_iter().enumerate() {
+        expressions.push((
+            Arc::new(expressions::Column::new(field.name(), i)),
+            field.name().to_owned(),
+        ));
+    }
+
+    let matched = col("__delta_rs_source")
         .is_true()
-        .and(col(TARGET_COLUMN).is_true());
-    let not_matched_target = col(SOURCE_COLUMN)
+        .and(col("__delta_rs_target").is_true());
+    let not_matched_target = col("__delta_rs_source")
         .is_true()
-        .and(col(TARGET_COLUMN).is_null());
-    let not_matched_source = col(SOURCE_COLUMN)
+        .and(col("__delta_rs_target").is_null());
+    let not_matched_source = col("__delta_rs_source")
         .is_null()
-        .and(col(TARGET_COLUMN))
+        .and(col("__delta_rs_target"))
         .is_true();
 
     // Plus 3 for the default operations for each match category
@@ -853,10 +811,35 @@ async fn execute(
 
     let case = CaseBuilder::new(None, when_expr, then_expr, None).end()?;
 
-    let projection = join.with_column(OPERATION_COLUMN, case)?;
+    let case = create_physical_expr(
+        &case,
+        &join_schema_df,
+        &join.schema(),
+        state.execution_props(),
+    )?;
+    expressions.push((case, OPERATION_COLUMN.to_owned()));
+    let projection = Arc::new(ProjectionExec::try_new(expressions, join.clone())?);
 
-    let mut new_columns = projection;
-    let mut write_projection = Vec::new();
+    let mut f = join_schema_df.fields().to_owned();
+    f.push(DFField::new_unqualified(
+        OPERATION_COLUMN,
+        arrow_schema::DataType::Int64,
+        false,
+    ));
+    let project_schema_df = DFSchema::new_with_metadata(f, HashMap::new())?;
+
+    // Project again and include the original table schema plus a column to mark if row needs to be filtered before write
+    let mut expressions: Vec<(Arc<dyn PhysicalExpr>, String)> = Vec::new();
+    let schema = projection.schema();
+    for (i, field) in schema.fields().into_iter().enumerate() {
+        expressions.push((
+            Arc::new(expressions::Column::new(field.name(), i)),
+            field.name().to_owned(),
+        ));
+    }
+
+    let mut projection_map = HashMap::new();
+    let mut f = project_schema_df.fields().clone();
 
     for delta_field in snapshot.schema().unwrap().fields() {
         let mut when_expr = Vec::with_capacity(operations_size);
@@ -870,6 +853,7 @@ async fn execute(
         };
         let name = delta_field.name();
         let column = Column::new(qualifier.clone(), name);
+        let field = project_schema_df.field_with_name(qualifier.as_ref(), name)?;
 
         for (idx, (operations, _)) in ops.iter().enumerate() {
             let op = operations
@@ -889,9 +873,22 @@ async fn execute(
         )
         .end()?;
 
+        let case = create_physical_expr(
+            &case,
+            &project_schema_df,
+            &projection.schema(),
+            state.execution_props(),
+        )?;
+
+        projection_map.insert(delta_field.name(), expressions.len());
         let name = "__delta_rs_c_".to_owned() + delta_field.name();
-        write_projection.push(col(name.clone()).alias(delta_field.name()));
-        new_columns = new_columns.with_column(&name, case)?;
+
+        f.push(DFField::new_unqualified(
+            &name,
+            field.data_type().clone(),
+            true,
+        ));
+        expressions.push((case, name));
     }
 
     let mut insert_when = Vec::with_capacity(ops.len());
@@ -957,47 +954,168 @@ async fn execute(
         );
     }
 
-    fn build_case(when: Vec<Expr>, then: Vec<Expr>) -> DataFusionResult<Expr> {
-        CaseBuilder::new(
+    fn build_case(
+        when: Vec<Expr>,
+        then: Vec<Expr>,
+        schema: SchemaRef,
+        input_dfschema: &DFSchema,
+        state: &SessionState,
+    ) -> DataFusionResult<Arc<dyn PhysicalExpr>> {
+        let case = CaseBuilder::new(
             Some(Box::new(col(OPERATION_COLUMN))),
             when,
             then,
             Some(Box::new(lit(false))),
         )
-        .end()
+        .end()?;
+
+        create_physical_expr(&case, input_dfschema, &schema, state.execution_props())
     }
 
-    new_columns = new_columns.with_column(DELETE_COLUMN, build_case(delete_when, delete_then)?)?;
-    new_columns =
-        new_columns.with_column(TARGET_INSERT_COLUMN, build_case(insert_when, insert_then)?)?;
-    new_columns =
-        new_columns.with_column(TARGET_UPDATE_COLUMN, build_case(update_when, update_then)?)?;
-    new_columns = new_columns.with_column(
+    let schema = projection.schema();
+    let input_dfschema = project_schema_df;
+    expressions.push((
+        build_case(
+            delete_when,
+            delete_then,
+            schema.clone(),
+            &input_dfschema,
+            &state,
+        )?,
+        DELETE_COLUMN.to_owned(),
+    ));
+    f.push(DFField::new_unqualified(
+        DELETE_COLUMN,
+        arrow_schema::DataType::Boolean,
+        true,
+    ));
+
+    expressions.push((
+        build_case(
+            insert_when,
+            insert_then,
+            schema.clone(),
+            &input_dfschema,
+            &state,
+        )?,
+        TARGET_INSERT_COLUMN.to_owned(),
+    ));
+    f.push(DFField::new_unqualified(
+        TARGET_INSERT_COLUMN,
+        arrow_schema::DataType::Boolean,
+        true,
+    ));
+
+    expressions.push((
+        build_case(
+            update_when,
+            update_then,
+            schema.clone(),
+            &input_dfschema,
+            &state,
+        )?,
+        TARGET_UPDATE_COLUMN.to_owned(),
+    ));
+    f.push(DFField::new_unqualified(
+        TARGET_UPDATE_COLUMN,
+        arrow_schema::DataType::Boolean,
+        true,
+    ));
+
+    expressions.push((
+        build_case(
+            target_delete_when,
+            target_delete_then,
+            schema.clone(),
+            &input_dfschema,
+            &state,
+        )?,
+        TARGET_DELETE_COLUMN.to_owned(),
+    ));
+    f.push(DFField::new_unqualified(
         TARGET_DELETE_COLUMN,
-        build_case(target_delete_when, target_delete_then)?,
+        arrow_schema::DataType::Boolean,
+        true,
+    ));
+
+    expressions.push((
+        build_case(
+            copy_when,
+            copy_then,
+            schema.clone(),
+            &input_dfschema,
+            &state,
+        )?,
+        TARGET_COPY_COLUMN.to_owned(),
+    ));
+    f.push(DFField::new_unqualified(
+        TARGET_COPY_COLUMN,
+        arrow_schema::DataType::Boolean,
+        true,
+    ));
+
+    let projection = Arc::new(ProjectionExec::try_new(expressions, projection.clone())?);
+
+    let target_count_plan = Arc::new(MetricObserverExec::new(projection, |batch, metrics| {
+        MetricBuilder::new(metrics)
+            .global_counter(TARGET_INSERTED_METRIC)
+            .add(
+                batch
+                    .column_by_name(TARGET_INSERT_COLUMN)
+                    .unwrap()
+                    .null_count(),
+            );
+        MetricBuilder::new(metrics)
+            .global_counter(TARGET_UPDATED_METRIC)
+            .add(
+                batch
+                    .column_by_name(TARGET_UPDATE_COLUMN)
+                    .unwrap()
+                    .null_count(),
+            );
+        MetricBuilder::new(metrics)
+            .global_counter(TARGET_DELETED_METRIC)
+            .add(
+                batch
+                    .column_by_name(TARGET_DELETE_COLUMN)
+                    .unwrap()
+                    .null_count(),
+            );
+        MetricBuilder::new(metrics)
+            .global_counter(TARGET_COPY_METRIC)
+            .add(
+                batch
+                    .column_by_name(TARGET_COPY_COLUMN)
+                    .unwrap()
+                    .null_count(),
+            );
+    }));
+
+    let write_schema_df = DFSchema::new_with_metadata(f, HashMap::new())?;
+
+    let write_predicate = create_physical_expr(
+        &(col(DELETE_COLUMN).is_false()),
+        &write_schema_df,
+        &target_count_plan.schema(),
+        state.execution_props(),
     )?;
-    new_columns = new_columns.with_column(TARGET_COPY_COLUMN, build_case(copy_when, copy_then)?)?;
+    let filter: Arc<dyn ExecutionPlan> = Arc::new(FilterExec::try_new(
+        write_predicate,
+        target_count_plan.clone(),
+    )?);
 
-    let new_columns = new_columns.into_optimized_plan()?;
-    let operation_count = LogicalPlan::Extension(Extension {
-        node: Arc::new(MetricObserver {
-            id: OUTPUT_COUNT_ID.into(),
-            input: new_columns,
-        }),
-    });
-
-    let operation_count = DataFrame::new(state.clone(), operation_count);
-    let filtered = operation_count.filter(col(DELETE_COLUMN).is_false())?;
-
-    let project = filtered.select(write_projection)?;
-    let optimized = &project.into_optimized_plan()?;
-
-    let state = state.with_query_planner(Arc::new(MergePlanner {}));
-    let write = state.create_physical_plan(optimized).await?;
-
-    let err = || DeltaTableError::Generic("Unable to locate expected metric node".into());
-    let source_count = find_metric_node(SOURCE_COUNT_ID, &write).ok_or_else(err)?;
-    let op_count = find_metric_node(OUTPUT_COUNT_ID, &write).ok_or_else(err)?;
+    let mut expressions: Vec<(Arc<dyn PhysicalExpr>, String)> = Vec::new();
+    for (key, value) in projection_map {
+        expressions.push((
+            Arc::new(expressions::Column::new(
+                &("__delta_rs_c_".to_owned() + key),
+                value,
+            )),
+            key.to_owned(),
+        ));
+    }
+    // project filtered records to delta schema
+    let projection = Arc::new(ProjectionExec::try_new(expressions, filter.clone())?);
 
     // write projected records
     let table_partition_cols = current_metadata.partition_columns.clone();
@@ -1006,9 +1124,9 @@ async fn execute(
     let add_actions = write_execution_plan(
         snapshot,
         state.clone(),
-        write,
+        projection.clone(),
         table_partition_cols.clone(),
-        log_store.object_store(),
+        log_store.object_store().clone(),
         Some(snapshot.table_config().target_file_size() as usize),
         None,
         writer_properties,
@@ -1046,7 +1164,7 @@ async fn execute(
     let mut version = snapshot.version();
 
     let source_count_metrics = source_count.metrics().unwrap();
-    let target_count_metrics = op_count.metrics().unwrap();
+    let target_count_metrics = target_count_plan.metrics().unwrap();
     fn get_metric(metrics: &MetricsSet, name: &str) -> usize {
         metrics.sum_by_name(name).map(|m| m.as_usize()).unwrap_or(0)
     }
@@ -1083,25 +1201,6 @@ async fn execute(
     Ok(((actions, version), metrics))
 }
 
-// TODO: Abstract MergePlanner into DeltaPlanner to support other delta operations in the future.
-struct MergePlanner {}
-
-#[async_trait]
-impl QueryPlanner for MergePlanner {
-    async fn create_physical_plan(
-        &self,
-        logical_plan: &LogicalPlan,
-        session_state: &SessionState,
-    ) -> DataFusionResult<Arc<dyn ExecutionPlan>> {
-        let planner = Arc::new(Box::new(DefaultPhysicalPlanner::with_extension_planners(
-            vec![Arc::new(MergeMetricExtensionPlanner {})],
-        )));
-        planner
-            .create_physical_plan(logical_plan, session_state)
-            .await
-    }
-}
-
 impl std::future::IntoFuture for MergeBuilder {
     type Output = DeltaResult<(DeltaTable, MergeMetrics)>;
     type IntoFuture = BoxFuture<'static, Self::Output>;
@@ -1113,9 +1212,7 @@ impl std::future::IntoFuture for MergeBuilder {
             PROTOCOL.can_write_to(&this.snapshot)?;
 
             let state = this.state.unwrap_or_else(|| {
-                //TODO: Datafusion's Hashjoin has some memory issues. Running with all cores results in a OoM. Can be removed when upstream improvemetns are made.
-                let config = SessionConfig::new().with_target_partitions(1);
-                let session = SessionContext::new_with_config(config);
+                let session = SessionContext::new();
 
                 // If a user provides their own their DF state then they must register the store themselves
                 register_store(this.log_store.clone(), session.runtime_env());
@@ -1253,8 +1350,8 @@ mod tests {
 
     async fn assert_merge(table: DeltaTable, metrics: MergeMetrics) {
         assert_eq!(table.version(), 2);
-        assert!(table.get_file_uris().count() >= 1);
-        assert!(metrics.num_target_files_added >= 1);
+        assert_eq!(table.get_file_uris().count(), 1);
+        assert_eq!(metrics.num_target_files_added, 1);
         assert_eq!(metrics.num_target_files_removed, 1);
         assert_eq!(metrics.num_target_rows_copied, 1);
         assert_eq!(metrics.num_target_rows_updated, 3);
@@ -1346,7 +1443,7 @@ mod tests {
             .unwrap()
             .when_not_matched_by_source_update(|update| {
                 update
-                    .predicate("target.value = 1")
+                    .predicate("target.value = arrow_cast(1, 'Int32')")
                     .update("value", "target.value + cast(1 as int)")
             })
             .unwrap()
@@ -1374,7 +1471,9 @@ mod tests {
         );
         assert_eq!(
             parameters["notMatchedBySourcePredicates"],
-            json!(r#"[{"actionType":"update","predicate":"target.value = 1"}]"#)
+            json!(
+                r#"[{"actionType":"update","predicate":"target.value = arrow_cast(1, 'Int32')"}]"#
+            )
         );
 
         assert_merge(table, metrics).await;
@@ -1402,7 +1501,9 @@ mod tests {
             })
             .unwrap()
             .when_not_matched_by_source_update(|update| {
-                update.predicate("value = 1").update("value", "value + 1")
+                update
+                    .predicate("value = arrow_cast(1, 'Int32')")
+                    .update("value", "value + cast(1 as int)")
             })
             .unwrap()
             .when_not_matched_insert(|insert| {
@@ -1443,8 +1544,8 @@ mod tests {
             .unwrap()
             .when_not_matched_by_source_update(|update| {
                 update
-                    .predicate("value = 1")
-                    .update("value", "target.value + 1")
+                    .predicate("value = arrow_cast(1, 'Int32')")
+                    .update("value", "target.value + cast(1 as int)")
             })
             .unwrap()
             .when_not_matched_insert(|insert| {
@@ -1557,8 +1658,8 @@ mod tests {
             .unwrap();
 
         assert_eq!(table.version(), 2);
-        assert!(table.get_file_uris().count() >= 3);
-        assert!(metrics.num_target_files_added >= 3);
+        assert_eq!(table.get_file_uris().count(), 3);
+        assert_eq!(metrics.num_target_files_added, 3);
         assert_eq!(metrics.num_target_files_removed, 2);
         assert_eq!(metrics.num_target_rows_copied, 1);
         assert_eq!(metrics.num_target_rows_updated, 3);
@@ -1620,8 +1721,8 @@ mod tests {
             .unwrap();
 
         assert_eq!(table.version(), 2);
-        assert!(table.get_file_uris().count() >= 2);
-        assert!(metrics.num_target_files_added >= 2);
+        assert_eq!(table.get_file_uris().count(), 2);
+        assert_eq!(metrics.num_target_files_added, 2);
         assert_eq!(metrics.num_target_files_removed, 2);
         assert_eq!(metrics.num_target_rows_copied, 2);
         assert_eq!(metrics.num_target_rows_updated, 0);
@@ -1684,8 +1785,8 @@ mod tests {
             .unwrap();
 
         assert_eq!(table.version(), 2);
-        assert!(table.get_file_uris().count() >= 2);
-        assert!(metrics.num_target_files_added >= 2);
+        assert_eq!(table.get_file_uris().count(), 2);
+        assert_eq!(metrics.num_target_files_added, 2);
         assert_eq!(metrics.num_target_files_removed, 2);
         assert_eq!(metrics.num_target_rows_copied, 3);
         assert_eq!(metrics.num_target_rows_updated, 0);
@@ -1818,7 +1919,8 @@ mod tests {
             .unwrap();
 
         assert_eq!(table.version(), 2);
-        assert!(metrics.num_target_files_added >= 2);
+        assert_eq!(table.get_file_uris().count(), 2);
+        assert_eq!(metrics.num_target_files_added, 2);
         assert_eq!(metrics.num_target_files_removed, 2);
         assert_eq!(metrics.num_target_rows_copied, 3);
         assert_eq!(metrics.num_target_rows_updated, 0);
@@ -1843,79 +1945,6 @@ mod tests {
             "| A  | 1     | 2021-02-01 |",
             "| B  | 10    | 2021-02-01 |",
             "| C  | 10    | 2021-02-02 |",
-            "+----+-------+------------+",
-        ];
-        let actual = get_data(&table).await;
-        assert_batches_sorted_eq!(&expected, &actual);
-    }
-
-    #[tokio::test]
-    async fn test_merge_empty_table() {
-        let schema = get_arrow_schema(&None);
-        let table = setup_table(Some(vec!["modified"])).await;
-
-        assert_eq!(table.version(), 0);
-        assert_eq!(table.get_file_uris().count(), 0);
-
-        let ctx = SessionContext::new();
-        let batch = RecordBatch::try_new(
-            Arc::clone(&schema),
-            vec![
-                Arc::new(arrow::array::StringArray::from(vec!["B", "C", "X"])),
-                Arc::new(arrow::array::Int32Array::from(vec![10, 20, 30])),
-                Arc::new(arrow::array::StringArray::from(vec![
-                    "2021-02-02",
-                    "2023-07-04",
-                    "2023-07-04",
-                ])),
-            ],
-        )
-        .unwrap();
-        let source = ctx.read_batch(batch).unwrap();
-
-        let (table, metrics) = DeltaOps(table)
-            .merge(
-                source,
-                col("target.id")
-                    .eq(col("source.id"))
-                    .and(col("target.modified").eq(lit("2021-02-02"))),
-            )
-            .with_source_alias("source")
-            .with_target_alias("target")
-            .when_matched_update(|update| {
-                update
-                    .update("value", col("source.value"))
-                    .update("modified", col("source.modified"))
-            })
-            .unwrap()
-            .when_not_matched_insert(|insert| {
-                insert
-                    .set("id", col("source.id"))
-                    .set("value", col("source.value"))
-                    .set("modified", col("source.modified"))
-            })
-            .unwrap()
-            .await
-            .unwrap();
-
-        assert_eq!(table.version(), 1);
-        assert!(table.get_file_uris().count() >= 2);
-        assert!(metrics.num_target_files_added >= 2);
-        assert_eq!(metrics.num_target_files_removed, 0);
-        assert_eq!(metrics.num_target_rows_copied, 0);
-        assert_eq!(metrics.num_target_rows_updated, 0);
-        assert_eq!(metrics.num_target_rows_inserted, 3);
-        assert_eq!(metrics.num_target_rows_deleted, 0);
-        assert_eq!(metrics.num_output_rows, 3);
-        assert_eq!(metrics.num_source_rows, 3);
-
-        let expected = vec![
-            "+----+-------+------------+",
-            "| id | value | modified   |",
-            "+----+-------+------------+",
-            "| B  | 10    | 2021-02-02 |",
-            "| C  | 20    | 2023-07-04 |",
-            "| X  | 30    | 2023-07-04 |",
             "+----+-------+------------+",
         ];
         let actual = get_data(&table).await;
