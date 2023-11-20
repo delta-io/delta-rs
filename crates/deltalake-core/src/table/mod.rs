@@ -159,18 +159,6 @@ pub struct DeltaTableMetaData {
     pub configuration: HashMap<String, Option<String>>,
 }
 
-/// Column Mapping modes
-#[derive(Default, PartialEq)]
-pub enum ColumnMappingMode {
-    #[default]
-    /// No column mapping is applied
-    None,
-    /// Columns are mapped by their field_id in parquet
-    Id,
-    /// Columns are mapped to a physical name
-    Name,
-}
-
 impl DeltaTableMetaData {
     /// Create metadata for a DeltaTable from scratch
     pub fn new(
@@ -219,21 +207,6 @@ impl DeltaTableMetaData {
                 }
             })
             .collect()
-    }
-
-    /// Return the column mapping mode according to delta.columnMapping.mode
-    pub fn get_column_mapping_mode(&self) -> Result<ColumnMappingMode, DeltaTableError> {
-        let mapping_mode = self.configuration.get("delta.columnMapping.mode");
-        match mapping_mode {
-            None => Ok(ColumnMappingMode::None),
-            Some(None) => Ok(ColumnMappingMode::None),
-            Some(Some(s)) => match s.as_str() {
-                "none" => Ok(ColumnMappingMode::None),
-                "id" => Ok(ColumnMappingMode::Id),
-                "name" => Ok(ColumnMappingMode::Name),
-                _ => Err(DeltaTableError::InvalidColumnMappingMode(s.clone())),
-            },
-        }
     }
 }
 
