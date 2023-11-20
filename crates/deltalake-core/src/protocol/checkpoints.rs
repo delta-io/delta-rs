@@ -469,19 +469,19 @@ fn apply_stats_conversion(
 ) {
     if path.len() == 1 {
         if let DataType::Primitive(PrimitiveType::Timestamp) = data_type {
-           let v = context.get_mut(&path[0]);
+            let v = context.get_mut(&path[0]);
 
-                if let Some(v) = v {
-                    let ts = v
-                        .as_str()
-                        .and_then(|s| time_utils::timestamp_micros_from_stats_string(s).ok())
-                        .map(|n| Value::Number(serde_json::Number::from(n)));
+            if let Some(v) = v {
+                let ts = v
+                    .as_str()
+                    .and_then(|s| time_utils::timestamp_micros_from_stats_string(s).ok())
+                    .map(|n| Value::Number(serde_json::Number::from(n)));
 
-                    if let Some(ts) = ts {
-                        *v = ts;
-                    }
+                if let Some(ts) = ts {
+                    *v = ts;
                 }
             }
+        }
     } else {
         let next_context = context.get_mut(&path[0]).and_then(|v| v.as_object_mut());
         if let Some(next_context) = next_context {
