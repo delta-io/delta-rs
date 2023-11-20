@@ -468,9 +468,8 @@ fn apply_stats_conversion(
     data_type: &DataType,
 ) {
     if path.len() == 1 {
-        match data_type {
-            DataType::Primitive(PrimitiveType::Timestamp) => {
-                let v = context.get_mut(&path[0]);
+        if let DataType::Primitive(PrimitiveType::Timestamp) = data_type {
+           let v = context.get_mut(&path[0]);
 
                 if let Some(v) = v {
                     let ts = v
@@ -483,8 +482,6 @@ fn apply_stats_conversion(
                     }
                 }
             }
-            _ => { /* noop */ }
-        }
     } else {
         let next_context = context.get_mut(&path[0]).and_then(|v| v.as_object_mut());
         if let Some(next_context) = next_context {
