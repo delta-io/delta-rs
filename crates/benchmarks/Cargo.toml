@@ -1,0 +1,46 @@
+[package]
+name = "delta-benchmarks"
+version = "0.0.1"
+authors = ["David Blajda <db@davidblajda.com>"]
+homepage = "https://github.com/delta-io/delta.rs"
+license = "Apache-2.0"
+keywords = ["deltalake", "delta", "datalake"]
+description = "Delta-rs Benchmarks"
+edition = "2021"
+
+[dependencies]
+clap = { version = "4", features = [ "derive" ] }
+chrono = { version = "0.4.31", default-features = false, features = ["clock"] }
+tokio = { version = "1", features = ["fs", "macros", "rt", "io-util"] }
+env_logger = "0"
+
+# arrow
+arrow = { workspace = true }
+arrow-array = { workspace = true }
+arrow-buffer = { workspace = true }
+arrow-cast = { workspace = true }
+arrow-ord = { workspace = true }
+arrow-row = { workspace = true }
+arrow-schema = { workspace = true, features = ["serde"] }
+arrow-select = { workspace = true }
+parquet = { workspace = true, features = [
+    "async",
+    "object_store",
+] }
+
+# serde
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+
+# datafusion
+datafusion = { workspace = true }
+datafusion-expr = { workspace = true }
+datafusion-common = { workspace = true }
+datafusion-proto = { workspace = true }
+datafusion-sql = { workspace = true }
+datafusion-physical-expr = { workspace = true }
+
+[dependencies.deltalake-core]
+path = "../deltalake-core"
+version = "0"
+features = ["datafusion"]
