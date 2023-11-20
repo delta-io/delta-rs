@@ -351,7 +351,6 @@ async fn execute(
         expressions,
         projection_update.clone(),
     )?);
-
     let add_actions = write_execution_plan(
         snapshot,
         state.clone(),
@@ -362,6 +361,7 @@ async fn execute(
         None,
         writer_properties,
         safe_cast,
+        false,
     )
     .await?;
 
