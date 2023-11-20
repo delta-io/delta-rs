@@ -7,7 +7,9 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
-pub(crate) mod schemas;
+#[cfg(all(feature = "arrow", feature = "parquet"))]
+pub(crate) mod arrow;
+// pub(crate) mod schemas;
 mod serde_path;
 pub(crate) mod types;
 
@@ -30,12 +32,10 @@ pub enum ActionType {
     Protocol,
     /// modify the data in a table by removing individual logical files
     Remove,
+    /// The Row ID high-water mark tracks the largest ID that has been assigned to a row in the table.
+    RowIdHighWaterMark,
     /// Transactional information
     Txn,
-    /// Checkpoint metadata
-    CheckpointMetadata,
-    /// Sidecar
-    Sidecar,
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Deserialize, Serialize)]

@@ -1,5 +1,3 @@
-//! Conversions between Delta and Arrow data types
-
 use std::sync::Arc;
 
 use arrow_schema::{
@@ -8,12 +6,7 @@ use arrow_schema::{
 };
 use lazy_static::lazy_static;
 
-use super::schema::{ArrayType, DataType, MapType, PrimitiveType, StructField, StructType};
-
-pub mod schemas;
-
-const MAP_KEYS_NAME: &str = "keys";
-const MAP_VALUES_NAME: &str = "values";
+use super::super::schema::{ArrayType, DataType, MapType, PrimitiveType, StructField, StructType};
 
 impl TryFrom<&StructType> for ArrowSchema {
     type Error = ArrowError;
@@ -71,9 +64,9 @@ impl TryFrom<&MapType> for ArrowField {
             "entries",
             ArrowDataType::Struct(
                 vec![
-                    ArrowField::new(MAP_KEYS_NAME, ArrowDataType::try_from(a.key_type())?, false),
+                    ArrowField::new("key", ArrowDataType::try_from(a.key_type())?, false),
                     ArrowField::new(
-                        MAP_VALUES_NAME,
+                        "value",
                         ArrowDataType::try_from(a.value_type())?,
                         a.value_contains_null(),
                     ),
@@ -150,12 +143,12 @@ impl TryFrom<&DataType> for ArrowDataType {
                     ArrowDataType::Struct(
                         vec![
                             ArrowField::new(
-                                MAP_KEYS_NAME,
+                                "keys",
                                 <ArrowDataType as TryFrom<&DataType>>::try_from(m.key_type())?,
                                 false,
                             ),
                             ArrowField::new(
-                                MAP_VALUES_NAME,
+                                "values",
                                 <ArrowDataType as TryFrom<&DataType>>::try_from(m.value_type())?,
                                 m.value_contains_null(),
                             ),
