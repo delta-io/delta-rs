@@ -47,14 +47,18 @@ pub struct CheckPoint {
     pub(crate) version: i64, // 20 digits decimals
     /// The number of actions that are stored in the checkpoint.
     pub(crate) size: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
     /// The number of fragments if the last checkpoint was written in multiple parts. This field is optional.
     pub(crate) parts: Option<u32>, // 10 digits decimals
+    #[serde(skip_serializing_if = "Option::is_none")]
     /// The number of bytes of the checkpoint. This field is optional.
     pub(crate) size_in_bytes: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     /// The number of AddFile actions in the checkpoint. This field is optional.
     pub(crate) num_of_add_files: Option<i64>,
 }
 
+#[derive(Default)]
 /// Builder for CheckPoint
 pub struct CheckPointBuilder {
     /// Delta table version
@@ -118,7 +122,7 @@ impl CheckPoint {
         Self {
             version,
             size,
-            parts,
+            parts: parts.or(None),
             size_in_bytes: None,
             num_of_add_files: None,
         }
@@ -906,6 +910,35 @@ mod tests {
         let bytes = serde_json::to_vec(&dt).unwrap();
         let actual: DeltaTable = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(actual.version(), dt.version());
+        drop(tmp_dir);
+    }
+
+    #[tokio::test]
+    async fn checkpoint_without_added_files_and_no_parts() {
+        let (dt, tmp_dir) = create_test_table().await;
+        let check_point = CheckPointBuilder::new(0, 0).build();
+        let checkpoint_data_paths = dt.get_checkpoint_data_paths(&check_point);
+        assert_eq!(checkpoint_data_paths.len(), 1);
+        assert_eq!(
+            serde_json::to_string(&check_point).unwrap(),
+            "{\"version\":0,\"size\":0}"
+        );
+        drop(tmp_dir);
+    }
+
+    #[tokio::test]
+    async fn checkpoint_with_added_files() {
+        let num_of_file_added: i64 = 4;
+        let (dt, tmp_dir) = create_test_table().await;
+        let check_point = CheckPointBuilder::new(0, 0)
+            .with_num_of_add_files(num_of_file_added)
+            .build();
+        let checkpoint_data_paths = dt.get_checkpoint_data_paths(&check_point);
+        assert_eq!(checkpoint_data_paths.len(), 1);
+        assert_eq!(
+            serde_json::to_string(&check_point).unwrap(),
+            "{\"version\":0,\"size\":0,\"num_of_add_files\":4}"
+        );
         drop(tmp_dir);
     }
 

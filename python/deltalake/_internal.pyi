@@ -126,6 +126,7 @@ class RawDeltaTable:
         schema: pyarrow.Schema,
         partitions_filters: Optional[FilterType],
     ) -> None: ...
+    def cleanup_metadata(self) -> None: ...
 
 def rust_core_version() -> str: ...
 def write_new_deltalake(
@@ -138,6 +139,16 @@ def write_new_deltalake(
     description: Optional[str],
     configuration: Optional[Mapping[str, Optional[str]]],
     storage_options: Optional[Dict[str, str]],
+) -> None: ...
+def convert_to_deltalake(
+    uri: str,
+    partition_by: Optional[pyarrow.Schema],
+    partition_strategy: Optional[Literal["hive"]],
+    name: Optional[str],
+    description: Optional[str],
+    configuration: Optional[Mapping[str, Optional[str]]],
+    storage_options: Optional[Dict[str, str]],
+    custom_metadata: Optional[Dict[str, str]],
 ) -> None: ...
 def batch_distinct(batch: pyarrow.RecordBatch) -> pyarrow.RecordBatch: ...
 

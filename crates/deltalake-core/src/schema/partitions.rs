@@ -7,6 +7,9 @@ use crate::kernel::{DataType, PrimitiveType};
 use std::cmp::Ordering;
 use std::collections::HashMap;
 
+/// A special value used in Hive to represent the null partition in partitioned tables
+pub const NULL_PARTITION_VALUE_DATA_PATH: &str = "__HIVE_DEFAULT_PARTITION__";
+
 /// A Enum used for selecting the partition value operation when filtering a DeltaTable partition.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PartitionValue {
