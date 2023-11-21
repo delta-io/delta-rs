@@ -2,6 +2,8 @@
 
 use std::convert::TryFrom;
 
+use chrono::NaiveDateTime;
+
 use crate::errors::DeltaTableError;
 use crate::kernel::{DataType, PrimitiveType};
 use std::cmp::Ordering;
@@ -40,6 +42,20 @@ pub struct PartitionFilter {
     pub value: PartitionValue,
 }
 
+fn parse_timestamp(timestamp_str: &str) -> Option<NaiveDateTime> {
+    // Timestamp formats as per https://github.com/delta-io/delta/blob/master/PROTOCOL.md#partition-value-serialization
+    let formats = &["%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M:%S%.6f"];
+
+    for &format in formats {
+        let parse_result = NaiveDateTime::parse_from_str(timestamp_str, format);
+        if let Ok(dt) = parse_result {
+            return Some(dt);
+        }
+    }
+
+    None
+}
+
 fn compare_typed_value(
     partition_value: &str,
     filter_value: &str,
@@ -64,6 +80,13 @@ fn compare_typed_value(
                 }
                 _ => None,
             },
+            PrimitiveType::Timestamp => match parse_timestamp(filter_value) {
+                Some(parsed_filter_value) => {
+                    let parsed_partition_value = parse_timestamp(partition_value).unwrap();
+                    parsed_partition_value.partial_cmp(&parsed_filter_value)
+                }
+                _ => None,
+            },
             _ => partition_value.partial_cmp(filter_value),
         },
         _ => partition_value.partial_cmp(filter_value),
@@ -79,8 +102,24 @@ impl PartitionFilter {
         }
 
         match &self.value {
-            PartitionValue::Equal(value) => value == &partition.value,
-            PartitionValue::NotEqual(value) => value != &partition.value,
+            PartitionValue::Equal(value) => {
+                if let DataType::Primitive(PrimitiveType::Timestamp) = data_type {
+                    compare_typed_value(&partition.value, value, data_type)
+                        .map(|x| x.is_eq())
+                        .unwrap_or(false)
+                } else {
+                    value == &partition.value
+                }
+            }
+            PartitionValue::NotEqual(value) => {
+                if let DataType::Primitive(PrimitiveType::Timestamp) = data_type {
+                    compare_typed_value(&partition.value, value, data_type)
+                        .map(|x| !x.is_eq())
+                        .unwrap_or(false)
+                } else {
+                    value == &partition.value
+                }
+            }
             PartitionValue::GreaterThan(value) => {
                 compare_typed_value(&partition.value, value, data_type)
                     .map(|x| x.is_gt())
