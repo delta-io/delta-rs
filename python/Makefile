@@ -75,7 +75,7 @@ check-python: ## Run check on Python
 .PHONY: unit-test
 unit-test: ## Run unit test
 	$(info --- Run Python unit-test ---)
-	python -m pytest --doctest-modules --doctest-glob='*.rst'
+	python -m pytest --doctest-modules 
 
 .PHONY: test-pyspark
 test-pyspark:

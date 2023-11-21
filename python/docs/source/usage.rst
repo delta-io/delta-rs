@@ -10,11 +10,13 @@ of the table, and other metadata such as creation time.
 .. code-block:: python
 
     >>> from deltalake import DeltaTable
-    >>> dt = DeltaTable("../crates/deltalake-core/tests/data/delta-0.2.0")
+    >>> dt = DeltaTable("../rust/tests/data/delta-0.2.0")
     >>> dt.version()
     3
     >>> dt.files()
-    ['part-00000-cb6b150b-30b8-4662-ad28-ff32ddab96d2-c000.snappy.parquet', 'part-00000-7c2deba3-1994-4fb8-bc07-d46c948aa415-c000.snappy.parquet', 'part-00001-c373a5bd-85f0-4758-815e-7eb62007a15c-c000.snappy.parquet']
+    ['part-00000-cb6b150b-30b8-4662-ad28-ff32ddab96d2-c000.snappy.parquet',
+     'part-00000-7c2deba3-1994-4fb8-bc07-d46c948aa415-c000.snappy.parquet',
+     'part-00001-c373a5bd-85f0-4758-815e-7eb62007a15c-c000.snappy.parquet']
 
 
 Loading a Delta Table
@@ -24,7 +26,7 @@ To load the current version, use the constructor:
 
 .. code-block:: python
 
-    >>> dt = DeltaTable("../crates/deltalake-core/tests/data/delta-0.2.0")
+    >>> dt = DeltaTable("../rust/tests/data/delta-0.2.0")
 
 Depending on your storage backend, you could use the ``storage_options`` parameter to provide some configuration.
 Configuration is defined for specific backends - `s3 options`_, `azure options`_, `gcs options`_.
@@ -32,7 +34,7 @@ Configuration is defined for specific backends - `s3 options`_, `azure options`_
 .. code-block:: python
 
     >>> storage_options = {"AWS_ACCESS_KEY_ID": "THE_AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY":"THE_AWS_SECRET_ACCESS_KEY"}
-    >>> dt = DeltaTable("../crates/deltalake-core/tests/data/delta-0.2.0", storage_options=storage_options)
+    >>> dt = DeltaTable("../rust/tests/data/delta-0.2.0", storage_options=storage_options)
 
 The configuration can also be provided via the environment, and the basic service provider is derived from the URL
 being used. We try to support many of the well-known formats to identify basic service properties.
@@ -64,8 +66,8 @@ For AWS Glue catalog, use AWS environment variables to authenticate.
     >>> database_name = "simple_database"
     >>> table_name = "simple_table"
     >>> data_catalog = DataCatalog.AWS
-    >>> dt = DeltaTable.from_data_catalog(data_catalog=data_catalog, database_name=database_name, table_name=table_name) # doctest: +SKIP
-    >>> dt.to_pyarrow_table().to_pydict() # doctest: +SKIP
+    >>> dt = DeltaTable.from_data_catalog(data_catalog=data_catalog, database_name=database_name, table_name=table_name)
+    >>> dt.to_pyarrow_table().to_pydict()
     {'id': [5, 7, 9, 5, 6, 7, 8, 9]}
 
 For Databricks Unity Catalog authentication, use environment variables:
@@ -82,7 +84,7 @@ For Databricks Unity Catalog authentication, use environment variables:
     >>> schema_name = 'db_schema'
     >>> table_name = 'db_table'
     >>> data_catalog = DataCatalog.UNITY
-    >>> dt = DeltaTable.from_data_catalog(data_catalog=data_catalog, data_catalog_id=catalog_name, database_name=schema_name, table_name=table_name) # doctest: +SKIP
+    >>> dt = DeltaTable.from_data_catalog(data_catalog=data_catalog, data_catalog_id=catalog_name, database_name=schema_name, table_name=table_name)
 
 .. _`s3 options`: https://docs.rs/object_store/latest/object_store/aws/enum.AmazonS3ConfigKey.html#variants
 .. _`azure options`: https://docs.rs/object_store/latest/object_store/azure/enum.AzureConfigKey.html#variants
@@ -133,7 +135,7 @@ load:
 
 .. code-block:: python
 
-    >>> dt = DeltaTable("../crates/deltalake-core/tests/data/simple_table", version=2)
+    >>> dt = DeltaTable("../rust/tests/data/simple_table", version=2)
 
 Once you've loaded a table, you can also change versions using either a version
 number or datetime string:
@@ -160,7 +162,7 @@ The delta log maintains basic metadata about a table, including:
 * A ``name``, if provided
 * A ``description``, if provided
 * The list of ``partition_columns``.
-* The ``created_time`` of the table.
+* The ``created_time`` of the table
 * A map of table ``configuration``. This includes fields such as ``delta.appendOnly``,
   which if ``true`` indicates the table is not meant to have data deleted from it.
 
@@ -169,9 +171,9 @@ Get metadata from a table with the :meth:`DeltaTable.metadata` method:
 .. code-block:: python
 
     >>> from deltalake import DeltaTable
-    >>> dt = DeltaTable("../crates/deltalake-core/tests/data/simple_table")
-    >>> print(dt.metadata())
-    Metadata(id: 5fba94ed-9794-4965-ba6e-6ee3c0d22af9, name: None, description: None, partition_columns: [], created_time: 1587968585495, configuration: {})
+    >>> dt = DeltaTable("../rust/tests/data/simple_table")
+    >>> dt.metadata()
+    Metadata(id: 5fba94ed-9794-4965-ba6e-6ee3c0d22af9, name: None, description: None, partitionColumns: [], created_time: 1587968585495, configuration={})
 
 Schema
 ~~~~~~
@@ -186,7 +188,7 @@ Use :meth:`DeltaTable.schema` to retrieve the delta lake schema:
 .. code-block:: python
 
     >>> from deltalake import DeltaTable
-    >>> dt = DeltaTable("../crates/deltalake-core/tests/data/simple_table")
+    >>> dt = DeltaTable("../rust/tests/data/simple_table")
     >>> dt.schema()
     Schema([Field(id, PrimitiveType("long"), nullable=True)])
 
@@ -196,7 +198,7 @@ from json, use `schema.Schema.from_json()`.
 .. code-block:: python
 
     >>> dt.schema().json()
-    {'type': 'struct', 'fields': [{'name': 'id', 'type': 'long', 'nullable': True, 'metadata': {}}]}
+    '{"type":"struct","fields":[{"name":"id","type":"long","nullable":true,"metadata":{}}]}'
 
 Use `deltalake.schema.Schema.to_pyarrow()` to retrieve the PyArrow schema:
 
@@ -223,42 +225,16 @@ specified by the table configuration ``delta.logRetentionDuration``.
 To view the available history, use :meth:`DeltaTable.history`:
 
 .. code-block:: python
-    
-    >>> from pprint import pprint
+
     >>> from deltalake import DeltaTable
-    >>> dt = DeltaTable("../crates/deltalake-core/tests/data/simple_table")
-    >>> pprint(dt.history())
-    [{'isBlindAppend': False,
-      'operation': 'DELETE',
-      'operationParameters': {'predicate': '["((`id` % CAST(2 AS BIGINT)) = CAST(0 '
-                                           'AS BIGINT))"]'},
-      'readVersion': 3,
-      'timestamp': 1587968626537,
-      'version': 4},
-     {'isBlindAppend': False,
-      'operation': 'UPDATE',
-      'operationParameters': {'predicate': '((id#697L % cast(2 as bigint)) = '
-                                           'cast(0 as bigint))'},
-      'readVersion': 2,
-      'timestamp': 1587968614187,
-      'version': 3},
-     {'isBlindAppend': False,
-      'operation': 'WRITE',
-      'operationParameters': {'mode': 'Overwrite', 'partitionBy': '[]'},
-      'readVersion': 1,
-      'timestamp': 1587968604143,
-      'version': 2},
-     {'isBlindAppend': False,
-      'operation': 'MERGE',
-      'operationParameters': {'predicate': '(oldData.`id` = newData.`id`)'},
-      'readVersion': 0,
-      'timestamp': 1587968596254,
-      'version': 1},
-     {'isBlindAppend': True,
-      'operation': 'WRITE',
-      'operationParameters': {'mode': 'ErrorIfExists', 'partitionBy': '[]'},
-      'timestamp': 1587968586154,
-      'version': 0}]
+    >>> dt = DeltaTable("../rust/tests/data/simple_table")
+    >>> dt.history()
+    [{'timestamp': 1587968626537, 'operation': 'DELETE', 'operationParameters': {'predicate': '["((`id` % CAST(2 AS BIGINT)) = CAST(0 AS BIGINT))"]'}, 'readVersion': 3, 'isBlindAppend': False},
+     {'timestamp': 1587968614187, 'operation': 'UPDATE', 'operationParameters': {'predicate': '((id#697L % cast(2 as bigint)) = cast(0 as bigint))'}, 'readVersion': 2, 'isBlindAppend': False},
+     {'timestamp': 1587968604143, 'operation': 'WRITE', 'operationParameters': {'mode': 'Overwrite', 'partitionBy': '[]'}, 'readVersion': 1, 'isBlindAppend': False},
+     {'timestamp': 1587968596254, 'operation': 'MERGE', 'operationParameters': {'predicate': '(oldData.`id` = newData.`id`)'}, 'readVersion': 0, 'isBlindAppend': False},
+     {'timestamp': 1587968586154, 'operation': 'WRITE', 'operationParameters': {'mode': 'ErrorIfExists', 'partitionBy': '[]'}, 'isBlindAppend': True}]
+
 
 Current Add Actions
 ~~~~~~~~~~~~~~~~~~~
@@ -269,51 +245,24 @@ such as creation time, size, and statistics. You can get a data frame of
 the add actions data using :meth:`DeltaTable.get_add_actions`:
 
 .. code-block:: python
-    
-    >>> from pprint import pprint
+
     >>> from deltalake import DeltaTable
-    >>> dt = DeltaTable("../crates/deltalake-core/tests/data/delta-0.8.0")
-    >>> pprint(dt.get_add_actions(flatten=True).to_pylist())
-    [{'data_change': True,
-      'max.value': 2,
-      'min.value': 0,
-      'modification_time': datetime.datetime(2021, 3, 6, 15, 16, 7),
-      'null_count.value': 0,
-      'num_records': 2,
-      'path': 'part-00000-c9b90f86-73e6-46c8-93ba-ff6bfaf892a1-c000.snappy.parquet',
-      'size_bytes': 440},
-     {'data_change': True,
-      'max.value': 4,
-      'min.value': 2,
-      'modification_time': datetime.datetime(2021, 3, 6, 15, 16, 16),
-      'null_count.value': 0,
-      'num_records': 2,
-      'path': 'part-00000-04ec9591-0b73-459e-8d18-ba5711d6cbe1-c000.snappy.parquet',
-      'size_bytes': 440}]
+    >>> dt = DeltaTable("../rust/tests/data/delta-0.8.0")
+    >>> dt.get_add_actions(flatten=True).to_pandas()
+                                                        path  size_bytes   modification_time  data_change  num_records  null_count.value  min.value  max.value
+    0  part-00000-c9b90f86-73e6-46c8-93ba-ff6bfaf892a...         440 2021-03-06 15:16:07         True            2                 0          0          2
+    1  part-00000-04ec9591-0b73-459e-8d18-ba5711d6cbe...         440 2021-03-06 15:16:16         True            2                 0          2          4
 
 This works even with past versions of the table:
 
 .. code-block:: python
 
-    >>> from pprint import pprint
-    >>> dt = DeltaTable("../crates/deltalake-core/tests/data/delta-0.8.0", version=0)
-    >>> pprint(dt.get_add_actions(flatten=True).to_pylist())
-    [{'data_change': True,
-      'max.value': 2,
-      'min.value': 0,
-      'modification_time': datetime.datetime(2021, 3, 6, 15, 16, 7),
-      'null_count.value': 0,
-      'num_records': 2,
-      'path': 'part-00000-c9b90f86-73e6-46c8-93ba-ff6bfaf892a1-c000.snappy.parquet',
-      'size_bytes': 440},
-     {'data_change': True,
-      'max.value': 4,
-      'min.value': 2,
-      'modification_time': datetime.datetime(2021, 3, 6, 15, 16, 7),
-      'null_count.value': 0,
-      'num_records': 3,
-      'path': 'part-00001-911a94a2-43f6-4acb-8620-5e68c2654989-c000.snappy.parquet',
-      'size_bytes': 445}]
+    >>> dt = DeltaTable("../rust/tests/data/delta-0.8.0", version=0)
+    >>> dt.get_add_actions(flatten=True).to_pandas()
+                                                    path  size_bytes   modification_time  data_change  num_records  null_count.value  min.value  max.value
+    0  part-00000-c9b90f86-73e6-46c8-93ba-ff6bfaf892a...         440 2021-03-06 15:16:07         True            2                 0          0          2
+    1  part-00001-911a94a2-43f6-4acb-8620-5e68c265498...         445 2021-03-06 15:16:07         True            3                 0          2          4
+
 
 Querying Delta Tables
 ---------------------
@@ -336,14 +285,14 @@ support filtering partitions and selecting particular columns.
 .. code-block:: python
 
     >>> from deltalake import DeltaTable
-    >>> dt = DeltaTable("../crates/deltalake-core/tests/data/delta-0.8.0-partitioned")
+    >>> dt = DeltaTable("../rust/tests/data/delta-0.8.0-partitioned")
     >>> dt.schema().to_pyarrow()
     value: string
     year: string
     month: string
     day: string
     >>> dt.to_pandas(partitions=[("year", "=", "2021")], columns=["value"])
-      value
+          value
     0     6
     1     7
     2     5
@@ -351,8 +300,6 @@ support filtering partitions and selecting particular columns.
     >>> dt.to_pyarrow_table(partitions=[("year", "=", "2021")], columns=["value"])
     pyarrow.Table
     value: string
-    ----
-    value: [["6","7"],["5"],["4"]]
 
 Converting to a PyArrow Dataset allows you to filter on columns other than
 partition columns and load the result as a stream of batches rather than a single
@@ -377,9 +324,6 @@ Delta transaction log and push down any other filters to the scanning operation.
     1     7
       value
     0     5
-    Empty DataFrame
-    Columns: [value]
-    Index: []
 
 PyArrow datasets may also be passed to compatible query engines, such as DuckDB_.
 
@@ -387,9 +331,9 @@ PyArrow datasets may also be passed to compatible query engines, such as DuckDB_
 
 .. code-block:: python
 
-    >>> import duckdb # doctest: +SKIP
-    >>> ex_data = duckdb.arrow(dataset) # doctest: +SKIP
-    >>> ex_data.filter("year = 2021 and value > 4").project("value") # doctest: +SKIP
+    >>> import duckdb
+    >>> ex_data = duckdb.arrow(dataset)
+    >>> ex_data.filter("year = 2021 and value > 4").project("value")
     ---------------------
     -- Expression Tree --
     ---------------------
@@ -417,9 +361,9 @@ you can pass them to ``dask.dataframe.read_parquet``:
 
 .. code-block:: python
 
-    >>> import dask.dataframe as dd # doctest: +SKIP
-    >>> df = dd.read_parquet(dt.file_uris()) # doctest: +SKIP
-    >>> df # doctest: +SKIP
+    >>> import dask.dataframe as dd
+    >>> df = dd.read_parquet(dt.file_uris())
+    >>> df
     Dask DataFrame Structure:
                     value             year            month              day
     npartitions=6
@@ -429,7 +373,7 @@ you can pass them to ``dask.dataframe.read_parquet``:
                       ...              ...              ...              ...
                       ...              ...              ...              ...
     Dask Name: read-parquet, 6 tasks
-    >>> df.compute() # doctest: +SKIP
+    >>> df.compute()
       value  year month day
     0     1  2020     1   1
     0     2  2020     2   3
@@ -460,10 +404,13 @@ only list the files to be deleted. Pass ``dry_run=False`` to actually delete fil
 
 .. code-block:: python
 
-    >>> dt = DeltaTable("../crates/deltalake-core/tests/data/simple_table")
-    >>> sorted(dt.vacuum())[:3]
-    ['part-00000-a72b1fb3-f2df-41fe-a8f0-e65b746382dd-c000.snappy.parquet', 'part-00000-a922ea3b-ffc2-4ca1-9074-a278c24c4449-c000.snappy.parquet', 'part-00000-f17fcbf5-e0dc-40ba-adae-ce66d1fcaef6-c000.snappy.parquet']
-    >>> dt.vacuum(dry_run=False) # Don't run this unless you are sure! # doctest: +SKIP 
+    >>> dt = DeltaTable("../rust/tests/data/simple_table")
+    >>> dt.vacuum()
+    ['../rust/tests/data/simple_table/part-00006-46f2ff20-eb5d-4dda-8498-7bfb2940713b-c000.snappy.parquet',
+     '../rust/tests/data/simple_table/part-00190-8ac0ae67-fb1d-461d-a3d3-8dc112766ff5-c000.snappy.parquet',
+     '../rust/tests/data/simple_table/part-00164-bf40481c-4afd-4c02-befa-90f056c2d77a-c000.snappy.parquet',
+     ...]
+    >>> dt.vacuum(dry_run=False) # Don't run this unless you are sure!
 
 Optimizing tables
 ~~~~~~~~~~~~~~~~~
@@ -481,17 +428,13 @@ For just file compaction, use the :meth:`TableOptimizer.compact` method:
 
 .. code-block:: python
 
-    >>> from pprint import pprint
-    >>> dt = DeltaTable("../crates/deltalake-core/tests/data/simple_table")
-    >>> pprint(dt.optimize.compact())
-    {...
-     'numBatches': 3,
-     'numFilesAdded': 1,
-     'numFilesRemoved': 5,
-     'partitionsOptimized': 1,
-     'preserveInsertionOrder': True,
-     'totalConsideredFiles': 5,
-     'totalFilesSkipped': 0}
+    >>> dt = DeltaTable("../rust/tests/data/simple_table")
+    >>> dt.optimize.compact()
+    {'numFilesAdded': 1, 'numFilesRemoved': 5,
+     'filesAdded': {'min': 555, 'max': 555, 'avg': 555.0, 'totalFiles': 1, 'totalSize': 555},
+     'filesRemoved': {'min': 262, 'max': 429, 'avg': 362.2, 'totalFiles': 5, 'totalSize': 1811},
+     'partitionsOptimized': 1, 'numBatches': 1, 'totalConsideredFiles': 5,
+     'totalFilesSkipped': 0, 'preserveInsertionOrder': True}
 
 For improved data skipping, use the :meth:`TableOptimizer.z_order` method. This
 is slower than just file compaction, but can improve performance for queries that
@@ -499,17 +442,13 @@ filter on multiple columns at once.
 
 .. code-block:: python
 
-    >>> from pprint import pprint
-    >>> dt = DeltaTable("../crates/deltalake-core/tests/data/COVID-19_NYT")
-    >>> pprint(dt.optimize.z_order(["date", "county"]))
-    {...
-     'numBatches': 136,
-     'numFilesAdded': 1,
-     'numFilesRemoved': 8,
-     'partitionsOptimized': 0,
-     'preserveInsertionOrder': True,
-     'totalConsideredFiles': 8,
-     'totalFilesSkipped': 0}
+    >>> dt = DeltaTable("../rust/tests/data/COVID-19_NYT")
+    >>> dt.optimize.z_order(["date", "county"])
+    {'numFilesAdded': 1, 'numFilesRemoved': 8,
+     'filesAdded': {'min': 2473439, 'max': 2473439, 'avg': 2473439.0, 'totalFiles': 1, 'totalSize': 2473439},
+     'filesRemoved': {'min': 325440, 'max': 895702, 'avg': 773810.625, 'totalFiles': 8, 'totalSize': 6190485},
+     'partitionsOptimized': 0, 'numBatches': 1, 'totalConsideredFiles': 8,
+     'totalFilesSkipped': 0, 'preserveInsertionOrder': True}
 
 Writing Delta Tables
 --------------------
@@ -522,10 +461,9 @@ DataFrame, a PyArrow Table, or an iterator of PyArrow Record Batches.
 
 .. code-block:: python
 
-    >>> import pandas as pd
     >>> from deltalake import write_deltalake
     >>> df = pd.DataFrame({'x': [1, 2, 3]})
-    >>> write_deltalake('path/to/table1', df)
+    >>> write_deltalake('path/to/table', df)
 
 .. note::
     :py:func:`write_deltalake` accepts a Pandas DataFrame, but will convert it to
@@ -538,8 +476,8 @@ to append pass in ``mode='append'``:
 
 .. code-block:: python
 
-    >>> write_deltalake('path/to/table1', df, mode='overwrite')
-    >>> write_deltalake('path/to/table1', df, mode='append')
+    >>> write_deltalake('path/to/table', df, mode='overwrite')
+    >>> write_deltalake('path/to/table', df, mode='append')
 
 :py:meth:`write_deltalake` will raise :py:exc:`ValueError` if the schema of
 the data passed to it differs from the existing table's schema. If you wish to
@@ -586,7 +524,7 @@ Here is an example writing to s3 using this mechanism:
     >>> from deltalake import write_deltalake
     >>> df = pd.DataFrame({'x': [1, 2, 3]})
     >>> storage_options = {'AWS_S3_LOCKING_PROVIDER': 'dynamodb', 'DYNAMO_LOCK_TABLE_NAME': 'custom_table_name'}
-    >>> write_deltalake('s3://path/to/table', df, storage_options=storage_options) # doctest: +SKIP 
+    >>> write_deltalake('s3://path/to/table', df, 'storage_options'= storage_options)
 
 .. note::
     if for some reason you don't want to use dynamodb as your locking mechanism you can
@@ -609,21 +547,16 @@ Update all the rows for the column "processed" to the value True.
 
 .. code-block:: python
 
-    >>> import pandas as pd
     >>> from deltalake import write_deltalake, DeltaTable
-    >>> df = pd.DataFrame({'x': [1, 2, 3], 'processed': [False, False, False]})
-    >>> write_deltalake('path/to/table2', df)
-    >>> dt = DeltaTable('path/to/table2')
+    >>> df = pd.DataFrame({'x': [1, 2, 3], 'deleted': [False, False, False]})
+    >>> write_deltalake('path/to/table', df)
+    >>> dt = DeltaTable('path/to/table')
     >>> dt.update({"processed": "True"})
-    <class 'str'> <class 'str'>
-    {'num_added_files': 1, 'num_removed_files': 1, 'num_updated_rows': 3, 'num_copied_rows': 0, 'execution_time_ms': ..., 'scan_time_ms': ...}
     >>> dt.to_pandas()
-       x  processed
-    0  1       True
-    1  2       True
-    2  3       True
-
-
+    >>>     x       processed
+    0       1       True
+    1       2       True
+    2       3       True
 .. note::
     :meth:`DeltaTable.update` predicates and updates are all in string format. The predicates and expressions,
     are parsed into Apache Datafusion expressions.
@@ -635,20 +568,17 @@ True where x = 3
 
     >>> from deltalake import write_deltalake, DeltaTable
     >>> df = pd.DataFrame({'x': [1, 2, 3], 'deleted': [False, False, False]})
-    >>> write_deltalake('path/to/table3', df)
-    >>> dt = DeltaTable('path/to/table3')
-    >>> dt.update( 
+    >>> write_deltalake('path/to/table', df)
+    >>> dt = DeltaTable('path/to/table')
+    >>> dt.update(
     ...    updates={"deleted": "True"},
     ...    predicate= 'x = 3',
     ... )
-    <class 'str'> <class 'str'>
-    {'num_added_files': 1, 'num_removed_files': 1, 'num_updated_rows': 1, 'num_copied_rows': 2, 'execution_time_ms': ..., 'scan_time_ms': ...}
     >>> dt.to_pandas()
-       x  deleted
-    0  1    False
-    1  2    False
-    2  3     True
-
+    >>>     x       deleted
+    0       1       False
+    1       2       False
+    2       3       True
 
 
 Overwriting a partition
@@ -664,10 +594,10 @@ the method will raise an error.
 
     >>> from deltalake import write_deltalake
     >>> df = pd.DataFrame({'x': [1, 2, 3], 'y': ['a', 'a', 'b']})
-    >>> write_deltalake('path/to/table4', df, partition_by=['y'])
+    >>> write_deltalake('path/to/table', df, partition_by=['y'])
 
-    >>> table = DeltaTable('path/to/table4')
-    >>> df2 = pd.DataFrame({'x': [100], 'y': ['b']}) 
+    >>> table = DeltaTable('path/to/table')
+    >>> df2 = pd.DataFrame({'x': [100], 'y': ['b']})
     >>> write_deltalake(table, df2, partition_filters=[('y', '=', 'b')], mode="overwrite")
 
     >>> table.to_pandas()
@@ -695,11 +625,11 @@ the clause will remove all files from the table.
 
     >>> from deltalake import DeltaTable, write_deltalake
     >>> df = pd.DataFrame({'a': [1, 2, 3], 'to_delete': [False, False, True]})
-    >>> write_deltalake('path/to/table5', df)
+    >>> write_deltalake('path/to/table', df)
 
-    >>> table = DeltaTable('path/to/table5')
+    >>> table = DeltaTable('path/to/table')
     >>> table.delete(predicate="to_delete = true")
-    {'num_added_files': 1, 'num_removed_files': 1, 'num_deleted_rows': 1, 'num_copied_rows': 2, 'execution_time_ms': ..., 'scan_time_ms': ..., 'rewrite_time_ms': ...}
+    {'num_added_files': 1, 'num_removed_files': 1, 'num_deleted_rows': 1, 'num_copied_rows': 2, 'execution_time_ms': 11081, 'scan_time_ms': 3721, 'rewrite_time_ms': 7}
 
     >>> table.to_pandas()
        a  to_delete
@@ -729,6 +659,6 @@ concurrent operation was performed on the table, restore will fail.
 
 .. code-block:: python
 
-    >>> dt = DeltaTable("../crates/deltalake-core/tests/data/simple_table")
+    >>> dt = DeltaTable("../rust/tests/data/simple_table")
     >>> dt.restore(1)
-    {'numRemovedFile': 1, 'numRestoredFile': 22}
+    {'numRemovedFile': 5, 'numRestoredFile': 22}

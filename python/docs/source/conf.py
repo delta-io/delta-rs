@@ -11,7 +11,6 @@
 # documentation root, use os.path.abspath to make it absolute, like shown here.
 #
 import os
-import pathlib
 import sys
 
 import toml
@@ -25,8 +24,7 @@ def get_release_version() -> str:
 
     :return:
     """
-    cargo_path = pathlib.Path(__file__).parent.parent.parent / "Cargo.toml"
-    cargo_content = toml.load(str(cargo_path))
+    cargo_content = toml.load("../../Cargo.toml")
     return cargo_content["package"]["version"]
 
 
