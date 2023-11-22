@@ -43,17 +43,10 @@ pub struct PartitionFilter {
 }
 
 fn parse_timestamp(timestamp_str: &str) -> Option<NaiveDateTime> {
-    // Timestamp formats as per https://github.com/delta-io/delta/blob/master/PROTOCOL.md#partition-value-serialization
-    let formats = &["%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M:%S%.6f"];
+    // Timestamp format as per https://github.com/delta-io/delta/blob/master/PROTOCOL.md#partition-value-serialization
+    let format = "%Y-%m-%d %H:%M:%S%.6f";
 
-    for &format in formats {
-        let parse_result = NaiveDateTime::parse_from_str(timestamp_str, format);
-        if let Ok(dt) = parse_result {
-            return Some(dt);
-        }
-    }
-
-    None
+    NaiveDateTime::parse_from_str(timestamp_str, format).ok()
 }
 
 fn compare_typed_value(
