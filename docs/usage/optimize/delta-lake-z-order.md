@@ -2,7 +2,7 @@
 
 This section explains how to Z Order a Delta table.
 
-Z Ordering colocates similar data in the same files, which allows for more better file skipping and faster queries.
+Z Ordering colocates similar data in the same files, which allows for better file skipping and faster queries.
 
 Suppose you have a table with `first_name`, `age`, and `country` columns.
 

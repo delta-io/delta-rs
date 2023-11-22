@@ -18,7 +18,7 @@ Suppose you have the following Delta table with four rows:
 Here's how to delete all the rows where the `num` is greater than 2:
 
 ```python
-dt = dl.DeltaTable("tmp/my-table")
+dt = DeltaTable("tmp/my-table")
 dt.delete("num > 2")
 ```
 

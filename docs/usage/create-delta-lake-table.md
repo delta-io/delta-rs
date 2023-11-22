@@ -5,7 +5,7 @@ This section explains how to create a Delta Lake table.
 You can easily write a DataFrame to a Delta table.
 
 ```python
-from deltalake.writer import write_deltalake
+from deltalake import write_deltalake
 import pandas as pd
 
 df = pd.DataFrame({"num": [1, 2, 3], "letter": ["a", "b", "c"]})

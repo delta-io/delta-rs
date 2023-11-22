@@ -19,7 +19,7 @@ Suppose you have a Delta table with the following contents:
 Append two additional rows of data to the table:
 
 ```python
-from deltalake.writer import write_deltalake
+from deltalake import write_deltalake, DeltaTable
 
 df = pd.DataFrame({"num": [8, 9], "letter": ["dd", "ee"]})
 write_deltalake("tmp/some-table", df, mode="append")
@@ -64,7 +64,7 @@ Here are the contents of the Delta table after the overwrite operation:
 Overwriting just performs a logical delete.  It doesn't physically remove the previous data from storage.  Time travel back to the previous version to confirm that the old version of the table is still accessable.
 
 ```
-dt = dl.DeltaTable("tmp/some-table", version=1)
+dt = DeltaTable("tmp/some-table", version=1)
 
 +-------+----------+
 |   num | letter   |
