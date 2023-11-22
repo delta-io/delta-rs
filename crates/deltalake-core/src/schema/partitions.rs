@@ -2,7 +2,7 @@
 
 use std::convert::TryFrom;
 
-use chrono::NaiveDateTime;
+use chrono::{NaiveDateTime, ParseResult};
 
 use crate::errors::DeltaTableError;
 use crate::kernel::{DataType, PrimitiveType};
@@ -42,11 +42,11 @@ pub struct PartitionFilter {
     pub value: PartitionValue,
 }
 
-fn parse_timestamp(timestamp_str: &str) -> Option<NaiveDateTime> {
+fn parse_timestamp(timestamp_str: &str) -> ParseResult<NaiveDateTime> {
     // Timestamp format as per https://github.com/delta-io/delta/blob/master/PROTOCOL.md#partition-value-serialization
     let format = "%Y-%m-%d %H:%M:%S%.f";
 
-    NaiveDateTime::parse_from_str(timestamp_str, format).ok()
+    NaiveDateTime::parse_from_str(timestamp_str, format)
 }
 
 fn compare_typed_value(
@@ -74,7 +74,7 @@ fn compare_typed_value(
                 _ => None,
             },
             PrimitiveType::Timestamp => match parse_timestamp(filter_value) {
-                Some(parsed_filter_value) => {
+                Ok(parsed_filter_value) => {
                     let parsed_partition_value = parse_timestamp(partition_value).unwrap();
                     parsed_partition_value.partial_cmp(&parsed_filter_value)
                 }
