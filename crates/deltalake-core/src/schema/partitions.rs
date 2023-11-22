@@ -44,7 +44,7 @@ pub struct PartitionFilter {
 
 fn parse_timestamp(timestamp_str: &str) -> Option<NaiveDateTime> {
     // Timestamp format as per https://github.com/delta-io/delta/blob/master/PROTOCOL.md#partition-value-serialization
-    let format = "%Y-%m-%d %H:%M:%S%.6f";
+    let format = "%Y-%m-%d %H:%M:%S%.f";
 
     NaiveDateTime::parse_from_str(timestamp_str, format).ok()
 }
