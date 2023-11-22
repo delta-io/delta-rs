@@ -19,8 +19,10 @@ Suppose you have a Delta table with the following contents:
 Append two additional rows of data to the table:
 
 ```python
+from deltalake.writer import write_deltalake
+
 df = pd.DataFrame({"num": [8, 9], "letter": ["dd", "ee"]})
-dl.writer.write_deltalake("tmp/some-table", df, mode="append")
+write_deltalake("tmp/some-table", df, mode="append")
 ```
 
 Here are the updated contents of the Delta table:
@@ -45,7 +47,7 @@ Now let's see how to overwrite the exisitng Delta table.
 
 ```python
 df = pd.DataFrame({"num": [11, 22], "letter": ["aa", "bb"]})
-dl.writer.write_deltalake("tmp/some-table", df, mode="overwrite")
+write_deltalake("tmp/some-table", df, mode="overwrite")
 ```
 
 Here are the contents of the Delta table after the overwrite operation:

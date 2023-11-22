@@ -6,10 +6,11 @@ You can easily write a DataFrame to a Delta table.
 
 ```python
 import deltalake as dl
+from deltalake.writer import write_deltalake
 import pandas as pd
 
 df = pd.DataFrame({"num": [1, 2, 3], "letter": ["a", "b", "c"]})
-dl.writer.write_deltalake("tmp/some-table", df)
+write_deltalake("tmp/some-table", df)
 ```
 
 Here are the contents of the Delta table in storage:
