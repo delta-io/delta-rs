@@ -48,7 +48,7 @@ API that lets you query, inspect, and operate your Delta Lake with ease.
 
 [pypi]: https://pypi.org/project/deltalake/
 [pypi-dl]: https://img.shields.io/pypi/dm/deltalake?style=flat-square&color=00ADD4
-[py-docs]: https://delta-io.github.io/delta-rs/python/
+[py-docs]: https://delta-io.github.io/delta-rs/
 [rs-docs]: https://docs.rs/deltalake/latest/deltalake/
 [crates]: https://crates.io/crates/deltalake
 [crates-dl]: https://img.shields.io/crates/d/deltalake?color=F75101
