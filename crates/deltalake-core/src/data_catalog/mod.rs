@@ -7,7 +7,7 @@ pub use unity::*;
 
 #[cfg(feature = "unity-experimental")]
 pub mod client;
-#[cfg(feature = "glue")]
+#[cfg(any(feature = "glue", feature = "glue-native-tls"))]
 pub mod glue;
 #[cfg(feature = "datafusion")]
 pub mod storage;
@@ -49,7 +49,7 @@ pub enum DataCatalogError {
     },
 
     /// Missing metadata in the catalog
-    #[cfg(feature = "glue")]
+    #[cfg(any(feature = "glue", feature = "glue-native-tls"))]
     #[error("Missing Metadata {metadata} in the Data Catalog ")]
     MissingMetadata {
         /// The missing metadata property
@@ -57,7 +57,7 @@ pub enum DataCatalogError {
     },
 
     /// Glue Glue Data Catalog Error
-    #[cfg(feature = "glue")]
+    #[cfg(any(feature = "glue", feature = "glue-native-tls"))]
     #[error("Catalog glue error: {source}")]
     GlueError {
         /// The underlying Glue Data Catalog Error
@@ -66,7 +66,7 @@ pub enum DataCatalogError {
     },
 
     /// Error caused by the http request dispatcher not being able to be created.
-    #[cfg(feature = "glue")]
+    #[cfg(any(feature = "glue", feature = "glue-native-tls"))]
     #[error("Failed to create request dispatcher: {source}")]
     AWSHttpClient {
         /// The underlying Rusoto TlsError
@@ -75,7 +75,7 @@ pub enum DataCatalogError {
     },
 
     /// Error representing a failure to retrieve AWS credentials.
-    #[cfg(feature = "glue")]
+    #[cfg(any(feature = "glue", feature = "glue-native-tls"))]
     #[error("Failed to retrieve AWS credentials: {source}")]
     AWSCredentials {
         /// The underlying Rusoto CredentialsError
@@ -138,7 +138,7 @@ pub fn get_data_catalog(
         "azure" => unimplemented!("Azure Data Catalog is not implemented"),
         #[cfg(feature = "hdfs")]
         "hdfs" => unimplemented!("HDFS Data Catalog is not implemented"),
-        #[cfg(feature = "glue")]
+        #[cfg(any(feature = "glue", feature = "glue-native-tls"))]
         "glue" => Ok(Box::new(glue::GlueDataCatalog::new()?)),
         #[cfg(feature = "unity-experimental")]
         "unity" => {
