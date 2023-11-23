@@ -847,12 +847,14 @@ class DeltaTable:
             >>> data = pa.table({"x": [1, 2, 3], "y": [4, 5, 6]})
             >>> write_deltalake("tmp", data, partition_by=["x"])
             >>> dt = DeltaTable("tmp")
-            >>> dt.get_add_actions().sort_by("path").to_pandas()["partition_values"]
-            0    {'x': 1}
-            1    {'x': 2}
-            2    {'x': 3}
+            >>> df = dt.get_add_actions().to_pandas()
+            >>> df["path"].sort_values(ignore_index=True)
+            0    x=1/0-...
+            1    x=2/0-...
+            2    x=3/0-...
             ...
-            >>> dt.get_add_actions(flatten=True).sort_by("path").to_pandas()["partition.x"]
+            >>> df = dt.get_add_actions(flatten=True).to_pandas()
+            >>> df["partition.x"].sort_values(ignore_index=True)
             0    1
             1    2
             2    3
