@@ -3,9 +3,6 @@ from typing import TYPE_CHECKING, Generator, Union
 import pyarrow as pa
 import pyarrow.dataset as ds
 
-if TYPE_CHECKING:
-    pass
-
 from ._internal import ArrayType as ArrayType
 from ._internal import Field as Field
 from ._internal import MapType as MapType
