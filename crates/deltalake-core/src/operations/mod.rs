@@ -36,7 +36,10 @@ use arrow::record_batch::RecordBatch;
 #[cfg(all(feature = "arrow", feature = "parquet"))]
 use optimize::OptimizeBuilder;
 use restore::RestoreBuilder;
+use crate::operations::constraints::ConstraintBuilder;
 
+#[cfg(feature = "datafusion")]
+pub mod constraints;
 #[cfg(feature = "datafusion")]
 pub mod delete;
 #[cfg(feature = "datafusion")]
@@ -169,6 +172,12 @@ impl DeltaOps {
         predicate: E,
     ) -> MergeBuilder {
         MergeBuilder::new(self.0.log_store, self.0.state, predicate.into(), source)
+    }
+
+    #[cfg(feature = "datafusion")]
+    #[must_use]
+    pub fn add_constraint(self) -> ConstraintBuilder {
+        ConstraintBuilder::new(self.0.log_store, self.0.state)
     }
 }
 

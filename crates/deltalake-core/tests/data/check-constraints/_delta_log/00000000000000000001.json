@@ -1,0 +1,3 @@
+{"commitInfo":{"timestamp":1700618848815,"operation":"ADD CONSTRAINT","operationParameters":{"name":"id","expr":"id > - 1"},"readVersion":0,"isolationLevel":"Serializable","isBlindAppend":false,"operationMetrics":{},"engineInfo":"Apache-Spark/3.5.0 Delta-Lake/3.0.0","txnId":"43d64f90-fed8-42a6-a62e-45c640c76007"}}
+{"metaData":{"id":"2d9d5c40-6358-4aa3-a9eb-94ba012bdef4","format":{"provider":"parquet","options":{}},"schemaString":"{\"type\":\"struct\",\"fields\":[{\"name\":\"id\",\"type\":\"long\",\"nullable\":true,\"metadata\":{}}]}","partitionColumns":[],"configuration":{"delta.constraints.id":"id > - 1"},"createdTime":1700616580070}}
+{"protocol":{"minReaderVersion":1,"minWriterVersion":3}}

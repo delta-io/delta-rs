@@ -410,6 +410,12 @@ pub enum DeltaOperation {
         /// The update predicate
         predicate: Option<String>,
     },
+    /// Add constraints to a table
+    AddConstraint {
+        /// Actual constraints
+        name: String,
+        expr: String
+    },
 
     /// Merge data with a source data with the following predicate
     #[serde(rename_all = "camelCase")]
