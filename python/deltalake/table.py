@@ -636,9 +636,7 @@ class DeltaTable:
         if isinstance(source, pyarrow.RecordBatchReader):
             source = convert_pyarrow_recordbatchreader(source, large_dtypes=True)
         elif isinstance(source, pyarrow.RecordBatch):
-            source = convert_pyarrow_recordbatch(
-                source, large_dtypes=True
-            )
+            source = convert_pyarrow_recordbatch(source, large_dtypes=True)
         elif isinstance(source, pyarrow.Table):
             source = convert_pyarrow_table(source, large_dtypes=True)
         elif isinstance(source, ds.Dataset):
