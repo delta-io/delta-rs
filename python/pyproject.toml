@@ -93,6 +93,7 @@ known-first-party = ["deltalake"]
 addopts = "--cov=deltalake -v -m 'not integration and not benchmark'"
 testpaths = [
     "tests",
+    "deltalake",
 ]
 markers = [
     "integration: marks tests as integration tests (deselect with '-m \"not integration\"')",
