@@ -420,10 +420,38 @@ def test_write_iterator(
 
 
 @pytest.mark.parametrize("engine", ["pyarrow", "rust"])
-def test_write_recordbatchreader(
+@pytest.mark.parametrize("large_dtypes", [True, False])
+@pytest.mark.parametrize(
+    "constructor",
+    [
+        lambda table: table.to_pyarrow_dataset(),
+        lambda table: table.to_pyarrow_table(),
+        lambda table: table.to_pyarrow_table().to_batches()[0],
+    ],
+)
+def test_write_dataset_table_recordbatch(
     tmp_path: pathlib.Path,
     existing_table: DeltaTable,
     sample_data: pa.Table,
+    engine: str,
+    large_dtypes: bool,
+    constructor,
+):
+    dataset = constructor(existing_table)
+
+    write_deltalake(tmp_path, dataset, mode="overwrite", large_dtypes=large_dtypes, engine=engine)
+    assert DeltaTable(tmp_path).to_pyarrow_table() == sample_data
+
+
+@pytest.mark.parametrize("large_dtypes", [True, False])
+@pytest.mark.parametrize("engine", ["pyarrow", "rust"])
+def test_write_recordbatchreader(
+    tmp_path: pathlib.Path,
+   
+    existing_table: DeltaTable,
+   
+    sample_data: pa.Table,
+    large_dtypes: bool,,
     engine: Literal["pyarrow", "rust"],
 ):
     batches = existing_table.to_pyarrow_dataset().to_batches()
@@ -431,7 +459,7 @@ def test_write_recordbatchreader(
         existing_table.to_pyarrow_dataset().schema, batches
     )
 
-    write_deltalake(tmp_path, reader, mode="overwrite", engine=engine)
+    write_deltalake(tmp_path, reader, mode="overwrite", large_dtypes=large_dtypes, engine=engine)
     assert DeltaTable(tmp_path).to_pyarrow_table() == sample_data
 
 

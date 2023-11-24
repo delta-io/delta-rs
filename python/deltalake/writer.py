@@ -34,14 +34,18 @@ import pyarrow.dataset as ds
 import pyarrow.fs as pa_fs
 from pyarrow.lib import RecordBatchReader
 
-from deltalake.schema import delta_arrow_schema_from_pandas
-
 from ._internal import DeltaDataChecker as _DeltaDataChecker
 from ._internal import batch_distinct
 from ._internal import convert_to_deltalake as _convert_to_deltalake
 from ._internal import write_new_deltalake as write_deltalake_pyarrow
 from ._internal import write_to_deltalake as write_deltalake_rust
 from .exceptions import DeltaProtocolError, TableNotFoundError
+from .schema import (
+    convert_pyarrow_dataset,
+    convert_pyarrow_recordbatch,
+    convert_pyarrow_recordbatchreader,
+    convert_pyarrow_table,
+)
 from .table import MAX_SUPPORTED_WRITER_VERSION, DeltaTable
 
 try:
@@ -161,7 +165,7 @@ def write_deltalake(
         overwrite_schema: If True, allows updating the schema of the table.
         storage_options: options passed to the native delta filesystem. Unused if 'filesystem' is defined.
         partition_filters: the partition filters that will be used for partition overwrite. Only used in pyarrow engine.
-        large_dtypes: If True, the table schema is checked against large_dtypes
+        large_dtypes: If True, the data schema is kept in large_dtypes, has no effect on pandas dataframe input
     """
     table, table_uri = try_get_table_and_table_uri(table_or_uri, storage_options)
     if table is not None:
@@ -230,13 +234,35 @@ def write_deltalake(
             else:
                 data, schema = delta_arrow_schema_from_pandas(data)
 
+    table, table_uri = try_get_table_and_table_uri(table_or_uri, storage_options)
+
+    # We need to write against the latest table version
+    if table:
+        table.update_incremental()
+
+    if isinstance(data, RecordBatchReader):
+        data = convert_pyarrow_recordbatchreader(data, large_dtypes)
+    elif isinstance(data, pa.RecordBatch):
+        data = convert_pyarrow_recordbatch(data, large_dtypes)
+    elif isinstance(data, pa.Table):
+        data = convert_pyarrow_table(data, large_dtypes)
+    elif isinstance(data, ds.Dataset):
+        data = convert_pyarrow_dataset(data, large_dtypes)
+    elif _has_pandas and isinstance(data, pd.DataFrame):
+        if schema is not None:
+            data = pa.Table.from_pandas(data, schema=schema)
+        else:
+            data = convert_pyarrow_table(pa.Table.from_pandas(data), False)
+    elif isinstance(data, Iterable):
         if schema is None:
-            if isinstance(data, RecordBatchReader):
-                schema = data.schema
-            elif isinstance(data, Iterable):
-                raise ValueError("You must provide schema if data is Iterable")
-            else:
-                schema = data.schema
+            raise ValueError("You must provide schema if data is Iterable")
+    else:
+        raise TypeError(
+            f"{type(data).__name__} is not a valid input. Only PyArrow RecordBatchReader, RecordBatch, Iterable[RecordBatch], Table, Dataset or Pandas DataFrame are valid inputs for source."
+        )
+
+    if schema is None:
+        schema = data.schema
 
         if filesystem is not None:
             raise NotImplementedError(
@@ -269,7 +295,7 @@ def write_deltalake(
             current_version = -1
 
         dtype_map = {
-            pa.large_string(): pa.string(),  # type: ignore
+            pa.large_string(): pa.string(),
         }
 
         def _large_to_normal_dtype(dtype: pa.DataType) -> pa.DataType:
@@ -373,20 +399,9 @@ def write_deltalake(
 
                 return batch
 
-            if isinstance(data, RecordBatchReader):
-                batch_iter = data
-            elif isinstance(data, pa.RecordBatch):
-                batch_iter = [data]
-            elif isinstance(data, pa.Table):
-                batch_iter = data.to_batches()
-            elif isinstance(data, ds.Dataset):
-                batch_iter = data.to_batches()
-            else:
-                batch_iter = data
-
-            data = RecordBatchReader.from_batches(
-                schema, (validate_batch(batch) for batch in batch_iter)
-            )
+        data = RecordBatchReader.from_batches(
+            schema, (validate_batch(batch) for batch in data)
+        )
 
         if file_options is not None:
             file_options.update(use_compliant_nested_type=False)
