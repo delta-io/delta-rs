@@ -166,6 +166,20 @@ impl StructField {
         self.nullable
     }
 
+    /// Returns the physical name of the column
+    /// Equals the name if column mapping is not enabled on table
+    pub fn physical_name(&self) -> Result<&str, Error> {
+        // Even on mapping type id the physical name should be there for partitions
+        let phys_name = self.get_config_value(&ColumnMetadataKey::ColumnMappingPhysicalName);
+        match phys_name {
+            None => Ok(&self.name),
+            Some(MetadataValue::String(s)) => Ok(s),
+            Some(MetadataValue::Number(_)) => Err(Error::MetadataError(
+                "Unexpected type for physical name".to_string(),
+            )),
+        }
+    }
+
     #[inline]
     /// Returns the data type of the column
     pub const fn data_type(&self) -> &DataType {
