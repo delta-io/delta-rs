@@ -20,6 +20,7 @@ from typing import (
 )
 
 import pyarrow
+import pyarrow.dataset as ds
 import pyarrow.fs as pa_fs
 from pyarrow.dataset import (
     Expression,
@@ -596,7 +597,13 @@ class DeltaTable:
 
     def merge(
         self,
-        source: Union[pyarrow.Table, pyarrow.RecordBatch, pyarrow.RecordBatchReader],
+        source: Union[
+            pyarrow.Table,
+            pyarrow.RecordBatch,
+            pyarrow.RecordBatchReader,
+            ds.Dataset,
+            "pandas.DataFrame",
+        ],
         predicate: str,
         source_alias: Optional[str] = None,
         target_alias: Optional[str] = None,
@@ -619,17 +626,28 @@ class DeltaTable:
         invariants = self.schema().invariants
         checker = _DeltaDataChecker(invariants)
 
+        from .schema import (
+            convert_pyarrow_dataset,
+            convert_pyarrow_recordbatch,
+            convert_pyarrow_recordbatchreader,
+            convert_pyarrow_table,
+        )
+
         if isinstance(source, pyarrow.RecordBatchReader):
-            schema = source.schema
+            source = convert_pyarrow_recordbatchreader(source, large_dtypes=True)
         elif isinstance(source, pyarrow.RecordBatch):
-            schema = source.schema
-            source = [source]
+            source = convert_pyarrow_recordbatch(source, large_dtypes=True)
         elif isinstance(source, pyarrow.Table):
-            schema = source.schema
-            source = source.to_reader()
+            source = convert_pyarrow_table(source, large_dtypes=True)
+        elif isinstance(source, ds.Dataset):
+            source = convert_pyarrow_dataset(source, large_dtypes=True)
+        elif isinstance(source, pandas.DataFrame):
+            source = convert_pyarrow_table(
+                pyarrow.Table.from_pandas(source), large_dtypes=True
+            )
         else:
             raise TypeError(
-                f"{type(source).__name__} is not a valid input. Only PyArrow RecordBatchReader, RecordBatch or Table are valid inputs for source."
+                f"{type(source).__name__} is not a valid input. Only PyArrow RecordBatchReader, RecordBatch, Table or Pandas DataFrame are valid inputs for source."
             )
 
         def validate_batch(batch: pyarrow.RecordBatch) -> pyarrow.RecordBatch:
@@ -637,7 +655,7 @@ class DeltaTable:
             return batch
 
         source = pyarrow.RecordBatchReader.from_batches(
-            schema, (validate_batch(batch) for batch in source)
+            source.schema, (validate_batch(batch) for batch in source)
         )
 
         return TableMerger(
