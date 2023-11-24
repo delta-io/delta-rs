@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, Generator, Union
+from typing import Generator, Union
 
 import pyarrow as pa
 import pyarrow.dataset as ds
