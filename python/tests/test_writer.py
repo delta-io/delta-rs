@@ -581,7 +581,7 @@ def test_writer_null_stats(tmp_path: pathlib.Path, engine: Literal["pyarrow", "r
     assert stats["nullCount"] == expected_nulls
 
 
-@pytest.mark.parametrize("engine", ["pyarrow", "rust"])
+@pytest.mark.parametrize("engine", ["pyarrow"])
 def test_writer_fails_on_protocol(
     existing_table: DeltaTable,
     sample_data: pa.Table,

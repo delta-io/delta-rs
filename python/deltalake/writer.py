@@ -238,12 +238,6 @@ def write_deltalake(
         storage_options.update(storage_options or {})
 
         table.update_incremental()
-        if table.protocol().min_writer_version > MAX_SUPPORTED_WRITER_VERSION:
-            raise DeltaProtocolError(
-                "This table's min_writer_version is "
-                f"{table.protocol().min_writer_version}, "
-                "but this method only supports version 2."
-            )
 
     __enforce_append_only(table=table, configuration=configuration, mode=mode)
 
@@ -385,6 +379,13 @@ def write_deltalake(
         if table is not None:
             # We don't currently provide a way to set invariants
             # (and maybe never will), so only enforce if already exist.
+            if table.protocol().min_writer_version > MAX_SUPPORTED_WRITER_VERSION:
+                raise DeltaProtocolError(
+                    "This table's min_writer_version is "
+                    f"{table.protocol().min_writer_version}, "
+                    "but this method only supports version 2."
+                )
+
             invariants = table.schema().invariants
             checker = _DeltaDataChecker(invariants)
 

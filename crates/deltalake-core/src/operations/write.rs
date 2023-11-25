@@ -497,8 +497,8 @@ impl std::future::IntoFuture for WriteBuilder {
                         .current_metadata()
                         .ok_or(DeltaTableError::NoMetadata)?
                         .clone();
-                    metadata.schema = schema.clone().try_into().unwrap();
-                    let metadata_action = Metadata::try_from(metadata).unwrap();
+                    metadata.schema = schema.clone().try_into()?;
+                    let metadata_action = Metadata::try_from(metadata)?;
                     actions.push(Action::Metadata(metadata_action));
                 }
                 // This should never error, since now() will always be larger than UNIX_EPOCH
