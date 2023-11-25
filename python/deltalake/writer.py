@@ -17,6 +17,7 @@ from typing import (
     Optional,
     Tuple,
     Union,
+    overload,
 )
 from urllib.parse import unquote
 
@@ -68,6 +69,68 @@ class AddAction:
     stats: str
 
 
+@overload
+def write_deltalake(
+    table_or_uri: Union[str, Path, DeltaTable],
+    data: Union[
+        "pd.DataFrame",
+        ds.Dataset,
+        pa.Table,
+        pa.RecordBatch,
+        Iterable[pa.RecordBatch],
+        RecordBatchReader,
+    ],
+    *,
+    schema: Optional[pa.Schema] = ...,
+    partition_by: Optional[Union[List[str], str]] = ...,
+    filesystem: Optional[pa_fs.FileSystem] = None,
+    mode: Literal["error", "append", "overwrite", "ignore"] = ...,
+    file_options: Optional[ds.ParquetFileWriteOptions] = ...,
+    max_partitions: Optional[int] = ...,
+    max_open_files: int = ...,
+    max_rows_per_file: int = ...,
+    min_rows_per_group: int = ...,
+    max_rows_per_group: int = ...,
+    name: Optional[str] = ...,
+    description: Optional[str] = ...,
+    configuration: Optional[Mapping[str, Optional[str]]] = ...,
+    overwrite_schema: bool = ...,
+    storage_options: Optional[Dict[str, str]] = ...,
+    partition_filters: Optional[List[Tuple[str, str, Any]]] = ...,
+    large_dtypes: bool = ...,
+    engine: Literal["pyarrow"] = ...,
+) -> None:
+    ...
+
+
+@overload
+def write_deltalake(
+    table_or_uri: Union[str, Path, DeltaTable],
+    data: Union[
+        "pd.DataFrame",
+        ds.Dataset,
+        pa.Table,
+        pa.RecordBatch,
+        Iterable[pa.RecordBatch],
+        RecordBatchReader,
+    ],
+    *,
+    schema: Optional[pa.Schema] = ...,
+    partition_by: Optional[Union[List[str], str]] = ...,
+    mode: Literal["error", "append", "overwrite", "ignore"] = ...,
+    max_rows_per_group: int = ...,
+    name: Optional[str] = ...,
+    description: Optional[str] = ...,
+    configuration: Optional[Mapping[str, Optional[str]]] = ...,
+    overwrite_schema: bool = ...,
+    storage_options: Optional[Dict[str, str]] = ...,
+    predicate: Optional[str] = ...,
+    large_dtypes: bool = ...,
+    engine: Literal["rust"],
+) -> None:
+    ...
+
+
 def write_deltalake(
     table_or_uri: Union[str, Path, DeltaTable],
     data: Union[
@@ -95,6 +158,7 @@ def write_deltalake(
     overwrite_schema: bool = False,
     storage_options: Optional[Dict[str, str]] = None,
     partition_filters: Optional[List[Tuple[str, str, Any]]] = None,
+    predicate: Optional[str] = None,
     large_dtypes: bool = False,
     engine: Literal["pyarrow", "rust"] = "pyarrow",
 ) -> None:
@@ -164,6 +228,7 @@ def write_deltalake(
         configuration: A map containing configuration options for the metadata action.
         overwrite_schema: If True, allows updating the schema of the table.
         storage_options: options passed to the native delta filesystem. Unused if 'filesystem' is defined.
+        predicate: When using `Overwrite` mode, replace data that matches a predicate. Only used in rust engine.
         partition_filters: the partition filters that will be used for partition overwrite. Only used in pyarrow engine.
         large_dtypes: If True, the data schema is kept in large_dtypes, has no effect on pandas dataframe input
     """
@@ -225,6 +290,7 @@ def write_deltalake(
             mode=mode,
             max_rows_per_group=max_rows_per_group,
             overwrite_schema=overwrite_schema,
+            predicate=predicate,
             name=name,
             description=description,
             configuration=configuration,

@@ -854,6 +854,74 @@ def test_partition_overwrite_unfiltered_data_fails(
         )
 
 
+@pytest.mark.parametrize(
+    "value_1,value_2,value_type,filter_string",
+    [
+        (1, 2, pa.int64(), "1"),
+        (False, True, pa.bool_(), "false"),
+        (date(2022, 1, 1), date(2022, 1, 2), pa.date32(), "2022-01-01"),
+    ],
+)
+def test_replace_where_overwrite(
+    tmp_path: pathlib.Path,
+    value_1: Any,
+    value_2: Any,
+    value_type: pa.DataType,
+    filter_string: str,
+):
+    sample_data = pa.table(
+        {
+            "p1": pa.array(["1", "1", "2", "2"], pa.string()),
+            "p2": pa.array([value_1, value_2, value_1, value_2], value_type),
+            "val": pa.array([1, 1, 1, 1], pa.int64()),
+        }
+    )
+    write_deltalake(tmp_path, sample_data, mode="overwrite", partition_by=["p1", "p2"])
+
+    delta_table = DeltaTable(tmp_path)
+    assert (
+        delta_table.to_pyarrow_table().sort_by(
+            [("p1", "ascending"), ("p2", "ascending")]
+        )
+        == sample_data
+    )
+
+    sample_data = pa.table(
+        {
+            "p1": pa.array(["1", "1"], pa.string()),
+            "p2": pa.array([value_2, value_1], value_type),
+            "val": pa.array([2, 2], pa.int64()),
+        }
+    )
+    expected_data = pa.table(
+        {
+            "p1": pa.array(["1", "1", "2", "2"], pa.string()),
+            "p2": pa.array([value_1, value_2, value_1, value_2], value_type),
+            "val": pa.array([2, 2, 1, 1], pa.int64()),
+        }
+    )
+
+    with pytest.raises(
+        DeltaError,
+        match="Generic DeltaTable error: Overwriting data based on predicate is not yet implemented",
+    ):
+        write_deltalake(
+            tmp_path,
+            sample_data,
+            mode="overwrite",
+            predicate="`p1` = 1",
+            engine="rust",
+        )
+
+        delta_table.update_incremental()
+        assert (
+            delta_table.to_pyarrow_table().sort_by(
+                [("p1", "ascending"), ("p2", "ascending")]
+            )
+            == expected_data
+        )
+
+
 def test_partition_overwrite_with_new_partition(
     tmp_path: pathlib.Path, sample_data_for_partitioning: pa.Table
 ):

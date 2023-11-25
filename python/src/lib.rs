@@ -1135,6 +1135,7 @@ fn write_to_deltalake(
     max_rows_per_group: i64,
     overwrite_schema: bool,
     partition_by: Option<Vec<String>>,
+    predicate: Option<String>,
     name: Option<String>,
     description: Option<String>,
     configuration: Option<HashMap<String, Option<String>>>,
@@ -1166,6 +1167,10 @@ fn write_to_deltalake(
 
     if let Some(description) = &description {
         builder = builder.with_description(description);
+    };
+
+    if let Some(predicate) = &predicate {
+        builder = builder.with_replace_where(predicate);
     };
 
     if let Some(config) = configuration {

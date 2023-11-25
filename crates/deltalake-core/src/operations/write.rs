@@ -525,7 +525,9 @@ impl std::future::IntoFuture for WriteBuilder {
 
                 match this.predicate {
                     Some(_pred) => {
-                        todo!("Overwriting data based on predicate is not yet implemented")
+                        return Err(DeltaTableError::Generic(
+                            "Overwriting data based on predicate is not yet implemented".to_string(),
+                        ));
                     }
                     _ => {
                         let remove_actions = this

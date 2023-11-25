@@ -147,6 +147,7 @@ def write_to_deltalake(
     mode: str,
     max_rows_per_group: int,
     overwrite_schema: bool,
+    predicate: Optional[str],
     name: Optional[str],
     description: Optional[str],
     configuration: Optional[Mapping[str, Optional[str]]],
