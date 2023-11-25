@@ -71,7 +71,7 @@ use serde::{Deserialize, Serialize};
 use url::Url;
 
 use crate::errors::{DeltaResult, DeltaTableError};
-use crate::kernel::{Add, DataType as DeltaDataType, Invariant, PrimitiveType};
+use crate::kernel::{Add, DataType as DeltaDataType, Invariant, PrimitiveType, WriterFeatures};
 use crate::logstore::LogStoreRef;
 use crate::protocol::{ColumnCountStat, ColumnValueStat};
 use crate::table::builder::ensure_table_uri;
@@ -1013,6 +1013,14 @@ pub(crate) fn logical_expr_to_physical_expr(
     create_physical_expr(expr, &df_schema, schema, &execution_props).unwrap()
 }
 
+#[inline]
+fn get_invariants(snapshot: &DeltaTableState) -> Vec<Invariant> {
+    snapshot
+        .current_metadata()
+        .and_then(|meta| meta.schema.get_invariants().ok())
+        .unwrap_or_default()
+}
+
 /// Responsible for checking batches of data conform to table's invariants.
 #[derive(Clone)]
 pub struct DeltaDataChecker {
@@ -1022,7 +1030,31 @@ pub struct DeltaDataChecker {
 
 impl DeltaDataChecker {
     /// Create a new DeltaDataChecker
-    pub fn new(invariants: Vec<Invariant>) -> Self {
+    pub fn new(snapshot: &DeltaTableState) -> Self {
+        // Only check if invariants are enabled if we are at a high enough writer level
+        // otherwise always get the invariants to check
+        let invariants = if snapshot.min_writer_version() >= 7 {
+            if snapshot
+                .writer_features()
+                .map(|wf| wf.contains(&WriterFeatures::Invariants))
+                .unwrap_or(false)
+            {
+                get_invariants(snapshot)
+            } else {
+                vec![]
+            }
+        } else {
+            get_invariants(snapshot)
+        };
+        Self {
+            invariants,
+            ctx: SessionContext::new(),
+        }
+    }
+
+    /// Directly create a checker with invariants, mostly used for tests, but
+    /// also in the python interface
+    pub fn with_invariants(invariants: Vec<Invariant>) -> Self {
         Self {
             invariants,
             ctx: SessionContext::new(),
@@ -1642,7 +1674,7 @@ mod tests {
         .unwrap();
         // Empty invariants is okay
         let invariants: Vec<Invariant> = vec![];
-        assert!(DeltaDataChecker::new(invariants)
+        assert!(DeltaDataChecker::with_invariants(invariants)
             .check_batch(&batch)
             .await
             .is_ok());
@@ -1652,7 +1684,7 @@ mod tests {
             Invariant::new("a", "a is not null"),
             Invariant::new("b", "b < 1000"),
         ];
-        assert!(DeltaDataChecker::new(invariants)
+        assert!(DeltaDataChecker::with_invariants(invariants)
             .check_batch(&batch)
             .await
             .is_ok());
@@ -1662,7 +1694,7 @@ mod tests {
             Invariant::new("a", "a is null"),
             Invariant::new("b", "b < 100"),
         ];
-        let result = DeltaDataChecker::new(invariants).check_batch(&batch).await;
+        let result = DeltaDataChecker::with_invariants(invariants).check_batch(&batch).await;
         assert!(result.is_err());
         assert!(matches!(result, Err(DeltaTableError::InvalidData { .. })));
         if let Err(DeltaTableError::InvalidData { violations }) = result {
@@ -1671,7 +1703,7 @@ mod tests {
 
         // Irrelevant invariants return a different error
         let invariants = vec![Invariant::new("c", "c > 2000")];
-        let result = DeltaDataChecker::new(invariants).check_batch(&batch).await;
+        let result = DeltaDataChecker::with_invariants(invariants).check_batch(&batch).await;
         assert!(result.is_err());
 
         // Nested invariants are unsupported
@@ -1685,7 +1717,7 @@ mod tests {
         let batch = RecordBatch::try_new(schema, vec![inner]).unwrap();
 
         let invariants = vec![Invariant::new("x.b", "x.b < 1000")];
-        let result = DeltaDataChecker::new(invariants).check_batch(&batch).await;
+        let result = DeltaDataChecker::with_invariants(invariants).check_batch(&batch).await;
         assert!(result.is_err());
         assert!(matches!(result, Err(DeltaTableError::Generic { .. })));
     }

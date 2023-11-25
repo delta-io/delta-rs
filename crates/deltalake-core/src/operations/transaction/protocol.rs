@@ -142,25 +142,6 @@ impl ProtocolChecker {
             })?;
         }
 
-        // Does the table have invariants?
-        let has_invariants = !snapshot
-            .current_metadata()
-            .and_then(|meta| meta.schema.get_invariants().ok())
-            .unwrap_or_default()
-            .is_empty();
-
-        // The table is at least version 7, has actual invariants and has the proper writer feature
-        // enabled
-        if snapshot.min_writer_version() >= 7
-            && has_invariants
-            && !snapshot
-                .writer_features()
-                .unwrap()
-                .contains(&WriterFeatures::Invariants)
-        {
-            return Err(TransactionError::WriterFeaturesRequired);
-        }
-
         Ok(())
     }
 }
