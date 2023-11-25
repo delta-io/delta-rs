@@ -172,12 +172,6 @@ def write_deltalake(
         storage_options = table._storage_options or {}
         storage_options.update(storage_options or {})
 
-    __enforce_append_only(table=table, configuration=configuration, mode=mode)
-
-    if isinstance(partition_by, str):
-        partition_by = [partition_by]
-
-    if table:
         table.update_incremental()
         if table.protocol().min_writer_version > MAX_SUPPORTED_WRITER_VERSION:
             raise DeltaProtocolError(
@@ -185,60 +179,11 @@ def write_deltalake(
                 f"{table.protocol().min_writer_version}, "
                 "but this method only supports version 2."
             )
-    if engine == "rust":
-        if table is not None and mode == "ignore":
-            return
 
-        if isinstance(data, RecordBatchReader):
-            batch_iter = data
-        elif isinstance(data, pa.RecordBatch):
-            batch_iter = [data]
-        elif isinstance(data, pa.Table):
-            batch_iter = data.to_reader()
-        elif isinstance(data, ds.Dataset):
-            batch_iter = data.scanner().to_reader()
-        elif _has_pandas and isinstance(data, pd.DataFrame):
-            if schema is not None:
-                batch_iter = pa.Table.from_pandas(data, schema).to_reader()
-            else:
-                batch_iter = pa.Table.from_pandas(data).to_reader()
-        else:
-            batch_iter = data
+    __enforce_append_only(table=table, configuration=configuration, mode=mode)
 
-        if schema is None:
-            if isinstance(batch_iter, RecordBatchReader):
-                schema = batch_iter.schema
-            elif isinstance(batch_iter, Iterable):
-                raise ValueError("You must provide schema if data is Iterable")
-
-        data = RecordBatchReader.from_batches(schema, (batch for batch in batch_iter))
-        write_deltalake_rust(
-            table_uri=table_uri,
-            data=data,
-            partition_by=partition_by,
-            mode=mode,
-            max_rows_per_group=max_rows_per_group,
-            overwrite_schema=overwrite_schema,
-            name=name,
-            description=description,
-            configuration=configuration,
-            storage_options=storage_options,
-        )
-        if table:
-            table.update_incremental()
-
-    elif engine == "pyarrow":
-        if _has_pandas and isinstance(data, pd.DataFrame):
-            if schema is not None:
-                data = pa.Table.from_pandas(data, schema=schema)
-            else:
-                data, schema = delta_arrow_schema_from_pandas(data)
-
-    table, table_uri = try_get_table_and_table_uri(table_or_uri, storage_options)
-
-    # We need to write against the latest table version
-    if table:
-        table.update_incremental()
+    if isinstance(partition_by, str):
+        partition_by = [partition_by]
 
     if isinstance(data, RecordBatchReader):
         data = convert_pyarrow_recordbatchreader(data, large_dtypes)
@@ -261,9 +206,28 @@ def write_deltalake(
             f"{type(data).__name__} is not a valid input. Only PyArrow RecordBatchReader, RecordBatch, Iterable[RecordBatch], Table, Dataset or Pandas DataFrame are valid inputs for source."
         )
 
-    if schema is None:
-        schema = data.schema
+    if engine == "rust":
+        if table is not None and mode == "ignore":
+            return
 
+        data = RecordBatchReader.from_batches(schema, (batch for batch in data))
+        write_deltalake_rust(
+            table_uri=table_uri,
+            data=data,
+            partition_by=partition_by,
+            mode=mode,
+            max_rows_per_group=max_rows_per_group,
+            overwrite_schema=overwrite_schema,
+            name=name,
+            description=description,
+            configuration=configuration,
+            storage_options=storage_options,
+        )
+        if table:
+            table.update_incremental()
+
+    elif engine == "pyarrow":
+        # We need to write against the latest table version
         if filesystem is not None:
             raise NotImplementedError(
                 "Filesystem support is not yet implemented.  #570"
@@ -399,9 +363,9 @@ def write_deltalake(
 
                 return batch
 
-        data = RecordBatchReader.from_batches(
-            schema, (validate_batch(batch) for batch in data)
-        )
+            data = RecordBatchReader.from_batches(
+                schema, (validate_batch(batch) for batch in data)
+            )
 
         if file_options is not None:
             file_options.update(use_compliant_nested_type=False)
