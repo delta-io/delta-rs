@@ -195,9 +195,13 @@ def write_deltalake(
         data = convert_pyarrow_dataset(data, large_dtypes)
     elif _has_pandas and isinstance(data, pd.DataFrame):
         if schema is not None:
-            data = pa.Table.from_pandas(data, schema=schema)
+            data = convert_pyarrow_table(
+                pa.Table.from_pandas(data, schema=schema), large_dtypes=large_dtypes
+            )
         else:
-            data = convert_pyarrow_table(pa.Table.from_pandas(data), False)
+            data = convert_pyarrow_table(
+                pa.Table.from_pandas(data), large_dtypes=large_dtypes
+            )
     elif isinstance(data, Iterable):
         if schema is None:
             raise ValueError("You must provide schema if data is Iterable")
@@ -205,6 +209,9 @@ def write_deltalake(
         raise TypeError(
             f"{type(data).__name__} is not a valid input. Only PyArrow RecordBatchReader, RecordBatch, Iterable[RecordBatch], Table, Dataset or Pandas DataFrame are valid inputs for source."
         )
+
+    if schema is None:
+        schema = data.schema
 
     if engine == "rust":
         if table is not None and mode == "ignore":
