@@ -491,7 +491,6 @@ impl std::future::IntoFuture for WriteBuilder {
                     .or_else(|_| this.snapshot.arrow_schema())
                     .unwrap_or(schema.clone());
 
-                // let data_schema: StructType = schema.clone().try_into().unwrap();
                 if schema != table_schema {
                     let mut metadata = this
                         .snapshot
