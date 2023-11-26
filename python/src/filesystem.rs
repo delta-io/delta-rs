@@ -523,7 +523,7 @@ impl ObjectOutputStream {
             pos: 0,
             closed: false,
             mode: "wb".into(),
-            max_buffer_size: max_buffer_size,
+            max_buffer_size,
             buffer_size: 0,
         })
     }
