@@ -248,6 +248,25 @@ letter: string
 
 Schema enforcement protects your table from getting corrupted by appending data with mismatched schema.  Parquet and CSV don't offer schema enforcement for pandas users.
 
+## Overwriting schema of table
+
+You can overwrite the table contents and schema by setting the `overwrite_schema` option.  Here's how to overwrite the table contents:
+
+```python
+write_deltalake("tmp/some-table", df, mode="overwrite", overwrite_schema=True)
+```
+
+Here are the contents of the table after the values and schema have been overwritten:
+
+```
++-------+----------+
+|   num | animal   |
+|-------+----------|
+|     5 | cat      |
+|     6 | dog      |
++-------+----------+
+```
+
 ## In-memory vs. in-storage data changes
 
 It's important to distinguish between data stored in-memory and data stored on disk when understanding the functionality offered by Delta Lake.
