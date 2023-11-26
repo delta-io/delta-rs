@@ -412,8 +412,9 @@ pub enum DeltaOperation {
     },
     /// Add constraints to a table
     AddConstraint {
-        /// Actual constraints
+        /// Constraints name
         name: String,
+        /// Expression to check against
         expr: String,
     },
 

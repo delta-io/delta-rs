@@ -1,6 +1,3 @@
-use arrow_array::RecordBatch;
-use datafusion_physical_expr::expressions::Column;
-use deltalake_core::operations::collect_sendable_stream;
 use deltalake_core::{DeltaResult, DeltaTableBuilder};
 use pretty_assertions::assert_eq;
 use std::collections::HashMap;
@@ -182,9 +179,7 @@ async fn read_delta_table_with_check_constraints() -> DeltaResult<()> {
     //
     // let (_table, stream) = table.load().await?;
     // let data: Vec<RecordBatch> = collect_sendable_stream(stream).await?;
-    let constraint = table
-        .add_constraint()
-        .with_constraint(Column::new("id", 0), "");
+    let constraint = table.add_constraint().with_constraint("id2", "id < 100");
     constraint.await?;
     Ok(())
 }

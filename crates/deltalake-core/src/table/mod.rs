@@ -137,6 +137,7 @@ impl PartialEq for CheckPoint {
 
 impl Eq for CheckPoint {}
 
+/// A constraint in a check constraint
 #[derive(Eq, PartialEq, Debug, Default, Clone)]
 pub struct Constraint {
     /// The full path to the field.
@@ -206,6 +207,7 @@ impl DeltaTableMetaData {
         &self.configuration
     }
 
+    /// Return the check constraints on the current table
     pub fn get_constraints(&self) -> Vec<Constraint> {
         self.configuration
             .iter()

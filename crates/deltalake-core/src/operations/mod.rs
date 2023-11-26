@@ -173,6 +173,7 @@ impl DeltaOps {
         MergeBuilder::new(self.0.log_store, self.0.state, predicate.into(), source)
     }
 
+    /// Add a check constraint to a table
     #[cfg(feature = "datafusion")]
     #[must_use]
     pub fn add_constraint(self) -> ConstraintBuilder {
