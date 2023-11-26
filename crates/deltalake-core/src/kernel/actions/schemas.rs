@@ -112,6 +112,7 @@ lazy_static! {
             deletion_vector_field(),
             StructField::new("baseRowId", DataType::long(), true),
             StructField::new("defaultRowCommitVersion", DataType::long(), true),
+            StructField::new("clusteringProvider", DataType::long(), true),
         ]))),
         true,
     );

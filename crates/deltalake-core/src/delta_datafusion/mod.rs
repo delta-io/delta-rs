@@ -1602,6 +1602,7 @@ mod tests {
             tags: None,
             base_row_id: None,
             default_row_commit_version: None,
+            clustering_provider: None,
         };
         let schema = ArrowSchema::new(vec![
             Field::new("year", ArrowDataType::Int64, true),
