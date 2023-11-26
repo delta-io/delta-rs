@@ -137,6 +137,24 @@ impl PartialEq for CheckPoint {
 
 impl Eq for CheckPoint {}
 
+#[derive(Eq, PartialEq, Debug, Default, Clone)]
+pub struct Constraint {
+    /// The full path to the field.
+    pub name: String,
+    /// The SQL string that must always evaluate to true.
+    pub expr: String,
+}
+
+impl Constraint {
+    /// Create a new invariant
+    pub fn new(field_name: &str, invariant_sql: &str) -> Self {
+        Self {
+            name: field_name.to_string(),
+            expr: invariant_sql.to_string(),
+        }
+    }
+}
+
 /// Delta table metadata
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct DeltaTableMetaData {
@@ -186,6 +204,19 @@ impl DeltaTableMetaData {
     /// Return the configurations of the DeltaTableMetaData; could be empty
     pub fn get_configuration(&self) -> &HashMap<String, Option<String>> {
         &self.configuration
+    }
+
+    pub fn get_constraints(&self) -> Vec<Constraint> {
+        self.configuration
+            .iter()
+            .filter_map(|(field, value)| {
+                if field.starts_with("delta.constraints") {
+                    value.as_ref().map(|f| Constraint::new(field, f))
+                } else {
+                    None
+                }
+            })
+            .collect()
     }
 
     /// Return partition fields along with their data type from the current schema.
@@ -956,6 +987,27 @@ mod tests {
             let table = DeltaTableBuilder::from_uri(table_uri).build().unwrap();
             assert_eq!(table.table_uri(), "s3://tests/data/delta-0.8.0");
         }
+    }
+
+    #[test]
+    fn get_table_constraints() {
+        let state = DeltaTableMetaData::new(
+            None,
+            None,
+            None,
+            StructType::new(vec![]),
+            vec![],
+            HashMap::from_iter(vec![
+                (
+                    "delta.constraints.id".to_string(),
+                    Some("id > 0".to_string()),
+                ),
+                ("delta.blahblah".to_string(), None),
+            ]),
+        );
+
+        let constraints = state.get_constraints();
+        assert_eq!(constraints.len(), 1)
     }
 
     async fn create_test_table() -> (DeltaTable, TempDir) {

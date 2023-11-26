@@ -1,21 +1,21 @@
 use std::collections::HashMap;
+
 use chrono::Utc;
-use datafusion::common::Column;
 use datafusion::execution::context::SessionState;
 use futures::future::BoxFuture;
 
-use crate::{DeltaResult, DeltaTableError};
-use crate::DeltaTable;
 use crate::kernel::{Action, CommitInfo, Metadata, Protocol};
 use crate::logstore::LogStoreRef;
 use crate::operations::datafusion_utils::Expression;
 use crate::operations::transaction::commit;
 use crate::protocol::DeltaOperation;
 use crate::table::state::DeltaTableState;
+use crate::DeltaTable;
+use crate::{DeltaResult, DeltaTableError};
 
 pub struct ConstraintBuilder {
     snapshot: DeltaTableState,
-    name: Option<Column>,
+    name: Option<String>,
     expr: Option<Expression>,
     log_store: LogStoreRef,
     state: Option<SessionState>,
@@ -32,7 +32,11 @@ impl ConstraintBuilder {
         }
     }
 
-    pub fn with_constraint<S: Into<Column>, E: Into<Expression>>(mut self, column: S, expression: E) -> Self {
+    pub fn with_constraint<S: Into<String>, E: Into<Expression>>(
+        mut self,
+        column: S,
+        expression: E,
+    ) -> Self {
         self.name = Some(column.into());
         self.expr = Some(expression.into());
         self
@@ -53,25 +57,40 @@ impl std::future::IntoFuture for ConstraintBuilder {
         let mut this = self;
 
         let fut = async move {
-
             if this.name.is_none() {
-                return Err(DeltaTableError::Generic("No name provided".to_string()))
+                return Err(DeltaTableError::Generic("No name provided".to_string()));
             } else if this.expr.is_none() {
-                return Err(DeltaTableError::Generic("No expression provided".to_string()))
+                return Err(DeltaTableError::Generic(
+                    "No expression provided".to_string(),
+                ));
             }
 
-            let name = this.name.unwrap().name;
+            let name = this.name.unwrap();
             let expr = match this.expr.unwrap() {
                 Expression::String(s) => s,
-                Expression::DataFusion(e) => e.to_string()
+                Expression::DataFusion(e) => e.to_string(),
             };
-            let mut metadata = this.snapshot.current_metadata().ok_or(DeltaTableError::NoMetadata)?.clone();
+            let mut metadata = this
+                .snapshot
+                .current_metadata()
+                .ok_or(DeltaTableError::NoMetadata)?
+                .clone();
 
-            metadata.configuration.insert(format!("delta.constraints.{}", name), Some(expr.into()));
+            metadata
+                .configuration
+                .insert(format!("delta.constraints.{}", name), Some(expr.into()));
 
             let protocol = Protocol {
-                min_reader_version: if this.snapshot.min_reader_version() > 1 { this.snapshot.min_reader_version() } else { 1 },
-                min_writer_version: if this.snapshot.min_reader_version() > 3 { this.snapshot.min_reader_version() } else { 3 },
+                min_reader_version: if this.snapshot.min_reader_version() > 1 {
+                    this.snapshot.min_reader_version()
+                } else {
+                    1
+                },
+                min_writer_version: if this.snapshot.min_reader_version() > 3 {
+                    this.snapshot.min_reader_version()
+                } else {
+                    3
+                },
                 reader_features: None,
                 writer_features: None,
             };
@@ -79,26 +98,20 @@ impl std::future::IntoFuture for ConstraintBuilder {
             let operational_parameters = HashMap::from_iter(&[(name, expr)]);
             let commit_info = CommitInfo {
                 timestamp: Some(Utc::now().timestamp_millis()),
-                user_id: None,
-                user_name: None,
                 operation: Some("ADD CONSTRAINT".to_string()),
                 operation_parameters: Some(operational_parameters),
-                read_version: None,
-                isolation_level: None,
-                is_blind_append: None,
-                engine_info: None,
-                info: Default::default(),
+                ..Default::default()
             };
 
             let actions = vec![
                 Action::CommitInfo(commit_info),
                 Action::Metadata(Metadata::try_from(metadata)?),
-                Action::Protocol(protocol)
+                Action::Protocol(protocol),
             ];
 
             let operations = DeltaOperation::AddConstraint {
                 name: name.clone(),
-                expr: expr.clone()
+                expr: expr.clone(),
             };
 
             let version = commit(
@@ -106,9 +119,10 @@ impl std::future::IntoFuture for ConstraintBuilder {
                 &actions,
                 operations,
                 &this.snapshot,
-                None
-            ).await?;
-            
+                None,
+            )
+            .await?;
+
             Ok(DeltaTable::new_with_state(this.log_store, this.snapshot))
         };
         Box::pin(fut)

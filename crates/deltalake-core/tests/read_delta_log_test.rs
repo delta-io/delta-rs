@@ -1,10 +1,10 @@
+use arrow_array::RecordBatch;
+use datafusion_physical_expr::expressions::Column;
+use deltalake_core::operations::collect_sendable_stream;
 use deltalake_core::{DeltaResult, DeltaTableBuilder};
 use pretty_assertions::assert_eq;
 use std::collections::HashMap;
 use std::time::SystemTime;
-use arrow_array::RecordBatch;
-use datafusion_physical_expr::expressions::Column;
-use deltalake_core::operations::collect_sendable_stream;
 
 #[allow(dead_code)]
 mod fs_common;
@@ -30,7 +30,7 @@ async fn test_log_buffering() {
             location.clone(),
             deltalake_core::storage::config::StorageOptions::from(HashMap::new()),
         )
-            .unwrap(),
+        .unwrap(),
     );
 
     let mut seq_version = 0;
@@ -182,7 +182,9 @@ async fn read_delta_table_with_check_constraints() -> DeltaResult<()> {
     //
     // let (_table, stream) = table.load().await?;
     // let data: Vec<RecordBatch> = collect_sendable_stream(stream).await?;
-    let constraint = table.add_constraint().with_constraint(Column::new("id", 0), "");
+    let constraint = table
+        .add_constraint()
+        .with_constraint(Column::new("id", 0), "");
     constraint.await?;
     Ok(())
 }

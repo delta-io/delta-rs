@@ -414,7 +414,7 @@ pub enum DeltaOperation {
     AddConstraint {
         /// Actual constraints
         name: String,
-        expr: String
+        expr: String,
     },
 
     /// Merge data with a source data with the following predicate
@@ -503,6 +503,7 @@ impl DeltaOperation {
             DeltaOperation::Restore { .. } => "RESTORE",
             DeltaOperation::VacuumStart { .. } => "VACUUM START",
             DeltaOperation::VacuumEnd { .. } => "VACUUM END",
+            DeltaOperation::AddConstraint { .. } => "ADD CONSTRAINT",
         }
     }
 
@@ -538,7 +539,10 @@ impl DeltaOperation {
     /// Denotes if the operation changes the data contained in the table
     pub fn changes_data(&self) -> bool {
         match self {
-            Self::Optimize { .. } | Self::VacuumStart { .. } | Self::VacuumEnd { .. } => false,
+            Self::Optimize { .. }
+            | Self::VacuumStart { .. }
+            | Self::VacuumEnd { .. }
+            | Self::AddConstraint { .. } => false,
             Self::Create { .. }
             | Self::FileSystemCheck {}
             | Self::StreamingUpdate { .. }
