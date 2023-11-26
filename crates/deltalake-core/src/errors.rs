@@ -211,6 +211,9 @@ pub enum DeltaTableError {
         #[from]
         source: crate::kernel::Error,
     },
+
+    #[error("Table metadata is invalid: {0}")]
+    MetadataError(String),
 }
 
 impl From<object_store::path::Error> for DeltaTableError {
