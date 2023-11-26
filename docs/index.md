@@ -12,7 +12,7 @@ This module provides the capability to read, write, and manage [Delta Lake](http
 
 ## Why implement the Delta Lake transaction log protocol in Rust and Scala?
 
-Delta Spark depends on Java and Spark, which is fine for many use cases, but not all Delta Lake users want to depend on these libraries.
+Delta Spark depends on Java and Spark, which is fine for many use cases, but not all Delta Lake users want to depend on these libraries.  delta-rs allows using Delta Lake in Rust or other native projects when using a JVM is often not an option.
 
 Python deltalake lets you query Delta tables without depending on Java/Scala.
 
