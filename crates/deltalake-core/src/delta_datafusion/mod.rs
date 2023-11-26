@@ -1694,7 +1694,9 @@ mod tests {
             Invariant::new("a", "a is null"),
             Invariant::new("b", "b < 100"),
         ];
-        let result = DeltaDataChecker::with_invariants(invariants).check_batch(&batch).await;
+        let result = DeltaDataChecker::with_invariants(invariants)
+            .check_batch(&batch)
+            .await;
         assert!(result.is_err());
         assert!(matches!(result, Err(DeltaTableError::InvalidData { .. })));
         if let Err(DeltaTableError::InvalidData { violations }) = result {
@@ -1703,7 +1705,9 @@ mod tests {
 
         // Irrelevant invariants return a different error
         let invariants = vec![Invariant::new("c", "c > 2000")];
-        let result = DeltaDataChecker::with_invariants(invariants).check_batch(&batch).await;
+        let result = DeltaDataChecker::with_invariants(invariants)
+            .check_batch(&batch)
+            .await;
         assert!(result.is_err());
 
         // Nested invariants are unsupported
@@ -1717,7 +1721,9 @@ mod tests {
         let batch = RecordBatch::try_new(schema, vec![inner]).unwrap();
 
         let invariants = vec![Invariant::new("x.b", "x.b < 1000")];
-        let result = DeltaDataChecker::with_invariants(invariants).check_batch(&batch).await;
+        let result = DeltaDataChecker::with_invariants(invariants)
+            .check_batch(&batch)
+            .await;
         assert!(result.is_err());
         assert!(matches!(result, Err(DeltaTableError::Generic { .. })));
     }
