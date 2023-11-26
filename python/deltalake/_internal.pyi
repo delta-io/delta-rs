@@ -150,6 +150,16 @@ def convert_to_deltalake(
     storage_options: Optional[Dict[str, str]],
     custom_metadata: Optional[Dict[str, str]],
 ) -> None: ...
+def create_deltalake(
+    table_uri: str,
+    schema: pyarrow.Schema,
+    partition_by: List[str],
+    mode: str,
+    name: Optional[str],
+    description: Optional[str],
+    configuration: Optional[Mapping[str, Optional[str]]],
+    storage_options: Optional[Dict[str, str]],
+) -> None: ...
 def batch_distinct(batch: pyarrow.RecordBatch) -> pyarrow.RecordBatch: ...
 
 # Can't implement inheritance (see note in src/schema.rs), so this is next
