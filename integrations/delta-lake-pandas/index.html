@@ -1,0 +1,1297 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+      
+      
+        <link rel="canonical" href="https://github.com/delta-io/delta-rs/integrations/delta-lake-pandas/">
+      
+      
+        <link rel="prev" href="../../api/storage/">
+      
+      
+      
+      <link rel="icon" href="../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.5.3, mkdocs-material-9.4.5">
+    
+    
+      
+        <title>pandas - Delta Lake Documentation</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.6a10b989.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/_markdown_exec_ansi.css">
+    
+      <link rel="stylesheet" href="../../assets/_mkdocstrings.css">
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce((e,_)=>(e<<5)-e+_.charCodeAt(0),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+    
+  </head>
+  
+  
+    <body dir="ltr">
+  
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&"object"==typeof palette.color)for(var key of Object.keys(palette.color))document.body.setAttribute("data-md-color-"+key,palette.color[key])</script>
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#using-delta-lake-with-pandas" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow md-header--lifted" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../.." title="Delta Lake Documentation" class="md-header__button md-logo" aria-label="Delta Lake Documentation" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54Z"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3V6m0 5h18v2H3v-2m0 5h18v2H3v-2Z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            Delta Lake Documentation
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              pandas
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+    
+    
+      <label class="md-header__button md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.516 6.516 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5Z"/></svg>
+      </label>
+      <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.516 6.516 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5Z"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11h12Z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12 19 6.41Z"/></svg>
+        </button>
+      </nav>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/delta-io/delta-rs" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.4.2 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2023 Fonticons, Inc.--><path d="M439.55 236.05 244 40.45a28.87 28.87 0 0 0-40.81 0l-40.66 40.63 51.52 51.52c27.06-9.14 52.68 16.77 43.39 43.68l49.66 49.66c34.23-11.8 61.18 31 35.47 56.69-26.49 26.49-70.21-2.87-56-37.34L240.22 199v121.85c25.3 12.54 22.26 41.85 9.08 55a34.34 34.34 0 0 1-48.55 0c-17.57-17.6-11.07-46.91 11.25-56v-123c-20.8-8.51-24.6-30.74-18.64-45L142.57 101 8.45 235.14a28.86 28.86 0 0 0 0 40.81l195.61 195.6a28.86 28.86 0 0 0 40.8 0l194.69-194.69a28.86 28.86 0 0 0 0-40.81z"/></svg>
+  </div>
+  <div class="md-source__repository">
+    delta-io/delta-rs
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+    
+      
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../.." class="md-tabs__link">
+        
+  
+    
+  
+  Home
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../usage/installation/" class="md-tabs__link">
+          
+  
+  Usage
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../api/delta_table/" class="md-tabs__link">
+          
+  
+  API Reference
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+    
+  
+  
+    
+    
+      <li class="md-tabs__item md-tabs__item--active">
+        <a href="./" class="md-tabs__link">
+          
+  
+  Integrations
+
+        </a>
+      </li>
+    
+  
+
+      
+    </ul>
+  </div>
+</nav>
+    
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="Delta Lake Documentation" class="md-nav__button md-logo" aria-label="Delta Lake Documentation" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54Z"/></svg>
+
+    </a>
+    Delta Lake Documentation
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/delta-io/delta-rs" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.4.2 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2023 Fonticons, Inc.--><path d="M439.55 236.05 244 40.45a28.87 28.87 0 0 0-40.81 0l-40.66 40.63 51.52 51.52c27.06-9.14 52.68 16.77 43.39 43.68l49.66 49.66c34.23-11.8 61.18 31 35.47 56.69-26.49 26.49-70.21-2.87-56-37.34L240.22 199v121.85c25.3 12.54 22.26 41.85 9.08 55a34.34 34.34 0 0 1-48.55 0c-17.57-17.6-11.07-46.91 11.25-56v-123c-20.8-8.51-24.6-30.74-18.64-45L142.57 101 8.45 235.14a28.86 28.86 0 0 0 0 40.81l195.61 195.6a28.86 28.86 0 0 0 40.8 0l194.69-194.69a28.86 28.86 0 0 0 0-40.81z"/></svg>
+  </div>
+  <div class="md-source__repository">
+    delta-io/delta-rs
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Home
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+    
+    
+    
+    
+    
+      
+      
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="">
+            
+  
+  <span class="md-ellipsis">
+    Usage
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            Usage
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../usage/installation/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Installation
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../usage/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Overview
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../usage/create-delta-lake-table/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Creating a table
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../usage/loading-table/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Loading a table
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../usage/appending-overwriting-delta-lake-table/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Append/overwrite tables
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../usage/examining-table/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Examining a table
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../usage/querying-delta-tables/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Querying a table
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../usage/managing-tables/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Managing a table
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../usage/writing-delta-tables/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Writing a table
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../usage/deleting-rows-from-delta-lake-table/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Deleting rows from a table
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+    
+    
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2_11" >
+        
+          
+          <label class="md-nav__link" for="__nav_2_11" id="__nav_2_11_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    Optimize
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_2_11_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2_11">
+            <span class="md-nav__icon md-icon"></span>
+            Optimize
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../usage/optimize/small-file-compaction-with-optimize/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Small file compaction
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../usage/optimize/delta-lake-z-order/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Z Order
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+    
+    
+    
+    
+    
+      
+      
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="">
+            
+  
+  <span class="md-ellipsis">
+    API Reference
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            API Reference
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/delta_table/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    DeltaTable
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/schema/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Schema
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/storage/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Storage
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+    
+    
+    
+    
+    
+      
+      
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="">
+            
+  
+  <span class="md-ellipsis">
+    Integrations
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            Integrations
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+    
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  <span class="md-ellipsis">
+    pandas
+  </span>
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  <span class="md-ellipsis">
+    pandas
+  </span>
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#delta-lake-makes-pandas-queries-run-faster" class="md-nav__link">
+    Delta Lake makes pandas queries run faster
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#delta-lake-lets-pandas-users-time-travel" class="md-nav__link">
+    Delta Lake lets pandas users time travel
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#schema-enforcement" class="md-nav__link">
+    Schema enforcement
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#overwriting-schema-of-table" class="md-nav__link">
+    Overwriting schema of table
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#in-memory-vs-in-storage-data-changes" class="md-nav__link">
+    In-memory vs. in-storage data changes
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#why-delta-lake-allows-for-faster-queries" class="md-nav__link">
+    Why Delta Lake allows for faster queries
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#more-resources" class="md-nav__link">
+    More resources
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#conclusion" class="md-nav__link">
+    Conclusion
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#delta-lake-makes-pandas-queries-run-faster" class="md-nav__link">
+    Delta Lake makes pandas queries run faster
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#delta-lake-lets-pandas-users-time-travel" class="md-nav__link">
+    Delta Lake lets pandas users time travel
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#schema-enforcement" class="md-nav__link">
+    Schema enforcement
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#overwriting-schema-of-table" class="md-nav__link">
+    Overwriting schema of table
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#in-memory-vs-in-storage-data-changes" class="md-nav__link">
+    In-memory vs. in-storage data changes
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#why-delta-lake-allows-for-faster-queries" class="md-nav__link">
+    Why Delta Lake allows for faster queries
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#more-resources" class="md-nav__link">
+    More resources
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#conclusion" class="md-nav__link">
+    Conclusion
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+  
+  
+
+
+<h1 id="using-delta-lake-with-pandas">Using Delta Lake with pandas</h1>
+<p>Delta Lake is a great storage system for pandas analyses.  This page shows how it's easy to use Delta Lake with pandas, the unique features Delta Lake offers pandas users, and how Delta Lake can make your pandas analyses run faster.</p>
+<p>Delta Lake is very easy to install for pandas analyses, just run <code>pip install deltalake</code>.</p>
+<p>Delta Lake allows for performance optimizations, so pandas queries can run much faster than the query run on data stored in CSV or Parquet.  See the following chart for the query runtime for the a Delta tables compared with CSV/Parquet.</p>
+<p><img alt="" src="../pandas-query-csv-parquet-delta.png" /></p>
+<p>Z Ordered Delta tables run this query much faster than when the data is stored in Parquet or CSV.  Let's dive in deeper and see how Delta Lake makes pandas faster.</p>
+<h2 id="delta-lake-makes-pandas-queries-run-faster">Delta Lake makes pandas queries run faster</h2>
+<p>There are a few reasons Delta Lake can make pandas queries run faster:</p>
+<ol>
+<li>column pruning: only grabbing the columns relevant for a query</li>
+<li>file skipping: only reading files with data for the query</li>
+<li>row group skipping: only reading row groups with data for the query</li>
+<li>Z ordering data: colocating similar data in the same files, so file skipping is more effective</li>
+</ol>
+<p>Reading less data (fewer columns and/or fewer rows) is how Delta Lake makes pandas queries run faster.</p>
+<p>Parquet allows for column pruning and row group skipping, but doesn't support file-level skipping or Z Ordering.  CSV doesn't support any of these performance optimizations.</p>
+<p>Let's take a look at a sample dataset and run a query to see the performance enhancements offered by Delta Lake.</p>
+<p>Suppose you have a 1 billion row dataset with 9 columns, here are the first three rows of the dataset:</p>
+<div class="highlight"><pre><span></span><code>+-------+-------+--------------+-------+-------+--------+------+------+---------+
+| id1   | id2   | id3          |   id4 |   id5 |    id6 |   v1 |   v2 |      v3 |
+|-------+-------+--------------+-------+-------+--------+------+------+---------|
+| id016 | id046 | id0000109363 |    88 |    13 | 146094 |    4 |    6 | 18.8377 |
+| id039 | id087 | id0000466766 |    14 |    30 | 111330 |    4 |   14 | 46.7973 |
+| id047 | id098 | id0000307804 |    85 |    23 | 187639 |    3 |    5 | 47.5773 |
++-------+-------+--------------+-------+-------+--------+------+------+---------+
+</code></pre></div>
+<p>The dataset is roughly 50 GB when stored as an uncompressed CSV files.  Let's run some queries on a 2021 Macbook M1 with 64 GB of RAM.</p>
+<p>Start by running the query on an uncompressed CSV file:</p>
+<div class="highlight"><pre><span></span><code><span class="p">(</span>
+    <span class="n">pd</span><span class="o">.</span><span class="n">read_csv</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">Path</span><span class="o">.</span><span class="n">home</span><span class="p">()</span><span class="si">}</span><span class="s2">/data/G1_1e9_1e2_0_0.csv&quot;</span><span class="p">,</span> <span class="n">usecols</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;id1&quot;</span><span class="p">,</span> <span class="s2">&quot;id2&quot;</span><span class="p">,</span> <span class="s2">&quot;v1&quot;</span><span class="p">])</span>
+    <span class="o">.</span><span class="n">query</span><span class="p">(</span><span class="s2">&quot;id1 == &#39;id016&#39;&quot;</span><span class="p">)</span>
+    <span class="o">.</span><span class="n">groupby</span><span class="p">(</span><span class="s2">&quot;id2&quot;</span><span class="p">)</span>
+    <span class="o">.</span><span class="n">agg</span><span class="p">({</span><span class="s2">&quot;v1&quot;</span><span class="p">:</span> <span class="s2">&quot;sum&quot;</span><span class="p">})</span>
+<span class="p">)</span>
+</code></pre></div>
+<p>This query takes 234 seconds to execute.  It runs out of memory if the <code>usecols</code> parameter is not set.</p>
+<p>Now let's convert the CSV dataset to Parquet and run the same query on the data stored in a Parquet file.</p>
+<div class="highlight"><pre><span></span><code><span class="p">(</span>
+    <span class="n">pd</span><span class="o">.</span><span class="n">read_parquet</span><span class="p">(</span>
+        <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">Path</span><span class="o">.</span><span class="n">home</span><span class="p">()</span><span class="si">}</span><span class="s2">/data/G1_1e9_1e2_0_0.parquet&quot;</span><span class="p">,</span> <span class="n">columns</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;id1&quot;</span><span class="p">,</span> <span class="s2">&quot;id2&quot;</span><span class="p">,</span> <span class="s2">&quot;v1&quot;</span><span class="p">]</span>
+    <span class="p">)</span>
+    <span class="o">.</span><span class="n">query</span><span class="p">(</span><span class="s2">&quot;id1 == &#39;id016&#39;&quot;</span><span class="p">)</span>
+    <span class="o">.</span><span class="n">groupby</span><span class="p">(</span><span class="s2">&quot;id2&quot;</span><span class="p">)</span>
+    <span class="o">.</span><span class="n">agg</span><span class="p">({</span><span class="s2">&quot;v1&quot;</span><span class="p">:</span> <span class="s2">&quot;sum&quot;</span><span class="p">})</span>
+<span class="p">)</span>
+</code></pre></div>
+<p>This query takes 118 seconds to execute.</p>
+<p>Parquet stores data in row groups and allows for skipping when the <code>filters</code> predicates are set.  Run the Parquet query again with row group skipping enabled:</p>
+<div class="highlight"><pre><span></span><code><span class="p">(</span>
+    <span class="n">pd</span><span class="o">.</span><span class="n">read_parquet</span><span class="p">(</span>
+        <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">Path</span><span class="o">.</span><span class="n">home</span><span class="p">()</span><span class="si">}</span><span class="s2">/data/G1_1e9_1e2_0_0.parquet&quot;</span><span class="p">,</span>
+        <span class="n">columns</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;id1&quot;</span><span class="p">,</span> <span class="s2">&quot;id2&quot;</span><span class="p">,</span> <span class="s2">&quot;v1&quot;</span><span class="p">],</span>
+        <span class="n">filters</span><span class="o">=</span><span class="p">[(</span><span class="s2">&quot;id1&quot;</span><span class="p">,</span> <span class="s2">&quot;==&quot;</span><span class="p">,</span> <span class="s2">&quot;id016&quot;</span><span class="p">)],</span>
+    <span class="p">)</span>
+    <span class="o">.</span><span class="n">query</span><span class="p">(</span><span class="s2">&quot;id1 == &#39;id016&#39;&quot;</span><span class="p">)</span>
+    <span class="o">.</span><span class="n">groupby</span><span class="p">(</span><span class="s2">&quot;id2&quot;</span><span class="p">)</span>
+    <span class="o">.</span><span class="n">agg</span><span class="p">({</span><span class="s2">&quot;v1&quot;</span><span class="p">:</span> <span class="s2">&quot;sum&quot;</span><span class="p">})</span>
+<span class="p">)</span>
+</code></pre></div>
+<p>This query runs in 19 seconds.  Lots of row groups can be skipped for this particular query.</p>
+<p>Now let's run the same query on a Delta table to see the out-of-the box performance:</p>
+<div class="highlight"><pre><span></span><code><span class="p">(</span>
+    <span class="n">DeltaTable</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">Path</span><span class="o">.</span><span class="n">home</span><span class="p">()</span><span class="si">}</span><span class="s2">/data/deltalake_baseline_G1_1e9_1e2_0_0&quot;</span><span class="p">,</span> <span class="n">version</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+    <span class="o">.</span><span class="n">to_pandas</span><span class="p">(</span><span class="n">filters</span><span class="o">=</span><span class="p">[(</span><span class="s2">&quot;id1&quot;</span><span class="p">,</span> <span class="s2">&quot;==&quot;</span><span class="p">,</span> <span class="s2">&quot;id016&quot;</span><span class="p">)],</span> <span class="n">columns</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;id1&quot;</span><span class="p">,</span> <span class="s2">&quot;id2&quot;</span><span class="p">,</span> <span class="s2">&quot;v1&quot;</span><span class="p">])</span>
+    <span class="o">.</span><span class="n">query</span><span class="p">(</span><span class="s2">&quot;id1 == &#39;id016&#39;&quot;</span><span class="p">)</span>
+    <span class="o">.</span><span class="n">groupby</span><span class="p">(</span><span class="s2">&quot;id2&quot;</span><span class="p">)</span>
+    <span class="o">.</span><span class="n">agg</span><span class="p">({</span><span class="s2">&quot;v1&quot;</span><span class="p">:</span> <span class="s2">&quot;sum&quot;</span><span class="p">})</span>
+<span class="p">)</span>
+</code></pre></div>
+<p>This query runs in 8 seconds, which is a significant performance enhancement.</p>
+<p>Now let's Z Order the Delta table by <code>id1</code> which will make the data skipping even better.  Run the query again on the Z Ordered Delta table:</p>
+<div class="highlight"><pre><span></span><code><span class="p">(</span>
+    <span class="n">DeltaTable</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">Path</span><span class="o">.</span><span class="n">home</span><span class="p">()</span><span class="si">}</span><span class="s2">/data/deltalake_baseline_G1_1e9_1e2_0_0&quot;</span><span class="p">,</span> <span class="n">version</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+    <span class="o">.</span><span class="n">to_pandas</span><span class="p">(</span><span class="n">filters</span><span class="o">=</span><span class="p">[(</span><span class="s2">&quot;id1&quot;</span><span class="p">,</span> <span class="s2">&quot;==&quot;</span><span class="p">,</span> <span class="s2">&quot;id016&quot;</span><span class="p">)],</span> <span class="n">columns</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;id1&quot;</span><span class="p">,</span> <span class="s2">&quot;id2&quot;</span><span class="p">,</span> <span class="s2">&quot;v1&quot;</span><span class="p">])</span>
+    <span class="o">.</span><span class="n">query</span><span class="p">(</span><span class="s2">&quot;id1 == &#39;id016&#39;&quot;</span><span class="p">)</span>
+    <span class="o">.</span><span class="n">groupby</span><span class="p">(</span><span class="s2">&quot;id2&quot;</span><span class="p">)</span>
+    <span class="o">.</span><span class="n">agg</span><span class="p">({</span><span class="s2">&quot;v1&quot;</span><span class="p">:</span> <span class="s2">&quot;sum&quot;</span><span class="p">})</span>
+<span class="p">)</span>
+</code></pre></div>
+<p>The query now executes in 2.4 seconds.</p>
+<p>Delta tables can make certain pandas queries run much faster.</p>
+<h2 id="delta-lake-lets-pandas-users-time-travel">Delta Lake lets pandas users time travel</h2>
+<p>Start by creating a Delta table:</p>
+<div class="highlight"><pre><span></span><code><span class="kn">from</span> <span class="nn">deltalake</span> <span class="kn">import</span> <span class="n">write_deltalake</span><span class="p">,</span> <span class="n">DeltaTable</span>
+
+<span class="n">df</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">({</span><span class="s2">&quot;num&quot;</span><span class="p">:</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">],</span> <span class="s2">&quot;letter&quot;</span><span class="p">:</span> <span class="p">[</span><span class="s2">&quot;a&quot;</span><span class="p">,</span> <span class="s2">&quot;b&quot;</span><span class="p">,</span> <span class="s2">&quot;c&quot;</span><span class="p">]})</span>
+<span class="n">write_deltalake</span><span class="p">(</span><span class="s2">&quot;tmp/some-table&quot;</span><span class="p">,</span> <span class="n">df</span><span class="p">)</span>
+</code></pre></div>
+<p>Here are the contents of the Delta table (version 0 of the Delta table):</p>
+<div class="highlight"><pre><span></span><code>+-------+----------+
+|   num | letter   |
+|-------+----------|
+|     1 | a        |
+|     2 | b        |
+|     3 | c        |
++-------+----------+
+</code></pre></div>
+<p>Now append two rows to the Delta table:</p>
+<div class="highlight"><pre><span></span><code><span class="n">df</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">({</span><span class="s2">&quot;num&quot;</span><span class="p">:</span> <span class="p">[</span><span class="mi">8</span><span class="p">,</span> <span class="mi">9</span><span class="p">],</span> <span class="s2">&quot;letter&quot;</span><span class="p">:</span> <span class="p">[</span><span class="s2">&quot;dd&quot;</span><span class="p">,</span> <span class="s2">&quot;ee&quot;</span><span class="p">]})</span>
+<span class="n">write_deltalake</span><span class="p">(</span><span class="s2">&quot;tmp/some-table&quot;</span><span class="p">,</span> <span class="n">df</span><span class="p">,</span> <span class="n">mode</span><span class="o">=</span><span class="s2">&quot;append&quot;</span><span class="p">)</span>
+</code></pre></div>
+<p>Here are the contents after the append operation (version 1 of the Delta table):</p>
+<div class="highlight"><pre><span></span><code>+-------+----------+
+|   num | letter   |
+|-------+----------|
+|     1 | a        |
+|     2 | b        |
+|     3 | c        |
+|     8 | dd       |
+|     9 | ee       |
++-------+----------+
+</code></pre></div>
+<p>Now perform an overwrite transaction:</p>
+<div class="highlight"><pre><span></span><code><span class="n">df</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">({</span><span class="s2">&quot;num&quot;</span><span class="p">:</span> <span class="p">[</span><span class="mi">11</span><span class="p">,</span> <span class="mi">22</span><span class="p">],</span> <span class="s2">&quot;letter&quot;</span><span class="p">:</span> <span class="p">[</span><span class="s2">&quot;aa&quot;</span><span class="p">,</span> <span class="s2">&quot;bb&quot;</span><span class="p">]})</span>
+<span class="n">write_deltalake</span><span class="p">(</span><span class="s2">&quot;tmp/some-table&quot;</span><span class="p">,</span> <span class="n">df</span><span class="p">,</span> <span class="n">mode</span><span class="o">=</span><span class="s2">&quot;overwrite&quot;</span><span class="p">)</span>
+</code></pre></div>
+<p>Here are the contents after the overwrite operation (version 2 of the Delta table):</p>
+<div class="highlight"><pre><span></span><code>+-------+----------+
+|   num | letter   |
+|-------+----------|
+|     8 | dd       |
+|     9 | ee       |
++-------+----------+
+</code></pre></div>
+<p>Read in the Delta table and it will grab the latest version by default:</p>
+<div class="highlight"><pre><span></span><code>DeltaTable(&quot;tmp/some-table&quot;).to_pandas()
+
++-------+----------+
+|   num | letter   |
+|-------+----------|
+|    11 | aa       |
+|    22 | bb       |
++-------+----------+
+</code></pre></div>
+<p>You can easily time travel back to version 0 of the Delta table:</p>
+<div class="highlight"><pre><span></span><code>DeltaTable(&quot;tmp/some-table&quot;, version=0).to_pandas()
+
++-------+----------+
+|   num | letter   |
+|-------+----------|
+|     1 | a        |
+|     2 | b        |
+|     3 | c        |
++-------+----------+
+</code></pre></div>
+<p>You can also time travel to version 1 of the Delta table:</p>
+<div class="highlight"><pre><span></span><code>DeltaTable(&quot;tmp/some-table&quot;, version=1).to_pandas()
+
++-------+----------+
+|   num | letter   |
+|-------+----------|
+|     1 | a        |
+|     2 | b        |
+|     3 | c        |
+|     8 | dd       |
+|     9 | ee       |
++-------+----------+
+</code></pre></div>
+<p>Time travel is a powerful feature that pandas users cannot access with CSV or Parquet.</p>
+<h2 id="schema-enforcement">Schema enforcement</h2>
+<p>Delta tables only allow you to append DataFrame with matching schema by default.  Suppose you have a DataFrame with <code>num</code> and <code>animal</code> columns, which is different from the Delta table that has columns with <code>num</code> and <code>letter</code> columns.</p>
+<p>Try to append this DataFrame with a mismatched schema to the existing table:</p>
+<div class="highlight"><pre><span></span><code>df = pd.DataFrame({&quot;num&quot;: [5, 6], &quot;animal&quot;: [&quot;cat&quot;, &quot;dog&quot;]})
+write_deltalake(&quot;tmp/some-table&quot;, df)
+</code></pre></div>
+<p>This transaction will be rejected and will return the following error message:</p>
+<div class="highlight"><pre><span></span><code>ValueError: Schema of data does not match table schema
+Data schema:
+num: int64
+animal: string
+-- schema metadata --
+pandas: &#39;{&quot;index_columns&quot;: [{&quot;kind&quot;: &quot;range&quot;, &quot;name&quot;: null, &quot;start&quot;: 0, &quot;&#39; + 474
+Table Schema:
+num: int64
+letter: string
+</code></pre></div>
+<p>Schema enforcement protects your table from getting corrupted by appending data with mismatched schema.  Parquet and CSV don't offer schema enforcement for pandas users.</p>
+<h2 id="overwriting-schema-of-table">Overwriting schema of table</h2>
+<p>You can overwrite the table contents and schema by setting the <code>overwrite_schema</code> option.  Here's how to overwrite the table contents:</p>
+<div class="highlight"><pre><span></span><code><span class="n">write_deltalake</span><span class="p">(</span><span class="s2">&quot;tmp/some-table&quot;</span><span class="p">,</span> <span class="n">df</span><span class="p">,</span> <span class="n">mode</span><span class="o">=</span><span class="s2">&quot;overwrite&quot;</span><span class="p">,</span> <span class="n">overwrite_schema</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+</code></pre></div>
+<p>Here are the contents of the table after the values and schema have been overwritten:</p>
+<div class="highlight"><pre><span></span><code>+-------+----------+
+|   num | animal   |
+|-------+----------|
+|     5 | cat      |
+|     6 | dog      |
++-------+----------+
+</code></pre></div>
+<h2 id="in-memory-vs-in-storage-data-changes">In-memory vs. in-storage data changes</h2>
+<p>It's important to distinguish between data stored in-memory and data stored on disk when understanding the functionality offered by Delta Lake.</p>
+<p>pandas loads data from storage (CSV, Parquet, or Delta Lake) into in-memory DataFrames.</p>
+<p>pandas makes it easy to modify the data in memory, say update a column value.  It's not easy to update a column value in storage systems like CSV or Parquet using pandas.</p>
+<p>Delta Lake makes it easy for pandas users to update data in storage.</p>
+<h2 id="why-delta-lake-allows-for-faster-queries">Why Delta Lake allows for faster queries</h2>
+<p>Delta tables store data in many files and metadata about the files in the transaction log.  Delta Lake allows for certain queries to skip entire files, which makes pandas queries run much faster.</p>
+<h2 id="more-resources">More resources</h2>
+<p>See this talk on why Delta Lake is the best file format for pandas analyses to learn more: </p>
+<iframe width="560" height="315" src="https://www.youtube.com/embed/A8bvJlG6phk?si=xHVZB5LhaWfTBU0r" title="YouTube video player" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" allowfullscreen></iframe>
+
+<h2 id="conclusion">Conclusion</h2>
+<p>Delta Lake provides many features that make it an excellent format for pandas analyses:</p>
+<ul>
+<li>performance optimizations make pandas queries run faster</li>
+<li>data management features make pandas analyses more reliable</li>
+<li>advanced features allow you to perform more complex pandas analyses</li>
+</ul>
+<p>Python deltalake offers pandas users a better experience compared with CSV/Parquet.</p>
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+  <script>var tabs=__md_get("__tabs");if(Array.isArray(tabs))e:for(var set of document.querySelectorAll(".tabbed-set")){var tab,labels=set.querySelector(".tabbed-labels");for(tab of tabs)for(var label of labels.getElementsByTagName("label"))if(label.innerText.trim()===tab){var input=document.getElementById(label.htmlFor);input.checked=!0;continue e}}</script>
+
+        </div>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+    
+      
+      <nav class="md-footer__inner md-grid" aria-label="Footer" >
+        
+          
+          <a href="../../api/storage/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Storage">
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11h12Z"/></svg>
+            </div>
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                Previous
+              </span>
+              <div class="md-ellipsis">
+                Storage
+              </div>
+            </div>
+          </a>
+        
+        
+      </nav>
+    
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    <script id="__config" type="application/json">{"base": "../..", "features": ["navigation.tracking", "navigation.instant", "navigation.tabs", "navigation.tabs.sticky", "navigation.footer", "content.tabs.link"], "search": "../../assets/javascripts/workers/search.f886a092.min.js", "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.aecac24b.min.js"></script>
+      
+    
+  </body>
+</html>

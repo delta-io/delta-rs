@@ -11,7 +11,7 @@
         <link rel="canonical" href="https://github.com/delta-io/delta-rs/api/delta_table/">
       
       
-        <link rel="prev" href="../../usage/writing-delta-tables/">
+        <link rel="prev" href="../../usage/optimize/delta-lake-z-order/">
       
       
         <link rel="next" href="../schema/">
@@ -195,27 +195,10 @@
   
   
   
-    <li class="md-tabs__item">
-      <a href="../../installation/" class="md-tabs__link">
-        
-  
-    
-  
-  Installation
-
-      </a>
-    </li>
-  
-
-      
-        
-  
-  
-  
     
     
       <li class="md-tabs__item">
-        <a href="../../usage/" class="md-tabs__link">
+        <a href="../../usage/installation/" class="md-tabs__link">
           
   
   Usage
@@ -239,6 +222,24 @@
           
   
   API Reference
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../integrations/delta-lake-pandas/" class="md-tabs__link">
+          
+  
+  Integrations
 
         </a>
       </li>
@@ -321,25 +322,6 @@
   
   
   
-    <li class="md-nav__item">
-      <a href="../../installation/" class="md-nav__link">
-        
-  
-  <span class="md-ellipsis">
-    Installation
-  </span>
-  
-
-      </a>
-    </li>
-  
-
-    
-      
-      
-  
-  
-  
     
     
     
@@ -353,10 +335,10 @@
         
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" >
         
           
-          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="">
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="">
             
   
   <span class="md-ellipsis">
@@ -367,12 +349,32 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_3">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
             <span class="md-nav__icon md-icon"></span>
             Usage
           </label>
           <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../usage/installation/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Installation
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
             
               
                 
@@ -400,11 +402,51 @@
   
   
     <li class="md-nav__item">
+      <a href="../../usage/create-delta-lake-table/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Creating a table
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../usage/loading-table/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
-    Loading a Delta Table
+    Loading a table
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../usage/appending-overwriting-delta-lake-table/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Append/overwrite tables
   </span>
   
 
@@ -424,7 +466,7 @@
         
   
   <span class="md-ellipsis">
-    Examining a Delta Table
+    Examining a table
   </span>
   
 
@@ -444,7 +486,7 @@
         
   
   <span class="md-ellipsis">
-    Querying a Delta Table
+    Querying a table
   </span>
   
 
@@ -464,7 +506,7 @@
         
   
   <span class="md-ellipsis">
-    Managing a Delta Table
+    Managing a table
   </span>
   
 
@@ -484,11 +526,115 @@
         
   
   <span class="md-ellipsis">
-    Writing Delta Tables
+    Writing a table
   </span>
   
 
       </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../usage/deleting-rows-from-delta-lake-table/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Deleting rows from a table
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+    
+    
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2_11" >
+        
+          
+          <label class="md-nav__link" for="__nav_2_11" id="__nav_2_11_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    Optimize
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_2_11_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2_11">
+            <span class="md-nav__icon md-icon"></span>
+            Optimize
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../usage/optimize/small-file-compaction-with-optimize/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Small file compaction
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../usage/optimize/delta-lake-z-order/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Z Order
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
     </li>
   
 
@@ -521,10 +667,10 @@
         
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" checked>
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" checked>
         
           
-          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="">
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="">
             
   
   <span class="md-ellipsis">
@@ -535,8 +681,8 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="true">
-          <label class="md-nav__title" for="__nav_4">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_3">
             <span class="md-nav__icon md-icon"></span>
             API Reference
           </label>
@@ -965,6 +1111,72 @@
   
   <span class="md-ellipsis">
     Storage
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+    
+    
+    
+    
+    
+      
+      
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="">
+            
+  
+  <span class="md-ellipsis">
+    Integrations
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            Integrations
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../integrations/delta-lake-pandas/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    pandas
   </span>
   
 
@@ -2005,26 +2217,26 @@ data is a low-level representation parsed from the transaction log.</p>
         </tr>
     </tbody>
   </table>
-      <p>Example:
-<div class="highlight"><pre><span></span><code>from deltalake import DeltaTable, write_deltalake
-import pyarrow as pa
-data = pa.table({&quot;x&quot;: [1, 2, 3], &quot;y&quot;: [4, 5, 6]})
-write_deltalake(&quot;tmp&quot;, data, partition_by=[&quot;x&quot;])
-dt = DeltaTable(&quot;tmp&quot;)
-dt.get_add_actions().to_pandas()
-</code></pre></div>
-<div class="highlight"><pre><span></span><code>path                                                size_bytes       modification_time  data_change partition_values  num_records null_count       min       max
-0  x=2/0-91820cbf-f698-45fb-886d-5d5f5669530b-0.p...         565 1970-01-20 08:40:08.071         True         {&#39;x&#39;: 2}            1   {&#39;y&#39;: 0}  {&#39;y&#39;: 5}  {&#39;y&#39;: 5}
-1  x=3/0-91820cbf-f698-45fb-886d-5d5f5669530b-0.p...         565 1970-01-20 08:40:08.071         True         {&#39;x&#39;: 3}            1   {&#39;y&#39;: 0}  {&#39;y&#39;: 6}  {&#39;y&#39;: 6}
-2  x=1/0-91820cbf-f698-45fb-886d-5d5f5669530b-0.p...         565 1970-01-20 08:40:08.071         True         {&#39;x&#39;: 1}            1   {&#39;y&#39;: 0}  {&#39;y&#39;: 4}  {&#39;y&#39;: 4}
-</code></pre></div></p>
-<p><div class="highlight"><pre><span></span><code>dt.get_add_actions(flatten=True).to_pandas()
-</code></pre></div>
-<div class="highlight"><pre><span></span><code>path                                                size_bytes       modification_time  data_change  partition.x  num_records  null_count.y  min.y  max.y
-0  x=2/0-91820cbf-f698-45fb-886d-5d5f5669530b-0.p...         565 1970-01-20 08:40:08.071         True            2            1             0      5      5
-1  x=3/0-91820cbf-f698-45fb-886d-5d5f5669530b-0.p...         565 1970-01-20 08:40:08.071         True            3            1             0      6      6
-2  x=1/0-91820cbf-f698-45fb-886d-5d5f5669530b-0.p...         565 1970-01-20 08:40:08.071         True            1            1             0      4      4
-</code></pre></div></p>
+      <p>Example:</p>
+<pre><code>&gt;&gt;&gt; from pprint import pprint
+&gt;&gt;&gt; from deltalake import DeltaTable, write_deltalake
+&gt;&gt;&gt; import pyarrow as pa
+&gt;&gt;&gt; data = pa.table({"x": [1, 2, 3], "y": [4, 5, 6]})
+&gt;&gt;&gt; write_deltalake("tmp", data, partition_by=["x"])
+&gt;&gt;&gt; dt = DeltaTable("tmp")
+&gt;&gt;&gt; df = dt.get_add_actions().to_pandas()
+&gt;&gt;&gt; df["path"].sort_values(ignore_index=True)
+0    x=1/0-...
+1    x=2/0-...
+2    x=3/0-...
+...
+&gt;&gt;&gt; df = dt.get_add_actions(flatten=True).to_pandas()
+&gt;&gt;&gt; df["partition.x"].sort_values(ignore_index=True)
+0    1
+1    2
+2    3
+...
+</code></pre>
 
   </div>
 
@@ -2228,7 +2440,7 @@ The <code>datetime_string</code> argument should be an RFC 3339 and ISO 8601 dat
 
 
 </h4>
-<div class="doc-signature highlight"><pre><span></span><code><span class="n">merge</span><span class="p">(</span><span class="n">source</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="n">pyarrow</span><span class="o">.</span><span class="n">Table</span><span class="p">,</span> <span class="n">pyarrow</span><span class="o">.</span><span class="n">RecordBatch</span><span class="p">,</span> <span class="n">pyarrow</span><span class="o">.</span><span class="n">RecordBatchReader</span><span class="p">],</span> <span class="n">predicate</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">source_alias</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">target_alias</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">error_on_type_mismatch</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">TableMerger</span>
+<div class="doc-signature highlight"><pre><span></span><code><span class="n">merge</span><span class="p">(</span><span class="n">source</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="n">pyarrow</span><span class="o">.</span><span class="n">Table</span><span class="p">,</span> <span class="n">pyarrow</span><span class="o">.</span><span class="n">RecordBatch</span><span class="p">,</span> <span class="n">pyarrow</span><span class="o">.</span><span class="n">RecordBatchReader</span><span class="p">,</span> <span class="n">ds</span><span class="o">.</span><span class="n">Dataset</span><span class="p">,</span> <span class="n">pandas</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">],</span> <span class="n">predicate</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">source_alias</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">target_alias</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">error_on_type_mismatch</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">TableMerger</span>
 </code></pre></div>
 
   <div class="doc doc-contents ">
@@ -3083,24 +3295,32 @@ only the following fields are supported: <code>data_page_size_limit</code>, <cod
     </tbody>
   </table>
       <p>Examples:</p>
-<p>Update some row values with SQL predicate. This is equivalent to <code>UPDATE table SET deleted = true WHERE id = '5'</code></p>
-<div class="highlight"><pre><span></span><code>from deltalake import DeltaTable
-dt = DeltaTable(&quot;tmp&quot;)
-dt.update(predicate=&quot;id = &#39;5&#39;&quot;, updates = {&quot;deleted&quot;: &#39;True&#39;})
-</code></pre></div>
-<p>Update all row values. This is equivalent to
-<code>UPDATE table SET deleted = true, id = concat(id, '_old')</code>.
-<div class="highlight"><pre><span></span><code>from deltalake import DeltaTable
-dt = DeltaTable(&quot;tmp&quot;)
-dt.update(updates = {&quot;deleted&quot;: &#39;True&#39;, &quot;id&quot;: &quot;concat(id, &#39;_old&#39;)&quot;})
-</code></pre></div></p>
-<p>To use Python objects instead of SQL strings, use the <code>new_values</code> parameter
-instead of the <code>updates</code> parameter. For example, this is equivalent to
-<code>UPDATE table SET price = 150.10 WHERE id = '5'</code>
-<div class="highlight"><pre><span></span><code>from deltalake import DeltaTable
-dt = DeltaTable(&quot;tmp&quot;)
-dt.update(predicate=&quot;id = &#39;5&#39;&quot;, new_values = {&quot;price&quot;: 150.10})
-</code></pre></div></p>
+<pre><code>Update some row values with SQL predicate. This is equivalent to `UPDATE table SET deleted = true WHERE id = '3'`
+
+&gt;&gt;&gt; from deltalake import write_deltalake, DeltaTable
+&gt;&gt;&gt; import pandas as pd
+&gt;&gt;&gt; df = pd.DataFrame({"id": ["1", "2", "3"], "deleted": [False, False, False], "price": [10., 15., 20.]})
+&gt;&gt;&gt; write_deltalake("tmp", df)
+&gt;&gt;&gt; dt = DeltaTable("tmp")
+&gt;&gt;&gt; dt.update(predicate="id = '3'", updates = {"deleted": 'True'})
+&lt;class 'str'&gt; &lt;class 'str'&gt;
+{'num_added_files': 1, 'num_removed_files': 1, 'num_updated_rows': 1, 'num_copied_rows': 2, 'execution_time_ms': ..., 'scan_time_ms': ...}
+
+Update all row values. This is equivalent to
+``UPDATE table SET deleted = true, id = concat(id, '_old')``.
+
+&gt;&gt;&gt; dt.update(updates = {"deleted": 'True', "id": "concat(id, '_old')"})
+&lt;class 'str'&gt; &lt;class 'str'&gt;
+&lt;class 'str'&gt; &lt;class 'str'&gt;
+{'num_added_files': 1, 'num_removed_files': 1, 'num_updated_rows': 3, 'num_copied_rows': 0, 'execution_time_ms': ..., 'scan_time_ms': ...}
+
+To use Python objects instead of SQL strings, use the `new_values` parameter
+instead of the `updates` parameter. For example, this is equivalent to
+``UPDATE table SET price = 150.10 WHERE id = '1'``
+
+&gt;&gt;&gt; dt.update(predicate="id = '1_old'", new_values = {"price": 150.10})
+{'num_added_files': 1, 'num_removed_files': 1, 'num_updated_rows': 1, 'num_copied_rows': 2, 'execution_time_ms': ..., 'scan_time_ms': ...}
+</code></pre>
 
   </div>
 
@@ -3624,19 +3844,47 @@ true for the matched row. If not specified it deletes all matches.</p>
     </tbody>
   </table>
       <p>Examples:</p>
-<p>Delete on a predicate
-<div class="highlight"><pre><span></span><code>from deltalake import DeltaTable
-import pyarrow as pa
-data = pa.table({&quot;x&quot;: [1, 2, 3], &quot;y&quot;: [4, 5, 6]})
-dt = DeltaTable(&quot;tmp&quot;)
-(             dt.merge(                 source=data,                 predicate=&#39;target.x = source.x&#39;,                 source_alias=&#39;source&#39;,                 target_alias=&#39;target&#39;)             .when_matched_delete(                 predicate = &quot;source.deleted = true&quot;)             .execute()         ```
+<pre><code>Delete on a predicate
+
+&gt;&gt;&gt; from deltalake import DeltaTable, write_deltalake
+&gt;&gt;&gt; import pyarrow as pa
+&gt;&gt;&gt; data = pa.table({"x": [1, 2, 3], "y": [4, 5, 6]})
+&gt;&gt;&gt; write_deltalake("tmp", data)
+&gt;&gt;&gt; dt = DeltaTable("tmp")
+&gt;&gt;&gt; new_data = pa.table({"x": [2, 3], "deleted": [False, True]})
+&gt;&gt;&gt; (
+...     dt.merge(
+...         source=new_data,
+...         predicate='target.x = source.x',
+...         source_alias='source',
+...         target_alias='target')
+...     .when_matched_delete(
+...         predicate="source.deleted = true")
+...     .execute()
+... )
+{'num_source_rows': 2, 'num_target_rows_inserted': 0, 'num_target_rows_updated': 0, 'num_target_rows_deleted': 1, 'num_target_rows_copied': 2, 'num_output_rows': 2, 'num_target_files_added': 1, 'num_target_files_removed': 1, 'execution_time_ms': ..., 'scan_time_ms': ..., 'rewrite_time_ms': ...}
+&gt;&gt;&gt; dt.to_pandas().sort_values("x", ignore_index=True)
+   x  y
+0  1  4
+1  2  5
+
 Delete all records that were matched
-</code></pre></div>
-from deltalake import DeltaTable
-import pyarrow as pa
-data = pa.table({"x": [1, 2, 3], "y": [4, 5, 6]})
-dt = DeltaTable("tmp")
-(             dt.merge(                 source=data,                 predicate='target.x = source.x',                 source_alias='source',                 target_alias='target')               .when_matched_delete()              .execute()         ```</p>
+
+&gt;&gt;&gt; dt = DeltaTable("tmp")
+&gt;&gt;&gt; (
+...     dt.merge(
+...         source=new_data,
+...         predicate='target.x = source.x',
+...         source_alias='source',
+...         target_alias='target')
+...     .when_matched_delete()
+...     .execute()
+... )
+{'num_source_rows': 2, 'num_target_rows_inserted': 0, 'num_target_rows_updated': 0, 'num_target_rows_deleted': 1, 'num_target_rows_copied': 1, 'num_output_rows': 1, 'num_target_files_added': 1, 'num_target_files_removed': 1, 'execution_time_ms': ..., 'scan_time_ms': ..., 'rewrite_time_ms': ...}
+&gt;&gt;&gt; dt.to_pandas()
+   x  y
+0  1  4
+</code></pre>
 
   </div>
 
@@ -3728,13 +3976,29 @@ If a <code>predicate</code> is specified, then it must evaluate to true for the 
         </tr>
     </tbody>
   </table>
-      <p>Examples:
-<div class="highlight"><pre><span></span><code>from deltalake import DeltaTable
-import pyarrow as pa
-data = pa.table({&quot;x&quot;: [1, 2, 3], &quot;y&quot;: [4, 5, 6]})
-dt = DeltaTable(&quot;tmp&quot;)
-(             dt.merge(                 source=data,                 predicate=&quot;target.x = source.x&quot;,                 source_alias=&quot;source&quot;,                 target_alias=&quot;target&quot;)             .when_matched_update(updates={&quot;x&quot;: &quot;source.x&quot;, &quot;y&quot;: &quot;source.y&quot;})             .execute()         )
-</code></pre></div></p>
+      <p>Examples:</p>
+<pre><code>&gt;&gt;&gt; from deltalake import DeltaTable, write_deltalake
+&gt;&gt;&gt; import pyarrow as pa
+&gt;&gt;&gt; data = pa.table({"x": [1, 2, 3], "y": [4, 5, 6]})
+&gt;&gt;&gt; write_deltalake("tmp", data)
+&gt;&gt;&gt; dt = DeltaTable("tmp")
+&gt;&gt;&gt; new_data = pa.table({"x": [1], "y": [7]})
+&gt;&gt;&gt; (
+...      dt.merge(
+...          source=new_data,
+...          predicate="target.x = source.x",
+...          source_alias="source",
+...          target_alias="target")
+...      .when_matched_update(updates={"x": "source.x", "y": "source.y"})
+...      .execute()
+... )
+{'num_source_rows': 1, 'num_target_rows_inserted': 0, 'num_target_rows_updated': 1, 'num_target_rows_deleted': 0, 'num_target_rows_copied': 2, 'num_output_rows': 3, 'num_target_files_added': 1, 'num_target_files_removed': 1, 'execution_time_ms': ..., 'scan_time_ms': ..., 'rewrite_time_ms': ...}
+&gt;&gt;&gt; dt.to_pandas()
+   x  y
+0  1  7
+1  2  5
+2  3  6
+</code></pre>
 
   </div>
 
@@ -3756,7 +4020,7 @@ dt = DeltaTable(&quot;tmp&quot;)
 
   <div class="doc doc-contents ">
   
-      <p>Updating all source fields to target fields, source and target are required to have the same field names. 
+      <p>Updating all source fields to target fields, source and target are required to have the same field names.
 If a <code>predicate</code> is specified, then it must evaluate to true for the row to be updated.</p>
 
 
@@ -3813,12 +4077,28 @@ If a <code>predicate</code> is specified, then it must evaluate to true for the 
     </tbody>
   </table>
       <p>Examples:</p>
-<div class="highlight"><pre><span></span><code>from deltalake import DeltaTable
-import pyarrow as pa
-data = pa.table({&quot;x&quot;: [1, 2, 3], &quot;y&quot;: [4, 5, 6]})
-dt = DeltaTable(&quot;tmp&quot;)
-(            dt.merge(                 source=data,                 predicate=&#39;target.x = source.x&#39;,                 source_alias=&#39;source&#39;,                 target_alias=&#39;target&#39;)              .when_matched_update_all()             .execute()             )
-</code></pre></div>
+<pre><code>&gt;&gt;&gt; from deltalake import DeltaTable, write_deltalake
+&gt;&gt;&gt; import pyarrow as pa
+&gt;&gt;&gt; data = pa.table({"x": [1, 2, 3], "y": [4, 5, 6]})
+&gt;&gt;&gt; write_deltalake("tmp", data)
+&gt;&gt;&gt; dt = DeltaTable("tmp")
+&gt;&gt;&gt; new_data = pa.table({"x": [1], "y": [7]})
+&gt;&gt;&gt; (
+...     dt.merge(
+...         source=new_data,
+...         predicate="target.x = source.x",
+...         source_alias="source",
+...         target_alias="target")
+...     .when_matched_update_all()
+...     .execute()
+... )
+{'num_source_rows': 1, 'num_target_rows_inserted': 0, 'num_target_rows_updated': 1, 'num_target_rows_deleted': 0, 'num_target_rows_copied': 2, 'num_output_rows': 3, 'num_target_files_added': 1, 'num_target_files_removed': 1, 'execution_time_ms': ..., 'scan_time_ms': ..., 'rewrite_time_ms': ...}
+&gt;&gt;&gt; dt.to_pandas()
+   x  y
+0  1  7
+1  2  5
+2  3  6
+</code></pre>
 
   </div>
 
@@ -3987,11 +4267,31 @@ If a <code>predicate</code> is specified, then it must evaluate to true for the 
         </tr>
     </tbody>
   </table>
-      <p><code>from deltalake import DeltaTable
-import pyarrow as pa
-data = pa.table({"x": [1, 2, 3], "y": [4, 5, 6]})
-dt = DeltaTable("tmp")
-(             dt.merge(                 source=data,                 predicate='target.x = source.x',                 source_alias='source',                 target_alias='target')             .when_not_matched_by_source_update(                 predicate = "y &gt; 3",                 updates = {"y": "0"})             .execute()             )</code></p>
+      <p>Examples:</p>
+<pre><code>&gt;&gt;&gt; from deltalake import DeltaTable, write_deltalake
+&gt;&gt;&gt; import pyarrow as pa
+&gt;&gt;&gt; data = pa.table({"x": [1, 2, 3], "y": [4, 5, 6]})
+&gt;&gt;&gt; write_deltalake("tmp", data)
+&gt;&gt;&gt; dt = DeltaTable("tmp")
+&gt;&gt;&gt; new_data = pa.table({"x": [2, 3, 4]})
+&gt;&gt;&gt; (
+...    dt.merge(
+...        source=new_data,
+...        predicate='target.x = source.x',
+...        source_alias='source',
+...        target_alias='target')
+...    .when_not_matched_by_source_update(
+...        predicate = "y &gt; 3",
+...        updates = {"y": "0"})
+...    .execute()
+... )
+{'num_source_rows': 3, 'num_target_rows_inserted': 0, 'num_target_rows_updated': 1, 'num_target_rows_deleted': 0, 'num_target_rows_copied': 2, 'num_output_rows': 3, 'num_target_files_added': 1, 'num_target_files_removed': 1, 'execution_time_ms': ..., 'scan_time_ms': ..., 'rewrite_time_ms': ...}
+&gt;&gt;&gt; dt.to_pandas().sort_values("x", ignore_index=True)
+   x  y
+0  1  0
+1  2  5
+2  3  6
+</code></pre>
 
   </div>
 
@@ -4084,12 +4384,33 @@ dt = DeltaTable("tmp")
     </tbody>
   </table>
       <p>Examples:</p>
-<div class="highlight"><pre><span></span><code>from deltalake import DeltaTable
-import pyarrow as pa
-data = pa.table({&quot;x&quot;: [1, 2, 3], &quot;y&quot;: [4, 5, 6]})
-dt = DeltaTable(&quot;tmp&quot;)
-(             dt.merge(                 source=data,                 predicate=&#39;target.x = source.x&#39;,                 source_alias=&#39;source&#39;,                 target_alias=&#39;target&#39;)             .when_not_matched_insert(                  updates = {                      &quot;x&quot;: &quot;source.x&quot;,                      &quot;y&quot;: &quot;source.y&quot;,                          })             .execute()                 )
-</code></pre></div>
+<pre><code>&gt;&gt;&gt; from deltalake import DeltaTable, write_deltalake
+&gt;&gt;&gt; import pyarrow as pa
+&gt;&gt;&gt; data = pa.table({"x": [1, 2, 3], "y": [4, 5, 6]})
+&gt;&gt;&gt; write_deltalake("tmp", data)
+&gt;&gt;&gt; dt = DeltaTable("tmp")
+&gt;&gt;&gt; new_data = pa.table({"x": [4], "y": [7]})
+&gt;&gt;&gt; (
+...    dt.merge(
+...        source=new_data,
+...        predicate='target.x = source.x',
+...        source_alias='source',
+...        target_alias='target')
+...    .when_not_matched_insert(
+...         updates = {
+...             "x": "source.x",
+...             "y": "source.y",
+...                 })
+...    .execute()
+... )
+{'num_source_rows': 1, 'num_target_rows_inserted': 1, 'num_target_rows_updated': 0, 'num_target_rows_deleted': 0, 'num_target_rows_copied': 3, 'num_output_rows': 4, 'num_target_files_added': 1, 'num_target_files_removed': 1, 'execution_time_ms': ..., 'scan_time_ms': ..., 'rewrite_time_ms': ...}
+&gt;&gt;&gt; dt.to_pandas().sort_values("x", ignore_index=True)
+   x  y
+0  1  4
+1  2  5
+2  3  6
+3  4  7
+</code></pre>
 
   </div>
 
@@ -4111,8 +4432,8 @@ dt = DeltaTable(&quot;tmp&quot;)
 
   <div class="doc doc-contents ">
   
-      <p>Insert a new row to the target table, updating all source fields to target fields. Source and target are 
-required to have the same field names. If a <code>predicate</code> is specified, then it must evaluate to true for 
+      <p>Insert a new row to the target table, updating all source fields to target fields. Source and target are
+required to have the same field names. If a <code>predicate</code> is specified, then it must evaluate to true for
 the new row to be inserted.</p>
 
 
@@ -4169,12 +4490,29 @@ the new row to be inserted.</p>
     </tbody>
   </table>
       <p>Examples:</p>
-<div class="highlight"><pre><span></span><code>from deltalake import DeltaTable
-import pyarrow as pa
-data = pa.table({&quot;x&quot;: [1, 2, 3], &quot;y&quot;: [4, 5, 6]})
-dt = DeltaTable(&quot;tmp&quot;)
-(             dt             .merge(                 source=data,                 predicate=&#39;target.x = source.x&#39;,                 source_alias=&#39;source&#39;,                 target_alias=&#39;target&#39;)             .when_not_matched_insert_all()             .execute()              )
-</code></pre></div>
+<pre><code>&gt;&gt;&gt; from deltalake import DeltaTable, write_deltalake
+&gt;&gt;&gt; import pyarrow as pa
+&gt;&gt;&gt; data = pa.table({"x": [1, 2, 3], "y": [4, 5, 6]})
+&gt;&gt;&gt; write_deltalake("tmp", data)
+&gt;&gt;&gt; dt = DeltaTable("tmp")
+&gt;&gt;&gt; new_data = pa.table({"x": [4], "y": [7]})
+&gt;&gt;&gt; (
+...    dt.merge(
+...        source=new_data,
+...        predicate='target.x = source.x',
+...        source_alias='source',
+...        target_alias='target')
+...    .when_not_matched_insert_all()
+...    .execute()
+... )
+{'num_source_rows': 1, 'num_target_rows_inserted': 1, 'num_target_rows_updated': 0, 'num_target_rows_deleted': 0, 'num_target_rows_copied': 3, 'num_output_rows': 4, 'num_target_files_added': 1, 'num_target_files_removed': 1, 'execution_time_ms': ..., 'scan_time_ms': ..., 'rewrite_time_ms': ...}
+&gt;&gt;&gt; dt.to_pandas().sort_values("x", ignore_index=True)
+   x  y
+0  1  4
+1  2  5
+2  3  6
+3  4  7
+</code></pre>
 
   </div>
 
@@ -4474,14 +4812,21 @@ it will fail.</p>
         </tr>
     </tbody>
   </table>
-      <p>Example:
-<div class="highlight"><pre><span></span><code># Use a timedelta object to specify the seconds, minutes or hours of the interval.
-from deltalake import DeltaTable
-from datetime import timedelta
-dt = DeltaTable(&quot;tmp&quot;)
-time_delta = timedelta(minutes=10)
-dt.optimize.z_order([&quot;timestamp&quot;], min_commit_interval=time_delta)
-</code></pre></div></p>
+
+
+
+<p><strong>Examples:</strong></p>
+    <p>Use a timedelta object to specify the seconds, minutes or hours of the interval.</p>
+    <div class="highlight"><pre><span></span><code><span class="gp">&gt;&gt;&gt; </span><span class="kn">from</span> <span class="nn">deltalake</span> <span class="kn">import</span> <span class="n">DeltaTable</span><span class="p">,</span> <span class="n">write_deltalake</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="kn">from</span> <span class="nn">datetime</span> <span class="kn">import</span> <span class="n">timedelta</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="kn">import</span> <span class="nn">pyarrow</span> <span class="k">as</span> <span class="nn">pa</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">write_deltalake</span><span class="p">(</span><span class="s2">&quot;tmp&quot;</span><span class="p">,</span> <span class="n">pa</span><span class="o">.</span><span class="n">table</span><span class="p">({</span><span class="s2">&quot;x&quot;</span><span class="p">:</span> <span class="p">[</span><span class="mi">1</span><span class="p">],</span> <span class="s2">&quot;y&quot;</span><span class="p">:</span> <span class="p">[</span><span class="mi">4</span><span class="p">]}))</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">write_deltalake</span><span class="p">(</span><span class="s2">&quot;tmp&quot;</span><span class="p">,</span> <span class="n">pa</span><span class="o">.</span><span class="n">table</span><span class="p">({</span><span class="s2">&quot;x&quot;</span><span class="p">:</span> <span class="p">[</span><span class="mi">2</span><span class="p">],</span> <span class="s2">&quot;y&quot;</span><span class="p">:</span> <span class="p">[</span><span class="mi">5</span><span class="p">]}),</span> <span class="n">mode</span><span class="o">=</span><span class="s2">&quot;append&quot;</span><span class="p">)</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">dt</span> <span class="o">=</span> <span class="n">DeltaTable</span><span class="p">(</span><span class="s2">&quot;tmp&quot;</span><span class="p">)</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">time_delta</span> <span class="o">=</span> <span class="n">timedelta</span><span class="p">(</span><span class="n">minutes</span><span class="o">=</span><span class="mi">10</span><span class="p">)</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">dt</span><span class="o">.</span><span class="n">optimize</span><span class="o">.</span><span class="n">compact</span><span class="p">(</span><span class="n">min_commit_interval</span><span class="o">=</span><span class="n">time_delta</span><span class="p">)</span>
+<span class="go">{&#39;numFilesAdded&#39;: 1, &#39;numFilesRemoved&#39;: 2, &#39;filesAdded&#39;: ..., &#39;filesRemoved&#39;: ..., &#39;partitionsOptimized&#39;: 1, &#39;numBatches&#39;: 2, &#39;totalConsideredFiles&#39;: 2, &#39;totalFilesSkipped&#39;: 0, &#39;preserveInsertionOrder&#39;: True}</span>
+</code></pre></div>
 
   </div>
 
@@ -4622,14 +4967,21 @@ dt.optimize.z_order([&quot;timestamp&quot;], min_commit_interval=time_delta)
         </tr>
     </tbody>
   </table>
-      <p>Example:
-<div class="highlight"><pre><span></span><code># Use a timedelta object to specify the seconds, minutes or hours of the interval.
-from deltalake import DeltaTable
-from datetime import timedelta
-dt = DeltaTable(&quot;tmp&quot;)
-time_delta = timedelta(minutes=10)
-dt.optimize.compact(min_commit_interval=time_delta)
-</code></pre></div></p>
+
+
+
+<p><strong>Examples:</strong></p>
+    <p>Use a timedelta object to specify the seconds, minutes or hours of the interval.</p>
+    <div class="highlight"><pre><span></span><code><span class="gp">&gt;&gt;&gt; </span><span class="kn">from</span> <span class="nn">deltalake</span> <span class="kn">import</span> <span class="n">DeltaTable</span><span class="p">,</span> <span class="n">write_deltalake</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="kn">from</span> <span class="nn">datetime</span> <span class="kn">import</span> <span class="n">timedelta</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="kn">import</span> <span class="nn">pyarrow</span> <span class="k">as</span> <span class="nn">pa</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">write_deltalake</span><span class="p">(</span><span class="s2">&quot;tmp&quot;</span><span class="p">,</span> <span class="n">pa</span><span class="o">.</span><span class="n">table</span><span class="p">({</span><span class="s2">&quot;x&quot;</span><span class="p">:</span> <span class="p">[</span><span class="mi">1</span><span class="p">],</span> <span class="s2">&quot;y&quot;</span><span class="p">:</span> <span class="p">[</span><span class="mi">4</span><span class="p">]}))</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">write_deltalake</span><span class="p">(</span><span class="s2">&quot;tmp&quot;</span><span class="p">,</span> <span class="n">pa</span><span class="o">.</span><span class="n">table</span><span class="p">({</span><span class="s2">&quot;x&quot;</span><span class="p">:</span> <span class="p">[</span><span class="mi">2</span><span class="p">],</span> <span class="s2">&quot;y&quot;</span><span class="p">:</span> <span class="p">[</span><span class="mi">5</span><span class="p">]}),</span> <span class="n">mode</span><span class="o">=</span><span class="s2">&quot;append&quot;</span><span class="p">)</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">dt</span> <span class="o">=</span> <span class="n">DeltaTable</span><span class="p">(</span><span class="s2">&quot;tmp&quot;</span><span class="p">)</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">time_delta</span> <span class="o">=</span> <span class="n">timedelta</span><span class="p">(</span><span class="n">minutes</span><span class="o">=</span><span class="mi">10</span><span class="p">)</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">dt</span><span class="o">.</span><span class="n">optimize</span><span class="o">.</span><span class="n">z_order</span><span class="p">([</span><span class="s2">&quot;x&quot;</span><span class="p">],</span> <span class="n">min_commit_interval</span><span class="o">=</span><span class="n">time_delta</span><span class="p">)</span>
+<span class="go">{&#39;numFilesAdded&#39;: 1, &#39;numFilesRemoved&#39;: 2, &#39;filesAdded&#39;: ..., &#39;filesRemoved&#39;: ..., &#39;partitionsOptimized&#39;: 0, &#39;numBatches&#39;: 1, &#39;totalConsideredFiles&#39;: 2, &#39;totalFilesSkipped&#39;: 0, &#39;preserveInsertionOrder&#39;: True}</span>
+</code></pre></div>
 
   </div>
 
@@ -4963,7 +5315,7 @@ If this value is set, then min_rows_per_group should also be set.</p>
           </td>
           <td>
             <div class="doc-md-description">
-              <p>If True, the table schema is checked against large_dtypes</p>
+              <p>If True, the data schema is kept in large_dtypes, has no effect on pandas dataframe input</p>
             </div>
           </td>
           <td>
@@ -4999,7 +5351,7 @@ If this value is set, then min_rows_per_group should also be set.</p>
       <nav class="md-footer__inner md-grid" aria-label="Footer" >
         
           
-          <a href="../../usage/writing-delta-tables/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Writing Delta Tables">
+          <a href="../../usage/optimize/delta-lake-z-order/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Z Order">
             <div class="md-footer__button md-icon">
               
               <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11h12Z"/></svg>
@@ -5009,7 +5361,7 @@ If this value is set, then min_rows_per_group should also be set.</p>
                 Previous
               </span>
               <div class="md-ellipsis">
-                Writing Delta Tables
+                Z Order
               </div>
             </div>
           </a>

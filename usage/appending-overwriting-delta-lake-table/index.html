@@ -8,13 +8,13 @@
       
       
       
-        <link rel="canonical" href="https://github.com/delta-io/delta-rs/usage/loading-table/">
+        <link rel="canonical" href="https://github.com/delta-io/delta-rs/usage/appending-overwriting-delta-lake-table/">
       
       
-        <link rel="prev" href="../create-delta-lake-table/">
+        <link rel="prev" href="../loading-table/">
       
       
-        <link rel="next" href="../appending-overwriting-delta-lake-table/">
+        <link rel="next" href="../examining-table/">
       
       
       <link rel="icon" href="../../assets/images/favicon.png">
@@ -22,7 +22,7 @@
     
     
       
-        <title>Loading a table - Delta Lake Documentation</title>
+        <title>Append/overwrite tables - Delta Lake Documentation</title>
       
     
     
@@ -71,7 +71,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#loading-a-delta-table" class="md-skip">
+        <a href="#appending-to-and-overwriting-a-delta-lake-table" class="md-skip">
           Skip to content
         </a>
       
@@ -107,7 +107,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              Loading a table
+              Append/overwrite tables
             
           </span>
         </div>
@@ -422,6 +422,26 @@
                 
   
   
+  
+    <li class="md-nav__item">
+      <a href="../loading-table/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Loading a table
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
     
   
   
@@ -437,7 +457,7 @@
           
   
   <span class="md-ellipsis">
-    Loading a table
+    Append/overwrite tables
   </span>
   
 
@@ -448,7 +468,7 @@
         
   
   <span class="md-ellipsis">
-    Loading a table
+    Append/overwrite tables
   </span>
   
 
@@ -470,15 +490,15 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#custom-storage-backends" class="md-nav__link">
-    Custom Storage Backends
+  <a href="#delta-lake-append-transactions" class="md-nav__link">
+    Delta Lake append transactions
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#time-travel" class="md-nav__link">
-    Time Travel
+  <a href="#delta-lake-overwrite-transactions" class="md-nav__link">
+    Delta Lake overwrite transactions
   </a>
   
 </li>
@@ -487,26 +507,6 @@
   
 </nav>
       
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../appending-overwriting-delta-lake-table/" class="md-nav__link">
-        
-  
-  <span class="md-ellipsis">
-    Append/overwrite tables
-  </span>
-  
-
-      </a>
     </li>
   
 
@@ -902,15 +902,15 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#custom-storage-backends" class="md-nav__link">
-    Custom Storage Backends
+  <a href="#delta-lake-append-transactions" class="md-nav__link">
+    Delta Lake append transactions
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#time-travel" class="md-nav__link">
-    Time Travel
+  <a href="#delta-lake-overwrite-transactions" class="md-nav__link">
+    Delta Lake overwrite transactions
   </a>
   
 </li>
@@ -933,102 +933,62 @@
   
 
 
-<h1 id="loading-a-delta-table">Loading a Delta Table</h1>
-<p>To load the current version, use the constructor:</p>
-<div class="highlight"><pre><span></span><code><span class="o">&gt;&gt;&gt;</span> <span class="n">dt</span> <span class="o">=</span> <span class="n">DeltaTable</span><span class="p">(</span><span class="s2">&quot;../rust/tests/data/delta-0.2.0&quot;</span><span class="p">)</span>
+<h1 id="appending-to-and-overwriting-a-delta-lake-table">Appending to and overwriting a Delta Lake table</h1>
+<p>This section explains how to append to an exising Delta table and how to overwrite a Delta table.</p>
+<h2 id="delta-lake-append-transactions">Delta Lake append transactions</h2>
+<p>Suppose you have a Delta table with the following contents:</p>
+<div class="highlight"><pre><span></span><code>+-------+----------+
+|   num | letter   |
+|-------+----------|
+|     1 | a        |
+|     2 | b        |
+|     3 | c        |
++-------+----------+
 </code></pre></div>
-<p>Depending on your storage backend, you could use the <code>storage_options</code>
-parameter to provide some configuration. Configuration is defined for
-specific backends - <a href="https://docs.rs/object_store/latest/object_store/aws/enum.AmazonS3ConfigKey.html#variants">s3
-options</a>,
-<a href="https://docs.rs/object_store/latest/object_store/azure/enum.AzureConfigKey.html#variants">azure
-options</a>,
-<a href="https://docs.rs/object_store/latest/object_store/gcp/enum.GoogleConfigKey.html#variants">gcs
-options</a>.</p>
-<div class="highlight"><pre><span></span><code><span class="o">&gt;&gt;&gt;</span> <span class="n">storage_options</span> <span class="o">=</span> <span class="p">{</span><span class="s2">&quot;AWS_ACCESS_KEY_ID&quot;</span><span class="p">:</span> <span class="s2">&quot;THE_AWS_ACCESS_KEY_ID&quot;</span><span class="p">,</span> <span class="s2">&quot;AWS_SECRET_ACCESS_KEY&quot;</span><span class="p">:</span><span class="s2">&quot;THE_AWS_SECRET_ACCESS_KEY&quot;</span><span class="p">}</span>
-<span class="o">&gt;&gt;&gt;</span> <span class="n">dt</span> <span class="o">=</span> <span class="n">DeltaTable</span><span class="p">(</span><span class="s2">&quot;../rust/tests/data/delta-0.2.0&quot;</span><span class="p">,</span> <span class="n">storage_options</span><span class="o">=</span><span class="n">storage_options</span><span class="p">)</span>
-</code></pre></div>
-<p>The configuration can also be provided via the environment, and the
-basic service provider is derived from the URL being used. We try to
-support many of the well-known formats to identify basic service
-properties.</p>
-<p><strong>S3</strong>:</p>
-<blockquote>
-<ul>
-<li>s3://\&lt;bucket&gt;/\&lt;path&gt;</li>
-<li>s3a://\&lt;bucket&gt;/\&lt;path&gt;</li>
-</ul>
-</blockquote>
-<p><strong>Azure</strong>:</p>
-<blockquote>
-<ul>
-<li>az://\&lt;container&gt;/\&lt;path&gt;</li>
-<li>adl://\&lt;container&gt;/\&lt;path&gt;</li>
-<li>abfs://\&lt;container&gt;/\&lt;path&gt;</li>
-</ul>
-</blockquote>
-<p><strong>GCS</strong>:</p>
-<blockquote>
-<ul>
-<li>gs://\&lt;bucket&gt;/\&lt;path&gt;</li>
-</ul>
-</blockquote>
-<p>Alternatively, if you have a data catalog you can load it by reference
-to a database and table name. Currently only AWS Glue is supported.</p>
-<p>For AWS Glue catalog, use AWS environment variables to authenticate.</p>
-<div class="highlight"><pre><span></span><code><span class="o">&gt;&gt;&gt;</span> <span class="kn">from</span> <span class="nn">deltalake</span> <span class="kn">import</span> <span class="n">DeltaTable</span>
-<span class="o">&gt;&gt;&gt;</span> <span class="kn">from</span> <span class="nn">deltalake</span> <span class="kn">import</span> <span class="n">DataCatalog</span>
-<span class="o">&gt;&gt;&gt;</span> <span class="n">database_name</span> <span class="o">=</span> <span class="s2">&quot;simple_database&quot;</span>
-<span class="o">&gt;&gt;&gt;</span> <span class="n">table_name</span> <span class="o">=</span> <span class="s2">&quot;simple_table&quot;</span>
-<span class="o">&gt;&gt;&gt;</span> <span class="n">data_catalog</span> <span class="o">=</span> <span class="n">DataCatalog</span><span class="o">.</span><span class="n">AWS</span>
-<span class="o">&gt;&gt;&gt;</span> <span class="n">dt</span> <span class="o">=</span> <span class="n">DeltaTable</span><span class="o">.</span><span class="n">from_data_catalog</span><span class="p">(</span><span class="n">data_catalog</span><span class="o">=</span><span class="n">data_catalog</span><span class="p">,</span> <span class="n">database_name</span><span class="o">=</span><span class="n">database_name</span><span class="p">,</span> <span class="n">table_name</span><span class="o">=</span><span class="n">table_name</span><span class="p">)</span>
-<span class="o">&gt;&gt;&gt;</span> <span class="n">dt</span><span class="o">.</span><span class="n">to_pyarrow_table</span><span class="p">()</span><span class="o">.</span><span class="n">to_pydict</span><span class="p">()</span>
-<span class="p">{</span><span class="s1">&#39;id&#39;</span><span class="p">:</span> <span class="p">[</span><span class="mi">5</span><span class="p">,</span> <span class="mi">7</span><span class="p">,</span> <span class="mi">9</span><span class="p">,</span> <span class="mi">5</span><span class="p">,</span> <span class="mi">6</span><span class="p">,</span> <span class="mi">7</span><span class="p">,</span> <span class="mi">8</span><span class="p">,</span> <span class="mi">9</span><span class="p">]}</span>
-</code></pre></div>
-<h2 id="custom-storage-backends">Custom Storage Backends</h2>
-<p>While delta always needs its internal storage backend to work and be
-properly configured, in order to manage the delta log, it may sometime
-be advantageous - and is common practice in the arrow world - to
-customize the storage interface used for reading the bulk data.</p>
-<p><code>deltalake</code> will work with any storage compliant with <code>pyarrow.fs.FileSystem</code>, however the root of the filesystem has to be adjusted to point at the root of the Delta table. We can achieve this by wrapping the custom filesystem into a <code>pyarrow.fs.SubTreeFileSystem</code>.</p>
-<div class="highlight"><pre><span></span><code><span class="kn">import</span> <span class="nn">pyarrow.fs</span> <span class="k">as</span> <span class="nn">fs</span>
-<span class="kn">from</span> <span class="nn">deltalake</span> <span class="kn">import</span> <span class="n">DeltaTable</span>
+<p>Append two additional rows of data to the table:</p>
+<div class="highlight"><pre><span></span><code><span class="kn">from</span> <span class="nn">deltalake</span> <span class="kn">import</span> <span class="n">write_deltalake</span><span class="p">,</span> <span class="n">DeltaTable</span>
 
-<span class="n">path</span> <span class="o">=</span> <span class="s2">&quot;&lt;path/to/table&gt;&quot;</span>
-<span class="n">filesystem</span> <span class="o">=</span> <span class="n">fs</span><span class="o">.</span><span class="n">SubTreeFileSystem</span><span class="p">(</span><span class="n">path</span><span class="p">,</span> <span class="n">fs</span><span class="o">.</span><span class="n">LocalFileSystem</span><span class="p">())</span>
+<span class="n">df</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">({</span><span class="s2">&quot;num&quot;</span><span class="p">:</span> <span class="p">[</span><span class="mi">8</span><span class="p">,</span> <span class="mi">9</span><span class="p">],</span> <span class="s2">&quot;letter&quot;</span><span class="p">:</span> <span class="p">[</span><span class="s2">&quot;dd&quot;</span><span class="p">,</span> <span class="s2">&quot;ee&quot;</span><span class="p">]})</span>
+<span class="n">write_deltalake</span><span class="p">(</span><span class="s2">&quot;tmp/some-table&quot;</span><span class="p">,</span> <span class="n">df</span><span class="p">,</span> <span class="n">mode</span><span class="o">=</span><span class="s2">&quot;append&quot;</span><span class="p">)</span>
+</code></pre></div>
+<p>Here are the updated contents of the Delta table:</p>
+<div class="highlight"><pre><span></span><code>+-------+----------+
+|   num | letter   |
+|-------+----------|
+|     1 | a        |
+|     2 | b        |
+|     3 | c        |
+|     8 | dd       |
+|     9 | ee       |
++-------+----------+
+</code></pre></div>
+<p>Now let's see how to perform an overwrite transaction.</p>
+<h2 id="delta-lake-overwrite-transactions">Delta Lake overwrite transactions</h2>
+<p>Now let's see how to overwrite the exisitng Delta table.</p>
+<div class="highlight"><pre><span></span><code><span class="n">df</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">({</span><span class="s2">&quot;num&quot;</span><span class="p">:</span> <span class="p">[</span><span class="mi">11</span><span class="p">,</span> <span class="mi">22</span><span class="p">],</span> <span class="s2">&quot;letter&quot;</span><span class="p">:</span> <span class="p">[</span><span class="s2">&quot;aa&quot;</span><span class="p">,</span> <span class="s2">&quot;bb&quot;</span><span class="p">]})</span>
+<span class="n">write_deltalake</span><span class="p">(</span><span class="s2">&quot;tmp/some-table&quot;</span><span class="p">,</span> <span class="n">df</span><span class="p">,</span> <span class="n">mode</span><span class="o">=</span><span class="s2">&quot;overwrite&quot;</span><span class="p">)</span>
+</code></pre></div>
+<p>Here are the contents of the Delta table after the overwrite operation:</p>
+<div class="highlight"><pre><span></span><code>+-------+----------+
+|   num | letter   |
+|-------+----------|
+|    11 | aa       |
+|    22 | bb       |
++-------+----------+
+</code></pre></div>
+<p>Overwriting just performs a logical delete.  It doesn't physically remove the previous data from storage.  Time travel back to the previous version to confirm that the old version of the table is still accessable.</p>
+<div class="highlight"><pre><span></span><code>dt = DeltaTable(&quot;tmp/some-table&quot;, version=1)
 
-<span class="n">dt</span> <span class="o">=</span> <span class="n">DeltaTable</span><span class="p">(</span><span class="n">path</span><span class="p">)</span>
-<span class="n">ds</span> <span class="o">=</span> <span class="n">dt</span><span class="o">.</span><span class="n">to_pyarrow_dataset</span><span class="p">(</span><span class="n">filesystem</span><span class="o">=</span><span class="n">filesystem</span><span class="p">)</span>
++-------+----------+
+|   num | letter   |
+|-------+----------|
+|     1 | a        |
+|     2 | b        |
+|     3 | c        |
+|     8 | dd       |
+|     9 | ee       |
++-------+----------+
 </code></pre></div>
-<p>When using the pyarrow factory method for file systems, the normalized
-path is provided on creation. In case of S3 this would look something
-like:</p>
-<div class="highlight"><pre><span></span><code><span class="kn">import</span> <span class="nn">pyarrow.fs</span> <span class="k">as</span> <span class="nn">fs</span>
-<span class="kn">from</span> <span class="nn">deltalake</span> <span class="kn">import</span> <span class="n">DeltaTable</span>
-
-<span class="n">table_uri</span> <span class="o">=</span> <span class="s2">&quot;s3://&lt;bucket&gt;/&lt;path&gt;&quot;</span>
-<span class="n">raw_fs</span><span class="p">,</span> <span class="n">normalized_path</span> <span class="o">=</span> <span class="n">fs</span><span class="o">.</span><span class="n">FileSystem</span><span class="o">.</span><span class="n">from_uri</span><span class="p">(</span><span class="n">table_uri</span><span class="p">)</span>
-<span class="n">filesystem</span> <span class="o">=</span> <span class="n">fs</span><span class="o">.</span><span class="n">SubTreeFileSystem</span><span class="p">(</span><span class="n">normalized_path</span><span class="p">,</span> <span class="n">raw_fs</span><span class="p">)</span>
-
-<span class="n">dt</span> <span class="o">=</span> <span class="n">DeltaTable</span><span class="p">(</span><span class="n">table_uri</span><span class="p">)</span>
-<span class="n">ds</span> <span class="o">=</span> <span class="n">dt</span><span class="o">.</span><span class="n">to_pyarrow_dataset</span><span class="p">(</span><span class="n">filesystem</span><span class="o">=</span><span class="n">filesystem</span><span class="p">)</span>
-</code></pre></div>
-<h2 id="time-travel">Time Travel</h2>
-<p>To load previous table states, you can provide the version number you
-wish to load:</p>
-<div class="highlight"><pre><span></span><code><span class="o">&gt;&gt;&gt;</span> <span class="n">dt</span> <span class="o">=</span> <span class="n">DeltaTable</span><span class="p">(</span><span class="s2">&quot;../rust/tests/data/simple_table&quot;</span><span class="p">,</span> <span class="n">version</span><span class="o">=</span><span class="mi">2</span><span class="p">)</span>
-</code></pre></div>
-<p>Once you\'ve loaded a table, you can also change versions using either a
-version number or datetime string:</p>
-<div class="highlight"><pre><span></span><code><span class="o">&gt;&gt;&gt;</span> <span class="n">dt</span><span class="o">.</span><span class="n">load_version</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span>
-<span class="o">&gt;&gt;&gt;</span> <span class="n">dt</span><span class="o">.</span><span class="n">load_with_datetime</span><span class="p">(</span><span class="s2">&quot;2021-11-04 00:05:23.283+00:00&quot;</span><span class="p">)</span>
-</code></pre></div>
-<div class="admonition warning">
-<p class="admonition-title">Warning</p>
-<p>Previous table versions may not exist if they have been vacuumed, in
-which case an exception will be thrown. See <a href="#vacuuming-tables">Vacuuming
-tables</a> for more information.</p>
-</div>
 
 
 
@@ -1052,7 +1012,7 @@ tables</a> for more information.</p>
       <nav class="md-footer__inner md-grid" aria-label="Footer" >
         
           
-          <a href="../create-delta-lake-table/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Creating a table">
+          <a href="../loading-table/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Loading a table">
             <div class="md-footer__button md-icon">
               
               <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11h12Z"/></svg>
@@ -1062,20 +1022,20 @@ tables</a> for more information.</p>
                 Previous
               </span>
               <div class="md-ellipsis">
-                Creating a table
+                Loading a table
               </div>
             </div>
           </a>
         
         
           
-          <a href="../appending-overwriting-delta-lake-table/" class="md-footer__link md-footer__link--next" aria-label="Next: Append/overwrite tables">
+          <a href="../examining-table/" class="md-footer__link md-footer__link--next" aria-label="Next: Examining a table">
             <div class="md-footer__title">
               <span class="md-footer__direction">
                 Next
               </span>
               <div class="md-ellipsis">
-                Append/overwrite tables
+                Examining a table
               </div>
             </div>
             <div class="md-footer__button md-icon">

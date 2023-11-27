@@ -12,7 +12,7 @@
       
       
       
-        <link rel="next" href="installation/">
+        <link rel="next" href="usage/installation/">
       
       
       <link rel="icon" href="assets/images/favicon.png">
@@ -69,7 +69,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#python-deltalake-package" class="md-skip">
+        <a href="#the-deltalake-package" class="md-skip">
           Skip to content
         </a>
       
@@ -195,27 +195,10 @@
   
   
   
-    <li class="md-tabs__item">
-      <a href="installation/" class="md-tabs__link">
-        
-  
-    
-  
-  Installation
-
-      </a>
-    </li>
-  
-
-      
-        
-  
-  
-  
     
     
       <li class="md-tabs__item">
-        <a href="usage/" class="md-tabs__link">
+        <a href="usage/installation/" class="md-tabs__link">
           
   
   Usage
@@ -237,6 +220,24 @@
           
   
   API Reference
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="integrations/delta-lake-pandas/" class="md-tabs__link">
+          
+  
+  Integrations
 
         </a>
       </li>
@@ -310,6 +311,17 @@
         
       
       
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  <span class="md-ellipsis">
+    Home
+  </span>
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
       <a href="." class="md-nav__link md-nav__link--active">
         
   
@@ -320,25 +332,53 @@
 
       </a>
       
-    </li>
-  
-
-    
-      
-      
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="installation/" class="md-nav__link">
         
-  
-  <span class="md-ellipsis">
-    Installation
-  </span>
-  
 
-      </a>
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#important-terminology" class="md-nav__link">
+    Important terminology
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#why-implement-the-delta-lake-transaction-log-protocol-in-rust-and-scala" class="md-nav__link">
+    Why implement the Delta Lake transaction log protocol in Rust and Scala?
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#contributing" class="md-nav__link">
+    Contributing
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#project-history" class="md-nav__link">
+    Project history
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
     </li>
   
 
@@ -361,10 +401,10 @@
         
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" >
         
           
-          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="">
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="">
             
   
   <span class="md-ellipsis">
@@ -375,12 +415,32 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_3">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
             <span class="md-nav__icon md-icon"></span>
             Usage
           </label>
           <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="usage/installation/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Installation
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
             
               
                 
@@ -408,11 +468,51 @@
   
   
     <li class="md-nav__item">
+      <a href="usage/create-delta-lake-table/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Creating a table
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+    <li class="md-nav__item">
       <a href="usage/loading-table/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
-    Loading a Delta Table
+    Loading a table
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="usage/appending-overwriting-delta-lake-table/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Append/overwrite tables
   </span>
   
 
@@ -432,7 +532,7 @@
         
   
   <span class="md-ellipsis">
-    Examining a Delta Table
+    Examining a table
   </span>
   
 
@@ -452,7 +552,7 @@
         
   
   <span class="md-ellipsis">
-    Querying a Delta Table
+    Querying a table
   </span>
   
 
@@ -472,7 +572,7 @@
         
   
   <span class="md-ellipsis">
-    Managing a Delta Table
+    Managing a table
   </span>
   
 
@@ -492,11 +592,115 @@
         
   
   <span class="md-ellipsis">
-    Writing Delta Tables
+    Writing a table
   </span>
   
 
       </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="usage/deleting-rows-from-delta-lake-table/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Deleting rows from a table
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+    
+    
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2_11" >
+        
+          
+          <label class="md-nav__link" for="__nav_2_11" id="__nav_2_11_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    Optimize
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_2_11_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2_11">
+            <span class="md-nav__icon md-icon"></span>
+            Optimize
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="usage/optimize/small-file-compaction-with-optimize/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Small file compaction
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="usage/optimize/delta-lake-z-order/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Z Order
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
     </li>
   
 
@@ -527,10 +731,10 @@
         
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" >
         
           
-          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="">
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="">
             
   
   <span class="md-ellipsis">
@@ -541,8 +745,8 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_4">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
             <span class="md-nav__icon md-icon"></span>
             API Reference
           </label>
@@ -615,6 +819,72 @@
   
 
     
+      
+      
+  
+  
+  
+    
+    
+    
+    
+    
+      
+      
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="">
+            
+  
+  <span class="md-ellipsis">
+    Integrations
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            Integrations
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="integrations/delta-lake-pandas/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    pandas
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
   </ul>
 </nav>
                   </div>
@@ -635,6 +905,42 @@
     
   
   
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#important-terminology" class="md-nav__link">
+    Important terminology
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#why-implement-the-delta-lake-transaction-log-protocol-in-rust-and-scala" class="md-nav__link">
+    Why implement the Delta Lake transaction log protocol in Rust and Scala?
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#contributing" class="md-nav__link">
+    Contributing
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#project-history" class="md-nav__link">
+    Project history
+  </a>
+  
+</li>
+      
+    </ul>
+  
 </nav>
                   </div>
                 </div>
@@ -651,10 +957,27 @@
   
 
 
-<h1 id="python-deltalake-package">Python deltalake package</h1>
-<p>This is the documentation for the native Python implementation of Delta Lake. It is based on the delta-rs Rust library and requires no Spark or JVM dependencies. For the PySpark implementation, see <a href="https://docs.delta.io/latest/api/python/index.html">delta-spark</a> instead.</p>
-<p>This module provides the capability to read, write, and manage <a href="https://delta.io/">Delta Lake</a> tables from Python without Spark or Java. It uses <a href="https://arrow.apache.org/">Apache Arrow</a> under the hood, so is compatible with other Arrow-native or integrated libraries such as <a href="https://pandas.pydata.org/">Pandas</a>, <a href="https://duckdb.org/">DuckDB</a>, and <a href="https://www.pola.rs/">Polars</a>.</p>
-<p>Note: This module is under active development and some features are experimental. It is not yet as feature-complete as the PySpark implementation of Delta Lake. If you encounter a bug, please let us know in our <a href="https://github.com/delta-io/delta-rs/issues">GitHub repo</a>.</p>
+<h1 id="the-deltalake-package">The deltalake package</h1>
+<p>This is the documentation for the native Rust/Python implementation of Delta Lake. It is based on the delta-rs Rust library and requires no Spark or JVM dependencies. For the PySpark implementation, see <a href="https://docs.delta.io/latest/api/python/index.html">delta-spark</a> instead.</p>
+<p>This module provides the capability to read, write, and manage <a href="https://delta.io/">Delta Lake</a> tables with Python or Rust without Spark or Java. It uses <a href="https://arrow.apache.org/">Apache Arrow</a> under the hood, so is compatible with other Arrow-native or integrated libraries such as <a href="https://pandas.pydata.org/">pandas</a>, <a href="https://duckdb.org/">DuckDB</a>, and <a href="https://www.pola.rs/">Polars</a>.</p>
+<h2 id="important-terminology">Important terminology</h2>
+<ul>
+<li>"Rust deltalake" refers to the Rust API of delta-rs (no Spark dependency)</li>
+<li>"Python deltalake" refers to the Python API of delta-rs (no Spark dependency)</li>
+<li>"Delta Spark" refers to the Scala impementation of the Delta Lake transaction log protocol.  This depends on Spark and Java.</li>
+</ul>
+<h2 id="why-implement-the-delta-lake-transaction-log-protocol-in-rust-and-scala">Why implement the Delta Lake transaction log protocol in Rust and Scala?</h2>
+<p>Delta Spark depends on Java and Spark, which is fine for many use cases, but not all Delta Lake users want to depend on these libraries.  delta-rs allows using Delta Lake in Rust or other native projects when using a JVM is often not an option.</p>
+<p>Python deltalake lets you query Delta tables without depending on Java/Scala.</p>
+<p>Suppose you want to query a Delta table with pandas on your local machine.  Python deltalake makes it easy to query the table with a simple <code>pip install</code> command - no need to install Java.</p>
+<h2 id="contributing">Contributing</h2>
+<p>The Delta Lake community welcomes contributors from all developers, regardless of your experience or programming background.</p>
+<p>You can write Rust code, Python code, documentation, submit bugs, or give talks to the community.  We welcome all of these contributions.</p>
+<p>Feel free to <a href="https://go.delta.io/slack">join our Slack</a> and message us in the #delta-rs channel any time!</p>
+<p>We value kind communication and building a productive, friendly environment for maximum collaboration and fun.</p>
+<h2 id="project-history">Project history</h2>
+<p>Check out this video by Denny Lee &amp; QP Hou to learn about the genesis of the delta-rs project:</p>
+<iframe width="560" height="315" src="https://www.youtube.com/embed/ZQdEdifcBh8?si=ytGW7FB-kwl6VqsV" title="YouTube video player" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" allowfullscreen></iframe>
 
 
 
@@ -679,7 +1002,7 @@
         
         
           
-          <a href="installation/" class="md-footer__link md-footer__link--next" aria-label="Next: Installation">
+          <a href="usage/installation/" class="md-footer__link md-footer__link--next" aria-label="Next: Installation">
             <div class="md-footer__title">
               <span class="md-footer__direction">
                 Next
