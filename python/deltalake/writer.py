@@ -245,6 +245,9 @@ def write_deltalake(
     if isinstance(partition_by, str):
         partition_by = [partition_by]
 
+    if isinstance(schema, Schema):
+        schema = schema.to_pyarrow()
+
     if isinstance(data, RecordBatchReader):
         data = convert_pyarrow_recordbatchreader(data, large_dtypes)
     elif isinstance(data, pa.RecordBatch):
@@ -336,24 +339,24 @@ def write_deltalake(
             except KeyError:
                 return dtype
 
-    if partition_by:
-        table_schema: pa.Schema = schema
-        if PYARROW_MAJOR_VERSION < 12:
-            partition_schema = pa.schema(
-                [
-                    pa.field(
-                        name, _large_to_normal_dtype(table_schema.field(name).type)
-                    )
-                    for name in partition_by
-                ]
-            )
+        if partition_by:
+            table_schema: pa.Schema = schema
+            if PYARROW_MAJOR_VERSION < 12:
+                partition_schema = pa.schema(
+                    [
+                        pa.field(
+                            name, _large_to_normal_dtype(table_schema.field(name).type)
+                        )
+                        for name in partition_by
+                    ]
+                )
+            else:
+                partition_schema = pa.schema(
+                    [table_schema.field(name) for name in partition_by]
+                )
+            partitioning = ds.partitioning(partition_schema, flavor="hive")
         else:
-            partition_schema = pa.schema(
-                [table_schema.field(name) for name in partition_by]
-            )
-        partitioning = ds.partitioning(partition_schema, flavor="hive")
-    else:
-        partitioning = None
+            partitioning = None
 
         add_actions: List[AddAction] = []
 

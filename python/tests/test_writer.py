@@ -17,7 +17,7 @@ from pyarrow.dataset import ParquetFileFormat, ParquetReadOptions
 from pyarrow.lib import RecordBatchReader
 
 from deltalake import DeltaTable, Schema, write_deltalake
-from deltalake.exceptions import CommitFailedError, DeltaProtocolError
+from deltalake.exceptions import CommitFailedError, DeltaError, DeltaProtocolError
 from deltalake.table import ProtocolVersions
 from deltalake.writer import try_get_table_and_table_uri
 
