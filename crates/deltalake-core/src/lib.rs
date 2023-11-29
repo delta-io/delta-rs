@@ -706,7 +706,7 @@ mod tests {
                 let path_still_doesnt_exist = !FolderPath::new(path_str).exists();
                 assert!(
                     path_still_doesnt_exist,
-                    "Path still doesn't exist, empty folder wasn't created"
+                    "Path exists for some reason, but it shouldn't"
                 );
 
                 Err(e)
