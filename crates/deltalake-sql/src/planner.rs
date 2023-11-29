@@ -92,6 +92,7 @@ mod tests {
     use arrow_schema::{DataType, Field, Schema};
     use datafusion_common::config::ConfigOptions;
     use datafusion_common::DataFusionError;
+    use datafusion_common::Result as DataFusionResult;
     use datafusion_expr::logical_plan::builder::LogicalTableSource;
     use datafusion_expr::{AggregateUDF, ScalarUDF, TableSource};
     use datafusion_sql::TableReference;
@@ -124,6 +125,10 @@ mod tests {
 
     impl ContextProvider for TestSchemaProvider {
         fn get_table_provider(&self, name: TableReference) -> DFResult<Arc<dyn TableSource>> {
+            self.get_table_source(name)
+        }
+
+        fn get_table_source(&self, name: TableReference) -> DFResult<Arc<dyn TableSource>> {
             match self.tables.get(name.table()) {
                 Some(table) => Ok(table.clone()),
                 _ => Err(DataFusionError::Plan(format!(

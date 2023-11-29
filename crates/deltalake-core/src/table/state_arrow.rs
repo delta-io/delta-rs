@@ -16,6 +16,7 @@ use arrow_array::{
 use arrow_schema::{DataType, Field, Fields, TimeUnit};
 use itertools::Itertools;
 
+use super::config::ColumnMappingMode;
 use super::state::DeltaTableState;
 use crate::errors::DeltaTableError;
 use crate::kernel::{DataType as DeltaDataType, StructType};
@@ -145,7 +146,7 @@ impl DeltaTableState {
         flatten: bool,
     ) -> Result<arrow::record_batch::RecordBatch, DeltaTableError> {
         let metadata = self.current_metadata().ok_or(DeltaTableError::NoMetadata)?;
-
+        let column_mapping_mode = self.table_config().column_mapping_mode();
         let partition_column_types: Vec<arrow::datatypes::DataType> = metadata
             .partition_columns
             .iter()
@@ -167,13 +168,44 @@ impl DeltaTableState {
             })
             .collect::<HashMap<&str, _>>();
 
+        let physical_name_to_logical_name = match column_mapping_mode {
+            ColumnMappingMode::None => HashMap::with_capacity(0), // No column mapping, no need for this HashMap
+            ColumnMappingMode::Id | ColumnMappingMode::Name => metadata
+                .partition_columns
+                .iter()
+                .map(|name| -> Result<_, DeltaTableError> {
+                    let physical_name = metadata
+                        .schema
+                        .field_with_name(name)
+                        .or(Err(DeltaTableError::MetadataError(format!(
+                            "Invalid partition column {0}",
+                            name
+                        ))))?
+                        .physical_name()
+                        .map_err(|e| DeltaTableError::Kernel { source: e })?;
+                    Ok((physical_name, name.as_str()))
+                })
+                .collect::<Result<HashMap<&str, &str>, DeltaTableError>>()?,
+        };
         // Append values
         for action in self.files() {
             for (name, maybe_value) in action.partition_values.iter() {
+                let logical_name = match column_mapping_mode {
+                    ColumnMappingMode::None => name.as_str(),
+                    ColumnMappingMode::Id | ColumnMappingMode::Name => {
+                        physical_name_to_logical_name.get(name.as_str()).ok_or(
+                            DeltaTableError::MetadataError(format!(
+                                "Invalid partition column {0}",
+                                name
+                            )),
+                        )?
+                    }
+                };
                 if let Some(value) = maybe_value {
-                    builders.get_mut(name.as_str()).unwrap().append_value(value);
+                    builders.get_mut(logical_name).unwrap().append_value(value);
+                // Unwrap is safe here since the name exists in the mapping where we check validity already
                 } else {
-                    builders.get_mut(name.as_str()).unwrap().append_null();
+                    builders.get_mut(logical_name).unwrap().append_null();
                 }
             }
         }

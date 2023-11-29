@@ -34,12 +34,17 @@ import pyarrow.dataset as ds
 import pyarrow.fs as pa_fs
 from pyarrow.lib import RecordBatchReader
 
-from deltalake.schema import delta_arrow_schema_from_pandas
-
 from ._internal import DeltaDataChecker as _DeltaDataChecker
 from ._internal import batch_distinct
+from ._internal import convert_to_deltalake as _convert_to_deltalake
 from ._internal import write_new_deltalake as _write_new_deltalake
 from .exceptions import DeltaProtocolError, TableNotFoundError
+from .schema import (
+    convert_pyarrow_dataset,
+    convert_pyarrow_recordbatch,
+    convert_pyarrow_recordbatchreader,
+    convert_pyarrow_table,
+)
 from .table import MAX_SUPPORTED_WRITER_VERSION, DeltaTable
 
 try:
@@ -158,13 +163,8 @@ def write_deltalake(
         overwrite_schema: If True, allows updating the schema of the table.
         storage_options: options passed to the native delta filesystem. Unused if 'filesystem' is defined.
         partition_filters: the partition filters that will be used for partition overwrite.
-        large_dtypes: If True, the table schema is checked against large_dtypes
+        large_dtypes: If True, the data schema is kept in large_dtypes, has no effect on pandas dataframe input
     """
-    if _has_pandas and isinstance(data, pd.DataFrame):
-        if schema is not None:
-            data = pa.Table.from_pandas(data, schema=schema)
-        else:
-            data, schema = delta_arrow_schema_from_pandas(data)
 
     table, table_uri = try_get_table_and_table_uri(table_or_uri, storage_options)
 
@@ -172,13 +172,29 @@ def write_deltalake(
     if table:
         table.update_incremental()
 
-    if schema is None:
-        if isinstance(data, RecordBatchReader):
-            schema = data.schema
-        elif isinstance(data, Iterable):
-            raise ValueError("You must provide schema if data is Iterable")
+    if isinstance(data, RecordBatchReader):
+        data = convert_pyarrow_recordbatchreader(data, large_dtypes)
+    elif isinstance(data, pa.RecordBatch):
+        data = convert_pyarrow_recordbatch(data, large_dtypes)
+    elif isinstance(data, pa.Table):
+        data = convert_pyarrow_table(data, large_dtypes)
+    elif isinstance(data, ds.Dataset):
+        data = convert_pyarrow_dataset(data, large_dtypes)
+    elif _has_pandas and isinstance(data, pd.DataFrame):
+        if schema is not None:
+            data = pa.Table.from_pandas(data, schema=schema)
         else:
-            schema = data.schema
+            data = convert_pyarrow_table(pa.Table.from_pandas(data), False)
+    elif isinstance(data, Iterable):
+        if schema is None:
+            raise ValueError("You must provide schema if data is Iterable")
+    else:
+        raise TypeError(
+            f"{type(data).__name__} is not a valid input. Only PyArrow RecordBatchReader, RecordBatch, Iterable[RecordBatch], Table, Dataset or Pandas DataFrame are valid inputs for source."
+        )
+
+    if schema is None:
+        schema = data.schema
 
     if filesystem is not None:
         raise NotImplementedError("Filesystem support is not yet implemented.  #570")
@@ -225,7 +241,7 @@ def write_deltalake(
         current_version = -1
 
     dtype_map = {
-        pa.large_string(): pa.string(),  # type: ignore
+        pa.large_string(): pa.string(),
     }
 
     def _large_to_normal_dtype(dtype: pa.DataType) -> pa.DataType:
@@ -327,19 +343,8 @@ def write_deltalake(
 
             return batch
 
-        if isinstance(data, RecordBatchReader):
-            batch_iter = data
-        elif isinstance(data, pa.RecordBatch):
-            batch_iter = [data]
-        elif isinstance(data, pa.Table):
-            batch_iter = data.to_batches()
-        elif isinstance(data, ds.Dataset):
-            batch_iter = data.to_batches()
-        else:
-            batch_iter = data
-
         data = RecordBatchReader.from_batches(
-            schema, (validate_batch(batch) for batch in batch_iter)
+            schema, (validate_batch(batch) for batch in data)
         )
 
     if file_options is not None:
@@ -389,6 +394,60 @@ def write_deltalake(
             partition_filters,
         )
         table.update_incremental()
+
+
+def convert_to_deltalake(
+    uri: Union[str, Path],
+    mode: Literal["error", "ignore"] = "error",
+    partition_by: Optional[pa.Schema] = None,
+    partition_strategy: Optional[Literal["hive"]] = None,
+    name: Optional[str] = None,
+    description: Optional[str] = None,
+    configuration: Optional[Mapping[str, Optional[str]]] = None,
+    storage_options: Optional[Dict[str, str]] = None,
+    custom_metadata: Optional[Dict[str, str]] = None,
+) -> None:
+    """
+    `Convert` parquet tables `to delta` tables.
+
+    Currently only HIVE partitioned tables are supported. `Convert to delta` creates
+    a transaction log commit with add actions, and additional properties provided such
+    as configuration, name, and description.
+
+    Args:
+        uri: URI of a table.
+        partition_by: Optional partitioning schema if table is partitioned.
+        partition_strategy: Optional partition strategy to read and convert
+        mode: How to handle existing data. Default is to error if table already exists.
+            If 'ignore', will not convert anything if table already exists.
+        name: User-provided identifier for this table.
+        description: User-provided description for this table.
+        configuration: A map containing configuration options for the metadata action.
+        storage_options: options passed to the native delta filesystem. Unused if 'filesystem' is defined.
+        custom_metadata: custom metadata that will be added to the transaction commit
+    """
+    if partition_by is not None and partition_strategy is None:
+        raise ValueError("Partition strategy has to be provided with partition_by.")
+
+    if partition_strategy is not None and partition_strategy != "hive":
+        raise ValueError(
+            "Currently only `hive` partition strategy is supported to be converted."
+        )
+
+    if mode == "ignore" and try_get_deltatable(uri, storage_options) is not None:
+        return
+
+    _convert_to_deltalake(
+        str(uri),
+        partition_by,
+        partition_strategy,
+        name,
+        description,
+        configuration,
+        storage_options,
+        custom_metadata,
+    )
+    return
 
 
 def __enforce_append_only(

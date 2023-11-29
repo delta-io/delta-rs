@@ -23,8 +23,9 @@ use std::borrow::Borrow;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::mem::take;
+use std::str::FromStr;
 
-use crate::errors::DeltaResult;
+use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::{Add, CommitInfo, Metadata, Protocol, Remove};
 use crate::logstore::LogStore;
 use crate::table::CheckPoint;
@@ -589,6 +590,23 @@ pub enum SaveMode {
     Ignore,
 }
 
+impl FromStr for SaveMode {
+    type Err = DeltaTableError;
+
+    fn from_str(s: &str) -> DeltaResult<Self> {
+        match s.to_ascii_lowercase().as_str() {
+            "append" => Ok(SaveMode::Append),
+            "overwrite" => Ok(SaveMode::Overwrite),
+            "error" => Ok(SaveMode::ErrorIfExists),
+            "ignore" => Ok(SaveMode::Ignore),
+            _ => Err(DeltaTableError::Generic(format!(
+                "Invalid save mode provided: {}, only these are supported: ['append', 'overwrite', 'error', 'ignore']",
+                s
+            ))),
+        }
+    }
+}
+
 /// The OutputMode used in streaming operations.
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum OutputMode {
@@ -1077,6 +1095,80 @@ mod tests {
             //     "partition_values",
             //     new_null_array(&DataType::Struct(vec![]), 5),
             // ));
+            let expected = RecordBatch::try_from_iter(expected_columns.clone()).unwrap();
+
+            assert_eq!(expected, actions);
+        }
+
+        #[tokio::test]
+        async fn test_with_column_mapping() {
+            // test table with column mapping and partitions
+            let path = "./tests/data/table_with_column_mapping";
+            let table = crate::open_table(path).await.unwrap();
+            let actions = table.get_state().add_actions_table(true).unwrap();
+            let expected_columns: Vec<(&str, ArrayRef)> = vec![
+                (
+                    "path",
+                    Arc::new(array::StringArray::from(vec![
+                        "BH/part-00000-4d6e745c-8e04-48d9-aa60-438228358f1a.c000.zstd.parquet",
+                        "8v/part-00001-69b4a452-aeac-4ffa-bf5c-a0c2833d05eb.c000.zstd.parquet",
+                    ])),
+                ),
+                (
+                    "size_bytes",
+                    Arc::new(array::Int64Array::from(vec![890, 810])),
+                ),
+                (
+                    "modification_time",
+                    Arc::new(arrow::array::TimestampMillisecondArray::from(vec![
+                        1699946088000,
+                        1699946088000,
+                    ])),
+                ),
+                (
+                    "data_change",
+                    Arc::new(array::BooleanArray::from(vec![true, true])),
+                ),
+                (
+                    "partition.Company Very Short",
+                    Arc::new(array::StringArray::from(vec!["BMS", "BME"])),
+                ),
+                ("num_records", Arc::new(array::Int64Array::from(vec![4, 1]))),
+                (
+                    "null_count.Company Very Short",
+                    Arc::new(array::NullArray::new(2)),
+                ),
+                ("min.Company Very Short", Arc::new(array::NullArray::new(2))),
+                ("max.Company Very Short", Arc::new(array::NullArray::new(2))),
+                ("null_count.Super Name", Arc::new(array::NullArray::new(2))),
+                ("min.Super Name", Arc::new(array::NullArray::new(2))),
+                ("max.Super Name", Arc::new(array::NullArray::new(2))),
+                (
+                    "tags.INSERTION_TIME",
+                    Arc::new(array::StringArray::from(vec![
+                        "1699946088000000",
+                        "1699946088000001",
+                    ])),
+                ),
+                (
+                    "tags.MAX_INSERTION_TIME",
+                    Arc::new(array::StringArray::from(vec![
+                        "1699946088000000",
+                        "1699946088000001",
+                    ])),
+                ),
+                (
+                    "tags.MIN_INSERTION_TIME",
+                    Arc::new(array::StringArray::from(vec![
+                        "1699946088000000",
+                        "1699946088000001",
+                    ])),
+                ),
+                (
+                    "tags.OPTIMIZE_TARGET_SIZE",
+                    Arc::new(array::StringArray::from(vec!["33554432", "33554432"])),
+                ),
+            ];
             let expected = RecordBatch::try_from_iter(expected_columns.clone()).unwrap();
 
             assert_eq!(expected, actions);

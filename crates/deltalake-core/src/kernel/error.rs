@@ -23,9 +23,8 @@ pub enum Error {
     #[error("Arrow error: {0}")]
     Parquet(#[from] parquet::errors::ParquetError),
 
-    #[cfg(feature = "object_store")]
     #[error("Error interacting with object store: {0}")]
-    ObjectStore(object_store::Error),
+    ObjectStore(#[from] object_store::Error),
 
     #[error("File not found: {0}")]
     FileNotFound(String),
@@ -65,6 +64,9 @@ pub enum Error {
         /// Invariant expression.
         line: String,
     },
+
+    #[error("Table metadata is invalid: {0}")]
+    MetadataError(String),
 }
 
 #[cfg(feature = "object_store")]
