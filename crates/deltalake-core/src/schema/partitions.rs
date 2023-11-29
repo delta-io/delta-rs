@@ -110,7 +110,7 @@ impl PartitionFilter {
                         .map(|x| !x.is_eq())
                         .unwrap_or(false)
                 } else {
-                    value == &partition.value
+                    value != &partition.value
                 }
             }
             PartitionValue::GreaterThan(value) => {
