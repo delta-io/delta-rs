@@ -86,6 +86,11 @@ build-documentation: ## Build documentation with Sphinx
 	$(info --- Run build of the Sphinx documentation ---)
 	sphinx-build -Wn -b html -d ./docs/build/doctrees ./docs/source ./docs/build/html
 
+.PHONY: build-docs
+build-docs: ## Build documentation with mkdocs
+	$(info --- Run build of the documentation ---)
+	(cd ..; pip install -r docs/requirements.txt; mkdocs build)
+
 .PHONY: clean
 clean: ## Run clean
 	$(warning --- Clean virtualenv and target directory ---)
