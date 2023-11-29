@@ -21,6 +21,7 @@ from typing import (
 )
 from urllib.parse import unquote
 
+from deltalake import Schema
 from deltalake.fs import DeltaStorageHandler
 
 from ._util import encode_partition_value
@@ -142,7 +143,7 @@ def write_deltalake(
         RecordBatchReader,
     ],
     *,
-    schema: Optional[pa.Schema] = None,
+    schema: Optional[Union[pa.Schema, Schema]] = None,
     partition_by: Optional[Union[List[str], str]] = None,
     filesystem: Optional[pa_fs.FileSystem] = None,
     mode: Literal["error", "append", "overwrite", "ignore"] = "error",
@@ -244,6 +245,9 @@ def write_deltalake(
     if isinstance(partition_by, str):
         partition_by = [partition_by]
 
+    if isinstance(schema, Schema):
+        schema = schema.to_pyarrow()
+
     if isinstance(data, RecordBatchReader):
         data = convert_pyarrow_recordbatchreader(data, large_dtypes)
     elif isinstance(data, pa.RecordBatch):
@@ -336,16 +340,19 @@ def write_deltalake(
                 return dtype
 
         if partition_by:
+            table_schema: pa.Schema = schema
             if PYARROW_MAJOR_VERSION < 12:
                 partition_schema = pa.schema(
                     [
-                        pa.field(name, _large_to_normal_dtype(schema.field(name).type))
+                        pa.field(
+                            name, _large_to_normal_dtype(table_schema.field(name).type)
+                        )
                         for name in partition_by
                     ]
                 )
             else:
                 partition_schema = pa.schema(
-                    [schema.field(name) for name in partition_by]
+                    [table_schema.field(name) for name in partition_by]
                 )
             partitioning = ds.partitioning(partition_schema, flavor="hive")
         else:
