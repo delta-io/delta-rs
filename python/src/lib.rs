@@ -1128,6 +1128,64 @@ impl From<&PyAddAction> for Add {
 
 #[pyfunction]
 #[allow(clippy::too_many_arguments)]
+fn write_to_deltalake(
+    table_uri: String,
+    data: PyArrowType<ArrowArrayStreamReader>,
+    mode: String,
+    max_rows_per_group: i64,
+    overwrite_schema: bool,
+    partition_by: Option<Vec<String>>,
+    predicate: Option<String>,
+    name: Option<String>,
+    description: Option<String>,
+    configuration: Option<HashMap<String, Option<String>>>,
+    storage_options: Option<HashMap<String, String>>,
+) -> PyResult<()> {
+    let batches = data.0.map(|batch| batch.unwrap()).collect::<Vec<_>>();
+    let save_mode = mode.parse().map_err(PythonError::from)?;
+
+    let options = storage_options.clone().unwrap_or_default();
+    let table = rt()?
+        .block_on(DeltaOps::try_from_uri_with_storage_options(
+            &table_uri, options,
+        ))
+        .map_err(PythonError::from)?;
+
+    let mut builder = table
+        .write(batches)
+        .with_save_mode(save_mode)
+        .with_overwrite_schema(overwrite_schema)
+        .with_write_batch_size(max_rows_per_group as usize);
+
+    if let Some(partition_columns) = partition_by {
+        builder = builder.with_partition_columns(partition_columns);
+    }
+
+    if let Some(name) = &name {
+        builder = builder.with_table_name(name);
+    };
+
+    if let Some(description) = &description {
+        builder = builder.with_description(description);
+    };
+
+    if let Some(predicate) = &predicate {
+        builder = builder.with_replace_where(predicate);
+    };
+
+    if let Some(config) = configuration {
+        builder = builder.with_configuration(config);
+    };
+
+    rt()?
+        .block_on(builder.into_future())
+        .map_err(PythonError::from)?;
+
+    Ok(())
+}
+
+#[pyfunction]
+#[allow(clippy::too_many_arguments)]
 fn write_new_deltalake(
     table_uri: String,
     schema: PyArrowType<ArrowSchema>,
@@ -1268,6 +1326,7 @@ fn _internal(py: Python, m: &PyModule) -> PyResult<()> {
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
     m.add_function(pyo3::wrap_pyfunction!(rust_core_version, m)?)?;
     m.add_function(pyo3::wrap_pyfunction!(write_new_deltalake, m)?)?;
+    m.add_function(pyo3::wrap_pyfunction!(write_to_deltalake, m)?)?;
     m.add_function(pyo3::wrap_pyfunction!(convert_to_deltalake, m)?)?;
     m.add_function(pyo3::wrap_pyfunction!(batch_distinct, m)?)?;
     m.add_class::<RawDeltaTable>()?;
