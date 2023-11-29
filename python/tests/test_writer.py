@@ -16,7 +16,7 @@ from packaging import version
 from pyarrow.dataset import ParquetFileFormat, ParquetReadOptions
 from pyarrow.lib import RecordBatchReader
 
-from deltalake import DeltaTable, write_deltalake
+from deltalake import DeltaTable, Schema, write_deltalake
 from deltalake.exceptions import CommitFailedError, DeltaError, DeltaProtocolError
 from deltalake.table import ProtocolVersions
 from deltalake.writer import try_get_table_and_table_uri
@@ -1176,3 +1176,11 @@ def test_float_values(tmp_path: pathlib.Path):
     assert actions["min"].field("x2")[0].as_py() is None
     assert actions["max"].field("x2")[0].as_py() == 1.0
     assert actions["null_count"].field("x2")[0].as_py() == 1
+
+
+def test_with_deltalake_schema(tmp_path: pathlib.Path, sample_data: pa.Table):
+    write_deltalake(
+        tmp_path, sample_data, schema=Schema.from_pyarrow(sample_data.schema)
+    )
+    delta_table = DeltaTable(tmp_path)
+    assert delta_table.schema().to_pyarrow() == sample_data.schema
