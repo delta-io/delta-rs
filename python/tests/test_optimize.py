@@ -61,7 +61,6 @@ def test_z_order_optimize(
 
     dt = DeltaTable(tmp_path)
     old_version = dt.version()
-    total_files = len(dt.file_uris())
 
     dt.optimize.z_order(["date32", "timestamp"])
 
