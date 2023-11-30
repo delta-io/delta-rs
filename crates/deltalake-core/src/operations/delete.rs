@@ -172,6 +172,7 @@ async fn excute_non_empty_expr(
         None,
         writer_properties,
         false,
+        false,
     )
     .await?;
 

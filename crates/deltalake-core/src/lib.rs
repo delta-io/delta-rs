@@ -71,6 +71,7 @@
 #![deny(warnings)]
 #![deny(missing_docs)]
 #![allow(rustdoc::invalid_html_tags)]
+#![allow(clippy::nonminimal_bool)]
 
 #[cfg(all(feature = "parquet", feature = "parquet2"))]
 compile_error!(
@@ -80,6 +81,11 @@ compile_error!(
 #[cfg(all(feature = "s3", feature = "s3-native-tls"))]
 compile_error!(
     "Features s3 and s3-native-tls are mutually exclusive and cannot be enabled together"
+);
+
+#[cfg(all(feature = "glue", feature = "glue-native-tls"))]
+compile_error!(
+    "Features glue and glue-native-tls are mutually exclusive and cannot be enabled together"
 );
 
 pub mod data_catalog;
@@ -130,18 +136,22 @@ pub mod test_utils;
 
 /// Creates and loads a DeltaTable from the given path with current metadata.
 /// Infers the storage backend to use from the scheme in the given table path.
+///
+/// Will fail fast if specified `table_uri` is a local path but doesn't exist.
 pub async fn open_table(table_uri: impl AsRef<str>) -> Result<DeltaTable, DeltaTableError> {
-    let table = DeltaTableBuilder::from_uri(table_uri).load().await?;
+    let table = DeltaTableBuilder::from_valid_uri(table_uri)?.load().await?;
     Ok(table)
 }
 
 /// Same as `open_table`, but also accepts storage options to aid in building the table for a deduced
 /// `StorageService`.
+///
+/// Will fail fast if specified `table_uri` is a local path but doesn't exist.
 pub async fn open_table_with_storage_options(
     table_uri: impl AsRef<str>,
     storage_options: HashMap<String, String>,
 ) -> Result<DeltaTable, DeltaTableError> {
-    let table = DeltaTableBuilder::from_uri(table_uri)
+    let table = DeltaTableBuilder::from_valid_uri(table_uri)?
         .with_storage_options(storage_options)
         .load()
         .await?;
@@ -150,11 +160,13 @@ pub async fn open_table_with_storage_options(
 
 /// Creates a DeltaTable from the given path and loads it with the metadata from the given version.
 /// Infers the storage backend to use from the scheme in the given table path.
+///
+/// Will fail fast if specified `table_uri` is a local path but doesn't exist.
 pub async fn open_table_with_version(
     table_uri: impl AsRef<str>,
     version: i64,
 ) -> Result<DeltaTable, DeltaTableError> {
-    let table = DeltaTableBuilder::from_uri(table_uri)
+    let table = DeltaTableBuilder::from_valid_uri(table_uri)?
         .with_version(version)
         .load()
         .await?;
@@ -164,11 +176,13 @@ pub async fn open_table_with_version(
 /// Creates a DeltaTable from the given path.
 /// Loads metadata from the version appropriate based on the given ISO-8601/RFC-3339 timestamp.
 /// Infers the storage backend to use from the scheme in the given table path.
+///
+/// Will fail fast if specified `table_uri` is a local path but doesn't exist.
 pub async fn open_table_with_ds(
     table_uri: impl AsRef<str>,
     ds: impl AsRef<str>,
 ) -> Result<DeltaTable, DeltaTableError> {
-    let table = DeltaTableBuilder::from_uri(table_uri)
+    let table = DeltaTableBuilder::from_valid_uri(table_uri)?
         .with_datestring(ds)?
         .load()
         .await?;
@@ -674,5 +688,50 @@ mod tests {
                 "part-00000-7444aec4-710a-4a4c-8abe-3323499043e9.c000.snappy.parquet"
             ),]
         );
+    }
+
+    #[tokio::test()]
+    async fn test_version_zero_table_load() {
+        let path = "./tests/data/COVID-19_NYT";
+        let mut latest_table: DeltaTable = crate::open_table(path).await.unwrap();
+
+        let mut version_0_table = crate::open_table_with_version(path, 0).await.unwrap();
+
+        let version_0_history = version_0_table
+            .history(None)
+            .await
+            .expect("Cannot get table history");
+        let latest_table_history = latest_table
+            .history(None)
+            .await
+            .expect("Cannot get table history");
+
+        assert_eq!(latest_table_history, version_0_history);
+    }
+
+    #[tokio::test()]
+    #[should_panic(expected = "does not exist or you don't have access!")]
+    async fn test_fail_fast_on_not_existing_path() {
+        use std::path::Path as FolderPath;
+
+        let path_str = "./tests/data/folder_doesnt_exist";
+
+        // Check that there is no such path at the beginning
+        let path_doesnt_exist = !FolderPath::new(path_str).exists();
+        assert!(path_doesnt_exist);
+
+        match crate::open_table(path_str).await {
+            Ok(table) => Ok(table),
+            Err(e) => {
+                let path_still_doesnt_exist = !FolderPath::new(path_str).exists();
+                assert!(
+                    path_still_doesnt_exist,
+                    "Path exists for some reason, but it shouldn't"
+                );
+
+                Err(e)
+            }
+        }
+        .unwrap();
     }
 }

@@ -17,9 +17,11 @@ from typing import (
     Optional,
     Tuple,
     Union,
+    overload,
 )
 from urllib.parse import unquote
 
+from deltalake import Schema
 from deltalake.fs import DeltaStorageHandler
 
 from ._util import encode_partition_value
@@ -34,13 +36,18 @@ import pyarrow.dataset as ds
 import pyarrow.fs as pa_fs
 from pyarrow.lib import RecordBatchReader
 
-from deltalake.schema import delta_arrow_schema_from_pandas
-
 from ._internal import DeltaDataChecker as _DeltaDataChecker
 from ._internal import batch_distinct
 from ._internal import convert_to_deltalake as _convert_to_deltalake
-from ._internal import write_new_deltalake as _write_new_deltalake
+from ._internal import write_new_deltalake as write_deltalake_pyarrow
+from ._internal import write_to_deltalake as write_deltalake_rust
 from .exceptions import DeltaProtocolError, TableNotFoundError
+from .schema import (
+    convert_pyarrow_dataset,
+    convert_pyarrow_recordbatch,
+    convert_pyarrow_recordbatchreader,
+    convert_pyarrow_table,
+)
 from .table import MAX_SUPPORTED_WRITER_VERSION, DeltaTable
 
 try:
@@ -63,6 +70,7 @@ class AddAction:
     stats: str
 
 
+@overload
 def write_deltalake(
     table_or_uri: Union[str, Path, DeltaTable],
     data: Union[
@@ -74,7 +82,68 @@ def write_deltalake(
         RecordBatchReader,
     ],
     *,
-    schema: Optional[pa.Schema] = None,
+    schema: Optional[Union[pa.Schema, Schema]] = ...,
+    partition_by: Optional[Union[List[str], str]] = ...,
+    filesystem: Optional[pa_fs.FileSystem] = None,
+    mode: Literal["error", "append", "overwrite", "ignore"] = ...,
+    file_options: Optional[ds.ParquetFileWriteOptions] = ...,
+    max_partitions: Optional[int] = ...,
+    max_open_files: int = ...,
+    max_rows_per_file: int = ...,
+    min_rows_per_group: int = ...,
+    max_rows_per_group: int = ...,
+    name: Optional[str] = ...,
+    description: Optional[str] = ...,
+    configuration: Optional[Mapping[str, Optional[str]]] = ...,
+    overwrite_schema: bool = ...,
+    storage_options: Optional[Dict[str, str]] = ...,
+    partition_filters: Optional[List[Tuple[str, str, Any]]] = ...,
+    large_dtypes: bool = ...,
+    engine: Literal["pyarrow"] = ...,
+) -> None:
+    ...
+
+
+@overload
+def write_deltalake(
+    table_or_uri: Union[str, Path, DeltaTable],
+    data: Union[
+        "pd.DataFrame",
+        ds.Dataset,
+        pa.Table,
+        pa.RecordBatch,
+        Iterable[pa.RecordBatch],
+        RecordBatchReader,
+    ],
+    *,
+    schema: Optional[Union[pa.Schema, Schema]] = ...,
+    partition_by: Optional[Union[List[str], str]] = ...,
+    mode: Literal["error", "append", "overwrite", "ignore"] = ...,
+    max_rows_per_group: int = ...,
+    name: Optional[str] = ...,
+    description: Optional[str] = ...,
+    configuration: Optional[Mapping[str, Optional[str]]] = ...,
+    overwrite_schema: bool = ...,
+    storage_options: Optional[Dict[str, str]] = ...,
+    predicate: Optional[str] = ...,
+    large_dtypes: bool = ...,
+    engine: Literal["rust"],
+) -> None:
+    ...
+
+
+def write_deltalake(
+    table_or_uri: Union[str, Path, DeltaTable],
+    data: Union[
+        "pd.DataFrame",
+        ds.Dataset,
+        pa.Table,
+        pa.RecordBatch,
+        Iterable[pa.RecordBatch],
+        RecordBatchReader,
+    ],
+    *,
+    schema: Optional[Union[pa.Schema, Schema]] = None,
     partition_by: Optional[Union[List[str], str]] = None,
     filesystem: Optional[pa_fs.FileSystem] = None,
     mode: Literal["error", "append", "overwrite", "ignore"] = "error",
@@ -90,7 +159,9 @@ def write_deltalake(
     overwrite_schema: bool = False,
     storage_options: Optional[Dict[str, str]] = None,
     partition_filters: Optional[List[Tuple[str, str, Any]]] = None,
+    predicate: Optional[str] = None,
     large_dtypes: bool = False,
+    engine: Literal["pyarrow", "rust"] = "pyarrow",
 ) -> None:
     """Write to a Delta Lake table
 
@@ -136,20 +207,20 @@ def write_deltalake(
         file_options: Optional write options for Parquet (ParquetFileWriteOptions).
             Can be provided with defaults using ParquetFileWriteOptions().make_write_options().
             Please refer to https://github.com/apache/arrow/blob/master/python/pyarrow/_dataset_parquet.pyx#L492-L533
-            for the list of available options
-        max_partitions: the maximum number of partitions that will be used.
+            for the list of available options. Only used in pyarrow engine.
+        max_partitions: the maximum number of partitions that will be used. Only used in pyarrow engine.
         max_open_files: Limits the maximum number of
             files that can be left open while writing. If an attempt is made to open
             too many files then the least recently used file will be closed.
             If this setting is set too low you may end up fragmenting your
-            data into many small files.
+            data into many small files. Only used in pyarrow engine.
         max_rows_per_file: Maximum number of rows per file.
             If greater than 0 then this will limit how many rows are placed in any single file.
             Otherwise there will be no limit and one file will be created in each output directory
             unless files need to be closed to respect max_open_files
             min_rows_per_group: Minimum number of rows per group. When the value is set,
             the dataset writer will batch incoming data and only write the row groups to the disk
-            when sufficient rows have accumulated.
+            when sufficient rows have accumulated. Only used in pyarrow engine.
         max_rows_per_group: Maximum number of rows per group.
             If the value is set, then the dataset writer may split up large incoming batches into multiple row groups.
             If this value is set, then min_rows_per_group should also be set.
@@ -158,238 +229,274 @@ def write_deltalake(
         configuration: A map containing configuration options for the metadata action.
         overwrite_schema: If True, allows updating the schema of the table.
         storage_options: options passed to the native delta filesystem. Unused if 'filesystem' is defined.
-        partition_filters: the partition filters that will be used for partition overwrite.
-        large_dtypes: If True, the table schema is checked against large_dtypes
+        predicate: When using `Overwrite` mode, replace data that matches a predicate. Only used in rust engine.
+        partition_filters: the partition filters that will be used for partition overwrite. Only used in pyarrow engine.
+        large_dtypes: If True, the data schema is kept in large_dtypes, has no effect on pandas dataframe input
     """
-    if _has_pandas and isinstance(data, pd.DataFrame):
-        if schema is not None:
-            data = pa.Table.from_pandas(data, schema=schema)
-        else:
-            data, schema = delta_arrow_schema_from_pandas(data)
-
     table, table_uri = try_get_table_and_table_uri(table_or_uri, storage_options)
-
-    # We need to write against the latest table version
-    if table:
-        table.update_incremental()
-
-    if schema is None:
-        if isinstance(data, RecordBatchReader):
-            schema = data.schema
-        elif isinstance(data, Iterable):
-            raise ValueError("You must provide schema if data is Iterable")
-        else:
-            schema = data.schema
-
-    if filesystem is not None:
-        raise NotImplementedError("Filesystem support is not yet implemented.  #570")
-
     if table is not None:
         storage_options = table._storage_options or {}
         storage_options.update(storage_options or {})
 
-    filesystem = pa_fs.PyFileSystem(DeltaStorageHandler(table_uri, storage_options))
+        table.update_incremental()
 
     __enforce_append_only(table=table, configuration=configuration, mode=mode)
 
     if isinstance(partition_by, str):
         partition_by = [partition_by]
 
-    if table:  # already exists
-        if schema != table.schema().to_pyarrow(as_large_types=large_dtypes) and not (
-            mode == "overwrite" and overwrite_schema
-        ):
-            raise ValueError(
-                "Schema of data does not match table schema\n"
-                f"Data schema:\n{schema}\nTable Schema:\n{table.schema().to_pyarrow(as_large_types=large_dtypes)}"
-            )
+    if isinstance(schema, Schema):
+        schema = schema.to_pyarrow()
 
-        if mode == "error":
-            raise AssertionError("DeltaTable already exists.")
-        elif mode == "ignore":
+    if isinstance(data, RecordBatchReader):
+        data = convert_pyarrow_recordbatchreader(data, large_dtypes)
+    elif isinstance(data, pa.RecordBatch):
+        data = convert_pyarrow_recordbatch(data, large_dtypes)
+    elif isinstance(data, pa.Table):
+        data = convert_pyarrow_table(data, large_dtypes)
+    elif isinstance(data, ds.Dataset):
+        data = convert_pyarrow_dataset(data, large_dtypes)
+    elif _has_pandas and isinstance(data, pd.DataFrame):
+        if schema is not None:
+            data = convert_pyarrow_table(
+                pa.Table.from_pandas(data, schema=schema), large_dtypes=large_dtypes
+            )
+        else:
+            data = convert_pyarrow_table(
+                pa.Table.from_pandas(data), large_dtypes=large_dtypes
+            )
+    elif isinstance(data, Iterable):
+        if schema is None:
+            raise ValueError("You must provide schema if data is Iterable")
+    else:
+        raise TypeError(
+            f"{type(data).__name__} is not a valid input. Only PyArrow RecordBatchReader, RecordBatch, Iterable[RecordBatch], Table, Dataset or Pandas DataFrame are valid inputs for source."
+        )
+
+    if schema is None:
+        schema = data.schema
+
+    if engine == "rust":
+        if table is not None and mode == "ignore":
             return
 
-        current_version = table.version()
+        data = RecordBatchReader.from_batches(schema, (batch for batch in data))
+        write_deltalake_rust(
+            table_uri=table_uri,
+            data=data,
+            partition_by=partition_by,
+            mode=mode,
+            max_rows_per_group=max_rows_per_group,
+            overwrite_schema=overwrite_schema,
+            predicate=predicate,
+            name=name,
+            description=description,
+            configuration=configuration,
+            storage_options=storage_options,
+        )
+        if table:
+            table.update_incremental()
+
+    elif engine == "pyarrow":
+        # We need to write against the latest table version
+        if filesystem is not None:
+            raise NotImplementedError(
+                "Filesystem support is not yet implemented.  #570"
+            )
+
+        filesystem = pa_fs.PyFileSystem(DeltaStorageHandler(table_uri, storage_options))
+
+        if table:  # already exists
+            if schema != table.schema().to_pyarrow(
+                as_large_types=large_dtypes
+            ) and not (mode == "overwrite" and overwrite_schema):
+                raise ValueError(
+                    "Schema of data does not match table schema\n"
+                    f"Data schema:\n{schema}\nTable Schema:\n{table.schema().to_pyarrow(as_large_types=large_dtypes)}"
+                )
+            if mode == "error":
+                raise AssertionError("DeltaTable already exists.")
+            elif mode == "ignore":
+                return
+
+            current_version = table.version()
+
+            if partition_by:
+                assert partition_by == table.metadata().partition_columns
+            else:
+                partition_by = table.metadata().partition_columns
+
+        else:  # creating a new table
+            current_version = -1
+
+        dtype_map = {
+            pa.large_string(): pa.string(),
+        }
+
+        def _large_to_normal_dtype(dtype: pa.DataType) -> pa.DataType:
+            try:
+                return dtype_map[dtype]
+            except KeyError:
+                return dtype
 
         if partition_by:
-            assert partition_by == table.metadata().partition_columns
+            table_schema: pa.Schema = schema
+            if PYARROW_MAJOR_VERSION < 12:
+                partition_schema = pa.schema(
+                    [
+                        pa.field(
+                            name, _large_to_normal_dtype(table_schema.field(name).type)
+                        )
+                        for name in partition_by
+                    ]
+                )
+            else:
+                partition_schema = pa.schema(
+                    [table_schema.field(name) for name in partition_by]
+                )
+            partitioning = ds.partitioning(partition_schema, flavor="hive")
         else:
-            partition_by = table.metadata().partition_columns
+            partitioning = None
 
-        if table.protocol().min_writer_version > MAX_SUPPORTED_WRITER_VERSION:
-            raise DeltaProtocolError(
-                "This table's min_writer_version is "
-                f"{table.protocol().min_writer_version}, "
-                "but this method only supports version 2."
+        add_actions: List[AddAction] = []
+
+        def visitor(written_file: Any) -> None:
+            path, partition_values = get_partitions_from_path(written_file.path)
+            stats = get_file_stats_from_metadata(written_file.metadata)
+
+            # PyArrow added support for written_file.size in 9.0.0
+            if PYARROW_MAJOR_VERSION >= 9:
+                size = written_file.size
+            elif filesystem is not None:
+                size = filesystem.get_file_info([path])[0].size
+            else:
+                size = 0
+
+            add_actions.append(
+                AddAction(
+                    path,
+                    size,
+                    partition_values,
+                    int(datetime.now().timestamp() * 1000),
+                    True,
+                    json.dumps(stats, cls=DeltaJSONEncoder),
+                )
             )
-    else:  # creating a new table
-        current_version = -1
 
-    dtype_map = {
-        pa.large_string(): pa.string(),  # type: ignore
-    }
+        if table is not None:
+            # We don't currently provide a way to set invariants
+            # (and maybe never will), so only enforce if already exist.
+            if table.protocol().min_writer_version > MAX_SUPPORTED_WRITER_VERSION:
+                raise DeltaProtocolError(
+                    "This table's min_writer_version is "
+                    f"{table.protocol().min_writer_version}, "
+                    "but this method only supports version 2."
+                )
 
-    def _large_to_normal_dtype(dtype: pa.DataType) -> pa.DataType:
-        try:
-            return dtype_map[dtype]
-        except KeyError:
-            return dtype
+            invariants = table.schema().invariants
+            checker = _DeltaDataChecker(invariants)
 
-    if partition_by:
-        if PYARROW_MAJOR_VERSION < 12:
-            partition_schema = pa.schema(
-                [
-                    pa.field(name, _large_to_normal_dtype(schema.field(name).type))
-                    for name in partition_by
-                ]
+            def check_data_is_aligned_with_partition_filtering(
+                batch: pa.RecordBatch,
+            ) -> None:
+                if table is None:
+                    return
+                existed_partitions: FrozenSet[
+                    FrozenSet[Tuple[str, Optional[str]]]
+                ] = table._table.get_active_partitions()
+                allowed_partitions: FrozenSet[
+                    FrozenSet[Tuple[str, Optional[str]]]
+                ] = table._table.get_active_partitions(partition_filters)
+                partition_values = pa.RecordBatch.from_arrays(
+                    [
+                        batch.column(column_name)
+                        for column_name in table.metadata().partition_columns
+                    ],
+                    table.metadata().partition_columns,
+                )
+                partition_values = batch_distinct(partition_values)
+                for i in range(partition_values.num_rows):
+                    # Map will maintain order of partition_columns
+                    partition_map = {
+                        column_name: encode_partition_value(
+                            batch.column(column_name)[i].as_py()
+                        )
+                        for column_name in table.metadata().partition_columns
+                    }
+                    partition = frozenset(partition_map.items())
+                    if (
+                        partition not in allowed_partitions
+                        and partition in existed_partitions
+                    ):
+                        partition_repr = " ".join(
+                            f"{key}={value}" for key, value in partition_map.items()
+                        )
+                        raise ValueError(
+                            f"Data should be aligned with partitioning. "
+                            f"Data contained values for partition {partition_repr}"
+                        )
+
+            def validate_batch(batch: pa.RecordBatch) -> pa.RecordBatch:
+                checker.check_batch(batch)
+
+                if mode == "overwrite" and partition_filters:
+                    check_data_is_aligned_with_partition_filtering(batch)
+
+                return batch
+
+            data = RecordBatchReader.from_batches(
+                schema, (validate_batch(batch) for batch in data)
+            )
+
+        if file_options is not None:
+            file_options.update(use_compliant_nested_type=False)
+        else:
+            file_options = ds.ParquetFileFormat().make_write_options(
+                use_compliant_nested_type=False
+            )
+
+        ds.write_dataset(
+            data,
+            base_dir="/",
+            basename_template=f"{current_version + 1}-{uuid.uuid4()}-{{i}}.parquet",
+            format="parquet",
+            partitioning=partitioning,
+            # It will not accept a schema if using a RBR
+            schema=schema if not isinstance(data, RecordBatchReader) else None,
+            file_visitor=visitor,
+            existing_data_behavior="overwrite_or_ignore",
+            file_options=file_options,
+            max_open_files=max_open_files,
+            max_rows_per_file=max_rows_per_file,
+            min_rows_per_group=min_rows_per_group,
+            max_rows_per_group=max_rows_per_group,
+            filesystem=filesystem,
+            max_partitions=max_partitions,
+        )
+
+        if table is None:
+            write_deltalake_pyarrow(
+                table_uri,
+                schema,
+                add_actions,
+                mode,
+                partition_by or [],
+                name,
+                description,
+                configuration,
+                storage_options,
             )
         else:
-            partition_schema = pa.schema([schema.field(name) for name in partition_by])
-        partitioning = ds.partitioning(partition_schema, flavor="hive")
+            table._table.create_write_transaction(
+                add_actions,
+                mode,
+                partition_by or [],
+                schema,
+                partition_filters,
+            )
+            table.update_incremental()
     else:
-        partitioning = None
-
-    add_actions: List[AddAction] = []
-
-    def visitor(written_file: Any) -> None:
-        path, partition_values = get_partitions_from_path(written_file.path)
-        stats = get_file_stats_from_metadata(written_file.metadata)
-
-        # PyArrow added support for written_file.size in 9.0.0
-        if PYARROW_MAJOR_VERSION >= 9:
-            size = written_file.size
-        elif filesystem is not None:
-            size = filesystem.get_file_info([path])[0].size
-        else:
-            size = 0
-
-        add_actions.append(
-            AddAction(
-                path,
-                size,
-                partition_values,
-                int(datetime.now().timestamp() * 1000),
-                True,
-                json.dumps(stats, cls=DeltaJSONEncoder),
-            )
-        )
-
-    if table is not None:
-        # We don't currently provide a way to set invariants
-        # (and maybe never will), so only enforce if already exist.
-        invariants = table.schema().invariants
-        checker = _DeltaDataChecker(invariants)
-
-        def check_data_is_aligned_with_partition_filtering(
-            batch: pa.RecordBatch,
-        ) -> None:
-            if table is None:
-                return
-            existed_partitions: FrozenSet[
-                FrozenSet[Tuple[str, Optional[str]]]
-            ] = table._table.get_active_partitions()
-            allowed_partitions: FrozenSet[
-                FrozenSet[Tuple[str, Optional[str]]]
-            ] = table._table.get_active_partitions(partition_filters)
-            partition_values = pa.RecordBatch.from_arrays(
-                [
-                    batch.column(column_name)
-                    for column_name in table.metadata().partition_columns
-                ],
-                table.metadata().partition_columns,
-            )
-            partition_values = batch_distinct(partition_values)
-            for i in range(partition_values.num_rows):
-                # Map will maintain order of partition_columns
-                partition_map = {
-                    column_name: encode_partition_value(
-                        batch.column(column_name)[i].as_py()
-                    )
-                    for column_name in table.metadata().partition_columns
-                }
-                partition = frozenset(partition_map.items())
-                if (
-                    partition not in allowed_partitions
-                    and partition in existed_partitions
-                ):
-                    partition_repr = " ".join(
-                        f"{key}={value}" for key, value in partition_map.items()
-                    )
-                    raise ValueError(
-                        f"Data should be aligned with partitioning. "
-                        f"Data contained values for partition {partition_repr}"
-                    )
-
-        def validate_batch(batch: pa.RecordBatch) -> pa.RecordBatch:
-            checker.check_batch(batch)
-
-            if mode == "overwrite" and partition_filters:
-                check_data_is_aligned_with_partition_filtering(batch)
-
-            return batch
-
-        if isinstance(data, RecordBatchReader):
-            batch_iter = data
-        elif isinstance(data, pa.RecordBatch):
-            batch_iter = [data]
-        elif isinstance(data, pa.Table):
-            batch_iter = data.to_batches()
-        elif isinstance(data, ds.Dataset):
-            batch_iter = data.to_batches()
-        else:
-            batch_iter = data
-
-        data = RecordBatchReader.from_batches(
-            schema, (validate_batch(batch) for batch in batch_iter)
-        )
-
-    if file_options is not None:
-        file_options.update(use_compliant_nested_type=False)
-    else:
-        file_options = ds.ParquetFileFormat().make_write_options(
-            use_compliant_nested_type=False
-        )
-
-    ds.write_dataset(
-        data,
-        base_dir="/",
-        basename_template=f"{current_version + 1}-{uuid.uuid4()}-{{i}}.parquet",
-        format="parquet",
-        partitioning=partitioning,
-        # It will not accept a schema if using a RBR
-        schema=schema if not isinstance(data, RecordBatchReader) else None,
-        file_visitor=visitor,
-        existing_data_behavior="overwrite_or_ignore",
-        file_options=file_options,
-        max_open_files=max_open_files,
-        max_rows_per_file=max_rows_per_file,
-        min_rows_per_group=min_rows_per_group,
-        max_rows_per_group=max_rows_per_group,
-        filesystem=filesystem,
-        max_partitions=max_partitions,
-    )
-
-    if table is None:
-        _write_new_deltalake(
-            table_uri,
-            schema,
-            add_actions,
-            mode,
-            partition_by or [],
-            name,
-            description,
-            configuration,
-            storage_options,
-        )
-    else:
-        table._table.create_write_transaction(
-            add_actions,
-            mode,
-            partition_by or [],
-            schema,
-            partition_filters,
-        )
-        table.update_incremental()
+        raise ValueError("Only `pyarrow` or `rust` are valid inputs for the engine.")
 
 
 def convert_to_deltalake(
