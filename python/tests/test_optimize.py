@@ -36,12 +36,16 @@ def test_optimize_run_table(
     )
 
     dt = DeltaTable(table_path)
+    old_data = dt.to_pyarrow_table()
     old_version = dt.version()
-    with pytest.warns(DeprecationWarning):
-        dt.optimize()
+
+    dt.optimize.compact()
+
+    new_data = dt.to_pyarrow_table()
     last_action = dt.history(1)[0]
     assert last_action["operation"] == "OPTIMIZE"
     assert dt.version() == old_version + 1
+    assert old_data == new_data
 
 
 @pytest.mark.parametrize("engine", ["pyarrow", "rust"])
@@ -60,14 +64,16 @@ def test_z_order_optimize(
     )
 
     dt = DeltaTable(tmp_path)
+    old_data = dt.to_pyarrow_table()
     old_version = dt.version()
 
     dt.optimize.z_order(["date32", "timestamp"])
-
+    new_data = dt.to_pyarrow_table()
     last_action = dt.history(1)[0]
     assert last_action["operation"] == "OPTIMIZE"
     assert dt.version() == old_version + 1
     assert len(dt.file_uris()) == 1
+    assert old_data == new_data
 
 
 def test_optimize_min_commit_interval(
