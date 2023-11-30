@@ -494,7 +494,7 @@ impl std::future::IntoFuture for WriteBuilder {
                 if schema != table_schema {
                     let mut metadata = this
                         .snapshot
-                        .current_metadata()
+                        .metadata()
                         .ok_or(DeltaTableError::NoMetadata)?
                         .clone();
                     metadata.schema = schema.clone().try_into()?;
