@@ -361,6 +361,7 @@ async fn execute(
         None,
         writer_properties,
         safe_cast,
+        false,
     )
     .await?;
 

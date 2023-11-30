@@ -43,7 +43,7 @@ use super::writer::{DeltaWriter, WriterConfig};
 use super::{transaction::commit, CreateBuilder};
 use crate::delta_datafusion::DeltaDataChecker;
 use crate::errors::{DeltaResult, DeltaTableError};
-use crate::kernel::{Action, Add, Remove, StructType};
+use crate::kernel::{Action, Add, Metadata, Remove, StructType};
 use crate::logstore::LogStoreRef;
 use crate::protocol::{DeltaOperation, SaveMode};
 use crate::storage::ObjectStoreRef;
@@ -103,12 +103,20 @@ pub struct WriteBuilder {
     write_batch_size: Option<usize>,
     /// RecordBatches to be written into the table
     batches: Option<Vec<RecordBatch>>,
+    /// whether to overwrite the schema
+    overwrite_schema: bool,
     /// how to handle cast failures, either return NULL (safe=true) or return ERR (safe=false)
     safe_cast: bool,
     /// Parquet writer properties
     writer_properties: Option<WriterProperties>,
     /// Additional metadata to be added to commit
     app_metadata: Option<HashMap<String, serde_json::Value>>,
+    /// Name of the table, only used when table doesn't exist yet
+    name: Option<String>,
+    /// Description of the table, only used when table doesn't exist yet
+    description: Option<String>,
+    /// Configurations of the delta table, only used when table doesn't exist
+    configuration: HashMap<String, Option<String>>,
 }
 
 impl WriteBuilder {
@@ -126,14 +134,24 @@ impl WriteBuilder {
             write_batch_size: None,
             batches: None,
             safe_cast: false,
+            overwrite_schema: false,
             writer_properties: None,
             app_metadata: None,
+            name: None,
+            description: None,
+            configuration: Default::default(),
         }
     }
 
     /// Specify the behavior when a table exists at location
     pub fn with_save_mode(mut self, save_mode: SaveMode) -> Self {
         self.mode = save_mode;
+        self
+    }
+
+    /// Add overwrite_schema
+    pub fn with_overwrite_schema(mut self, overwrite_schema: bool) -> Self {
+        self.overwrite_schema = overwrite_schema;
         self
     }
 
@@ -205,6 +223,31 @@ impl WriteBuilder {
         self
     }
 
+    /// Specify the table name. Optionally qualified with
+    /// a database name [database_name.] table_name.
+    pub fn with_table_name(mut self, name: impl Into<String>) -> Self {
+        self.name = Some(name.into());
+        self
+    }
+
+    /// Comment to describe the table.
+    pub fn with_description(mut self, description: impl Into<String>) -> Self {
+        self.description = Some(description.into());
+        self
+    }
+
+    /// Set configuration on created table
+    pub fn with_configuration(
+        mut self,
+        configuration: impl IntoIterator<Item = (impl Into<String>, Option<impl Into<String>>)>,
+    ) -> Self {
+        self.configuration = configuration
+            .into_iter()
+            .map(|(k, v)| (k.into(), v.map(|s| s.into())))
+            .collect();
+        self
+    }
+
     async fn check_preconditions(&self) -> DeltaResult<Vec<Action>> {
         match self.log_store.is_delta_table_location().await? {
             true => {
@@ -229,10 +272,20 @@ impl WriteBuilder {
                 }?;
                 let mut builder = CreateBuilder::new()
                     .with_log_store(self.log_store.clone())
-                    .with_columns(schema.fields().clone());
+                    .with_columns(schema.fields().clone())
+                    .with_configuration(self.configuration.clone());
                 if let Some(partition_columns) = self.partition_columns.as_ref() {
                     builder = builder.with_partition_columns(partition_columns.clone())
                 }
+
+                if let Some(name) = self.name.as_ref() {
+                    builder = builder.with_table_name(name.clone());
+                };
+
+                if let Some(desc) = self.description.as_ref() {
+                    builder = builder.with_comment(desc.clone());
+                };
+
                 let (_, actions, _) = builder.into_table_and_actions()?;
                 Ok(actions)
             }
@@ -251,6 +304,7 @@ pub(crate) async fn write_execution_plan(
     write_batch_size: Option<usize>,
     writer_properties: Option<WriterProperties>,
     safe_cast: bool,
+    overwrite_schema: bool,
 ) -> DeltaResult<Vec<Add>> {
     let invariants = snapshot
         .metadata()
@@ -258,7 +312,11 @@ pub(crate) async fn write_execution_plan(
         .unwrap_or_default();
 
     // Use input schema to prevent wrapping partitions columns into a dictionary.
-    let schema = snapshot.input_schema().unwrap_or(plan.schema());
+    let schema: ArrowSchemaRef = if overwrite_schema {
+        plan.schema()
+    } else {
+        snapshot.input_schema().unwrap_or(plan.schema())
+    };
 
     let checker = DeltaDataChecker::new(invariants);
 
@@ -339,13 +397,14 @@ impl std::future::IntoFuture for WriteBuilder {
                 Ok(this.partition_columns.unwrap_or_default())
             }?;
 
+            let mut schema: ArrowSchemaRef = arrow_schema::Schema::empty().into();
             let plan = if let Some(plan) = this.input {
                 Ok(plan)
             } else if let Some(batches) = this.batches {
                 if batches.is_empty() {
                     Err(WriteError::MissingData)
                 } else {
-                    let schema = batches[0].schema();
+                    schema = batches[0].schema();
                     let table_schema = this
                         .snapshot
                         .physical_arrow_schema(this.log_store.object_store().clone())
@@ -353,9 +412,11 @@ impl std::future::IntoFuture for WriteBuilder {
                         .or_else(|_| this.snapshot.arrow_schema())
                         .unwrap_or(schema.clone());
 
-                    if !can_cast_batch(schema.fields(), table_schema.fields()) {
+                    if !can_cast_batch(schema.fields(), table_schema.fields())
+                        && !(this.overwrite_schema && matches!(this.mode, SaveMode::Overwrite))
+                    {
                         return Err(DeltaTableError::Generic(
-                            "Updating table schema not yet implemented".to_string(),
+                            "Schema of data does not match table schema".to_string(),
                         ));
                     };
 
@@ -390,7 +451,7 @@ impl std::future::IntoFuture for WriteBuilder {
                         vec![batches]
                     };
 
-                    Ok(Arc::new(MemoryExec::try_new(&data, schema, None)?)
+                    Ok(Arc::new(MemoryExec::try_new(&data, schema.clone(), None)?)
                         as Arc<dyn ExecutionPlan>)
                 }
             } else {
@@ -415,12 +476,31 @@ impl std::future::IntoFuture for WriteBuilder {
                 this.write_batch_size,
                 this.writer_properties,
                 this.safe_cast,
+                this.overwrite_schema,
             )
             .await?;
             actions.extend(add_actions.into_iter().map(Action::Add));
 
             // Collect remove actions if we are overwriting the table
             if matches!(this.mode, SaveMode::Overwrite) {
+                // Update metadata with new schema
+                let table_schema = this
+                    .snapshot
+                    .physical_arrow_schema(this.log_store.object_store().clone())
+                    .await
+                    .or_else(|_| this.snapshot.arrow_schema())
+                    .unwrap_or(schema.clone());
+
+                if schema != table_schema {
+                    let mut metadata = this
+                        .snapshot
+                        .current_metadata()
+                        .ok_or(DeltaTableError::NoMetadata)?
+                        .clone();
+                    metadata.schema = schema.clone().try_into()?;
+                    let metadata_action = Metadata::try_from(metadata)?;
+                    actions.push(Action::Metadata(metadata_action));
+                }
                 // This should never error, since now() will always be larger than UNIX_EPOCH
                 let deletion_timestamp = SystemTime::now()
                     .duration_since(UNIX_EPOCH)
@@ -445,7 +525,10 @@ impl std::future::IntoFuture for WriteBuilder {
 
                 match this.predicate {
                     Some(_pred) => {
-                        todo!("Overwriting data based on predicate is not yet implemented")
+                        return Err(DeltaTableError::Generic(
+                            "Overwriting data based on predicate is not yet implemented"
+                                .to_string(),
+                        ));
                     }
                     _ => {
                         let remove_actions = this

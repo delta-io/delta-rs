@@ -34,6 +34,9 @@ nav:
     - api/delta_table.md
     - api/schema.md
     - api/storage.md
+  - Integrations:
+    - Arrow: integrations/delta-lake-arrow.md
+    - pandas: integrations/delta-lake-pandas.md
 not_in_nav: |
   /_build/
 
