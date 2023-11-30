@@ -371,6 +371,10 @@ impl std::future::IntoFuture for WriteBuilder {
         let mut this = self;
 
         Box::pin(async move {
+            if this.mode == SaveMode::Overwrite {
+                PROTOCOL.check_append_only(&this.snapshot)?;
+            }
+
             // Create table actions to initialize table in case it does not yet exist and should be created
             let mut actions = this.check_preconditions().await?;
 
