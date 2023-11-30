@@ -623,10 +623,11 @@ class DeltaTable:
         Returns:
             TableMerger: TableMerger Object
         """
+
         invariants = self.schema().invariants
         checker = _DeltaDataChecker(invariants)
 
-        from .schema import (
+        from deltalake.schema import (
             convert_pyarrow_dataset,
             convert_pyarrow_recordbatch,
             convert_pyarrow_recordbatchreader,
@@ -1356,6 +1357,7 @@ class TableMerger:
         Returns:
             Dict[str, Any]: metrics
         """
+        self.table.update_incremental()
         metrics = self.table._table.merge_execute(
             source=self.source,
             predicate=self.predicate,
