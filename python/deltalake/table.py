@@ -311,6 +311,7 @@ class DeltaTable:
         storage_options: Optional[Dict[str, str]] = None,
     ) -> "DeltaTable":
         """`CREATE` or `CREATE_OR_REPLACE` a delta table given a table_uri.
+
         Args:
             table_uri: URI of a table
             schema: Table schema
@@ -323,21 +324,25 @@ class DeltaTable:
             description: User-provided description for this table.
             configuration:  A map containing configuration options for the metadata action.
             storage_options: options passed to the object store crate.
+
         Returns:
             DeltaTable: created delta table
-        **Examples:**
-        ``` .py
-        import pyarrow as pa
-        from deltalake import DeltaTable
-        dt = DeltaTable.create(
-            table_uri="my_local_table",
-            schema=pa.schema(
-                [pa.field("foo", pa.string()), pa.field("bar", pa.string())]
-            ),
-            mode="error",
-            partition_by="bar",
-        )
-        ```
+
+        Example:
+            ```python
+            import pyarrow as pa
+
+            from deltalake import DeltaTable
+
+            dt = DeltaTable.create(
+                table_uri="my_local_table",
+                schema=pa.schema(
+                    [pa.field("foo", pa.string()), pa.field("bar", pa.string())]
+                ),
+                mode="error",
+                partition_by="bar",
+            )
+            ```
         """
         if isinstance(schema, DeltaSchema):
             schema = schema.to_pyarrow()
