@@ -16,7 +16,7 @@ Let’s start by creating a Delta table with a lot of small files so we can demo
 
 Start by writing a function that generates on thousand rows of random data given a timestamp.
 
-```
+```python
 def record_observations(date: datetime) -> pa.Table:
     """Pulls data for a certain datetime"""
     nrows = 1000
@@ -31,7 +31,7 @@ def record_observations(date: datetime) -> pa.Table:
 
 Let’s run this function and observe the output:
 
-```
+```python
 record_observations(datetime(2021, 1, 1, 12)).to_pandas()
 
 	date				timestamp	value
@@ -44,7 +44,7 @@ record_observations(datetime(2021, 1, 1, 12)).to_pandas()
 
 Let’s write 100 hours worth of data to the Delta table.
 
-```
+```python
 # Every hour starting at midnight on 2021-01-01
 hours_iter = (datetime(2021, 1, 1) + timedelta(hours=i) for i in itertools.count())
 
@@ -60,7 +60,7 @@ for timestamp in itertools.islice(hours_iter, 100):
 
 This data was appended to the Delta table in 100 separate transactions, so the table will contain 100 transaction log entries and 100 data files.  You can see the number of files with the `files()` method.
 
-```
+```python
 dt = DeltaTable("observation_data")
 len(dt.files()) # 100
 ```
@@ -101,7 +101,7 @@ Each of these Parquet files are tiny - they’re only 10 KB.  Let’s see how to
 
 Let’s run the optimize command to compact the existing small files into larger files:
 
-```
+```python
 dt = DeltaTable("observation_data")
 
 dt.optimize()
@@ -109,7 +109,7 @@ dt.optimize()
 
 Here’s the output of the command:
 
-```
+```python
 {'numFilesAdded': 5,
  'numFilesRemoved': 100,
  'filesAdded': {'min': 39000,
@@ -137,7 +137,7 @@ Let’s append some more data to the Delta table and see how we can selectively 
 
 Let’s append another 24 hours of data to the Delta table:
 
-```
+```python
 for timestamp in itertools.islice(hours_iter, 24):
     write_deltalake(
         dt,
@@ -149,7 +149,7 @@ for timestamp in itertools.islice(hours_iter, 24):
 
 We can use `get_add_actions()` to introspect the table state. We can see that `2021-01-06` has only a few hours of data so far, so we don't want to optimize that yet. But `2021-01-05` has all 24 hours of data, so it's ready to be optimized.
 
-```
+```python
 dt.get_add_actions(flatten=True).to_pandas()[
     "partition.date"
 ].value_counts().sort_index()
@@ -164,7 +164,7 @@ dt.get_add_actions(flatten=True).to_pandas()[
 
 To optimize a single partition, you can pass in a `partition_filters` argument speficying which partitions to optimize.
 
-```
+```python
 dt.optimize(partition_filters=[("date", "=", "2021-01-05")])
 
 {'numFilesAdded': 1,
@@ -188,7 +188,7 @@ dt.optimize(partition_filters=[("date", "=", "2021-01-05")])
 
 This optimize operation tombstones 21 small data files and adds one file with all the existing data properly condensed.  Let’s take a look a portion of the `_delta_log/00000000000000000125.json` file, which is the transaction log entry that corresponds with this incremental optimize command.
 
-```
+```python
 {
   "remove": {
     "path": "date=2021-01-05/part-00000-41178aab-2491-488f-943d-8f03867295ee-c000.snappy.parquet",
@@ -248,13 +248,13 @@ It’s normally a good idea to have a retention period of at least 7 days.  For 
 
 Let’s run the vacuum command:
 
-```
+```python
 dt.vacuum(retention_hours=0, enforce_retention_duration=False, dry_run=False)
 ```
 
 The command returns a list of all the files that are removed from storage:
 
-```
+```python
 ['date=2021-01-02/39-a98680f2-0e0e-4f26-a491-18b183f9eb05-0.parquet',
  'date=2021-01-02/41-e96bc8bb-c571-484c-b534-e897424fb7da-0.parquet',
  …
