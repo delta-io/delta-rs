@@ -531,7 +531,6 @@ impl MergePlan {
     async fn read_zorder(
         files: MergeBin,
         context: Arc<zorder::ZOrderExecContext>,
-        file_schema: ArrowSchemaRef,
     ) -> Result<BoxStream<'static, Result<RecordBatch, ParquetError>>, DeltaTableError> {
         use datafusion::prelude::{col, ParquetReadOptions};
         use datafusion_expr::expr::ScalarUDF;
@@ -543,10 +542,7 @@ impl MergePlan {
             .collect_vec();
         let df = context
             .ctx
-            .read_parquet(
-                locations,
-                ParquetReadOptions::default().schema(&file_schema),
-            )
+            .read_parquet(locations, ParquetReadOptions::default())
             .await?;
 
         let original_columns = df
@@ -651,11 +647,7 @@ impl MergePlan {
                 let log_store = log_store.clone();
                 futures::stream::iter(bins)
                     .map(move |(partition, files)| {
-                        let batch_stream = Self::read_zorder(
-                            files.clone(),
-                            exec_context.clone(),
-                            task_parameters.file_schema.clone(),
-                        );
+                        let batch_stream = Self::read_zorder(files.clone(), exec_context.clone());
                         let rewrite_result = tokio::task::spawn(Self::rewrite_files(
                             task_parameters.clone(),
                             partition,
