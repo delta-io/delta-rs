@@ -1,3 +1,5 @@
-## Delta Storage Handler
+# Storage
 
-::: deltalake.fs
+The delta filesystem handler for the pyarrow engine writer.
+
+::: deltalake.fs.DeltaStorageHandler
