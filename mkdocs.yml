@@ -113,3 +113,8 @@ markdown_extensions:
 
 extra:
   python_api_url: https://delta-io.github.io/delta-rs/api/
+  generator: false
+  social:
+    - icon: fontawesome/brands/slack
+      link: https://go.delta.io/slack
+      name: Delta slack channel
