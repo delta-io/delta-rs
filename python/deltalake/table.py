@@ -539,7 +539,6 @@ class DeltaTable:
             {'num_added_files': 1, 'num_removed_files': 1, 'num_updated_rows': 1, 'num_copied_rows': 2, 'execution_time_ms': ..., 'scan_time_ms': ...}
             ```
 
-
             **Update all row values**
 
             This is equivalent to ``UPDATE table SET deleted = true, id = concat(id, '_old')``.
@@ -880,7 +879,9 @@ class DeltaTable:
             0    x=1/0
             1    x=2/0
             2    x=3/0
+            ```
 
+            ```python
             df = dt.get_add_actions(flatten=True).to_pandas()
             df["partition.x"].sort_values(ignore_index=True)
             0    1
