@@ -127,11 +127,6 @@ jobs:
           python -m pytest -m "not pandas and not integration and not benchmark"
           pip install pandas
 
-      - name: Build Sphinx documentation
-        run: |
-          source venv/bin/activate
-          make build-documentation
-
   benchmark:
     name: Python Benchmark
     runs-on: ubuntu-latest
