@@ -21,7 +21,7 @@ from typing import (
 )
 from urllib.parse import unquote
 
-from deltalake import Schema
+from deltalake import Schema as DeltaSchema
 from deltalake.fs import DeltaStorageHandler
 
 from ._util import encode_partition_value
@@ -82,7 +82,7 @@ def write_deltalake(
         RecordBatchReader,
     ],
     *,
-    schema: Optional[Union[pa.Schema, Schema]] = ...,
+    schema: Optional[Union[pa.Schema, DeltaSchema]] = ...,
     partition_by: Optional[Union[List[str], str]] = ...,
     filesystem: Optional[pa_fs.FileSystem] = None,
     mode: Literal["error", "append", "overwrite", "ignore"] = ...,
@@ -116,7 +116,7 @@ def write_deltalake(
         RecordBatchReader,
     ],
     *,
-    schema: Optional[Union[pa.Schema, Schema]] = ...,
+    schema: Optional[Union[pa.Schema, DeltaSchema]] = ...,
     partition_by: Optional[Union[List[str], str]] = ...,
     mode: Literal["error", "append", "overwrite", "ignore"] = ...,
     max_rows_per_group: int = ...,
@@ -143,7 +143,7 @@ def write_deltalake(
         RecordBatchReader,
     ],
     *,
-    schema: Optional[Union[pa.Schema, Schema]] = None,
+    schema: Optional[Union[pa.Schema, DeltaSchema]] = None,
     partition_by: Optional[Union[List[str], str]] = None,
     filesystem: Optional[pa_fs.FileSystem] = None,
     mode: Literal["error", "append", "overwrite", "ignore"] = "error",
@@ -231,7 +231,9 @@ def write_deltalake(
         storage_options: options passed to the native delta filesystem. Unused if 'filesystem' is defined.
         predicate: When using `Overwrite` mode, replace data that matches a predicate. Only used in rust engine.
         partition_filters: the partition filters that will be used for partition overwrite. Only used in pyarrow engine.
-        large_dtypes: If True, the data schema is kept in large_dtypes, has no effect on pandas dataframe input
+        large_dtypes: If True, the data schema is kept in large_dtypes, has no effect on pandas dataframe input.
+        engine: writer engine to write the delta table. `Rust` engine is still experimental but you may
+            see up to 4x performance improvements over pyarrow.
     """
     table, table_uri = try_get_table_and_table_uri(table_or_uri, storage_options)
     if table is not None:
@@ -245,7 +247,7 @@ def write_deltalake(
     if isinstance(partition_by, str):
         partition_by = [partition_by]
 
-    if isinstance(schema, Schema):
+    if isinstance(schema, DeltaSchema):
         schema = schema.to_pyarrow()
 
     if isinstance(data, RecordBatchReader):
