@@ -31,6 +31,8 @@ from pyarrow.dataset import (
 )
 
 if TYPE_CHECKING:
+    import os
+
     import pandas
 
 from deltalake._internal import DeltaDataChecker as _DeltaDataChecker
@@ -209,13 +211,13 @@ the key with the value. The supported op are: `=`, `!=`, `in`, and `not in`. If
 the op is in or not in, the value must be a collection such as a list, a set or a tuple.
 The supported type for value is str. Use empty string `''` for Null partition value.
 
-Examples:
-```
-("x", "=", "a")
-("x", "!=", "a")
-("y", "in", ["a", "b", "c"])
-("z", "not in", ["a","b"])
-```
+Example:
+    ```
+    ("x", "=", "a")
+    ("x", "!=", "a")
+    ("y", "in", ["a", "b", "c"])
+    ("z", "not in", ["a","b"])
+    ```
 """
 
 
@@ -225,7 +227,7 @@ class DeltaTable:
 
     def __init__(
         self,
-        table_uri: Union[str, Path],
+        table_uri: Union[str, Path, "os.PathLike[str]"],
         version: Optional[int] = None,
         storage_options: Optional[Dict[str, str]] = None,
         without_files: bool = False,
@@ -329,13 +331,13 @@ class DeltaTable:
         the op is in or not in, the value must be a collection such as a list, a set or a tuple.
         The supported type for value is str. Use empty string `''` for Null partition value.
 
-        Examples:
-        ```
-        ("x", "=", "a")
-        ("x", "!=", "a")
-        ("y", "in", ["a", "b", "c"])
-        ("z", "not in", ["a","b"])
-        ```
+        Example:
+            ```
+            ("x", "=", "a")
+            ("x", "!=", "a")
+            ("y", "in", ["a", "b", "c"])
+            ("z", "not in", ["a","b"])
+            ```
         """
         return self._table.files(self.__stringify_partition_values(partition_filters))
 
@@ -366,13 +368,13 @@ class DeltaTable:
         the op is in or not in, the value must be a collection such as a list, a set or a tuple.
         The supported type for value is str. Use empty string `''` for Null partition value.
 
-        Examples:
-        ```
-        ("x", "=", "a")
-        ("x", "!=", "a")
-        ("y", "in", ["a", "b", "c"])
-        ("z", "not in", ["a","b"])
-        ```
+        Example:
+            ```
+            ("x", "=", "a")
+            ("x", "!=", "a")
+            ("y", "in", ["a", "b", "c"])
+            ("z", "not in", ["a","b"])
+            ```
         """
         return self._table.file_uris(
             self.__stringify_partition_values(partition_filters)
@@ -397,12 +399,12 @@ class DeltaTable:
         Args:
             datetime_string: the identifier of the datetime point of the DeltaTable to load
 
-        Examples:
-        ```
-        "2018-01-26T18:30:09Z"
-        "2018-12-19T16:39:57-08:00"
-        "2018-01-26T18:30:09.453+00:00"
-        ```
+        Example:
+            ```
+            "2018-01-26T18:30:09Z"
+            "2018-12-19T16:39:57-08:00"
+            "2018-01-26T18:30:09.453+00:00"
+            ```
         """
         self._table.load_with_datetime(datetime_string)
 
@@ -511,7 +513,7 @@ class DeltaTable:
         Args:
             updates: a mapping of column name to update SQL expression.
             new_values: a mapping of column name to python datatype.
-            predicate: a logical expression, defaults to None
+            predicate: a logical expression.
             writer_properties: Pass writer properties to the Rust parquet writer, see options https://arrow.apache.org/rust/parquet/file/properties/struct.WriterProperties.html,
                 only the following fields are supported: `data_page_size_limit`, `dictionary_page_size_limit`,
                 `data_page_row_count_limit`, `write_batch_size`, `max_row_group_size`.
@@ -520,34 +522,43 @@ class DeltaTable:
         Returns:
             the metrics from update
 
-        Examples:
+        Example:
+            **Update some row values with SQL predicate**
 
-            Update some row values with SQL predicate. This is equivalent to `UPDATE table SET deleted = true WHERE id = '3'`
+            This is equivalent to `UPDATE table SET deleted = true WHERE id = '3'`
+            ```py
+            from deltalake import write_deltalake, DeltaTable
+            import pandas as pd
+            df = pd.DataFrame(
+                {"id": ["1", "2", "3"],
+                "deleted": [False, False, False],
+                "price": [10., 15., 20.]
+                })
+            write_deltalake("tmp", df)
+            dt = DeltaTable("tmp")
+            dt.update(predicate="id = '3'", updates = {"deleted": 'True'})
 
-            >>> from deltalake import write_deltalake, DeltaTable
-            >>> import pandas as pd
-            >>> df = pd.DataFrame({"id": ["1", "2", "3"], "deleted": [False, False, False], "price": [10., 15., 20.]})
-            >>> write_deltalake("tmp", df)
-            >>> dt = DeltaTable("tmp")
-            >>> dt.update(predicate="id = '3'", updates = {"deleted": 'True'})
-            <class 'str'> <class 'str'>
             {'num_added_files': 1, 'num_removed_files': 1, 'num_updated_rows': 1, 'num_copied_rows': 2, 'execution_time_ms': ..., 'scan_time_ms': ...}
+            ```
 
-            Update all row values. This is equivalent to
-            ``UPDATE table SET deleted = true, id = concat(id, '_old')``.
+            **Update all row values**
 
-            >>> dt.update(updates = {"deleted": 'True', "id": "concat(id, '_old')"})
-            <class 'str'> <class 'str'>
-            <class 'str'> <class 'str'>
+            This is equivalent to ``UPDATE table SET deleted = true, id = concat(id, '_old')``.
+            ```py
+            dt.update(updates = {"deleted": 'True', "id": "concat(id, '_old')"})
+
             {'num_added_files': 1, 'num_removed_files': 1, 'num_updated_rows': 3, 'num_copied_rows': 0, 'execution_time_ms': ..., 'scan_time_ms': ...}
+            ```
 
-            To use Python objects instead of SQL strings, use the `new_values` parameter
-            instead of the `updates` parameter. For example, this is equivalent to
-            ``UPDATE table SET price = 150.10 WHERE id = '1'``
+            **Use Python objects instead of SQL strings**
 
-            >>> dt.update(predicate="id = '1_old'", new_values = {"price": 150.10})
+            Use the `new_values` parameter instead of the `updates` parameter. For example,
+            this is equivalent to ``UPDATE table SET price = 150.10 WHERE id = '1'``
+            ```py
+            dt.update(predicate="id = '1_old'", new_values = {"price": 150.10})
+
             {'num_added_files': 1, 'num_removed_files': 1, 'num_updated_rows': 1, 'num_copied_rows': 2, 'execution_time_ms': ..., 'scan_time_ms': ...}
-
+            ```
         """
         if updates is None and new_values is not None:
             updates = {}
@@ -614,11 +625,11 @@ class DeltaTable:
         match the underlying table.
 
         Args:
-            source (pyarrow.Table | pyarrow.RecordBatch | pyarrow.RecordBatchReader ): source data
-            predicate (str): SQL like predicate on how to merge
-            source_alias (str): Alias for the source table
-            target_alias (str): Alias for the target table
-            error_on_type_mismatch (bool): specify if merge will return error if data types are mismatching :default = True
+            source: source data
+            predicate: SQL like predicate on how to merge
+            source_alias: Alias for the source table
+            target_alias: Alias for the target table
+            error_on_type_mismatch: specify if merge will return error if data types are mismatching :default = True
 
         Returns:
             TableMerger: TableMerger Object
@@ -859,26 +870,27 @@ class DeltaTable:
             a PyArrow RecordBatch containing the add action data.
 
         Example:
+            ```python
+            from pprint import pprint
+            from deltalake import DeltaTable, write_deltalake
+            import pyarrow as pa
+            data = pa.table({"x": [1, 2, 3], "y": [4, 5, 6]})
+            write_deltalake("tmp", data, partition_by=["x"])
+            dt = DeltaTable("tmp")
+            df = dt.get_add_actions().to_pandas()
+            df["path"].sort_values(ignore_index=True)
+            0    x=1/0
+            1    x=2/0
+            2    x=3/0
+            ```
 
-            >>> from pprint import pprint
-            >>> from deltalake import DeltaTable, write_deltalake
-            >>> import pyarrow as pa
-            >>> data = pa.table({"x": [1, 2, 3], "y": [4, 5, 6]})
-            >>> write_deltalake("tmp", data, partition_by=["x"])
-            >>> dt = DeltaTable("tmp")
-            >>> df = dt.get_add_actions().to_pandas()
-            >>> df["path"].sort_values(ignore_index=True)
-            0    x=1/0-...
-            1    x=2/0-...
-            2    x=3/0-...
-            ...
-            >>> df = dt.get_add_actions(flatten=True).to_pandas()
-            >>> df["partition.x"].sort_values(ignore_index=True)
+            ```python
+            df = dt.get_add_actions(flatten=True).to_pandas()
+            df["partition.x"].sort_values(ignore_index=True)
             0    1
             1    2
             2    3
-            ...
-
+            ```
         """
         return self._table.get_add_actions(flatten)
 
@@ -912,16 +924,16 @@ class DeltaTable:
         Returns:
             The metrics from repair (FSCK) action.
 
-        Examples:
-        ```
-        from deltalake import DeltaTable
-        dt = DeltaTable('TEST')
-        dt.repair(dry_run=False)
-        ```
-        Results in
-        ```
-        {'dry_run': False, 'files_removed': ['6-0d084325-6885-4847-b008-82c1cf30674c-0.parquet', 5-4fba1d3e-3e20-4de1-933d-a8e13ac59f53-0.parquet']}
-        ```
+        Example:
+            ```python
+            from deltalake import DeltaTable
+            dt = DeltaTable('TEST')
+            dt.repair(dry_run=False)
+            ```
+            Results in
+            ```
+            {'dry_run': False, 'files_removed': ['6-0d084325-6885-4847-b008-82c1cf30674c-0.parquet', 5-4fba1d3e-3e20-4de1-933d-a8e13ac59f53-0.parquet']}
+            ```
         """
         metrics = self._table.repair(dry_run)
         return json.loads(metrics)
@@ -970,11 +982,11 @@ class TableMerger:
         """Pass writer properties to the Rust parquet writer, see options https://arrow.apache.org/rust/parquet/file/properties/struct.WriterProperties.html:
 
         Args:
-            data_page_size_limit (int|None, Optional): Limit DataPage size to this in bytes. Defaults to None.
-            dictionary_page_size_limit (int|None, Optional): Limit the size of each DataPage to store dicts to this amount in bytes. Defaults to None.
-            data_page_row_count_limit (int|None, Optional): Limit the number of rows in each DataPage. Defaults to None.
-            write_batch_size (int|None, Optional): Splits internally to smaller batch size. Defaults to None.
-            max_row_group_size (int|None, Optional): Max number of rows in row group. Defaults to None.
+            data_page_size_limit: Limit DataPage size to this in bytes.
+            dictionary_page_size_limit: Limit the size of each DataPage to store dicts to this amount in bytes.
+            data_page_row_count_limit: Limit the number of rows in each DataPage.
+            write_batch_size: Splits internally to smaller batch size.
+            max_row_group_size: Max number of rows in row group.
 
         Returns:
             TableMerger: TableMerger Object
@@ -996,36 +1008,39 @@ class TableMerger:
         If a ``predicate`` is specified, then it must evaluate to true for the row to be updated.
 
         Args:
-            updates (dict): a mapping of column name to update SQL expression.
-            predicate (str | None, Optional):  SQL like predicate on when to update. Defaults to None.
+            updates: a mapping of column name to update SQL expression.
+            predicate:  SQL like predicate on when to update.
 
         Returns:
             TableMerger: TableMerger Object
 
-        Examples:
+        Example:
+            ```python
+            from deltalake import DeltaTable, write_deltalake
+            import pyarrow as pa
 
-            >>> from deltalake import DeltaTable, write_deltalake
-            >>> import pyarrow as pa
-            >>> data = pa.table({"x": [1, 2, 3], "y": [4, 5, 6]})
-            >>> write_deltalake("tmp", data)
-            >>> dt = DeltaTable("tmp")
-            >>> new_data = pa.table({"x": [1], "y": [7]})
-            >>> (
-            ...      dt.merge(
-            ...          source=new_data,
-            ...          predicate="target.x = source.x",
-            ...          source_alias="source",
-            ...          target_alias="target")
-            ...      .when_matched_update(updates={"x": "source.x", "y": "source.y"})
-            ...      .execute()
-            ... )
+            data = pa.table({"x": [1, 2, 3], "y": [4, 5, 6]})
+            write_deltalake("tmp", data)
+            dt = DeltaTable("tmp")
+            new_data = pa.table({"x": [1], "y": [7]})
+
+            (
+                 dt.merge(
+                     source=new_data,
+                     predicate="target.x = source.x",
+                     source_alias="source",
+                     target_alias="target")
+                 .when_matched_update(updates={"x": "source.x", "y": "source.y"})
+                 .execute()
+            )
             {'num_source_rows': 1, 'num_target_rows_inserted': 0, 'num_target_rows_updated': 1, 'num_target_rows_deleted': 0, 'num_target_rows_copied': 2, 'num_output_rows': 3, 'num_target_files_added': 1, 'num_target_files_removed': 1, 'execution_time_ms': ..., 'scan_time_ms': ..., 'rewrite_time_ms': ...}
-            >>> dt.to_pandas()
+
+            dt.to_pandas()
                x  y
             0  1  7
             1  2  5
             2  3  6
-
+            ```
         """
         if isinstance(self.matched_update_updates, list) and isinstance(
             self.matched_update_predicate, list
@@ -1042,35 +1057,38 @@ class TableMerger:
         If a ``predicate`` is specified, then it must evaluate to true for the row to be updated.
 
         Args:
-            predicate (str | None, Optional): SQL like predicate on when to update all columns. Defaults to None.
+            predicate: SQL like predicate on when to update all columns.
 
         Returns:
             TableMerger: TableMerger Object
 
-        Examples:
+        Example:
+            ```python
+            from deltalake import DeltaTable, write_deltalake
+            import pyarrow as pa
 
-            >>> from deltalake import DeltaTable, write_deltalake
-            >>> import pyarrow as pa
-            >>> data = pa.table({"x": [1, 2, 3], "y": [4, 5, 6]})
-            >>> write_deltalake("tmp", data)
-            >>> dt = DeltaTable("tmp")
-            >>> new_data = pa.table({"x": [1], "y": [7]})
-            >>> (
-            ...     dt.merge(
-            ...         source=new_data,
-            ...         predicate="target.x = source.x",
-            ...         source_alias="source",
-            ...         target_alias="target")
-            ...     .when_matched_update_all()
-            ...     .execute()
-            ... )
+            data = pa.table({"x": [1, 2, 3], "y": [4, 5, 6]})
+            write_deltalake("tmp", data)
+            dt = DeltaTable("tmp")
+            new_data = pa.table({"x": [1], "y": [7]})
+
+            (
+                dt.merge(
+                    source=new_data,
+                    predicate="target.x = source.x",
+                    source_alias="source",
+                    target_alias="target")
+                .when_matched_update_all()
+                .execute()
+            )
             {'num_source_rows': 1, 'num_target_rows_inserted': 0, 'num_target_rows_updated': 1, 'num_target_rows_deleted': 0, 'num_target_rows_copied': 2, 'num_output_rows': 3, 'num_target_files_added': 1, 'num_target_files_removed': 1, 'execution_time_ms': ..., 'scan_time_ms': ..., 'rewrite_time_ms': ...}
-            >>> dt.to_pandas()
+
+            dt.to_pandas()
                x  y
             0  1  7
             1  2  5
             2  3  6
-
+            ```
         """
 
         src_alias = (self.source_alias + ".") if self.source_alias is not None else ""
@@ -1097,54 +1115,59 @@ class TableMerger:
         true for the matched row. If not specified it deletes all matches.
 
         Args:
-           predicate (str | None, Optional):  SQL like predicate on when to delete. Defaults to None.
+           predicate (str | None, Optional):  SQL like predicate on when to delete.
 
         Returns:
             TableMerger: TableMerger Object
 
-        Examples:
+        Example:
+            **Delete on a predicate**
 
-            Delete on a predicate
+            ```python
+            from deltalake import DeltaTable, write_deltalake
+            import pyarrow as pa
 
-            >>> from deltalake import DeltaTable, write_deltalake
-            >>> import pyarrow as pa
-            >>> data = pa.table({"x": [1, 2, 3], "y": [4, 5, 6]})
-            >>> write_deltalake("tmp", data)
-            >>> dt = DeltaTable("tmp")
-            >>> new_data = pa.table({"x": [2, 3], "deleted": [False, True]})
-            >>> (
-            ...     dt.merge(
-            ...         source=new_data,
-            ...         predicate='target.x = source.x',
-            ...         source_alias='source',
-            ...         target_alias='target')
-            ...     .when_matched_delete(
-            ...         predicate="source.deleted = true")
-            ...     .execute()
-            ... )
+            data = pa.table({"x": [1, 2, 3], "y": [4, 5, 6]})
+            write_deltalake("tmp", data)
+            dt = DeltaTable("tmp")
+            new_data = pa.table({"x": [2, 3], "deleted": [False, True]})
+
+            (
+                dt.merge(
+                    source=new_data,
+                    predicate='target.x = source.x',
+                    source_alias='source',
+                    target_alias='target')
+                .when_matched_delete(
+                    predicate="source.deleted = true")
+                .execute()
+            )
             {'num_source_rows': 2, 'num_target_rows_inserted': 0, 'num_target_rows_updated': 0, 'num_target_rows_deleted': 1, 'num_target_rows_copied': 2, 'num_output_rows': 2, 'num_target_files_added': 1, 'num_target_files_removed': 1, 'execution_time_ms': ..., 'scan_time_ms': ..., 'rewrite_time_ms': ...}
-            >>> dt.to_pandas().sort_values("x", ignore_index=True)
+
+            dt.to_pandas().sort_values("x", ignore_index=True)
                x  y
             0  1  4
             1  2  5
+            ```
 
-            Delete all records that were matched
-
-            >>> dt = DeltaTable("tmp")
-            >>> (
-            ...     dt.merge(
-            ...         source=new_data,
-            ...         predicate='target.x = source.x',
-            ...         source_alias='source',
-            ...         target_alias='target')
-            ...     .when_matched_delete()
-            ...     .execute()
-            ... )
+            **Delete all records that were matched**
+            ```python
+            dt = DeltaTable("tmp")
+            (
+                dt.merge(
+                    source=new_data,
+                    predicate='target.x = source.x',
+                    source_alias='source',
+                    target_alias='target')
+                .when_matched_delete()
+                .execute()
+            )
             {'num_source_rows': 2, 'num_target_rows_inserted': 0, 'num_target_rows_updated': 0, 'num_target_rows_deleted': 1, 'num_target_rows_copied': 1, 'num_output_rows': 1, 'num_target_files_added': 1, 'num_target_files_removed': 1, 'execution_time_ms': ..., 'scan_time_ms': ..., 'rewrite_time_ms': ...}
-            >>> dt.to_pandas()
+
+            dt.to_pandas()
                x  y
             0  1  4
-
+            ```
         """
         if self.matched_delete_all is not None:
             raise ValueError(
@@ -1169,40 +1192,43 @@ class TableMerger:
 
         Args:
             updates (dict):  a mapping of column name to insert SQL expression.
-            predicate (str | None, Optional): SQL like predicate on when to insert. Defaults to None.
+            predicate (str | None, Optional): SQL like predicate on when to insert.
 
         Returns:
             TableMerger: TableMerger Object
 
-        Examples:
+        Example:
+            ```python
+            from deltalake import DeltaTable, write_deltalake
+            import pyarrow as pa
 
-            >>> from deltalake import DeltaTable, write_deltalake
-            >>> import pyarrow as pa
-            >>> data = pa.table({"x": [1, 2, 3], "y": [4, 5, 6]})
-            >>> write_deltalake("tmp", data)
-            >>> dt = DeltaTable("tmp")
-            >>> new_data = pa.table({"x": [4], "y": [7]})
-            >>> (
-            ...    dt.merge(
-            ...        source=new_data,
-            ...        predicate='target.x = source.x',
-            ...        source_alias='source',
-            ...        target_alias='target')
-            ...    .when_not_matched_insert(
-            ...         updates = {
-            ...             "x": "source.x",
-            ...             "y": "source.y",
-            ...                 })
-            ...    .execute()
-            ... )
+            data = pa.table({"x": [1, 2, 3], "y": [4, 5, 6]})
+            write_deltalake("tmp", data)
+            dt = DeltaTable("tmp")
+            new_data = pa.table({"x": [4], "y": [7]})
+
+            (
+                dt.merge(
+                    source=new_data,
+                    predicate="target.x = source.x",
+                    source_alias="source",
+                    target_alias="target",)
+                .when_not_matched_insert(
+                    updates={
+                        "x": "source.x",
+                        "y": "source.y",
+                    })
+                .execute()
+            )
             {'num_source_rows': 1, 'num_target_rows_inserted': 1, 'num_target_rows_updated': 0, 'num_target_rows_deleted': 0, 'num_target_rows_copied': 3, 'num_output_rows': 4, 'num_target_files_added': 1, 'num_target_files_removed': 1, 'execution_time_ms': ..., 'scan_time_ms': ..., 'rewrite_time_ms': ...}
-            >>> dt.to_pandas().sort_values("x", ignore_index=True)
+
+            dt.to_pandas().sort_values("x", ignore_index=True)
                x  y
             0  1  4
             1  2  5
             2  3  6
             3  4  7
-
+            ```
         """
 
         if isinstance(self.not_matched_insert_updates, list) and isinstance(
@@ -1224,36 +1250,39 @@ class TableMerger:
         the new row to be inserted.
 
         Args:
-            predicate (str | None, Optional): SQL like predicate on when to insert. Defaults to None.
+            predicate: SQL like predicate on when to insert.
 
         Returns:
             TableMerger: TableMerger Object
 
-        Examples:
+        Example:
+            ```python
+            from deltalake import DeltaTable, write_deltalake
+            import pyarrow as pa
 
-            >>> from deltalake import DeltaTable, write_deltalake
-            >>> import pyarrow as pa
-            >>> data = pa.table({"x": [1, 2, 3], "y": [4, 5, 6]})
-            >>> write_deltalake("tmp", data)
-            >>> dt = DeltaTable("tmp")
-            >>> new_data = pa.table({"x": [4], "y": [7]})
-            >>> (
-            ...    dt.merge(
-            ...        source=new_data,
-            ...        predicate='target.x = source.x',
-            ...        source_alias='source',
-            ...        target_alias='target')
-            ...    .when_not_matched_insert_all()
-            ...    .execute()
-            ... )
+            data = pa.table({"x": [1, 2, 3], "y": [4, 5, 6]})
+            write_deltalake("tmp", data)
+            dt = DeltaTable("tmp")
+            new_data = pa.table({"x": [4], "y": [7]})
+
+            (
+               dt.merge(
+                   source=new_data,
+                   predicate='target.x = source.x',
+                   source_alias='source',
+                   target_alias='target')
+               .when_not_matched_insert_all()
+               .execute()
+            )
             {'num_source_rows': 1, 'num_target_rows_inserted': 1, 'num_target_rows_updated': 0, 'num_target_rows_deleted': 0, 'num_target_rows_copied': 3, 'num_output_rows': 4, 'num_target_files_added': 1, 'num_target_files_removed': 1, 'execution_time_ms': ..., 'scan_time_ms': ..., 'rewrite_time_ms': ...}
-            >>> dt.to_pandas().sort_values("x", ignore_index=True)
+
+            dt.to_pandas().sort_values("x", ignore_index=True)
                x  y
             0  1  4
             1  2  5
             2  3  6
             3  4  7
-
+            ```
         """
 
         src_alias = (self.source_alias + ".") if self.source_alias is not None else ""
@@ -1280,38 +1309,41 @@ class TableMerger:
         If a ``predicate`` is specified, then it must evaluate to true for the row to be updated.
 
         Args:
-            updates (dict): a mapping of column name to update SQL expression.
-            predicate (str | None, Optional): SQL like predicate on when to update. Defaults to None.
+            updates: a mapping of column name to update SQL expression.
+            predicate: SQL like predicate on when to update.
 
         Returns:
             TableMerger: TableMerger Object
 
-        Examples:
+        Example:
+            ```python
+            from deltalake import DeltaTable, write_deltalake
+            import pyarrow as pa
 
-            >>> from deltalake import DeltaTable, write_deltalake
-            >>> import pyarrow as pa
-            >>> data = pa.table({"x": [1, 2, 3], "y": [4, 5, 6]})
-            >>> write_deltalake("tmp", data)
-            >>> dt = DeltaTable("tmp")
-            >>> new_data = pa.table({"x": [2, 3, 4]})
-            >>> (
-            ...    dt.merge(
-            ...        source=new_data,
-            ...        predicate='target.x = source.x',
-            ...        source_alias='source',
-            ...        target_alias='target')
-            ...    .when_not_matched_by_source_update(
-            ...        predicate = "y > 3",
-            ...        updates = {"y": "0"})
-            ...    .execute()
-            ... )
+            data = pa.table({"x": [1, 2, 3], "y": [4, 5, 6]})
+            write_deltalake("tmp", data)
+            dt = DeltaTable("tmp")
+            new_data = pa.table({"x": [2, 3, 4]})
+
+            (
+               dt.merge(
+                   source=new_data,
+                   predicate='target.x = source.x',
+                   source_alias='source',
+                   target_alias='target')
+               .when_not_matched_by_source_update(
+                   predicate = "y > 3",
+                   updates = {"y": "0"})
+               .execute()
+            )
             {'num_source_rows': 3, 'num_target_rows_inserted': 0, 'num_target_rows_updated': 1, 'num_target_rows_deleted': 0, 'num_target_rows_copied': 2, 'num_output_rows': 3, 'num_target_files_added': 1, 'num_target_files_removed': 1, 'execution_time_ms': ..., 'scan_time_ms': ..., 'rewrite_time_ms': ...}
-            >>> dt.to_pandas().sort_values("x", ignore_index=True)
+
+            dt.to_pandas().sort_values("x", ignore_index=True)
                x  y
             0  1  0
             1  2  5
             2  3  6
-
+            ```
         """
 
         if isinstance(self.not_matched_by_source_update_updates, list) and isinstance(
@@ -1331,7 +1363,7 @@ class TableMerger:
         ``predicate`` (if specified) is true for the target row.
 
         Args:
-            predicate (str | None, Optional):  SQL like predicate on when to delete when not matched by source. Defaults to None.
+            predicate:  SQL like predicate on when to delete when not matched by source.
 
         Returns:
             TableMerger: TableMerger Object
@@ -1355,7 +1387,7 @@ class TableMerger:
         """Executes `MERGE` with the previously provided settings in Rust with Apache Datafusion query engine.
 
         Returns:
-            Dict[str, Any]: metrics
+            Dict: metrics
         """
         self.table.update_incremental()
         metrics = self.table._table.merge_execute(
@@ -1436,19 +1468,21 @@ class TableOptimizer:
         Returns:
             the metrics from optimize
 
-        Examples:
+        Example:
             Use a timedelta object to specify the seconds, minutes or hours of the interval.
+            ```python
+            from deltalake import DeltaTable, write_deltalake
+            from datetime import timedelta
+            import pyarrow as pa
 
-            >>> from deltalake import DeltaTable, write_deltalake
-            >>> from datetime import timedelta
-            >>> import pyarrow as pa
-            >>> write_deltalake("tmp", pa.table({"x": [1], "y": [4]}))
-            >>> write_deltalake("tmp", pa.table({"x": [2], "y": [5]}), mode="append")
-            >>> dt = DeltaTable("tmp")
-            >>> time_delta = timedelta(minutes=10)
-            >>> dt.optimize.compact(min_commit_interval=time_delta)
+            write_deltalake("tmp", pa.table({"x": [1], "y": [4]}))
+            write_deltalake("tmp", pa.table({"x": [2], "y": [5]}), mode="append")
+
+            dt = DeltaTable("tmp")
+            time_delta = timedelta(minutes=10)
+            dt.optimize.compact(min_commit_interval=time_delta)
             {'numFilesAdded': 1, 'numFilesRemoved': 2, 'filesAdded': ..., 'filesRemoved': ..., 'partitionsOptimized': 1, 'numBatches': 2, 'totalConsideredFiles': 2, 'totalFilesSkipped': 0, 'preserveInsertionOrder': True}
-
+            ```
         """
         if isinstance(min_commit_interval, timedelta):
             min_commit_interval = int(min_commit_interval.total_seconds())
@@ -1490,19 +1524,21 @@ class TableOptimizer:
         Returns:
             the metrics from optimize
 
-        Examples:
+        Example:
             Use a timedelta object to specify the seconds, minutes or hours of the interval.
+            ```python
+            from deltalake import DeltaTable, write_deltalake
+            from datetime import timedelta
+            import pyarrow as pa
 
-            >>> from deltalake import DeltaTable, write_deltalake
-            >>> from datetime import timedelta
-            >>> import pyarrow as pa
-            >>> write_deltalake("tmp", pa.table({"x": [1], "y": [4]}))
-            >>> write_deltalake("tmp", pa.table({"x": [2], "y": [5]}), mode="append")
-            >>> dt = DeltaTable("tmp")
-            >>> time_delta = timedelta(minutes=10)
-            >>> dt.optimize.z_order(["x"], min_commit_interval=time_delta)
+            write_deltalake("tmp", pa.table({"x": [1], "y": [4]}))
+            write_deltalake("tmp", pa.table({"x": [2], "y": [5]}), mode="append")
+
+            dt = DeltaTable("tmp")
+            time_delta = timedelta(minutes=10)
+            dt.optimize.z_order(["x"], min_commit_interval=time_delta)
             {'numFilesAdded': 1, 'numFilesRemoved': 2, 'filesAdded': ..., 'filesRemoved': ..., 'partitionsOptimized': 0, 'numBatches': 1, 'totalConsideredFiles': 2, 'totalFilesSkipped': 0, 'preserveInsertionOrder': True}
-
+            ```
         """
         if isinstance(min_commit_interval, timedelta):
             min_commit_interval = int(min_commit_interval.total_seconds())
