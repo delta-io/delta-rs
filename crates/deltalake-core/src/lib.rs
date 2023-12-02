@@ -710,28 +710,23 @@ mod tests {
     }
 
     #[tokio::test()]
-    #[should_panic(expected = "does not exist or you don't have access!")]
     async fn test_fail_fast_on_not_existing_path() {
         use std::path::Path as FolderPath;
 
-        let path_str = "./tests/data/folder_doesnt_exist";
+        let non_existing_path_str = "./tests/data/folder_doesnt_exist";
 
         // Check that there is no such path at the beginning
-        let path_doesnt_exist = !FolderPath::new(path_str).exists();
+        let path_doesnt_exist = !FolderPath::new(non_existing_path_str).exists();
         assert!(path_doesnt_exist);
 
-        match crate::open_table(path_str).await {
-            Ok(table) => Ok(table),
-            Err(e) => {
-                let path_still_doesnt_exist = !FolderPath::new(path_str).exists();
-                assert!(
-                    path_still_doesnt_exist,
-                    "Path exists for some reason, but it shouldn't"
-                );
-
-                Err(e)
-            }
-        }
-        .unwrap();
+        let error = crate::open_table(non_existing_path_str).await.unwrap_err();
+        let _expected_error_msg = format!(
+            "Local path \"{}\" does not exist or you don't have access!",
+            non_existing_path_str
+        );
+        assert!(matches!(
+            error,
+            DeltaTableError::InvalidTableLocation(_expected_error_msg),
+        ))
     }
 }
