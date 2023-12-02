@@ -625,7 +625,8 @@ fn cast_record_batch_columns(
         .collect::<Result<Vec<_>, _>>()
 }
 
-fn cast_record_batch(
+/// Cast recordbatch to a new target_schema, by casting each column array
+pub fn cast_record_batch(
     batch: &RecordBatch,
     target_schema: ArrowSchemaRef,
     safe: bool,
