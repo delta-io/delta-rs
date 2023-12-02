@@ -166,7 +166,11 @@ impl DeltaTableBuilder {
 
         if let UriType::LocalPath(path) = resolve_uri_type(table_uri)? {
             if !path.exists() {
-                panic!("Path \"{table_uri}\" does not exist or you don't have access!");
+                let msg = format!(
+                    "Local path \"{}\" does not exist or you don't have access!",
+                    table_uri
+                );
+                return Err(DeltaTableError::InvalidTableLocation(msg));
             }
         }
 
