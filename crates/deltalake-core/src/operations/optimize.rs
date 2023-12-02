@@ -903,10 +903,14 @@ fn build_compaction_plan(
 
     // Prune merge bins with only 1 file, since they have no effect
     for (_, bins) in operations.iter_mut() {
-        if bins.len() == 1 && bins[0].len() == 1 {
-            metrics.total_files_skipped += 1;
-            bins.clear();
-        }
+        bins.retain(|bin| {
+            if bin.len() == 1 {
+                metrics.total_files_skipped += 1;
+                false
+            } else {
+                true
+            }
+        })
     }
     operations.retain(|_, files| !files.is_empty());
 
