@@ -219,7 +219,7 @@ impl VacuumBuilder {
                     if let Ok(parent) =
                         &Url::parse(&format!("file://{}", self.log_store.root_uri().as_str()))
                     {
-                        if let Ok(dv_absolute_path) = deletion_vector.absolute_path(&parent) {
+                        if let Ok(dv_absolute_path) = deletion_vector.absolute_path(parent) {
                             Some(dv_absolute_path?.path().to_string())
                         } else {
                             None
@@ -307,7 +307,7 @@ impl std::future::IntoFuture for VacuumBuilder {
 
 fn is_absolute_path(path: &str) -> bool {
     let path = std::path::Path::new(path);
-    return path.is_absolute();
+    path.is_absolute()
 }
 
 /// Encapsulate which files are to be deleted and the parameters used to make that decision
