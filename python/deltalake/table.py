@@ -1,6 +1,5 @@
 import json
 import operator
-import os
 import warnings
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -32,6 +31,8 @@ from pyarrow.dataset import (
 )
 
 if TYPE_CHECKING:
+    import os
+
     import pandas
 
 from deltalake._internal import DeltaDataChecker as _DeltaDataChecker
@@ -226,7 +227,7 @@ class DeltaTable:
 
     def __init__(
         self,
-        table_uri: Union[str, Path, os.PathLike],
+        table_uri: Union[str, Path, "os.PathLike[str]"],
         version: Optional[int] = None,
         storage_options: Optional[Dict[str, str]] = None,
         without_files: bool = False,
