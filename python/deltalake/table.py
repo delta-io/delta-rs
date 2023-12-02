@@ -12,6 +12,8 @@ from typing import (
     Generator,
     Iterable,
     List,
+    Literal,
+    Mapping,
     NamedTuple,
     Optional,
     Tuple,
@@ -37,11 +39,12 @@ if TYPE_CHECKING:
 
 from deltalake._internal import DeltaDataChecker as _DeltaDataChecker
 from deltalake._internal import RawDeltaTable
+from deltalake._internal import create_deltalake as _create_deltalake
 from deltalake._util import encode_partition_value
 from deltalake.data_catalog import DataCatalog
 from deltalake.exceptions import DeltaProtocolError
 from deltalake.fs import DeltaStorageHandler
-from deltalake.schema import Schema
+from deltalake.schema import Schema as DeltaSchema
 
 MAX_SUPPORTED_READER_VERSION = 1
 MAX_SUPPORTED_WRITER_VERSION = 2
@@ -297,6 +300,73 @@ class DeltaTable:
             table_uri=table_uri, version=version, log_buffer_size=log_buffer_size
         )
 
+    @classmethod
+    def create(
+        cls,
+        table_uri: Union[str, Path],
+        schema: Union[pyarrow.Schema, DeltaSchema],
+        mode: Literal["error", "append", "overwrite", "ignore"] = "error",
+        partition_by: Optional[Union[List[str], str]] = None,
+        name: Optional[str] = None,
+        description: Optional[str] = None,
+        configuration: Optional[Mapping[str, Optional[str]]] = None,
+        storage_options: Optional[Dict[str, str]] = None,
+    ) -> "DeltaTable":
+        """`CREATE` or `CREATE_OR_REPLACE` a delta table given a table_uri.
+
+        Args:
+            table_uri: URI of a table
+            schema: Table schema
+            mode: How to handle existing data. Default is to error if table already exists.
+                If 'append', returns not support error if table exists.
+                If 'overwrite', will `CREATE_OR_REPLACE` table.
+                If 'ignore', will not do anything if table already exists. Defaults to "error".
+            partition_by:  List of columns to partition the table by.
+            name: User-provided identifier for this table.
+            description: User-provided description for this table.
+            configuration:  A map containing configuration options for the metadata action.
+            storage_options: options passed to the object store crate.
+
+        Returns:
+            DeltaTable: created delta table
+
+        Example:
+            ```python
+            import pyarrow as pa
+
+            from deltalake import DeltaTable
+
+            dt = DeltaTable.create(
+                table_uri="my_local_table",
+                schema=pa.schema(
+                    [pa.field("foo", pa.string()), pa.field("bar", pa.string())]
+                ),
+                mode="error",
+                partition_by="bar",
+            )
+            ```
+        """
+        if isinstance(schema, DeltaSchema):
+            schema = schema.to_pyarrow()
+        if isinstance(partition_by, str):
+            partition_by = [partition_by]
+
+        if isinstance(table_uri, Path):
+            table_uri = str(table_uri)
+
+        _create_deltalake(
+            table_uri,
+            schema,
+            partition_by or [],
+            mode,
+            name,
+            description,
+            configuration,
+            storage_options,
+        )
+
+        return cls(table_uri=table_uri, storage_options=storage_options)
+
     def version(self) -> int:
         """
         Get the version of the DeltaTable.
@@ -412,7 +482,7 @@ class DeltaTable:
     def table_uri(self) -> str:
         return self._table.table_uri()
 
-    def schema(self) -> Schema:
+    def schema(self) -> DeltaSchema:
         """
         Get the current schema of the DeltaTable.
 
