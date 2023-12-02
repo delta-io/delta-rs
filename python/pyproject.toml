@@ -18,7 +18,8 @@ classifiers = [
     "Programming Language :: Python :: 3.12"
 ]
 dependencies = [
-    "pyarrow>=14.0.1"
+    "pyarrow>=8",
+    "pyarrow-hotfix",    
 ]
 
 [project.optional-dependencies]
