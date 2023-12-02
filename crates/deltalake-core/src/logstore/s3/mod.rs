@@ -43,7 +43,7 @@ impl S3DynamoDbLogStore {
         s3_options: &S3StorageOptions,
         object_store: ObjectStoreRef,
     ) -> DeltaResult<Self> {
-        let lock_client = DynamoDbLockClient::try_new(&s3_options).map_err(|err| {
+        let lock_client = DynamoDbLockClient::try_new(s3_options).map_err(|err| {
             DeltaTableError::ObjectStore {
                 source: object_store::Error::Generic {
                     store: STORE_NAME,
@@ -112,7 +112,7 @@ impl S3DynamoDbLogStore {
                     source: Box::new(err),
                 }) {
                 Ok(x) => return Ok(Self::map_retry_result(x, copy_performed)),
-                Err(err) if retry == MAX_REPAIR_RETRIES => return Err(err.into()),
+                Err(err) if retry == MAX_REPAIR_RETRIES => return Err(err),
                 Err(err) => log::debug!(
                     "retry #{retry} on log entry {entry:?} failed to update lock db: '{err}'"
                 ),
@@ -226,8 +226,8 @@ impl LogStore for S3DynamoDbLogStore {
 
 /// Representation of a log entry stored in DynamoDb
 /// dynamo db item consists of:
-/// - tablePath: String - part of primary key, configured in [`DeltaObjectStore`]
-/// - fileName: String - commit version.json (part of primary key), stored as i64 here
+/// - tablePath: String - tracked in the log store implementation
+/// - fileName: String - commit version.json (part of primary key), stored as i64 in this struct
 /// - tempPath: String - name of temporary file containing commit info
 /// - complete: bool - operation completed, i.e. atomic rename from `tempPath` to `fileName` succeeded
 /// - expireTime: Option<SystemTime> - epoch seconds at which this external commit entry is safe to be deleted
