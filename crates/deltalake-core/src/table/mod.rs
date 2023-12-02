@@ -305,7 +305,7 @@ impl<'de> Deserialize<'de> for DeltaTable {
                     .next_element()?
                     .ok_or_else(|| A::Error::invalid_length(0, &self))?;
                 let log_store = configure_log_store(
-                    &storage_config.location.to_string(),
+                    storage_config.location.as_ref(),
                     storage_config.options,
                     None,
                 )
