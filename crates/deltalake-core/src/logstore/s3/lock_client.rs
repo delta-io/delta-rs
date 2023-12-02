@@ -33,9 +33,9 @@ pub struct DynamoDbLockClient {
 impl DynamoDbLockClient {
     /// Creates a new DynamoDbLockClient from the supplied storage options.
     ///
-    /// Options are described in [s3_storage_options].
+    /// Options are described in [crate::table::builder::s3_storage_options].
     pub fn try_new(options: &S3StorageOptions) -> Result<Self, DynamoDbConfigError> {
-        let dynamodb_client = create_dynamodb_client(&options)?;
+        let dynamodb_client = create_dynamodb_client(options)?;
         let lock_table_name = options
             .extra_opts
             .get(constants::LOCK_TABLE_KEY_NAME)
@@ -43,7 +43,7 @@ impl DynamoDbLockClient {
         let billing_mode = options
             .extra_opts
             .get(constants::BILLING_MODE_KEY_NAME)
-            .map(|bm| BillingMode::from_str(&bm))
+            .map(|bm| BillingMode::from_str(bm))
             .unwrap_or(Ok(BillingMode::PayPerRequest))?;
         Ok(Self {
             dynamodb_client,
@@ -133,7 +133,7 @@ impl DynamoDbLockClient {
         table_path: &str,
         entry: &CommitEntry,
     ) -> Result<(), LockClientError> {
-        let item = create_value_map(&entry, table_path);
+        let item = create_value_map(entry, table_path);
         let input = PutItemInput {
             condition_expression: Some(constants::CONDITION_EXPR_CREATE.to_owned()),
             table_name: self.get_lock_table_name(),
@@ -192,7 +192,7 @@ impl DynamoDbLockClient {
             .items
             .unwrap()
             .iter()
-            .map(|item| CommitEntry::try_from(item))
+            .map(CommitEntry::try_from)
             .collect()
     }
 
@@ -290,7 +290,7 @@ fn create_value_map(
     let mut value_map = maplit::hashmap! {
         constants::ATTR_TABLE_PATH.to_owned()  => string_attr(table_path),
         constants::ATTR_FILE_NAME.to_owned()   => string_attr(format!("{:020}.json", commit_entry.version)),
-        constants::ATTR_TEMP_PATH.to_owned()   => string_attr(&temp_path),
+        constants::ATTR_TEMP_PATH.to_owned()   => string_attr(temp_path),
         constants::ATTR_COMPLETE.to_owned()    => string_attr(if commit_entry.complete { "true" } else { "false" }),
     };
     commit_entry.expire_time.as_ref().map(|t| {
