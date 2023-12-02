@@ -509,6 +509,71 @@ async fn test_idempotent_metrics() -> Result<(), Box<dyn Error>> {
 }
 
 #[tokio::test]
+/// Validate that multiple bins packing is idempotent.
+async fn test_idempotent_with_multiple_bins() -> Result<(), Box<dyn Error>> {
+    //TODO: Compression makes it hard to get the target file size...
+    //Maybe just commit files with a known size
+    let context = setup_test(true).await?;
+    let mut dt = context.table;
+    let mut writer = RecordBatchWriter::for_table(&dt)?;
+
+    write(
+        &mut writer,
+        &mut dt,
+        generate_random_batch(records_for_size(6_000_000), "2022-05-22")?,
+    )
+    .await?;
+    write(
+        &mut writer,
+        &mut dt,
+        generate_random_batch(records_for_size(3_000_000), "2022-05-22")?,
+    )
+    .await?;
+    write(
+        &mut writer,
+        &mut dt,
+        generate_random_batch(records_for_size(6_000_000), "2022-05-22")?,
+    )
+    .await?;
+    write(
+        &mut writer,
+        &mut dt,
+        generate_random_batch(records_for_size(3_000_000), "2022-05-22")?,
+    )
+    .await?;
+    write(
+        &mut writer,
+        &mut dt,
+        generate_random_batch(records_for_size(9_900_000), "2022-05-22")?,
+    )
+    .await?;
+
+    let version = dt.version();
+
+    let filter = vec![PartitionFilter::try_from(("date", "=", "2022-05-22"))?];
+
+    let optimize = DeltaOps(dt)
+        .optimize()
+        .with_filters(&filter)
+        .with_target_size(10_000_000);
+    let (dt, metrics) = optimize.await?;
+    assert_eq!(metrics.num_files_added, 2);
+    assert_eq!(metrics.num_files_removed, 4);
+    assert_eq!(dt.version(), version + 1);
+
+    let optimize = DeltaOps(dt)
+        .optimize()
+        .with_filters(&filter)
+        .with_target_size(10_000_000);
+    let (dt, metrics) = optimize.await?;
+    assert_eq!(metrics.num_files_added, 0);
+    assert_eq!(metrics.num_files_removed, 0);
+    assert_eq!(dt.version(), version + 1);
+
+    Ok(())
+}
+
+#[tokio::test]
 /// Validate operation data and metadata was written
 async fn test_commit_info() -> Result<(), Box<dyn Error>> {
     let context = setup_test(true).await?;
