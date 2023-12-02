@@ -71,11 +71,12 @@ use serde::{Deserialize, Serialize};
 use url::Url;
 
 use crate::errors::{DeltaResult, DeltaTableError};
-use crate::kernel::{Add, DataType as DeltaDataType, Invariant, PrimitiveType};
+use crate::kernel::{Add, DataCheck, DataType as DeltaDataType, Invariant, PrimitiveType};
 use crate::logstore::LogStoreRef;
 use crate::protocol::{ColumnCountStat, ColumnValueStat};
 use crate::table::builder::ensure_table_uri;
 use crate::table::state::DeltaTableState;
+use crate::table::Constraint;
 use crate::{open_table, open_table_with_storage_options, DeltaTable};
 
 const PATH_COLUMN: &str = "__delta_rs_path";
@@ -1016,15 +1017,41 @@ pub(crate) fn logical_expr_to_physical_expr(
 /// Responsible for checking batches of data conform to table's invariants.
 #[derive(Clone)]
 pub struct DeltaDataChecker {
+    constraints: Vec<Constraint>,
     invariants: Vec<Invariant>,
     ctx: SessionContext,
 }
 
 impl DeltaDataChecker {
-    /// Create a new DeltaDataChecker
-    pub fn new(invariants: Vec<Invariant>) -> Self {
+    /// Create a new DeltaDataChecker with a specified set of invariants
+    pub fn with_invariants(invariants: Vec<Invariant>) -> Self {
         Self {
             invariants,
+            constraints: vec![],
+            ctx: SessionContext::new(),
+        }
+    }
+
+    /// Create a new DeltaDataChecker with a specified set of constraints
+    pub fn with_constraints(constraints: Vec<Constraint>) -> Self {
+        Self {
+            constraints,
+            invariants: vec![],
+            ctx: SessionContext::new(),
+        }
+    }
+
+    /// Create a new DeltaDataChecker
+    pub fn new(snapshot: &DeltaTableState) -> Self {
+        let invariants = snapshot
+            .current_metadata()
+            .and_then(|meta| meta.schema.get_invariants().ok())
+            .unwrap_or_default();
+
+        let constraints = vec![];
+        Self {
+            invariants,
+            constraints,
             ctx: SessionContext::new(),
         }
     }
@@ -1034,45 +1061,53 @@ impl DeltaDataChecker {
     /// If it does not, it will return [DeltaTableError::InvalidData] with a list
     /// of values that violated each invariant.
     pub async fn check_batch(&self, record_batch: &RecordBatch) -> Result<(), DeltaTableError> {
-        self.enforce_invariants(record_batch).await
-        // TODO: for support for Protocol V3, check constraints
+        self.enforce_checks(record_batch, &self.invariants).await?;
+        self.enforce_checks(record_batch, &self.constraints).await
     }
 
-    async fn enforce_invariants(&self, record_batch: &RecordBatch) -> Result<(), DeltaTableError> {
-        // Invariants are deprecated, so let's not pay the overhead for any of this
-        // if we can avoid it.
-        if self.invariants.is_empty() {
+    async fn enforce_checks<C: DataCheck>(
+        &self,
+        record_batch: &RecordBatch,
+        checks: &[C],
+    ) -> Result<(), DeltaTableError> {
+        if checks.is_empty() {
             return Ok(());
         }
 
-        let table = MemTable::try_new(record_batch.schema(), vec![vec![record_batch.clone()]])?;
-        self.ctx.register_table("data", Arc::new(table))?;
+        if !self.ctx.table_exist("data")? {
+            let table = MemTable::try_new(record_batch.schema(), vec![vec![record_batch.clone()]])?;
+            self.ctx.register_table("data", Arc::new(table))?;
+        }
 
         let mut violations: Vec<String> = Vec::new();
 
-        for invariant in self.invariants.iter() {
-            if invariant.field_name.contains('.') {
+        for check in checks {
+            if check.get_name().contains('.') {
                 return Err(DeltaTableError::Generic(
-                    "Support for column invariants on nested columns is not supported.".to_string(),
+                    "Support for nested columns is not supported.".to_string(),
                 ));
             }
 
             let sql = format!(
-                "SELECT {} FROM data WHERE not ({}) LIMIT 1",
-                invariant.field_name, invariant.invariant_sql
+                "SELECT {} FROM data WHERE NOT ({}) LIMIT 1",
+                check.get_name(),
+                check.get_expression()
             );
+            dbg!(&sql);
 
             let dfs: Vec<RecordBatch> = self.ctx.sql(&sql).await?.collect().await?;
             if !dfs.is_empty() && dfs[0].num_rows() > 0 {
                 let value = format!("{:?}", dfs[0].column(0));
                 let msg = format!(
-                    "Invariant ({}) violated by value {}",
-                    invariant.invariant_sql, value
+                    "Check or Invariant ({}) violated by value {}",
+                    check.get_expression(),
+                    value
                 );
                 violations.push(msg);
             }
         }
 
+        self.ctx.deregister_table("data")?;
         if !violations.is_empty() {
             Err(DeltaTableError::InvalidData { violations })
         } else {
@@ -1642,7 +1677,7 @@ mod tests {
         .unwrap();
         // Empty invariants is okay
         let invariants: Vec<Invariant> = vec![];
-        assert!(DeltaDataChecker::new(invariants)
+        assert!(DeltaDataChecker::with_invariants(invariants)
             .check_batch(&batch)
             .await
             .is_ok());
@@ -1652,7 +1687,7 @@ mod tests {
             Invariant::new("a", "a is not null"),
             Invariant::new("b", "b < 1000"),
         ];
-        assert!(DeltaDataChecker::new(invariants)
+        assert!(DeltaDataChecker::with_invariants(invariants)
             .check_batch(&batch)
             .await
             .is_ok());
@@ -1662,7 +1697,9 @@ mod tests {
             Invariant::new("a", "a is null"),
             Invariant::new("b", "b < 100"),
         ];
-        let result = DeltaDataChecker::new(invariants).check_batch(&batch).await;
+        let result = DeltaDataChecker::with_invariants(invariants)
+            .check_batch(&batch)
+            .await;
         assert!(result.is_err());
         assert!(matches!(result, Err(DeltaTableError::InvalidData { .. })));
         if let Err(DeltaTableError::InvalidData { violations }) = result {
@@ -1671,7 +1708,9 @@ mod tests {
 
         // Irrelevant invariants return a different error
         let invariants = vec![Invariant::new("c", "c > 2000")];
-        let result = DeltaDataChecker::new(invariants).check_batch(&batch).await;
+        let result = DeltaDataChecker::with_invariants(invariants)
+            .check_batch(&batch)
+            .await;
         assert!(result.is_err());
 
         // Nested invariants are unsupported
@@ -1685,7 +1724,9 @@ mod tests {
         let batch = RecordBatch::try_new(schema, vec![inner]).unwrap();
 
         let invariants = vec![Invariant::new("x.b", "x.b < 1000")];
-        let result = DeltaDataChecker::new(invariants).check_batch(&batch).await;
+        let result = DeltaDataChecker::with_invariants(invariants)
+            .check_batch(&batch)
+            .await;
         assert!(result.is_err());
         assert!(matches!(result, Err(DeltaTableError::Generic { .. })));
     }

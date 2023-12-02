@@ -78,6 +78,14 @@ impl AsRef<str> for ColumnMetadataKey {
     }
 }
 
+/// A trait for all kernel types that are used as part of data checking
+pub trait DataCheck {
+    /// The name of the specific check
+    fn get_name(&self) -> &str;
+    /// The SQL expression to use for the check
+    fn get_expression(&self) -> &str;
+}
+
 /// An invariant for a column that is enforced on all writes to a Delta table.
 #[derive(Eq, PartialEq, Debug, Default, Clone)]
 pub struct Invariant {
@@ -94,6 +102,16 @@ impl Invariant {
             field_name: field_name.to_string(),
             invariant_sql: invariant_sql.to_string(),
         }
+    }
+}
+
+impl DataCheck for Invariant {
+    fn get_name(&self) -> &str {
+        &self.field_name
+    }
+
+    fn get_expression(&self) -> &str {
+      &self.invariant_sql
     }
 }
 

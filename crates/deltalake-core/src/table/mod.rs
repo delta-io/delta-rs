@@ -22,8 +22,8 @@ use self::builder::DeltaTableConfig;
 use self::state::DeltaTableState;
 use crate::errors::DeltaTableError;
 use crate::kernel::{
-    Action, Add, CommitInfo, DataType, Format, Metadata, ReaderFeatures, Remove, StructType,
-    WriterFeatures,
+    Action, Add, CommitInfo, DataCheck, DataType, Format, Metadata, ReaderFeatures, Remove,
+    StructType, WriterFeatures,
 };
 use crate::logstore::LogStoreConfig;
 use crate::logstore::LogStoreRef;
@@ -153,6 +153,16 @@ impl Constraint {
             name: field_name.to_string(),
             expr: invariant_sql.to_string(),
         }
+    }
+}
+
+impl DataCheck for Constraint {
+    fn get_name(&self) -> &str {
+        &self.name
+    }
+
+    fn get_expression(&self) -> &str {
+        &self.expr
     }
 }
 
