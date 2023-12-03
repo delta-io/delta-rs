@@ -1,3 +1,9 @@
+---
+search:
+  boost: 2 
+---
+
+
 # TableMerger
 
 ::: deltalake.table.TableMerger
