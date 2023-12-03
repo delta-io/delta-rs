@@ -728,12 +728,14 @@ impl DeltaTable {
     }
 
     /// Returns a collection of file names present in the loaded state
+    #[deprecated(since = "0.17.0", note = "use get_files_iter() instead")]
     #[inline]
     pub fn get_files(&self) -> Vec<Path> {
         self.state.file_paths_iter().collect()
     }
 
     /// Returns file names present in the loaded state in HashSet
+    #[deprecated(since = "0.17.0", note = "use get_files_iter() instead")]
     pub fn get_file_set(&self) -> HashSet<Path> {
         self.state.file_paths_iter().collect()
     }
@@ -830,6 +832,10 @@ impl DeltaTable {
     }
 
     /// Return the tables configurations that are encapsulated in the DeltaTableStates currentMetaData field
+    #[deprecated(
+        since = "0.17.0",
+        note = "use metadata().configuration or get_state().table_config() instead"
+    )]
     pub fn get_configurations(&self) -> Result<&HashMap<String, Option<String>>, DeltaTableError> {
         Ok(self
             .state
