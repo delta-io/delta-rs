@@ -223,7 +223,7 @@ impl DeltaTableMetaData {
             .iter()
             .filter_map(|(field, value)| {
                 if field.starts_with("delta.constraints") {
-                    value.as_ref().map(|f| Constraint::new(field, f))
+                    value.as_ref().map(|f| Constraint::new("*", f))
                 } else {
                     None
                 }

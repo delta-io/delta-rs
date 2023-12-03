@@ -14,14 +14,13 @@ use serde_json::json;
 use crate::delta_datafusion::{find_files, register_store, DeltaDataChecker, DeltaScanBuilder};
 use crate::kernel::{Action, CommitInfo, IsolationLevel, Metadata, Protocol};
 use crate::logstore::LogStoreRef;
+use crate::operations::collect_sendable_stream;
 use crate::operations::datafusion_utils::Expression;
 use crate::operations::transaction::commit;
 use crate::protocol::DeltaOperation;
 use crate::table::state::DeltaTableState;
-use crate::table::Constraint;
 use crate::DeltaTable;
 use crate::{DeltaResult, DeltaTableError};
-use crate::operations::collect_sendable_stream;
 
 /// Build a constraint to add to a table
 pub struct ConstraintBuilder {
@@ -80,9 +79,10 @@ impl std::future::IntoFuture for ConstraintBuilder {
             }
 
             let name = this.name.unwrap();
-            let expr = match this.expr.unwrap() {
-                Expression::String(s) => s,
-                Expression::DataFusion(e) => e.to_string(),
+            let expr = match this.expr {
+                Some(Expression::String(s)) => s,
+                Some(Expression::DataFusion(e)) => e.to_string(),
+                None => unreachable!(),
             };
 
             let state = this.state.unwrap_or_else(|| {
@@ -92,11 +92,10 @@ impl std::future::IntoFuture for ConstraintBuilder {
             });
             dbg!(&state);
 
-            let checker = DeltaDataChecker::with_constraints(vec![Constraint::new("*", &expr)]);
+            let checker = DeltaDataChecker::new(&this.snapshot)?;
 
             let files_to_check =
                 find_files(&this.snapshot, this.log_store.clone(), &state, None).await?;
-            dbg!(&files_to_check.candidates);
             let scan = DeltaScanBuilder::new(&this.snapshot, this.log_store.clone(), &state)
                 .with_files(&files_to_check.candidates)
                 .build()

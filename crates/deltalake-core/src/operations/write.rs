@@ -255,7 +255,7 @@ pub(crate) async fn write_execution_plan(
     // Use input schema to prevent wrapping partitions columns into a dictionary.
     let schema = snapshot.input_schema().unwrap_or(plan.schema());
 
-    let checker = DeltaDataChecker::new(snapshot);
+    let checker = DeltaDataChecker::new(snapshot)?;
 
     // Write data to disk
     let mut tasks = vec![];

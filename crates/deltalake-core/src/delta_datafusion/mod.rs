@@ -1042,18 +1042,20 @@ impl DeltaDataChecker {
     }
 
     /// Create a new DeltaDataChecker
-    pub fn new(snapshot: &DeltaTableState) -> Self {
-        let invariants = snapshot
-            .current_metadata()
+    pub fn new(snapshot: &DeltaTableState) -> Result<Self, DeltaTableError> {
+        let metadata = snapshot.current_metadata();
+
+        let invariants = metadata
             .and_then(|meta| meta.schema.get_invariants().ok())
             .unwrap_or_default();
-
-        let constraints = vec![];
-        Self {
+        let constraints = metadata
+            .and_then(|meta| Some(meta.get_constraints()))
+            .unwrap_or_default();
+        Ok(Self {
             invariants,
             constraints,
             ctx: SessionContext::new(),
-        }
+        })
     }
 
     /// Check that a record batch conforms to table's invariants.

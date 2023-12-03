@@ -111,7 +111,7 @@ impl DataCheck for Invariant {
     }
 
     fn get_expression(&self) -> &str {
-      &self.invariant_sql
+        &self.invariant_sql
     }
 }
 

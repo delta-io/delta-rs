@@ -1,8 +1,8 @@
+use deltalake_core::DeltaTableError::InvalidData;
 use deltalake_core::{DeltaResult, DeltaTableBuilder};
 use pretty_assertions::assert_eq;
 use std::collections::HashMap;
 use std::time::SystemTime;
-use deltalake_core::DeltaTableError::InvalidData;
 
 #[allow(dead_code)]
 mod fs_common;
@@ -180,7 +180,7 @@ async fn read_delta_table_with_check_constraints() -> DeltaResult<()> {
 
     let constraint = table.add_constraint().with_constraint("id3", "id < 60");
 
-    if let Err(InvalidData {violations} ) = constraint.await {
+    if let Err(InvalidData { violations }) = constraint.await {
         for v in violations {
             println!("{}", v);
         }
