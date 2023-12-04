@@ -1,3 +1,8 @@
+---
+search:
+  boost: 10
+---
+
 # Writer
 ## Write to Delta Tables
 
@@ -5,3 +10,5 @@
 
 ## Convert to Delta Tables
 ::: deltalake.convert_to_deltalake
+
+
