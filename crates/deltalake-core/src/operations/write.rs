@@ -313,7 +313,7 @@ pub(crate) async fn write_execution_plan(
         snapshot.input_schema().unwrap_or(plan.schema())
     };
 
-    let checker = DeltaDataChecker::new(snapshot)?;
+    let checker = DeltaDataChecker::new(snapshot);
 
     // Write data to disk
     let mut tasks = vec![];

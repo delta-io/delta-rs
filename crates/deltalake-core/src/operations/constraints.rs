@@ -90,9 +90,8 @@ impl std::future::IntoFuture for ConstraintBuilder {
                 register_store(this.log_store.clone(), session.runtime_env());
                 session.state()
             });
-            dbg!(&state);
 
-            let checker = DeltaDataChecker::new(&this.snapshot)?;
+            let checker = DeltaDataChecker::new(&this.snapshot);
 
             let files_to_check =
                 find_files(&this.snapshot, this.log_store.clone(), &state, None).await?;
@@ -100,7 +99,6 @@ impl std::future::IntoFuture for ConstraintBuilder {
                 .with_files(&files_to_check.candidates)
                 .build()
                 .await?;
-            let scan = Arc::new(scan);
 
             let task_ctx = Arc::new(TaskContext::from(&state));
 
@@ -110,10 +108,9 @@ impl std::future::IntoFuture for ConstraintBuilder {
                 checker.check_batch(&batch).await?;
             }
 
-            dbg!(&name, &expr);
             let mut metadata = this
                 .snapshot
-                .current_metadata()
+                .metadata()
                 .ok_or(DeltaTableError::NoMetadata)?
                 .clone();
             let configuration_key = format!("delta.constraints.{}", name);
@@ -129,19 +126,20 @@ impl std::future::IntoFuture for ConstraintBuilder {
                 .configuration
                 .insert(format!("delta.constraints.{}", name), Some(expr.clone()));
 
+            let old_protocol = this.snapshot.protocol();
             let protocol = Protocol {
-                min_reader_version: if this.snapshot.min_reader_version() > 1 {
-                    this.snapshot.min_reader_version()
+                min_reader_version: if old_protocol.min_reader_version > 1 {
+                    old_protocol.min_reader_version
                 } else {
                     1
                 },
-                min_writer_version: if this.snapshot.min_reader_version() > 3 {
-                    this.snapshot.min_reader_version()
+                min_writer_version: if old_protocol.min_reader_version > 3 {
+                    old_protocol.min_reader_version
                 } else {
                     3
                 },
-                reader_features: this.snapshot.reader_features().cloned(),
-                writer_features: this.snapshot.writer_features().cloned(),
+                reader_features: old_protocol.reader_features.clone(),
+                writer_features: old_protocol.writer_features.clone(),
             };
 
             let operational_parameters = HashMap::from_iter([
@@ -169,8 +167,6 @@ impl std::future::IntoFuture for ConstraintBuilder {
                 expr: expr.clone(),
             };
 
-            dbg!(&actions);
-
             let _version = commit(
                 this.log_store.as_ref(),
                 &actions,
@@ -179,9 +175,29 @@ impl std::future::IntoFuture for ConstraintBuilder {
                 None,
             )
             .await?;
-            dbg!(_version);
 
             Ok(DeltaTable::new_with_state(this.log_store, this.snapshot))
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::DeltaResult;
+    use crate::DeltaTableError::InvalidData;
+
+    #[cfg(feature = "datafusion")]
+    #[tokio::test]
+    async fn read_delta_table_with_check_constraints() -> DeltaResult<()> {
+        let table = crate::DeltaOps::try_from_uri("./tests/data/check-constraints").await?;
+
+        let constraint = table.add_constraint().with_constraint("id3", "id < 60");
+
+        if let Err(InvalidData { violations }) = constraint.await {
+            for v in violations {
+                println!("{}", v);
+            }
+        }
+        Ok(())
     }
 }

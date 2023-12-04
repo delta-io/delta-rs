@@ -1042,8 +1042,8 @@ impl DeltaDataChecker {
     }
 
     /// Create a new DeltaDataChecker
-    pub fn new(snapshot: &DeltaTableState) -> Result<Self, DeltaTableError> {
-        let metadata = snapshot.current_metadata();
+    pub fn new(snapshot: &DeltaTableState) -> Self {
+        let metadata = snapshot.metadata();
 
         let invariants = metadata
             .and_then(|meta| meta.schema.get_invariants().ok())
@@ -1051,11 +1051,11 @@ impl DeltaDataChecker {
         let constraints = metadata
             .and_then(|meta| Some(meta.get_constraints()))
             .unwrap_or_default();
-        Ok(Self {
+        Self {
             invariants,
             constraints,
             ctx: SessionContext::new(),
-        })
+        }
     }
 
     /// Check that a record batch conforms to table's invariants.
@@ -1076,10 +1076,10 @@ impl DeltaDataChecker {
             return Ok(());
         }
 
-        if !self.ctx.table_exist("data")? {
-            let table = MemTable::try_new(record_batch.schema(), vec![vec![record_batch.clone()]])?;
-            self.ctx.register_table("data", Arc::new(table))?;
-        }
+        // if !self.ctx.table_exist("data")? {
+        let table = MemTable::try_new(record_batch.schema(), vec![vec![record_batch.clone()]])?;
+        self.ctx.register_table("data", Arc::new(table))?;
+    // }
 
         let mut violations: Vec<String> = Vec::new();
 
@@ -1095,7 +1095,6 @@ impl DeltaDataChecker {
                 check.get_name(),
                 check.get_expression()
             );
-            dbg!(&sql);
 
             let dfs: Vec<RecordBatch> = self.ctx.sql(&sql).await?.collect().await?;
             if !dfs.is_empty() && dfs[0].num_rows() > 0 {

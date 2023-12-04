@@ -1,4 +1,3 @@
-use deltalake_core::DeltaTableError::InvalidData;
 use deltalake_core::{DeltaResult, DeltaTableBuilder};
 use pretty_assertions::assert_eq;
 use std::collections::HashMap;
@@ -172,18 +171,4 @@ async fn read_delta_table_from_dlt() {
         .unwrap();
     assert_eq!(table.version(), 1);
     assert!(table.schema().is_some());
-}
-
-#[tokio::test]
-async fn read_delta_table_with_check_constraints() -> DeltaResult<()> {
-    let table = deltalake_core::DeltaOps::try_from_uri("./tests/data/check-constraints").await?;
-
-    let constraint = table.add_constraint().with_constraint("id3", "id < 60");
-
-    if let Err(InvalidData { violations }) = constraint.await {
-        for v in violations {
-            println!("{}", v);
-        }
-    }
-    Ok(())
 }
