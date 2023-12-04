@@ -140,6 +140,19 @@ def write_new_deltalake(
     configuration: Optional[Mapping[str, Optional[str]]],
     storage_options: Optional[Dict[str, str]],
 ) -> None: ...
+def write_to_deltalake(
+    table_uri: str,
+    data: pyarrow.RecordBatchReader,
+    partition_by: Optional[List[str]],
+    mode: str,
+    max_rows_per_group: int,
+    overwrite_schema: bool,
+    predicate: Optional[str],
+    name: Optional[str],
+    description: Optional[str],
+    configuration: Optional[Mapping[str, Optional[str]]],
+    storage_options: Optional[Dict[str, str]],
+) -> None: ...
 def convert_to_deltalake(
     uri: str,
     partition_by: Optional[pyarrow.Schema],
@@ -149,6 +162,16 @@ def convert_to_deltalake(
     configuration: Optional[Mapping[str, Optional[str]]],
     storage_options: Optional[Dict[str, str]],
     custom_metadata: Optional[Dict[str, str]],
+) -> None: ...
+def create_deltalake(
+    table_uri: str,
+    schema: pyarrow.Schema,
+    partition_by: List[str],
+    mode: str,
+    name: Optional[str],
+    description: Optional[str],
+    configuration: Optional[Mapping[str, Optional[str]]],
+    storage_options: Optional[Dict[str, str]],
 ) -> None: ...
 def batch_distinct(batch: pyarrow.RecordBatch) -> pyarrow.RecordBatch: ...
 
@@ -197,36 +220,39 @@ class PrimitiveType:
         The JSON representation for a primitive type is just a quoted string: `PrimitiveType.from_json('"integer"')`
 
         Args:
-            json: A JSON string
+            json: a JSON string
 
-        Returns a [PrimitiveType][deltalake.schema.PrimitiveType] type
+        Returns:
+            a PrimitiveType type
         """
     def to_pyarrow(self) -> pyarrow.DataType:
         """Get the equivalent PyArrow type (pyarrow.DataType)"""
     @staticmethod
     def from_pyarrow(type: pyarrow.DataType) -> PrimitiveType:
-        """Create a [PrimitiveType][deltalake.schema.PrimitiveType] from a PyArrow type
+        """Create a PrimitiveType from a PyArrow datatype
 
         Will raise `TypeError` if the PyArrow type is not a primitive type.
 
         Args:
-            type: A PyArrow [DataType][pyarrow.DataType] type
+            type: A PyArrow DataType
 
-        Returns: a [PrimitiveType][deltalake.schema.PrimitiveType] type
+        Returns:
+            a PrimitiveType
         """
 
 class ArrayType:
     """An Array (List) DataType
 
-    Can either pass the element type explicitly or can pass a string
-    if it is a primitive type:
-    ```
-    ArrayType(PrimitiveType("integer"))
-    # Returns ArrayType(PrimitiveType("integer"), contains_null=True)
+    Example:
+        Can either pass the element type explicitly or can pass a string
+        if it is a primitive type:
+        ```python
+        ArrayType(PrimitiveType("integer"))
+        # Returns ArrayType(PrimitiveType("integer"), contains_null=True)
 
-    ArrayType("integer", contains_null=False)
-    # Returns ArrayType(PrimitiveType("integer"), contains_null=False)
-    ```
+        ArrayType("integer", contains_null=False)
+        # Returns ArrayType(PrimitiveType("integer"), contains_null=False)
+        ```
     """
 
     def __init__(
@@ -256,23 +282,25 @@ class ArrayType:
     def from_json(json: str) -> "ArrayType":
         """Create an ArrayType from a JSON string
 
-        The JSON representation for an array type is an object with `type` (set to
-        `"array"`), `elementType`, and `containsNull`:
-        ```
-        ArrayType.from_json(
-            '''{
-                "type": "array",
-                "elementType": "integer",
-                "containsNull": false
-            }'''
-        )
-        # Returns ArrayType(PrimitiveType("integer"), contains_null=False)
-        ```
-
         Args:
-            json: A JSON string
+            json: a JSON string
 
-        Returns: an [ArrayType][deltalake.schema.ArrayType] type
+        Returns:
+            an ArrayType
+
+        Example:
+            The JSON representation for an array type is an object with `type` (set to
+            `"array"`), `elementType`, and `containsNull`.
+            ```python
+            ArrayType.from_json(
+                '''{
+                    "type": "array",
+                    "elementType": "integer",
+                    "containsNull": false
+                }'''
+            )
+            # Returns ArrayType(PrimitiveType("integer"), contains_null=False)
+            ```
         """
     def to_pyarrow(
         self,
@@ -285,9 +313,10 @@ class ArrayType:
         Will raise `TypeError` if a different PyArrow DataType is provided.
 
         Args:
-            type: The PyArrow [ListType][pyarrow.ListType]
+            type: The PyArrow ListType
 
-        Returns: an [ArrayType][deltalake.schema.ArrayType] type
+        Returns:
+            an ArrayType
         """
 
 class MapType:
@@ -297,13 +326,14 @@ class MapType:
     or [StructType][deltalake.schema.StructType]. A string can also be passed, which will be
     parsed as a primitive type:
 
-    ```
-    MapType(PrimitiveType("integer"), PrimitiveType("string"))
-    # Returns MapType(PrimitiveType("integer"), PrimitiveType("string"), value_contains_null=True)
+    Example:
+        ```python
+        MapType(PrimitiveType("integer"), PrimitiveType("string"))
+        # Returns MapType(PrimitiveType("integer"), PrimitiveType("string"), value_contains_null=True)
 
-    MapType("integer", "string", value_contains_null=False)
-    # Returns MapType(PrimitiveType("integer"), PrimitiveType("string"), value_contains_null=False)
-    ```
+        MapType("integer", "string", value_contains_null=False)
+        # Returns MapType(PrimitiveType("integer"), PrimitiveType("string"), value_contains_null=False)
+        ```
     """
 
     def __init__(
@@ -339,29 +369,36 @@ class MapType:
     """
 
     def to_json(self) -> str:
-        """Get JSON string representation of map type."""
+        """Get JSON string representation of map type.
+
+        Returns:
+            a JSON string
+        """
     @staticmethod
     def from_json(json: str) -> MapType:
         """Create a MapType from a JSON string
 
-        The JSON representation for a map type is an object with `type` (set to `map`),
-        `keyType`, `valueType`, and `valueContainsNull`:
-        ```
-        MapType.from_json(
-            '''{
-                "type": "map",
-                "keyType": "integer",
-                "valueType": "string",
-                "valueContainsNull": true
-            }'''
-        )
-        # Returns MapType(PrimitiveType("integer"), PrimitiveType("string"), value_contains_null=True)
-        ```
-
         Args:
-            json: A JSON string
+            json: a JSON string
 
-        Returns: a [MapType][deltalake.schema.MapType] type
+        Returns:
+            an ArrayType
+
+        Example:
+            The JSON representation for a map type is an object with `type` (set to `map`),
+            `keyType`, `valueType`, and `valueContainsNull`:
+
+            ```python
+            MapType.from_json(
+                '''{
+                    "type": "map",
+                    "keyType": "integer",
+                    "valueType": "string",
+                    "valueContainsNull": true
+                }'''
+            )
+            # Returns MapType(PrimitiveType("integer"), PrimitiveType("string"), value_contains_null=True)
+            ```
         """
     def to_pyarrow(self) -> pyarrow.MapType:
         """Get the equivalent PyArrow data type."""
@@ -374,25 +411,27 @@ class MapType:
         Args:
             type: the PyArrow MapType
 
-        Returns: a [MapType][deltalake.schema.MapType] type
+        Returns:
+            a MapType
         """
 
 class Field:
     """A field in a Delta StructType or Schema
 
-    Can create with just a name and a type:
-    ```
-    Field("my_int_col", "integer")
-    # Returns Field("my_int_col", PrimitiveType("integer"), nullable=True, metadata=None)
-    ```
+    Example:
+        Can create with just a name and a type:
+        ```python
+        Field("my_int_col", "integer")
+        # Returns Field("my_int_col", PrimitiveType("integer"), nullable=True, metadata=None)
+        ```
 
-    Can also attach metadata to the field. Metadata should be a dictionary with
-    string keys and JSON-serializable values (str, list, int, float, dict):
+        Can also attach metadata to the field. Metadata should be a dictionary with
+        string keys and JSON-serializable values (str, list, int, float, dict):
 
-    ```
-    Field("my_col", "integer", metadata={"custom_metadata": {"test": 2}})
-    # Returns Field("my_col", PrimitiveType("integer"), nullable=True, metadata={"custom_metadata": {"test": 2}})
-    ```
+        ```python
+        Field("my_col", "integer", metadata={"custom_metadata": {"test": 2}})
+        # Returns Field("my_col", PrimitiveType("integer"), nullable=True, metadata={"custom_metadata": {"test": 2}})
+        ```
     """
 
     def __init__(
@@ -427,10 +466,15 @@ class Field:
 
     def to_json(self) -> str:
         """Get the field as JSON string.
-        ```
-        Field("col", "integer").to_json()
-        # Returns '{"name":"col","type":"integer","nullable":true,"metadata":{}}'
-        ```
+
+        Returns:
+            a JSON string
+
+        Example:
+            ```python
+            Field("col", "integer").to_json()
+            # Returns '{"name":"col","type":"integer","nullable":true,"metadata":{}}'
+            ```
         """
     @staticmethod
     def from_json(json: str) -> Field:
@@ -439,25 +483,27 @@ class Field:
         Args:
             json: the JSON string.
 
-        Returns: Field
+        Returns:
+            Field
 
         Example:
-        ```
-        Field.from_json('''{
-                "name": "col",
-                "type": "integer",
-                "nullable": true,
-                "metadata": {}
-            }'''
-        )
-        # Returns Field(col, PrimitiveType("integer"), nullable=True)
-        ```
+            ```
+            Field.from_json('''{
+                    "name": "col",
+                    "type": "integer",
+                    "nullable": true,
+                    "metadata": {}
+                }'''
+            )
+            # Returns Field(col, PrimitiveType("integer"), nullable=True)
+            ```
         """
     def to_pyarrow(self) -> pyarrow.Field:
         """Convert to an equivalent PyArrow field
         Note: This currently doesn't preserve field metadata.
 
-        Returns: a [pyarrow.Field][pyarrow.Field] type
+        Returns:
+            a pyarrow Field
         """
     @staticmethod
     def from_pyarrow(field: pyarrow.Field) -> Field:
@@ -465,21 +511,21 @@ class Field:
         Note: This currently doesn't preserve field metadata.
 
         Args:
-            field: a PyArrow Field type
+            field: a PyArrow Field
 
-        Returns: a [Field][deltalake.schema.Field] type
+        Returns:
+            a Field
         """
 
 class StructType:
     """A struct datatype, containing one or more subfields
 
     Example:
-
-    Create with a list of :class:`Field`:
-    ```
-    StructType([Field("x", "integer"), Field("y", "string")])
-    # Creates: StructType([Field(x, PrimitiveType("integer"), nullable=True), Field(y, PrimitiveType("string"), nullable=True)])
-    ```
+        Create with a list of :class:`Field`:
+        ```python
+        StructType([Field("x", "integer"), Field("y", "string")])
+        # Creates: StructType([Field(x, PrimitiveType("integer"), nullable=True), Field(y, PrimitiveType("string"), nullable=True)])
+        ```
     """
 
     def __init__(self, fields: List[Field]) -> None: ...
@@ -490,33 +536,42 @@ class StructType:
 
     def to_json(self) -> str:
         """Get the JSON representation of the type.
-        ```
-        StructType([Field("x", "integer")]).to_json()
-        # Returns '{"type":"struct","fields":[{"name":"x","type":"integer","nullable":true,"metadata":{}}]}'
-        ```
+
+        Returns:
+            a JSON string
+
+        Example:
+            ```python
+            StructType([Field("x", "integer")]).to_json()
+            # Returns '{"type":"struct","fields":[{"name":"x","type":"integer","nullable":true,"metadata":{}}]}'
+            ```
         """
     @staticmethod
     def from_json(json: str) -> StructType:
         """Create a new StructType from a JSON string.
-        ```
-        StructType.from_json(
-            '''{
-                "type": "struct",
-                "fields": [{"name": "x", "type": "integer", "nullable": true, "metadata": {}}]
-            }'''
-        )
-        # Returns StructType([Field(x, PrimitiveType("integer"), nullable=True)])
-        ```
 
         Args:
             json: a JSON string
 
-        Returns: a [StructType][deltalake.schema.StructType] type
+        Returns:
+            a StructType
+
+        Example:
+            ```python
+            StructType.from_json(
+                '''{
+                    "type": "struct",
+                    "fields": [{"name": "x", "type": "integer", "nullable": true, "metadata": {}}]
+                }'''
+            )
+            # Returns StructType([Field(x, PrimitiveType("integer"), nullable=True)])
+            ```
         """
     def to_pyarrow(self) -> pyarrow.StructType:
         """Get the equivalent PyArrow StructType
 
-        Returns: a PyArrow [StructType][pyarrow.StructType] type
+        Returns:
+            a PyArrow StructType
         """
     @staticmethod
     def from_pyarrow(type: pyarrow.StructType) -> StructType:
@@ -527,7 +582,8 @@ class StructType:
         Args:
             type: a PyArrow struct type.
 
-        Returns: a [StructType][deltalake.schema.StructType] type
+        Returns:
+            a StructType
         """
 
 class Schema:
@@ -540,38 +596,44 @@ class Schema:
     """
     def to_json(self) -> str:
         """Get the JSON string representation of the Schema.
-        A schema has the same JSON format as a StructType.
-        ```
-        Schema([Field("x", "integer")]).to_json()
-        # Returns '{"type":"struct","fields":[{"name":"x","type":"integer","nullable":true,"metadata":{}}]}'
-        ```
-        Returns: a JSON string
+
+        Returns:
+            a JSON string
+
+        Example:
+            A schema has the same JSON format as a StructType.
+            ```python
+            Schema([Field("x", "integer")]).to_json()
+            # Returns '{"type":"struct","fields":[{"name":"x","type":"integer","nullable":true,"metadata":{}}]}'
+            ```
         """
     @staticmethod
     def from_json(json: str) -> Schema:
         """Create a new Schema from a JSON string.
 
-        A schema has the same JSON format as a StructType.
-        ```
-        Schema.from_json('''{
-            "type": "struct",
-            "fields": [{"name": "x", "type": "integer", "nullable": true, "metadata": {}}]
-            }
-        )'''
-        # Returns Schema([Field(x, PrimitiveType("integer"), nullable=True)])
-        ```
-
         Args:
             json: a JSON string
+
+        Example:
+            A schema has the same JSON format as a StructType.
+            ```python
+            Schema.from_json('''{
+                "type": "struct",
+                "fields": [{"name": "x", "type": "integer", "nullable": true, "metadata": {}}]
+                }
+            )'''
+            # Returns Schema([Field(x, PrimitiveType("integer"), nullable=True)])
+            ```
         """
     def to_pyarrow(self, as_large_types: bool = False) -> pyarrow.Schema:
         """Return equivalent PyArrow schema
 
         Args:
-            as_large_types: get schema with all variable size types (list, binary, string) as large variants (with int64 indices). This is for compatibility with systems like Polars that only support the large versions of Arrow types.
+            as_large_types: get schema with all variable size types (list, binary, string) as large variants (with int64 indices).
+                This is for compatibility with systems like Polars that only support the large versions of Arrow types.
 
         Returns:
-            a PyArrow [Schema][pyarrow.Schema] type
+            a PyArrow Schema
         """
     @staticmethod
     def from_pyarrow(type: pyarrow.Schema) -> Schema:
@@ -580,9 +642,10 @@ class Schema:
         Will raise `TypeError` if the PyArrow type is not a primitive type.
 
         Args:
-            type: A PyArrow [Schema][pyarrow.Schema] type
+            type: A PyArrow Schema
 
-        Returns: a [Schema][deltalake.schema.Schema] type
+        Returns:
+            a Schema
         """
 
 class ObjectInputFile:

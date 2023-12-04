@@ -63,7 +63,7 @@ Here are the contents of the Delta table after the overwrite operation:
 
 Overwriting just performs a logical delete.  It doesn't physically remove the previous data from storage.  Time travel back to the previous version to confirm that the old version of the table is still accessable.
 
-```
+```python
 dt = DeltaTable("tmp/some-table", version=1)
 
 +-------+----------+

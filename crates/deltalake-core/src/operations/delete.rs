@@ -139,7 +139,7 @@ async fn excute_non_empty_expr(
     let input_dfschema: DFSchema = input_schema.clone().as_ref().clone().try_into()?;
 
     let table_partition_cols = snapshot
-        .current_metadata()
+        .metadata()
         .ok_or(DeltaTableError::NoMetadata)?
         .partition_columns
         .clone();
@@ -171,6 +171,7 @@ async fn excute_non_empty_expr(
         Some(snapshot.table_config().target_file_size() as usize),
         None,
         writer_properties,
+        false,
         false,
     )
     .await?;
@@ -274,6 +275,8 @@ impl std::future::IntoFuture for DeleteBuilder {
         let mut this = self;
 
         Box::pin(async move {
+            PROTOCOL.check_append_only(&this.snapshot)?;
+
             PROTOCOL.can_write_to(&this.snapshot)?;
 
             let state = this.state.unwrap_or_else(|| {
