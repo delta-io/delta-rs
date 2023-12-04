@@ -68,8 +68,8 @@ async fn prepare_table(
         .await?;
 
     assert_eq!(0, table.version());
-    assert_eq!(1, table.get_min_reader_version());
-    assert_eq!(2, table.get_min_writer_version());
+    assert_eq!(1, table.protocol().min_reader_version);
+    assert_eq!(2, table.protocol().min_writer_version);
     assert_eq!(0, table.get_files().len());
 
     Ok((table, table_uri))
@@ -166,6 +166,7 @@ impl Worker {
             deletion_vector: None,
             base_row_id: None,
             default_row_commit_version: None,
+            clustering_provider: None,
         })];
         let version = commit(
             self.table.log_store().as_ref(),

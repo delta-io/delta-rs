@@ -583,6 +583,9 @@ pub struct Add {
     /// First commit version in which an add action with the same path was committed to the table.
     pub default_row_commit_version: Option<i64>,
 
+    /// The name of the clustering implementation
+    pub clustering_provider: Option<String>,
+
     // TODO remove migration filds added to not do too many business logic changes in one PR
     /// Partition values stored in raw parquet struct format. In this struct, the column names
     /// correspond to the partition columns and the values are stored in their corresponding data
