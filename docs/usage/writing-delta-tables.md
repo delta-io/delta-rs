@@ -5,7 +5,7 @@ The `data` parameter will accept a Pandas DataFrame, a PyArrow Table, or
 an iterator of PyArrow Record Batches.
 
 ``` python
->>> from deltalake.writer import write_deltalake
+>>> from deltalake import write_deltalake
 >>> df = pd.DataFrame({'x': [1, 2, 3]})
 >>> write_deltalake('path/to/table', df)
 ```
@@ -34,7 +34,7 @@ done on one partition at a time. All of the input data must belong to
 that partition or else the method will raise an error.
 
 ``` python
->>> from deltalake.writer import write_deltalake
+>>> from deltalake import write_deltalake
 >>> df = pd.DataFrame({'x': [1, 2, 3], 'y': ['a', 'a', 'b']})
 >>> write_deltalake('path/to/table', df, partition_by=['y'])
 
