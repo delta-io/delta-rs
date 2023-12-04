@@ -141,6 +141,7 @@ pub async fn add_file(
             default_row_commit_version: None,
             base_row_id: None,
             deletion_vector: None,
+            clustering_provider: None,
         };
         let operation = DeltaOperation::Write {
             mode: SaveMode::Append,
