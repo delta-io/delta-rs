@@ -12,8 +12,8 @@ use serde::{Deserialize, Serialize};
 
 use super::config::TableConfig;
 use crate::errors::DeltaTableError;
-use crate::kernel::Protocol;
 use crate::kernel::{Action, Add, CommitInfo, DataType, DomainMetadata, Remove, StructType};
+use crate::kernel::{Metadata, Protocol};
 use crate::partitions::{DeltaTablePartition, PartitionFilter};
 use crate::protocol::ProtocolError;
 use crate::storage::commit_uri_from_version;
@@ -41,7 +41,8 @@ pub struct DeltaTableState {
     app_transaction_version: HashMap<String, i64>,
     // table metadata corresponding to current version
     current_metadata: Option<DeltaTableMetaData>,
-    current_protocol: Option<Protocol>,
+    protocol: Option<Protocol>,
+    metadata: Option<Metadata>,
 }
 
 impl DeltaTableState {
@@ -207,7 +208,12 @@ impl DeltaTableState {
         lazy_static! {
             static ref DEFAULT_PROTOCOL: Protocol = Protocol::default();
         }
-        self.current_protocol.as_ref().unwrap_or(&DEFAULT_PROTOCOL)
+        self.protocol.as_ref().unwrap_or(&DEFAULT_PROTOCOL)
+    }
+
+    /// The most recent metadata of the table.
+    pub fn metadata_action(&self) -> Result<&Metadata, ProtocolError> {
+        self.metadata.as_ref().ok_or(ProtocolError::NoMetaData)
     }
 
     /// The most recent metadata of the table.
@@ -269,9 +275,12 @@ impl DeltaTableState {
         if new_state.current_metadata.is_some() {
             self.current_metadata = new_state.current_metadata.take();
         }
+        if new_state.metadata.is_some() {
+            self.metadata = new_state.metadata.take();
+        }
 
-        if new_state.current_protocol.is_some() {
-            self.current_protocol = new_state.current_protocol.take();
+        if new_state.protocol.is_some() {
+            self.protocol = new_state.protocol.take();
         }
 
         new_state
@@ -314,9 +323,10 @@ impl DeltaTableState {
                 }
             }
             Action::Protocol(v) => {
-                self.current_protocol = Some(v);
+                self.protocol = Some(v);
             }
             Action::Metadata(v) => {
+                self.metadata = Some(v.clone());
                 let md = DeltaTableMetaData::try_from(v)?;
                 self.current_metadata = Some(md);
             }
@@ -391,7 +401,8 @@ mod tests {
             domain_metadatas: vec![],
             app_transaction_version: Default::default(),
             current_metadata: None,
-            current_protocol: None,
+            metadata: None,
+            protocol: None,
         };
         let bytes = serde_json::to_vec(&expected).unwrap();
         let actual: DeltaTableState = serde_json::from_slice(&bytes).unwrap();
@@ -411,7 +422,8 @@ mod tests {
             domain_metadatas: vec![],
             tombstones: HashSet::new(),
             current_metadata: None,
-            current_protocol: None,
+            protocol: None,
+            metadata: None,
             app_transaction_version,
         };
 

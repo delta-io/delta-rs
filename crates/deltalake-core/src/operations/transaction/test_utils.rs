@@ -30,6 +30,7 @@ pub fn create_add_action(
         default_row_commit_version: None,
         tags: None,
         deletion_vector: None,
+        clustering_provider: None,
     })
 }
 
