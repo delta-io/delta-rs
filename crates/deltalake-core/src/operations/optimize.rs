@@ -39,6 +39,7 @@ use parquet::file::properties::WriterProperties;
 use serde::{Deserialize, Serialize};
 
 use super::transaction::{commit, PROTOCOL};
+use super::write::cast_record_batch;
 use super::writer::{PartitionWriter, PartitionWriterConfig};
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::{Action, Remove};
@@ -439,7 +440,9 @@ impl MergePlan {
         let mut read_stream = read_stream.await?;
 
         while let Some(maybe_batch) = read_stream.next().await {
-            let batch = maybe_batch?;
+            let mut batch = maybe_batch?;
+
+            batch = cast_record_batch(&batch, task_parameters.file_schema.clone(), false)?;
             partial_metrics.num_batches += 1;
             writer.write(&batch).await.map_err(DeltaTableError::from)?;
         }
@@ -767,7 +770,7 @@ pub fn create_merge_plan(
     let target_size = target_size.unwrap_or_else(|| snapshot.table_config().target_file_size());
 
     let partitions_keys = &snapshot
-        .current_metadata()
+        .metadata()
         .ok_or(DeltaTableError::NoMetadata)?
         .partition_columns;
 
@@ -785,7 +788,7 @@ pub fn create_merge_plan(
         &Arc::new(
             <ArrowSchema as TryFrom<&crate::kernel::StructType>>::try_from(
                 &snapshot
-                    .current_metadata()
+                    .metadata()
                     .ok_or(DeltaTableError::NoMetadata)?
                     .schema,
             )?,
@@ -900,10 +903,14 @@ fn build_compaction_plan(
 
     // Prune merge bins with only 1 file, since they have no effect
     for (_, bins) in operations.iter_mut() {
-        if bins.len() == 1 && bins[0].len() == 1 {
-            metrics.total_files_skipped += 1;
-            bins.clear();
-        }
+        bins.retain(|bin| {
+            if bin.len() == 1 {
+                metrics.total_files_skipped += 1;
+                false
+            } else {
+                true
+            }
+        })
     }
     operations.retain(|_, files| !files.is_empty());
 
@@ -933,7 +940,7 @@ fn build_zorder_plan(
         )));
     }
     let field_names = snapshot
-        .current_metadata()
+        .metadata()
         .unwrap()
         .schema
         .fields()

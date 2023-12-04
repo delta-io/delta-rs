@@ -589,7 +589,7 @@ impl DeltaOperation {
 }
 
 /// The SaveMode used when performing a DeltaOperation
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub enum SaveMode {
     /// Files will be appended to the target location.
     Append,

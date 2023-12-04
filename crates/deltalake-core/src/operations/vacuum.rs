@@ -163,7 +163,12 @@ impl VacuumBuilder {
 
     /// Determine which files can be deleted. Does not actually peform the deletion
     async fn create_vacuum_plan(&self) -> Result<VacuumPlan, VacuumError> {
-        let min_retention = Duration::milliseconds(self.snapshot.tombstone_retention_millis());
+        let min_retention = Duration::milliseconds(
+            self.snapshot
+                .table_config()
+                .deleted_file_retention_duration()
+                .as_millis() as i64,
+        );
         let retention_period = self.retention_period.unwrap_or(min_retention);
         let enforce_retention_duration = self.enforce_retention_duration;
 
@@ -191,7 +196,7 @@ impl VacuumBuilder {
             .map_err(DeltaTableError::from)?;
         let partition_columns = &self
             .snapshot
-            .current_metadata()
+            .metadata()
             .ok_or(DeltaTableError::NoMetadata)?
             .partition_columns;
 

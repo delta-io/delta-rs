@@ -809,9 +809,7 @@ impl DeltaTable {
 
     /// Returns the metadata associated with the loaded state.
     pub fn get_metadata(&self) -> Result<&DeltaTableMetaData, DeltaTableError> {
-        self.state
-            .current_metadata()
-            .ok_or(DeltaTableError::NoMetadata)
+        self.state.metadata().ok_or(DeltaTableError::NoMetadata)
     }
 
     /// Returns a vector of active tombstones (i.e. `Remove` actions present in the current delta log).
@@ -827,23 +825,23 @@ impl DeltaTable {
     /// Returns the minimum reader version supported by the DeltaTable based on the loaded
     /// metadata.
     pub fn get_min_reader_version(&self) -> i32 {
-        self.state.min_reader_version()
+        self.state.protocol().min_reader_version
     }
 
     /// Returns the minimum writer version supported by the DeltaTable based on the loaded
     /// metadata.
     pub fn get_min_writer_version(&self) -> i32 {
-        self.state.min_writer_version()
+        self.state.protocol().min_writer_version
     }
 
     /// Returns current supported reader features by this table
     pub fn get_reader_features(&self) -> Option<&HashSet<ReaderFeatures>> {
-        self.state.reader_features()
+        self.state.protocol().reader_features.as_ref()
     }
 
     /// Returns current supported writer features by this table
     pub fn get_writer_features(&self) -> Option<&HashSet<WriterFeatures>> {
-        self.state.writer_features()
+        self.state.protocol().writer_features.as_ref()
     }
 
     /// Return table schema parsed from transaction log. Return None if table hasn't been loaded or
@@ -862,7 +860,7 @@ impl DeltaTable {
     pub fn get_configurations(&self) -> Result<&HashMap<String, Option<String>>, DeltaTableError> {
         Ok(self
             .state
-            .current_metadata()
+            .metadata()
             .ok_or(DeltaTableError::NoMetadata)?
             .get_configuration())
     }
@@ -912,7 +910,7 @@ impl fmt::Display for DeltaTable {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         writeln!(f, "DeltaTable({})", self.table_uri())?;
         writeln!(f, "\tversion: {}", self.version())?;
-        match self.state.current_metadata() {
+        match self.state.metadata() {
             Some(metadata) => {
                 writeln!(f, "\tmetadata: {metadata}")?;
             }
@@ -923,8 +921,8 @@ impl fmt::Display for DeltaTable {
         writeln!(
             f,
             "\tmin_version: read={}, write={}",
-            self.state.min_reader_version(),
-            self.state.min_writer_version()
+            self.state.protocol().min_reader_version,
+            self.state.protocol().min_writer_version
         )?;
         writeln!(f, "\tfiles count: {}", self.state.files().len())
     }
