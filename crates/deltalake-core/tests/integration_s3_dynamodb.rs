@@ -32,38 +32,34 @@ mod fs_common;
 pub type TestResult<T> = Result<T, Box<dyn std::error::Error + 'static>>;
 
 lazy_static! {
-    static ref LOCK_TABLE_NAME: String = format!("delta_log_tests_constant");
     static ref OPTIONS: HashMap<String, String> = maplit::hashmap! {
         "allow_http".to_owned() => "true".to_owned(),
-        "table_name".to_owned() => LOCK_TABLE_NAME.to_owned(),
     };
     static ref S3_OPTIONS: S3StorageOptions = S3StorageOptions::from_map(&OPTIONS);
-    static ref CLIENT: DynamoDbLockClient =
-        DynamoDbLockClient::try_new(&S3StorageOptions::from_map(&OPTIONS))
-            .expect("failure initializing dynamodb lock client");
     static ref TABLE_PATH: String = format!("s3://my_delta_table_{}", uuid::Uuid::new_v4());
 }
 
-#[ctor::ctor]
-fn prepare_dynamodb() {
-    let _context = IntegrationContext::new(StorageIntegration::Amazon).unwrap();
-    tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .unwrap()
-        .block_on(async {
-            let _create_table_result = CLIENT.try_create_lock_table().await.unwrap();
-        });
+fn make_client() -> TestResult<DynamoDbLockClient> {
+    Ok(DynamoDbLockClient::try_new(&S3StorageOptions::from_map(
+        &OPTIONS,
+    ))?)
 }
 
 #[test]
-fn client_config_picks_up_lock_table_name() {
-    assert_eq!(CLIENT.get_lock_table_name(), LOCK_TABLE_NAME.clone());
+#[serial]
+fn client_config_picks_up_lock_table_name() -> TestResult<()> {
+    let _context = IntegrationContext::new(StorageIntegration::Amazon)?;
+    assert!(make_client()?
+        .get_lock_table_name()
+        .starts_with("delta_log_it_"));
+    Ok(())
 }
 
 #[tokio::test]
+#[serial]
 async fn get_missing_item() -> TestResult<()> {
-    let client = &CLIENT;
+    let _context = IntegrationContext::new(StorageIntegration::Amazon)?;
+    let client = make_client()?;
     let version = i64::MAX;
     let result = client.get_commit_entry(&TABLE_PATH, version).await;
     assert_eq!(result.unwrap(), None);
@@ -85,6 +81,7 @@ async fn test_append() -> TestResult<()> {
 #[serial]
 async fn test_repair() -> TestResult<()> {
     let context = IntegrationContext::new(StorageIntegration::Amazon)?;
+    let client = make_client()?;
     let table = prepare_table(&context, "repair_needed").await?;
     let options: StorageOptions = OPTIONS.clone().into();
     let log_store: S3DynamoDbLogStore = S3DynamoDbLogStore::try_new(
@@ -96,7 +93,7 @@ async fn test_repair() -> TestResult<()> {
 
     // create an incomplete log entry, commit file not yet moved from its temporary location
     let entry = create_incomplete_commit_entry(&table, 1, "unfinished_commit").await?;
-    let read_entry = CLIENT
+    let read_entry = client
         .get_latest_entry(&table.table_uri())
         .await?
         .expect("no latest entry!");
@@ -112,7 +109,7 @@ async fn test_repair() -> TestResult<()> {
         .rename_if_not_exists(&entry.temp_path, &commit_uri_from_version(entry.version))
         .await?;
 
-    let read_entry = CLIENT
+    let read_entry = client
         .get_latest_entry(&table.table_uri())
         .await?
         .expect("no latest entry!");
@@ -228,7 +225,7 @@ async fn create_incomplete_commit_entry(
     )
     .await?;
     let commit_entry = CommitEntry::new(version, temp_path);
-    CLIENT
+    make_client()?
         .put_commit_entry(&table.table_uri(), &commit_entry)
         .await?;
     Ok(commit_entry)
@@ -256,7 +253,7 @@ fn add_action(name: &str) -> Action {
 }
 
 async fn prepare_table(context: &IntegrationContext, table_name: &str) -> TestResult<DeltaTable> {
-    CLIENT.try_create_lock_table().await?;
+    make_client()?.try_create_lock_table().await?;
     let table_name = format!("{}_{}", table_name, uuid::Uuid::new_v4());
     let table_uri = context.uri_for_table(TestTables::Custom(table_name.to_owned()));
     let schema = StructType::new(vec![StructField::new(
@@ -303,14 +300,15 @@ async fn append_to_table(
 /// version and expiration time is around 24h in the future. Commits should cover a consecutive range
 /// of versions, with monotonically non-decreasing expiration timestamps.
 async fn validate_lock_table_state(table: &DeltaTable, expected_version: i64) -> TestResult<()> {
-    let lock_entry = CLIENT.get_latest_entry(&table.table_uri()).await?.unwrap();
+    let client = make_client()?;
+    let lock_entry = client.get_latest_entry(&table.table_uri()).await?.unwrap();
     assert!(lock_entry.complete);
     assert_eq!(lock_entry.version, expected_version);
     assert_eq!(lock_entry.version, table.get_latest_version().await?);
 
     validate_commit_entry(&lock_entry)?;
 
-    let latest = CLIENT
+    let latest = client
         .get_latest_entries(&table.table_uri(), WORKERS * COMMITS)
         .await?;
     let max_version = latest.get(0).unwrap().version;
