@@ -1,3 +1,9 @@
+---
+search:
+  boost: 2 
+---
+
+
 # Metadata
 
 ::: deltalake.Metadata
