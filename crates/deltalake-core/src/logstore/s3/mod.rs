@@ -175,6 +175,13 @@ impl LogStore for S3DynamoDbLogStore {
                     TransactionError::VersionAlreadyExists(version)
                 }
                 LockClientError::ProvisionedThroughputExceeded => todo!(),
+                LockClientError::LockTableNotFound => TransactionError::LogStoreError {
+                    msg: format!(
+                        "lock table '{}' not found",
+                        self.lock_client.get_lock_table_name()
+                    ),
+                    source: Box::new(err),
+                },
                 err => TransactionError::LogStoreError {
                     msg: "dynamodb client failed to write log entry".to_owned(),
                     source: Box::new(err),

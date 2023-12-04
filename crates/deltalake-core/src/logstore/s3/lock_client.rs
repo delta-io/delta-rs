@@ -39,12 +39,26 @@ impl DynamoDbLockClient {
         let lock_table_name = options
             .extra_opts
             .get(constants::LOCK_TABLE_KEY_NAME)
-            .map_or(constants::DEFAULT_LOCK_TABLE_NAME.to_owned(), Clone::clone);
-        let billing_mode = options
+            .map_or_else(
+                || {
+                    std::env::var(constants::LOCK_TABLE_KEY_NAME)
+                        .unwrap_or(constants::DEFAULT_LOCK_TABLE_NAME.to_owned())
+                },
+                Clone::clone,
+            );
+
+        let billing_mode: BillingMode = options
             .extra_opts
             .get(constants::BILLING_MODE_KEY_NAME)
-            .map(|bm| BillingMode::from_str(bm))
-            .unwrap_or(Ok(BillingMode::PayPerRequest))?;
+            .map_or_else(
+                || {
+                    std::env::var(constants::BILLING_MODE_KEY_NAME).map_or_else(
+                        |_| Ok(BillingMode::PayPerRequest),
+                        |bm| BillingMode::from_str(&bm),
+                    )
+                },
+                |bm| BillingMode::from_str(bm),
+            )?;
         Ok(Self {
             dynamodb_client,
             config: DynamoDbConfig {
@@ -341,8 +355,8 @@ mod constants {
     use lazy_static::lazy_static;
 
     pub const DEFAULT_LOCK_TABLE_NAME: &str = "delta_log";
-    pub const LOCK_TABLE_KEY_NAME: &str = "table_name";
-    pub const BILLING_MODE_KEY_NAME: &str = "billing_mode";
+    pub const LOCK_TABLE_KEY_NAME: &str = "DELTA_DYNAMO_TABLE_NAME";
+    pub const BILLING_MODE_KEY_NAME: &str = "DELTA_DYNAMO_BILLING_MODE";
 
     pub const ATTR_TABLE_PATH: &str = "tablePath";
     pub const ATTR_FILE_NAME: &str = "fileName";
