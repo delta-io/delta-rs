@@ -72,6 +72,7 @@ nav:
     - api/catalog.md
     - api/exceptions.md
   - Integrations:
+    - Arrow: integrations/delta-lake-arrow.md
     - pandas: integrations/delta-lake-pandas.md
   - How Delta Lake works:
     - Architecture: how-delta-lake-works/architecture-of-delta-table.md
