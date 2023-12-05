@@ -73,6 +73,8 @@ nav:
     - api/exceptions.md
   - Integrations:
     - pandas: integrations/delta-lake-pandas.md
+  - How Delta Lake works:
+    - Architecture: how-delta-lake-works/architecture-of-delta-table.md
 not_in_nav: |
   /_build/
 
