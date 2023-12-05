@@ -5,15 +5,45 @@ repo_name: delta-io/delta-rs
 
 theme:
   name: material
+  logo: delta-rust-no-whitespace.svg
+  favicon: delta-rust-no-whitespace.svg
+  
+  palette:
+    # Palette toggle for automatic mode
+    - media: "(prefers-color-scheme)"
+      primary: indigo
+      toggle:
+        icon: material/brightness-auto
+        name: Switch to light mode
+        
+    # Palette toggle for light mode
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: indigo
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+
+    # Palette toggle for dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: indigo
+      toggle:
+        icon: material/brightness-4
+        name: Switch to system preference
   locale: en
   navigation_depth: 3
   features:
     - navigation.tracking
     - navigation.instant
+    - navigation.expand
     - navigation.tabs
+    - navigation.indexes
     - navigation.tabs.sticky
     - navigation.footer
     - content.tabs.link
+    - content.code.annotation
+    - content.code.copy
 nav:
   - Home: index.md
   - Usage:
@@ -31,9 +61,16 @@ nav:
       - Small file compaction: usage/optimize/small-file-compaction-with-optimize.md
       - Z Order: usage/optimize/delta-lake-z-order.md
   - API Reference:
-    - api/delta_table.md
+    - api/delta_writer.md
+    - Table:
+      - api/delta_table/index.md
+      - api/delta_table/metadata.md
+      - api/delta_table/delta_table_merger.md
+      - api/delta_table/delta_table_optimizer.md
     - api/schema.md
     - api/storage.md
+    - api/catalog.md
+    - api/exceptions.md
   - Integrations:
     - pandas: integrations/delta-lake-pandas.md
   - How Delta Lake works:
@@ -62,7 +99,7 @@ plugins:
             show_source: false
             show_symbol_type_in_heading: true
             show_signature_annotations: true
-            show_root_heading: false
+            show_root_heading: true
             show_root_full_path: true
             separate_signature: true
             docstring_options:
@@ -82,6 +119,11 @@ plugins:
         on_page_markdown: 'docs._build.hooks:on_page_markdown'
 
 markdown_extensions:
+  - pymdownx.highlight:
+      anchor_linenums: true
+      line_spans: __span
+      pygments_lang_class: true
+  - pymdownx.inlinehilite
   - admonition
   - pymdownx.details
   - attr_list
@@ -99,3 +141,8 @@ markdown_extensions:
 
 extra:
   python_api_url: https://delta-io.github.io/delta-rs/api/
+  generator: false
+  social:
+    - icon: fontawesome/brands/slack
+      link: https://go.delta.io/slack
+      name: Delta slack channel

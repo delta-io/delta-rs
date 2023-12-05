@@ -578,7 +578,7 @@ impl DeltaOperation {
 }
 
 /// The SaveMode used when performing a DeltaOperation
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub enum SaveMode {
     /// Files will be appended to the target location.
     Append,
@@ -721,6 +721,7 @@ mod tests {
             modification_time: 0,
             base_row_id: None,
             default_row_commit_version: None,
+            clustering_provider: None,
         };
 
         let stats = action.get_stats().unwrap().unwrap();
@@ -796,6 +797,7 @@ mod tests {
             modification_time: 0,
             base_row_id: None,
             default_row_commit_version: None,
+            clustering_provider: None,
         };
 
         let stats = action.get_stats().unwrap().unwrap();

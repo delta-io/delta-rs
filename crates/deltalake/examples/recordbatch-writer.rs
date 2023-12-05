@@ -159,10 +159,10 @@ fn fetch_readings() -> Vec<WeatherRecord> {
  */
 fn convert_to_batch(table: &DeltaTable, records: &Vec<WeatherRecord>) -> RecordBatch {
     let metadata = table
-        .get_metadata()
+        .metadata()
         .expect("Failed to get metadata for the table");
     let arrow_schema = <deltalake::arrow::datatypes::Schema as TryFrom<&StructType>>::try_from(
-        &metadata.schema.clone(),
+        &metadata.schema().expect("failed to get schema"),
     )
     .expect("Failed to convert to arrow schema");
     let arrow_schema_ref = Arc::new(arrow_schema);

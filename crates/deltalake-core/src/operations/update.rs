@@ -207,9 +207,7 @@ async fn execute(
         })
         .collect::<Result<HashMap<Column, Expr>, _>>()?;
 
-    let current_metadata = snapshot
-        .current_metadata()
-        .ok_or(DeltaTableError::NoMetadata)?;
+    let current_metadata = snapshot.metadata().ok_or(DeltaTableError::NoMetadata)?;
     let table_partition_cols = current_metadata.partition_columns.clone();
 
     let scan_start = Instant::now();
@@ -363,6 +361,7 @@ async fn execute(
         None,
         writer_properties,
         safe_cast,
+        false,
     )
     .await?;
 
@@ -427,6 +426,8 @@ impl std::future::IntoFuture for UpdateBuilder {
         let mut this = self;
 
         Box::pin(async move {
+            PROTOCOL.check_append_only(&this.snapshot)?;
+
             PROTOCOL.can_write_to(&this.snapshot)?;
 
             let state = this.state.unwrap_or_else(|| {

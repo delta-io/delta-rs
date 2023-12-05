@@ -135,6 +135,11 @@ impl DeltaTableLoadOptions {
     }
 }
 
+enum UriType {
+    LocalPath(PathBuf),
+    Url(Url),
+}
+
 /// builder for configuring a delta table load.
 #[derive(Debug)]
 pub struct DeltaTableBuilder {
@@ -154,6 +159,23 @@ impl DeltaTableBuilder {
         }
     }
 
+    /// Creates `DeltaTableBuilder` from verified table uri.
+    /// Will fail fast if specified `table_uri` is a local path but doesn't exist.
+    pub fn from_valid_uri(table_uri: impl AsRef<str>) -> DeltaResult<Self> {
+        let table_uri = table_uri.as_ref();
+
+        if let UriType::LocalPath(path) = resolve_uri_type(table_uri)? {
+            if !path.exists() {
+                let msg = format!(
+                    "Local path \"{}\" does not exist or you don't have access!",
+                    table_uri
+                );
+                return Err(DeltaTableError::InvalidTableLocation(msg));
+            }
+        }
+
+        Ok(DeltaTableBuilder::from_uri(table_uri))
+    }
     /// Sets `require_tombstones=false` to the builder
     pub fn without_tombstones(mut self) -> Self {
         self.options.require_tombstones = false;
@@ -391,6 +413,30 @@ lazy_static::lazy_static! {
         ]);
 }
 
+/// Utility function to figure out whether string representation of the path
+/// is either local path or some kind or URL.
+///
+/// Will return an error if the path is not valid.
+fn resolve_uri_type(table_uri: impl AsRef<str>) -> DeltaResult<UriType> {
+    let table_uri = table_uri.as_ref();
+
+    if let Ok(url) = Url::parse(table_uri) {
+        if url.scheme() == "file" {
+            Ok(UriType::LocalPath(url.to_file_path().map_err(|err| {
+                let msg = format!("Invalid table location: {}\nError: {:?}", table_uri, err);
+                DeltaTableError::InvalidTableLocation(msg)
+            })?))
+        // NOTE this check is required to support absolute windows paths which may properly parse as url
+        } else if KNOWN_SCHEMES.contains(&url.scheme()) {
+            Ok(UriType::Url(url))
+        } else {
+            Ok(UriType::LocalPath(PathBuf::from(table_uri)))
+        }
+    } else {
+        Ok(UriType::LocalPath(PathBuf::from(table_uri)))
+    }
+}
+
 /// Attempt to create a Url from given table location.
 ///
 /// The location could be:
@@ -405,25 +451,7 @@ lazy_static::lazy_static! {
 pub fn ensure_table_uri(table_uri: impl AsRef<str>) -> DeltaResult<Url> {
     let table_uri = table_uri.as_ref();
 
-    enum UriType {
-        LocalPath(PathBuf),
-        Url(Url),
-    }
-    let uri_type: UriType = if let Ok(url) = Url::parse(table_uri) {
-        if url.scheme() == "file" {
-            UriType::LocalPath(url.to_file_path().map_err(|err| {
-                let msg = format!("Invalid table location: {}\nError: {:?}", table_uri, err);
-                DeltaTableError::InvalidTableLocation(msg)
-            })?)
-        // NOTE this check is required to support absolute windows paths which may properly parse as url
-        } else if KNOWN_SCHEMES.contains(&url.scheme()) {
-            UriType::Url(url)
-        } else {
-            UriType::LocalPath(PathBuf::from(table_uri))
-        }
-    } else {
-        UriType::LocalPath(PathBuf::from(table_uri))
-    };
+    let uri_type: UriType = resolve_uri_type(table_uri)?;
 
     // If it is a local path, we need to create it if it does not exist.
     let mut url = match uri_type {
@@ -461,11 +489,12 @@ pub fn ensure_table_uri(table_uri: impl AsRef<str>) -> DeltaResult<Url> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use itertools::Itertools;
     use object_store::path::Path;
 
     #[test]
     fn test_ensure_table_uri() {
-        // parse an exisiting relative directory
+        // parse an existing relative directory
         let uri = ensure_table_uri(".");
         assert!(uri.is_ok());
         let _uri = ensure_table_uri("./nonexistent");
@@ -579,7 +608,7 @@ mod tests {
         );
 
         assert_eq!(
-            table.get_files(),
+            table.get_files_iter().collect_vec(),
             vec![
                 Path::from("part-00000-c9b90f86-73e6-46c8-93ba-ff6bfaf892a1-c000.snappy.parquet"),
                 Path::from("part-00000-04ec9591-0b73-459e-8d18-ba5711d6cbe1-c000.snappy.parquet")
@@ -595,7 +624,7 @@ mod tests {
             .await
             .unwrap();
 
-        assert!(table.get_files().is_empty(), "files should be empty");
+        assert_eq!(table.get_files_iter().count(), 0, "files should be empty");
         assert!(
             table.get_tombstones().next().is_none(),
             "tombstones should be empty"
@@ -612,7 +641,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(table.version(), 0);
-        assert!(table.get_files().is_empty(), "files should be empty");
+        assert_eq!(table.get_files_iter().count(), 0, "files should be empty");
         assert!(
             table.get_tombstones().next().is_none(),
             "tombstones should be empty"
@@ -620,7 +649,7 @@ mod tests {
 
         table.update().await.unwrap();
         assert_eq!(table.version(), 1);
-        assert!(table.get_files().is_empty(), "files should be empty");
+        assert_eq!(table.get_files_iter().count(), 0, "files should be empty");
         assert!(
             table.get_tombstones().next().is_none(),
             "tombstones should be empty"

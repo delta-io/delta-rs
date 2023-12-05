@@ -1,3 +1,11 @@
-## Delta Storage Handler
+---
+search:
+  boost: 2 
+---
 
-::: deltalake.fs
+
+# Storage
+
+The delta filesystem handler for the pyarrow engine writer.
+
+::: deltalake.fs.DeltaStorageHandler

@@ -22,8 +22,8 @@ use self::builder::DeltaTableConfig;
 use self::state::DeltaTableState;
 use crate::errors::DeltaTableError;
 use crate::kernel::{
-    Action, Add, CommitInfo, DataType, Format, Metadata, ReaderFeatures, Remove, StructType,
-    WriterFeatures,
+    Action, Add, CommitInfo, DataType, Format, Metadata, Protocol, ReaderFeatures, Remove,
+    StructType, WriterFeatures,
 };
 use crate::logstore::LogStoreConfig;
 use crate::logstore::LogStoreRef;
@@ -435,6 +435,7 @@ impl DeltaTable {
 
         Ok(())
     }
+
     /// returns the latest available version of the table
     pub async fn get_latest_version(&mut self) -> Result<i64, DeltaTableError> {
         self.log_store.get_latest_version(self.version()).await
@@ -727,12 +728,14 @@ impl DeltaTable {
     }
 
     /// Returns a collection of file names present in the loaded state
+    #[deprecated(since = "0.17.0", note = "use get_files_iter() instead")]
     #[inline]
     pub fn get_files(&self) -> Vec<Path> {
         self.state.file_paths_iter().collect()
     }
 
     /// Returns file names present in the loaded state in HashSet
+    #[deprecated(since = "0.17.0", note = "use get_files_iter() instead")]
     pub fn get_file_set(&self) -> HashSet<Path> {
         self.state.file_paths_iter().collect()
     }
@@ -764,11 +767,20 @@ impl DeltaTable {
         &self.state
     }
 
+    /// Returns current table protocol
+    pub fn protocol(&self) -> &Protocol {
+        self.state.protocol()
+    }
+
     /// Returns the metadata associated with the loaded state.
+    pub fn metadata(&self) -> Result<&Metadata, DeltaTableError> {
+        Ok(self.state.metadata_action()?)
+    }
+
+    /// Returns the metadata associated with the loaded state.
+    #[deprecated(since = "0.17.0", note = "use metadata() instead")]
     pub fn get_metadata(&self) -> Result<&DeltaTableMetaData, DeltaTableError> {
-        self.state
-            .current_metadata()
-            .ok_or(DeltaTableError::NoMetadata)
+        self.state.metadata().ok_or(DeltaTableError::NoMetadata)
     }
 
     /// Returns a vector of active tombstones (i.e. `Remove` actions present in the current delta log).
@@ -783,24 +795,28 @@ impl DeltaTable {
 
     /// Returns the minimum reader version supported by the DeltaTable based on the loaded
     /// metadata.
+    #[deprecated(since = "0.17.0", note = "use protocol().min_reader_version instead")]
     pub fn get_min_reader_version(&self) -> i32 {
-        self.state.min_reader_version()
+        self.state.protocol().min_reader_version
     }
 
     /// Returns the minimum writer version supported by the DeltaTable based on the loaded
     /// metadata.
+    #[deprecated(since = "0.17.0", note = "use protocol().min_writer_version instead")]
     pub fn get_min_writer_version(&self) -> i32 {
-        self.state.min_writer_version()
+        self.state.protocol().min_writer_version
     }
 
     /// Returns current supported reader features by this table
+    #[deprecated(since = "0.17.0", note = "use protocol().reader_features instead")]
     pub fn get_reader_features(&self) -> Option<&HashSet<ReaderFeatures>> {
-        self.state.reader_features()
+        self.state.protocol().reader_features.as_ref()
     }
 
     /// Returns current supported writer features by this table
+    #[deprecated(since = "0.17.0", note = "use protocol().writer_features instead")]
     pub fn get_writer_features(&self) -> Option<&HashSet<WriterFeatures>> {
-        self.state.writer_features()
+        self.state.protocol().writer_features.as_ref()
     }
 
     /// Return table schema parsed from transaction log. Return None if table hasn't been loaded or
@@ -816,10 +832,14 @@ impl DeltaTable {
     }
 
     /// Return the tables configurations that are encapsulated in the DeltaTableStates currentMetaData field
+    #[deprecated(
+        since = "0.17.0",
+        note = "use metadata().configuration or get_state().table_config() instead"
+    )]
     pub fn get_configurations(&self) -> Result<&HashMap<String, Option<String>>, DeltaTableError> {
         Ok(self
             .state
-            .current_metadata()
+            .metadata()
             .ok_or(DeltaTableError::NoMetadata)?
             .get_configuration())
     }
@@ -869,7 +889,7 @@ impl fmt::Display for DeltaTable {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         writeln!(f, "DeltaTable({})", self.table_uri())?;
         writeln!(f, "\tversion: {}", self.version())?;
-        match self.state.current_metadata() {
+        match self.state.metadata() {
             Some(metadata) => {
                 writeln!(f, "\tmetadata: {metadata}")?;
             }
@@ -880,8 +900,8 @@ impl fmt::Display for DeltaTable {
         writeln!(
             f,
             "\tmin_version: read={}, write={}",
-            self.state.min_reader_version(),
-            self.state.min_writer_version()
+            self.state.protocol().min_reader_version,
+            self.state.protocol().min_writer_version
         )?;
         writeln!(f, "\tfiles count: {}", self.state.files().len())
     }

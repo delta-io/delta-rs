@@ -246,7 +246,7 @@ fn get_prune_stats(table: &DeltaTable, column: &Column, get_max: bool) -> Option
     }
 
     let data_type = field.data_type().try_into().ok()?;
-    let partition_columns = &table.get_metadata().ok()?.partition_columns;
+    let partition_columns = &table.metadata().ok()?.partition_columns;
 
     let values = table.get_state().files().iter().map(|add| {
         if partition_columns.contains(&column.name) {
@@ -310,7 +310,7 @@ impl PruningStatistics for DeltaTable {
     ///
     /// Note: the returned array must contain `num_containers()` rows.
     fn null_counts(&self, column: &Column) -> Option<ArrayRef> {
-        let partition_columns = &self.get_metadata().ok()?.partition_columns;
+        let partition_columns = &self.metadata().ok()?.partition_columns;
 
         let values = self.get_state().files().iter().map(|add| {
             if let Ok(Some(statistics)) = add.get_stats() {
@@ -568,7 +568,7 @@ impl<'a> DeltaScanBuilder<'a> {
 
         let table_partition_cols = &self
             .snapshot
-            .current_metadata()
+            .metadata()
             .ok_or(DeltaTableError::NoMetadata)?
             .partition_columns;
 
@@ -1457,9 +1457,7 @@ pub async fn find_files<'a>(
     state: &SessionState,
     predicate: Option<Expr>,
 ) -> DeltaResult<FindFiles> {
-    let current_metadata = snapshot
-        .current_metadata()
-        .ok_or(DeltaTableError::NoMetadata)?;
+    let current_metadata = snapshot.metadata().ok_or(DeltaTableError::NoMetadata)?;
 
     match &predicate {
         Some(predicate) => {
@@ -1604,6 +1602,7 @@ mod tests {
             tags: None,
             base_row_id: None,
             default_row_commit_version: None,
+            clustering_provider: None,
         };
         let schema = ArrowSchema::new(vec![
             Field::new("year", ArrowDataType::Int64, true),
