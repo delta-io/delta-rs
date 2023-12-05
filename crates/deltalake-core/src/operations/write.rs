@@ -535,7 +535,12 @@ fn cast_record_batch_columns(
     fields
         .iter()
         .map(|f| {
-            let col = batch.column_by_name(f.name()).unwrap();
+            let col_opt = batch.column_by_name(f.name());
+            if col_opt.is_none() {
+                return Err(arrow_schema::ArrowError::SchemaError(format!("Missing column {}", f.name())));
+            }
+
+            let col = col_opt.unwrap();
             if let (DataType::Struct(_), DataType::Struct(child_fields)) =
                 (col.data_type(), f.data_type())
             {
