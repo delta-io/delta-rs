@@ -65,7 +65,7 @@ def test_read_simple_table_using_options_to_dict():
 
 def test_simple_table_lazy_loading():
     table_path = "../crates/deltalake-core/tests/data/simple_table"
-    dt = DeltaTable(table_path, lazy_load=True)
+    dt = DeltaTable(table_path, load_lazy=True)
     dt.load_version(2)
     assert dt.version() == 2
 
@@ -77,7 +77,7 @@ def test_simple_table_lazy_loading_with_options():
         storage_options={},
         without_files=False,
         log_buffer_size=1,
-        lazy_load=True,
+        load_lazy=True,
     )
     assert isinstance(dt, DeltaTable)
 

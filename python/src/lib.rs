@@ -85,67 +85,39 @@ struct RawDeltaTableMetaData {
     configuration: HashMap<String, Option<String>>,
 }
 
-#[inline]
-fn build_table(
-    table_uri: &str,
-    storage_options: Option<HashMap<String, String>>,
-    without_files: bool,
-    log_buffer_size: Option<usize>,
-) -> Result<DeltaTableBuilder, PythonError> {
-    let mut builder = deltalake::DeltaTableBuilder::from_uri(table_uri);
-    if let Some(storage_options) = storage_options {
-        builder = builder.with_storage_options(storage_options)
-    }
-    if without_files {
-        builder = builder.without_files()
-    }
-    if let Some(buf_size) = log_buffer_size {
-        builder = builder
-            .with_log_buffer_size(buf_size)
-            .map_err(PythonError::from)?;
-    }
-    Ok(builder)
-}
-
 #[pymethods]
 impl RawDeltaTable {
     #[new]
-    #[pyo3(signature = (table_uri, version = None, storage_options = None, without_files = false, log_buffer_size = None))]
+    #[pyo3(signature = (table_uri, version = None, storage_options = None, without_files = false, log_buffer_size = None, load_lazy = false))]
     fn new(
         table_uri: &str,
         version: Option<i64>,
         storage_options: Option<HashMap<String, String>>,
         without_files: bool,
         log_buffer_size: Option<usize>,
+        load_lazy: bool,
     ) -> PyResult<Self> {
+        let mut builder = deltalake::DeltaTableBuilder::from_uri(table_uri);
         let options = storage_options.clone().unwrap_or_default();
-        let mut builder = build_table(table_uri, storage_options, without_files, log_buffer_size);
-        if let Some(version) = version {
-            builder = Ok(builder?.with_version(version))
+        if let Some(storage_options) = storage_options {
+            builder = builder.with_storage_options(storage_options)
         }
-
-        let table = rt()?.block_on(builder?.load()).map_err(PythonError::from)?;
-        Ok(RawDeltaTable {
-            _table: table,
-            _config: FsConfig {
-                root_url: table_uri.into(),
-                options,
-            },
-        })
-    }
-
-    #[classmethod]
-    #[pyo3(signature = (table_uri, storage_options = None, without_files = false, log_buffer_size = None))]
-    fn load_lazy(
-        _cls: &PyType,
-        table_uri: &str,
-        storage_options: Option<HashMap<String, String>>,
-        without_files: bool,
-        log_buffer_size: Option<usize>,
-    ) -> PyResult<Self> {
-        let options = storage_options.clone().unwrap_or_default();
-        let builder = build_table(table_uri, storage_options, without_files, log_buffer_size);
-        let table = builder?.build().map_err(PythonError::from)?;
+        if let Some(version) = version {
+            builder = builder.with_version(version)
+        }
+        if without_files {
+            builder = builder.without_files()
+        }
+        if let Some(buf_size) = log_buffer_size {
+            builder = builder
+                .with_log_buffer_size(buf_size)
+                .map_err(PythonError::from)?;
+        }
+        let table = if !load_lazy {
+            rt()?.block_on(builder.load()).map_err(PythonError::from)?
+        } else {
+            builder.build().map_err(PythonError::from)?
+        };
         Ok(RawDeltaTable {
             _table: table,
             _config: FsConfig {
