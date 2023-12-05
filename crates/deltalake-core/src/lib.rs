@@ -105,7 +105,7 @@ pub mod writer;
 
 use std::collections::HashMap;
 
-pub use self::data_catalog::{get_data_catalog, DataCatalog, DataCatalogError};
+pub use self::data_catalog::{DataCatalog, DataCatalogError};
 pub use self::errors::*;
 pub use self::schema::partitions::*;
 pub use self::schema::*;
