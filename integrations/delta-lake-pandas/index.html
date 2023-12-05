@@ -11,11 +11,13 @@
         <link rel="canonical" href="https://github.com/delta-io/delta-rs/integrations/delta-lake-pandas/">
       
       
-        <link rel="prev" href="../../api/storage/">
+        <link rel="prev" href="../../api/exceptions/">
       
       
+        <link rel="next" href="../../how-delta-lake-works/architecture-of-delta-table/">
       
-      <link rel="icon" href="../../assets/images/favicon.png">
+      
+      <link rel="icon" href="../../delta-rust-no-whitespace.svg">
       <meta name="generator" content="mkdocs-1.5.3, mkdocs-material-9.4.5">
     
     
@@ -25,6 +27,9 @@
     
     
       <link rel="stylesheet" href="../../assets/stylesheets/main.6a10b989.min.css">
+      
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.356b1318.min.css">
       
       
 
@@ -57,7 +62,14 @@
   </head>
   
   
-    <body dir="ltr">
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
   
     
     
@@ -87,8 +99,7 @@
   <nav class="md-header__inner md-grid" aria-label="Header">
     <a href="../.." title="Delta Lake Documentation" class="md-header__button md-logo" aria-label="Delta Lake Documentation" data-md-component="logo">
       
-  
-  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54Z"/></svg>
+  <img src="../../delta-rust-no-whitespace.svg" alt="logo">
 
     </a>
     <label class="md-header__button md-icon" for="__drawer">
@@ -111,6 +122,42 @@
         </div>
       </div>
     </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme)" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_3" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m14.3 16-.7-2h-3.2l-.7 2H7.8L11 7h2l3.2 9h-1.9M20 8.69V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12 20 8.69m-9.15 3.96h2.3L12 9l-1.15 3.65Z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_2">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12 20 8.69Z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to system preference"  type="radio" name="__palette" id="__palette_3">
+    
+      <label class="md-header__button md-icon" title="Switch to system preference" for="__palette_2" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12c0-2.42-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12 20 8.69Z"/></svg>
+      </label>
+    
+  
+</form>
+      
     
     
     
@@ -199,6 +246,8 @@
         <a href="../../usage/installation/" class="md-tabs__link">
           
   
+    
+  
   Usage
 
         </a>
@@ -214,8 +263,10 @@
     
     
       <li class="md-tabs__item">
-        <a href="../../api/delta_table/" class="md-tabs__link">
+        <a href="../../api/delta_writer/" class="md-tabs__link">
           
+  
+    
   
   API Reference
 
@@ -237,7 +288,29 @@
         <a href="./" class="md-tabs__link">
           
   
+    
+  
   Integrations
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../how-delta-lake-works/architecture-of-delta-table/" class="md-tabs__link">
+          
+  
+    
+  
+  How Delta Lake works
 
         </a>
       </li>
@@ -275,8 +348,7 @@
   <label class="md-nav__title" for="__drawer">
     <a href="../.." title="Delta Lake Documentation" class="md-nav__button md-logo" aria-label="Delta Lake Documentation" data-md-component="logo">
       
-  
-  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54Z"/></svg>
+  <img src="../../delta-rust-no-whitespace.svg" alt="logo">
 
     </a>
     Delta Lake Documentation
@@ -322,6 +394,32 @@
   
     
     
+      
+        
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
     
@@ -333,19 +431,29 @@
         
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" >
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_2" >
         
           
-          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="">
-            
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../usage/" class="md-nav__link ">
+              
   
   <span class="md-ellipsis">
     Usage
   </span>
   
 
-            <span class="md-nav__icon md-icon"></span>
-          </label>
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_2" id="__nav_2_label" tabindex="">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
         
         <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
           <label class="md-nav__title" for="__nav_2">
@@ -374,24 +482,6 @@
 
               
             
-              
-                
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../../usage/" class="md-nav__link">
-        
-  
-  <span class="md-ellipsis">
-    Overview
-  </span>
-  
-
-      </a>
-    </li>
-  
-
               
             
               
@@ -561,6 +651,12 @@
   
     
     
+      
+        
+      
+        
+      
+    
     
     
     
@@ -569,7 +665,9 @@
         
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2_11" >
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_2_11" >
         
           
           <label class="md-nav__link" for="__nav_2_11" id="__nav_2_11_label" tabindex="0">
@@ -652,6 +750,20 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
     
@@ -663,7 +775,9 @@
         
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" >
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3" >
         
           
           <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="">
@@ -690,15 +804,143 @@
   
   
     <li class="md-nav__item">
-      <a href="../../api/delta_table/" class="md-nav__link">
+      <a href="../../api/delta_writer/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
-    DeltaTable
+    Writer
   </span>
   
 
       </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_2" >
+        
+          
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../api/delta_table/" class="md-nav__link ">
+              
+  
+  <span class="md-ellipsis">
+    Table
+  </span>
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_3_2" id="__nav_3_2_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_3_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3_2">
+            <span class="md-nav__icon md-icon"></span>
+            Table
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/delta_table/metadata/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Metadata
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/delta_table/delta_table_merger/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    TableMerger
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/delta_table/delta_table_optimizer/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    TableOptimizer
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
     </li>
   
 
@@ -744,6 +986,46 @@
 
               
             
+              
+                
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/catalog/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Catalog
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/exceptions/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Exceptions
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
           </ul>
         </nav>
       
@@ -759,6 +1041,10 @@
   
   
     
+    
+      
+        
+      
     
     
     
@@ -915,6 +1201,78 @@
   
 
     
+      
+      
+  
+  
+  
+    
+    
+      
+        
+      
+    
+    
+    
+    
+      
+      
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="">
+            
+  
+  <span class="md-ellipsis">
+    How Delta Lake works
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            How Delta Lake works
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../how-delta-lake-works/architecture-of-delta-table/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Architecture
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
   </ul>
 </nav>
                   </div>
@@ -1033,177 +1391,177 @@
 <p>Parquet allows for column pruning and row group skipping, but doesn't support file-level skipping or Z Ordering.  CSV doesn't support any of these performance optimizations.</p>
 <p>Let's take a look at a sample dataset and run a query to see the performance enhancements offered by Delta Lake.</p>
 <p>Suppose you have a 1 billion row dataset with 9 columns, here are the first three rows of the dataset:</p>
-<div class="highlight"><pre><span></span><code>+-------+-------+--------------+-------+-------+--------+------+------+---------+
-| id1   | id2   | id3          |   id4 |   id5 |    id6 |   v1 |   v2 |      v3 |
-|-------+-------+--------------+-------+-------+--------+------+------+---------|
-| id016 | id046 | id0000109363 |    88 |    13 | 146094 |    4 |    6 | 18.8377 |
-| id039 | id087 | id0000466766 |    14 |    30 | 111330 |    4 |   14 | 46.7973 |
-| id047 | id098 | id0000307804 |    85 |    23 | 187639 |    3 |    5 | 47.5773 |
-+-------+-------+--------------+-------+-------+--------+------+------+---------+
-</code></pre></div>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>+-------+-------+--------------+-------+-------+--------+------+------+---------+
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>| id1   | id2   | id3          |   id4 |   id5 |    id6 |   v1 |   v2 |      v3 |
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>|-------+-------+--------------+-------+-------+--------+------+------+---------|
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>| id016 | id046 | id0000109363 |    88 |    13 | 146094 |    4 |    6 | 18.8377 |
+</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>| id039 | id087 | id0000466766 |    14 |    30 | 111330 |    4 |   14 | 46.7973 |
+</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>| id047 | id098 | id0000307804 |    85 |    23 | 187639 |    3 |    5 | 47.5773 |
+</span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>+-------+-------+--------------+-------+-------+--------+------+------+---------+
+</span></code></pre></div>
 <p>The dataset is roughly 50 GB when stored as an uncompressed CSV files.  Let's run some queries on a 2021 Macbook M1 with 64 GB of RAM.</p>
 <p>Start by running the query on an uncompressed CSV file:</p>
-<div class="highlight"><pre><span></span><code><span class="p">(</span>
-    <span class="n">pd</span><span class="o">.</span><span class="n">read_csv</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">Path</span><span class="o">.</span><span class="n">home</span><span class="p">()</span><span class="si">}</span><span class="s2">/data/G1_1e9_1e2_0_0.csv&quot;</span><span class="p">,</span> <span class="n">usecols</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;id1&quot;</span><span class="p">,</span> <span class="s2">&quot;id2&quot;</span><span class="p">,</span> <span class="s2">&quot;v1&quot;</span><span class="p">])</span>
-    <span class="o">.</span><span class="n">query</span><span class="p">(</span><span class="s2">&quot;id1 == &#39;id016&#39;&quot;</span><span class="p">)</span>
-    <span class="o">.</span><span class="n">groupby</span><span class="p">(</span><span class="s2">&quot;id2&quot;</span><span class="p">)</span>
-    <span class="o">.</span><span class="n">agg</span><span class="p">({</span><span class="s2">&quot;v1&quot;</span><span class="p">:</span> <span class="s2">&quot;sum&quot;</span><span class="p">})</span>
-<span class="p">)</span>
-</code></pre></div>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="p">(</span>
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>    <span class="n">pd</span><span class="o">.</span><span class="n">read_csv</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">Path</span><span class="o">.</span><span class="n">home</span><span class="p">()</span><span class="si">}</span><span class="s2">/data/G1_1e9_1e2_0_0.csv&quot;</span><span class="p">,</span> <span class="n">usecols</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;id1&quot;</span><span class="p">,</span> <span class="s2">&quot;id2&quot;</span><span class="p">,</span> <span class="s2">&quot;v1&quot;</span><span class="p">])</span>
+</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>    <span class="o">.</span><span class="n">query</span><span class="p">(</span><span class="s2">&quot;id1 == &#39;id016&#39;&quot;</span><span class="p">)</span>
+</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a>    <span class="o">.</span><span class="n">groupby</span><span class="p">(</span><span class="s2">&quot;id2&quot;</span><span class="p">)</span>
+</span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a>    <span class="o">.</span><span class="n">agg</span><span class="p">({</span><span class="s2">&quot;v1&quot;</span><span class="p">:</span> <span class="s2">&quot;sum&quot;</span><span class="p">})</span>
+</span><span id="__span-1-6"><a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a><span class="p">)</span>
+</span></code></pre></div>
 <p>This query takes 234 seconds to execute.  It runs out of memory if the <code>usecols</code> parameter is not set.</p>
 <p>Now let's convert the CSV dataset to Parquet and run the same query on the data stored in a Parquet file.</p>
-<div class="highlight"><pre><span></span><code><span class="p">(</span>
-    <span class="n">pd</span><span class="o">.</span><span class="n">read_parquet</span><span class="p">(</span>
-        <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">Path</span><span class="o">.</span><span class="n">home</span><span class="p">()</span><span class="si">}</span><span class="s2">/data/G1_1e9_1e2_0_0.parquet&quot;</span><span class="p">,</span> <span class="n">columns</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;id1&quot;</span><span class="p">,</span> <span class="s2">&quot;id2&quot;</span><span class="p">,</span> <span class="s2">&quot;v1&quot;</span><span class="p">]</span>
-    <span class="p">)</span>
-    <span class="o">.</span><span class="n">query</span><span class="p">(</span><span class="s2">&quot;id1 == &#39;id016&#39;&quot;</span><span class="p">)</span>
-    <span class="o">.</span><span class="n">groupby</span><span class="p">(</span><span class="s2">&quot;id2&quot;</span><span class="p">)</span>
-    <span class="o">.</span><span class="n">agg</span><span class="p">({</span><span class="s2">&quot;v1&quot;</span><span class="p">:</span> <span class="s2">&quot;sum&quot;</span><span class="p">})</span>
-<span class="p">)</span>
-</code></pre></div>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="p">(</span>
+</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>    <span class="n">pd</span><span class="o">.</span><span class="n">read_parquet</span><span class="p">(</span>
+</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>        <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">Path</span><span class="o">.</span><span class="n">home</span><span class="p">()</span><span class="si">}</span><span class="s2">/data/G1_1e9_1e2_0_0.parquet&quot;</span><span class="p">,</span> <span class="n">columns</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;id1&quot;</span><span class="p">,</span> <span class="s2">&quot;id2&quot;</span><span class="p">,</span> <span class="s2">&quot;v1&quot;</span><span class="p">]</span>
+</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a>    <span class="p">)</span>
+</span><span id="__span-2-5"><a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a>    <span class="o">.</span><span class="n">query</span><span class="p">(</span><span class="s2">&quot;id1 == &#39;id016&#39;&quot;</span><span class="p">)</span>
+</span><span id="__span-2-6"><a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a>    <span class="o">.</span><span class="n">groupby</span><span class="p">(</span><span class="s2">&quot;id2&quot;</span><span class="p">)</span>
+</span><span id="__span-2-7"><a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a>    <span class="o">.</span><span class="n">agg</span><span class="p">({</span><span class="s2">&quot;v1&quot;</span><span class="p">:</span> <span class="s2">&quot;sum&quot;</span><span class="p">})</span>
+</span><span id="__span-2-8"><a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a><span class="p">)</span>
+</span></code></pre></div>
 <p>This query takes 118 seconds to execute.</p>
 <p>Parquet stores data in row groups and allows for skipping when the <code>filters</code> predicates are set.  Run the Parquet query again with row group skipping enabled:</p>
-<div class="highlight"><pre><span></span><code><span class="p">(</span>
-    <span class="n">pd</span><span class="o">.</span><span class="n">read_parquet</span><span class="p">(</span>
-        <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">Path</span><span class="o">.</span><span class="n">home</span><span class="p">()</span><span class="si">}</span><span class="s2">/data/G1_1e9_1e2_0_0.parquet&quot;</span><span class="p">,</span>
-        <span class="n">columns</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;id1&quot;</span><span class="p">,</span> <span class="s2">&quot;id2&quot;</span><span class="p">,</span> <span class="s2">&quot;v1&quot;</span><span class="p">],</span>
-        <span class="n">filters</span><span class="o">=</span><span class="p">[(</span><span class="s2">&quot;id1&quot;</span><span class="p">,</span> <span class="s2">&quot;==&quot;</span><span class="p">,</span> <span class="s2">&quot;id016&quot;</span><span class="p">)],</span>
-    <span class="p">)</span>
-    <span class="o">.</span><span class="n">query</span><span class="p">(</span><span class="s2">&quot;id1 == &#39;id016&#39;&quot;</span><span class="p">)</span>
-    <span class="o">.</span><span class="n">groupby</span><span class="p">(</span><span class="s2">&quot;id2&quot;</span><span class="p">)</span>
-    <span class="o">.</span><span class="n">agg</span><span class="p">({</span><span class="s2">&quot;v1&quot;</span><span class="p">:</span> <span class="s2">&quot;sum&quot;</span><span class="p">})</span>
-<span class="p">)</span>
-</code></pre></div>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="p">(</span>
+</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>    <span class="n">pd</span><span class="o">.</span><span class="n">read_parquet</span><span class="p">(</span>
+</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>        <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">Path</span><span class="o">.</span><span class="n">home</span><span class="p">()</span><span class="si">}</span><span class="s2">/data/G1_1e9_1e2_0_0.parquet&quot;</span><span class="p">,</span>
+</span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a>        <span class="n">columns</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;id1&quot;</span><span class="p">,</span> <span class="s2">&quot;id2&quot;</span><span class="p">,</span> <span class="s2">&quot;v1&quot;</span><span class="p">],</span>
+</span><span id="__span-3-5"><a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a>        <span class="n">filters</span><span class="o">=</span><span class="p">[(</span><span class="s2">&quot;id1&quot;</span><span class="p">,</span> <span class="s2">&quot;==&quot;</span><span class="p">,</span> <span class="s2">&quot;id016&quot;</span><span class="p">)],</span>
+</span><span id="__span-3-6"><a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a>    <span class="p">)</span>
+</span><span id="__span-3-7"><a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a>    <span class="o">.</span><span class="n">query</span><span class="p">(</span><span class="s2">&quot;id1 == &#39;id016&#39;&quot;</span><span class="p">)</span>
+</span><span id="__span-3-8"><a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a>    <span class="o">.</span><span class="n">groupby</span><span class="p">(</span><span class="s2">&quot;id2&quot;</span><span class="p">)</span>
+</span><span id="__span-3-9"><a id="__codelineno-3-9" name="__codelineno-3-9" href="#__codelineno-3-9"></a>    <span class="o">.</span><span class="n">agg</span><span class="p">({</span><span class="s2">&quot;v1&quot;</span><span class="p">:</span> <span class="s2">&quot;sum&quot;</span><span class="p">})</span>
+</span><span id="__span-3-10"><a id="__codelineno-3-10" name="__codelineno-3-10" href="#__codelineno-3-10"></a><span class="p">)</span>
+</span></code></pre></div>
 <p>This query runs in 19 seconds.  Lots of row groups can be skipped for this particular query.</p>
 <p>Now let's run the same query on a Delta table to see the out-of-the box performance:</p>
-<div class="highlight"><pre><span></span><code><span class="p">(</span>
-    <span class="n">DeltaTable</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">Path</span><span class="o">.</span><span class="n">home</span><span class="p">()</span><span class="si">}</span><span class="s2">/data/deltalake_baseline_G1_1e9_1e2_0_0&quot;</span><span class="p">,</span> <span class="n">version</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
-    <span class="o">.</span><span class="n">to_pandas</span><span class="p">(</span><span class="n">filters</span><span class="o">=</span><span class="p">[(</span><span class="s2">&quot;id1&quot;</span><span class="p">,</span> <span class="s2">&quot;==&quot;</span><span class="p">,</span> <span class="s2">&quot;id016&quot;</span><span class="p">)],</span> <span class="n">columns</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;id1&quot;</span><span class="p">,</span> <span class="s2">&quot;id2&quot;</span><span class="p">,</span> <span class="s2">&quot;v1&quot;</span><span class="p">])</span>
-    <span class="o">.</span><span class="n">query</span><span class="p">(</span><span class="s2">&quot;id1 == &#39;id016&#39;&quot;</span><span class="p">)</span>
-    <span class="o">.</span><span class="n">groupby</span><span class="p">(</span><span class="s2">&quot;id2&quot;</span><span class="p">)</span>
-    <span class="o">.</span><span class="n">agg</span><span class="p">({</span><span class="s2">&quot;v1&quot;</span><span class="p">:</span> <span class="s2">&quot;sum&quot;</span><span class="p">})</span>
-<span class="p">)</span>
-</code></pre></div>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="p">(</span>
+</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>    <span class="n">DeltaTable</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">Path</span><span class="o">.</span><span class="n">home</span><span class="p">()</span><span class="si">}</span><span class="s2">/data/deltalake_baseline_G1_1e9_1e2_0_0&quot;</span><span class="p">,</span> <span class="n">version</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+</span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a>    <span class="o">.</span><span class="n">to_pandas</span><span class="p">(</span><span class="n">filters</span><span class="o">=</span><span class="p">[(</span><span class="s2">&quot;id1&quot;</span><span class="p">,</span> <span class="s2">&quot;==&quot;</span><span class="p">,</span> <span class="s2">&quot;id016&quot;</span><span class="p">)],</span> <span class="n">columns</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;id1&quot;</span><span class="p">,</span> <span class="s2">&quot;id2&quot;</span><span class="p">,</span> <span class="s2">&quot;v1&quot;</span><span class="p">])</span>
+</span><span id="__span-4-4"><a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a>    <span class="o">.</span><span class="n">query</span><span class="p">(</span><span class="s2">&quot;id1 == &#39;id016&#39;&quot;</span><span class="p">)</span>
+</span><span id="__span-4-5"><a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a>    <span class="o">.</span><span class="n">groupby</span><span class="p">(</span><span class="s2">&quot;id2&quot;</span><span class="p">)</span>
+</span><span id="__span-4-6"><a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a>    <span class="o">.</span><span class="n">agg</span><span class="p">({</span><span class="s2">&quot;v1&quot;</span><span class="p">:</span> <span class="s2">&quot;sum&quot;</span><span class="p">})</span>
+</span><span id="__span-4-7"><a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a><span class="p">)</span>
+</span></code></pre></div>
 <p>This query runs in 8 seconds, which is a significant performance enhancement.</p>
 <p>Now let's Z Order the Delta table by <code>id1</code> which will make the data skipping even better.  Run the query again on the Z Ordered Delta table:</p>
-<div class="highlight"><pre><span></span><code><span class="p">(</span>
-    <span class="n">DeltaTable</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">Path</span><span class="o">.</span><span class="n">home</span><span class="p">()</span><span class="si">}</span><span class="s2">/data/deltalake_baseline_G1_1e9_1e2_0_0&quot;</span><span class="p">,</span> <span class="n">version</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
-    <span class="o">.</span><span class="n">to_pandas</span><span class="p">(</span><span class="n">filters</span><span class="o">=</span><span class="p">[(</span><span class="s2">&quot;id1&quot;</span><span class="p">,</span> <span class="s2">&quot;==&quot;</span><span class="p">,</span> <span class="s2">&quot;id016&quot;</span><span class="p">)],</span> <span class="n">columns</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;id1&quot;</span><span class="p">,</span> <span class="s2">&quot;id2&quot;</span><span class="p">,</span> <span class="s2">&quot;v1&quot;</span><span class="p">])</span>
-    <span class="o">.</span><span class="n">query</span><span class="p">(</span><span class="s2">&quot;id1 == &#39;id016&#39;&quot;</span><span class="p">)</span>
-    <span class="o">.</span><span class="n">groupby</span><span class="p">(</span><span class="s2">&quot;id2&quot;</span><span class="p">)</span>
-    <span class="o">.</span><span class="n">agg</span><span class="p">({</span><span class="s2">&quot;v1&quot;</span><span class="p">:</span> <span class="s2">&quot;sum&quot;</span><span class="p">})</span>
-<span class="p">)</span>
-</code></pre></div>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="p">(</span>
+</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>    <span class="n">DeltaTable</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">Path</span><span class="o">.</span><span class="n">home</span><span class="p">()</span><span class="si">}</span><span class="s2">/data/deltalake_baseline_G1_1e9_1e2_0_0&quot;</span><span class="p">,</span> <span class="n">version</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a>    <span class="o">.</span><span class="n">to_pandas</span><span class="p">(</span><span class="n">filters</span><span class="o">=</span><span class="p">[(</span><span class="s2">&quot;id1&quot;</span><span class="p">,</span> <span class="s2">&quot;==&quot;</span><span class="p">,</span> <span class="s2">&quot;id016&quot;</span><span class="p">)],</span> <span class="n">columns</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;id1&quot;</span><span class="p">,</span> <span class="s2">&quot;id2&quot;</span><span class="p">,</span> <span class="s2">&quot;v1&quot;</span><span class="p">])</span>
+</span><span id="__span-5-4"><a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a>    <span class="o">.</span><span class="n">query</span><span class="p">(</span><span class="s2">&quot;id1 == &#39;id016&#39;&quot;</span><span class="p">)</span>
+</span><span id="__span-5-5"><a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a>    <span class="o">.</span><span class="n">groupby</span><span class="p">(</span><span class="s2">&quot;id2&quot;</span><span class="p">)</span>
+</span><span id="__span-5-6"><a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a>    <span class="o">.</span><span class="n">agg</span><span class="p">({</span><span class="s2">&quot;v1&quot;</span><span class="p">:</span> <span class="s2">&quot;sum&quot;</span><span class="p">})</span>
+</span><span id="__span-5-7"><a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a><span class="p">)</span>
+</span></code></pre></div>
 <p>The query now executes in 2.4 seconds.</p>
 <p>Delta tables can make certain pandas queries run much faster.</p>
 <h2 id="delta-lake-lets-pandas-users-time-travel">Delta Lake lets pandas users time travel</h2>
 <p>Start by creating a Delta table:</p>
-<div class="highlight"><pre><span></span><code><span class="kn">from</span> <span class="nn">deltalake</span> <span class="kn">import</span> <span class="n">write_deltalake</span><span class="p">,</span> <span class="n">DeltaTable</span>
-
-<span class="n">df</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">({</span><span class="s2">&quot;num&quot;</span><span class="p">:</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">],</span> <span class="s2">&quot;letter&quot;</span><span class="p">:</span> <span class="p">[</span><span class="s2">&quot;a&quot;</span><span class="p">,</span> <span class="s2">&quot;b&quot;</span><span class="p">,</span> <span class="s2">&quot;c&quot;</span><span class="p">]})</span>
-<span class="n">write_deltalake</span><span class="p">(</span><span class="s2">&quot;tmp/some-table&quot;</span><span class="p">,</span> <span class="n">df</span><span class="p">)</span>
-</code></pre></div>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="kn">from</span> <span class="nn">deltalake</span> <span class="kn">import</span> <span class="n">write_deltalake</span><span class="p">,</span> <span class="n">DeltaTable</span>
+</span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>
+</span><span id="__span-6-3"><a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="n">df</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">({</span><span class="s2">&quot;num&quot;</span><span class="p">:</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">],</span> <span class="s2">&quot;letter&quot;</span><span class="p">:</span> <span class="p">[</span><span class="s2">&quot;a&quot;</span><span class="p">,</span> <span class="s2">&quot;b&quot;</span><span class="p">,</span> <span class="s2">&quot;c&quot;</span><span class="p">]})</span>
+</span><span id="__span-6-4"><a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="n">write_deltalake</span><span class="p">(</span><span class="s2">&quot;tmp/some-table&quot;</span><span class="p">,</span> <span class="n">df</span><span class="p">)</span>
+</span></code></pre></div>
 <p>Here are the contents of the Delta table (version 0 of the Delta table):</p>
-<div class="highlight"><pre><span></span><code>+-------+----------+
-|   num | letter   |
-|-------+----------|
-|     1 | a        |
-|     2 | b        |
-|     3 | c        |
-+-------+----------+
-</code></pre></div>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>+-------+----------+
+</span><span id="__span-7-2"><a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a>|   num | letter   |
+</span><span id="__span-7-3"><a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a>|-------+----------|
+</span><span id="__span-7-4"><a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a>|     1 | a        |
+</span><span id="__span-7-5"><a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a>|     2 | b        |
+</span><span id="__span-7-6"><a id="__codelineno-7-6" name="__codelineno-7-6" href="#__codelineno-7-6"></a>|     3 | c        |
+</span><span id="__span-7-7"><a id="__codelineno-7-7" name="__codelineno-7-7" href="#__codelineno-7-7"></a>+-------+----------+
+</span></code></pre></div>
 <p>Now append two rows to the Delta table:</p>
-<div class="highlight"><pre><span></span><code><span class="n">df</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">({</span><span class="s2">&quot;num&quot;</span><span class="p">:</span> <span class="p">[</span><span class="mi">8</span><span class="p">,</span> <span class="mi">9</span><span class="p">],</span> <span class="s2">&quot;letter&quot;</span><span class="p">:</span> <span class="p">[</span><span class="s2">&quot;dd&quot;</span><span class="p">,</span> <span class="s2">&quot;ee&quot;</span><span class="p">]})</span>
-<span class="n">write_deltalake</span><span class="p">(</span><span class="s2">&quot;tmp/some-table&quot;</span><span class="p">,</span> <span class="n">df</span><span class="p">,</span> <span class="n">mode</span><span class="o">=</span><span class="s2">&quot;append&quot;</span><span class="p">)</span>
-</code></pre></div>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="n">df</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">({</span><span class="s2">&quot;num&quot;</span><span class="p">:</span> <span class="p">[</span><span class="mi">8</span><span class="p">,</span> <span class="mi">9</span><span class="p">],</span> <span class="s2">&quot;letter&quot;</span><span class="p">:</span> <span class="p">[</span><span class="s2">&quot;dd&quot;</span><span class="p">,</span> <span class="s2">&quot;ee&quot;</span><span class="p">]})</span>
+</span><span id="__span-8-2"><a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a><span class="n">write_deltalake</span><span class="p">(</span><span class="s2">&quot;tmp/some-table&quot;</span><span class="p">,</span> <span class="n">df</span><span class="p">,</span> <span class="n">mode</span><span class="o">=</span><span class="s2">&quot;append&quot;</span><span class="p">)</span>
+</span></code></pre></div>
 <p>Here are the contents after the append operation (version 1 of the Delta table):</p>
-<div class="highlight"><pre><span></span><code>+-------+----------+
-|   num | letter   |
-|-------+----------|
-|     1 | a        |
-|     2 | b        |
-|     3 | c        |
-|     8 | dd       |
-|     9 | ee       |
-+-------+----------+
-</code></pre></div>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a>+-------+----------+
+</span><span id="__span-9-2"><a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a>|   num | letter   |
+</span><span id="__span-9-3"><a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a>|-------+----------|
+</span><span id="__span-9-4"><a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a>|     1 | a        |
+</span><span id="__span-9-5"><a id="__codelineno-9-5" name="__codelineno-9-5" href="#__codelineno-9-5"></a>|     2 | b        |
+</span><span id="__span-9-6"><a id="__codelineno-9-6" name="__codelineno-9-6" href="#__codelineno-9-6"></a>|     3 | c        |
+</span><span id="__span-9-7"><a id="__codelineno-9-7" name="__codelineno-9-7" href="#__codelineno-9-7"></a>|     8 | dd       |
+</span><span id="__span-9-8"><a id="__codelineno-9-8" name="__codelineno-9-8" href="#__codelineno-9-8"></a>|     9 | ee       |
+</span><span id="__span-9-9"><a id="__codelineno-9-9" name="__codelineno-9-9" href="#__codelineno-9-9"></a>+-------+----------+
+</span></code></pre></div>
 <p>Now perform an overwrite transaction:</p>
-<div class="highlight"><pre><span></span><code><span class="n">df</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">({</span><span class="s2">&quot;num&quot;</span><span class="p">:</span> <span class="p">[</span><span class="mi">11</span><span class="p">,</span> <span class="mi">22</span><span class="p">],</span> <span class="s2">&quot;letter&quot;</span><span class="p">:</span> <span class="p">[</span><span class="s2">&quot;aa&quot;</span><span class="p">,</span> <span class="s2">&quot;bb&quot;</span><span class="p">]})</span>
-<span class="n">write_deltalake</span><span class="p">(</span><span class="s2">&quot;tmp/some-table&quot;</span><span class="p">,</span> <span class="n">df</span><span class="p">,</span> <span class="n">mode</span><span class="o">=</span><span class="s2">&quot;overwrite&quot;</span><span class="p">)</span>
-</code></pre></div>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="n">df</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">({</span><span class="s2">&quot;num&quot;</span><span class="p">:</span> <span class="p">[</span><span class="mi">11</span><span class="p">,</span> <span class="mi">22</span><span class="p">],</span> <span class="s2">&quot;letter&quot;</span><span class="p">:</span> <span class="p">[</span><span class="s2">&quot;aa&quot;</span><span class="p">,</span> <span class="s2">&quot;bb&quot;</span><span class="p">]})</span>
+</span><span id="__span-10-2"><a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a><span class="n">write_deltalake</span><span class="p">(</span><span class="s2">&quot;tmp/some-table&quot;</span><span class="p">,</span> <span class="n">df</span><span class="p">,</span> <span class="n">mode</span><span class="o">=</span><span class="s2">&quot;overwrite&quot;</span><span class="p">)</span>
+</span></code></pre></div>
 <p>Here are the contents after the overwrite operation (version 2 of the Delta table):</p>
-<div class="highlight"><pre><span></span><code>+-------+----------+
-|   num | letter   |
-|-------+----------|
-|     8 | dd       |
-|     9 | ee       |
-+-------+----------+
-</code></pre></div>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-11-1"><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a>+-------+----------+
+</span><span id="__span-11-2"><a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a>|   num | letter   |
+</span><span id="__span-11-3"><a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a>|-------+----------|
+</span><span id="__span-11-4"><a id="__codelineno-11-4" name="__codelineno-11-4" href="#__codelineno-11-4"></a>|     8 | dd       |
+</span><span id="__span-11-5"><a id="__codelineno-11-5" name="__codelineno-11-5" href="#__codelineno-11-5"></a>|     9 | ee       |
+</span><span id="__span-11-6"><a id="__codelineno-11-6" name="__codelineno-11-6" href="#__codelineno-11-6"></a>+-------+----------+
+</span></code></pre></div>
 <p>Read in the Delta table and it will grab the latest version by default:</p>
-<div class="highlight"><pre><span></span><code>DeltaTable(&quot;tmp/some-table&quot;).to_pandas()
-
-+-------+----------+
-|   num | letter   |
-|-------+----------|
-|    11 | aa       |
-|    22 | bb       |
-+-------+----------+
-</code></pre></div>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-12-1"><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a>DeltaTable(&quot;tmp/some-table&quot;).to_pandas()
+</span><span id="__span-12-2"><a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a>
+</span><span id="__span-12-3"><a id="__codelineno-12-3" name="__codelineno-12-3" href="#__codelineno-12-3"></a>+-------+----------+
+</span><span id="__span-12-4"><a id="__codelineno-12-4" name="__codelineno-12-4" href="#__codelineno-12-4"></a>|   num | letter   |
+</span><span id="__span-12-5"><a id="__codelineno-12-5" name="__codelineno-12-5" href="#__codelineno-12-5"></a>|-------+----------|
+</span><span id="__span-12-6"><a id="__codelineno-12-6" name="__codelineno-12-6" href="#__codelineno-12-6"></a>|    11 | aa       |
+</span><span id="__span-12-7"><a id="__codelineno-12-7" name="__codelineno-12-7" href="#__codelineno-12-7"></a>|    22 | bb       |
+</span><span id="__span-12-8"><a id="__codelineno-12-8" name="__codelineno-12-8" href="#__codelineno-12-8"></a>+-------+----------+
+</span></code></pre></div>
 <p>You can easily time travel back to version 0 of the Delta table:</p>
-<div class="highlight"><pre><span></span><code>DeltaTable(&quot;tmp/some-table&quot;, version=0).to_pandas()
-
-+-------+----------+
-|   num | letter   |
-|-------+----------|
-|     1 | a        |
-|     2 | b        |
-|     3 | c        |
-+-------+----------+
-</code></pre></div>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-13-1"><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a>DeltaTable(&quot;tmp/some-table&quot;, version=0).to_pandas()
+</span><span id="__span-13-2"><a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a>
+</span><span id="__span-13-3"><a id="__codelineno-13-3" name="__codelineno-13-3" href="#__codelineno-13-3"></a>+-------+----------+
+</span><span id="__span-13-4"><a id="__codelineno-13-4" name="__codelineno-13-4" href="#__codelineno-13-4"></a>|   num | letter   |
+</span><span id="__span-13-5"><a id="__codelineno-13-5" name="__codelineno-13-5" href="#__codelineno-13-5"></a>|-------+----------|
+</span><span id="__span-13-6"><a id="__codelineno-13-6" name="__codelineno-13-6" href="#__codelineno-13-6"></a>|     1 | a        |
+</span><span id="__span-13-7"><a id="__codelineno-13-7" name="__codelineno-13-7" href="#__codelineno-13-7"></a>|     2 | b        |
+</span><span id="__span-13-8"><a id="__codelineno-13-8" name="__codelineno-13-8" href="#__codelineno-13-8"></a>|     3 | c        |
+</span><span id="__span-13-9"><a id="__codelineno-13-9" name="__codelineno-13-9" href="#__codelineno-13-9"></a>+-------+----------+
+</span></code></pre></div>
 <p>You can also time travel to version 1 of the Delta table:</p>
-<div class="highlight"><pre><span></span><code>DeltaTable(&quot;tmp/some-table&quot;, version=1).to_pandas()
-
-+-------+----------+
-|   num | letter   |
-|-------+----------|
-|     1 | a        |
-|     2 | b        |
-|     3 | c        |
-|     8 | dd       |
-|     9 | ee       |
-+-------+----------+
-</code></pre></div>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-14-1"><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a>DeltaTable(&quot;tmp/some-table&quot;, version=1).to_pandas()
+</span><span id="__span-14-2"><a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a>
+</span><span id="__span-14-3"><a id="__codelineno-14-3" name="__codelineno-14-3" href="#__codelineno-14-3"></a>+-------+----------+
+</span><span id="__span-14-4"><a id="__codelineno-14-4" name="__codelineno-14-4" href="#__codelineno-14-4"></a>|   num | letter   |
+</span><span id="__span-14-5"><a id="__codelineno-14-5" name="__codelineno-14-5" href="#__codelineno-14-5"></a>|-------+----------|
+</span><span id="__span-14-6"><a id="__codelineno-14-6" name="__codelineno-14-6" href="#__codelineno-14-6"></a>|     1 | a        |
+</span><span id="__span-14-7"><a id="__codelineno-14-7" name="__codelineno-14-7" href="#__codelineno-14-7"></a>|     2 | b        |
+</span><span id="__span-14-8"><a id="__codelineno-14-8" name="__codelineno-14-8" href="#__codelineno-14-8"></a>|     3 | c        |
+</span><span id="__span-14-9"><a id="__codelineno-14-9" name="__codelineno-14-9" href="#__codelineno-14-9"></a>|     8 | dd       |
+</span><span id="__span-14-10"><a id="__codelineno-14-10" name="__codelineno-14-10" href="#__codelineno-14-10"></a>|     9 | ee       |
+</span><span id="__span-14-11"><a id="__codelineno-14-11" name="__codelineno-14-11" href="#__codelineno-14-11"></a>+-------+----------+
+</span></code></pre></div>
 <p>Time travel is a powerful feature that pandas users cannot access with CSV or Parquet.</p>
 <h2 id="schema-enforcement">Schema enforcement</h2>
 <p>Delta tables only allow you to append DataFrame with matching schema by default.  Suppose you have a DataFrame with <code>num</code> and <code>animal</code> columns, which is different from the Delta table that has columns with <code>num</code> and <code>letter</code> columns.</p>
 <p>Try to append this DataFrame with a mismatched schema to the existing table:</p>
-<div class="highlight"><pre><span></span><code>df = pd.DataFrame({&quot;num&quot;: [5, 6], &quot;animal&quot;: [&quot;cat&quot;, &quot;dog&quot;]})
-write_deltalake(&quot;tmp/some-table&quot;, df)
-</code></pre></div>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-15-1"><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a>df = pd.DataFrame({&quot;num&quot;: [5, 6], &quot;animal&quot;: [&quot;cat&quot;, &quot;dog&quot;]})
+</span><span id="__span-15-2"><a id="__codelineno-15-2" name="__codelineno-15-2" href="#__codelineno-15-2"></a>write_deltalake(&quot;tmp/some-table&quot;, df)
+</span></code></pre></div>
 <p>This transaction will be rejected and will return the following error message:</p>
-<div class="highlight"><pre><span></span><code>ValueError: Schema of data does not match table schema
-Data schema:
-num: int64
-animal: string
--- schema metadata --
-pandas: &#39;{&quot;index_columns&quot;: [{&quot;kind&quot;: &quot;range&quot;, &quot;name&quot;: null, &quot;start&quot;: 0, &quot;&#39; + 474
-Table Schema:
-num: int64
-letter: string
-</code></pre></div>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-16-1"><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a>ValueError: Schema of data does not match table schema
+</span><span id="__span-16-2"><a id="__codelineno-16-2" name="__codelineno-16-2" href="#__codelineno-16-2"></a>Data schema:
+</span><span id="__span-16-3"><a id="__codelineno-16-3" name="__codelineno-16-3" href="#__codelineno-16-3"></a>num: int64
+</span><span id="__span-16-4"><a id="__codelineno-16-4" name="__codelineno-16-4" href="#__codelineno-16-4"></a>animal: string
+</span><span id="__span-16-5"><a id="__codelineno-16-5" name="__codelineno-16-5" href="#__codelineno-16-5"></a>-- schema metadata --
+</span><span id="__span-16-6"><a id="__codelineno-16-6" name="__codelineno-16-6" href="#__codelineno-16-6"></a>pandas: &#39;{&quot;index_columns&quot;: [{&quot;kind&quot;: &quot;range&quot;, &quot;name&quot;: null, &quot;start&quot;: 0, &quot;&#39; + 474
+</span><span id="__span-16-7"><a id="__codelineno-16-7" name="__codelineno-16-7" href="#__codelineno-16-7"></a>Table Schema:
+</span><span id="__span-16-8"><a id="__codelineno-16-8" name="__codelineno-16-8" href="#__codelineno-16-8"></a>num: int64
+</span><span id="__span-16-9"><a id="__codelineno-16-9" name="__codelineno-16-9" href="#__codelineno-16-9"></a>letter: string
+</span></code></pre></div>
 <p>Schema enforcement protects your table from getting corrupted by appending data with mismatched schema.  Parquet and CSV don't offer schema enforcement for pandas users.</p>
 <h2 id="overwriting-schema-of-table">Overwriting schema of table</h2>
 <p>You can overwrite the table contents and schema by setting the <code>overwrite_schema</code> option.  Here's how to overwrite the table contents:</p>
-<div class="highlight"><pre><span></span><code><span class="n">write_deltalake</span><span class="p">(</span><span class="s2">&quot;tmp/some-table&quot;</span><span class="p">,</span> <span class="n">df</span><span class="p">,</span> <span class="n">mode</span><span class="o">=</span><span class="s2">&quot;overwrite&quot;</span><span class="p">,</span> <span class="n">overwrite_schema</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
-</code></pre></div>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-17-1"><a id="__codelineno-17-1" name="__codelineno-17-1" href="#__codelineno-17-1"></a><span class="n">write_deltalake</span><span class="p">(</span><span class="s2">&quot;tmp/some-table&quot;</span><span class="p">,</span> <span class="n">df</span><span class="p">,</span> <span class="n">mode</span><span class="o">=</span><span class="s2">&quot;overwrite&quot;</span><span class="p">,</span> <span class="n">overwrite_schema</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+</span></code></pre></div>
 <p>Here are the contents of the table after the values and schema have been overwritten:</p>
-<div class="highlight"><pre><span></span><code>+-------+----------+
-|   num | animal   |
-|-------+----------|
-|     5 | cat      |
-|     6 | dog      |
-+-------+----------+
-</code></pre></div>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-18-1"><a id="__codelineno-18-1" name="__codelineno-18-1" href="#__codelineno-18-1"></a>+-------+----------+
+</span><span id="__span-18-2"><a id="__codelineno-18-2" name="__codelineno-18-2" href="#__codelineno-18-2"></a>|   num | animal   |
+</span><span id="__span-18-3"><a id="__codelineno-18-3" name="__codelineno-18-3" href="#__codelineno-18-3"></a>|-------+----------|
+</span><span id="__span-18-4"><a id="__codelineno-18-4" name="__codelineno-18-4" href="#__codelineno-18-4"></a>|     5 | cat      |
+</span><span id="__span-18-5"><a id="__codelineno-18-5" name="__codelineno-18-5" href="#__codelineno-18-5"></a>|     6 | dog      |
+</span><span id="__span-18-6"><a id="__codelineno-18-6" name="__codelineno-18-6" href="#__codelineno-18-6"></a>+-------+----------+
+</span></code></pre></div>
 <h2 id="in-memory-vs-in-storage-data-changes">In-memory vs. in-storage data changes</h2>
 <p>It's important to distinguish between data stored in-memory and data stored on disk when understanding the functionality offered by Delta Lake.</p>
 <p>pandas loads data from storage (CSV, Parquet, or Delta Lake) into in-memory DataFrames.</p>
@@ -1246,7 +1604,7 @@ letter: string
       <nav class="md-footer__inner md-grid" aria-label="Footer" >
         
           
-          <a href="../../api/storage/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Storage">
+          <a href="../../api/exceptions/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Exceptions">
             <div class="md-footer__button md-icon">
               
               <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11h12Z"/></svg>
@@ -1256,11 +1614,27 @@ letter: string
                 Previous
               </span>
               <div class="md-ellipsis">
-                Storage
+                Exceptions
               </div>
             </div>
           </a>
         
+        
+          
+          <a href="../../how-delta-lake-works/architecture-of-delta-table/" class="md-footer__link md-footer__link--next" aria-label="Next: Architecture">
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                Next
+              </span>
+              <div class="md-ellipsis">
+                Architecture
+              </div>
+            </div>
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M4 11v2h12l-5.5 5.5 1.42 1.42L19.84 12l-7.92-7.92L10.5 5.5 16 11H4Z"/></svg>
+            </div>
+          </a>
         
       </nav>
     
@@ -1270,9 +1644,16 @@ letter: string
       <div class="md-copyright">
   
   
-    Made with
-    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
-      Material for MkDocs
+</div>
+      
+        <div class="md-social">
+  
+    
+    
+    
+    
+    <a href="https://go.delta.io/slack" target="_blank" rel="noopener" title="Delta slack channel" class="md-social__link">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.4.2 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2023 Fonticons, Inc.--><path d="M94.12 315.1c0 25.9-21.16 47.06-47.06 47.06S0 341 0 315.1c0-25.9 21.16-47.06 47.06-47.06h47.06v47.06zm23.72 0c0-25.9 21.16-47.06 47.06-47.06s47.06 21.16 47.06 47.06v117.84c0 25.9-21.16 47.06-47.06 47.06s-47.06-21.16-47.06-47.06V315.1zm47.06-188.98c-25.9 0-47.06-21.16-47.06-47.06S139 32 164.9 32s47.06 21.16 47.06 47.06v47.06H164.9zm0 23.72c25.9 0 47.06 21.16 47.06 47.06s-21.16 47.06-47.06 47.06H47.06C21.16 243.96 0 222.8 0 196.9s21.16-47.06 47.06-47.06H164.9zm188.98 47.06c0-25.9 21.16-47.06 47.06-47.06 25.9 0 47.06 21.16 47.06 47.06s-21.16 47.06-47.06 47.06h-47.06V196.9zm-23.72 0c0 25.9-21.16 47.06-47.06 47.06-25.9 0-47.06-21.16-47.06-47.06V79.06c0-25.9 21.16-47.06 47.06-47.06 25.9 0 47.06 21.16 47.06 47.06V196.9zM283.1 385.88c25.9 0 47.06 21.16 47.06 47.06 0 25.9-21.16 47.06-47.06 47.06-25.9 0-47.06-21.16-47.06-47.06v-47.06h47.06zm0-23.72c-25.9 0-47.06-21.16-47.06-47.06 0-25.9 21.16-47.06 47.06-47.06h117.84c25.9 0 47.06 21.16 47.06 47.06 0 25.9-21.16 47.06-47.06 47.06H283.1z"/></svg>
     </a>
   
 </div>
@@ -1287,7 +1668,7 @@ letter: string
     </div>
     
     
-    <script id="__config" type="application/json">{"base": "../..", "features": ["navigation.tracking", "navigation.instant", "navigation.tabs", "navigation.tabs.sticky", "navigation.footer", "content.tabs.link"], "search": "../../assets/javascripts/workers/search.f886a092.min.js", "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}}</script>
+    <script id="__config" type="application/json">{"base": "../..", "features": ["navigation.tracking", "navigation.instant", "navigation.expand", "navigation.tabs", "navigation.indexes", "navigation.tabs.sticky", "navigation.footer", "content.tabs.link", "content.code.annotation", "content.code.copy"], "search": "../../assets/javascripts/workers/search.f886a092.min.js", "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}}</script>
     
     
       <script src="../../assets/javascripts/bundle.aecac24b.min.js"></script>

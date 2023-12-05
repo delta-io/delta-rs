@@ -17,7 +17,7 @@
         <link rel="next" href="../delta-lake-z-order/">
       
       
-      <link rel="icon" href="../../../assets/images/favicon.png">
+      <link rel="icon" href="../../../delta-rust-no-whitespace.svg">
       <meta name="generator" content="mkdocs-1.5.3, mkdocs-material-9.4.5">
     
     
@@ -27,6 +27,9 @@
     
     
       <link rel="stylesheet" href="../../../assets/stylesheets/main.6a10b989.min.css">
+      
+        
+        <link rel="stylesheet" href="../../../assets/stylesheets/palette.356b1318.min.css">
       
       
 
@@ -59,7 +62,14 @@
   </head>
   
   
-    <body dir="ltr">
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
   
     
     
@@ -89,8 +99,7 @@
   <nav class="md-header__inner md-grid" aria-label="Header">
     <a href="../../.." title="Delta Lake Documentation" class="md-header__button md-logo" aria-label="Delta Lake Documentation" data-md-component="logo">
       
-  
-  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54Z"/></svg>
+  <img src="../../../delta-rust-no-whitespace.svg" alt="logo">
 
     </a>
     <label class="md-header__button md-icon" for="__drawer">
@@ -113,6 +122,42 @@
         </div>
       </div>
     </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme)" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_3" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m14.3 16-.7-2h-3.2l-.7 2H7.8L11 7h2l3.2 9h-1.9M20 8.69V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12 20 8.69m-9.15 3.96h2.3L12 9l-1.15 3.65Z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_2">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12 20 8.69Z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to system preference"  type="radio" name="__palette" id="__palette_3">
+    
+      <label class="md-header__button md-icon" title="Switch to system preference" for="__palette_2" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12c0-2.42-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12 20 8.69Z"/></svg>
+      </label>
+    
+  
+</form>
+      
     
     
     
@@ -203,6 +248,8 @@
         <a href="../../installation/" class="md-tabs__link">
           
   
+    
+  
   Usage
 
         </a>
@@ -218,8 +265,10 @@
     
     
       <li class="md-tabs__item">
-        <a href="../../../api/delta_table/" class="md-tabs__link">
+        <a href="../../../api/delta_writer/" class="md-tabs__link">
           
+  
+    
   
   API Reference
 
@@ -239,7 +288,29 @@
         <a href="../../../integrations/delta-lake-pandas/" class="md-tabs__link">
           
   
+    
+  
   Integrations
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../../how-delta-lake-works/architecture-of-delta-table/" class="md-tabs__link">
+          
+  
+    
+  
+  How Delta Lake works
 
         </a>
       </li>
@@ -277,8 +348,7 @@
   <label class="md-nav__title" for="__drawer">
     <a href="../../.." title="Delta Lake Documentation" class="md-nav__button md-logo" aria-label="Delta Lake Documentation" data-md-component="logo">
       
-  
-  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54Z"/></svg>
+  <img src="../../../delta-rust-no-whitespace.svg" alt="logo">
 
     </a>
     Delta Lake Documentation
@@ -326,6 +396,32 @@
   
     
     
+      
+        
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
     
@@ -340,16 +436,24 @@
         <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" checked>
         
           
-          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="">
-            
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../" class="md-nav__link ">
+              
   
   <span class="md-ellipsis">
     Usage
   </span>
   
 
-            <span class="md-nav__icon md-icon"></span>
-          </label>
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_2" id="__nav_2_label" tabindex="">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
         
         <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="true">
           <label class="md-nav__title" for="__nav_2">
@@ -378,24 +482,6 @@
 
               
             
-              
-                
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../../" class="md-nav__link">
-        
-  
-  <span class="md-ellipsis">
-    Overview
-  </span>
-  
-
-      </a>
-    </li>
-  
-
               
             
               
@@ -566,6 +652,12 @@
   
   
     
+    
+      
+        
+      
+        
+      
     
     
     
@@ -740,6 +832,20 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
     
@@ -751,7 +857,9 @@
         
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" >
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3" >
         
           
           <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="">
@@ -778,15 +886,143 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../api/delta_table/" class="md-nav__link">
+      <a href="../../../api/delta_writer/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
-    DeltaTable
+    Writer
   </span>
   
 
       </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_2" >
+        
+          
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../../api/delta_table/" class="md-nav__link ">
+              
+  
+  <span class="md-ellipsis">
+    Table
+  </span>
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_3_2" id="__nav_3_2_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_3_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3_2">
+            <span class="md-nav__icon md-icon"></span>
+            Table
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../api/delta_table/metadata/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Metadata
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../api/delta_table/delta_table_merger/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    TableMerger
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../api/delta_table/delta_table_optimizer/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    TableOptimizer
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
     </li>
   
 
@@ -832,6 +1068,46 @@
 
               
             
+              
+                
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../api/catalog/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Catalog
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../api/exceptions/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Exceptions
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
           </ul>
         </nav>
       
@@ -846,6 +1122,10 @@
   
     
     
+      
+        
+      
+    
     
     
     
@@ -857,7 +1137,9 @@
         
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" >
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4" >
         
           
           <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="">
@@ -889,6 +1171,78 @@
   
   <span class="md-ellipsis">
     pandas
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+    
+    
+      
+        
+      
+    
+    
+    
+    
+      
+      
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="">
+            
+  
+  <span class="md-ellipsis">
+    How Delta Lake works
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            How Delta Lake works
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../how-delta-lake-works/architecture-of-delta-table/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Architecture
   </span>
   
 
@@ -1000,187 +1354,187 @@
 <h2 id="create-a-delta-table-with-small-files">Create a Delta table with small files</h2>
 <p>Let’s start by creating a Delta table with a lot of small files so we can demonstrate the usefulness of the <code>optimize</code> command.</p>
 <p>Start by writing a function that generates on thousand rows of random data given a timestamp.</p>
-<div class="highlight"><pre><span></span><code>def record_observations(date: datetime) -&gt; pa.Table:
-    &quot;&quot;&quot;Pulls data for a certain datetime&quot;&quot;&quot;
-    nrows = 1000
-    return pa.table(
-        {
-            &quot;date&quot;: pa.array([date.date()] * nrows),
-            &quot;timestamp&quot;: pa.array([date] * nrows),
-            &quot;value&quot;: pc.random(nrows),
-        }
-    )
-</code></pre></div>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="k">def</span> <span class="nf">record_observations</span><span class="p">(</span><span class="n">date</span><span class="p">:</span> <span class="n">datetime</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">pa</span><span class="o">.</span><span class="n">Table</span><span class="p">:</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Pulls data for a certain datetime&quot;&quot;&quot;</span>
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>    <span class="n">nrows</span> <span class="o">=</span> <span class="mi">1000</span>
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>    <span class="k">return</span> <span class="n">pa</span><span class="o">.</span><span class="n">table</span><span class="p">(</span>
+</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>        <span class="p">{</span>
+</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>            <span class="s2">&quot;date&quot;</span><span class="p">:</span> <span class="n">pa</span><span class="o">.</span><span class="n">array</span><span class="p">([</span><span class="n">date</span><span class="o">.</span><span class="n">date</span><span class="p">()]</span> <span class="o">*</span> <span class="n">nrows</span><span class="p">),</span>
+</span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>            <span class="s2">&quot;timestamp&quot;</span><span class="p">:</span> <span class="n">pa</span><span class="o">.</span><span class="n">array</span><span class="p">([</span><span class="n">date</span><span class="p">]</span> <span class="o">*</span> <span class="n">nrows</span><span class="p">),</span>
+</span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a>            <span class="s2">&quot;value&quot;</span><span class="p">:</span> <span class="n">pc</span><span class="o">.</span><span class="n">random</span><span class="p">(</span><span class="n">nrows</span><span class="p">),</span>
+</span><span id="__span-0-9"><a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a>        <span class="p">}</span>
+</span><span id="__span-0-10"><a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a>    <span class="p">)</span>
+</span></code></pre></div>
 <p>Let’s run this function and observe the output:</p>
-<div class="highlight"><pre><span></span><code>record_observations(datetime(2021, 1, 1, 12)).to_pandas()
-
-    date                timestamp   value
-0   2021-01-01  2021-01-01 12:00:00 0.3186397383362023
-1   2021-01-01  2021-01-01 12:00:00 0.04253766974259088
-2   2021-01-01  2021-01-01 12:00:00 0.9355682965171573
-…
-999 2021-01-01  2021-01-01 12:00:00 0.23207037062879843
-</code></pre></div>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="n">record_observations</span><span class="p">(</span><span class="n">datetime</span><span class="p">(</span><span class="mi">2021</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">12</span><span class="p">))</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span>
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>
+</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>    <span class="n">date</span>                <span class="n">timestamp</span>   <span class="n">value</span>
+</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="mi">0</span>   <span class="mi">2021</span><span class="o">-</span><span class="mi">01</span><span class="o">-</span><span class="mi">01</span>  <span class="mi">2021</span><span class="o">-</span><span class="mi">01</span><span class="o">-</span><span class="mi">01</span> <span class="mi">12</span><span class="p">:</span><span class="mi">00</span><span class="p">:</span><span class="mi">00</span> <span class="mf">0.3186397383362023</span>
+</span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="mi">1</span>   <span class="mi">2021</span><span class="o">-</span><span class="mi">01</span><span class="o">-</span><span class="mi">01</span>  <span class="mi">2021</span><span class="o">-</span><span class="mi">01</span><span class="o">-</span><span class="mi">01</span> <span class="mi">12</span><span class="p">:</span><span class="mi">00</span><span class="p">:</span><span class="mi">00</span> <span class="mf">0.04253766974259088</span>
+</span><span id="__span-1-6"><a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a><span class="mi">2</span>   <span class="mi">2021</span><span class="o">-</span><span class="mi">01</span><span class="o">-</span><span class="mi">01</span>  <span class="mi">2021</span><span class="o">-</span><span class="mi">01</span><span class="o">-</span><span class="mi">01</span> <span class="mi">12</span><span class="p">:</span><span class="mi">00</span><span class="p">:</span><span class="mi">00</span> <span class="mf">0.9355682965171573</span>
+</span><span id="__span-1-7"><a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a><span class="err">…</span>
+</span><span id="__span-1-8"><a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a><span class="mi">999</span> <span class="mi">2021</span><span class="o">-</span><span class="mi">01</span><span class="o">-</span><span class="mi">01</span>  <span class="mi">2021</span><span class="o">-</span><span class="mi">01</span><span class="o">-</span><span class="mi">01</span> <span class="mi">12</span><span class="p">:</span><span class="mi">00</span><span class="p">:</span><span class="mi">00</span> <span class="mf">0.23207037062879843</span>
+</span></code></pre></div>
 <p>Let’s write 100 hours worth of data to the Delta table.</p>
-<div class="highlight"><pre><span></span><code># Every hour starting at midnight on 2021-01-01
-hours_iter = (datetime(2021, 1, 1) + timedelta(hours=i) for i in itertools.count())
-
-# Write 100 hours worth of data
-for timestamp in itertools.islice(hours_iter, 100):
-    write_deltalake(
-        &quot;observation_data&quot;,
-        record_observations(timestamp),
-        partition_by=[&quot;date&quot;],
-        mode=&quot;append&quot;,
-    )
-</code></pre></div>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="c1"># Every hour starting at midnight on 2021-01-01</span>
+</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="n">hours_iter</span> <span class="o">=</span> <span class="p">(</span><span class="n">datetime</span><span class="p">(</span><span class="mi">2021</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">)</span> <span class="o">+</span> <span class="n">timedelta</span><span class="p">(</span><span class="n">hours</span><span class="o">=</span><span class="n">i</span><span class="p">)</span> <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="n">itertools</span><span class="o">.</span><span class="n">count</span><span class="p">())</span>
+</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>
+</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="c1"># Write 100 hours worth of data</span>
+</span><span id="__span-2-5"><a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="k">for</span> <span class="n">timestamp</span> <span class="ow">in</span> <span class="n">itertools</span><span class="o">.</span><span class="n">islice</span><span class="p">(</span><span class="n">hours_iter</span><span class="p">,</span> <span class="mi">100</span><span class="p">):</span>
+</span><span id="__span-2-6"><a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a>    <span class="n">write_deltalake</span><span class="p">(</span>
+</span><span id="__span-2-7"><a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a>        <span class="s2">&quot;observation_data&quot;</span><span class="p">,</span>
+</span><span id="__span-2-8"><a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a>        <span class="n">record_observations</span><span class="p">(</span><span class="n">timestamp</span><span class="p">),</span>
+</span><span id="__span-2-9"><a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a>        <span class="n">partition_by</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;date&quot;</span><span class="p">],</span>
+</span><span id="__span-2-10"><a id="__codelineno-2-10" name="__codelineno-2-10" href="#__codelineno-2-10"></a>        <span class="n">mode</span><span class="o">=</span><span class="s2">&quot;append&quot;</span><span class="p">,</span>
+</span><span id="__span-2-11"><a id="__codelineno-2-11" name="__codelineno-2-11" href="#__codelineno-2-11"></a>    <span class="p">)</span>
+</span></code></pre></div>
 <p>This data was appended to the Delta table in 100 separate transactions, so the table will contain 100 transaction log entries and 100 data files.  You can see the number of files with the <code>files()</code> method.</p>
-<div class="highlight"><pre><span></span><code>dt = DeltaTable(&quot;observation_data&quot;)
-len(dt.files()) # 100
-</code></pre></div>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="n">dt</span> <span class="o">=</span> <span class="n">DeltaTable</span><span class="p">(</span><span class="s2">&quot;observation_data&quot;</span><span class="p">)</span>
+</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="nb">len</span><span class="p">(</span><span class="n">dt</span><span class="o">.</span><span class="n">files</span><span class="p">())</span> <span class="c1"># 100</span>
+</span></code></pre></div>
 <p>Here’s how the files are persisted in storage.</p>
-<div class="highlight"><pre><span></span><code>observation_data
-├── _delta_log
-│   ├── 00000000000000000000.json
-│   ├── …
-│   └── 00000000000000000099.json
-├── date=2021-01-01
-│   ├── 0-cfe227c6-edd9-4369-a1b0-db4559a2e693-0.parquet
-│   ├── …
-│   ├── 23-a4ace29e-e73e-40a1-81d3-0f5dc13093de-0.parquet
-├── date=2021-01-02
-│   ├── 24-9698b456-66eb-4075-8732-fe56d81edb60-0.parquet
-│   ├── …
-│   └── 47-d3fce527-e018-4c02-8acd-a649f6f523d2-0.parquet
-├── date=2021-01-03
-│   ├── 48-fd90a7fa-5a14-42ed-9f59-9fe48d87899d-0.parquet
-│   ├── …
-│   └── 71-5f143ade-8ae2-4854-bdc5-61154175665f-0.parquet
-├── date=2021-01-04
-│   ├── 72-477c10fe-dc09-4087-80f0-56006e4a7911-0.parquet
-│   ├── …
-│   └── 95-1c92cbce-8af4-4fe4-9c11-832245cf4d40-0.parquet
-└── date=2021-01-05
-    ├── 96-1b878ee5-25fd-431a-bc3e-6dcacc96b470-0.parquet
-    ├── …
-    └── 99-9650ed63-c195-433d-a86b-9469088c14ba-0.parquet
-</code></pre></div>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>observation_data
+</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>├── _delta_log
+</span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a>│   ├── 00000000000000000000.json
+</span><span id="__span-4-4"><a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a>│   ├── …
+</span><span id="__span-4-5"><a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a>│   └── 00000000000000000099.json
+</span><span id="__span-4-6"><a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a>├── date=2021-01-01
+</span><span id="__span-4-7"><a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a>│   ├── 0-cfe227c6-edd9-4369-a1b0-db4559a2e693-0.parquet
+</span><span id="__span-4-8"><a id="__codelineno-4-8" name="__codelineno-4-8" href="#__codelineno-4-8"></a>│   ├── …
+</span><span id="__span-4-9"><a id="__codelineno-4-9" name="__codelineno-4-9" href="#__codelineno-4-9"></a>│   ├── 23-a4ace29e-e73e-40a1-81d3-0f5dc13093de-0.parquet
+</span><span id="__span-4-10"><a id="__codelineno-4-10" name="__codelineno-4-10" href="#__codelineno-4-10"></a>├── date=2021-01-02
+</span><span id="__span-4-11"><a id="__codelineno-4-11" name="__codelineno-4-11" href="#__codelineno-4-11"></a>│   ├── 24-9698b456-66eb-4075-8732-fe56d81edb60-0.parquet
+</span><span id="__span-4-12"><a id="__codelineno-4-12" name="__codelineno-4-12" href="#__codelineno-4-12"></a>│   ├── …
+</span><span id="__span-4-13"><a id="__codelineno-4-13" name="__codelineno-4-13" href="#__codelineno-4-13"></a>│   └── 47-d3fce527-e018-4c02-8acd-a649f6f523d2-0.parquet
+</span><span id="__span-4-14"><a id="__codelineno-4-14" name="__codelineno-4-14" href="#__codelineno-4-14"></a>├── date=2021-01-03
+</span><span id="__span-4-15"><a id="__codelineno-4-15" name="__codelineno-4-15" href="#__codelineno-4-15"></a>│   ├── 48-fd90a7fa-5a14-42ed-9f59-9fe48d87899d-0.parquet
+</span><span id="__span-4-16"><a id="__codelineno-4-16" name="__codelineno-4-16" href="#__codelineno-4-16"></a>│   ├── …
+</span><span id="__span-4-17"><a id="__codelineno-4-17" name="__codelineno-4-17" href="#__codelineno-4-17"></a>│   └── 71-5f143ade-8ae2-4854-bdc5-61154175665f-0.parquet
+</span><span id="__span-4-18"><a id="__codelineno-4-18" name="__codelineno-4-18" href="#__codelineno-4-18"></a>├── date=2021-01-04
+</span><span id="__span-4-19"><a id="__codelineno-4-19" name="__codelineno-4-19" href="#__codelineno-4-19"></a>│   ├── 72-477c10fe-dc09-4087-80f0-56006e4a7911-0.parquet
+</span><span id="__span-4-20"><a id="__codelineno-4-20" name="__codelineno-4-20" href="#__codelineno-4-20"></a>│   ├── …
+</span><span id="__span-4-21"><a id="__codelineno-4-21" name="__codelineno-4-21" href="#__codelineno-4-21"></a>│   └── 95-1c92cbce-8af4-4fe4-9c11-832245cf4d40-0.parquet
+</span><span id="__span-4-22"><a id="__codelineno-4-22" name="__codelineno-4-22" href="#__codelineno-4-22"></a>└── date=2021-01-05
+</span><span id="__span-4-23"><a id="__codelineno-4-23" name="__codelineno-4-23" href="#__codelineno-4-23"></a>    ├── 96-1b878ee5-25fd-431a-bc3e-6dcacc96b470-0.parquet
+</span><span id="__span-4-24"><a id="__codelineno-4-24" name="__codelineno-4-24" href="#__codelineno-4-24"></a>    ├── …
+</span><span id="__span-4-25"><a id="__codelineno-4-25" name="__codelineno-4-25" href="#__codelineno-4-25"></a>    └── 99-9650ed63-c195-433d-a86b-9469088c14ba-0.parquet
+</span></code></pre></div>
 <p>Each of these Parquet files are tiny - they’re only 10 KB.  Let’s see how to compact these tiny files into larger files, which is more efficient for data queries.</p>
 <h2 id="compact-small-files-in-the-delta-table-with-optimize">Compact small files in the Delta table with optimize</h2>
 <p>Let’s run the optimize command to compact the existing small files into larger files:</p>
-<div class="highlight"><pre><span></span><code>dt = DeltaTable(&quot;observation_data&quot;)
-
-dt.optimize()
-</code></pre></div>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="n">dt</span> <span class="o">=</span> <span class="n">DeltaTable</span><span class="p">(</span><span class="s2">&quot;observation_data&quot;</span><span class="p">)</span>
+</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>
+</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="n">dt</span><span class="o">.</span><span class="n">optimize</span><span class="p">()</span>
+</span></code></pre></div>
 <p>Here’s the output of the command:</p>
-<div class="highlight"><pre><span></span><code>{&#39;numFilesAdded&#39;: 5,
- &#39;numFilesRemoved&#39;: 100,
- &#39;filesAdded&#39;: {&#39;min&#39;: 39000,
-  &#39;max&#39;: 238282,
-  &#39;avg&#39;: 198425.6,
-  &#39;totalFiles&#39;: 5,
-  &#39;totalSize&#39;: 992128},
- &#39;filesRemoved&#39;: {&#39;min&#39;: 10244,
-  &#39;max&#39;: 10244,
-  &#39;avg&#39;: 10244.0,
-  &#39;totalFiles&#39;: 100,
-  &#39;totalSize&#39;: 1024400},
- &#39;partitionsOptimized&#39;: 5,
- &#39;numBatches&#39;: 1,
- &#39;totalConsideredFiles&#39;: 100,
- &#39;totalFilesSkipped&#39;: 0,
- &#39;preserveInsertionOrder&#39;: True}
-</code></pre></div>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="p">{</span><span class="s1">&#39;numFilesAdded&#39;</span><span class="p">:</span> <span class="mi">5</span><span class="p">,</span>
+</span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a> <span class="s1">&#39;numFilesRemoved&#39;</span><span class="p">:</span> <span class="mi">100</span><span class="p">,</span>
+</span><span id="__span-6-3"><a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a> <span class="s1">&#39;filesAdded&#39;</span><span class="p">:</span> <span class="p">{</span><span class="s1">&#39;min&#39;</span><span class="p">:</span> <span class="mi">39000</span><span class="p">,</span>
+</span><span id="__span-6-4"><a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a>  <span class="s1">&#39;max&#39;</span><span class="p">:</span> <span class="mi">238282</span><span class="p">,</span>
+</span><span id="__span-6-5"><a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a>  <span class="s1">&#39;avg&#39;</span><span class="p">:</span> <span class="mf">198425.6</span><span class="p">,</span>
+</span><span id="__span-6-6"><a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a>  <span class="s1">&#39;totalFiles&#39;</span><span class="p">:</span> <span class="mi">5</span><span class="p">,</span>
+</span><span id="__span-6-7"><a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a>  <span class="s1">&#39;totalSize&#39;</span><span class="p">:</span> <span class="mi">992128</span><span class="p">},</span>
+</span><span id="__span-6-8"><a id="__codelineno-6-8" name="__codelineno-6-8" href="#__codelineno-6-8"></a> <span class="s1">&#39;filesRemoved&#39;</span><span class="p">:</span> <span class="p">{</span><span class="s1">&#39;min&#39;</span><span class="p">:</span> <span class="mi">10244</span><span class="p">,</span>
+</span><span id="__span-6-9"><a id="__codelineno-6-9" name="__codelineno-6-9" href="#__codelineno-6-9"></a>  <span class="s1">&#39;max&#39;</span><span class="p">:</span> <span class="mi">10244</span><span class="p">,</span>
+</span><span id="__span-6-10"><a id="__codelineno-6-10" name="__codelineno-6-10" href="#__codelineno-6-10"></a>  <span class="s1">&#39;avg&#39;</span><span class="p">:</span> <span class="mf">10244.0</span><span class="p">,</span>
+</span><span id="__span-6-11"><a id="__codelineno-6-11" name="__codelineno-6-11" href="#__codelineno-6-11"></a>  <span class="s1">&#39;totalFiles&#39;</span><span class="p">:</span> <span class="mi">100</span><span class="p">,</span>
+</span><span id="__span-6-12"><a id="__codelineno-6-12" name="__codelineno-6-12" href="#__codelineno-6-12"></a>  <span class="s1">&#39;totalSize&#39;</span><span class="p">:</span> <span class="mi">1024400</span><span class="p">},</span>
+</span><span id="__span-6-13"><a id="__codelineno-6-13" name="__codelineno-6-13" href="#__codelineno-6-13"></a> <span class="s1">&#39;partitionsOptimized&#39;</span><span class="p">:</span> <span class="mi">5</span><span class="p">,</span>
+</span><span id="__span-6-14"><a id="__codelineno-6-14" name="__codelineno-6-14" href="#__codelineno-6-14"></a> <span class="s1">&#39;numBatches&#39;</span><span class="p">:</span> <span class="mi">1</span><span class="p">,</span>
+</span><span id="__span-6-15"><a id="__codelineno-6-15" name="__codelineno-6-15" href="#__codelineno-6-15"></a> <span class="s1">&#39;totalConsideredFiles&#39;</span><span class="p">:</span> <span class="mi">100</span><span class="p">,</span>
+</span><span id="__span-6-16"><a id="__codelineno-6-16" name="__codelineno-6-16" href="#__codelineno-6-16"></a> <span class="s1">&#39;totalFilesSkipped&#39;</span><span class="p">:</span> <span class="mi">0</span><span class="p">,</span>
+</span><span id="__span-6-17"><a id="__codelineno-6-17" name="__codelineno-6-17" href="#__codelineno-6-17"></a> <span class="s1">&#39;preserveInsertionOrder&#39;</span><span class="p">:</span> <span class="kc">True</span><span class="p">}</span>
+</span></code></pre></div>
 <p>The optimize operation has added 5 new files and marked 100 exisitng files for removal (this is also known as “tombstoning” files).  It has compacted the 100 tiny files into 5 larger files.</p>
 <p>Let’s append some more data to the Delta table and see how we can selectively run optimize on the new data that’s added.</p>
 <h2 id="handling-incremental-updates-with-optimize">Handling incremental updates with optimize</h2>
 <p>Let’s append another 24 hours of data to the Delta table:</p>
-<div class="highlight"><pre><span></span><code>for timestamp in itertools.islice(hours_iter, 24):
-    write_deltalake(
-        dt,
-        record_observations(timestamp),
-        partition_by=[&quot;date&quot;],
-        mode=&quot;append&quot;,
-    )
-</code></pre></div>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="k">for</span> <span class="n">timestamp</span> <span class="ow">in</span> <span class="n">itertools</span><span class="o">.</span><span class="n">islice</span><span class="p">(</span><span class="n">hours_iter</span><span class="p">,</span> <span class="mi">24</span><span class="p">):</span>
+</span><span id="__span-7-2"><a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a>    <span class="n">write_deltalake</span><span class="p">(</span>
+</span><span id="__span-7-3"><a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a>        <span class="n">dt</span><span class="p">,</span>
+</span><span id="__span-7-4"><a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a>        <span class="n">record_observations</span><span class="p">(</span><span class="n">timestamp</span><span class="p">),</span>
+</span><span id="__span-7-5"><a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a>        <span class="n">partition_by</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;date&quot;</span><span class="p">],</span>
+</span><span id="__span-7-6"><a id="__codelineno-7-6" name="__codelineno-7-6" href="#__codelineno-7-6"></a>        <span class="n">mode</span><span class="o">=</span><span class="s2">&quot;append&quot;</span><span class="p">,</span>
+</span><span id="__span-7-7"><a id="__codelineno-7-7" name="__codelineno-7-7" href="#__codelineno-7-7"></a>    <span class="p">)</span>
+</span></code></pre></div>
 <p>We can use <code>get_add_actions()</code> to introspect the table state. We can see that <code>2021-01-06</code> has only a few hours of data so far, so we don't want to optimize that yet. But <code>2021-01-05</code> has all 24 hours of data, so it's ready to be optimized.</p>
-<div class="highlight"><pre><span></span><code>dt.get_add_actions(flatten=True).to_pandas()[
-    &quot;partition.date&quot;
-].value_counts().sort_index()
-
-2021-01-01     1
-2021-01-02     1
-2021-01-03     1
-2021-01-04     1
-2021-01-05    21
-2021-01-06     4
-</code></pre></div>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="n">dt</span><span class="o">.</span><span class="n">get_add_actions</span><span class="p">(</span><span class="n">flatten</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()[</span>
+</span><span id="__span-8-2"><a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a>    <span class="s2">&quot;partition.date&quot;</span>
+</span><span id="__span-8-3"><a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a><span class="p">]</span><span class="o">.</span><span class="n">value_counts</span><span class="p">()</span><span class="o">.</span><span class="n">sort_index</span><span class="p">()</span>
+</span><span id="__span-8-4"><a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a>
+</span><span id="__span-8-5"><a id="__codelineno-8-5" name="__codelineno-8-5" href="#__codelineno-8-5"></a><span class="mi">2021</span><span class="o">-</span><span class="mi">01</span><span class="o">-</span><span class="mi">01</span>     <span class="mi">1</span>
+</span><span id="__span-8-6"><a id="__codelineno-8-6" name="__codelineno-8-6" href="#__codelineno-8-6"></a><span class="mi">2021</span><span class="o">-</span><span class="mi">01</span><span class="o">-</span><span class="mi">02</span>     <span class="mi">1</span>
+</span><span id="__span-8-7"><a id="__codelineno-8-7" name="__codelineno-8-7" href="#__codelineno-8-7"></a><span class="mi">2021</span><span class="o">-</span><span class="mi">01</span><span class="o">-</span><span class="mi">03</span>     <span class="mi">1</span>
+</span><span id="__span-8-8"><a id="__codelineno-8-8" name="__codelineno-8-8" href="#__codelineno-8-8"></a><span class="mi">2021</span><span class="o">-</span><span class="mi">01</span><span class="o">-</span><span class="mi">04</span>     <span class="mi">1</span>
+</span><span id="__span-8-9"><a id="__codelineno-8-9" name="__codelineno-8-9" href="#__codelineno-8-9"></a><span class="mi">2021</span><span class="o">-</span><span class="mi">01</span><span class="o">-</span><span class="mi">05</span>    <span class="mi">21</span>
+</span><span id="__span-8-10"><a id="__codelineno-8-10" name="__codelineno-8-10" href="#__codelineno-8-10"></a><span class="mi">2021</span><span class="o">-</span><span class="mi">01</span><span class="o">-</span><span class="mi">06</span>     <span class="mi">4</span>
+</span></code></pre></div>
 <p>To optimize a single partition, you can pass in a <code>partition_filters</code> argument speficying which partitions to optimize.</p>
-<div class="highlight"><pre><span></span><code>dt.optimize(partition_filters=[(&quot;date&quot;, &quot;=&quot;, &quot;2021-01-05&quot;)])
-
-{&#39;numFilesAdded&#39;: 1,
- &#39;numFilesRemoved&#39;: 21,
- &#39;filesAdded&#39;: {&#39;min&#39;: 238282,
-  &#39;max&#39;: 238282,
-  &#39;avg&#39;: 238282.0,
-  &#39;totalFiles&#39;: 1,
-  &#39;totalSize&#39;: 238282},
- &#39;filesRemoved&#39;: {&#39;min&#39;: 10244,
-  &#39;max&#39;: 39000,
-  &#39;avg&#39;: 11613.333333333334,
-  &#39;totalFiles&#39;: 21,
-  &#39;totalSize&#39;: 243880},
- &#39;partitionsOptimized&#39;: 1,
- &#39;numBatches&#39;: 1,
- &#39;totalConsideredFiles&#39;: 21,
- &#39;totalFilesSkipped&#39;: 0,
- &#39;preserveInsertionOrder&#39;: True}
-</code></pre></div>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="n">dt</span><span class="o">.</span><span class="n">optimize</span><span class="p">(</span><span class="n">partition_filters</span><span class="o">=</span><span class="p">[(</span><span class="s2">&quot;date&quot;</span><span class="p">,</span> <span class="s2">&quot;=&quot;</span><span class="p">,</span> <span class="s2">&quot;2021-01-05&quot;</span><span class="p">)])</span>
+</span><span id="__span-9-2"><a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a>
+</span><span id="__span-9-3"><a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a><span class="p">{</span><span class="s1">&#39;numFilesAdded&#39;</span><span class="p">:</span> <span class="mi">1</span><span class="p">,</span>
+</span><span id="__span-9-4"><a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a> <span class="s1">&#39;numFilesRemoved&#39;</span><span class="p">:</span> <span class="mi">21</span><span class="p">,</span>
+</span><span id="__span-9-5"><a id="__codelineno-9-5" name="__codelineno-9-5" href="#__codelineno-9-5"></a> <span class="s1">&#39;filesAdded&#39;</span><span class="p">:</span> <span class="p">{</span><span class="s1">&#39;min&#39;</span><span class="p">:</span> <span class="mi">238282</span><span class="p">,</span>
+</span><span id="__span-9-6"><a id="__codelineno-9-6" name="__codelineno-9-6" href="#__codelineno-9-6"></a>  <span class="s1">&#39;max&#39;</span><span class="p">:</span> <span class="mi">238282</span><span class="p">,</span>
+</span><span id="__span-9-7"><a id="__codelineno-9-7" name="__codelineno-9-7" href="#__codelineno-9-7"></a>  <span class="s1">&#39;avg&#39;</span><span class="p">:</span> <span class="mf">238282.0</span><span class="p">,</span>
+</span><span id="__span-9-8"><a id="__codelineno-9-8" name="__codelineno-9-8" href="#__codelineno-9-8"></a>  <span class="s1">&#39;totalFiles&#39;</span><span class="p">:</span> <span class="mi">1</span><span class="p">,</span>
+</span><span id="__span-9-9"><a id="__codelineno-9-9" name="__codelineno-9-9" href="#__codelineno-9-9"></a>  <span class="s1">&#39;totalSize&#39;</span><span class="p">:</span> <span class="mi">238282</span><span class="p">},</span>
+</span><span id="__span-9-10"><a id="__codelineno-9-10" name="__codelineno-9-10" href="#__codelineno-9-10"></a> <span class="s1">&#39;filesRemoved&#39;</span><span class="p">:</span> <span class="p">{</span><span class="s1">&#39;min&#39;</span><span class="p">:</span> <span class="mi">10244</span><span class="p">,</span>
+</span><span id="__span-9-11"><a id="__codelineno-9-11" name="__codelineno-9-11" href="#__codelineno-9-11"></a>  <span class="s1">&#39;max&#39;</span><span class="p">:</span> <span class="mi">39000</span><span class="p">,</span>
+</span><span id="__span-9-12"><a id="__codelineno-9-12" name="__codelineno-9-12" href="#__codelineno-9-12"></a>  <span class="s1">&#39;avg&#39;</span><span class="p">:</span> <span class="mf">11613.333333333334</span><span class="p">,</span>
+</span><span id="__span-9-13"><a id="__codelineno-9-13" name="__codelineno-9-13" href="#__codelineno-9-13"></a>  <span class="s1">&#39;totalFiles&#39;</span><span class="p">:</span> <span class="mi">21</span><span class="p">,</span>
+</span><span id="__span-9-14"><a id="__codelineno-9-14" name="__codelineno-9-14" href="#__codelineno-9-14"></a>  <span class="s1">&#39;totalSize&#39;</span><span class="p">:</span> <span class="mi">243880</span><span class="p">},</span>
+</span><span id="__span-9-15"><a id="__codelineno-9-15" name="__codelineno-9-15" href="#__codelineno-9-15"></a> <span class="s1">&#39;partitionsOptimized&#39;</span><span class="p">:</span> <span class="mi">1</span><span class="p">,</span>
+</span><span id="__span-9-16"><a id="__codelineno-9-16" name="__codelineno-9-16" href="#__codelineno-9-16"></a> <span class="s1">&#39;numBatches&#39;</span><span class="p">:</span> <span class="mi">1</span><span class="p">,</span>
+</span><span id="__span-9-17"><a id="__codelineno-9-17" name="__codelineno-9-17" href="#__codelineno-9-17"></a> <span class="s1">&#39;totalConsideredFiles&#39;</span><span class="p">:</span> <span class="mi">21</span><span class="p">,</span>
+</span><span id="__span-9-18"><a id="__codelineno-9-18" name="__codelineno-9-18" href="#__codelineno-9-18"></a> <span class="s1">&#39;totalFilesSkipped&#39;</span><span class="p">:</span> <span class="mi">0</span><span class="p">,</span>
+</span><span id="__span-9-19"><a id="__codelineno-9-19" name="__codelineno-9-19" href="#__codelineno-9-19"></a> <span class="s1">&#39;preserveInsertionOrder&#39;</span><span class="p">:</span> <span class="kc">True</span><span class="p">}</span>
+</span></code></pre></div>
 <p>This optimize operation tombstones 21 small data files and adds one file with all the existing data properly condensed.  Let’s take a look a portion of the <code>_delta_log/00000000000000000125.json</code> file, which is the transaction log entry that corresponds with this incremental optimize command.</p>
-<div class="highlight"><pre><span></span><code>{
-  &quot;remove&quot;: {
-    &quot;path&quot;: &quot;date=2021-01-05/part-00000-41178aab-2491-488f-943d-8f03867295ee-c000.snappy.parquet&quot;,
-    &quot;deletionTimestamp&quot;: 1683465499480,
-    &quot;dataChange&quot;: false,
-    &quot;extendedFileMetadata&quot;: null,
-    &quot;partitionValues&quot;: {
-      &quot;date&quot;: &quot;2021-01-05&quot;
-    },
-    &quot;size&quot;: 39000,
-    &quot;tags&quot;: null
-  }
-}
-
-{
-  &quot;remove&quot;: {
-    &quot;path&quot;: &quot;date=2021-01-05/101-79ae6fc9-c0cc-49ec-bb94-9aba879ac949-0.parquet&quot;,
-    &quot;deletionTimestamp&quot;: 1683465499481,
-    &quot;dataChange&quot;: false,
-    &quot;extendedFileMetadata&quot;: null,
-    &quot;partitionValues&quot;: {
-      &quot;date&quot;: &quot;2021-01-05&quot;
-    },
-    &quot;size&quot;: 10244,
-    &quot;tags&quot;: null
-  }
-}
-
-…
-
-{
-  &quot;add&quot;: {
-    &quot;path&quot;: &quot;date=2021-01-05/part-00000-4b020a40-c836-4a11-851f-4691370c9f3a-c000.snappy.parquet&quot;,
-    &quot;size&quot;: 238282,
-    &quot;partitionValues&quot;: {
-      &quot;date&quot;: &quot;2021-01-05&quot;
-    },
-    &quot;modificationTime&quot;: 1683465499493,
-    &quot;dataChange&quot;: false,
-    &quot;stats&quot;: &quot;{\&quot;numRecords\&quot;:24000,\&quot;minValues\&quot;:{\&quot;value\&quot;:0.00005581532256615507,\&quot;timestamp\&quot;:\&quot;2021-01-05T00:00:00.000Z\&quot;},\&quot;maxValues\&quot;:{\&quot;timestamp\&quot;:\&quot;2021-01-05T23:00:00.000Z\&quot;,\&quot;value\&quot;:0.9999911402868216},\&quot;nullCount\&quot;:{\&quot;timestamp\&quot;:0,\&quot;value\&quot;:0}}&quot;,
-    &quot;tags&quot;: null
-  }
-}
-</code></pre></div>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="p">{</span>
+</span><span id="__span-10-2"><a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a>  <span class="s2">&quot;remove&quot;</span><span class="p">:</span> <span class="p">{</span>
+</span><span id="__span-10-3"><a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a>    <span class="s2">&quot;path&quot;</span><span class="p">:</span> <span class="s2">&quot;date=2021-01-05/part-00000-41178aab-2491-488f-943d-8f03867295ee-c000.snappy.parquet&quot;</span><span class="p">,</span>
+</span><span id="__span-10-4"><a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a>    <span class="s2">&quot;deletionTimestamp&quot;</span><span class="p">:</span> <span class="mi">1683465499480</span><span class="p">,</span>
+</span><span id="__span-10-5"><a id="__codelineno-10-5" name="__codelineno-10-5" href="#__codelineno-10-5"></a>    <span class="s2">&quot;dataChange&quot;</span><span class="p">:</span> <span class="n">false</span><span class="p">,</span>
+</span><span id="__span-10-6"><a id="__codelineno-10-6" name="__codelineno-10-6" href="#__codelineno-10-6"></a>    <span class="s2">&quot;extendedFileMetadata&quot;</span><span class="p">:</span> <span class="n">null</span><span class="p">,</span>
+</span><span id="__span-10-7"><a id="__codelineno-10-7" name="__codelineno-10-7" href="#__codelineno-10-7"></a>    <span class="s2">&quot;partitionValues&quot;</span><span class="p">:</span> <span class="p">{</span>
+</span><span id="__span-10-8"><a id="__codelineno-10-8" name="__codelineno-10-8" href="#__codelineno-10-8"></a>      <span class="s2">&quot;date&quot;</span><span class="p">:</span> <span class="s2">&quot;2021-01-05&quot;</span>
+</span><span id="__span-10-9"><a id="__codelineno-10-9" name="__codelineno-10-9" href="#__codelineno-10-9"></a>    <span class="p">},</span>
+</span><span id="__span-10-10"><a id="__codelineno-10-10" name="__codelineno-10-10" href="#__codelineno-10-10"></a>    <span class="s2">&quot;size&quot;</span><span class="p">:</span> <span class="mi">39000</span><span class="p">,</span>
+</span><span id="__span-10-11"><a id="__codelineno-10-11" name="__codelineno-10-11" href="#__codelineno-10-11"></a>    <span class="s2">&quot;tags&quot;</span><span class="p">:</span> <span class="n">null</span>
+</span><span id="__span-10-12"><a id="__codelineno-10-12" name="__codelineno-10-12" href="#__codelineno-10-12"></a>  <span class="p">}</span>
+</span><span id="__span-10-13"><a id="__codelineno-10-13" name="__codelineno-10-13" href="#__codelineno-10-13"></a><span class="p">}</span>
+</span><span id="__span-10-14"><a id="__codelineno-10-14" name="__codelineno-10-14" href="#__codelineno-10-14"></a>
+</span><span id="__span-10-15"><a id="__codelineno-10-15" name="__codelineno-10-15" href="#__codelineno-10-15"></a><span class="p">{</span>
+</span><span id="__span-10-16"><a id="__codelineno-10-16" name="__codelineno-10-16" href="#__codelineno-10-16"></a>  <span class="s2">&quot;remove&quot;</span><span class="p">:</span> <span class="p">{</span>
+</span><span id="__span-10-17"><a id="__codelineno-10-17" name="__codelineno-10-17" href="#__codelineno-10-17"></a>    <span class="s2">&quot;path&quot;</span><span class="p">:</span> <span class="s2">&quot;date=2021-01-05/101-79ae6fc9-c0cc-49ec-bb94-9aba879ac949-0.parquet&quot;</span><span class="p">,</span>
+</span><span id="__span-10-18"><a id="__codelineno-10-18" name="__codelineno-10-18" href="#__codelineno-10-18"></a>    <span class="s2">&quot;deletionTimestamp&quot;</span><span class="p">:</span> <span class="mi">1683465499481</span><span class="p">,</span>
+</span><span id="__span-10-19"><a id="__codelineno-10-19" name="__codelineno-10-19" href="#__codelineno-10-19"></a>    <span class="s2">&quot;dataChange&quot;</span><span class="p">:</span> <span class="n">false</span><span class="p">,</span>
+</span><span id="__span-10-20"><a id="__codelineno-10-20" name="__codelineno-10-20" href="#__codelineno-10-20"></a>    <span class="s2">&quot;extendedFileMetadata&quot;</span><span class="p">:</span> <span class="n">null</span><span class="p">,</span>
+</span><span id="__span-10-21"><a id="__codelineno-10-21" name="__codelineno-10-21" href="#__codelineno-10-21"></a>    <span class="s2">&quot;partitionValues&quot;</span><span class="p">:</span> <span class="p">{</span>
+</span><span id="__span-10-22"><a id="__codelineno-10-22" name="__codelineno-10-22" href="#__codelineno-10-22"></a>      <span class="s2">&quot;date&quot;</span><span class="p">:</span> <span class="s2">&quot;2021-01-05&quot;</span>
+</span><span id="__span-10-23"><a id="__codelineno-10-23" name="__codelineno-10-23" href="#__codelineno-10-23"></a>    <span class="p">},</span>
+</span><span id="__span-10-24"><a id="__codelineno-10-24" name="__codelineno-10-24" href="#__codelineno-10-24"></a>    <span class="s2">&quot;size&quot;</span><span class="p">:</span> <span class="mi">10244</span><span class="p">,</span>
+</span><span id="__span-10-25"><a id="__codelineno-10-25" name="__codelineno-10-25" href="#__codelineno-10-25"></a>    <span class="s2">&quot;tags&quot;</span><span class="p">:</span> <span class="n">null</span>
+</span><span id="__span-10-26"><a id="__codelineno-10-26" name="__codelineno-10-26" href="#__codelineno-10-26"></a>  <span class="p">}</span>
+</span><span id="__span-10-27"><a id="__codelineno-10-27" name="__codelineno-10-27" href="#__codelineno-10-27"></a><span class="p">}</span>
+</span><span id="__span-10-28"><a id="__codelineno-10-28" name="__codelineno-10-28" href="#__codelineno-10-28"></a>
+</span><span id="__span-10-29"><a id="__codelineno-10-29" name="__codelineno-10-29" href="#__codelineno-10-29"></a><span class="err">…</span>
+</span><span id="__span-10-30"><a id="__codelineno-10-30" name="__codelineno-10-30" href="#__codelineno-10-30"></a>
+</span><span id="__span-10-31"><a id="__codelineno-10-31" name="__codelineno-10-31" href="#__codelineno-10-31"></a><span class="p">{</span>
+</span><span id="__span-10-32"><a id="__codelineno-10-32" name="__codelineno-10-32" href="#__codelineno-10-32"></a>  <span class="s2">&quot;add&quot;</span><span class="p">:</span> <span class="p">{</span>
+</span><span id="__span-10-33"><a id="__codelineno-10-33" name="__codelineno-10-33" href="#__codelineno-10-33"></a>    <span class="s2">&quot;path&quot;</span><span class="p">:</span> <span class="s2">&quot;date=2021-01-05/part-00000-4b020a40-c836-4a11-851f-4691370c9f3a-c000.snappy.parquet&quot;</span><span class="p">,</span>
+</span><span id="__span-10-34"><a id="__codelineno-10-34" name="__codelineno-10-34" href="#__codelineno-10-34"></a>    <span class="s2">&quot;size&quot;</span><span class="p">:</span> <span class="mi">238282</span><span class="p">,</span>
+</span><span id="__span-10-35"><a id="__codelineno-10-35" name="__codelineno-10-35" href="#__codelineno-10-35"></a>    <span class="s2">&quot;partitionValues&quot;</span><span class="p">:</span> <span class="p">{</span>
+</span><span id="__span-10-36"><a id="__codelineno-10-36" name="__codelineno-10-36" href="#__codelineno-10-36"></a>      <span class="s2">&quot;date&quot;</span><span class="p">:</span> <span class="s2">&quot;2021-01-05&quot;</span>
+</span><span id="__span-10-37"><a id="__codelineno-10-37" name="__codelineno-10-37" href="#__codelineno-10-37"></a>    <span class="p">},</span>
+</span><span id="__span-10-38"><a id="__codelineno-10-38" name="__codelineno-10-38" href="#__codelineno-10-38"></a>    <span class="s2">&quot;modificationTime&quot;</span><span class="p">:</span> <span class="mi">1683465499493</span><span class="p">,</span>
+</span><span id="__span-10-39"><a id="__codelineno-10-39" name="__codelineno-10-39" href="#__codelineno-10-39"></a>    <span class="s2">&quot;dataChange&quot;</span><span class="p">:</span> <span class="n">false</span><span class="p">,</span>
+</span><span id="__span-10-40"><a id="__codelineno-10-40" name="__codelineno-10-40" href="#__codelineno-10-40"></a>    <span class="s2">&quot;stats&quot;</span><span class="p">:</span> <span class="s2">&quot;{</span><span class="se">\&quot;</span><span class="s2">numRecords</span><span class="se">\&quot;</span><span class="s2">:24000,</span><span class="se">\&quot;</span><span class="s2">minValues</span><span class="se">\&quot;</span><span class="s2">:{</span><span class="se">\&quot;</span><span class="s2">value</span><span class="se">\&quot;</span><span class="s2">:0.00005581532256615507,</span><span class="se">\&quot;</span><span class="s2">timestamp</span><span class="se">\&quot;</span><span class="s2">:</span><span class="se">\&quot;</span><span class="s2">2021-01-05T00:00:00.000Z</span><span class="se">\&quot;</span><span class="s2">},</span><span class="se">\&quot;</span><span class="s2">maxValues</span><span class="se">\&quot;</span><span class="s2">:{</span><span class="se">\&quot;</span><span class="s2">timestamp</span><span class="se">\&quot;</span><span class="s2">:</span><span class="se">\&quot;</span><span class="s2">2021-01-05T23:00:00.000Z</span><span class="se">\&quot;</span><span class="s2">,</span><span class="se">\&quot;</span><span class="s2">value</span><span class="se">\&quot;</span><span class="s2">:0.9999911402868216},</span><span class="se">\&quot;</span><span class="s2">nullCount</span><span class="se">\&quot;</span><span class="s2">:{</span><span class="se">\&quot;</span><span class="s2">timestamp</span><span class="se">\&quot;</span><span class="s2">:0,</span><span class="se">\&quot;</span><span class="s2">value</span><span class="se">\&quot;</span><span class="s2">:0}}&quot;</span><span class="p">,</span>
+</span><span id="__span-10-41"><a id="__codelineno-10-41" name="__codelineno-10-41" href="#__codelineno-10-41"></a>    <span class="s2">&quot;tags&quot;</span><span class="p">:</span> <span class="n">null</span>
+</span><span id="__span-10-42"><a id="__codelineno-10-42" name="__codelineno-10-42" href="#__codelineno-10-42"></a>  <span class="p">}</span>
+</span><span id="__span-10-43"><a id="__codelineno-10-43" name="__codelineno-10-43" href="#__codelineno-10-43"></a><span class="p">}</span>
+</span></code></pre></div>
 <p>The trasaction log indicates that many files have been tombstoned and one file is added, as expected.</p>
 <p>The Delta Lake optimize command “removes” data by marking the data files as removed in the transaction log.  The optimize command doesn’t physically delete the Parquet file from storage.  Optimize performs a “logical remove” not a “physical remove”.</p>
 <p>Delta Lake uses logical operations so you can time travel back to earlier versions of your data.  You can vacuum your Delta table to physically remove Parquet files from storage if you don’t need to time travel and don’t want to pay to store the tombstoned files.</p>
@@ -1188,39 +1542,39 @@ dt.optimize()
 <p>The vacuum command deletes all files from storage that are marked for removal in the transaction log and older than the retention period which is 7 days by default.</p>
 <p>It’s normally a good idea to have a retention period of at least 7 days.  For purposes of this example, we will set the retention period to zero, just so you can see how the files get removed from storage.  Adjusting the retention period in this manner isn’t recommended for production use cases.</p>
 <p>Let’s run the vacuum command:</p>
-<div class="highlight"><pre><span></span><code>dt.vacuum(retention_hours=0, enforce_retention_duration=False, dry_run=False)
-</code></pre></div>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-11-1"><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a><span class="n">dt</span><span class="o">.</span><span class="n">vacuum</span><span class="p">(</span><span class="n">retention_hours</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span> <span class="n">enforce_retention_duration</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span> <span class="n">dry_run</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
+</span></code></pre></div>
 <p>The command returns a list of all the files that are removed from storage:</p>
-<div class="highlight"><pre><span></span><code>[&#39;date=2021-01-02/39-a98680f2-0e0e-4f26-a491-18b183f9eb05-0.parquet&#39;,
- &#39;date=2021-01-02/41-e96bc8bb-c571-484c-b534-e897424fb7da-0.parquet&#39;,
- …
- &#39;date=2021-01-01/0-cfe227c6-edd9-4369-a1b0-db4559a2e693-0.parquet&#39;,
- &#39;date=2021-01-01/18-ded53418-172b-4e40-bf2e-7c8142e71bd1-0.parquet&#39;]
-</code></pre></div>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-12-1"><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a><span class="p">[</span><span class="s1">&#39;date=2021-01-02/39-a98680f2-0e0e-4f26-a491-18b183f9eb05-0.parquet&#39;</span><span class="p">,</span>
+</span><span id="__span-12-2"><a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a> <span class="s1">&#39;date=2021-01-02/41-e96bc8bb-c571-484c-b534-e897424fb7da-0.parquet&#39;</span><span class="p">,</span>
+</span><span id="__span-12-3"><a id="__codelineno-12-3" name="__codelineno-12-3" href="#__codelineno-12-3"></a> <span class="err">…</span>
+</span><span id="__span-12-4"><a id="__codelineno-12-4" name="__codelineno-12-4" href="#__codelineno-12-4"></a> <span class="s1">&#39;date=2021-01-01/0-cfe227c6-edd9-4369-a1b0-db4559a2e693-0.parquet&#39;</span><span class="p">,</span>
+</span><span id="__span-12-5"><a id="__codelineno-12-5" name="__codelineno-12-5" href="#__codelineno-12-5"></a> <span class="s1">&#39;date=2021-01-01/18-ded53418-172b-4e40-bf2e-7c8142e71bd1-0.parquet&#39;</span><span class="p">]</span>
+</span></code></pre></div>
 <p>Let’s look at the content of the Delta table now that all the really small files have been removed from storage:</p>
-<div class="highlight"><pre><span></span><code>observation_data
-├── _delta_log
-│   ├── 00000000000000000000.json
-│   ├── 00000000000000000001.json
-│   ├── …
-│   ├── 00000000000000000124.json
-│   └── 00000000000000000125.json
-├── date=2021-01-01
-│   └── part-00000-31e3df5a-8bbe-425c-b85d-77794f922837-c000.snappy.parquet
-├── date=2021-01-02
-│   └── part-00000-8af07878-b179-49ce-a900-d58595ffb60a-c000.snappy.parquet
-├── date=2021-01-03
-│   └── part-00000-5e980864-b32f-4686-a58d-a75fae455c1e-c000.snappy.parquet
-├── date=2021-01-04
-│   └── part-00000-1e82d23b-084d-47e3-9790-d68289c39837-c000.snappy.parquet
-├── date=2021-01-05
-│   └── part-00000-4b020a40-c836-4a11-851f-4691370c9f3a-c000.snappy.parquet
-└── date=2021-01-06
-    ├── 121-0ecb5d70-4a28-4cd4-b2d2-89ee2285eaaa-0.parquet
-    ├── 122-6b2d2758-9154-4392-b287-fe371ee507ec-0.parquet
-    ├── 123-551d318f-4968-441f-83fc-89f98cd15daf-0.parquet
-    └── 124-287309d3-662e-449d-b4da-2e67b7cc0557-0.parquet
-</code></pre></div>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-13-1"><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a>observation_data
+</span><span id="__span-13-2"><a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a>├── _delta_log
+</span><span id="__span-13-3"><a id="__codelineno-13-3" name="__codelineno-13-3" href="#__codelineno-13-3"></a>│   ├── 00000000000000000000.json
+</span><span id="__span-13-4"><a id="__codelineno-13-4" name="__codelineno-13-4" href="#__codelineno-13-4"></a>│   ├── 00000000000000000001.json
+</span><span id="__span-13-5"><a id="__codelineno-13-5" name="__codelineno-13-5" href="#__codelineno-13-5"></a>│   ├── …
+</span><span id="__span-13-6"><a id="__codelineno-13-6" name="__codelineno-13-6" href="#__codelineno-13-6"></a>│   ├── 00000000000000000124.json
+</span><span id="__span-13-7"><a id="__codelineno-13-7" name="__codelineno-13-7" href="#__codelineno-13-7"></a>│   └── 00000000000000000125.json
+</span><span id="__span-13-8"><a id="__codelineno-13-8" name="__codelineno-13-8" href="#__codelineno-13-8"></a>├── date=2021-01-01
+</span><span id="__span-13-9"><a id="__codelineno-13-9" name="__codelineno-13-9" href="#__codelineno-13-9"></a>│   └── part-00000-31e3df5a-8bbe-425c-b85d-77794f922837-c000.snappy.parquet
+</span><span id="__span-13-10"><a id="__codelineno-13-10" name="__codelineno-13-10" href="#__codelineno-13-10"></a>├── date=2021-01-02
+</span><span id="__span-13-11"><a id="__codelineno-13-11" name="__codelineno-13-11" href="#__codelineno-13-11"></a>│   └── part-00000-8af07878-b179-49ce-a900-d58595ffb60a-c000.snappy.parquet
+</span><span id="__span-13-12"><a id="__codelineno-13-12" name="__codelineno-13-12" href="#__codelineno-13-12"></a>├── date=2021-01-03
+</span><span id="__span-13-13"><a id="__codelineno-13-13" name="__codelineno-13-13" href="#__codelineno-13-13"></a>│   └── part-00000-5e980864-b32f-4686-a58d-a75fae455c1e-c000.snappy.parquet
+</span><span id="__span-13-14"><a id="__codelineno-13-14" name="__codelineno-13-14" href="#__codelineno-13-14"></a>├── date=2021-01-04
+</span><span id="__span-13-15"><a id="__codelineno-13-15" name="__codelineno-13-15" href="#__codelineno-13-15"></a>│   └── part-00000-1e82d23b-084d-47e3-9790-d68289c39837-c000.snappy.parquet
+</span><span id="__span-13-16"><a id="__codelineno-13-16" name="__codelineno-13-16" href="#__codelineno-13-16"></a>├── date=2021-01-05
+</span><span id="__span-13-17"><a id="__codelineno-13-17" name="__codelineno-13-17" href="#__codelineno-13-17"></a>│   └── part-00000-4b020a40-c836-4a11-851f-4691370c9f3a-c000.snappy.parquet
+</span><span id="__span-13-18"><a id="__codelineno-13-18" name="__codelineno-13-18" href="#__codelineno-13-18"></a>└── date=2021-01-06
+</span><span id="__span-13-19"><a id="__codelineno-13-19" name="__codelineno-13-19" href="#__codelineno-13-19"></a>    ├── 121-0ecb5d70-4a28-4cd4-b2d2-89ee2285eaaa-0.parquet
+</span><span id="__span-13-20"><a id="__codelineno-13-20" name="__codelineno-13-20" href="#__codelineno-13-20"></a>    ├── 122-6b2d2758-9154-4392-b287-fe371ee507ec-0.parquet
+</span><span id="__span-13-21"><a id="__codelineno-13-21" name="__codelineno-13-21" href="#__codelineno-13-21"></a>    ├── 123-551d318f-4968-441f-83fc-89f98cd15daf-0.parquet
+</span><span id="__span-13-22"><a id="__codelineno-13-22" name="__codelineno-13-22" href="#__codelineno-13-22"></a>    └── 124-287309d3-662e-449d-b4da-2e67b7cc0557-0.parquet
+</span></code></pre></div>
 <p>All the partitions only contain a single file now, except for the <code>date=2021-01-06</code> partition that has not been compacted yet.</p>
 <p>An entire partition won’t necessarily get compacted to a single data file when optimize is run.  Each partition has data files that are condensed to the target file size.</p>
 <h2 id="what-causes-the-small-file-problem">What causes the small file problem?</h2>
@@ -1297,9 +1651,16 @@ dt.optimize()
       <div class="md-copyright">
   
   
-    Made with
-    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
-      Material for MkDocs
+</div>
+      
+        <div class="md-social">
+  
+    
+    
+    
+    
+    <a href="https://go.delta.io/slack" target="_blank" rel="noopener" title="Delta slack channel" class="md-social__link">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.4.2 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2023 Fonticons, Inc.--><path d="M94.12 315.1c0 25.9-21.16 47.06-47.06 47.06S0 341 0 315.1c0-25.9 21.16-47.06 47.06-47.06h47.06v47.06zm23.72 0c0-25.9 21.16-47.06 47.06-47.06s47.06 21.16 47.06 47.06v117.84c0 25.9-21.16 47.06-47.06 47.06s-47.06-21.16-47.06-47.06V315.1zm47.06-188.98c-25.9 0-47.06-21.16-47.06-47.06S139 32 164.9 32s47.06 21.16 47.06 47.06v47.06H164.9zm0 23.72c25.9 0 47.06 21.16 47.06 47.06s-21.16 47.06-47.06 47.06H47.06C21.16 243.96 0 222.8 0 196.9s21.16-47.06 47.06-47.06H164.9zm188.98 47.06c0-25.9 21.16-47.06 47.06-47.06 25.9 0 47.06 21.16 47.06 47.06s-21.16 47.06-47.06 47.06h-47.06V196.9zm-23.72 0c0 25.9-21.16 47.06-47.06 47.06-25.9 0-47.06-21.16-47.06-47.06V79.06c0-25.9 21.16-47.06 47.06-47.06 25.9 0 47.06 21.16 47.06 47.06V196.9zM283.1 385.88c25.9 0 47.06 21.16 47.06 47.06 0 25.9-21.16 47.06-47.06 47.06-25.9 0-47.06-21.16-47.06-47.06v-47.06h47.06zm0-23.72c-25.9 0-47.06-21.16-47.06-47.06 0-25.9 21.16-47.06 47.06-47.06h117.84c25.9 0 47.06 21.16 47.06 47.06 0 25.9-21.16 47.06-47.06 47.06H283.1z"/></svg>
     </a>
   
 </div>
@@ -1314,7 +1675,7 @@ dt.optimize()
     </div>
     
     
-    <script id="__config" type="application/json">{"base": "../../..", "features": ["navigation.tracking", "navigation.instant", "navigation.tabs", "navigation.tabs.sticky", "navigation.footer", "content.tabs.link"], "search": "../../../assets/javascripts/workers/search.f886a092.min.js", "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}}</script>
+    <script id="__config" type="application/json">{"base": "../../..", "features": ["navigation.tracking", "navigation.instant", "navigation.expand", "navigation.tabs", "navigation.indexes", "navigation.tabs.sticky", "navigation.footer", "content.tabs.link", "content.code.annotation", "content.code.copy"], "search": "../../../assets/javascripts/workers/search.f886a092.min.js", "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}}</script>
     
     
       <script src="../../../assets/javascripts/bundle.aecac24b.min.js"></script>
