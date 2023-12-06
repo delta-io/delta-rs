@@ -1049,7 +1049,7 @@ impl DeltaDataChecker {
             .and_then(|meta| meta.schema.get_invariants().ok())
             .unwrap_or_default();
         let constraints = metadata
-            .and_then(|meta| Some(meta.get_constraints()))
+            .map(|meta| meta.get_constraints())
             .unwrap_or_default();
         Self {
             invariants,
