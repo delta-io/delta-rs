@@ -19,6 +19,7 @@ use crate::operations::datafusion_utils::Expression;
 use crate::operations::transaction::commit;
 use crate::protocol::DeltaOperation;
 use crate::table::state::DeltaTableState;
+use crate::table::Constraint;
 use crate::DeltaTable;
 use crate::{DeltaResult, DeltaTableError};
 
@@ -77,36 +78,12 @@ impl std::future::IntoFuture for ConstraintBuilder {
                     "No expression provided".to_string(),
                 ));
             }
-
             let name = this.name.unwrap();
             let expr = match this.expr {
                 Some(Expression::String(s)) => s,
                 Some(Expression::DataFusion(e)) => e.to_string(),
                 None => unreachable!(),
             };
-
-            let state = this.state.unwrap_or_else(|| {
-                let session = SessionContext::new();
-                register_store(this.log_store.clone(), session.runtime_env());
-                session.state()
-            });
-
-            let checker = DeltaDataChecker::new(&this.snapshot);
-
-            let files_to_check =
-                find_files(&this.snapshot, this.log_store.clone(), &state, None).await?;
-            let scan = DeltaScanBuilder::new(&this.snapshot, this.log_store.clone(), &state)
-                .with_files(&files_to_check.candidates)
-                .build()
-                .await?;
-
-            let task_ctx = Arc::new(TaskContext::from(&state));
-
-            let record_stream: SendableRecordBatchStream = scan.execute(0, task_ctx)?;
-            let records = collect_sendable_stream(record_stream).await?;
-            for batch in records {
-                checker.check_batch(&batch).await?;
-            }
 
             let mut metadata = this
                 .snapshot
@@ -121,6 +98,33 @@ impl std::future::IntoFuture for ConstraintBuilder {
                     name, expr
                 )));
             }
+
+            let state = this.state.unwrap_or_else(|| {
+                let session = SessionContext::new();
+                register_store(this.log_store.clone(), session.runtime_env());
+                session.state()
+            });
+
+            // Checker built here with the one time constraint to check.
+            let checker = DeltaDataChecker::with_constraints(vec![Constraint::new("*", &expr)]);
+
+            let files_to_check =
+                find_files(&this.snapshot, this.log_store.clone(), &state, None).await?;
+            let scan = DeltaScanBuilder::new(&this.snapshot, this.log_store.clone(), &state)
+                .with_files(&files_to_check.candidates)
+                .build()
+                .await?;
+
+            let task_ctx = Arc::new(TaskContext::from(&state));
+            let record_stream: SendableRecordBatchStream = scan.execute(0, task_ctx)?;
+            let records = collect_sendable_stream(record_stream).await?;
+
+            for batch in records {
+                checker.check_batch(&batch).await?;
+            }
+
+            // We have validated the table passes it's constraints, now to add the constraint to
+            // the table.
 
             metadata
                 .configuration
@@ -181,23 +185,77 @@ impl std::future::IntoFuture for ConstraintBuilder {
     }
 }
 
+#[cfg(feature = "datafusion")]
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
+    use arrow_array::{Array, Int64Array, RecordBatch};
+
+    use crate::kernel::StructType;
     use crate::DeltaResult;
-    use crate::DeltaTableError::InvalidData;
 
-    #[cfg(feature = "datafusion")]
     #[tokio::test]
-    async fn read_delta_table_with_check_constraints() -> DeltaResult<()> {
+    async fn add_constraint_with_invalid_data() -> DeltaResult<()> {
         let table = crate::DeltaOps::try_from_uri("./tests/data/check-constraints").await?;
+        let constraint = table
+            .add_constraint()
+            .with_constraint("id3", "id < 60")
+            .await;
+        assert!(constraint.is_err());
+        Ok(())
+    }
 
-        let constraint = table.add_constraint().with_constraint("id3", "id < 60");
+    #[tokio::test]
+    async fn add_valid_constraint() -> DeltaResult<()> {
+        let table = crate::DeltaOps::try_from_uri("./tests/data/check-constraints").await?;
+        let constraint = table
+            .add_constraint()
+            .with_constraint("id2", "id < 1000")
+            .await;
+        assert!(constraint.is_ok());
+        let version = constraint?.version();
+        assert_eq!(version, 2);
+        Ok(())
+    }
 
-        if let Err(InvalidData { violations }) = constraint.await {
-            for v in violations {
-                println!("{}", v);
-            }
-        }
+    #[tokio::test]
+    async fn add_conflicting_named_constraint() -> DeltaResult<()> {
+        let table = crate::DeltaOps::try_from_uri("./tests/data/check-constraints").await?;
+        let constraint = table
+            .add_constraint()
+            .with_constraint("id", "id < 60")
+            .await;
+
+        assert!(constraint.is_err());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn write_data_that_violates_constraint() -> DeltaResult<()> {
+        let table = crate::DeltaOps::try_from_uri("./tests/data/check-constraints").await?;
+        let metadata = table.0.get_metadata()?;
+        let arrow_schema =
+            <arrow::datatypes::Schema as TryFrom<&StructType>>::try_from(&metadata.schema.clone())?;
+        let invalid_values: Vec<Arc<dyn Array>> = vec![Arc::new(Int64Array::from(vec![-10]))];
+        let batch = RecordBatch::try_new(Arc::new(arrow_schema), invalid_values)?;
+        let err = table.write(vec![batch]).await;
+
+        assert!(err.is_err());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn write_data_that_does_not_violate_constraint() -> DeltaResult<()> {
+        let table = crate::DeltaOps::try_from_uri("./tests/data/check-constraints").await?;
+        let metadata = table.0.get_metadata()?;
+        let arrow_schema =
+            <arrow::datatypes::Schema as TryFrom<&StructType>>::try_from(&metadata.schema.clone())?;
+        let invalid_values: Vec<Arc<dyn Array>> = vec![Arc::new(Int64Array::from(vec![160]))];
+        let batch = RecordBatch::try_new(Arc::new(arrow_schema), invalid_values)?;
+        let err = table.write(vec![batch]).await;
+
+        assert!(err.is_ok());
         Ok(())
     }
 }

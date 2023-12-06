@@ -1079,7 +1079,7 @@ impl DeltaDataChecker {
         // if !self.ctx.table_exist("data")? {
         let table = MemTable::try_new(record_batch.schema(), vec![vec![record_batch.clone()]])?;
         self.ctx.register_table("data", Arc::new(table))?;
-    // }
+        // }
 
         let mut violations: Vec<String> = Vec::new();
 
