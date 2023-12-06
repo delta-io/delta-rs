@@ -22,8 +22,8 @@ use self::builder::DeltaTableConfig;
 use self::state::DeltaTableState;
 use crate::errors::DeltaTableError;
 use crate::kernel::{
-    Action, Add, CommitInfo, DataCheck, DataType, Format, Metadata, ReaderFeatures, Remove,
-    StructType, WriterFeatures,
+    Action, Add, CommitInfo, DataCheck, DataType, Format, Metadata, Protocol, ReaderFeatures,
+    Remove, StructType, WriterFeatures,
 };
 use crate::logstore::LogStoreConfig;
 use crate::logstore::LogStoreRef;

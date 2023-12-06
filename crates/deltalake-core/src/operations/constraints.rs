@@ -234,9 +234,10 @@ mod tests {
     #[tokio::test]
     async fn write_data_that_violates_constraint() -> DeltaResult<()> {
         let table = crate::DeltaOps::try_from_uri("./tests/data/check-constraints").await?;
-        let metadata = table.0.get_metadata()?;
-        let arrow_schema =
-            <arrow::datatypes::Schema as TryFrom<&StructType>>::try_from(&metadata.schema.clone())?;
+        let metadata = table.0.metadata()?;
+        let arrow_schema = <arrow::datatypes::Schema as TryFrom<&StructType>>::try_from(
+            &metadata.schema()?.clone(),
+        )?;
         let invalid_values: Vec<Arc<dyn Array>> = vec![Arc::new(Int64Array::from(vec![-10]))];
         let batch = RecordBatch::try_new(Arc::new(arrow_schema), invalid_values)?;
         let err = table.write(vec![batch]).await;
@@ -248,9 +249,10 @@ mod tests {
     #[tokio::test]
     async fn write_data_that_does_not_violate_constraint() -> DeltaResult<()> {
         let table = crate::DeltaOps::try_from_uri("./tests/data/check-constraints").await?;
-        let metadata = table.0.get_metadata()?;
-        let arrow_schema =
-            <arrow::datatypes::Schema as TryFrom<&StructType>>::try_from(&metadata.schema.clone())?;
+        let metadata = table.0.metadata()?;
+        let arrow_schema = <arrow::datatypes::Schema as TryFrom<&StructType>>::try_from(
+            &metadata.schema()?.clone(),
+        )?;
         let invalid_values: Vec<Arc<dyn Array>> = vec![Arc::new(Int64Array::from(vec![160]))];
         let batch = RecordBatch::try_new(Arc::new(arrow_schema), invalid_values)?;
         let err = table.write(vec![batch]).await;

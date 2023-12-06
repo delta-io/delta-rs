@@ -6,6 +6,7 @@ use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 use std::{collections::HashMap, fmt::Display};
 
+use crate::kernel::DataCheck;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -76,14 +77,6 @@ impl AsRef<str> for ColumnMetadataKey {
             Self::Invariants => "delta.invariants",
         }
     }
-}
-
-/// A trait for all kernel types that are used as part of data checking
-pub trait DataCheck {
-    /// The name of the specific check
-    fn get_name(&self) -> &str;
-    /// The SQL expression to use for the check
-    fn get_expression(&self) -> &str;
 }
 
 /// An invariant for a column that is enforced on all writes to a Delta table.
