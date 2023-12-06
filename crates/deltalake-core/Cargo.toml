@@ -99,6 +99,7 @@ rusoto_core = { version = "0.47", default-features = false, optional = true }
 rusoto_credential = { version = "0.47", optional = true }
 rusoto_sts = { version = "0.47", default-features = false, optional = true }
 rusoto_dynamodb = { version = "0.47", default-features = false, optional = true }
+deltalake-aws = { path = "../deltalake-aws", default-features = false, optional = true }
 
 # Glue
 rusoto_glue = { version = "0.47", default-features = false, optional = true }
@@ -175,6 +176,7 @@ s3-native-tls = [
     "rusoto_dynamodb/native-tls",
     "dynamodb_lock/native-tls",
     "object_store/aws",
+    "deltalake-aws/native-tls",
 ]
 s3 = [
     "rusoto_core/rustls",
@@ -183,6 +185,7 @@ s3 = [
     "rusoto_dynamodb/rustls",
     "dynamodb_lock/rustls",
     "object_store/aws",
+    "deltalake-aws/rustls",
 ]
 unity-experimental = ["reqwest", "tracing", "hyper"]
 

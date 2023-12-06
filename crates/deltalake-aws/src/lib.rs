@@ -1,4 +1,9 @@
 //! Lock client implementation based on DynamoDb.
+
+pub mod errors;
+
+use lazy_static::lazy_static;
+use regex::Regex;
 use std::{
     collections::HashMap,
     str::FromStr,
@@ -6,7 +11,7 @@ use std::{
 };
 
 use object_store::path::Path;
-use rusoto_core::{HttpClient, RusotoError};
+use rusoto_core::{HttpClient, Region, RusotoError};
 use rusoto_credential::AutoRefreshingProvider;
 use rusoto_dynamodb::{
     AttributeDefinition, AttributeValue, CreateTableError, CreateTableInput, DynamoDb,
@@ -15,12 +20,39 @@ use rusoto_dynamodb::{
 };
 use rusoto_sts::WebIdentityProvider;
 
-use crate::{logstore::extract_version_from_filename, storage::s3::S3StorageOptions};
+use errors::{DynamoDbConfigError, LockClientError};
 
-use super::{
-    errors::{DynamoDbConfigError, LockClientError},
-    CommitEntry, CreateLockTableResult,
-};
+/// Representation of a log entry stored in DynamoDb
+/// dynamo db item consists of:
+/// - tablePath: String - tracked in the log store implementation
+/// - fileName: String - commit version.json (part of primary key), stored as i64 in this struct
+/// - tempPath: String - name of temporary file containing commit info
+/// - complete: bool - operation completed, i.e. atomic rename from `tempPath` to `fileName` succeeded
+/// - expireTime: Option<SystemTime> - epoch seconds at which this external commit entry is safe to be deleted
+#[derive(Debug, PartialEq)]
+pub struct CommitEntry {
+    /// Commit version, stored as file name (e.g., 00000N.json) in dynamodb (relative to `_delta_log/`
+    pub version: i64,
+    /// Path to temp file for this commit, relative to the `_delta_log
+    pub temp_path: Path,
+    /// true if delta json file is successfully copied to its destination location, else false
+    pub complete: bool,
+    /// If complete = true, epoch seconds at which this external commit entry is safe to be deleted
+    pub expire_time: Option<SystemTime>,
+}
+
+impl CommitEntry {
+    /// Create a new log entry for the given version.
+    /// Initial log entry state is incomplete.
+    pub fn new(version: i64, temp_path: Path) -> CommitEntry {
+        Self {
+            version,
+            temp_path,
+            complete: false,
+            expire_time: None,
+        }
+    }
+}
 
 /// Lock client backed by DynamoDb.
 pub struct DynamoDbLockClient {
@@ -34,37 +66,39 @@ impl DynamoDbLockClient {
     /// Creates a new DynamoDbLockClient from the supplied storage options.
     ///
     /// Options are described in [crate::table::builder::s3_storage_options].
-    pub fn try_new(options: &S3StorageOptions) -> Result<Self, DynamoDbConfigError> {
-        let dynamodb_client = create_dynamodb_client(options)?;
-        let lock_table_name = options
-            .extra_opts
-            .get(constants::LOCK_TABLE_KEY_NAME)
-            .map_or_else(
-                || {
-                    std::env::var(constants::LOCK_TABLE_KEY_NAME)
-                        .unwrap_or(constants::DEFAULT_LOCK_TABLE_NAME.to_owned())
-                },
-                Clone::clone,
-            );
+    pub fn try_new(
+        lock_table_name: Option<&String>,
+        billing_mode: Option<&String>,
+        region: Region,
+        use_web_identity: bool,
+    ) -> Result<Self, DynamoDbConfigError> {
+        let dynamodb_client = create_dynamodb_client(region.clone(), use_web_identity)?;
+        let lock_table_name = lock_table_name.map_or_else(
+            || {
+                std::env::var(constants::LOCK_TABLE_KEY_NAME)
+                    .unwrap_or(constants::DEFAULT_LOCK_TABLE_NAME.to_owned())
+            },
+            Clone::clone,
+        );
 
-        let billing_mode: BillingMode = options
-            .extra_opts
-            .get(constants::BILLING_MODE_KEY_NAME)
-            .map_or_else(
-                || {
-                    std::env::var(constants::BILLING_MODE_KEY_NAME).map_or_else(
-                        |_| Ok(BillingMode::PayPerRequest),
-                        |bm| BillingMode::from_str(&bm),
-                    )
-                },
-                |bm| BillingMode::from_str(bm),
-            )?;
+        let billing_mode: BillingMode = billing_mode.map_or_else(
+            || {
+                std::env::var(constants::BILLING_MODE_KEY_NAME).map_or_else(
+                    |_| Ok(BillingMode::PayPerRequest),
+                    |bm| BillingMode::from_str(&bm),
+                )
+            },
+            |bm| BillingMode::from_str(bm),
+        )?;
+        let config = DynamoDbConfig {
+            billing_mode,
+            lock_table_name,
+            use_web_identity,
+            region,
+        };
         Ok(Self {
             dynamodb_client,
-            config: DynamoDbConfig {
-                lock_table_name,
-                billing_mode,
-            },
+            config,
         })
     }
 
@@ -211,7 +245,7 @@ impl DynamoDbLockClient {
     }
 
     /// Update existing log entry
-    pub(super) async fn update_commit_entry(
+    pub async fn update_commit_entry(
         &self,
         version: i64,
         table_path: &str,
@@ -245,7 +279,7 @@ impl DynamoDbLockClient {
 }
 
 #[derive(Debug, PartialEq)]
-pub(super) enum UpdateLogEntryResult {
+pub enum UpdateLogEntryResult {
     UpdatePerformed,
     AlreadyCompleted,
 }
@@ -263,11 +297,8 @@ impl TryFrom<&HashMap<String, AttributeValue>> for CommitEntry {
             }
         })?;
         let temp_path = extract_required_string_field(item, constants::ATTR_TEMP_PATH)?;
-        let temp_path = Path::from_iter(
-            super::DELTA_LOG_PATH
-                .parts()
-                .chain(Path::from(temp_path).parts()),
-        );
+        let temp_path =
+            Path::from_iter(DELTA_LOG_PATH.parts().chain(Path::from(temp_path).parts()));
         let expire_time: Option<SystemTime> =
             extract_optional_number_field(item, constants::ATTR_EXPIRE_TIME)?
                 .map(|s| {
@@ -343,13 +374,25 @@ impl FromStr for BillingMode {
     }
 }
 
-#[derive(Debug)]
-struct DynamoDbConfig {
+#[derive(Debug, PartialEq)]
+pub struct DynamoDbConfig {
     billing_mode: BillingMode,
     lock_table_name: String,
+    use_web_identity: bool,
+    region: Region,
 }
 
-mod constants {
+/// Represents the possible, positive outcomes of calling `DynamoDbClient::try_create_lock_table()`
+#[derive(Debug, PartialEq)]
+pub enum CreateLockTableResult {
+    /// Table created successfully.
+    TableCreated,
+    /// Table was not created because it already exists.
+    /// Does not imply that the table has the correct schema.
+    TableAlreadyExists,
+}
+
+pub mod constants {
     use std::time::Duration;
 
     use lazy_static::lazy_static;
@@ -381,18 +424,19 @@ mod constants {
 }
 
 fn create_dynamodb_client(
-    options: &S3StorageOptions,
+    region: Region,
+    use_web_identity: bool,
 ) -> Result<DynamoDbClient, DynamoDbConfigError> {
-    Ok(match options.use_web_identity {
+    Ok(match use_web_identity {
         true => {
             let dispatcher = HttpClient::new()?;
             rusoto_dynamodb::DynamoDbClient::new_with(
                 dispatcher,
                 get_web_identity_provider()?,
-                options.region.clone(),
+                region,
             )
         }
-        false => rusoto_dynamodb::DynamoDbClient::new(options.region.clone()),
+        false => rusoto_dynamodb::DynamoDbClient::new(region),
     })
 }
 
@@ -456,6 +500,18 @@ fn get_web_identity_provider(
 ) -> Result<AutoRefreshingProvider<WebIdentityProvider>, DynamoDbConfigError> {
     let provider = WebIdentityProvider::from_k8s_env();
     Ok(AutoRefreshingProvider::new(provider)?)
+}
+
+lazy_static! {
+    static ref DELTA_LOG_PATH: Path = Path::from("_delta_log");
+    static ref DELTA_LOG_REGEX: Regex = Regex::new(r"(\d{20})\.(json|checkpoint).*$").unwrap();
+}
+
+/// Extract version from a file name in the delta log
+fn extract_version_from_filename(name: &str) -> Option<i64> {
+    DELTA_LOG_REGEX
+        .captures(name)
+        .map(|captures| captures.get(1).unwrap().as_str().parse().unwrap())
 }
 
 #[cfg(test)]
