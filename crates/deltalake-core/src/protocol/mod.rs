@@ -732,6 +732,7 @@ mod tests {
             modification_time: 0,
             base_row_id: None,
             default_row_commit_version: None,
+            clustering_provider: None,
         };
 
         let stats = action.get_stats().unwrap().unwrap();
@@ -807,6 +808,7 @@ mod tests {
             modification_time: 0,
             base_row_id: None,
             default_row_commit_version: None,
+            clustering_provider: None,
         };
 
         let stats = action.get_stats().unwrap().unwrap();

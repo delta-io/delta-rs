@@ -9,7 +9,7 @@ keywords = ["deltalake", "delta", "datalake"]
 description = "Native Delta Lake implementation in Rust"
 documentation = "https://docs.rs/deltalake"
 repository = "https://github.com/delta-io/delta.rs"
-readme = "README.md"
+readme = "../README.md"
 edition = "2021"
 
 [dependencies]

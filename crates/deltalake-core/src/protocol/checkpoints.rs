@@ -519,7 +519,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(table.version(), 0);
-        assert_eq!(table.get_metadata().unwrap().schema, table_schema);
+        assert_eq!(table.get_schema().unwrap(), &table_schema);
         let res = create_checkpoint_for(0, table.get_state(), table.log_store.as_ref()).await;
         assert!(res.is_ok());
 
@@ -548,7 +548,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(table.version(), 0);
-        assert_eq!(table.get_metadata().unwrap().schema, table_schema);
+        assert_eq!(table.get_schema().unwrap(), &table_schema);
         match create_checkpoint_for(1, table.get_state(), table.log_store.as_ref()).await {
             Ok(_) => {
                 /*

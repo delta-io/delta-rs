@@ -207,27 +207,27 @@ async fn execute(
     let mut actions = vec![];
     let protocol = if protocol_downgrade_allowed {
         Protocol {
-            min_reader_version: table.get_min_reader_version(),
-            min_writer_version: table.get_min_writer_version(),
+            min_reader_version: table.protocol().min_reader_version,
+            min_writer_version: table.protocol().min_writer_version,
             writer_features: if snapshot.protocol().min_writer_version < 7 {
                 None
             } else {
-                table.get_writer_features().cloned()
+                table.protocol().writer_features.clone()
             },
             reader_features: if snapshot.protocol().min_reader_version < 3 {
                 None
             } else {
-                table.get_reader_features().cloned()
+                table.protocol().reader_features.clone()
             },
         }
     } else {
         Protocol {
             min_reader_version: max(
-                table.get_min_reader_version(),
+                table.protocol().min_reader_version,
                 snapshot.protocol().min_reader_version,
             ),
             min_writer_version: max(
-                table.get_min_writer_version(),
+                table.protocol().min_writer_version,
                 snapshot.protocol().min_writer_version,
             ),
             writer_features: snapshot.protocol().writer_features.clone(),
