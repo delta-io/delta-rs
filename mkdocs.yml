@@ -73,6 +73,7 @@ nav:
     - api/exceptions.md
   - Integrations:
     - pandas: integrations/delta-lake-pandas.md
+    - Polars: integrations/delta-lake-polars.md
 not_in_nav: |
   /_build/
 
