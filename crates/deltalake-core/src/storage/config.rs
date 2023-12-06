@@ -296,16 +296,24 @@ pub fn configure_store(
         ObjectStoreScheme::AmazonS3 => {
             options.with_env_s3();
             let (store, prefix) = parse_url_opts(url, options.as_s3_options())?;
+            let s3_options = S3StorageOptions::from_map(&options.0);
             if options
                 .as_s3_options()
                 .contains_key(&AmazonS3ConfigKey::CopyIfNotExists)
             {
                 url_prefix_handler(store, prefix)
+            } else if Some("dynamodb".to_owned())
+                == s3_options
+                    .locking_provider
+                    .as_ref()
+                    .map(|v| v.to_lowercase())
+            {
+                // if a lock client is requested, unsafe rename is always safe
+                let store = S3StorageBackend::try_new(Arc::new(store), true)?;
+                url_prefix_handler(store, prefix)
             } else {
-                let store = S3StorageBackend::try_new(
-                    Arc::new(store),
-                    S3StorageOptions::from_map(&options.0),
-                )?;
+                let store =
+                    S3StorageBackend::try_new(Arc::new(store), s3_options.allow_unsafe_rename)?;
                 url_prefix_handler(store, prefix)
             }
         }

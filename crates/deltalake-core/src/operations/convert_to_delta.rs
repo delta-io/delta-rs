@@ -152,8 +152,6 @@ impl ConvertToDeltaBuilder {
     /// Options may be passed in the HashMap or set as environment variables.
     ///
     /// [crate::table::builder::s3_storage_options] describes the available options for the AWS or S3-compliant backend.
-    /// [dynamodb_lock::DynamoDbLockClient] describes additional options for the AWS atomic rename client.
-    ///
     /// If an object store is also passed using `with_log_store()`, these options will be ignored.
     pub fn with_storage_options(mut self, storage_options: HashMap<String, String>) -> Self {
         self.storage_options = Some(storage_options);
