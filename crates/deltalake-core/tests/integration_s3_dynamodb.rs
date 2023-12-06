@@ -8,10 +8,9 @@
 use std::collections::HashMap;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use deltalake_aws::{CommitEntry, DynamoDbLockClient};
 use deltalake_core::kernel::{Action, Add, DataType, PrimitiveType, StructField, StructType};
-use deltalake_core::logstore::s3::{
-    lock_client::DynamoDbLockClient, CommitEntry, RepairLogEntryResult, S3DynamoDbLogStore,
-};
+use deltalake_core::logstore::s3::{RepairLogEntryResult, S3DynamoDbLogStore};
 use deltalake_core::logstore::LogStore;
 use deltalake_core::operations::transaction::{commit, prepare_commit};
 use deltalake_core::protocol::{DeltaOperation, SaveMode};
@@ -36,13 +35,15 @@ lazy_static! {
         "allow_http".to_owned() => "true".to_owned(),
     };
     static ref S3_OPTIONS: S3StorageOptions = S3StorageOptions::from_map(&OPTIONS);
-    static ref TABLE_PATH: String = format!("s3://my_delta_table_{}", uuid::Uuid::new_v4());
 }
 
 fn make_client() -> TestResult<DynamoDbLockClient> {
-    Ok(DynamoDbLockClient::try_new(&S3StorageOptions::from_map(
-        &OPTIONS,
-    ))?)
+    Ok(DynamoDbLockClient::try_new(
+        None,
+        None,
+        S3_OPTIONS.region.clone(),
+        false,
+    )?)
 }
 
 #[test]
@@ -61,7 +62,12 @@ async fn get_missing_item() -> TestResult<()> {
     let _context = IntegrationContext::new(StorageIntegration::Amazon)?;
     let client = make_client()?;
     let version = i64::MAX;
-    let result = client.get_commit_entry(&TABLE_PATH, version).await;
+    let result = client
+        .get_commit_entry(
+            &format!("s3a://my_delta_table_{}", uuid::Uuid::new_v4()),
+            version,
+        )
+        .await;
     assert_eq!(result.unwrap(), None);
     Ok(())
 }
@@ -249,6 +255,7 @@ fn add_action(name: &str) -> Action {
         deletion_vector: None,
         base_row_id: None,
         default_row_commit_version: None,
+        clustering_provider: None,
     })
 }
 

@@ -3,24 +3,18 @@
 //! when the underlying object storage does not support atomic `put_if_absent`
 //! or `rename_if_absent` operations, as is the case for S3.
 
-mod errors;
-pub mod lock_client;
-
-use std::time::SystemTime;
+use deltalake_aws::errors::LockClientError;
+use deltalake_aws::{constants, CommitEntry, DynamoDbLockClient, UpdateLogEntryResult};
 
 use bytes::Bytes;
 use object_store::path::Path;
 use url::Url;
 
-use crate::logstore::DELTA_LOG_PATH;
 use crate::{
     operations::transaction::TransactionError,
     storage::{config::StorageOptions, s3::S3StorageOptions, ObjectStoreRef},
     DeltaResult, DeltaTableError,
 };
-use errors::LockClientError;
-
-use self::lock_client::{DynamoDbLockClient, UpdateLogEntryResult};
 
 use super::{LogStore, LogStoreConfig};
 
@@ -43,13 +37,17 @@ impl S3DynamoDbLogStore {
         s3_options: &S3StorageOptions,
         object_store: ObjectStoreRef,
     ) -> DeltaResult<Self> {
-        let lock_client = DynamoDbLockClient::try_new(s3_options).map_err(|err| {
-            DeltaTableError::ObjectStore {
-                source: object_store::Error::Generic {
-                    store: STORE_NAME,
-                    source: err.into(),
-                },
-            }
+        let lock_client = DynamoDbLockClient::try_new(
+            s3_options.extra_opts.get(constants::LOCK_TABLE_KEY_NAME),
+            s3_options.extra_opts.get(constants::BILLING_MODE_KEY_NAME),
+            s3_options.region.clone(),
+            s3_options.use_web_identity,
+        )
+        .map_err(|err| DeltaTableError::ObjectStore {
+            source: object_store::Error::Generic {
+                store: STORE_NAME,
+                source: err.into(),
+            },
         })?;
         let table_path = super::to_uri(&location, &Path::from(""));
         Ok(Self {
@@ -204,6 +202,7 @@ impl LogStore for S3DynamoDbLogStore {
             .map_err(|err| DeltaTableError::GenericError {
                 source: Box::new(err),
             })?;
+        println!("twh; fetched entry for {current_version}: {:?}", entry);
         // when there is a latest entry in DynamoDb, we can avoid the file listing in S3.
         if let Some(entry) = entry {
             self.repair_entry(&entry).await?;
@@ -228,38 +227,6 @@ impl LogStore for S3DynamoDbLogStore {
 
     fn config(&self) -> &LogStoreConfig {
         &self.config
-    }
-}
-
-/// Representation of a log entry stored in DynamoDb
-/// dynamo db item consists of:
-/// - tablePath: String - tracked in the log store implementation
-/// - fileName: String - commit version.json (part of primary key), stored as i64 in this struct
-/// - tempPath: String - name of temporary file containing commit info
-/// - complete: bool - operation completed, i.e. atomic rename from `tempPath` to `fileName` succeeded
-/// - expireTime: Option<SystemTime> - epoch seconds at which this external commit entry is safe to be deleted
-#[derive(Debug, PartialEq)]
-pub struct CommitEntry {
-    /// Commit version, stored as file name (e.g., 00000N.json) in dynamodb (relative to `_delta_log/`
-    pub version: i64,
-    /// Path to temp file for this commit, relative to the `_delta_log
-    pub temp_path: Path,
-    /// true if delta json file is successfully copied to its destination location, else false
-    pub complete: bool,
-    /// If complete = true, epoch seconds at which this external commit entry is safe to be deleted
-    pub expire_time: Option<SystemTime>,
-}
-
-impl CommitEntry {
-    /// Create a new log entry for the given version.
-    /// Initial log entry state is incomplete.
-    pub fn new(version: i64, temp_path: Path) -> CommitEntry {
-        Self {
-            version,
-            temp_path,
-            complete: false,
-            expire_time: None,
-        }
     }
 }
 
