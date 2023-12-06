@@ -28,7 +28,7 @@ use errors::{DynamoDbConfigError, LockClientError};
 /// - fileName: String - commit version.json (part of primary key), stored as i64 in this struct
 /// - tempPath: String - name of temporary file containing commit info
 /// - complete: bool - operation completed, i.e. atomic rename from `tempPath` to `fileName` succeeded
-/// - expireTime: Option<SystemTime> - epoch seconds at which this external commit entry is safe to be deleted
+/// - expireTime: `Option<SystemTime>` - epoch seconds at which this external commit entry is safe to be deleted
 #[derive(Debug, PartialEq)]
 pub struct CommitEntry {
     /// Commit version, stored as file name (e.g., 00000N.json) in dynamodb (relative to `_delta_log/`
@@ -64,8 +64,6 @@ pub struct DynamoDbLockClient {
 
 impl DynamoDbLockClient {
     /// Creates a new DynamoDbLockClient from the supplied storage options.
-    ///
-    /// Options are described in [crate::table::builder::s3_storage_options].
     pub fn try_new(
         lock_table_name: Option<&String>,
         billing_mode: Option<&String>,

@@ -170,7 +170,6 @@ impl Drop for IntegrationContext {
             StorageIntegration::Amazon => {
                 s3_cli::delete_bucket(self.root_uri()).unwrap();
                 s3_cli::delete_lock_table().unwrap();
-                s3_cli::delete_new_lock_table().unwrap();
             }
             StorageIntegration::Microsoft => {
                 az_cli::delete_container(&self.bucket).unwrap();
@@ -231,7 +230,6 @@ impl StorageIntegration {
                     format!("s3://{}", name.as_ref()),
                 );
                 s3_cli::create_lock_table()?;
-                s3_cli::create_new_lock_table()?;
                 Ok(())
             }
             Self::Google => {
@@ -508,19 +506,6 @@ pub mod s3_cli {
         let endpoint_url = std::env::var(s3_storage_options::AWS_ENDPOINT_URL)
             .expect("variable AWS_ENDPOINT_URL must be set to connect to S3 emulator");
         let table_name =
-            std::env::var("DYNAMO_LOCK_TABLE_NAME").unwrap_or_else(|_| "test_table".into());
-        create_dynamodb_table(
-            &table_name,
-            &endpoint_url,
-            &["AttributeName=key,AttributeType=S"],
-            &["AttributeName=key,KeyType=HASH"],
-        )
-    }
-
-    pub fn create_new_lock_table() -> std::io::Result<ExitStatus> {
-        let endpoint_url = std::env::var(s3_storage_options::AWS_ENDPOINT_URL)
-            .expect("variable AWS_ENDPOINT_URL must be set to connect to S3 emulator");
-        let table_name =
             std::env::var("DELTA_DYNAMO_TABLE_NAME").unwrap_or_else(|_| "delta_log".into());
         create_dynamodb_table(
             &table_name,
@@ -553,14 +538,6 @@ pub mod s3_cli {
     }
 
     pub fn delete_lock_table() -> std::io::Result<ExitStatus> {
-        let endpoint_url = std::env::var(s3_storage_options::AWS_ENDPOINT_URL)
-            .expect("variable AWS_ENDPOINT_URL must be set to connect to S3 emulator");
-        let table_name =
-            std::env::var("DYNAMO_LOCK_TABLE_NAME").unwrap_or_else(|_| "test_table".into());
-        delete_dynamodb_table(&table_name, &endpoint_url)
-    }
-
-    pub fn delete_new_lock_table() -> std::io::Result<ExitStatus> {
         let endpoint_url = std::env::var(s3_storage_options::AWS_ENDPOINT_URL)
             .expect("variable AWS_ENDPOINT_URL must be set to connect to S3 emulator");
         let table_name =

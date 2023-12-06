@@ -56,6 +56,13 @@ pub enum LockClientError {
     Credentials {
         source: rusoto_credential::CredentialsError,
     },
+
+    #[error(
+        "Atomic rename requires a LockClient for S3 backends. \
+         Either configure the LockClient, or set AWS_S3_ALLOW_UNSAFE_RENAME=true \
+         to opt out of support for concurrent writers."
+    )]
+    LockClientRequired,
 }
 
 impl From<GetItemError> for LockClientError {

@@ -8,6 +8,7 @@ use deltalake_aws::{constants, CommitEntry, DynamoDbLockClient, UpdateLogEntryRe
 
 use bytes::Bytes;
 use object_store::path::Path;
+use object_store::Error as ObjectStoreError;
 use url::Url;
 
 use crate::{
@@ -79,7 +80,9 @@ impl S3DynamoDbLogStore {
                     return self.try_complete_entry(entry, true).await;
                 }
                 // `N.json` has already been moved, complete the entry in DynamoDb just in case
-                Err(TransactionError::VersionAlreadyExists(_)) => {
+                Err(TransactionError::ObjectStore {
+                    source: ObjectStoreError::NotFound { .. },
+                }) => {
                     return self.try_complete_entry(entry, false).await;
                 }
                 Err(err) if retry == MAX_REPAIR_RETRIES => return Err(err),
@@ -202,7 +205,6 @@ impl LogStore for S3DynamoDbLogStore {
             .map_err(|err| DeltaTableError::GenericError {
                 source: Box::new(err),
             })?;
-        println!("twh; fetched entry for {current_version}: {:?}", entry);
         // when there is a latest entry in DynamoDb, we can avoid the file listing in S3.
         if let Some(entry) = entry {
             self.repair_entry(&entry).await?;

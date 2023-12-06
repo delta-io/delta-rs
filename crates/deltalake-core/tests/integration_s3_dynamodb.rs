@@ -85,7 +85,7 @@ async fn test_append() -> TestResult<()> {
 
 #[tokio::test]
 #[serial]
-async fn test_repair() -> TestResult<()> {
+async fn test_repair_commit_entry() -> TestResult<()> {
     let context = IntegrationContext::new(StorageIntegration::Amazon)?;
     let client = make_client()?;
     let table = prepare_table(&context, "repair_needed").await?;

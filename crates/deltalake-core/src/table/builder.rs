@@ -364,7 +364,6 @@ pub mod s3_storage_options {
     /// The list of option keys owned by the S3 module.
     /// Option keys not contained in this list will be added to the `extra_opts`
     /// field of [crate::storage::s3::S3StorageOptions].
-    /// `extra_opts` are passed to [dynamodb_lock::DynamoDbOptions] to configure the lock client.
     pub const S3_OPTS: &[&str] = &[
         AWS_ENDPOINT_URL,
         AWS_REGION,
