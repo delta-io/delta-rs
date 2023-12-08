@@ -1342,7 +1342,7 @@ impl PyDeltaDataChecker {
             })
             .collect();
         Self {
-            inner: DeltaDataChecker::with_invariants(invariants),
+            inner: DeltaDataChecker::new_with_invariants(invariants),
             rt: tokio::runtime::Runtime::new().unwrap(),
         }
     }

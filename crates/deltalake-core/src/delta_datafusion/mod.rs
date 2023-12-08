@@ -32,7 +32,9 @@ use arrow::datatypes::{DataType as ArrowDataType, Schema as ArrowSchema, SchemaR
 use arrow::error::ArrowError;
 use arrow::record_batch::RecordBatch;
 use arrow_array::types::UInt16Type;
-use arrow_array::{DictionaryArray, StringArray};
+use arrow_array::{Array, DictionaryArray, StringArray};
+use arrow_cast::display::array_value_to_string;
+
 use arrow_schema::Field;
 use async_trait::async_trait;
 use chrono::{NaiveDateTime, TimeZone, Utc};
@@ -65,6 +67,7 @@ use datafusion_physical_expr::execution_props::ExecutionProps;
 use datafusion_physical_expr::{create_physical_expr, PhysicalExpr};
 use datafusion_proto::logical_plan::LogicalExtensionCodec;
 use datafusion_proto::physical_plan::PhysicalExtensionCodec;
+use itertools::Itertools;
 use log::error;
 use object_store::ObjectMeta;
 use serde::{Deserialize, Serialize};
@@ -1024,7 +1027,7 @@ pub struct DeltaDataChecker {
 
 impl DeltaDataChecker {
     /// Create a new DeltaDataChecker with a specified set of invariants
-    pub fn with_invariants(invariants: Vec<Invariant>) -> Self {
+    pub fn new_with_invariants(invariants: Vec<Invariant>) -> Self {
         Self {
             invariants,
             constraints: vec![],
@@ -1033,7 +1036,7 @@ impl DeltaDataChecker {
     }
 
     /// Create a new DeltaDataChecker with a specified set of constraints
-    pub fn with_constraints(constraints: Vec<Constraint>) -> Self {
+    pub fn new_with_constraints(constraints: Vec<Constraint>) -> Self {
         Self {
             constraints,
             invariants: vec![],
@@ -1075,11 +1078,8 @@ impl DeltaDataChecker {
         if checks.is_empty() {
             return Ok(());
         }
-
-        // if !self.ctx.table_exist("data")? {
         let table = MemTable::try_new(record_batch.schema(), vec![vec![record_batch.clone()]])?;
         self.ctx.register_table("data", Arc::new(table))?;
-        // }
 
         let mut violations: Vec<String> = Vec::new();
 
@@ -1098,9 +1098,15 @@ impl DeltaDataChecker {
 
             let dfs: Vec<RecordBatch> = self.ctx.sql(&sql).await?.collect().await?;
             if !dfs.is_empty() && dfs[0].num_rows() > 0 {
-                let value = format!("{:?}", dfs[0].column(0));
+                let values: String = dfs[0]
+                    .columns()
+                    .iter()
+                    .map(|c| array_value_to_string(c, 0).unwrap_or(String::from("null")))
+                    .join(", ");
+
+                let value = format!("{}", values);
                 let msg = format!(
-                    "Check or Invariant ({}) violated by value {}",
+                    "Check or Invariant ({}) violated by value in row: [{}]",
                     check.get_expression(),
                     value
                 );
@@ -1677,7 +1683,7 @@ mod tests {
         .unwrap();
         // Empty invariants is okay
         let invariants: Vec<Invariant> = vec![];
-        assert!(DeltaDataChecker::with_invariants(invariants)
+        assert!(DeltaDataChecker::new_with_invariants(invariants)
             .check_batch(&batch)
             .await
             .is_ok());
@@ -1687,7 +1693,7 @@ mod tests {
             Invariant::new("a", "a is not null"),
             Invariant::new("b", "b < 1000"),
         ];
-        assert!(DeltaDataChecker::with_invariants(invariants)
+        assert!(DeltaDataChecker::new_with_invariants(invariants)
             .check_batch(&batch)
             .await
             .is_ok());
@@ -1697,7 +1703,7 @@ mod tests {
             Invariant::new("a", "a is null"),
             Invariant::new("b", "b < 100"),
         ];
-        let result = DeltaDataChecker::with_invariants(invariants)
+        let result = DeltaDataChecker::new_with_invariants(invariants)
             .check_batch(&batch)
             .await;
         assert!(result.is_err());
@@ -1708,7 +1714,7 @@ mod tests {
 
         // Irrelevant invariants return a different error
         let invariants = vec![Invariant::new("c", "c > 2000")];
-        let result = DeltaDataChecker::with_invariants(invariants)
+        let result = DeltaDataChecker::new_with_invariants(invariants)
             .check_batch(&batch)
             .await;
         assert!(result.is_err());
@@ -1724,7 +1730,7 @@ mod tests {
         let batch = RecordBatch::try_new(schema, vec![inner]).unwrap();
 
         let invariants = vec![Invariant::new("x.b", "x.b < 1000")];
-        let result = DeltaDataChecker::with_invariants(invariants)
+        let result = DeltaDataChecker::new_with_invariants(invariants)
             .check_batch(&batch)
             .await;
         assert!(result.is_err());
