@@ -77,7 +77,7 @@ write_deltalake("./data/delta", df)
 dt = DeltaTable("./data/delta")
 df2 = dt.to_pandas()
 
-assert df == df2
+pd.testing.assert_frame_equal(df, df2)
 ```
 
 The same table can also be loaded using the core Rust crate:
