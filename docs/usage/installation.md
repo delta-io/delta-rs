@@ -39,6 +39,7 @@ dependencies:
   - python=3.11
   - ipykernel
   - pandas
+  - polars
   - jupyterlab
   - pip
   - pip:
