@@ -72,7 +72,9 @@ nav:
     - api/catalog.md
     - api/exceptions.md
   - Integrations:
+    - Arrow: integrations/delta-lake-arrow.md
     - pandas: integrations/delta-lake-pandas.md
+    - Polars: integrations/delta-lake-polars.md
   - How Delta Lake works:
     - Architecture: how-delta-lake-works/architecture-of-delta-table.md
 not_in_nav: |
