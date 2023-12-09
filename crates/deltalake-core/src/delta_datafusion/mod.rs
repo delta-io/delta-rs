@@ -1098,13 +1098,12 @@ impl DeltaDataChecker {
 
             let dfs: Vec<RecordBatch> = self.ctx.sql(&sql).await?.collect().await?;
             if !dfs.is_empty() && dfs[0].num_rows() > 0 {
-                let values: String = dfs[0]
+                let value: String = dfs[0]
                     .columns()
                     .iter()
                     .map(|c| array_value_to_string(c, 0).unwrap_or(String::from("null")))
                     .join(", ");
 
-                let value = format!("{}", values);
                 let msg = format!(
                     "Check or Invariant ({}) violated by value in row: [{}]",
                     check.get_expression(),
