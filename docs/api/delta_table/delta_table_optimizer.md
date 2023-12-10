@@ -1,3 +1,9 @@
+---
+search:
+  boost: 10
+---
+
+
 # TableOptimizer
 
 ::: deltalake.table.TableOptimizer

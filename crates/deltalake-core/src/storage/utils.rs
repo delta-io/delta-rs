@@ -118,6 +118,7 @@ mod tests {
             deletion_vector: None,
             partition_values_parsed: None,
             stats_parsed: None,
+            clustering_provider: None,
         };
 
         let meta: ObjectMeta = (&add).try_into().unwrap();

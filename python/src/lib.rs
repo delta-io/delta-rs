@@ -26,7 +26,7 @@ use deltalake::datafusion::datasource::provider::TableProvider;
 use deltalake::datafusion::prelude::SessionContext;
 use deltalake::delta_datafusion::DeltaDataChecker;
 use deltalake::errors::DeltaTableError;
-use deltalake::kernel::{Action, Add, Invariant, Metadata, Remove, StructType};
+use deltalake::kernel::{Action, Add, Invariant, Remove, StructType};
 use deltalake::operations::convert_to_delta::{ConvertToDeltaBuilder, PartitionStrategy};
 use deltalake::operations::delete::DeleteBuilder;
 use deltalake::operations::filesystem_check::FileSystemCheckBuilder;
@@ -155,7 +155,7 @@ impl RawDeltaTable {
     }
 
     pub fn metadata(&self) -> PyResult<RawDeltaTableMetaData> {
-        let metadata = self._table.get_metadata().map_err(PythonError::from)?;
+        let metadata = self._table.metadata().map_err(PythonError::from)?;
         Ok(RawDeltaTableMetaData {
             id: metadata.id.clone(),
             name: metadata.name.clone(),
@@ -168,8 +168,8 @@ impl RawDeltaTable {
 
     pub fn protocol_versions(&self) -> PyResult<(i32, i32)> {
         Ok((
-            self._table.get_min_reader_version(),
-            self._table.get_min_writer_version(),
+            self._table.protocol().min_reader_version,
+            self._table.protocol().min_writer_version,
         ))
     }
 
@@ -685,15 +685,15 @@ impl RawDeltaTable {
     ) -> PyResult<&'py PyFrozenSet> {
         let column_names: HashSet<&str> = self
             ._table
-            .schema()
-            .ok_or_else(|| DeltaProtocolError::new_err("table does not yet have a schema"))?
+            .get_schema()
+            .map_err(|_| DeltaProtocolError::new_err("table does not yet have a schema"))?
             .fields()
             .iter()
             .map(|field| field.name().as_str())
             .collect();
         let partition_columns: HashSet<&str> = self
             ._table
-            .get_metadata()
+            .metadata()
             .map_err(PythonError::from)?
             .partition_columns
             .iter()
@@ -799,15 +799,11 @@ impl RawDeltaTable {
 
                 // Update metadata with new schema
                 if &schema != existing_schema {
-                    let mut metadata = self
-                        ._table
-                        .get_metadata()
-                        .map_err(PythonError::from)?
-                        .clone();
-                    metadata.schema = schema;
-                    let metadata_action = Metadata::try_from(metadata)
-                        .map_err(|_| PyValueError::new_err("Failed to reparse metadata"))?;
-                    actions.push(Action::Metadata(metadata_action));
+                    let mut metadata = self._table.metadata().map_err(PythonError::from)?.clone();
+                    metadata.schema_string = serde_json::to_string(&schema)
+                        .map_err(DeltaTableError::from)
+                        .map_err(PythonError::from)?;
+                    actions.push(Action::Metadata(metadata));
                 }
             }
             _ => {
@@ -1122,6 +1118,7 @@ impl From<&PyAddAction> for Add {
             deletion_vector: None,
             base_row_id: None,
             default_row_commit_version: None,
+            clustering_provider: None,
         }
     }
 }
@@ -1171,6 +1168,51 @@ fn write_to_deltalake(
 
     if let Some(predicate) = &predicate {
         builder = builder.with_replace_where(predicate);
+    };
+
+    if let Some(config) = configuration {
+        builder = builder.with_configuration(config);
+    };
+
+    rt()?
+        .block_on(builder.into_future())
+        .map_err(PythonError::from)?;
+
+    Ok(())
+}
+
+#[pyfunction]
+#[allow(clippy::too_many_arguments)]
+fn create_deltalake(
+    table_uri: String,
+    schema: PyArrowType<ArrowSchema>,
+    partition_by: Vec<String>,
+    mode: String,
+    name: Option<String>,
+    description: Option<String>,
+    configuration: Option<HashMap<String, Option<String>>>,
+    storage_options: Option<HashMap<String, String>>,
+) -> PyResult<()> {
+    let table = DeltaTableBuilder::from_uri(table_uri)
+        .with_storage_options(storage_options.unwrap_or_default())
+        .build()
+        .map_err(PythonError::from)?;
+
+    let mode = mode.parse().map_err(PythonError::from)?;
+    let schema: StructType = (&schema.0).try_into().map_err(PythonError::from)?;
+
+    let mut builder = DeltaOps(table)
+        .create()
+        .with_columns(schema.fields().clone())
+        .with_save_mode(mode)
+        .with_partition_columns(partition_by);
+
+    if let Some(name) = &name {
+        builder = builder.with_table_name(name);
+    };
+
+    if let Some(description) = &description {
+        builder = builder.with_comment(description);
     };
 
     if let Some(config) = configuration {
@@ -1325,6 +1367,7 @@ fn _internal(py: Python, m: &PyModule) -> PyResult<()> {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn")).init();
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
     m.add_function(pyo3::wrap_pyfunction!(rust_core_version, m)?)?;
+    m.add_function(pyo3::wrap_pyfunction!(create_deltalake, m)?)?;
     m.add_function(pyo3::wrap_pyfunction!(write_new_deltalake, m)?)?;
     m.add_function(pyo3::wrap_pyfunction!(write_to_deltalake, m)?)?;
     m.add_function(pyo3::wrap_pyfunction!(convert_to_deltalake, m)?)?;

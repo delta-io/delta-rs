@@ -307,7 +307,7 @@ pub(crate) async fn write_execution_plan(
     overwrite_schema: bool,
 ) -> DeltaResult<Vec<Add>> {
     let invariants = snapshot
-        .current_metadata()
+        .metadata()
         .and_then(|meta| meta.schema.get_invariants().ok())
         .unwrap_or_default();
 
@@ -380,7 +380,7 @@ impl std::future::IntoFuture for WriteBuilder {
 
             let active_partitions = this
                 .snapshot
-                .current_metadata()
+                .metadata()
                 .map(|meta| meta.partition_columns.clone());
 
             // validate partition columns
@@ -498,7 +498,7 @@ impl std::future::IntoFuture for WriteBuilder {
                 if schema != table_schema {
                     let mut metadata = this
                         .snapshot
-                        .current_metadata()
+                        .metadata()
                         .ok_or(DeltaTableError::NoMetadata)?
                         .clone();
                     metadata.schema = schema.clone().try_into()?;
@@ -625,7 +625,8 @@ fn cast_record_batch_columns(
         .collect::<Result<Vec<_>, _>>()
 }
 
-fn cast_record_batch(
+/// Cast recordbatch to a new target_schema, by casting each column array
+pub fn cast_record_batch(
     batch: &RecordBatch,
     target_schema: ArrowSchemaRef,
     safe: bool,

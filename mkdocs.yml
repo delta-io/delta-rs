@@ -5,6 +5,32 @@ repo_name: delta-io/delta-rs
 
 theme:
   name: material
+  logo: delta-rust-no-whitespace.svg
+  favicon: delta-rust-no-whitespace.svg
+  
+  palette:
+    # Palette toggle for automatic mode
+    - media: "(prefers-color-scheme)"
+      primary: indigo
+      toggle:
+        icon: material/brightness-auto
+        name: Switch to light mode
+        
+    # Palette toggle for light mode
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: indigo
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+
+    # Palette toggle for dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: indigo
+      toggle:
+        icon: material/brightness-4
+        name: Switch to system preference
   locale: en
   navigation_depth: 3
   features:
@@ -46,7 +72,11 @@ nav:
     - api/catalog.md
     - api/exceptions.md
   - Integrations:
+    - Arrow: integrations/delta-lake-arrow.md
     - pandas: integrations/delta-lake-pandas.md
+    - Polars: integrations/delta-lake-polars.md
+  - How Delta Lake works:
+    - Architecture: how-delta-lake-works/architecture-of-delta-table.md
 not_in_nav: |
   /_build/
 

@@ -405,6 +405,7 @@ mod tests {
         storage::config::StorageOptions,
         Path,
     };
+    use itertools::Itertools;
     use pretty_assertions::assert_eq;
     use std::fs;
     use tempfile::tempdir;
@@ -501,7 +502,7 @@ mod tests {
             "Testing location: {test_data_from:?}"
         );
 
-        let mut files = table.get_files();
+        let mut files = table.get_files_iter().collect_vec();
         files.sort();
         assert_eq!(
             files, expected_paths,

@@ -113,6 +113,7 @@ impl Add {
             base_row_id: None,
             default_row_commit_version: None,
             tags: None,
+            clustering_provider: None,
         };
 
         for (i, (name, _)) in record.get_column_iter().enumerate() {

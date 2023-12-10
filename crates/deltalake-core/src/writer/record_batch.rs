@@ -77,9 +77,9 @@ impl RecordBatchWriter {
     /// Creates a [`RecordBatchWriter`] to write data to provided Delta Table
     pub fn for_table(table: &DeltaTable) -> Result<Self, DeltaTableError> {
         // Initialize an arrow schema ref from the delta table schema
-        let metadata = table.get_metadata()?;
+        let metadata = table.metadata()?;
         let arrow_schema =
-            <ArrowSchema as TryFrom<&StructType>>::try_from(&metadata.schema.clone())?;
+            <ArrowSchema as TryFrom<&StructType>>::try_from(&metadata.schema()?.clone())?;
         let arrow_schema_ref = Arc::new(arrow_schema);
         let partition_columns = metadata.partition_columns.clone();
 

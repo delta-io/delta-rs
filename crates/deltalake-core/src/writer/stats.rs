@@ -42,6 +42,7 @@ pub fn create_add(
         default_row_commit_version: None,
         stats_parsed: None,
         partition_values_parsed: None,
+        clustering_provider: None,
     })
 }
 
