@@ -1,6 +1,7 @@
 from typing import Dict, List, Optional
 
 import pyarrow as pa
+import pyarrow_hotfix  # noqa: F401; addresses CVE-2023-47248; # type: ignore
 from pyarrow.fs import FileInfo, FileSelector, FileSystemHandler
 
 from ._internal import DeltaFileSystemHandler

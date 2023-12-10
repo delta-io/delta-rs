@@ -1,6 +1,7 @@
 from typing import List
 
 import pyarrow as pa
+import pyarrow_hotfix  # noqa: F401; addresses CVE-2023-47248; # type: ignore
 
 try:
     import delta

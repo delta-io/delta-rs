@@ -8,6 +8,7 @@ else:
 
 import pyarrow
 import pyarrow.fs as fs
+import pyarrow_hotfix  # noqa: F401; addresses CVE-2023-47248; # type: ignore
 
 from deltalake.writer import AddAction
 

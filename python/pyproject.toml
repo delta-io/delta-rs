@@ -71,7 +71,6 @@ warn_return_any = false
 implicit_reexport = true
 strict_equality = true
 
-
 [tool.black]
 include = '\.pyi?$'
 exclude = "venv"
