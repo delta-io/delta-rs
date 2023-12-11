@@ -63,10 +63,10 @@ impl fmt::Display for Statement {
     }
 }
 
-/// Delta Lake SQL Parser based on [`sqlparser`]
+/// Delta Lake SQL Parser based on [`sqlparser`](https://crates.io/crates/sqlparser)
 ///
 /// This parser handles Delta Lake specific statements, delegating to
-/// [`DFParser`](datafusion_sql::parser::DFParser) for other SQL statements.
+/// [`DFParser`]for other SQL statements.
 pub struct DeltaParser<'a> {
     sql: &'a str,
     parser: Parser<'a>,

@@ -1,4 +1,4 @@
-//! Configuration handling for defining Storage backends for DeltaTables.
+//! Configurltion handling for defining Storage backends for DeltaTables.
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -11,9 +11,13 @@ use url::Url;
 
 use super::file::FileStorageBackend;
 use super::utils::str_is_truthy;
+use super::ObjectStoreRef;
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::logstore::default_logstore::DefaultLogStore;
-use crate::logstore::LogStoreRef;
+#[cfg(any(feature = "s3", feature = "s3-native-tls"))]
+use crate::logstore::s3::S3DynamoDbLogStore;
+use crate::logstore::{LogStoreConfig, LogStoreRef};
+use crate::table::builder::ensure_table_uri;
 
 #[cfg(any(feature = "s3", feature = "s3-native-tls"))]
 use super::s3::{S3StorageBackend, S3StorageOptions};
@@ -229,12 +233,49 @@ impl From<HashMap<String, String>> for StorageOptions {
 
 /// Configure a [`LogStoreRef`] for the given url and configuration
 pub fn configure_log_store(
-    url: Url,
+    location: &str,
     options: impl Into<StorageOptions> + Clone,
+    storage_backend: Option<(ObjectStoreRef, Url)>,
 ) -> DeltaResult<LogStoreRef> {
     let mut options = options.into();
-    let (_scheme, _prefix) = ObjectStoreScheme::parse(&url, &mut options)?;
-    Ok(Arc::new(DefaultLogStore::try_new(url, options)?))
+    let (object_store, location) = match storage_backend {
+        Some((object_store, url)) => (object_store, url),
+        None => {
+            let url = ensure_table_uri(location)?;
+            let object_store = crate::storage::config::configure_store(&url, &mut options)?;
+            (object_store, url)
+        }
+    };
+
+    let (scheme, _prefix) = ObjectStoreScheme::parse(&location, &mut options)?;
+    match scheme {
+        #[cfg(any(feature = "s3", feature = "s3-native-tls"))]
+        ObjectStoreScheme::AmazonS3 => {
+            let s3_options = S3StorageOptions::from_map(&options.0);
+            if Some("dynamodb".to_owned())
+                == s3_options
+                    .locking_provider
+                    .as_ref()
+                    .map(|v| v.to_lowercase())
+            {
+                Ok(Arc::new(S3DynamoDbLogStore::try_new(
+                    location,
+                    options,
+                    &s3_options,
+                    object_store,
+                )?))
+            } else {
+                Ok(Arc::new(DefaultLogStore::new(
+                    object_store,
+                    LogStoreConfig { location, options },
+                )))
+            }
+        }
+        _ => Ok(Arc::new(DefaultLogStore::new(
+            object_store,
+            LogStoreConfig { location, options },
+        ))),
+    }
 }
 
 /// Configure an instance of an [`ObjectStore`] for the given url and configuration
@@ -255,16 +296,24 @@ pub fn configure_store(
         ObjectStoreScheme::AmazonS3 => {
             options.with_env_s3();
             let (store, prefix) = parse_url_opts(url, options.as_s3_options())?;
+            let s3_options = S3StorageOptions::from_map(&options.0);
             if options
                 .as_s3_options()
                 .contains_key(&AmazonS3ConfigKey::CopyIfNotExists)
             {
                 url_prefix_handler(store, prefix)
+            } else if Some("dynamodb".to_owned())
+                == s3_options
+                    .locking_provider
+                    .as_ref()
+                    .map(|v| v.to_lowercase())
+            {
+                // if a lock client is requested, unsafe rename is always safe
+                let store = S3StorageBackend::try_new(Arc::new(store), true)?;
+                url_prefix_handler(store, prefix)
             } else {
-                let store = S3StorageBackend::try_new(
-                    Arc::new(store),
-                    S3StorageOptions::from_map(&options.0),
-                )?;
+                let store =
+                    S3StorageBackend::try_new(Arc::new(store), s3_options.allow_unsafe_rename)?;
                 url_prefix_handler(store, prefix)
             }
         }
