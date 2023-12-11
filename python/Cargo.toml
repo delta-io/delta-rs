@@ -42,6 +42,10 @@ reqwest = { version = "*", features = ["native-tls-vendored"] }
 version = "0.20"
 features = ["extension-module", "abi3", "abi3-py38"]
 
+[dependencies.pyo3-asyncio]
+version = "0.20"
+features = ["tokio-runtime"]
+
 [dependencies.deltalake]
 path = "../crates/deltalake"
 version = "0"
