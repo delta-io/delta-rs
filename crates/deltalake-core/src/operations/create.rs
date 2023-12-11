@@ -148,8 +148,6 @@ impl CreateBuilder {
     /// Options may be passed in the HashMap or set as environment variables.
     ///
     /// [crate::table::builder::s3_storage_options] describes the available options for the AWS or S3-compliant backend.
-    /// [dynamodb_lock::DynamoDbLockClient] describes additional options for the AWS atomic rename client.
-    ///
     /// If an object store is also passed using `with_object_store()` these options will be ignored.
     pub fn with_storage_options(mut self, storage_options: HashMap<String, String>) -> Self {
         self.storage_options = Some(storage_options);
@@ -286,7 +284,6 @@ impl std::future::IntoFuture for CreateBuilder {
 
     fn into_future(self) -> Self::IntoFuture {
         let this = self;
-
         Box::pin(async move {
             let mode = this.mode.clone();
             let (mut table, actions, operation) = this.into_table_and_actions()?;

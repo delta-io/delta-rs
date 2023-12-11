@@ -11,8 +11,7 @@ use url::Url;
 
 use super::DeltaTable;
 use crate::errors::{DeltaResult, DeltaTableError};
-use crate::logstore::default_logstore::DefaultLogStore;
-use crate::logstore::{LogStoreConfig, LogStoreRef};
+use crate::logstore::LogStoreRef;
 use crate::storage::config::{self, StorageOptions};
 
 #[allow(dead_code)]
@@ -267,25 +266,11 @@ impl DeltaTableBuilder {
 
     /// Build a delta storage backend for the given config
     pub fn build_storage(self) -> DeltaResult<LogStoreRef> {
-        match self.options.storage_backend {
-            Some((storage, location)) => {
-                let location = ensure_table_uri(location.as_str())?;
-                Ok(Arc::new(DefaultLogStore::new(
-                    Arc::new(storage),
-                    LogStoreConfig {
-                        location,
-                        options: HashMap::new().into(),
-                    },
-                )))
-            }
-            None => {
-                let location = ensure_table_uri(&self.options.table_uri)?;
-                Ok(config::configure_log_store(
-                    location,
-                    self.storage_options(),
-                )?)
-            }
-        }
+        config::configure_log_store(
+            &self.options.table_uri,
+            self.storage_options(),
+            self.options.storage_backend,
+        )
     }
 
     /// Build the [`DeltaTable`] from specified options.
@@ -379,7 +364,6 @@ pub mod s3_storage_options {
     /// The list of option keys owned by the S3 module.
     /// Option keys not contained in this list will be added to the `extra_opts`
     /// field of [crate::storage::s3::S3StorageOptions].
-    /// `extra_opts` are passed to [dynamodb_lock::DynamoDbOptions] to configure the lock client.
     pub const S3_OPTS: &[&str] = &[
         AWS_ENDPOINT_URL,
         AWS_REGION,

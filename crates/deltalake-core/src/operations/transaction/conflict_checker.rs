@@ -1,16 +1,14 @@
 //! Helper module to check if a transaction can be committed in case of conflicting commits.
 use std::collections::HashSet;
-use std::io::{BufRead, BufReader, Cursor};
-
-use object_store::ObjectStore;
 
 use super::CommitInfo;
-use crate::errors::{DeltaResult, DeltaTableError};
+use crate::errors::DeltaResult;
 use crate::kernel::{Action, Add, Metadata, Protocol, Remove};
+use crate::logstore::{get_actions, LogStore};
 use crate::protocol::DeltaOperation;
-use crate::storage::commit_uri_from_version;
 use crate::table::config::IsolationLevel;
 use crate::table::state::DeltaTableState;
+use crate::DeltaTableError;
 
 #[cfg(feature = "datafusion")]
 use super::state::AddContainer;
@@ -202,6 +200,7 @@ impl<'a> TransactionInfo<'a> {
 }
 
 /// Summary of the Winning commit against which we want to check the conflict
+#[derive(Debug)]
 pub(crate) struct WinningCommitSummary {
     pub actions: Vec<Action>,
     pub commit_info: Option<CommitInfo>,
@@ -209,44 +208,32 @@ pub(crate) struct WinningCommitSummary {
 
 impl WinningCommitSummary {
     pub async fn try_new(
-        object_store: &dyn ObjectStore,
+        log_store: &dyn LogStore,
         read_version: i64,
         winning_commit_version: i64,
     ) -> DeltaResult<Self> {
-        // NOTE using asser, since a wrong version would right now mean a bug in our code.
+        // NOTE using assert, since a wrong version would right now mean a bug in our code.
         assert_eq!(winning_commit_version, read_version + 1);
 
-        let commit_uri = commit_uri_from_version(winning_commit_version);
-        let commit_log_bytes = object_store.get(&commit_uri).await?.bytes().await?;
+        let commit_log_bytes = log_store.read_commit_entry(winning_commit_version).await?;
+        match commit_log_bytes {
+            Some(bytes) => {
+                let actions = get_actions(winning_commit_version, bytes).await?;
+                let commit_info = actions
+                    .iter()
+                    .find(|action| matches!(action, Action::CommitInfo(_)))
+                    .map(|action| match action {
+                        Action::CommitInfo(info) => info.clone(),
+                        _ => unreachable!(),
+                    });
 
-        let reader = BufReader::new(Cursor::new(commit_log_bytes));
-
-        let actions = reader
-            .lines()
-            .map(|maybe_line| {
-                let line = maybe_line?;
-                serde_json::from_str::<Action>(line.as_str()).map_err(|e| {
-                    DeltaTableError::InvalidJsonLog {
-                        json_err: e,
-                        version: winning_commit_version,
-                        line,
-                    }
+                Ok(Self {
+                    actions,
+                    commit_info,
                 })
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-
-        let commit_info = actions
-            .iter()
-            .find(|action| matches!(action, Action::CommitInfo(_)))
-            .map(|action| match action {
-                Action::CommitInfo(info) => info.clone(),
-                _ => unreachable!(),
-            });
-
-        Ok(Self {
-            actions,
-            commit_info,
-        })
+            }
+            None => Err(DeltaTableError::InvalidVersion(winning_commit_version)),
+        }
     }
 
     pub fn metadata_updates(&self) -> Vec<Metadata> {
