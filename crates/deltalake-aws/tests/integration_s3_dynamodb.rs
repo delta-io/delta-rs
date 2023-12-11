@@ -1,32 +1,29 @@
 //! Integration test to verify correct behavior of S3 DynamoDb locking.
 //! It inspects the state of the locking table after each operation.
-#![cfg(all(
-    feature = "integration_test",
-    any(feature = "s3", feature = "s3-native-tls")
-))]
+#![cfg(feature = "integration_test")]
 
 use std::collections::HashMap;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use deltalake_aws::logstore::{RepairLogEntryResult, S3DynamoDbLogStore};
+use deltalake_aws::storage::S3StorageOptions;
 use deltalake_aws::{CommitEntry, DynamoDbLockClient};
 use deltalake_core::kernel::{Action, Add, DataType, PrimitiveType, StructField, StructType};
-use deltalake_core::logstore::s3::{RepairLogEntryResult, S3DynamoDbLogStore};
 use deltalake_core::logstore::LogStore;
 use deltalake_core::operations::transaction::{commit, prepare_commit};
 use deltalake_core::protocol::{DeltaOperation, SaveMode};
 use deltalake_core::storage::commit_uri_from_version;
-use deltalake_core::storage::config::StorageOptions;
-use deltalake_core::storage::s3::S3StorageOptions;
+use deltalake_core::storage::StorageOptions;
 use deltalake_core::table::builder::ensure_table_uri;
-use deltalake_core::test_utils::{IntegrationContext, StorageIntegration, TestTables};
 use deltalake_core::{DeltaOps, DeltaTable, DeltaTableBuilder};
+use deltalake_test::utils::*;
 use lazy_static::lazy_static;
 use object_store::path::Path;
 use serde_json::Value;
 use serial_test::serial;
 
-#[allow(dead_code)]
-mod fs_common;
+mod common;
+use common::*;
 
 pub type TestResult<T> = Result<T, Box<dyn std::error::Error + 'static>>;
 
@@ -49,7 +46,7 @@ fn make_client() -> TestResult<DynamoDbLockClient> {
 #[test]
 #[serial]
 fn client_config_picks_up_lock_table_name() -> TestResult<()> {
-    let _context = IntegrationContext::new(StorageIntegration::Amazon)?;
+    let _context = IntegrationContext::new(Box::new(S3Integration::default()))?;
     assert!(make_client()?
         .get_lock_table_name()
         .starts_with("delta_log_it_"));
@@ -59,7 +56,7 @@ fn client_config_picks_up_lock_table_name() -> TestResult<()> {
 #[tokio::test]
 #[serial]
 async fn get_missing_item() -> TestResult<()> {
-    let _context = IntegrationContext::new(StorageIntegration::Amazon)?;
+    let _context = IntegrationContext::new(Box::new(S3Integration::default()))?;
     let client = make_client()?;
     let version = i64::MAX;
     let result = client
@@ -75,7 +72,7 @@ async fn get_missing_item() -> TestResult<()> {
 #[tokio::test]
 #[serial]
 async fn test_append() -> TestResult<()> {
-    let context = IntegrationContext::new(StorageIntegration::Amazon)?;
+    let context = IntegrationContext::new(Box::new(S3Integration::default()))?;
     let table = prepare_table(&context, "delta01").await?;
     validate_lock_table_state(&table, 0).await?;
     append_to_table("datav01.parquet", &table, None).await?;
@@ -86,7 +83,7 @@ async fn test_append() -> TestResult<()> {
 #[tokio::test]
 #[serial]
 async fn test_repair_commit_entry() -> TestResult<()> {
-    let context = IntegrationContext::new(StorageIntegration::Amazon)?;
+    let context = IntegrationContext::new(Box::new(S3Integration::default()))?;
     let client = make_client()?;
     let table = prepare_table(&context, "repair_needed").await?;
     let options: StorageOptions = OPTIONS.clone().into();
@@ -135,7 +132,7 @@ async fn test_repair_commit_entry() -> TestResult<()> {
 #[tokio::test]
 #[serial]
 async fn test_repair_on_update() -> TestResult<()> {
-    let context = IntegrationContext::new(StorageIntegration::Amazon)?;
+    let context = IntegrationContext::new(Box::new(S3Integration::default()))?;
     let mut table = prepare_table(&context, "repair_on_update").await?;
     let _entry = create_incomplete_commit_entry(&table, 1, "unfinished_commit").await?;
     table.update().await?;
@@ -152,9 +149,12 @@ const COMMITS: i64 = 5;
 #[serial]
 async fn test_concurrent_writers() -> TestResult<()> {
     // Goal: a test with multiple writers, very similar to `integration_concurrent_writes`
-    let context = IntegrationContext::new(StorageIntegration::Amazon)?;
+    let context = IntegrationContext::new(Box::new(S3Integration::default()))?;
+    println!(">>> preparing table");
     let table = prepare_table(&context, "concurrent_writes").await?;
+    println!(">>> table prepared");
     let table_uri = table.table_uri();
+    println!("Starting workers on {table_uri}");
 
     let mut workers = Vec::new();
     for w in 0..WORKERS {
@@ -187,6 +187,7 @@ impl Worker {
             .load()
             .await
             .unwrap();
+        println!("Loaded table in worker: {table:?}");
         Self { table, name }
     }
 
@@ -271,11 +272,13 @@ async fn prepare_table(context: &IntegrationContext, table_name: &str) -> TestRe
         .with_allow_http(true)
         .with_storage_options(OPTIONS.clone())
         .build()?;
+    println!("table built: {table:?}");
     // create delta table
     let table = DeltaOps(table)
         .create()
         .with_columns(schema.fields().clone())
         .await?;
+    println!("table created: {table:?}");
     Ok(table)
 }
 

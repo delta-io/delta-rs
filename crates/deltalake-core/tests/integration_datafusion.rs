@@ -1,8 +1,8 @@
 #![cfg(all(feature = "integration_test", feature = "datafusion"))]
 
 use arrow::array::Int64Array;
-use common::datafusion::context_with_delta_table_factory;
-use deltalake_core::test_utils::{IntegrationContext, StorageIntegration, TestResult, TestTables};
+use deltalake_test::datafusion::*;
+use deltalake_test::utils::*;
 use serial_test::serial;
 
 use std::collections::{HashMap, HashSet};
@@ -32,18 +32,16 @@ use url::Url;
 
 use deltalake_core::delta_datafusion::{DeltaPhysicalCodec, DeltaScan};
 use deltalake_core::kernel::{DataType, MapType, PrimitiveType, StructField, StructType};
+use deltalake_core::logstore::logstore_for;
 use deltalake_core::operations::create::CreateBuilder;
 use deltalake_core::protocol::SaveMode;
 use deltalake_core::writer::{DeltaWriter, RecordBatchWriter};
 use deltalake_core::{
     open_table,
     operations::{write::WriteBuilder, DeltaOps},
-    storage::config::configure_log_store,
     DeltaTable, DeltaTableError,
 };
 use std::error::Error;
-
-mod common;
 
 mod local {
     use datafusion::common::stats::Precision;
@@ -53,7 +51,9 @@ mod local {
     #[tokio::test]
     #[serial]
     async fn test_datafusion_local() -> TestResult {
-        test_datafusion(StorageIntegration::Local).await
+        let storage = Box::new(LocalStorageIntegration::default());
+        let context = IntegrationContext::new(storage)?;
+        test_datafusion(&context).await
     }
 
     fn get_scanned_files(node: &dyn ExecutionPlan) -> HashSet<Label> {
@@ -126,7 +126,7 @@ mod local {
         let ctx = context_with_delta_table_factory();
 
         let mut d = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        d.push("tests/data/delta-0.8.0-partitioned");
+        d.push("../deltalake-test/tests/data/delta-0.8.0-partitioned");
         let sql = format!(
             "CREATE EXTERNAL TABLE demo STORED AS DELTATABLE LOCATION '{}'",
             d.to_str().unwrap()
@@ -155,7 +155,7 @@ mod local {
     #[tokio::test]
     async fn test_datafusion_simple_query_partitioned() -> Result<()> {
         let ctx = SessionContext::new();
-        let table = open_table("./tests/data/delta-0.8.0-partitioned")
+        let table = open_table("../deltalake-test/tests/data/delta-0.8.0-partitioned")
             .await
             .unwrap();
         ctx.register_table("demo", Arc::new(table))?;
@@ -184,7 +184,7 @@ mod local {
         let source_scan_bytes = {
             let ctx = SessionContext::new();
             let state = ctx.state();
-            let source_table = open_table("./tests/data/delta-0.8.0-date").await?;
+            let source_table = open_table("../deltalake-test/tests/data/delta-0.8.0-date").await?;
             let source_scan = source_table.scan(&state, None, &[], None).await?;
             physical_plan_to_bytes_with_extension_codec(source_scan, &DeltaPhysicalCodec {})?
         };
@@ -221,13 +221,16 @@ mod local {
         );
 
         // Register the missing source table object store
-        let source_uri = source_scan
-            .as_any()
-            .downcast_ref::<DeltaScan>()
-            .unwrap()
-            .table_uri
-            .clone();
-        let source_store = configure_log_store(&source_uri, HashMap::new(), None).unwrap();
+        let source_uri = Url::parse(
+            &source_scan
+                .as_any()
+                .downcast_ref::<DeltaScan>()
+                .unwrap()
+                .table_uri
+                .clone(),
+        )
+        .unwrap();
+        let source_store = logstore_for(source_uri, HashMap::new()).unwrap();
         let object_store_url = source_store.object_store_url();
         let source_store_url: &Url = object_store_url.as_ref();
         state
@@ -262,7 +265,9 @@ mod local {
     #[tokio::test]
     async fn test_datafusion_date_column() -> Result<()> {
         let ctx = SessionContext::new();
-        let table = open_table("./tests/data/delta-0.8.0-date").await.unwrap();
+        let table = open_table("../deltalake-test/tests/data/delta-0.8.0-date")
+            .await
+            .unwrap();
         ctx.register_table("dates", Arc::new(table))?;
 
         let batches = ctx
@@ -282,7 +287,9 @@ mod local {
     #[tokio::test]
     async fn test_datafusion_stats() -> Result<()> {
         // Validate a table that contains statisitics for all files
-        let table = open_table("./tests/data/delta-0.8.0").await.unwrap();
+        let table = open_table("../deltalake-test/tests/data/delta-0.8.0")
+            .await
+            .unwrap();
         let statistics = table.state.datafusion_table_statistics()?;
 
         assert_eq!(statistics.num_rows, Precision::Exact(4_usize),);
@@ -321,7 +328,9 @@ mod local {
         assert_batches_sorted_eq!(&expected, &actual);
 
         // Validate a table that does not contain column statisitics
-        let table = open_table("./tests/data/delta-0.2.0").await.unwrap();
+        let table = open_table("../deltalake-test/tests/data/delta-0.2.0")
+            .await
+            .unwrap();
         let statistics = table.state.datafusion_table_statistics()?;
 
         assert_eq!(statistics.num_rows, Precision::Absent);
@@ -357,7 +366,7 @@ mod local {
         // In particular 'new_column' contains statistics for when it
         // is introduced (10) but the commit following (11) does not contain
         // statistics for this column.
-        let table = open_table("./tests/data/delta-1.2.1-only-struct-stats")
+        let table = open_table("../deltalake-test/tests/data/delta-1.2.1-only-struct-stats")
             .await
             .unwrap();
         let schema = table.get_schema().unwrap();
@@ -840,7 +849,7 @@ mod local {
     #[tokio::test]
     async fn test_datafusion_partitioned_types() -> Result<()> {
         let ctx = SessionContext::new();
-        let table = open_table("./tests/data/delta-2.2.0-partitioned-types")
+        let table = open_table("../deltalake-test/tests/data/delta-2.2.0-partitioned-types")
             .await
             .unwrap();
         ctx.register_table("demo", Arc::new(table))?;
@@ -889,7 +898,7 @@ mod local {
     #[tokio::test]
     async fn test_datafusion_scan_timestamps() -> Result<()> {
         let ctx = SessionContext::new();
-        let table = open_table("./tests/data/table_with_edge_timestamps")
+        let table = open_table("../deltalake-test/tests/data/table_with_edge_timestamps")
             .await
             .unwrap();
         ctx.register_table("demo", Arc::new(table))?;
@@ -913,7 +922,9 @@ mod local {
     #[tokio::test]
     async fn test_issue_1292_datafusion_sql_projection() -> Result<()> {
         let ctx = SessionContext::new();
-        let table = open_table("./tests/data/http_requests").await.unwrap();
+        let table = open_table("../deltalake-test/tests/data/http_requests")
+            .await
+            .unwrap();
         ctx.register_table("http_requests", Arc::new(table))?;
 
         let batches = ctx
@@ -942,7 +953,9 @@ mod local {
     #[tokio::test]
     async fn test_issue_1291_datafusion_sql_partitioned_data() -> Result<()> {
         let ctx = SessionContext::new();
-        let table = open_table("./tests/data/http_requests").await.unwrap();
+        let table = open_table("../deltalake-test//tests/data/http_requests")
+            .await
+            .unwrap();
         ctx.register_table("http_requests", Arc::new(table))?;
 
         let batches = ctx
@@ -973,7 +986,9 @@ mod local {
     #[tokio::test]
     async fn test_issue_1374() -> Result<()> {
         let ctx = SessionContext::new();
-        let table = open_table("./tests/data/issue_1374").await.unwrap();
+        let table = open_table("../deltalake-test/tests/data/issue_1374")
+            .await
+            .unwrap();
         ctx.register_table("t", Arc::new(table))?;
 
         let batches = ctx
@@ -1055,48 +1070,7 @@ mod local {
     }
 }
 
-#[cfg(any(feature = "s3", feature = "s3-native-tls"))]
-mod s3 {
-    use super::*;
-    #[tokio::test]
-    #[serial]
-    async fn test_datafusion_aws() -> TestResult {
-        test_datafusion(StorageIntegration::Amazon).await
-    }
-}
-
-#[cfg(feature = "azure")]
-mod azure {
-    use super::*;
-    #[tokio::test]
-    #[serial]
-    async fn test_datafusion_azure() -> TestResult {
-        test_datafusion(StorageIntegration::Microsoft).await
-    }
-}
-
-#[cfg(feature = "gcs")]
-mod gcs {
-    use super::*;
-    #[tokio::test]
-    #[serial]
-    async fn test_datafusion_gcp() -> TestResult {
-        test_datafusion(StorageIntegration::Google).await
-    }
-}
-
-#[cfg(feature = "hdfs")]
-mod hdfs {
-    use super::*;
-    #[tokio::test]
-    #[serial]
-    async fn test_datafusion_hdfs() -> TestResult {
-        Ok(test_datafusion(StorageIntegration::Hdfs).await?)
-    }
-}
-
-async fn test_datafusion(storage: StorageIntegration) -> TestResult {
-    let context = IntegrationContext::new(storage)?;
+async fn test_datafusion(context: &IntegrationContext) -> TestResult {
     context.load_table(TestTables::Simple).await?;
 
     simple_query(&context).await?;
@@ -1107,14 +1081,7 @@ async fn test_datafusion(storage: StorageIntegration) -> TestResult {
 async fn simple_query(context: &IntegrationContext) -> TestResult {
     let table_uri = context.uri_for_table(TestTables::Simple);
 
-    let dynamo_lock_option = "'DYNAMO_LOCK_OWNER_NAME' 's3::deltars/simple'".to_string();
-    let options = match context.integration {
-        StorageIntegration::Amazon => format!("'AWS_ALLOW_HTTP' '1', {dynamo_lock_option}"),
-        StorageIntegration::Microsoft => {
-            format!("'AZURE_STORAGE_ALLOW_HTTP' '1', {dynamo_lock_option}")
-        }
-        _ => dynamo_lock_option,
-    };
+    let options = "'DYNAMO_LOCK_OWNER_NAME' 's3::deltars/simple'".to_string();
 
     let sql = format!(
         "CREATE EXTERNAL TABLE demo \

@@ -1,6 +1,6 @@
-use datafusion::execution::context::{SessionContext, SessionState};
-use datafusion::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
-use datafusion::prelude::SessionConfig;
+use deltalake_core::datafusion::execution::context::{SessionContext, SessionState};
+use deltalake_core::datafusion::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
+use deltalake_core::datafusion::prelude::SessionConfig;
 use deltalake_core::delta_datafusion::DeltaTableFactory;
 use std::sync::Arc;
 

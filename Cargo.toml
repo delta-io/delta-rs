@@ -46,6 +46,7 @@ serde_json = "1"
 # "stdlib"
 bytes = { version = "1" }
 chrono = { version = "0.4.31", default-features = false, features = ["clock"] }
+log = { version = "0.4" }
 regex = { version = "1" }
 thiserror = { version = "1" }
 url = { version = "2" }

@@ -14,7 +14,7 @@ mod simple_checkpoint {
 
     #[tokio::test]
     async fn simple_checkpoint_test() {
-        let table_location = "./tests/data/checkpoints";
+        let table_location = "../deltalake-test/tests/data/checkpoints";
         let table_path = PathBuf::from(table_location);
         let log_path = table_path.join("_delta_log");
 
@@ -97,7 +97,7 @@ mod delete_expired_delta_log_in_checkpoint {
     #[tokio::test]
     async fn test_delete_expired_logs() {
         let mut table = fs_common::create_table(
-            "./tests/data/checkpoints_with_expired_logs/expired",
+            "../deltalake-test/tests/data/checkpoints_with_expired_logs/expired",
             Some(hashmap! {
                 DeltaConfigKey::LogRetentionDuration.as_ref().into() => Some("interval 10 minute".to_string()),
                 DeltaConfigKey::EnableExpiredLogCleanup.as_ref().into() => Some("true".to_string())
@@ -161,7 +161,7 @@ mod delete_expired_delta_log_in_checkpoint {
     #[tokio::test]
     async fn test_not_delete_expired_logs() {
         let mut table = fs_common::create_table(
-            "./tests/data/checkpoints_with_expired_logs/not_delete_expired",
+            "../deltalake-test/tests/data/checkpoints_with_expired_logs/not_delete_expired",
             Some(hashmap! {
                 DeltaConfigKey::LogRetentionDuration.as_ref().into() => Some("interval 1 second".to_string()),
                 DeltaConfigKey::EnableExpiredLogCleanup.as_ref().into() => Some("false".to_string())
@@ -237,7 +237,7 @@ mod checkpoints_with_tombstones {
 
     #[tokio::test]
     async fn test_expired_tombstones() {
-        let mut table = fs_common::create_table("./tests/data/checkpoints_tombstones/expired", Some(hashmap! {
+        let mut table = fs_common::create_table("../deltalake-test/tests/data/checkpoints_tombstones/expired", Some(hashmap! {
             DeltaConfigKey::DeletedFileRetentionDuration.as_ref().into() => Some("interval 1 minute".to_string())
         })).await;
 
@@ -274,7 +274,7 @@ mod checkpoints_with_tombstones {
 
     #[tokio::test]
     async fn test_checkpoint_with_extended_file_metadata_true() {
-        let path = "./tests/data/checkpoints_tombstones/metadata_true";
+        let path = "../deltalake-test/tests/data/checkpoints_tombstones/metadata_true";
         let mut table = fs_common::create_table(path, None).await;
         let r1 = remove_metadata_true();
         let r2 = remove_metadata_true();
@@ -290,7 +290,7 @@ mod checkpoints_with_tombstones {
 
     #[tokio::test]
     async fn test_checkpoint_with_extended_file_metadata_false() {
-        let path = "./tests/data/checkpoints_tombstones/metadata_false";
+        let path = "../deltalake-test/tests/data/checkpoints_tombstones/metadata_false";
         let mut table = fs_common::create_table(path, None).await;
         let r1 = remove_metadata_true();
         let r2 = remove_metadata_false();
@@ -313,7 +313,7 @@ mod checkpoints_with_tombstones {
 
     #[tokio::test]
     async fn test_checkpoint_with_extended_file_metadata_broken() {
-        let path = "./tests/data/checkpoints_tombstones/metadata_broken";
+        let path = "../deltalake-test/tests/data/checkpoints_tombstones/metadata_broken";
         let mut table = fs_common::create_table(path, None).await;
         let r1 = remove_metadata_broken();
         let r2 = remove_metadata_false();

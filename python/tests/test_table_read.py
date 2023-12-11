@@ -30,7 +30,7 @@ from deltalake import DeltaTable
 
 
 def test_read_table_with_edge_timestamps():
-    table_path = "../crates/deltalake-core/tests/data/table_with_edge_timestamps"
+    table_path = "../crates/deltalake-test/tests/data/table_with_edge_timestamps"
     dt = DeltaTable(table_path)
     dataset = dt.to_pyarrow_dataset(
         parquet_read_options=ParquetReadOptions(coerce_int96_timestamp_unit="ms")
@@ -46,19 +46,19 @@ def test_read_table_with_edge_timestamps():
 
 
 def test_read_simple_table_to_dict():
-    table_path = "../crates/deltalake-core/tests/data/simple_table"
+    table_path = "../crates/deltalake-test/tests/data/simple_table"
     dt = DeltaTable(table_path)
     assert dt.to_pyarrow_dataset().to_table().to_pydict() == {"id": [5, 7, 9]}
 
 
 def test_read_simple_table_by_version_to_dict():
-    table_path = "../crates/deltalake-core/tests/data/delta-0.2.0"
+    table_path = "../crates/deltalake-test/tests/data/delta-0.2.0"
     dt = DeltaTable(table_path, version=2)
     assert dt.to_pyarrow_dataset().to_table().to_pydict() == {"value": [1, 2, 3]}
 
 
 def test_read_simple_table_using_options_to_dict():
-    table_path = "../crates/deltalake-core/tests/data/delta-0.2.0"
+    table_path = "../crates/deltalake-test/tests/data/delta-0.2.0"
     dt = DeltaTable(table_path, version=2, storage_options={})
     assert dt.to_pyarrow_dataset().to_table().to_pydict() == {"value": [1, 2, 3]}
 
@@ -72,7 +72,7 @@ def test_read_simple_table_using_options_to_dict():
     ],
 )
 def test_load_as_version_datetime(date_value: str, expected_version):
-    log_dir = "../crates/deltalake-core/tests/data/simple_table/_delta_log"
+    log_dir = "../crates/deltalake-test/tests/data/simple_table/_delta_log"
     log_mtime_pair = [
         ("00000000000000000000.json", 1588398451.0),
         ("00000000000000000001.json", 1588484851.0),
@@ -84,7 +84,7 @@ def test_load_as_version_datetime(date_value: str, expected_version):
         file_path = os.path.join(log_dir, file_name)
         os.utime(file_path, (dt_epoch, dt_epoch))
 
-    table_path = "../crates/deltalake-core/tests/data/simple_table"
+    table_path = "../crates/deltalake-test/tests/data/simple_table"
     dt = DeltaTable(table_path)
     dt.load_as_version(date_value)
     assert dt.version() == expected_version
@@ -94,7 +94,7 @@ def test_load_as_version_datetime(date_value: str, expected_version):
 
 
 def test_load_as_version_datetime_bad_format():
-    table_path = "../crates/deltalake-core/tests/data/simple_table"
+    table_path = "../crates/deltalake-test/tests/data/simple_table"
     dt = DeltaTable(table_path)
 
     for bad_format in [
@@ -107,7 +107,7 @@ def test_load_as_version_datetime_bad_format():
 
 
 def test_read_simple_table_update_incremental():
-    table_path = "../crates/deltalake-core/tests/data/simple_table"
+    table_path = "../crates/deltalake-test/tests/data/simple_table"
     dt = DeltaTable(table_path, version=0)
     assert dt.to_pyarrow_dataset().to_table().to_pydict() == {"id": [0, 1, 2, 3, 4]}
     dt.update_incremental()
@@ -115,7 +115,7 @@ def test_read_simple_table_update_incremental():
 
 
 def test_read_simple_table_file_sizes_failure():
-    table_path = "../crates/deltalake-core/tests/data/simple_table"
+    table_path = "../crates/deltalake-test/tests/data/simple_table"
     dt = DeltaTable(table_path)
     add_actions = dt.get_add_actions().to_pydict()
 
@@ -132,7 +132,7 @@ def test_read_simple_table_file_sizes_failure():
 
 
 def test_read_partitioned_table_to_dict():
-    table_path = "../crates/deltalake-core/tests/data/delta-0.8.0-partitioned"
+    table_path = "../crates/deltalake-test/tests/data/delta-0.8.0-partitioned"
     dt = DeltaTable(table_path)
     expected = {
         "value": ["1", "2", "3", "6", "7", "5", "4"],
@@ -144,7 +144,7 @@ def test_read_partitioned_table_to_dict():
 
 
 def test_read_partitioned_table_with_partitions_filters_to_dict():
-    table_path = "../crates/deltalake-core/tests/data/delta-0.8.0-partitioned"
+    table_path = "../crates/deltalake-test/tests/data/delta-0.8.0-partitioned"
     dt = DeltaTable(table_path)
     partitions = [("year", "=", "2021")]
     expected = {
@@ -158,7 +158,7 @@ def test_read_partitioned_table_with_partitions_filters_to_dict():
 
 
 def test_read_empty_delta_table_after_delete():
-    table_path = "../crates/deltalake-core/tests/data/delta-0.8-empty"
+    table_path = "../crates/deltalake-test/tests/data/delta-0.8-empty"
     dt = DeltaTable(table_path)
     expected = {"column": []}
 
@@ -166,7 +166,7 @@ def test_read_empty_delta_table_after_delete():
 
 
 def test_read_table_with_column_subset():
-    table_path = "../crates/deltalake-core/tests/data/delta-0.8.0-partitioned"
+    table_path = "../crates/deltalake-test/tests/data/delta-0.8.0-partitioned"
     dt = DeltaTable(table_path)
     expected = {
         "value": ["1", "2", "3", "6", "7", "5", "4"],
@@ -179,7 +179,7 @@ def test_read_table_with_column_subset():
 
 
 def test_read_table_as_category():
-    table_path = "../crates/deltalake-core/tests/data/delta-0.8.0-partitioned"
+    table_path = "../crates/deltalake-test/tests/data/delta-0.8.0-partitioned"
     dt = DeltaTable(table_path)
 
     assert dt.schema().to_pyarrow().field("value").type == pa.string()
@@ -193,7 +193,7 @@ def test_read_table_as_category():
 
 
 def test_read_table_with_filter():
-    table_path = "../crates/deltalake-core/tests/data/delta-0.8.0-partitioned"
+    table_path = "../crates/deltalake-test/tests/data/delta-0.8.0-partitioned"
     dt = DeltaTable(table_path)
     expected = {
         "value": ["6", "7", "5"],
@@ -210,7 +210,7 @@ def test_read_table_with_filter():
 
 
 def test_read_table_with_stats():
-    table_path = "../crates/deltalake-core/tests/data/COVID-19_NYT"
+    table_path = "../crates/deltalake-test/tests/data/COVID-19_NYT"
     dt = DeltaTable(table_path)
     dataset = dt.to_pyarrow_dataset()
 
@@ -236,7 +236,7 @@ def test_read_table_with_stats():
 
 
 def test_read_special_partition():
-    table_path = "../crates/deltalake-core/tests/data/delta-0.8.0-special-partition"
+    table_path = "../crates/deltalake-test/tests/data/delta-0.8.0-special-partition"
     dt = DeltaTable(table_path)
 
     file1 = (
@@ -258,7 +258,7 @@ def test_read_special_partition():
 
 
 def test_read_partitioned_table_metadata():
-    table_path = "../crates/deltalake-core/tests/data/delta-0.8.0-partitioned"
+    table_path = "../crates/deltalake-test/tests/data/delta-0.8.0-partitioned"
     dt = DeltaTable(table_path)
     metadata = dt.metadata()
     assert metadata.id == "fe5a3c11-30d4-4dd7-b115-a1c121e66a4e"
@@ -270,7 +270,7 @@ def test_read_partitioned_table_metadata():
 
 
 def test_read_partitioned_table_protocol():
-    table_path = "../crates/deltalake-core/tests/data/delta-0.8.0-partitioned"
+    table_path = "../crates/deltalake-test/tests/data/delta-0.8.0-partitioned"
     dt = DeltaTable(table_path)
     protocol = dt.protocol()
     assert protocol.min_reader_version == 1
@@ -278,7 +278,7 @@ def test_read_partitioned_table_protocol():
 
 
 def test_read_table_with_cdc():
-    table_path = "../crates/deltalake-core/tests/data/simple_table_with_cdc"
+    table_path = "../crates/deltalake-test/tests/data/simple_table_with_cdc"
     dt = DeltaTable(table_path)
     assert dt.to_pyarrow_table().to_pydict() == {
         "id": [0],
@@ -287,7 +287,7 @@ def test_read_table_with_cdc():
 
 
 def test_history_partitioned_table_metadata():
-    table_path = "../crates/deltalake-core/tests/data/delta-0.8.0-partitioned"
+    table_path = "../crates/deltalake-test/tests/data/delta-0.8.0-partitioned"
     dt = DeltaTable(table_path)
     history = dt.history()
     commit_info = history[0]
@@ -312,7 +312,7 @@ def test_history_partitioned_table_metadata():
 
 @pytest.mark.parametrize("flatten", [True, False])
 def test_add_actions_table(flatten: bool):
-    table_path = "../crates/deltalake-core/tests/data/delta-0.8.0-partitioned"
+    table_path = "../crates/deltalake-test/tests/data/delta-0.8.0-partitioned"
     dt = DeltaTable(table_path)
     actions_df = dt.get_add_actions(flatten)
     # RecordBatch doesn't have a sort_by method yet
@@ -356,10 +356,10 @@ def assert_correct_files(dt: DeltaTable, partition_filters, expected_paths):
 
 
 def test_get_files_partitioned_table():
-    table_path = "../crates/deltalake-core/tests/data/delta-0.8.0-partitioned"
+    table_path = "../crates/deltalake-test/tests/data/delta-0.8.0-partitioned"
     dt = DeltaTable(table_path)
     table_path = (
-        Path.cwd().parent / "crates/deltalake-core/tests/data/delta-0.8.0-partitioned"
+        Path.cwd().parent / "crates/deltalake-test/tests/data/delta-0.8.0-partitioned"
     ).as_posix()
 
     partition_filters = [("day", "=", "3")]
@@ -432,14 +432,14 @@ def test_get_files_partitioned_table():
 
 @pytest.mark.pandas
 def test_delta_table_to_pandas():
-    table_path = "../crates/deltalake-core/tests/data/simple_table"
+    table_path = "../crates/deltalake-test/tests/data/simple_table"
     dt = DeltaTable(table_path)
     assert dt.to_pandas().equals(pd.DataFrame({"id": [5, 7, 9]}))
 
 
 @pytest.mark.pandas
 def test_delta_table_with_filesystem():
-    table_path = "../crates/deltalake-core/tests/data/simple_table"
+    table_path = "../crates/deltalake-test/tests/data/simple_table"
     dt = DeltaTable(table_path)
     filesystem = SubTreeFileSystem(table_path, LocalFileSystem())
     assert dt.to_pandas(filesystem=filesystem).equals(pd.DataFrame({"id": [5, 7, 9]}))
@@ -447,7 +447,7 @@ def test_delta_table_with_filesystem():
 
 @pytest.mark.pandas
 def test_delta_table_with_filters():
-    table_path = "../crates/deltalake-core/tests/data/COVID-19_NYT"
+    table_path = "../crates/deltalake-test/tests/data/COVID-19_NYT"
     dt = DeltaTable(table_path)
     dataset = dt.to_pyarrow_dataset()
 
@@ -489,7 +489,7 @@ def test_delta_table_with_filters():
 
 
 def test_writer_fails_on_protocol():
-    table_path = "../crates/deltalake-core/tests/data/simple_table"
+    table_path = "../crates/deltalake-test/tests/data/simple_table"
     dt = DeltaTable(table_path)
     dt.protocol = Mock(return_value=ProtocolVersions(2, 1))
     with pytest.raises(DeltaProtocolError):
@@ -547,7 +547,7 @@ class ExcPassThroughThread(Thread):
 @pytest.mark.timeout(timeout=5, method="thread")
 def test_read_multiple_tables_from_s3(s3_localstack):
     """Should be able to create multiple cloud storage based DeltaTable instances
-    without blocking on async crates/deltalake-core function calls.
+    without blocking on async crates/deltalake-test function calls.
     """
     for path in ["s3://deltars/simple", "s3://deltars/simple"]:
         t = DeltaTable(path)

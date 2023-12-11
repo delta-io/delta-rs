@@ -60,14 +60,6 @@ pub async fn flatten_list_stream(
         .await
 }
 
-pub(crate) fn str_is_truthy(val: &str) -> bool {
-    val.eq_ignore_ascii_case("1")
-        | val.eq_ignore_ascii_case("true")
-        | val.eq_ignore_ascii_case("on")
-        | val.eq_ignore_ascii_case("yes")
-        | val.eq_ignore_ascii_case("y")
-}
-
 impl TryFrom<Add> for ObjectMeta {
     type Error = DeltaTableError;
 
