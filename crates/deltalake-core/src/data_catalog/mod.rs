@@ -1,6 +1,6 @@
 //! Catalog abstraction for Delta Table
 
-use std::{collections::HashMap, fmt::Debug};
+use std::fmt::Debug;
 
 #[cfg(feature = "unity-experimental")]
 pub use unity::*;
@@ -124,35 +124,4 @@ pub trait DataCatalog: Send + Sync + Debug {
         database_name: &str,
         table_name: &str,
     ) -> Result<String, DataCatalogError>;
-}
-
-/// Get the Data Catalog
-pub fn get_data_catalog(
-    data_catalog: &str,
-    #[allow(unused)] options: Option<HashMap<String, String>>,
-) -> Result<Box<dyn DataCatalog>, DataCatalogError> {
-    match data_catalog {
-        #[cfg(feature = "gcp")]
-        "gcp" => unimplemented!("GCP Data Catalog is not implemented"),
-        #[cfg(feature = "azure")]
-        "azure" => unimplemented!("Azure Data Catalog is not implemented"),
-        #[cfg(feature = "hdfs")]
-        "hdfs" => unimplemented!("HDFS Data Catalog is not implemented"),
-        #[cfg(any(feature = "glue", feature = "glue-native-tls"))]
-        "glue" => Ok(Box::new(glue::GlueDataCatalog::new()?)),
-        #[cfg(feature = "unity-experimental")]
-        "unity" => {
-            let catalog = if let Some(opts) = options {
-                unity::UnityCatalogBuilder::default()
-                    .try_with_options(opts)?
-                    .build()
-            } else {
-                unity::UnityCatalogBuilder::from_env().build()
-            }?;
-            Ok(Box::new(catalog))
-        }
-        _ => Err(DataCatalogError::InvalidDataCatalog {
-            data_catalog: data_catalog.to_string(),
-        }),
-    }
 }
