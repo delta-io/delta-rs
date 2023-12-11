@@ -13,6 +13,8 @@ use futures::{Stream, StreamExt};
 
 use crate::DeltaTableError;
 
+use super::barrier::MergeBarrierExec;
+
 // Metric Observer is used to update DataFusion metrics from a record batch.
 // Typically the null count for a particular column is pulled after performing a
 // projection since this count is easy to obtain
@@ -171,6 +173,24 @@ pub(crate) fn find_metric_node(
 
     for child in &parent.children() {
         let res = find_metric_node(id, child);
+        if res.is_some() {
+            return res;
+        }
+    }
+
+    None
+}
+
+pub(crate) fn find_barrier_node(
+    parent: &Arc<dyn ExecutionPlan>,
+) -> Option<Arc<dyn ExecutionPlan>> {
+    //! Used to locate the physical MetricCountExec Node after the planner converts the logical node
+    if parent.as_any().downcast_ref::<MergeBarrierExec>().is_some() {
+        return Some(parent.to_owned());
+    }
+
+    for child in &parent.children() {
+        let res = find_barrier_node(child);
         if res.is_some() {
             return res;
         }

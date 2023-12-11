@@ -1,5 +1,7 @@
 //! Logical Operations for DataFusion
 
+use std::collections::HashSet;
+
 use datafusion_expr::{LogicalPlan, UserDefinedLogicalNodeCore};
 
 // Metric Observer is used to update DataFusion metrics from a record batch.
@@ -10,6 +12,7 @@ pub(crate) struct MetricObserver {
     // id is preserved during conversion to physical node
     pub id: String,
     pub input: LogicalPlan,
+    pub enable_pushdown: bool,
 }
 
 impl UserDefinedLogicalNodeCore for MetricObserver {
@@ -35,6 +38,15 @@ impl UserDefinedLogicalNodeCore for MetricObserver {
         write!(f, "MetricObserver id={}", &self.id)
     }
 
+
+    fn prevent_predicate_push_down_columns(&self) -> HashSet<String> {
+        if self.enable_pushdown {
+            HashSet::new()
+        } else {
+            self.schema().fields().iter().map(|f| f.name().clone()).collect()
+        }
+    }
+
     fn from_template(
         &self,
         _exprs: &[datafusion_expr::Expr],
@@ -43,6 +55,7 @@ impl UserDefinedLogicalNodeCore for MetricObserver {
         MetricObserver {
             id: self.id.clone(),
             input: inputs[0].clone(),
+            enable_pushdown: self.enable_pushdown
         }
     }
 }
