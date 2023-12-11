@@ -493,6 +493,29 @@ def test_writer_fails_on_protocol():
         dt.to_pandas()
 
 
+@pytest.mark.parametrize("version, expected", [(2, (5, 3))])
+def test_peek_next_commit(version, expected):
+    table_path = "../crates/deltalake-core/tests/data/simple_table"
+    dt = DeltaTable(table_path)
+    actions, next_version = dt.peek_next_commit(version=version)
+    assert (len(actions), next_version) == expected
+
+
+def test_delta_log_not_found():
+    table_path = "../crates/deltalake-core/tests/data/simple_table"
+    dt = DeltaTable(table_path)
+    latest_version = dt.get_latest_version()
+    _, version = dt.peek_next_commit(version=latest_version)
+    assert version == latest_version
+
+
+def test_delta_log_missed():
+    table_path = "../crates/deltalake-core/tests/data/simple_table_missing_commit"
+    dt = DeltaTable(table_path)
+    _, version = dt.peek_next_commit(version=1)
+    assert version == 3  # Missed commit version 2, should return version 3
+
+
 class ExcPassThroughThread(Thread):
     """Wrapper around `threading.Thread` that propagates exceptions."""
 

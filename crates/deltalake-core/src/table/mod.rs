@@ -6,6 +6,7 @@ use std::fmt;
 use std::fmt::Formatter;
 use std::{cmp::max, cmp::Ordering, collections::HashSet};
 
+use bytes::Bytes;
 use chrono::{DateTime, Utc};
 use futures::StreamExt;
 use lazy_static::lazy_static;
@@ -453,6 +454,23 @@ impl DeltaTable {
         self.last_check_point = None;
         self.state = DeltaTableState::with_version(-1);
         self.update().await
+    }
+
+    /// Get the commit obj from the version
+    pub async fn get_obj_from_version(
+        &self,
+        current_version: i64,
+    ) -> Result<Bytes, DeltaTableError> {
+        let commit_log_bytes = match self.log_store.read_commit_entry(current_version).await {
+            Ok(bytes) => Ok(bytes),
+            Err(DeltaTableError::ObjectStore {
+                source: ObjectStoreError::NotFound { .. },
+            }) => {
+                return Err(DeltaTableError::DeltaLogNotFound(current_version));
+            }
+            Err(err) => Err(err),
+        }?;
+        Ok(commit_log_bytes)
     }
 
     /// Get the list of actions for the next commit

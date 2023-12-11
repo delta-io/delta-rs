@@ -76,6 +76,10 @@ pub enum DeltaTableError {
     #[error("Invalid table version: {0}")]
     InvalidVersion(i64),
 
+    /// Error returned when the DeltaTable has no delta log version.
+    #[error("Delta log not found for table version: {0}")]
+    DeltaLogNotFound(i64),
+
     /// Error returned when the DeltaTable has no data files.
     #[error("Corrupted table, cannot read data file {}: {}", .path, .source)]
     MissingDataFile {

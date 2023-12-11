@@ -42,7 +42,7 @@ from deltalake._internal import RawDeltaTable
 from deltalake._internal import create_deltalake as _create_deltalake
 from deltalake._util import encode_partition_value
 from deltalake.data_catalog import DataCatalog
-from deltalake.exceptions import DeltaProtocolError
+from deltalake.exceptions import DeltaError, DeltaProtocolError
 from deltalake.fs import DeltaStorageHandler
 from deltalake.schema import Schema as DeltaSchema
 
@@ -256,6 +256,7 @@ class DeltaTable:
 
         """
         self._storage_options = storage_options
+        self._latest_version = -1
         self._table = RawDeltaTable(
             str(table_uri),
             version=version,
@@ -896,6 +897,36 @@ class DeltaTable:
         newer versions.
         """
         self._table.update_incremental()
+
+    def get_latest_version(self) -> int:
+        """
+        Get latest version of commit.
+        """
+        return self._table.get_latest_version()
+
+    def peek_next_commit(
+        self, version: int
+    ) -> Tuple[Optional[List[Dict[Any, Any]]], int]:
+        """
+        Peek next commit of the input version.
+        """
+        actions = []
+        next_version = version + 1
+        if next_version > self._latest_version:
+            self._latest_version = self.get_latest_version()
+        while next_version <= self._latest_version:
+            try:
+                commit_log_bytes = self._table.get_obj(next_version)
+                for commit_action in commit_log_bytes.split(b"\n"):
+                    if commit_action:
+                        actions.append(json.loads(commit_action))
+                return actions, next_version
+            except DeltaError as e:
+                if str(e) == f"Delta log not found for table version: {next_version}":
+                    next_version += 1
+                else:
+                    raise
+        return None, version
 
     def create_checkpoint(self) -> None:
         self._table.create_checkpoint()
