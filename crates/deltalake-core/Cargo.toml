@@ -146,6 +146,7 @@ arrow = [
 ]
 default = ["arrow", "parquet"]
 datafusion = [
+    "dep:arrow",
     "dep:datafusion",
     "datafusion-expr",
     "datafusion-common",
