@@ -1018,27 +1018,21 @@ pub(crate) async fn execute_plan_to_batch(
     state: &SessionState,
     plan: Arc<dyn ExecutionPlan>,
 ) -> DeltaResult<arrow::record_batch::RecordBatch> {
-    let data = futures::future::try_join_all(
-        (0..plan.output_partitioning().partition_count())
-            .into_iter()
-            .map(|p| {
-                let plan_copy = plan.clone();
-                let task_context = state.task_ctx().clone();
-                async move {
-                    let batch_stream = plan_copy.execute(p, task_context)?;
+    let data =
+        futures::future::try_join_all((0..plan.output_partitioning().partition_count()).map(|p| {
+            let plan_copy = plan.clone();
+            let task_context = state.task_ctx().clone();
+            async move {
+                let batch_stream = plan_copy.execute(p, task_context)?;
 
-                    let schema = batch_stream.schema();
+                let schema = batch_stream.schema();
 
-                    let batches = batch_stream.try_collect::<Vec<_>>().await?;
+                let batches = batch_stream.try_collect::<Vec<_>>().await?;
 
-                    DataFusionResult::<_>::Ok(arrow::compute::concat_batches(
-                        &schema,
-                        batches.iter(),
-                    )?)
-                }
-            }),
-    )
-    .await?;
+                DataFusionResult::<_>::Ok(arrow::compute::concat_batches(&schema, batches.iter())?)
+            }
+        }))
+        .await?;
 
     let batch = arrow::compute::concat_batches(&plan.schema(), data.iter())?;
 

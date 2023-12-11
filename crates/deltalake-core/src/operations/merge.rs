@@ -692,7 +692,7 @@ fn generalize_filter(
                     None
                 }
             }),
-            Expr::Negative(neg) => references_table(&*neg, table),
+            Expr::Negative(neg) => references_table(neg, table),
             Expr::Cast(cast) => references_table(&cast.expr, table),
             Expr::TryCast(try_cast) => references_table(&try_cast.expr, table),
             Expr::ScalarFunction(func) => {
@@ -715,7 +715,7 @@ fn generalize_filter(
 
     match predicate {
         Expr::BinaryExpr(binary) => {
-            if let Some(_) = references_table(&binary.right, source_name) {
+            if references_table(&binary.right, source_name).is_some() {
                 if let Some(left_target) = references_table(&binary.left, target_name) {
                     if partition_columns.contains(&left_target) {
                         let placeholder_name = format!("{left_target}_{}", placeholders.len());
@@ -737,7 +737,7 @@ fn generalize_filter(
                 }
                 return None;
             }
-            if let Some(_) = references_table(&binary.left, source_name) {
+            if references_table(&binary.left, source_name).is_some() {
                 if let Some(right_target) = references_table(&binary.right, target_name) {
                     if partition_columns.contains(&right_target) {
                         let placeholder_name = format!("{right_target}_{}", placeholders.len());
@@ -871,7 +871,6 @@ async fn try_construct_early_filter(
             .collect_vec();
 
         (0..items.num_rows())
-            .into_iter()
             .map(|i| {
                 let replacements = placeholder_names
                     .iter()
@@ -973,36 +972,34 @@ async fn execute(
             // It's only worth trying to create an early filter where there are no `when_not_matched_source` operators, since
             // that implies a full scan
             (target, snapshot.files().iter().collect_vec())
-        } else {
-            if let Some(filter) = try_construct_early_filter(
-                predicate.clone(),
-                snapshot,
-                &state,
-                &source,
-                &source_name,
-                &target_name,
-            )
-            .await
-            {
-                let file_filter = filter
-                    .clone()
-                    .transform(&|expr| match expr {
-                        Expr::Column(c) => Ok(Transformed::Yes(Expr::Column(Column {
-                            relation: None, // the file filter won't be looking at columns like `target.partition`, it'll just be `partition`
-                            name: c.name,
-                        }))),
-                        expr => Ok(Transformed::No(expr)),
-                    })
-                    .unwrap();
-                let files = snapshot
-                    .files_matching_predicate(&[file_filter])?
-                    .collect_vec();
+        } else if let Some(filter) = try_construct_early_filter(
+            predicate.clone(),
+            snapshot,
+            &state,
+            &source,
+            &source_name,
+            &target_name,
+        )
+        .await
+        {
+            let file_filter = filter
+                .clone()
+                .transform(&|expr| match expr {
+                    Expr::Column(c) => Ok(Transformed::Yes(Expr::Column(Column {
+                        relation: None, // the file filter won't be looking at columns like `target.partition`, it'll just be `partition`
+                        name: c.name,
+                    }))),
+                    expr => Ok(Transformed::No(expr)),
+                })
+                .unwrap();
+            let files = snapshot
+                .files_matching_predicate(&[file_filter])?
+                .collect_vec();
 
-                let new_target = LogicalPlan::Filter(Filter::try_new(filter, target.into())?);
-                (new_target, files)
-            } else {
-                (target, snapshot.files().iter().collect_vec())
-            }
+            let new_target = LogicalPlan::Filter(Filter::try_new(filter, target.into())?);
+            (new_target, files)
+        } else {
+            (target, snapshot.files().iter().collect_vec())
         }
     };
 
