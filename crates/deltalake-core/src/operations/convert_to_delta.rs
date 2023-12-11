@@ -6,7 +6,7 @@ use crate::{
     logstore::{LogStore, LogStoreRef},
     operations::create::CreateBuilder,
     protocol::SaveMode,
-    storage::config::configure_log_store,
+    table::builder::ensure_table_uri,
     table::config::DeltaConfigKey,
     DeltaResult, DeltaTable, DeltaTableError, DeltaTablePartition, ObjectStoreError,
     NULL_PARTITION_VALUE_DATA_PATH,
@@ -55,6 +55,8 @@ enum Error {
     DeltaTableAlready,
     #[error("Location must be provided to convert a Parquet table to a Delta table")]
     MissingLocation,
+    #[error("The location provided must be a valid URL")]
+    InvalidLocation(#[from] url::ParseError),
 }
 
 impl From<Error> for DeltaTableError {
@@ -231,7 +233,10 @@ impl ConvertToDeltaBuilder {
         let log_store = if let Some(log_store) = self.log_store {
             log_store
         } else if let Some(location) = self.location {
-            configure_log_store(&location, self.storage_options.unwrap_or_default(), None)?
+            crate::logstore::logstore_for(
+                ensure_table_uri(location)?,
+                self.storage_options.unwrap_or_default(),
+            )?
         } else {
             return Err(Error::MissingLocation);
         };
@@ -389,11 +394,11 @@ impl std::future::IntoFuture for ConvertToDeltaBuilder {
 
 #[cfg(test)]
 mod tests {
-    use super::{configure_log_store, ConvertToDeltaBuilder, DeltaTable, LogStoreRef, StructField};
+    use super::*;
     use crate::{
         kernel::schema::{DataType, PrimitiveType},
         open_table,
-        storage::config::StorageOptions,
+        storage::StorageOptions,
         Path,
     };
     use itertools::Itertools;
@@ -424,7 +429,9 @@ mod tests {
     }
 
     fn log_store(path: impl Into<String>) -> LogStoreRef {
-        configure_log_store(&path.into(), StorageOptions::default(), None)
+        let path: String = path.into();
+        let location = ensure_table_uri(path).expect("Failed to get the URI from the path");
+        crate::logstore::logstore_for(location, StorageOptions::default())
             .expect("Failed to create an object store")
     }
 
@@ -442,7 +449,9 @@ mod tests {
         // Copy all files to a temp directory to perform testing. Skip Delta log
         copy_files(format!("{}/{}", env!("CARGO_MANIFEST_DIR"), path), temp_dir);
         let builder = if from_path {
-            ConvertToDeltaBuilder::new().with_location(temp_dir)
+            ConvertToDeltaBuilder::new().with_location(
+                ensure_table_uri(temp_dir).expect("Failed to turn temp dir into a URL"),
+            )
         } else {
             ConvertToDeltaBuilder::new().with_log_store(log_store(temp_dir))
         };
@@ -519,7 +528,7 @@ mod tests {
     // Test Parquet files in object store location
     #[tokio::test]
     async fn test_convert_to_delta() {
-        let path = "tests/data/delta-0.8.0-date";
+        let path = "../deltalake-test/tests/data/delta-0.8.0-date";
         let table = create_delta_table(path, Vec::new(), false).await;
         let action = table
             .get_active_add_actions_by_partitions(&[])
@@ -545,7 +554,7 @@ mod tests {
             &[],
         );
 
-        let path = "tests/data/delta-0.8.0-null-partition";
+        let path = "../deltalake-test/tests/data/delta-0.8.0-null-partition";
         let table = create_delta_table(
             path,
             vec![schema_field("k", PrimitiveType::String, true)],
@@ -570,7 +579,7 @@ mod tests {
             ],
         );
 
-        let path = "tests/data/delta-0.8.0-special-partition";
+        let path = "../deltalake-test/tests/data/delta-0.8.0-special-partition";
         let table = create_delta_table(
             path,
             vec![schema_field("x", PrimitiveType::String, true)],
@@ -601,7 +610,7 @@ mod tests {
             ],
         );
 
-        let path = "tests/data/delta-0.8.0-partitioned";
+        let path = "../deltalake-test/tests/data/delta-0.8.0-partitioned";
         let table = create_delta_table(
             path,
             vec![
@@ -668,7 +677,7 @@ mod tests {
     // Test opening the newly created Delta table
     #[tokio::test]
     async fn test_open_created_delta_table() {
-        let path = "tests/data/delta-0.2.0";
+        let path = "../deltalake-test/tests/data/delta-0.2.0";
         let table = open_created_delta_table(path, Vec::new()).await;
         assert_delta_table(
             table,
@@ -687,7 +696,7 @@ mod tests {
             &[],
         );
 
-        let path = "tests/data/delta-0.8-empty";
+        let path = "../deltalake-test/tests/data/delta-0.8-empty";
         let table = open_created_delta_table(path, Vec::new()).await;
         assert_delta_table(
             table,
@@ -701,7 +710,7 @@ mod tests {
             &[],
         );
 
-        let path = "tests/data/delta-0.8.0";
+        let path = "../deltalake-test/tests/data/delta-0.8.0";
         let table = open_created_delta_table(path, Vec::new()).await;
         assert_delta_table(
             table,
@@ -720,7 +729,7 @@ mod tests {
     // Test Parquet files in path
     #[tokio::test]
     async fn test_convert_to_delta_from_path() {
-        let path = "tests/data/delta-2.2.0-partitioned-types";
+        let path = "../deltalake-test/tests/data/delta-2.2.0-partitioned-types";
         let table = create_delta_table(
             path,
             vec![
@@ -760,7 +769,7 @@ mod tests {
             ],
         );
 
-        let path = "tests/data/delta-0.8.0-numeric-partition";
+        let path = "../deltalake-test/tests/data/delta-0.8.0-numeric-partition";
         let table = create_delta_table(
             path,
             vec![
@@ -819,7 +828,7 @@ mod tests {
     #[tokio::test]
     async fn test_partition_column_not_exist() {
         let _table = ConvertToDeltaBuilder::new()
-            .with_location("tests/data/delta-0.8.0-null-partition")
+            .with_location("../deltalake-test/tests/data/delta-0.8.0-null-partition")
             .with_partition_schema(vec![schema_field("foo", PrimitiveType::String, true)])
             .await
             .expect_err(
@@ -830,7 +839,7 @@ mod tests {
     #[tokio::test]
     async fn test_missing_partition_schema() {
         let _table = ConvertToDeltaBuilder::new()
-            .with_location("tests/data/delta-0.8.0-numeric-partition")
+            .with_location("../deltalake-test/tests/data/delta-0.8.0-numeric-partition")
             .await
             .expect_err("The schema of a partition column is not provided by user. Should error");
     }
@@ -838,7 +847,7 @@ mod tests {
     #[tokio::test]
     async fn test_delta_table_already() {
         let _table = ConvertToDeltaBuilder::new()
-            .with_location("tests/data/delta-0.2.0")
+            .with_location("../deltalake-test/tests/data/delta-0.2.0")
             .await
             .expect_err("The given location is already a delta table location. Should error");
     }

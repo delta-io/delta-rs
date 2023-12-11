@@ -30,7 +30,6 @@ use crate::partitions::PartitionFilter;
 use crate::protocol::{
     find_latest_check_point_for_version, get_last_checkpoint, ProtocolError, Stats,
 };
-use crate::storage::config::configure_log_store;
 use crate::storage::{commit_uri_from_version, ObjectStoreRef};
 
 pub mod builder;
@@ -347,12 +346,9 @@ impl<'de> Deserialize<'de> for DeltaTable {
                 let storage_config: LogStoreConfig = seq
                     .next_element()?
                     .ok_or_else(|| A::Error::invalid_length(0, &self))?;
-                let log_store = configure_log_store(
-                    storage_config.location.as_ref(),
-                    storage_config.options,
-                    None,
-                )
-                .map_err(|_| A::Error::custom("Failed deserializing LogStore"))?;
+                let log_store =
+                    crate::logstore::logstore_for(storage_config.location, storage_config.options)
+                        .map_err(|_| A::Error::custom("Failed deserializing LogStore"))?;
                 let last_check_point = seq
                     .next_element()?
                     .ok_or_else(|| A::Error::invalid_length(0, &self))?;
@@ -474,7 +470,7 @@ impl DeltaTable {
         Ok(current_delta_log_ver)
     }
 
-    #[cfg(any(feature = "parquet", feature = "parquet2"))]
+    #[cfg(feature = "parquet")]
     async fn restore_checkpoint(&mut self, check_point: CheckPoint) -> Result<(), DeltaTableError> {
         self.state = DeltaTableState::from_checkpoint(self, &check_point).await?;
 
@@ -516,7 +512,7 @@ impl DeltaTable {
 
     /// Updates the DeltaTable to the most recent state committed to the transaction log by
     /// loading the last checkpoint and incrementally applying each version since.
-    #[cfg(any(feature = "parquet", feature = "parquet2"))]
+    #[cfg(feature = "parquet")]
     pub async fn update(&mut self) -> Result<(), DeltaTableError> {
         match get_last_checkpoint(self.log_store.as_ref()).await {
             Ok(last_check_point) => {
@@ -538,7 +534,7 @@ impl DeltaTable {
     }
 
     /// Updates the DeltaTable to the most recent state committed to the transaction log.
-    #[cfg(not(any(feature = "parquet", feature = "parquet2")))]
+    #[cfg(not(feature = "parquet"))]
     pub async fn update(&mut self) -> Result<(), DeltaTableError> {
         self.update_incremental(None).await
     }
@@ -615,7 +611,7 @@ impl DeltaTable {
         }
 
         // 1. find latest checkpoint below version
-        #[cfg(any(feature = "parquet", feature = "parquet2"))]
+        #[cfg(feature = "parquet")]
         match find_latest_check_point_for_version(self.log_store.as_ref(), version).await? {
             Some(check_point) => {
                 self.restore_checkpoint(check_point).await?;
@@ -940,8 +936,6 @@ mod tests {
     use super::*;
     use crate::kernel::{DataType, PrimitiveType, StructField};
     use crate::operations::create::CreateBuilder;
-    #[cfg(any(feature = "s3", feature = "s3-native-tls"))]
-    use crate::table::builder::DeltaTableBuilder;
 
     #[tokio::test]
     async fn table_round_trip() {
@@ -981,6 +975,7 @@ mod tests {
         drop(tmp_dir);
     }
 
+    /* TODO move into deltalake-aws crate
     #[cfg(any(feature = "s3", feature = "s3-native-tls"))]
     #[test]
     fn normalize_table_uri_s3() {
@@ -992,10 +987,11 @@ mod tests {
         ]
         .iter()
         {
-            let table = DeltaTableBuilder::from_uri(table_uri).build().unwrap();
+            let table = crate::DeltaTableBuilder::from_uri(table_uri).build().unwrap();
             assert_eq!(table.table_uri(), "s3://tests/data/delta-0.8.0");
         }
     }
+    */
 
     #[test]
     fn get_table_constraints() {

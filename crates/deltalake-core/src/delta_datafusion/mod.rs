@@ -1911,7 +1911,7 @@ mod tests {
 
     #[tokio::test]
     async fn delta_table_provider_with_config() {
-        let table = crate::open_table("tests/data/delta-2.2.0-partitioned-types")
+        let table = crate::open_table("../deltalake-test/tests/data/delta-2.2.0-partitioned-types")
             .await
             .unwrap();
         let config = DeltaScanConfigBuilder::new()

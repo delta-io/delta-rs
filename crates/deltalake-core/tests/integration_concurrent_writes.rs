@@ -1,11 +1,13 @@
 #![cfg(feature = "integration_test")]
 
+use log::*;
+
 use deltalake_core::kernel::{Action, Add, DataType, PrimitiveType, StructField, StructType};
 use deltalake_core::operations::transaction::commit;
 use deltalake_core::operations::DeltaOps;
 use deltalake_core::protocol::{DeltaOperation, SaveMode};
-use deltalake_core::test_utils::{IntegrationContext, StorageIntegration, TestResult, TestTables};
 use deltalake_core::{DeltaTable, DeltaTableBuilder};
+use deltalake_test::utils::*;
 use serial_test::serial;
 use std::collections::HashMap;
 use std::future::Future;
@@ -15,38 +17,13 @@ use std::time::Duration;
 #[tokio::test]
 #[serial]
 async fn test_concurrent_writes_local() -> TestResult {
-    test_concurrent_writes(StorageIntegration::Local).await?;
+    let storage = Box::new(LocalStorageIntegration::default());
+    let context = IntegrationContext::new(storage)?;
+    test_concurrent_writes(&context).await?;
     Ok(())
 }
 
-#[cfg(feature = "s3")]
-#[tokio::test]
-#[serial]
-async fn concurrent_writes_s3() -> TestResult {
-    test_concurrent_writes(StorageIntegration::Amazon).await?;
-    Ok(())
-}
-
-#[cfg(feature = "azure")]
-#[tokio::test]
-#[serial]
-async fn test_concurrent_writes_azure() -> TestResult {
-    test_concurrent_writes(StorageIntegration::Microsoft).await?;
-    Ok(())
-}
-
-// tracked via https://github.com/datafusion-contrib/datafusion-objectstore-hdfs/issues/13
-#[ignore]
-#[cfg(feature = "hdfs")]
-#[tokio::test]
-#[serial]
-async fn test_concurrent_writes_hdfs() -> TestResult {
-    test_concurrent_writes(StorageIntegration::Hdfs).await?;
-    Ok(())
-}
-
-async fn test_concurrent_writes(integration: StorageIntegration) -> TestResult {
-    let context = IntegrationContext::new(integration)?;
+async fn test_concurrent_writes(context: &IntegrationContext) -> TestResult {
     let (_table, table_uri) = prepare_table(&context).await?;
     run_test(|name| Worker::new(&table_uri, name)).await;
     Ok(())

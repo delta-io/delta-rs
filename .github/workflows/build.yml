@@ -144,25 +144,3 @@ jobs:
       - name: Run tests with native-tls
         run: |
           cargo test --no-default-features --features integration_test,s3-native-tls,datafusion
-
-  parquet2_test:
-    runs-on: ubuntu-latest
-    env:
-      RUSTFLAGS: "-C debuginfo=line-tables-only"
-      CARGO_INCREMENTAL: 0
-
-    steps:
-      - uses: actions/checkout@v3
-
-      - name: Install minimal stable with clippy and rustfmt
-        uses: actions-rs/toolchain@v1
-        with:
-          profile: default
-          toolchain: stable
-          override: true
-
-      - uses: Swatinem/rust-cache@v2
-
-      - name: Run tests
-        working-directory: crates/deltalake-core
-        run: cargo test --no-default-features --features=parquet2

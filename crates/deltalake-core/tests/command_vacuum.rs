@@ -1,14 +1,12 @@
 use chrono::Duration;
-use common::clock::TestClock;
-use common::TestContext;
 use deltalake_core::kernel::StructType;
 use deltalake_core::operations::vacuum::Clock;
 use deltalake_core::operations::DeltaOps;
+use deltalake_test::clock::TestClock;
+use deltalake_test::*;
 use object_store::{path::Path, Error as ObjectStoreError, ObjectStore};
 use serde_json::json;
 use std::sync::Arc;
-
-mod common;
 
 /// Basic schema
 pub fn get_xy_date_schema() -> StructType {
@@ -51,7 +49,7 @@ async fn test_non_partitioned_table() {
     ];
 
     for path in paths {
-        common::add_file(
+        add_file(
             &mut table,
             &path,
             "random junk".as_bytes().into(),
@@ -64,7 +62,7 @@ async fn test_non_partitioned_table() {
 
     clock.tick(Duration::seconds(10));
 
-    common::remove_file(
+    remove_file(
         &mut table,
         "delete_me.parquet",
         &[],
@@ -103,7 +101,7 @@ async fn test_partitioned_table() {
     let partition_values = [("date", Some("2022-07-03")), ("x", Some("2"))];
 
     for path in paths {
-        common::add_file(
+        add_file(
             &mut table,
             &path,
             "random junk".as_bytes().into(),
@@ -116,7 +114,7 @@ async fn test_partitioned_table() {
 
     clock.tick(Duration::seconds(10));
 
-    common::remove_file(
+    remove_file(
         &mut table,
         "date=2022-07-03/x=2/delete_me.parquet",
         &partition_values,
@@ -168,7 +166,7 @@ async fn test_partitions_included() {
     let partition_values = &[("_date", Some("2022-07-03"))];
 
     for path in paths {
-        common::add_file(
+        add_file(
             &mut table,
             &path,
             "random junk".as_bytes().into(),
@@ -181,7 +179,7 @@ async fn test_partitions_included() {
 
     clock.tick(Duration::seconds(10));
 
-    common::remove_file(
+    remove_file(
         &mut table,
         "_date=2022-07-03/delete_me.parquet",
         partition_values,
@@ -247,7 +245,7 @@ async fn test_non_managed_files() {
     ];
 
     for path in paths_delete.iter().chain(paths_ignore.iter()) {
-        common::add_file(
+        add_file(
             &mut table,
             path,
             "random junk".as_bytes().into(),

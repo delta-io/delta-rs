@@ -736,7 +736,7 @@ mod tests {
         use parquet::file::reader::{FileReader, SerializedFileReader};
         use std::fs::File;
 
-        let path = "./tests/data/delta-0.2.0/_delta_log/00000000000000000003.checkpoint.parquet";
+        let path = "../deltalake-test/tests/data/delta-0.2.0/_delta_log/00000000000000000003.checkpoint.parquet";
         let preader = SerializedFileReader::new(File::open(path).unwrap()).unwrap();
 
         let mut iter = preader.get_row_iter(None).unwrap();
