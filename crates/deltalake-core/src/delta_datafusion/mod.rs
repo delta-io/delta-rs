@@ -42,7 +42,7 @@ use datafusion::datasource::physical_plan::{
 };
 use datafusion::datasource::provider::TableProviderFactory;
 use datafusion::datasource::{listing::PartitionedFile, MemTable, TableProvider, TableType};
-use datafusion::execution::context::{SessionContext, SessionState, TaskContext};
+use datafusion::execution::context::{SessionConfig, SessionContext, SessionState, TaskContext};
 use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::execution::FunctionRegistry;
 use datafusion::optimizer::utils::conjunction;
@@ -65,6 +65,7 @@ use datafusion_physical_expr::execution_props::ExecutionProps;
 use datafusion_physical_expr::{create_physical_expr, PhysicalExpr};
 use datafusion_proto::logical_plan::LogicalExtensionCodec;
 use datafusion_proto::physical_plan::PhysicalExtensionCodec;
+use datafusion_sql::planner::ParserOptions;
 use log::error;
 use object_store::ObjectMeta;
 use serde::{Deserialize, Serialize};
@@ -1494,6 +1495,111 @@ pub async fn find_files<'a>(
     }
 }
 
+/// A wrapper for sql_parser's ParserOptions to capture sane default table defaults
+pub struct DeltaParserOptions {
+    inner: ParserOptions,
+}
+
+impl Default for DeltaParserOptions {
+    fn default() -> Self {
+        DeltaParserOptions {
+            inner: ParserOptions {
+                enable_ident_normalization: false,
+                ..ParserOptions::default()
+            },
+        }
+    }
+}
+
+impl From<DeltaParserOptions> for ParserOptions {
+    fn from(value: DeltaParserOptions) -> Self {
+        value.inner
+    }
+}
+
+/// A wrapper for Deltafusion's SessionConfig to capture sane default table defaults
+pub struct DeltaSessionConfig {
+    inner: SessionConfig,
+}
+
+impl Default for DeltaSessionConfig {
+    fn default() -> Self {
+        DeltaSessionConfig {
+            inner: SessionConfig::default()
+                .set_bool("datafusion.sql_parser.enable_ident_normalization", false),
+        }
+    }
+}
+
+impl From<DeltaSessionConfig> for SessionConfig {
+    fn from(value: DeltaSessionConfig) -> Self {
+        value.inner
+    }
+}
+
+/// A wrapper for Deltafusion's SessionContext to capture sane default table defaults
+pub struct DeltaSessionContext {
+    inner: SessionContext,
+}
+
+impl Default for DeltaSessionContext {
+    fn default() -> Self {
+        DeltaSessionContext {
+            inner: SessionContext::new_with_config(DeltaSessionConfig::default().into()),
+        }
+    }
+}
+
+impl From<DeltaSessionContext> for SessionContext {
+    fn from(value: DeltaSessionContext) -> Self {
+        value.inner
+    }
+}
+
+/// A wrapper for Deltafusion's Column to preserve case-sensitivity during string conversion
+pub struct DeltaColumn {
+    inner: Column,
+}
+
+impl From<&str> for DeltaColumn {
+    fn from(c: &str) -> Self {
+        DeltaColumn {
+            inner: Column::from_qualified_name_ignore_case(c),
+        }
+    }
+}
+
+/// Create a column, cloning the string
+impl From<&String> for DeltaColumn {
+    fn from(c: &String) -> Self {
+        DeltaColumn {
+            inner: Column::from_qualified_name_ignore_case(c),
+        }
+    }
+}
+
+/// Create a column, reusing the existing string
+impl From<String> for DeltaColumn {
+    fn from(c: String) -> Self {
+        DeltaColumn {
+            inner: Column::from_qualified_name_ignore_case(c),
+        }
+    }
+}
+
+impl From<DeltaColumn> for Column {
+    fn from(value: DeltaColumn) -> Self {
+        value.inner
+    }
+}
+
+/// Create a column, resuing the existing datafusion column
+impl From<Column> for DeltaColumn {
+    fn from(c: Column) -> Self {
+        DeltaColumn { inner: c }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::writer::test_utils::get_delta_schema;
@@ -1803,5 +1909,71 @@ mod tests {
             "+-------+------------+----+",
         ];
         assert_batches_sorted_eq!(&expected, &actual);
+    }
+
+    #[tokio::test]
+    async fn delta_scan_case_sensitive() {
+        let schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("moDified", DataType::Utf8, true),
+            Field::new("ID", DataType::Utf8, true),
+            Field::new("vaLue", DataType::Int32, true),
+        ]));
+
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(arrow::array::StringArray::from(vec![
+                    "2021-02-01",
+                    "2021-02-01",
+                    "2021-02-02",
+                    "2021-02-02",
+                ])),
+                Arc::new(arrow::array::StringArray::from(vec!["A", "B", "C", "D"])),
+                Arc::new(arrow::array::Int32Array::from(vec![1, 10, 20, 100])),
+            ],
+        )
+        .unwrap();
+        // write some data
+        let table = crate::DeltaOps::new_in_memory()
+            .write(vec![batch.clone()])
+            .with_save_mode(crate::protocol::SaveMode::Append)
+            .await
+            .unwrap();
+
+        let config = DeltaScanConfigBuilder::new().build(&table.state).unwrap();
+        let log = table.log_store();
+
+        let provider = DeltaTableProvider::try_new(table.state, log, config).unwrap();
+        let ctx: SessionContext = DeltaSessionContext::default().into();
+        ctx.register_table("test", Arc::new(provider)).unwrap();
+
+        let df = ctx
+            .sql("select ID, moDified, vaLue from test")
+            .await
+            .unwrap();
+        let actual = df.collect().await.unwrap();
+        let expected = vec![
+            "+----+------------+-------+",
+            "| ID | moDified   | vaLue |",
+            "+----+------------+-------+",
+            "| A  | 2021-02-01 | 1     |",
+            "| B  | 2021-02-01 | 10    |",
+            "| C  | 2021-02-02 | 20    |",
+            "| D  | 2021-02-02 | 100   |",
+            "+----+------------+-------+",
+        ];
+        assert_batches_sorted_eq!(&expected, &actual);
+
+        /* TODO: Datafusion doesn't have any options to prevent case-sensitivity with the col func */
+        /*
+        let df = ctx
+            .table("test")
+            .await
+            .unwrap()
+            .select(vec![col("ID"), col("moDified"), col("vaLue")])
+            .unwrap();
+        let actual = df.collect().await.unwrap();
+        assert_batches_sorted_eq!(&expected, &actual);
+        */
     }
 }
