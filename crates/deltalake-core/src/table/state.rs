@@ -9,6 +9,7 @@ use chrono::Utc;
 use lazy_static::lazy_static;
 use object_store::{path::Path, Error as ObjectStoreError, ObjectStore};
 use serde::{Deserialize, Serialize};
+use tracing::instrument;
 
 use super::config::TableConfig;
 use crate::errors::DeltaTableError;
@@ -98,6 +99,7 @@ impl DeltaTableState {
 
     /// Update DeltaTableState with checkpoint data.
     #[cfg(any(feature = "parquet", feature = "parquet2"))]
+    #[instrument(skip(self, data))]
     pub fn process_checkpoint_bytes(
         &mut self,
         data: bytes::Bytes,

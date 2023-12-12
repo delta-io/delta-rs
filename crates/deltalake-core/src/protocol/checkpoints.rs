@@ -17,6 +17,7 @@ use parquet::arrow::ArrowWriter;
 use parquet::errors::ParquetError;
 use regex::Regex;
 use serde_json::Value;
+use tracing::instrument;
 
 use super::{time_utils, Action, Add as AddAction, MetaData, Protocol, ProtocolError, Txn};
 use crate::arrow_convert::delta_log_schema_for_table;
@@ -67,6 +68,7 @@ impl From<CheckpointError> for ProtocolError {
 pub const CHECKPOINT_RECORD_BATCH_SIZE: usize = 5000;
 
 /// Creates checkpoint at current table version
+#[instrument(skip(table))]
 pub async fn create_checkpoint(table: &DeltaTable) -> Result<(), ProtocolError> {
     create_checkpoint_for(table.version(), table.get_state(), table.storage.as_ref()).await?;
     Ok(())
@@ -110,6 +112,7 @@ pub async fn create_checkpoint_from_table_uri_and_cleanup(
 }
 
 /// Creates checkpoint for a given table version, table state and object store
+#[instrument(skip(state, storage))]
 pub async fn create_checkpoint_for(
     version: i64,
     state: &DeltaTableState,
