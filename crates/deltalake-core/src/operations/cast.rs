@@ -44,9 +44,7 @@ fn is_cast_required(a: &DataType, b: &DataType) -> bool {
             // If list item name is not the default('item') the list must be casted
             !a.equals_datatype(b) || a_item.name() != b_item.name()
         }
-        (_, _) => {
-             !a.equals_datatype(b)
-        }
+        (_, _) => !a.equals_datatype(b),
     }
 }
 
@@ -65,30 +63,35 @@ pub fn cast_record_batch(
     Ok(RecordBatch::try_new(target_schema, columns)?)
 }
 
-
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
+    use crate::operations::cast::{cast_record_batch, is_cast_required};
     use arrow::array::ArrayData;
     use arrow_array::{Array, ArrayRef, ListArray, RecordBatch};
     use arrow_buffer::Buffer;
     use arrow_schema::{DataType, Field, FieldRef, Fields, Schema, SchemaRef};
-    use crate::operations::cast::{cast_record_batch, is_cast_required};
+    use std::sync::Arc;
 
     #[test]
-    fn test_cast_record_batch_with_list_non_default_item(){
+    fn test_cast_record_batch_with_list_non_default_item() {
         let array = Arc::new(make_list_array()) as ArrayRef;
-        let source_schema = Schema::new(vec![
-            Field::new("list_column", array.data_type().clone(), false)
-        ]);
+        let source_schema = Schema::new(vec![Field::new(
+            "list_column",
+            array.data_type().clone(),
+            false,
+        )]);
         let record_batch = RecordBatch::try_new(Arc::new(source_schema), vec![array]).unwrap();
 
-        let fields = Fields::from(vec![Field::new_list("list_column", Field::new("item", DataType::Int8, false), false)]);
+        let fields = Fields::from(vec![Field::new_list(
+            "list_column",
+            Field::new("item", DataType::Int8, false),
+            false,
+        )]);
         let target_schema = Arc::new(Schema::new(fields)) as SchemaRef;
 
         let result = cast_record_batch(&record_batch, target_schema, false);
 
-        let schema =  result.unwrap().schema();
+        let schema = result.unwrap().schema();
         let field = schema.column_with_name("list_column").unwrap().1;
         if let DataType::List(list_item) = field.data_type() {
             assert_eq!(list_item.name(), "item");
@@ -106,8 +109,7 @@ mod tests {
 
         let value_offsets = Buffer::from_slice_ref([0, 3, 6, 8]);
 
-        let list_data_type =
-            DataType::List(Arc::new(Field::new("element", DataType::Int32, true)));
+        let list_data_type = DataType::List(Arc::new(Field::new("element", DataType::Int32, true)));
         let list_data = ArrayData::builder(list_data_type)
             .len(3)
             .add_buffer(value_offsets)
@@ -127,10 +129,13 @@ mod tests {
 
     #[test]
     fn test_is_cast_required_with_list_non_default_item() {
-        let field1 = DataType::List(FieldRef::from(Field::new("element", DataType::Int32, false)));
-        let field2 = DataType::List(FieldRef::from(Field::new("item", DataType::Int32, false)));
+        let field1 = DataType::List(FieldRef::from(Field::new("item", DataType::Int32, false)));
+        let field2 = DataType::List(FieldRef::from(Field::new(
+            "element",
+            DataType::Int32,
+            false,
+        )));
 
         assert!(is_cast_required(&field1, &field2));
     }
-
 }
