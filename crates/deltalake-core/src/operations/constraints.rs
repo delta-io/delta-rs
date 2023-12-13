@@ -186,7 +186,7 @@ impl std::future::IntoFuture for ConstraintBuilder {
                 Action::Protocol(protocol),
             ];
 
-            let _version = commit(
+            let version = commit(
                 this.log_store.as_ref(),
                 &actions,
                 operations,
@@ -195,11 +195,8 @@ impl std::future::IntoFuture for ConstraintBuilder {
             )
             .await?;
 
-            this.snapshot.merge(
-                DeltaTableState::from_actions(actions, _version)?,
-                true,
-                true,
-            );
+            this.snapshot
+                .merge(DeltaTableState::from_actions(actions, version)?, true, true);
             Ok(DeltaTable::new_with_state(this.log_store, this.snapshot))
         })
     }
