@@ -81,6 +81,7 @@ parking_lot = "0.12"
 parquet2 = { version = "0.17", optional = true }
 percent-encoding = "2"
 tracing = { version = "0.1", optional = true }
+tracing-futures = { version = "0.2.5", features = ["futures-03"], optional = true }
 rand = "0.8"
 
 # hdfs
@@ -139,7 +140,7 @@ arrow = [
     "arrow-select",
     "arrow-buffer",
 ]
-default = ["arrow", "parquet", "tracing"]
+default = ["arrow", "parquet", "tracing", "tracing-futures"]
 datafusion = [
     "dep:datafusion",
     "datafusion-expr",
