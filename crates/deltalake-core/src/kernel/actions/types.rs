@@ -640,6 +640,7 @@ pub struct Remove {
     /// [RFC 2396 URI Generic Syntax], which needs to be decoded to get the data file path.
     ///
     /// [RFC 2396 URI Generic Syntax]: https://www.ietf.org/rfc/rfc2396.txt
+    #[serde(with = "serde_path")]
     pub path: String,
 
     /// When `false` the logical file must already be present in the table or the records
