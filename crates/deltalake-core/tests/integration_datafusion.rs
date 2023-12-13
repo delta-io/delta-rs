@@ -227,8 +227,7 @@ mod local {
             .unwrap()
             .table_uri
             .clone();
-        let source_location = Url::parse(&source_uri).unwrap();
-        let source_store = configure_log_store(source_location, HashMap::new()).unwrap();
+        let source_store = configure_log_store(&source_uri, HashMap::new(), None).unwrap();
         let object_store_url = source_store.object_store_url();
         let source_store_url: &Url = object_store_url.as_ref();
         state
