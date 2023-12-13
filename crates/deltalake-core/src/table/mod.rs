@@ -4,7 +4,6 @@ use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::fmt;
 use std::fmt::Formatter;
-use std::io::{BufRead, BufReader, Cursor};
 use std::{cmp::max, cmp::Ordering, collections::HashSet};
 
 use chrono::{DateTime, Utc};
@@ -25,8 +24,8 @@ use crate::kernel::{
     Action, Add, CommitInfo, DataCheck, DataType, Format, Metadata, Protocol, ReaderFeatures,
     Remove, StructType, WriterFeatures,
 };
-use crate::logstore::LogStoreConfig;
 use crate::logstore::LogStoreRef;
+use crate::logstore::{self, LogStoreConfig};
 use crate::partitions::PartitionFilter;
 use crate::protocol::{
     find_latest_check_point_for_version, get_last_checkpoint, ProtocolError, Stats,
@@ -348,9 +347,12 @@ impl<'de> Deserialize<'de> for DeltaTable {
                 let storage_config: LogStoreConfig = seq
                     .next_element()?
                     .ok_or_else(|| A::Error::invalid_length(0, &self))?;
-                let log_store =
-                    configure_log_store(storage_config.location, storage_config.options)
-                        .map_err(|_| A::Error::custom("Failed deserializing LogStore"))?;
+                let log_store = configure_log_store(
+                    storage_config.location.as_ref(),
+                    storage_config.options,
+                    None,
+                )
+                .map_err(|_| A::Error::custom("Failed deserializing LogStore"))?;
                 let last_check_point = seq
                     .next_element()?
                     .ok_or_else(|| A::Error::invalid_length(0, &self))?;
@@ -480,7 +482,7 @@ impl DeltaTable {
     }
 
     /// returns the latest available version of the table
-    pub async fn get_latest_version(&mut self) -> Result<i64, DeltaTableError> {
+    pub async fn get_latest_version(&self) -> Result<i64, DeltaTableError> {
         self.log_store.get_latest_version(self.version()).await
     }
 
@@ -503,38 +505,13 @@ impl DeltaTable {
     ) -> Result<PeekCommit, DeltaTableError> {
         let next_version = current_version + 1;
         let commit_log_bytes = match self.log_store.read_commit_entry(next_version).await {
-            Ok(bytes) => Ok(bytes),
-            Err(DeltaTableError::ObjectStore {
-                source: ObjectStoreError::NotFound { .. },
-            }) => return Ok(PeekCommit::UpToDate),
+            Ok(Some(bytes)) => Ok(bytes),
+            Ok(None) => return Ok(PeekCommit::UpToDate),
             Err(err) => Err(err),
         }?;
 
-        let actions = Self::get_actions(next_version, commit_log_bytes).await;
+        let actions = logstore::get_actions(next_version, commit_log_bytes).await;
         Ok(PeekCommit::New(next_version, actions.unwrap()))
-    }
-
-    /// Reads a commit and gets list of actions
-    async fn get_actions(
-        version: i64,
-        commit_log_bytes: bytes::Bytes,
-    ) -> Result<Vec<Action>, DeltaTableError> {
-        debug!("parsing commit with version {version}...");
-        let reader = BufReader::new(Cursor::new(commit_log_bytes));
-
-        let mut actions = Vec::new();
-        for re_line in reader.lines() {
-            let line = re_line?;
-            let lstr = line.as_str();
-            let action =
-                serde_json::from_str(lstr).map_err(|e| DeltaTableError::InvalidJsonLog {
-                    json_err: e,
-                    line,
-                    version,
-                })?;
-            actions.push(action);
-        }
-        Ok(actions)
     }
 
     /// Updates the DeltaTable to the most recent state committed to the transaction log by
@@ -591,19 +568,19 @@ impl DeltaTable {
             .map(|version| {
                 let log_store = log_store.clone();
                 async move {
-                    let data = log_store.read_commit_entry(version).await?;
-                    let actions = Self::get_actions(version, data).await?;
-                    Ok((version, actions))
+                    if let Some(data) = log_store.read_commit_entry(version).await? {
+                        Ok(Some((version, logstore::get_actions(version, data).await?)))
+                    } else {
+                        Ok(None)
+                    }
                 }
             })
             .buffered(buf_size);
 
         while let Some(res) = log_stream.next().await {
             let (new_version, actions) = match res {
-                Ok((version, actions)) => (version, actions),
-                Err(DeltaTableError::ObjectStore {
-                    source: ObjectStoreError::NotFound { .. },
-                }) => break, // no more files in the log
+                Ok(Some((version, actions))) => (version, actions),
+                Ok(None) => break,
                 Err(err) => return Err(err),
             };
 

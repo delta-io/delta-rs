@@ -37,7 +37,7 @@ use serde_json::Value;
 use super::datafusion_utils::Expression;
 use super::transaction::PROTOCOL;
 use crate::delta_datafusion::expr::fmt_expr_to_sql;
-use crate::delta_datafusion::{find_files, register_store, DeltaScanBuilder};
+use crate::delta_datafusion::{find_files, register_store, DeltaScanBuilder, DeltaSessionContext};
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::{Action, Add, Remove};
 use crate::operations::transaction::commit;
@@ -280,7 +280,7 @@ impl std::future::IntoFuture for DeleteBuilder {
             PROTOCOL.can_write_to(&this.snapshot)?;
 
             let state = this.state.unwrap_or_else(|| {
-                let session = SessionContext::new();
+                let session: SessionContext = DeltaSessionContext::default().into();
 
                 // If a user provides their own their DF state then they must register the store themselves
                 register_store(this.log_store.clone(), session.runtime_env());

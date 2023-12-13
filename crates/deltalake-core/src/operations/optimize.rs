@@ -39,7 +39,6 @@ use parquet::file::properties::WriterProperties;
 use serde::{Deserialize, Serialize};
 
 use super::transaction::{commit, PROTOCOL};
-use super::write::cast_record_batch;
 use super::writer::{PartitionWriter, PartitionWriterConfig};
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::{Action, Remove};
@@ -442,7 +441,8 @@ impl MergePlan {
         while let Some(maybe_batch) = read_stream.next().await {
             let mut batch = maybe_batch?;
 
-            batch = cast_record_batch(&batch, task_parameters.file_schema.clone(), false)?;
+            batch =
+                super::cast::cast_record_batch(&batch, task_parameters.file_schema.clone(), false)?;
             partial_metrics.num_batches += 1;
             writer.write(&batch).await.map_err(DeltaTableError::from)?;
         }

@@ -15,6 +15,8 @@ use crate::table::builder::DeltaTableBuilder;
 use crate::DeltaTable;
 use std::collections::HashMap;
 
+#[cfg(feature = "arrow")]
+pub mod cast;
 #[cfg(all(feature = "arrow", feature = "parquet"))]
 pub mod convert_to_delta;
 pub mod create;

@@ -41,9 +41,9 @@ use deltalake::partitions::PartitionFilter;
 use deltalake::protocol::{ColumnCountStat, ColumnValueStat, DeltaOperation, SaveMode, Stats};
 use deltalake::DeltaOps;
 use deltalake::DeltaTableBuilder;
-use pyo3::exceptions::{PyIOError, PyRuntimeError, PyValueError};
+use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::{PyFrozenSet, PyType};
+use pyo3::types::PyFrozenSet;
 use serde_json::{Map, Value};
 
 use crate::error::DeltaProtocolError;
@@ -121,29 +121,6 @@ impl RawDeltaTable {
                 options,
             },
         })
-    }
-
-    #[classmethod]
-    #[pyo3(signature = (data_catalog, database_name, table_name, data_catalog_id, catalog_options = None))]
-    fn get_table_uri_from_data_catalog(
-        _cls: &PyType,
-        data_catalog: &str,
-        database_name: &str,
-        table_name: &str,
-        data_catalog_id: Option<String>,
-        catalog_options: Option<HashMap<String, String>>,
-    ) -> PyResult<String> {
-        let data_catalog = deltalake::data_catalog::get_data_catalog(data_catalog, catalog_options)
-            .map_err(|e| PyValueError::new_err(format!("{}", e)))?;
-        let table_uri = rt()?
-            .block_on(data_catalog.get_table_storage_location(
-                data_catalog_id,
-                database_name,
-                table_name,
-            ))
-            .map_err(|err| PyIOError::new_err(err.to_string()))?;
-
-        Ok(table_uri)
     }
 
     pub fn table_uri(&self) -> PyResult<String> {
