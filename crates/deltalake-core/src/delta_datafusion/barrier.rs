@@ -11,7 +11,6 @@ use arrow_array::{
     builder::UInt64Builder, types::UInt16Type, ArrayAccessor, ArrayRef, DictionaryArray,
     RecordBatch, StringArray,
 };
-use arrow_cast::pretty::pretty_format_batches;
 use arrow_schema::SchemaRef;
 use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, RecordBatchStream, SendableRecordBatchStream,
@@ -99,15 +98,6 @@ impl ExecutionPlan for MergeBarrierExec {
         partition: usize,
         context: std::sync::Arc<datafusion::execution::TaskContext>,
     ) -> datafusion_common::Result<datafusion::physical_plan::SendableRecordBatchStream> {
-        //dbg!("{:?}", &self.input);
-        //dbg!("{:?}", self.output_partitioning());
-        dbg!("Start MergeBarrier::execute for partition: {}", partition);
-        let input_partitions = self.input.output_partitioning().partition_count();
-        dbg!(
-            "Number of input partitions of  MergeBarrier::execute: {}",
-            input_partitions
-        );
-
         let input = self.input.execute(partition, context)?;
         Ok(Box::pin(MergeBarrierStream::new(
             input,
@@ -139,33 +129,32 @@ enum State {
 }
 
 #[derive(Debug)]
-enum PartitionStreamState {
+enum PartitionBarrierState {
     Closed,
     Open,
 }
 
 #[derive(Debug)]
-struct MergeBarrierPartitionStream {
-    state: PartitionStreamState,
+struct MergeBarrierPartition {
+    state: PartitionBarrierState,
     buffer: Vec<RecordBatch>,
     file_name: Option<String>,
 }
 
-impl MergeBarrierPartitionStream {
+impl MergeBarrierPartition {
     pub fn feed(&mut self, batch: RecordBatch) {
         match self.state {
-            PartitionStreamState::Closed => {
+            PartitionBarrierState::Closed => {
                 let delete_count = get_count(&batch, TARGET_DELETE_COLUMN);
                 let update_count = get_count(&batch, TARGET_UPDATE_COLUMN);
                 let insert_count = get_count(&batch, TARGET_INSERT_COLUMN);
-                println!("{}", pretty_format_batches(&[batch.clone()]).unwrap());
                 self.buffer.push(batch);
 
                 if insert_count > 0 || update_count > 0 || delete_count > 0 {
-                    self.state = PartitionStreamState::Open;
+                    self.state = PartitionBarrierState::Open;
                 }
             }
-            PartitionStreamState::Open => {
+            PartitionBarrierState::Open => {
                 self.buffer.push(batch);
             }
         }
@@ -173,8 +162,8 @@ impl MergeBarrierPartitionStream {
 
     pub fn drain(&mut self) -> Option<RecordBatch> {
         match self.state {
-            PartitionStreamState::Closed => None,
-            PartitionStreamState::Open => self.buffer.pop(),
+            PartitionBarrierState::Closed => None,
+            PartitionBarrierState::Open => self.buffer.pop(),
         }
     }
 }
@@ -187,7 +176,7 @@ struct MergeBarrierStream {
     survivors: Arc<Mutex<Vec<String>>>,
     // TODO: STD hashmap likely too slow
     map: HashMap<Option<String>, usize>,
-    file_partitions: Vec<MergeBarrierPartitionStream>,
+    file_partitions: Vec<MergeBarrierPartition>,
 }
 
 impl MergeBarrierStream {
@@ -218,17 +207,15 @@ impl Stream for MergeBarrierStream {
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         loop {
-            dbg!("{:?}", &self.state);
             match self.state {
                 State::Feed => {
-                    dbg!("Feed");
                     match self.input.poll_next_unpin(cx) {
                         Poll::Ready(Some(Ok(batch))) => {
-                            println!("{}", pretty_format_batches(&[batch.clone()]).unwrap());
                             let mut indices: Vec<_> = (0..(self.file_partitions.len()))
                                 .map(|_| UInt64Builder::with_capacity(batch.num_rows()))
                                 .collect();
 
+                            
                             let path_column = &self.file_column;
                             let array = batch
                                 .column_by_name(path_column)
@@ -253,12 +240,11 @@ impl Stream for MergeBarrierStream {
 
                                 if !self.map.contains_key(&file) {
                                     let key = self.file_partitions.len();
-                                    let part_stream = MergeBarrierPartitionStream {
-                                        state: PartitionStreamState::Closed,
+                                    let part_stream = MergeBarrierPartition {
+                                        state: PartitionBarrierState::Closed,
                                         buffer: Vec::new(),
                                         file_name: file.clone(),
                                     };
-                                    dbg!("{:?}", &part_stream);
                                     self.file_partitions.push(part_stream);
                                     indices.push(UInt64Builder::with_capacity(batch.num_rows()));
                                     self.map.insert(file.clone(), key);
@@ -321,7 +307,6 @@ impl Stream for MergeBarrierStream {
                     }
                 }
                 State::Drain => {
-                    dbg!("Drain");
                     for part in &mut self.file_partitions {
                         if let Some(batch) = part.drain() {
                             return Poll::Ready(Some(Ok(batch)));
@@ -332,7 +317,6 @@ impl Stream for MergeBarrierStream {
                     continue;
                 }
                 State::Finalize => {
-                    dbg!("Finalize");
                     for part in &mut self.file_partitions {
                         if let Some(batch) = part.drain() {
                             return Poll::Ready(Some(Ok(batch)));
@@ -343,8 +327,8 @@ impl Stream for MergeBarrierStream {
                         let mut lock = self.survivors.lock().unwrap();
                         for part in &self.file_partitions {
                             match part.state {
-                                PartitionStreamState::Closed => {}
-                                PartitionStreamState::Open => {
+                                PartitionBarrierState::Closed => {}
+                                PartitionBarrierState::Open => {
                                     if let Some(file_name) = &part.file_name {
                                         lock.push(file_name.to_owned())
                                     }

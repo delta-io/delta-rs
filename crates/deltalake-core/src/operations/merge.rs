@@ -1073,10 +1073,8 @@ async fn execute(
 
     {
         let lock = survivors.lock().unwrap();
-        dbg!("{:?}", &lock);
         for action in snapshot.files() {
             if lock.contains(&action.path) {
-                dbg!("contained");
                 metrics.num_target_files_removed += 1;
                 actions.push(Action::Remove(Remove {
                     path: action.path.clone(),
@@ -1621,13 +1619,13 @@ mod tests {
         assert_eq!(table.version(), 2);
         assert!(table.get_file_uris().count() >= 3);
         assert!(metrics.num_target_files_added >= 3);
-        //assert_eq!(metrics.num_target_files_removed, 2);
-        //assert_eq!(metrics.num_target_rows_copied, 1);
-        //assert_eq!(metrics.num_target_rows_updated, 3);
-        //assert_eq!(metrics.num_target_rows_inserted, 2);
-        //assert_eq!(metrics.num_target_rows_deleted, 0);
-        //assert_eq!(metrics.num_output_rows, 6);
-        //assert_eq!(metrics.num_source_rows, 3);
+        assert_eq!(metrics.num_target_files_removed, 2);
+        assert_eq!(metrics.num_target_rows_copied, 1);
+        assert_eq!(metrics.num_target_rows_updated, 3);
+        assert_eq!(metrics.num_target_rows_inserted, 2);
+        assert_eq!(metrics.num_target_rows_deleted, 0);
+        assert_eq!(metrics.num_output_rows, 6);
+        assert_eq!(metrics.num_source_rows, 3);
 
         let expected = vec![
             "+----+-------+------------+",
@@ -1672,7 +1670,7 @@ mod tests {
         .unwrap();
         let source = ctx.read_batch(batch).unwrap();
 
-        let (mut table, _metrics) = DeltaOps(table)
+        let (mut table, metrics) = DeltaOps(table)
             .merge(source, col("target.id").eq(col("source.id")))
             .with_source_alias("source")
             .with_target_alias("target")
@@ -1681,16 +1679,16 @@ mod tests {
             .await
             .unwrap();
 
-        //assert_eq!(table.version(), 2);
-        //assert!(table.get_file_uris().count() >= 2);
-        //assert!(metrics.num_target_files_added >= 2);
-        //assert_eq!(metrics.num_target_files_removed, 2);
-        //assert_eq!(metrics.num_target_rows_copied, 2);
-        //assert_eq!(metrics.num_target_rows_updated, 0);
-        //assert_eq!(metrics.num_target_rows_inserted, 0);
-        //assert_eq!(metrics.num_target_rows_deleted, 2);
-        //assert_eq!(metrics.num_output_rows, 2);
-        //assert_eq!(metrics.num_source_rows, 3);
+        assert_eq!(table.version(), 2);
+        assert!(table.get_file_uris().count() >= 2);
+        assert_eq!(metrics.num_target_files_added, 2);
+        assert_eq!(metrics.num_target_files_removed, 2);
+        assert_eq!(metrics.num_target_rows_copied, 2);
+        assert_eq!(metrics.num_target_rows_updated, 0);
+        assert_eq!(metrics.num_target_rows_inserted, 0);
+        assert_eq!(metrics.num_target_rows_deleted, 2);
+        assert_eq!(metrics.num_output_rows, 2);
+        assert_eq!(metrics.num_source_rows, 3);
 
         let commit_info = table.history(None).await.unwrap();
         let last_commit = &commit_info[commit_info.len() - 1];
@@ -1736,7 +1734,7 @@ mod tests {
         .unwrap();
         let source = ctx.read_batch(batch).unwrap();
 
-        let (mut table, _metrics) = DeltaOps(table)
+        let (mut table, metrics) = DeltaOps(table)
             .merge(source, col("target.id").eq(col("source.id")))
             .with_source_alias("source")
             .with_target_alias("target")
@@ -1745,16 +1743,16 @@ mod tests {
             .await
             .unwrap();
 
-        //assert_eq!(table.version(), 2);
-        //assert!(table.get_file_uris().count() >= 2);
-        //assert!(metrics.num_target_files_added >= 2);
-        //assert_eq!(metrics.num_target_files_removed, 2);
-        //assert_eq!(metrics.num_target_rows_copied, 3);
-        //assert_eq!(metrics.num_target_rows_updated, 0);
-        //assert_eq!(metrics.num_target_rows_inserted, 0);
-        //assert_eq!(metrics.num_target_rows_deleted, 1);
-        //assert_eq!(metrics.num_output_rows, 3);
-        //assert_eq!(metrics.num_source_rows, 3);
+        assert_eq!(table.version(), 2);
+        assert!(table.get_file_uris().count() >= 2);
+        assert_eq!(metrics.num_target_files_added, 1);
+        assert_eq!(metrics.num_target_files_removed, 1);
+        assert_eq!(metrics.num_target_rows_copied, 1);
+        assert_eq!(metrics.num_target_rows_updated, 0);
+        assert_eq!(metrics.num_target_rows_inserted, 0);
+        assert_eq!(metrics.num_target_rows_deleted, 1);
+        assert_eq!(metrics.num_output_rows, 1);
+        assert_eq!(metrics.num_source_rows, 3);
 
         let commit_info = table.history(None).await.unwrap();
         let last_commit = &commit_info[commit_info.len() - 1];
@@ -1868,7 +1866,7 @@ mod tests {
         .unwrap();
         let source = ctx.read_batch(batch).unwrap();
 
-        let (mut table, _metrics) = DeltaOps(table)
+        let (mut table, metrics) = DeltaOps(table)
             .merge(source, col("target.id").eq(col("source.id")))
             .with_source_alias("source")
             .with_target_alias("target")
@@ -1880,14 +1878,14 @@ mod tests {
             .unwrap();
 
         assert_eq!(table.version(), 2);
-        //assert!(metrics.num_target_files_added >= 2);
-        //assert_eq!(metrics.num_target_files_removed, 2);
-        //assert_eq!(metrics.num_target_rows_copied, 3);
-        //assert_eq!(metrics.num_target_rows_updated, 0);
-        //assert_eq!(metrics.num_target_rows_inserted, 0);
-        //assert_eq!(metrics.num_target_rows_deleted, 1);
-        //assert_eq!(metrics.num_output_rows, 3);
-        //assert_eq!(metrics.num_source_rows, 3);
+        assert!(metrics.num_target_files_added == 1);
+        assert_eq!(metrics.num_target_files_removed, 1);
+        assert_eq!(metrics.num_target_rows_copied, 1);
+        assert_eq!(metrics.num_target_rows_updated, 0);
+        assert_eq!(metrics.num_target_rows_inserted, 0);
+        assert_eq!(metrics.num_target_rows_deleted, 1);
+        assert_eq!(metrics.num_output_rows, 1);
+        assert_eq!(metrics.num_source_rows, 3);
 
         let commit_info = table.history(None).await.unwrap();
         let last_commit = &commit_info[commit_info.len() - 1];
