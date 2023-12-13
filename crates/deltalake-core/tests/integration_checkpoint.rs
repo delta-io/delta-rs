@@ -13,6 +13,7 @@ use std::time::Duration;
 use tokio::time::sleep;
 
 #[tokio::test]
+#[serial]
 async fn cleanup_metadata_fs_test() -> TestResult {
     let context = IntegrationContext::new(StorageIntegration::Local)?;
     cleanup_metadata_test(&context).await?;
@@ -109,6 +110,7 @@ async fn cleanup_metadata_test(context: &IntegrationContext) -> TestResult {
 }
 
 #[tokio::test]
+#[serial]
 async fn test_issue_1420_cleanup_expired_logs_for() -> DeltaResult<()> {
     let _ = std::fs::remove_dir_all("./tests/data/issue_1420");
 
