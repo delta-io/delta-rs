@@ -34,7 +34,6 @@ else:
 import pyarrow as pa
 import pyarrow.dataset as ds
 import pyarrow.fs as pa_fs
-import pyarrow_hotfix  # noqa: F401; addresses CVE-2023-47248; # type: ignore
 from pyarrow.lib import RecordBatchReader
 
 from ._internal import DeltaDataChecker as _DeltaDataChecker

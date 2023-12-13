@@ -2,7 +2,6 @@ from typing import Generator, Union
 
 import pyarrow as pa
 import pyarrow.dataset as ds
-import pyarrow_hotfix  # noqa: F401; addresses CVE-2023-47248; # type: ignore
 
 from ._internal import ArrayType as ArrayType
 from ._internal import Field as Field
