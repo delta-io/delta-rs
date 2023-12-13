@@ -1,0 +1,2 @@
+{"commitInfo":{"timestamp":1631873480445,"operation":"WRITE","operationParameters":{"mode":"ErrorIfExists","partitionBy":"[\"x\"]"},"isBlindAppend":true,"operationMetrics":{"numFiles":"1","numOutputBytes":"460","numOutputRows":"1"}}}
+{"remove":{"path":"x=A%252FA/part-00016-94175338-2acc-40c2-a68a-d08ba677975f.c000.snappy.parquet","deletionTimestamp":1631873480445,"partitionValues":{"x":"A/A"},"size":460,"modificationTime":1631873480391,"dataChange":true}}
