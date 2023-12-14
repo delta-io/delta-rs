@@ -8,8 +8,7 @@ use std::{
 };
 
 use arrow_array::{
-    builder::UInt64Builder, types::UInt16Type, ArrayAccessor, ArrayRef, DictionaryArray,
-    RecordBatch, StringArray,
+    builder::UInt64Builder, types::UInt16Type, ArrayRef, DictionaryArray, RecordBatch, StringArray,
 };
 use arrow_schema::SchemaRef;
 use datafusion::physical_plan::{
@@ -21,7 +20,7 @@ use datafusion_physical_expr::{Distribution, PhysicalExpr};
 use futures::{Stream, StreamExt};
 
 use crate::{
-    operations::merge::{TARGET_INSERT_COLUMN, TARGET_UPDATE_COLUMN, TARGET_DELETE_COLUMN},
+    operations::merge::{TARGET_DELETE_COLUMN, TARGET_INSERT_COLUMN, TARGET_UPDATE_COLUMN},
     DeltaTableError,
 };
 
@@ -142,6 +141,14 @@ struct MergeBarrierPartition {
 }
 
 impl MergeBarrierPartition {
+    pub fn new(file_name: Option<String>) -> Self {
+        MergeBarrierPartition {
+            state: PartitionBarrierState::Closed,
+            buffer: Vec::new(),
+            file_name,
+        }
+    }
+
     pub fn feed(&mut self, batch: RecordBatch) {
         match self.state {
             PartitionBarrierState::Closed => {
@@ -174,8 +181,7 @@ struct MergeBarrierStream {
     input: SendableRecordBatchStream,
     file_column: Arc<String>,
     survivors: Arc<Mutex<Vec<String>>>,
-    // TODO: STD hashmap likely too slow
-    map: HashMap<Option<String>, usize>,
+    map: HashMap<String, usize>,
     file_partitions: Vec<MergeBarrierPartition>,
 }
 
@@ -186,13 +192,16 @@ impl MergeBarrierStream {
         survivors: Arc<Mutex<Vec<String>>>,
         file_column: Arc<String>,
     ) -> Self {
+        // Always allocate for a null bucket at index 0;
+        let file_partitions = vec![MergeBarrierPartition::new(None)];
+
         MergeBarrierStream {
             schema,
             state: State::Feed,
             input,
             file_column,
             survivors,
-            file_partitions: Vec::new(),
+            file_partitions,
             map: HashMap::new(),
         }
     }
@@ -211,13 +220,8 @@ impl Stream for MergeBarrierStream {
                 State::Feed => {
                     match self.input.poll_next_unpin(cx) {
                         Poll::Ready(Some(Ok(batch))) => {
-                            let mut indices: Vec<_> = (0..(self.file_partitions.len()))
-                                .map(|_| UInt64Builder::with_capacity(batch.num_rows()))
-                                .collect();
-
-                            
                             let path_column = &self.file_column;
-                            let array = batch
+                            let file_dictionary = batch
                                 .column_by_name(path_column)
                                 .unwrap()
                                 .as_any()
@@ -225,33 +229,46 @@ impl Stream for MergeBarrierStream {
                                 .ok_or(DeltaTableError::Generic(format!(
                                     "Unable to downcast column {}",
                                     path_column
-                                )))?;
-
-                            // We need to obtain the path name at least once to determine which files need to be removed.
-                            let name = array.downcast_dict::<StringArray>().ok_or(
-                                DeltaTableError::Generic(format!(
+                                )))?
+                                .downcast_dict::<StringArray>()
+                                .ok_or(DeltaTableError::Generic(format!(
                                     "Unable to downcast column {}",
                                     path_column
-                                )),
-                            )?;
+                                )))?;
 
-                            for (idx, key_value) in array.keys_iter().enumerate() {
-                                let file = key_value.map(|value| name.value(value).to_owned());
+                            let mut key_map = Vec::new();
 
-                                if !self.map.contains_key(&file) {
-                                    let key = self.file_partitions.len();
-                                    let part_stream = MergeBarrierPartition {
-                                        state: PartitionBarrierState::Closed,
-                                        buffer: Vec::new(),
-                                        file_name: file.clone(),
-                                    };
-                                    self.file_partitions.push(part_stream);
-                                    indices.push(UInt64Builder::with_capacity(batch.num_rows()));
-                                    self.map.insert(file.clone(), key);
+                            for file_name in file_dictionary.values().into_iter() {
+                                match file_name {
+                                    Some(name) => {
+                                        if !self.map.contains_key(name) {
+                                            let key = self.file_partitions.len();
+                                            let part_stream = MergeBarrierPartition {
+                                                state: PartitionBarrierState::Closed,
+                                                buffer: Vec::new(),
+                                                file_name: Some(name.to_string()),
+                                            };
+                                            self.file_partitions.push(part_stream);
+                                            self.map.insert(name.to_string(), key);
+                                        }
+                                        let bucket_idx = self.map.get(name).unwrap();
+                                        key_map.push(*bucket_idx);
+                                    }
+                                    None => key_map.push(0),
                                 }
+                            }
 
-                                let entry = self.map.get(&file).unwrap();
-                                indices[*entry].append_value(idx as u64);
+                            let mut indices: Vec<_> = (0..(self.file_partitions.len()))
+                                .map(|_| UInt64Builder::with_capacity(batch.num_rows()))
+                                .collect();
+
+                            for (idx, key) in file_dictionary.keys().iter().enumerate() {
+                                match key {
+                                    Some(value) => {
+                                        indices[key_map[value as usize]].append_value(idx as u64)
+                                    }
+                                    None => indices[0].append_value(idx as u64),
+                                }
                             }
 
                             let batches: Vec<Result<(usize, RecordBatch), DataFusionError>> =
@@ -402,5 +419,8 @@ impl UserDefinedLogicalNodeCore for MergeBarrier {
 mod tests {
 
     #[tokio::test]
+    // TODO:
+    // Need to check if when null exist in dictionary keys
+    // Need to check nulls when in dictionary values
     async fn test_barrier() {}
 }

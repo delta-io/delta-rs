@@ -181,9 +181,7 @@ pub(crate) fn find_metric_node(
     None
 }
 
-pub(crate) fn find_barrier_node(
-    parent: &Arc<dyn ExecutionPlan>,
-) -> Option<Arc<dyn ExecutionPlan>> {
+pub(crate) fn find_barrier_node(parent: &Arc<dyn ExecutionPlan>) -> Option<Arc<dyn ExecutionPlan>> {
     //! Used to locate the physical MetricCountExec Node after the planner converts the logical node
     if parent.as_any().downcast_ref::<MergeBarrierExec>().is_some() {
         return Some(parent.to_owned());

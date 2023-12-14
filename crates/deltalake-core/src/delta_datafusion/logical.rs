@@ -38,12 +38,15 @@ impl UserDefinedLogicalNodeCore for MetricObserver {
         write!(f, "MetricObserver id={}", &self.id)
     }
 
-
     fn prevent_predicate_push_down_columns(&self) -> HashSet<String> {
         if self.enable_pushdown {
             HashSet::new()
         } else {
-            self.schema().fields().iter().map(|f| f.name().clone()).collect()
+            self.schema()
+                .fields()
+                .iter()
+                .map(|f| f.name().clone())
+                .collect()
         }
     }
 
@@ -55,7 +58,7 @@ impl UserDefinedLogicalNodeCore for MetricObserver {
         MetricObserver {
             id: self.id.clone(),
             input: inputs[0].clone(),
-            enable_pushdown: self.enable_pushdown
+            enable_pushdown: self.enable_pushdown,
         }
     }
 }

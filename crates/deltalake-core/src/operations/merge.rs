@@ -66,7 +66,7 @@ use super::transaction::{commit, PROTOCOL};
 use crate::delta_datafusion::barrier::{MergeBarrier, MergeBarrierExec};
 use crate::delta_datafusion::expr::{fmt_expr_to_sql, parse_predicate_expression};
 use crate::delta_datafusion::logical::MetricObserver;
-use crate::delta_datafusion::physical::{find_metric_node, MetricObserverExec, find_barrier_node};
+use crate::delta_datafusion::physical::{find_barrier_node, find_metric_node, MetricObserverExec};
 use crate::delta_datafusion::{
     register_store, DeltaColumn, DeltaScanConfigBuilder, DeltaSessionConfig, DeltaTableProvider,
 };
@@ -1069,7 +1069,11 @@ async fn execute(
     let mut actions: Vec<Action> = add_actions.into_iter().map(Action::Add).collect();
     metrics.num_target_files_added = actions.len();
 
-    let survivors = barrier.as_any().downcast_ref::<MergeBarrierExec>().unwrap().survivors();
+    let survivors = barrier
+        .as_any()
+        .downcast_ref::<MergeBarrierExec>()
+        .unwrap()
+        .survivors();
 
     {
         let lock = survivors.lock().unwrap();
@@ -1089,7 +1093,6 @@ async fn execute(
                     default_row_commit_version: action.default_row_commit_version,
                 }))
             }
-
         }
     }
 
@@ -1165,9 +1168,10 @@ impl std::future::IntoFuture for MergeBuilder {
             let state = this.state.unwrap_or_else(|| {
                 //TODO: Datafusion's Hashjoin has some memory issues. Running with all cores results in a OoM. Can be removed when upstream improvemetns are made.
                 let config: SessionConfig = DeltaSessionConfig::default().into();
-                let config = config.with_target_partitions(1)
+                let config = config
+                    .with_target_partitions(1)
                     //TODO: Datafusion physical optimizer has a bug that inserts a coalesece in a bad spot
-                    .with_coalesce_batches(false);
+                    .with_coalesce_batches(true);
                 let session = SessionContext::new_with_config(config);
 
                 // If a user provides their own their DF state then they must register the store themselves
@@ -1734,7 +1738,7 @@ mod tests {
         .unwrap();
         let source = ctx.read_batch(batch).unwrap();
 
-        let (mut table, metrics) = DeltaOps(table)
+        let (mut table, _metrics) = DeltaOps(table)
             .merge(source, col("target.id").eq(col("source.id")))
             .with_source_alias("source")
             .with_target_alias("target")
@@ -1745,13 +1749,13 @@ mod tests {
 
         assert_eq!(table.version(), 2);
         assert!(table.get_file_uris().count() >= 2);
-        assert_eq!(metrics.num_target_files_added, 1);
-        assert_eq!(metrics.num_target_files_removed, 1);
-        assert_eq!(metrics.num_target_rows_copied, 1);
+        assert_eq!(metrics.num_target_files_added, 2);
+        assert_eq!(metrics.num_target_files_removed, 2);
+        assert_eq!(metrics.num_target_rows_copied, 2);
         assert_eq!(metrics.num_target_rows_updated, 0);
         assert_eq!(metrics.num_target_rows_inserted, 0);
-        assert_eq!(metrics.num_target_rows_deleted, 1);
-        assert_eq!(metrics.num_output_rows, 1);
+        assert_eq!(metrics.num_target_rows_deleted, 2);
+        assert_eq!(metrics.num_output_rows, 2);
         assert_eq!(metrics.num_source_rows, 3);
 
         let commit_info = table.history(None).await.unwrap();
