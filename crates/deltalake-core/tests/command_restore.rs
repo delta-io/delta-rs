@@ -11,6 +11,8 @@ use rand::Rng;
 use std::error::Error;
 use std::fs;
 use std::sync::Arc;
+use std::thread;
+use std::time::Duration;
 use tempdir::TempDir;
 
 #[derive(Debug)]
@@ -42,19 +44,21 @@ async fn setup_test() -> Result<Context, Box<dyn Error>> {
         .await?;
 
     let batch = get_record_batch();
-
+    thread::sleep(Duration::from_secs(1));
     let table = DeltaOps(table)
         .write(vec![batch.clone()])
         .with_save_mode(SaveMode::Append)
         .await
         .unwrap();
 
+    thread::sleep(Duration::from_secs(1));
     let table = DeltaOps(table)
         .write(vec![batch.clone()])
         .with_save_mode(SaveMode::Overwrite)
         .await
         .unwrap();
 
+    thread::sleep(Duration::from_secs(1));
     let table = DeltaOps(table)
         .write(vec![batch.clone()])
         .with_save_mode(SaveMode::Append)
@@ -115,7 +119,7 @@ async fn test_restore_by_datetime() -> Result<(), Box<dyn Error>> {
     let context = setup_test().await?;
     let mut table = context.table;
     let history = table.history(Some(10)).await?;
-    let timestamp = history.get(2).unwrap().timestamp.unwrap();
+    let timestamp = history.get(1).unwrap().timestamp.unwrap();
     let naive = NaiveDateTime::from_timestamp_millis(timestamp).unwrap();
     let datetime: DateTime<Utc> = Utc.from_utc_datetime(&naive);
 
