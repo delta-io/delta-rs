@@ -1,4 +1,13 @@
 //! Merge Barrier determines which files have modifications during the merge operation
+//!
+//! For every unique path in the input stream, a barrier is established. If any
+//! single record for a file contains any delete, update, or insert operations
+//! then the barrier for the file is opened and can be sent downstream.
+//! To determine if a file contains zero changes, the input stream is
+//! exhausted. Afterwards, records are then dropped.
+//!
+//! Bookkeeping is maintained to determine which files have modifications so
+//! they can be removed from the delta log.
 
 use std::{
     collections::HashMap,
@@ -25,7 +34,9 @@ use crate::{
 };
 
 #[derive(Debug)]
-/// Exec Node for MergeBarrier
+/// Physical Node for the MergeBarrier
+/// Batches to this node must be repartitioned on col('deleta_rs_path').
+/// Each record batch then undergoes further partitioning based on the file column to it's corresponding barrier
 pub struct MergeBarrierExec {
     input: Arc<dyn ExecutionPlan>,
     file_column: Arc<String>,
@@ -236,26 +247,29 @@ impl Stream for MergeBarrierStream {
                                     path_column
                                 )))?;
 
+                            // For each record batch, the key for a file path is not stable.
+                            // We can iterate through the dictionary and lookup the correspond string for each record and then lookup the correct `file_partition` for that value.
+                            // However this approach exposes the cost of hashing so we want to minimize that as much as possible.
+                            // A map from an arrow dictionary key to the correct index of `file_partition` is created for each batch that's processed.
+                            // This ensures we only need to hash each file path at most once per batch.
                             let mut key_map = Vec::new();
 
                             for file_name in file_dictionary.values().into_iter() {
-                                match file_name {
+                                let key = match file_name {
                                     Some(name) => {
                                         if !self.map.contains_key(name) {
                                             let key = self.file_partitions.len();
-                                            let part_stream = MergeBarrierPartition {
-                                                state: PartitionBarrierState::Closed,
-                                                buffer: Vec::new(),
-                                                file_name: Some(name.to_string()),
-                                            };
+                                            let part_stream =
+                                                MergeBarrierPartition::new(Some(name.to_string()));
                                             self.file_partitions.push(part_stream);
                                             self.map.insert(name.to_string(), key);
                                         }
-                                        let bucket_idx = self.map.get(name).unwrap();
-                                        key_map.push(*bucket_idx);
+                                        // Safe unwrap due to the above
+                                        *self.map.get(name).unwrap()
                                     }
-                                    None => key_map.push(0),
-                                }
+                                    None => 0,
+                                };
+                                key_map.push(key)
                             }
 
                             let mut indices: Vec<_> = (0..(self.file_partitions.len()))
