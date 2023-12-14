@@ -306,11 +306,6 @@ pub(crate) async fn write_execution_plan(
     safe_cast: bool,
     overwrite_schema: bool,
 ) -> DeltaResult<Vec<Add>> {
-    let invariants = snapshot
-        .metadata()
-        .and_then(|meta| meta.schema.get_invariants().ok())
-        .unwrap_or_default();
-
     // Use input schema to prevent wrapping partitions columns into a dictionary.
     let schema: ArrowSchemaRef = if overwrite_schema {
         plan.schema()
@@ -318,7 +313,7 @@ pub(crate) async fn write_execution_plan(
         snapshot.input_schema().unwrap_or(plan.schema())
     };
 
-    let checker = DeltaDataChecker::new(invariants);
+    let checker = DeltaDataChecker::new(snapshot);
 
     // Write data to disk
     let mut tasks = vec![];
