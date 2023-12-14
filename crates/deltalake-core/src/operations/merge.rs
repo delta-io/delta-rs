@@ -811,7 +811,6 @@ async fn try_construct_early_filter(
     source_name: &TableReference<'_>,
     target_name: &TableReference<'_>,
 ) -> Option<Expr> {
-    println!("checkit");
     let table_metadata = table_snapshot.metadata()?;
 
     let partition_columns = &table_metadata.partition_columns;
@@ -822,8 +821,6 @@ async fn try_construct_early_filter(
 
     let mut placeholders = HashMap::default();
 
-    println!("generalize {join_predicate}");
-
     let filter = generalize_filter(
         join_predicate,
         partition_columns,
@@ -831,8 +828,6 @@ async fn try_construct_early_filter(
         target_name,
         &mut placeholders,
     )?;
-
-    println!("{filter:?}");
 
     if placeholders.is_empty() {
         // if we haven't recognised any partition-based predicates in the join predicate, return our reduced filter
@@ -1436,6 +1431,8 @@ impl std::future::IntoFuture for MergeBuilder {
 
 #[cfg(test)]
 mod tests {
+    use crate::operations::merge::generalize_filter;
+    use crate::operations::merge::try_construct_early_filter;
     use crate::operations::DeltaOps;
     use crate::protocol::*;
     use crate::writer::test_utils::datafusion::get_data;
@@ -1447,11 +1444,20 @@ mod tests {
     use arrow::datatypes::Schema as ArrowSchema;
     use arrow::record_batch::RecordBatch;
     use datafusion::assert_batches_sorted_eq;
+    use datafusion::datasource::provider_as_source;
     use datafusion::prelude::DataFrame;
     use datafusion::prelude::SessionContext;
+    use datafusion_common::Column;
+    use datafusion_common::ScalarValue;
+    use datafusion_common::TableReference;
     use datafusion_expr::col;
+    use datafusion_expr::expr::Placeholder;
     use datafusion_expr::lit;
+    use datafusion_expr::Expr;
+    use datafusion_expr::LogicalPlanBuilder;
     use serde_json::json;
+    use std::collections::HashMap;
+    use std::ops::Neg;
     use std::sync::Arc;
 
     use super::MergeMetrics;
@@ -2277,5 +2283,202 @@ mod tests {
         ];
         let actual = get_data(&table).await;
         assert_batches_sorted_eq!(&expected, &actual);
+    }
+
+    #[tokio::test]
+    async fn test_generalize_filter_with_partitions() {
+        let source = TableReference::parse_str("source");
+        let target = TableReference::parse_str("target");
+
+        let parsed_filter = col(Column::new(source.clone().into(), "id"))
+            .eq(col(Column::new(target.clone().into(), "id")));
+
+        let mut placeholders = HashMap::default();
+
+        let generalized = generalize_filter(
+            parsed_filter,
+            &vec!["id".to_owned()],
+            &source,
+            &target,
+            &mut placeholders,
+        )
+        .unwrap();
+
+        let expected_filter = Expr::Placeholder(Placeholder {
+            id: "id_0".to_owned(),
+            data_type: None,
+        })
+        .eq(col(Column::new(target.clone().into(), "id")));
+
+        assert_eq!(generalized, expected_filter);
+    }
+
+    #[tokio::test]
+    async fn test_generalize_filter_with_partitions_captures_expression() {
+        // Check that when generalizing the filter, the placeholder map captures the expression needed to make the statement the same
+        // when the distinct values are substitiuted in
+        let source = TableReference::parse_str("source");
+        let target = TableReference::parse_str("target");
+
+        let parsed_filter = col(Column::new(source.clone().into(), "id"))
+            .neg()
+            .eq(col(Column::new(target.clone().into(), "id")));
+
+        let mut placeholders = HashMap::default();
+
+        let generalized = generalize_filter(
+            parsed_filter,
+            &vec!["id".to_owned()],
+            &source,
+            &target,
+            &mut placeholders,
+        )
+        .unwrap();
+
+        let expected_filter = Expr::Placeholder(Placeholder {
+            id: "id_0".to_owned(),
+            data_type: None,
+        })
+        .eq(col(Column::new(target.clone().into(), "id")));
+
+        assert_eq!(generalized, expected_filter);
+
+        assert_eq!(placeholders.len(), 1);
+
+        let placeholder_expr = &placeholders["id_0"];
+
+        let expected_placeholder = col(Column::new(source.clone().into(), "id")).neg();
+
+        assert_eq!(placeholder_expr, &expected_placeholder);
+    }
+
+    #[tokio::test]
+    async fn test_generalize_filter_keeps_static_target_references() {
+        let source = TableReference::parse_str("source");
+        let target = TableReference::parse_str("target");
+
+        let parsed_filter = col(Column::new(source.clone().into(), "id"))
+            .eq(col(Column::new(target.clone().into(), "id")))
+            .and(col(Column::new(target.clone().into(), "id")).eq(lit("C")));
+
+        let mut placeholders = HashMap::default();
+
+        let generalized = generalize_filter(
+            parsed_filter,
+            &vec!["id".to_owned()],
+            &source,
+            &target,
+            &mut placeholders,
+        )
+        .unwrap();
+
+        let expected_filter = Expr::Placeholder(Placeholder {
+            id: "id_0".to_owned(),
+            data_type: None,
+        })
+        .eq(col(Column::new(target.clone().into(), "id")))
+        .and(col(Column::new(target.clone().into(), "id")).eq(lit("C")));
+
+        assert_eq!(generalized, expected_filter);
+    }
+
+    #[tokio::test]
+    async fn test_generalize_filter_removes_source_references() {
+        let source = TableReference::parse_str("source");
+        let target = TableReference::parse_str("target");
+
+        let parsed_filter = col(Column::new(source.clone().into(), "id"))
+            .eq(col(Column::new(target.clone().into(), "id")))
+            .and(col(Column::new(source.clone().into(), "id")).eq(lit("C")));
+
+        let mut placeholders = HashMap::default();
+
+        let generalized = generalize_filter(
+            parsed_filter,
+            &vec!["id".to_owned()],
+            &source,
+            &target,
+            &mut placeholders,
+        )
+        .unwrap();
+
+        let expected_filter = Expr::Placeholder(Placeholder {
+            id: "id_0".to_owned(),
+            data_type: None,
+        })
+        .eq(col(Column::new(target.clone().into(), "id")));
+
+        assert_eq!(generalized, expected_filter);
+    }
+
+    #[tokio::test]
+    async fn test_try_construct_early_filter_with_partitions_expands() {
+        let schema = get_arrow_schema(&None);
+        let table = setup_table(Some(vec!["id"])).await;
+
+        assert_eq!(table.version(), 0);
+        assert_eq!(table.get_file_uris().count(), 0);
+
+        let ctx = SessionContext::new();
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(arrow::array::StringArray::from(vec!["B", "C", "X"])),
+                Arc::new(arrow::array::Int32Array::from(vec![10, 20, 30])),
+                Arc::new(arrow::array::StringArray::from(vec![
+                    "2021-02-02",
+                    "2023-07-04",
+                    "2023-07-04",
+                ])),
+            ],
+        )
+        .unwrap();
+        let source = ctx.read_batch(batch).unwrap();
+
+        let source_name = TableReference::parse_str("source");
+        let target_name = TableReference::parse_str("target");
+
+        let source = LogicalPlanBuilder::scan(
+            source_name.clone(),
+            provider_as_source(source.into_view()),
+            None,
+        )
+        .unwrap()
+        .build()
+        .unwrap();
+
+        let join_predicate = col(Column {
+            relation: Some(source_name.clone()),
+            name: "id".to_owned(),
+        })
+        .eq(col(Column {
+            relation: Some(target_name.clone()),
+            name: "id".to_owned(),
+        }));
+
+        let pred = try_construct_early_filter(
+            join_predicate,
+            &table.state,
+            &ctx.state(),
+            &source,
+            &source_name,
+            &target_name,
+        )
+        .await;
+
+        assert!(pred.is_some());
+
+        let expected_pred = ["C", "X", "B"]
+            .into_iter()
+            .map(|id| {
+                lit(ScalarValue::Utf8(id.to_owned().into())).eq(col(Column {
+                    relation: Some(target_name.clone()),
+                    name: "id".to_owned(),
+                }))
+            })
+            .reduce(Expr::or)
+            .unwrap();
+
+        assert_eq!(pred.unwrap(), expected_pred);
     }
 }
