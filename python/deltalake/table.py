@@ -455,7 +455,7 @@ class DeltaTable:
 
     def load_to(self, version: Union[int, str, datetime]) -> None:
         """
-        Load/time travel a DeltaTable with a specified version number, or a timestamp version of the table. If a
+        Load/time travel a DeltaTable to a specified version number, or a timestamp version of the table. If a
         string is passed then the argument should be an RFC 3339 and ISO 8601 date and time string format.
 
         Args:
@@ -464,19 +464,20 @@ class DeltaTable:
         Example:
             **Use a version number**
             ```
-            1
+            dt = DeltaTable("test_table")
+            dt.load_to(1)
             ```
 
             **Use a datetime object**
             ```
-            datetime(2023,1,1)
+            dt.load_to(datetime(2023,1,1))
             ```
 
             **Use a datetime in string format**
             ```
-            "2018-01-26T18:30:09Z"
-            "2018-12-19T16:39:57-08:00"
-            "2018-01-26T18:30:09.453+00:00"
+            dt.load_to("2018-01-26T18:30:09Z")
+            dt.load_to("2018-12-19T16:39:57-08:00")
+            dt.load_to("2018-01-26T18:30:09.453+00:00")
             ```
         """
         if isinstance(version, int):
