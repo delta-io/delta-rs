@@ -47,10 +47,10 @@ impl ConstraintBuilder {
     /// Specify the constraint to be added
     pub fn with_constraint<S: Into<String>, E: Into<Expression>>(
         mut self,
-        column: S,
+        name: S,
         expression: E,
     ) -> Self {
-        self.name = Some(column.into());
+        self.name = Some(name.into());
         self.expr = Some(expression.into());
         self
     }

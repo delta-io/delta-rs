@@ -74,6 +74,10 @@ class RawDeltaTable:
         max_spill_size: Optional[int],
         min_commit_interval: Optional[int],
     ) -> str: ...
+    def add_constraints(
+        self,
+        constraints: Dict[str, str],
+    ) -> None: ...
     def restore(
         self,
         target: Optional[Any],
