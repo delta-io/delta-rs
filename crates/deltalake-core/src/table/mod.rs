@@ -604,7 +604,7 @@ impl DeltaTable {
                 let ts = meta.last_modified.timestamp_millis();
                 // also cache timestamp for version
                 self.version_timestamp.insert(version, ts);
-                
+
                 Ok(ts)
             }
         }
@@ -833,7 +833,7 @@ impl DeltaTable {
         let mut max_version = self.get_latest_version().await?;
         let mut version = min_version;
         let target_ts = datetime.timestamp_millis();
-        
+
         // binary search
         while min_version <= max_version {
             let pivot = (max_version + min_version) / 2;
