@@ -70,7 +70,7 @@ use crate::delta_datafusion::expr::{fmt_expr_to_sql, parse_predicate_expression}
 use crate::delta_datafusion::logical::MetricObserver;
 use crate::delta_datafusion::physical::{find_metric_node, MetricObserverExec};
 use crate::delta_datafusion::{
-    execute_plan_to_batch, register_store, DeltaScanConfig, DeltaTableProvider,
+    register_store, DeltaColumn, DeltaScanConfig, DeltaSessionConfig, DeltaTableProvider,
 };
 use crate::kernel::{Action, Remove};
 use crate::logstore::LogStoreRef;
@@ -397,12 +397,12 @@ impl UpdateBuilder {
     /// How a column from the target table should be updated.
     /// In the match case the expression may contain both source and target columns.
     /// In the source not match case the expression may only contain target columns
-    pub fn update<C: Into<Column>, E: Into<Expression>>(
+    pub fn update<C: Into<DeltaColumn>, E: Into<Expression>>(
         mut self,
         column: C,
         expression: E,
     ) -> Self {
-        self.updates.insert(column.into(), expression.into());
+        self.updates.insert(column.into().into(), expression.into());
         self
     }
 }
@@ -425,8 +425,12 @@ impl InsertBuilder {
 
     /// Which values to insert into the target tables. If a target column is not
     /// specified then null is inserted.
-    pub fn set<C: Into<Column>, E: Into<Expression>>(mut self, column: C, expression: E) -> Self {
-        self.set.insert(column.into(), expression.into());
+    pub fn set<C: Into<DeltaColumn>, E: Into<Expression>>(
+        mut self,
+        column: C,
+        expression: E,
+    ) -> Self {
+        self.set.insert(column.into().into(), expression.into());
         self
     }
 }
@@ -1171,7 +1175,10 @@ async fn execute(
         .end()?;
 
         let name = "__delta_rs_c_".to_owned() + delta_field.name();
-        write_projection.push(col(name.clone()).alias(delta_field.name()));
+        write_projection.push(
+            Expr::Column(Column::from_qualified_name_ignore_case(name.clone()))
+                .alias(delta_field.name()),
+        );
         new_columns = new_columns.with_column(&name, case)?;
     }
 
@@ -1394,7 +1401,8 @@ impl std::future::IntoFuture for MergeBuilder {
 
             let state = this.state.unwrap_or_else(|| {
                 //TODO: Datafusion's Hashjoin has some memory issues. Running with all cores results in a OoM. Can be removed when upstream improvemetns are made.
-                let config = SessionConfig::new().with_target_partitions(1);
+                let config: SessionConfig = DeltaSessionConfig::default().into();
+                let config = config.with_target_partitions(1);
                 let session = SessionContext::new_with_config(config);
 
                 // If a user provides their own their DF state then they must register the store themselves
@@ -1431,6 +1439,9 @@ impl std::future::IntoFuture for MergeBuilder {
 
 #[cfg(test)]
 mod tests {
+    use crate::kernel::DataType;
+    use crate::kernel::PrimitiveType;
+    use crate::kernel::StructField;
     use crate::operations::merge::generalize_filter;
     use crate::operations::merge::try_construct_early_filter;
     use crate::operations::DeltaOps;
@@ -1443,6 +1454,8 @@ mod tests {
     use crate::DeltaTable;
     use arrow::datatypes::Schema as ArrowSchema;
     use arrow::record_batch::RecordBatch;
+    use arrow_schema::DataType as ArrowDataType;
+    use arrow_schema::Field;
     use datafusion::assert_batches_sorted_eq;
     use datafusion::datasource::provider_as_source;
     use datafusion::prelude::DataFrame;
@@ -2279,6 +2292,87 @@ mod tests {
             "| B  | 10    | 2021-02-02 |",
             "| C  | 20    | 2023-07-04 |",
             "| X  | 30    | 2023-07-04 |",
+            "+----+-------+------------+",
+        ];
+        let actual = get_data(&table).await;
+        assert_batches_sorted_eq!(&expected, &actual);
+    }
+
+    #[tokio::test]
+    async fn test_merge_case_sensitive() {
+        let schema = vec![
+            StructField::new(
+                "Id".to_string(),
+                DataType::Primitive(PrimitiveType::String),
+                true,
+            ),
+            StructField::new(
+                "vAlue".to_string(),
+                DataType::Primitive(PrimitiveType::Integer),
+                true,
+            ),
+            StructField::new(
+                "mOdifieD".to_string(),
+                DataType::Primitive(PrimitiveType::String),
+                true,
+            ),
+        ];
+
+        let arrow_schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("Id", ArrowDataType::Utf8, true),
+            Field::new("vAlue", ArrowDataType::Int32, true),
+            Field::new("mOdifieD", ArrowDataType::Utf8, true),
+        ]));
+
+        let table = DeltaOps::new_in_memory()
+            .create()
+            .with_columns(schema)
+            .await
+            .unwrap();
+
+        let ctx = SessionContext::new();
+        let batch = RecordBatch::try_new(
+            Arc::clone(&arrow_schema.clone()),
+            vec![
+                Arc::new(arrow::array::StringArray::from(vec!["B", "C", "X"])),
+                Arc::new(arrow::array::Int32Array::from(vec![10, 20, 30])),
+                Arc::new(arrow::array::StringArray::from(vec![
+                    "2021-02-02",
+                    "2023-07-04",
+                    "2023-07-04",
+                ])),
+            ],
+        )
+        .unwrap();
+        let source = ctx.read_batch(batch).unwrap();
+
+        let table = write_data(table, &arrow_schema).await;
+        assert_eq!(table.version(), 1);
+        assert_eq!(table.get_file_uris().count(), 1);
+
+        let (table, _metrics) = DeltaOps(table)
+            .merge(source, "target.Id = source.Id")
+            .with_source_alias("source")
+            .with_target_alias("target")
+            .when_not_matched_insert(|insert| {
+                insert
+                    .set("Id", "source.Id")
+                    .set("vAlue", "source.vAlue + 1")
+                    .set("mOdifieD", "source.mOdifieD")
+            })
+            .unwrap()
+            .await
+            .unwrap();
+
+        let expected = vec![
+            "+----+-------+------------+",
+            "| Id | vAlue | mOdifieD   |",
+            "+----+-------+------------+",
+            "| A  | 1     | 2021-02-01 |",
+            "| B  | 10    | 2021-02-01 |",
+            "| C  | 10    | 2021-02-02 |",
+            "| D  | 100   | 2021-02-02 |",
+            "| X  | 31    | 2023-07-04 |",
             "+----+-------+------------+",
         ];
         let actual = get_data(&table).await;

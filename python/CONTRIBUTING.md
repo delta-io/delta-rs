@@ -7,12 +7,12 @@ Most of the workflow is based on the `Makefile` and the `maturin` CLI tool.
 #### Setup your local environment with virtualenv
 
 ```bash
-$ make setup-venv
+make setup-venv
 ```
 
 #### Activate it
 ```bash
-$ source ./venv/bin/activate
+source ./venv/bin/activate
 ```
 
 #### Ready to develop with maturin
@@ -21,13 +21,13 @@ $ source ./venv/bin/activate
 Install delta-rs in the current virtualenv
 
 ```bash
-$ make develop
+make develop
 ```
 
 Then, list all the available tasks
 
 ```bash
-$ make help
+make help
 ```
 
 Format:

@@ -29,8 +29,8 @@ pub mod vacuum;
 
 #[cfg(feature = "datafusion")]
 use self::{
-    datafusion_utils::Expression, delete::DeleteBuilder, load::LoadBuilder, merge::MergeBuilder,
-    update::UpdateBuilder, write::WriteBuilder,
+    constraints::ConstraintBuilder, datafusion_utils::Expression, delete::DeleteBuilder,
+    load::LoadBuilder, merge::MergeBuilder, update::UpdateBuilder, write::WriteBuilder,
 };
 #[cfg(feature = "datafusion")]
 pub use ::datafusion::physical_plan::common::collect as collect_sendable_stream;
@@ -40,6 +40,8 @@ use arrow::record_batch::RecordBatch;
 use optimize::OptimizeBuilder;
 use restore::RestoreBuilder;
 
+#[cfg(feature = "datafusion")]
+pub mod constraints;
 #[cfg(feature = "datafusion")]
 pub mod delete;
 #[cfg(feature = "datafusion")]
@@ -188,6 +190,13 @@ impl DeltaOps {
         predicate: E,
     ) -> MergeBuilder {
         MergeBuilder::new(self.0.log_store, self.0.state, predicate.into(), source)
+    }
+
+    /// Add a check constraint to a table
+    #[cfg(feature = "datafusion")]
+    #[must_use]
+    pub fn add_constraint(self) -> ConstraintBuilder {
+        ConstraintBuilder::new(self.0.log_store, self.0.state)
     }
 }
 

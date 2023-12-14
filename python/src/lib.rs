@@ -1319,7 +1319,7 @@ impl PyDeltaDataChecker {
             })
             .collect();
         Self {
-            inner: DeltaDataChecker::new(invariants),
+            inner: DeltaDataChecker::new_with_invariants(invariants),
             rt: tokio::runtime::Runtime::new().unwrap(),
         }
     }
