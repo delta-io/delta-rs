@@ -32,7 +32,9 @@ use arrow::datatypes::{DataType as ArrowDataType, Schema as ArrowSchema, SchemaR
 use arrow::error::ArrowError;
 use arrow::record_batch::RecordBatch;
 use arrow_array::types::UInt16Type;
-use arrow_array::{DictionaryArray, StringArray};
+use arrow_array::{Array, DictionaryArray, StringArray};
+use arrow_cast::display::array_value_to_string;
+
 use arrow_schema::Field;
 use async_trait::async_trait;
 use chrono::{NaiveDateTime, TimeZone, Utc};
@@ -42,7 +44,7 @@ use datafusion::datasource::physical_plan::{
 };
 use datafusion::datasource::provider::TableProviderFactory;
 use datafusion::datasource::{listing::PartitionedFile, MemTable, TableProvider, TableType};
-use datafusion::execution::context::{SessionContext, SessionState, TaskContext};
+use datafusion::execution::context::{SessionConfig, SessionContext, SessionState, TaskContext};
 use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::execution::FunctionRegistry;
 use datafusion::optimizer::utils::conjunction;
@@ -65,17 +67,21 @@ use datafusion_physical_expr::execution_props::ExecutionProps;
 use datafusion_physical_expr::{create_physical_expr, PhysicalExpr};
 use datafusion_proto::logical_plan::LogicalExtensionCodec;
 use datafusion_proto::physical_plan::PhysicalExtensionCodec;
+use datafusion_sql::planner::ParserOptions;
+
+use itertools::Itertools;
 use log::error;
 use object_store::ObjectMeta;
 use serde::{Deserialize, Serialize};
 use url::Url;
 
 use crate::errors::{DeltaResult, DeltaTableError};
-use crate::kernel::{Add, DataType as DeltaDataType, Invariant, PrimitiveType};
+use crate::kernel::{Add, DataCheck, DataType as DeltaDataType, Invariant, PrimitiveType};
 use crate::logstore::LogStoreRef;
 use crate::protocol::{ColumnCountStat, ColumnValueStat};
 use crate::table::builder::ensure_table_uri;
 use crate::table::state::DeltaTableState;
+use crate::table::Constraint;
 use crate::{open_table, open_table_with_storage_options, DeltaTable};
 
 const PATH_COLUMN: &str = "__delta_rs_path";
@@ -1016,15 +1022,43 @@ pub(crate) fn logical_expr_to_physical_expr(
 /// Responsible for checking batches of data conform to table's invariants.
 #[derive(Clone)]
 pub struct DeltaDataChecker {
+    constraints: Vec<Constraint>,
     invariants: Vec<Invariant>,
     ctx: SessionContext,
 }
 
 impl DeltaDataChecker {
-    /// Create a new DeltaDataChecker
-    pub fn new(invariants: Vec<Invariant>) -> Self {
+    /// Create a new DeltaDataChecker with a specified set of invariants
+    pub fn new_with_invariants(invariants: Vec<Invariant>) -> Self {
         Self {
             invariants,
+            constraints: vec![],
+            ctx: SessionContext::new(),
+        }
+    }
+
+    /// Create a new DeltaDataChecker with a specified set of constraints
+    pub fn new_with_constraints(constraints: Vec<Constraint>) -> Self {
+        Self {
+            constraints,
+            invariants: vec![],
+            ctx: SessionContext::new(),
+        }
+    }
+
+    /// Create a new DeltaDataChecker
+    pub fn new(snapshot: &DeltaTableState) -> Self {
+        let metadata = snapshot.metadata();
+
+        let invariants = metadata
+            .and_then(|meta| meta.schema.get_invariants().ok())
+            .unwrap_or_default();
+        let constraints = metadata
+            .map(|meta| meta.get_constraints())
+            .unwrap_or_default();
+        Self {
+            invariants,
+            constraints,
             ctx: SessionContext::new(),
         }
     }
@@ -1034,45 +1068,54 @@ impl DeltaDataChecker {
     /// If it does not, it will return [DeltaTableError::InvalidData] with a list
     /// of values that violated each invariant.
     pub async fn check_batch(&self, record_batch: &RecordBatch) -> Result<(), DeltaTableError> {
-        self.enforce_invariants(record_batch).await
-        // TODO: for support for Protocol V3, check constraints
+        self.enforce_checks(record_batch, &self.invariants).await?;
+        self.enforce_checks(record_batch, &self.constraints).await
     }
 
-    async fn enforce_invariants(&self, record_batch: &RecordBatch) -> Result<(), DeltaTableError> {
-        // Invariants are deprecated, so let's not pay the overhead for any of this
-        // if we can avoid it.
-        if self.invariants.is_empty() {
+    async fn enforce_checks<C: DataCheck>(
+        &self,
+        record_batch: &RecordBatch,
+        checks: &[C],
+    ) -> Result<(), DeltaTableError> {
+        if checks.is_empty() {
             return Ok(());
         }
-
         let table = MemTable::try_new(record_batch.schema(), vec![vec![record_batch.clone()]])?;
         self.ctx.register_table("data", Arc::new(table))?;
 
         let mut violations: Vec<String> = Vec::new();
 
-        for invariant in self.invariants.iter() {
-            if invariant.field_name.contains('.') {
+        for check in checks {
+            if check.get_name().contains('.') {
                 return Err(DeltaTableError::Generic(
-                    "Support for column invariants on nested columns is not supported.".to_string(),
+                    "Support for nested columns is not supported.".to_string(),
                 ));
             }
 
             let sql = format!(
-                "SELECT {} FROM data WHERE not ({}) LIMIT 1",
-                invariant.field_name, invariant.invariant_sql
+                "SELECT {} FROM data WHERE NOT ({}) LIMIT 1",
+                check.get_name(),
+                check.get_expression()
             );
 
             let dfs: Vec<RecordBatch> = self.ctx.sql(&sql).await?.collect().await?;
             if !dfs.is_empty() && dfs[0].num_rows() > 0 {
-                let value = format!("{:?}", dfs[0].column(0));
+                let value: String = dfs[0]
+                    .columns()
+                    .iter()
+                    .map(|c| array_value_to_string(c, 0).unwrap_or(String::from("null")))
+                    .join(", ");
+
                 let msg = format!(
-                    "Invariant ({}) violated by value {}",
-                    invariant.invariant_sql, value
+                    "Check or Invariant ({}) violated by value in row: [{}]",
+                    check.get_expression(),
+                    value
                 );
                 violations.push(msg);
             }
         }
 
+        self.ctx.deregister_table("data")?;
         if !violations.is_empty() {
             Err(DeltaTableError::InvalidData { violations })
         } else {
@@ -1494,6 +1537,111 @@ pub async fn find_files<'a>(
     }
 }
 
+/// A wrapper for sql_parser's ParserOptions to capture sane default table defaults
+pub struct DeltaParserOptions {
+    inner: ParserOptions,
+}
+
+impl Default for DeltaParserOptions {
+    fn default() -> Self {
+        DeltaParserOptions {
+            inner: ParserOptions {
+                enable_ident_normalization: false,
+                ..ParserOptions::default()
+            },
+        }
+    }
+}
+
+impl From<DeltaParserOptions> for ParserOptions {
+    fn from(value: DeltaParserOptions) -> Self {
+        value.inner
+    }
+}
+
+/// A wrapper for Deltafusion's SessionConfig to capture sane default table defaults
+pub struct DeltaSessionConfig {
+    inner: SessionConfig,
+}
+
+impl Default for DeltaSessionConfig {
+    fn default() -> Self {
+        DeltaSessionConfig {
+            inner: SessionConfig::default()
+                .set_bool("datafusion.sql_parser.enable_ident_normalization", false),
+        }
+    }
+}
+
+impl From<DeltaSessionConfig> for SessionConfig {
+    fn from(value: DeltaSessionConfig) -> Self {
+        value.inner
+    }
+}
+
+/// A wrapper for Deltafusion's SessionContext to capture sane default table defaults
+pub struct DeltaSessionContext {
+    inner: SessionContext,
+}
+
+impl Default for DeltaSessionContext {
+    fn default() -> Self {
+        DeltaSessionContext {
+            inner: SessionContext::new_with_config(DeltaSessionConfig::default().into()),
+        }
+    }
+}
+
+impl From<DeltaSessionContext> for SessionContext {
+    fn from(value: DeltaSessionContext) -> Self {
+        value.inner
+    }
+}
+
+/// A wrapper for Deltafusion's Column to preserve case-sensitivity during string conversion
+pub struct DeltaColumn {
+    inner: Column,
+}
+
+impl From<&str> for DeltaColumn {
+    fn from(c: &str) -> Self {
+        DeltaColumn {
+            inner: Column::from_qualified_name_ignore_case(c),
+        }
+    }
+}
+
+/// Create a column, cloning the string
+impl From<&String> for DeltaColumn {
+    fn from(c: &String) -> Self {
+        DeltaColumn {
+            inner: Column::from_qualified_name_ignore_case(c),
+        }
+    }
+}
+
+/// Create a column, reusing the existing string
+impl From<String> for DeltaColumn {
+    fn from(c: String) -> Self {
+        DeltaColumn {
+            inner: Column::from_qualified_name_ignore_case(c),
+        }
+    }
+}
+
+impl From<DeltaColumn> for Column {
+    fn from(value: DeltaColumn) -> Self {
+        value.inner
+    }
+}
+
+/// Create a column, resuing the existing datafusion column
+impl From<Column> for DeltaColumn {
+    fn from(c: Column) -> Self {
+        DeltaColumn { inner: c }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::writer::test_utils::get_delta_schema;
@@ -1641,7 +1789,7 @@ mod tests {
         .unwrap();
         // Empty invariants is okay
         let invariants: Vec<Invariant> = vec![];
-        assert!(DeltaDataChecker::new(invariants)
+        assert!(DeltaDataChecker::new_with_invariants(invariants)
             .check_batch(&batch)
             .await
             .is_ok());
@@ -1651,7 +1799,7 @@ mod tests {
             Invariant::new("a", "a is not null"),
             Invariant::new("b", "b < 1000"),
         ];
-        assert!(DeltaDataChecker::new(invariants)
+        assert!(DeltaDataChecker::new_with_invariants(invariants)
             .check_batch(&batch)
             .await
             .is_ok());
@@ -1661,7 +1809,9 @@ mod tests {
             Invariant::new("a", "a is null"),
             Invariant::new("b", "b < 100"),
         ];
-        let result = DeltaDataChecker::new(invariants).check_batch(&batch).await;
+        let result = DeltaDataChecker::new_with_invariants(invariants)
+            .check_batch(&batch)
+            .await;
         assert!(result.is_err());
         assert!(matches!(result, Err(DeltaTableError::InvalidData { .. })));
         if let Err(DeltaTableError::InvalidData { violations }) = result {
@@ -1670,7 +1820,9 @@ mod tests {
 
         // Irrelevant invariants return a different error
         let invariants = vec![Invariant::new("c", "c > 2000")];
-        let result = DeltaDataChecker::new(invariants).check_batch(&batch).await;
+        let result = DeltaDataChecker::new_with_invariants(invariants)
+            .check_batch(&batch)
+            .await;
         assert!(result.is_err());
 
         // Nested invariants are unsupported
@@ -1684,7 +1836,9 @@ mod tests {
         let batch = RecordBatch::try_new(schema, vec![inner]).unwrap();
 
         let invariants = vec![Invariant::new("x.b", "x.b < 1000")];
-        let result = DeltaDataChecker::new(invariants).check_batch(&batch).await;
+        let result = DeltaDataChecker::new_with_invariants(invariants)
+            .check_batch(&batch)
+            .await;
         assert!(result.is_err());
         assert!(matches!(result, Err(DeltaTableError::Generic { .. })));
     }
@@ -1803,5 +1957,71 @@ mod tests {
             "+-------+------------+----+",
         ];
         assert_batches_sorted_eq!(&expected, &actual);
+    }
+
+    #[tokio::test]
+    async fn delta_scan_case_sensitive() {
+        let schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("moDified", DataType::Utf8, true),
+            Field::new("ID", DataType::Utf8, true),
+            Field::new("vaLue", DataType::Int32, true),
+        ]));
+
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(arrow::array::StringArray::from(vec![
+                    "2021-02-01",
+                    "2021-02-01",
+                    "2021-02-02",
+                    "2021-02-02",
+                ])),
+                Arc::new(arrow::array::StringArray::from(vec!["A", "B", "C", "D"])),
+                Arc::new(arrow::array::Int32Array::from(vec![1, 10, 20, 100])),
+            ],
+        )
+        .unwrap();
+        // write some data
+        let table = crate::DeltaOps::new_in_memory()
+            .write(vec![batch.clone()])
+            .with_save_mode(crate::protocol::SaveMode::Append)
+            .await
+            .unwrap();
+
+        let config = DeltaScanConfigBuilder::new().build(&table.state).unwrap();
+        let log = table.log_store();
+
+        let provider = DeltaTableProvider::try_new(table.state, log, config).unwrap();
+        let ctx: SessionContext = DeltaSessionContext::default().into();
+        ctx.register_table("test", Arc::new(provider)).unwrap();
+
+        let df = ctx
+            .sql("select ID, moDified, vaLue from test")
+            .await
+            .unwrap();
+        let actual = df.collect().await.unwrap();
+        let expected = vec![
+            "+----+------------+-------+",
+            "| ID | moDified   | vaLue |",
+            "+----+------------+-------+",
+            "| A  | 2021-02-01 | 1     |",
+            "| B  | 2021-02-01 | 10    |",
+            "| C  | 2021-02-02 | 20    |",
+            "| D  | 2021-02-02 | 100   |",
+            "+----+------------+-------+",
+        ];
+        assert_batches_sorted_eq!(&expected, &actual);
+
+        /* TODO: Datafusion doesn't have any options to prevent case-sensitivity with the col func */
+        /*
+        let df = ctx
+            .table("test")
+            .await
+            .unwrap()
+            .select(vec![col("ID"), col("moDified"), col("vaLue")])
+            .unwrap();
+        let actual = df.collect().await.unwrap();
+        assert_batches_sorted_eq!(&expected, &actual);
+        */
     }
 }
