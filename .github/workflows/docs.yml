@@ -11,11 +11,11 @@ on:
     types:
       - release-docs
   # Allow manual trigger for now
-  workflow_dispatch:
+  # workflow_dispatch:
 
 env:    
-  IS_RELEASE: ${{ github.event_name == 'workflow_dispatch' }}
-  BUILD_ARGS: ${{ (github.event_name == 'workflow_dispatch') && 'install MATURIN_EXTRA_ARGS="--manylinux off"' || 'develop' }}
+  IS_RELEASE: ${{ github.event_name == 'repository_dispatch' }}
+  BUILD_ARGS: ${{ (github.event_name == 'repository_dispatch') && 'install MATURIN_EXTRA_ARGS="--manylinux off"' || 'develop' }}
 
 jobs:
   markdown-link-check:
