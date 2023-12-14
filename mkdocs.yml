@@ -119,7 +119,9 @@ plugins:
   - mkdocs-simple-hooks:
       hooks:
         on_page_markdown: 'docs._build.hooks:on_page_markdown'
-
+  - mike:
+      # These fields are all optional; the defaults are as below...
+      version_selector: true
 markdown_extensions:
   - pymdownx.highlight:
       anchor_linenums: true
@@ -144,6 +146,9 @@ markdown_extensions:
 extra:
   python_api_url: https://delta-io.github.io/delta-rs/api/
   generator: false
+  version:
+    provider: mike
+    default: latest
   social:
     - icon: fontawesome/brands/slack
       link: https://go.delta.io/slack

@@ -77,7 +77,7 @@ jobs:
       - name: Build
         run: |
           source python/venv/bin/activate
-          mkdocs build
+          mike deploy `${{ github.event.client_payload.tag }` 
 
       - name: Deploy
         if: ${{ env.IS_RELEASE == 'true' }}
