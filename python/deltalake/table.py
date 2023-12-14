@@ -453,7 +453,7 @@ class DeltaTable:
 
     file_uris.__doc__ = ""
 
-    def load_to(self, version: int | str | datetime) -> None:
+    def load_to(self, version: Union[int, str, datetime]) -> None:
         """
         Load/time travel a DeltaTable with a specified version number, or a timestamp version of the table. If a
         string is passed then the argument should be an RFC 3339 and ISO 8601 date and time string format.
