@@ -70,7 +70,8 @@ use crate::delta_datafusion::expr::{fmt_expr_to_sql, parse_predicate_expression}
 use crate::delta_datafusion::logical::MetricObserver;
 use crate::delta_datafusion::physical::{find_metric_node, MetricObserverExec};
 use crate::delta_datafusion::{
-    register_store, DeltaColumn, DeltaScanConfig, DeltaSessionConfig, DeltaTableProvider,
+    execute_plan_to_batch, register_store, DeltaColumn, DeltaScanConfig, DeltaSessionConfig,
+    DeltaTableProvider,
 };
 use crate::kernel::{Action, Remove};
 use crate::logstore::LogStoreRef;
