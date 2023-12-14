@@ -1494,7 +1494,7 @@ class TableAlterer:
     def __init__(self, table: DeltaTable) -> None:
         self.table = table
 
-    def add_constraints(self, constraints: Dict[str, str]) -> None:
+    def add_constraint(self, constraints: Dict[str, str]) -> None:
         """
         Add constraints to the table. Limited to `single constraint` at once.
 
@@ -1505,7 +1505,7 @@ class TableAlterer:
             ```python
             from deltalake import DeltaTable
             dt = DeltaTable("test_table_constraints")
-            dt.alter.add_constraints({
+            dt.alter.add_constraint({
                 "value_gt_5": "value > 5",
             })
             ```
