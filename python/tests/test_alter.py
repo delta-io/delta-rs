@@ -4,7 +4,7 @@ import pyarrow as pa
 import pytest
 
 from deltalake import DeltaTable, write_deltalake
-from deltalake.exceptions import DeltaError
+from deltalake.exceptions import DeltaError, DeltaProtocolError
 
 
 def test_add_constraint(tmp_path: pathlib.Path, sample_table: pa.Table):
@@ -24,6 +24,17 @@ def test_add_constraint(tmp_path: pathlib.Path, sample_table: pa.Table):
     with pytest.raises(DeltaError):
         # Invalid constraint
         dt.alter.add_constraint({"check_price": "price < 0"})
+
+    with pytest.raises(DeltaProtocolError):
+        data = pa.table(
+            {
+                "id": pa.array(["1"]),
+                "price": pa.array([-1], pa.int64()),
+                "sold": pa.array(list(range(1)), pa.int32()),
+                "deleted": pa.array([False] * 1),
+            }
+        )
+        write_deltalake(tmp_path, data, engine="rust", mode="append")
 
 
 def test_add_multiple_constraints(tmp_path: pathlib.Path, sample_table: pa.Table):
