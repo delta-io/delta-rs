@@ -115,7 +115,7 @@ async fn test_restore_by_datetime() -> Result<(), Box<dyn Error>> {
     let context = setup_test().await?;
     let mut table = context.table;
     let history = table.history(Some(10)).await?;
-    let timestamp = history.get(1).unwrap().timestamp.unwrap();
+    let timestamp = history.get(2).unwrap().timestamp.unwrap();
     let naive = NaiveDateTime::from_timestamp_millis(timestamp).unwrap();
     let datetime: DateTime<Utc> = Utc.from_utc_datetime(&naive);
 
