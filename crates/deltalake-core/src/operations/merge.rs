@@ -1738,7 +1738,7 @@ mod tests {
         .unwrap();
         let source = ctx.read_batch(batch).unwrap();
 
-        let (mut table, _metrics) = DeltaOps(table)
+        let (mut table, metrics) = DeltaOps(table)
             .merge(source, col("target.id").eq(col("source.id")))
             .with_source_alias("source")
             .with_target_alias("target")
@@ -1749,13 +1749,13 @@ mod tests {
 
         assert_eq!(table.version(), 2);
         assert!(table.get_file_uris().count() >= 2);
-        assert_eq!(metrics.num_target_files_added, 2);
-        assert_eq!(metrics.num_target_files_removed, 2);
-        assert_eq!(metrics.num_target_rows_copied, 2);
+        assert_eq!(metrics.num_target_files_added, 1);
+        assert_eq!(metrics.num_target_files_removed, 1);
+        assert_eq!(metrics.num_target_rows_copied, 1);
         assert_eq!(metrics.num_target_rows_updated, 0);
         assert_eq!(metrics.num_target_rows_inserted, 0);
-        assert_eq!(metrics.num_target_rows_deleted, 2);
-        assert_eq!(metrics.num_output_rows, 2);
+        assert_eq!(metrics.num_target_rows_deleted, 1);
+        assert_eq!(metrics.num_output_rows, 1);
         assert_eq!(metrics.num_source_rows, 3);
 
         let commit_info = table.history(None).await.unwrap();
