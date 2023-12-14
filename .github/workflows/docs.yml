@@ -77,7 +77,9 @@ jobs:
       - name: Build
         run: |
           source python/venv/bin/activate
-          mike deploy `${{ github.event.client_payload.tag }` 
+          var=$(echo `${{ github.event.client_payload.tag }` | sed 's/^python-v//')
+          mike set-default --push latest
+          mike deploy --push --update-aliases $var latest
 
       - name: Deploy
         if: ${{ env.IS_RELEASE == 'true' }}
