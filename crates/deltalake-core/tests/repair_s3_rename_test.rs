@@ -3,7 +3,6 @@
     feature = "integration_test"
 ))]
 use bytes::Bytes;
-use deltalake_core::storage::s3::S3StorageOptions;
 use deltalake_core::test_utils::{IntegrationContext, StorageIntegration};
 use deltalake_core::{storage::s3::S3StorageBackend, DeltaTableBuilder, ObjectStore};
 use futures::stream::BoxStream;
@@ -129,8 +128,7 @@ fn create_s3_backend(
         pause_until_true: pause_until_true.clone(),
     };
 
-    let backend =
-        S3StorageBackend::try_new(Arc::new(delayed_store), S3StorageOptions::default()).unwrap();
+    let backend = S3StorageBackend::try_new(Arc::new(delayed_store), false).unwrap();
 
     (Arc::new(backend), pause_until_true)
 }

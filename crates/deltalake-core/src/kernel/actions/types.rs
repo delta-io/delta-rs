@@ -130,9 +130,11 @@ pub struct Protocol {
     pub min_writer_version: i32,
     /// A collection of features that a client must implement in order to correctly
     /// read this table (exist only when minReaderVersion is set to 3)
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub reader_features: Option<HashSet<ReaderFeatures>>,
     /// A collection of features that a client must implement in order to correctly
     /// write this table (exist only when minWriterVersion is set to 7)
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub writer_features: Option<HashSet<WriterFeatures>>,
 }
 
@@ -582,6 +584,9 @@ pub struct Add {
 
     /// First commit version in which an add action with the same path was committed to the table.
     pub default_row_commit_version: Option<i64>,
+
+    /// The name of the clustering implementation
+    pub clustering_provider: Option<String>,
 
     // TODO remove migration filds added to not do too many business logic changes in one PR
     /// Partition values stored in raw parquet struct format. In this struct, the column names

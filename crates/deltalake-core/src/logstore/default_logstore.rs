@@ -3,20 +3,10 @@
 use std::sync::Arc;
 
 use bytes::Bytes;
-#[cfg(feature = "datafusion")]
-use datafusion::execution::object_store::ObjectStoreUrl;
 use object_store::{path::Path, ObjectStore};
-use url::Url;
 
 use super::{LogStore, LogStoreConfig};
-use crate::{
-    operations::transaction::TransactionError,
-    storage::{
-        config::{self, StorageOptions},
-        ObjectStoreRef,
-    },
-    DeltaResult,
-};
+use crate::{operations::transaction::TransactionError, storage::ObjectStoreRef, DeltaResult};
 
 /// Default [`LogStore`] implementation
 #[derive(Debug, Clone)]
@@ -35,21 +25,11 @@ impl DefaultLogStore {
     pub fn new(storage: ObjectStoreRef, config: LogStoreConfig) -> Self {
         Self { storage, config }
     }
-
-    /// Create log store
-    pub fn try_new(location: Url, options: impl Into<StorageOptions> + Clone) -> DeltaResult<Self> {
-        let mut options = options.into();
-        let storage = config::configure_store(&location, &mut options)?;
-        Ok(Self {
-            storage: Arc::new(storage),
-            config: LogStoreConfig { location, options },
-        })
-    }
 }
 
 #[async_trait::async_trait]
 impl LogStore for DefaultLogStore {
-    async fn read_commit_entry(&self, version: i64) -> DeltaResult<Bytes> {
+    async fn read_commit_entry(&self, version: i64) -> DeltaResult<Option<Bytes>> {
         super::read_commit_entry(self.storage.as_ref(), version).await
     }
 
@@ -79,7 +59,7 @@ impl LogStore for DefaultLogStore {
     }
 
     #[cfg(feature = "datafusion")]
-    fn object_store_url(&self) -> ObjectStoreUrl {
+    fn object_store_url(&self) -> datafusion::execution::object_store::ObjectStoreUrl {
         super::object_store_url(&self.config.location)
     }
 

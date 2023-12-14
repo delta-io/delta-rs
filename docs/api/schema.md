@@ -1,3 +1,9 @@
+---
+search:
+  boost: 2 
+---
+
+
 ## Schema and field
 Schemas, fields, and data types are provided in the ``deltalake.schema`` submodule.
 

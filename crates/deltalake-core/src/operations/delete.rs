@@ -37,7 +37,7 @@ use serde_json::Value;
 use super::datafusion_utils::Expression;
 use super::transaction::PROTOCOL;
 use crate::delta_datafusion::expr::fmt_expr_to_sql;
-use crate::delta_datafusion::{find_files, register_store, DeltaScanBuilder};
+use crate::delta_datafusion::{find_files, register_store, DeltaScanBuilder, DeltaSessionContext};
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::{Action, Add, Remove};
 use crate::operations::transaction::commit;
@@ -139,7 +139,7 @@ async fn excute_non_empty_expr(
     let input_dfschema: DFSchema = input_schema.clone().as_ref().clone().try_into()?;
 
     let table_partition_cols = snapshot
-        .current_metadata()
+        .metadata()
         .ok_or(DeltaTableError::NoMetadata)?
         .partition_columns
         .clone();
@@ -280,7 +280,7 @@ impl std::future::IntoFuture for DeleteBuilder {
             PROTOCOL.can_write_to(&this.snapshot)?;
 
             let state = this.state.unwrap_or_else(|| {
-                let session = SessionContext::new();
+                let session: SessionContext = DeltaSessionContext::default().into();
 
                 // If a user provides their own their DF state then they must register the store themselves
                 register_store(this.log_store.clone(), session.runtime_env());

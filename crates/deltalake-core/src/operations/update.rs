@@ -46,7 +46,9 @@ use serde_json::Value;
 use super::datafusion_utils::Expression;
 use super::transaction::{commit, PROTOCOL};
 use super::write::write_execution_plan;
-use crate::delta_datafusion::{expr::fmt_expr_to_sql, physical::MetricObserverExec};
+use crate::delta_datafusion::{
+    expr::fmt_expr_to_sql, physical::MetricObserverExec, DeltaColumn, DeltaSessionContext,
+};
 use crate::delta_datafusion::{find_files, register_store, DeltaScanBuilder};
 use crate::kernel::{Action, Remove};
 use crate::logstore::LogStoreRef;
@@ -115,12 +117,12 @@ impl UpdateBuilder {
     }
 
     /// Perform an additional update expression during the operaton
-    pub fn with_update<S: Into<Column>, E: Into<Expression>>(
+    pub fn with_update<S: Into<DeltaColumn>, E: Into<Expression>>(
         mut self,
         column: S,
         expression: E,
     ) -> Self {
-        self.updates.insert(column.into(), expression.into());
+        self.updates.insert(column.into().into(), expression.into());
         self
     }
 
@@ -207,9 +209,7 @@ async fn execute(
         })
         .collect::<Result<HashMap<Column, Expr>, _>>()?;
 
-    let current_metadata = snapshot
-        .current_metadata()
-        .ok_or(DeltaTableError::NoMetadata)?;
+    let current_metadata = snapshot.metadata().ok_or(DeltaTableError::NoMetadata)?;
     let table_partition_cols = current_metadata.partition_columns.clone();
 
     let scan_start = Instant::now();
@@ -433,7 +433,7 @@ impl std::future::IntoFuture for UpdateBuilder {
             PROTOCOL.can_write_to(&this.snapshot)?;
 
             let state = this.state.unwrap_or_else(|| {
-                let session = SessionContext::new();
+                let session: SessionContext = DeltaSessionContext::default().into();
 
                 // If a user provides their own their DF state then they must register the store themselves
                 register_store(this.log_store.clone(), session.runtime_env());
@@ -464,6 +464,10 @@ impl std::future::IntoFuture for UpdateBuilder {
 
 #[cfg(test)]
 mod tests {
+    use crate::kernel::DataType as DeltaDataType;
+    use crate::kernel::PrimitiveType;
+    use crate::kernel::StructField;
+    use crate::kernel::StructType;
     use crate::operations::DeltaOps;
     use crate::writer::test_utils::datafusion::get_data;
     use crate::writer::test_utils::datafusion::write_batch;
@@ -472,9 +476,11 @@ mod tests {
     };
     use crate::DeltaConfigKey;
     use crate::DeltaTable;
+    use arrow::datatypes::Schema as ArrowSchema;
     use arrow::datatypes::{Field, Schema};
     use arrow::record_batch::RecordBatch;
     use arrow_array::Int32Array;
+    use arrow_schema::DataType;
     use datafusion::assert_batches_sorted_eq;
     use datafusion::prelude::*;
     use serde_json::json;
@@ -724,6 +730,77 @@ mod tests {
             "| A  | 1     | 2021-02-02 |",
             "| A  | 10    | 2021-02-03 |",
             "| B  | 10    | 2021-02-02 |",
+            "| C  | 100   | 2023-05-14 |",
+            "+----+-------+------------+",
+        ];
+
+        let actual = get_data(&table).await;
+        assert_batches_sorted_eq!(&expected, &actual);
+    }
+
+    #[tokio::test]
+    async fn test_update_case_sensitive() {
+        let schema = StructType::new(vec![
+            StructField::new(
+                "Id".to_string(),
+                DeltaDataType::Primitive(PrimitiveType::String),
+                true,
+            ),
+            StructField::new(
+                "ValUe".to_string(),
+                DeltaDataType::Primitive(PrimitiveType::Integer),
+                true,
+            ),
+            StructField::new(
+                "mOdified".to_string(),
+                DeltaDataType::Primitive(PrimitiveType::String),
+                true,
+            ),
+        ]);
+
+        let arrow_schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("Id", DataType::Utf8, true),
+            Field::new("ValUe", DataType::Int32, true),
+            Field::new("mOdified", DataType::Utf8, true),
+        ]));
+
+        let batch = RecordBatch::try_new(
+            Arc::clone(&arrow_schema),
+            vec![
+                Arc::new(arrow::array::StringArray::from(vec!["A", "B", "A", "A"])),
+                Arc::new(arrow::array::Int32Array::from(vec![1, 10, 10, 100])),
+                Arc::new(arrow::array::StringArray::from(vec![
+                    "2021-02-02",
+                    "2021-02-02",
+                    "2021-02-03",
+                    "2021-02-03",
+                ])),
+            ],
+        )
+        .unwrap();
+
+        let table = DeltaOps::new_in_memory()
+            .create()
+            .with_columns(schema.fields().clone())
+            .await
+            .unwrap();
+        let table = write_batch(table, batch).await;
+
+        let (table, _metrics) = DeltaOps(table)
+            .update()
+            .with_predicate("mOdified = '2021-02-03'")
+            .with_update("mOdified", "'2023-05-14'")
+            .with_update("Id", "'C'")
+            .await
+            .unwrap();
+
+        let expected = vec![
+            "+----+-------+------------+",
+            "| Id | ValUe | mOdified   |",
+            "+----+-------+------------+",
+            "| A  | 1     | 2021-02-02 |",
+            "| B  | 10    | 2021-02-02 |",
+            "| C  | 10    | 2023-05-14 |",
             "| C  | 100   | 2023-05-14 |",
             "+----+-------+------------+",
         ];

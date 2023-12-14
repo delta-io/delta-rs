@@ -50,6 +50,7 @@ async fn test_object_store_onelake_abfs() -> TestResult {
 
 #[cfg(feature = "s3")]
 #[tokio::test]
+#[ignore = "S3 does not support rename_if_not_exists"]
 #[serial]
 async fn test_object_store_aws() -> TestResult {
     test_object_store(StorageIntegration::Amazon, true).await?;

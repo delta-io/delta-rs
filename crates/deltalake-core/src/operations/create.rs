@@ -148,8 +148,6 @@ impl CreateBuilder {
     /// Options may be passed in the HashMap or set as environment variables.
     ///
     /// [crate::table::builder::s3_storage_options] describes the available options for the AWS or S3-compliant backend.
-    /// [dynamodb_lock::DynamoDbLockClient] describes additional options for the AWS atomic rename client.
-    ///
     /// If an object store is also passed using `with_object_store()` these options will be ignored.
     pub fn with_storage_options(mut self, storage_options: HashMap<String, String>) -> Self {
         self.storage_options = Some(storage_options);
@@ -286,7 +284,6 @@ impl std::future::IntoFuture for CreateBuilder {
 
     fn into_future(self) -> Self::IntoFuture {
         let this = self;
-
         Box::pin(async move {
             let mode = this.mode.clone();
             let (mut table, actions, operation) = this.into_table_and_actions()?;
@@ -342,7 +339,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(table.version(), 0);
-        assert_eq!(table.get_metadata().unwrap().schema, table_schema)
+        assert_eq!(table.get_schema().unwrap(), &table_schema)
     }
 
     #[tokio::test]
@@ -362,7 +359,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(table.version(), 0);
-        assert_eq!(table.get_metadata().unwrap().schema, table_schema)
+        assert_eq!(table.get_schema().unwrap(), &table_schema)
     }
 
     #[tokio::test]
@@ -391,14 +388,14 @@ mod tests {
             .unwrap();
         assert_eq!(table.version(), 0);
         assert_eq!(
-            table.get_min_reader_version(),
+            table.protocol().min_reader_version,
             PROTOCOL.default_reader_version()
         );
         assert_eq!(
-            table.get_min_writer_version(),
+            table.protocol().min_writer_version,
             PROTOCOL.default_writer_version()
         );
-        assert_eq!(table.schema().unwrap(), &schema);
+        assert_eq!(table.get_schema().unwrap(), &schema);
 
         // check we can overwrite default settings via adding actions
         let protocol = Protocol {
@@ -413,8 +410,8 @@ mod tests {
             .with_actions(vec![Action::Protocol(protocol)])
             .await
             .unwrap();
-        assert_eq!(table.get_min_reader_version(), 0);
-        assert_eq!(table.get_min_writer_version(), 0);
+        assert_eq!(table.protocol().min_reader_version, 0);
+        assert_eq!(table.protocol().min_writer_version, 0);
 
         let table = CreateBuilder::new()
             .with_location("memory://")
@@ -423,7 +420,7 @@ mod tests {
             .await
             .unwrap();
         let append = table
-            .get_metadata()
+            .metadata()
             .unwrap()
             .configuration
             .get(DeltaConfigKey::AppendOnly.as_ref())
@@ -445,7 +442,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(table.version(), 0);
-        let first_id = table.get_metadata().unwrap().id.clone();
+        let first_id = table.metadata().unwrap().id.clone();
 
         let log_store = table.log_store;
 
@@ -464,7 +461,7 @@ mod tests {
             .with_save_mode(SaveMode::Ignore)
             .await
             .unwrap();
-        assert_eq!(table.get_metadata().unwrap().id, first_id);
+        assert_eq!(table.metadata().unwrap().id, first_id);
 
         // Check table is overwritten
         let table = CreateBuilder::new()
@@ -473,6 +470,6 @@ mod tests {
             .with_save_mode(SaveMode::Overwrite)
             .await
             .unwrap();
-        assert_ne!(table.get_metadata().unwrap().id, first_id)
+        assert_ne!(table.metadata().unwrap().id, first_id)
     }
 }

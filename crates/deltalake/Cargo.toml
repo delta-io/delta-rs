@@ -9,11 +9,12 @@ keywords = ["deltalake", "delta", "datalake"]
 description = "Native Delta Lake implementation in Rust"
 documentation = "https://docs.rs/deltalake"
 repository = "https://github.com/delta-io/delta.rs"
-readme = "README.md"
+readme = "../README.md"
 edition = "2021"
 
 [dependencies]
 deltalake-core = { path = "../deltalake-core" }
+deltalake-catalog-glue = { path = "../deltalake-catalog-glue", optional = true }
 
 [features]
 # All of these features are just reflected into the core crate until that
@@ -24,8 +25,8 @@ default = ["arrow", "deltalake-core/parquet"]
 datafusion = ["deltalake-core/datafusion"]
 datafusion-ext = ["datafusion"]
 gcs = ["deltalake-core/gcs"]
-glue = ["deltalake-core/glue"]
-glue-native-tls = ["deltalake-core/glue-native-tls"]
+glue = ["deltalake-catalog-glue"]
+glue-native-tls = ["deltalake-catalog-glue/native-tls"]
 hdfs = ["deltalake-core/hdfs"]
 # used only for integration testing
 integration_test = ["deltalake-core/integration_test"]
