@@ -143,7 +143,7 @@ async fn test_repair_on_update() -> TestResult<()> {
 }
 
 const WORKERS: i64 = 3;
-const COMMITS: i64 = 5;
+const COMMITS: i64 = 15;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[serial]

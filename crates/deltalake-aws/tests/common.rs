@@ -1,4 +1,5 @@
 use chrono::Utc;
+use deltalake_aws::constants;
 use deltalake_aws::register_handlers;
 use deltalake_aws::storage::*;
 use deltalake_test::utils::*;
@@ -44,8 +45,8 @@ impl StorageIntegration for S3Integration {
 
     /// prepare_env
     fn prepare_env(&self) {
-        std::env::set_var(
-            "DELTA_DYNAMO_TABLE_NAME",
+        set_env_if_not_set(
+            constants::LOCK_TABLE_KEY_NAME,
             format!("delta_log_it_{}", rand::thread_rng().gen::<u16>()),
         );
         match std::env::var(s3_constants::AWS_ENDPOINT_URL).ok() {
@@ -59,9 +60,6 @@ impl StorageIntegration for S3Integration {
         set_env_if_not_set(s3_constants::AWS_SECRET_ACCESS_KEY, "weloverust");
         set_env_if_not_set(s3_constants::AWS_REGION, "us-east-1");
         set_env_if_not_set(s3_constants::AWS_S3_LOCKING_PROVIDER, "dynamodb");
-        set_env_if_not_set("DYNAMO_LOCK_TABLE_NAME", "test_table");
-        set_env_if_not_set("DYNAMO_LOCK_REFRESH_PERIOD_MILLIS", "100");
-        set_env_if_not_set("DYNAMO_LOCK_ADDITIONAL_TIME_TO_WAIT_MILLIS", "100");
     }
 
     /// copy directory
@@ -95,7 +93,7 @@ impl S3Integration {
             "--table-name",
             &table_name,
             "--provisioned-throughput",
-            "ReadCapacityUnits=10,WriteCapacityUnits=10",
+            "ReadCapacityUnits=1,WriteCapacityUnits=1",
             "--attribute-definitions",
         ];
         let mut child = Command::new("aws")
@@ -135,7 +133,7 @@ impl S3Integration {
 
     pub fn create_lock_table() -> std::io::Result<ExitStatus> {
         let table_name =
-            std::env::var("DELTA_DYNAMO_TABLE_NAME").unwrap_or_else(|_| "delta_log".into());
+            std::env::var(constants::LOCK_TABLE_KEY_NAME).unwrap_or_else(|_| "delta_log".into());
         Self::create_dynamodb_table(
             &table_name,
             &[
@@ -160,7 +158,7 @@ impl S3Integration {
 
     pub fn delete_lock_table() -> std::io::Result<ExitStatus> {
         let table_name =
-            std::env::var("DELTA_DYNAMO_TABLE_NAME").unwrap_or_else(|_| "delta_log".into());
+            std::env::var(constants::LOCK_TABLE_KEY_NAME).unwrap_or_else(|_| "delta_log".into());
         Self::delete_dynamodb_table(&table_name)
     }
 }
