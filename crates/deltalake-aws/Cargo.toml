@@ -23,6 +23,7 @@ tokio = { workspace = true }
 regex = { workspace = true }
 uuid = { workspace = true, features = ["serde", "v4"] }
 url = { workspace = true }
+backoff = { version = "0.4", features = [ "tokio" ] }
 
 [dev-dependencies]
 chrono = { workspace = true }

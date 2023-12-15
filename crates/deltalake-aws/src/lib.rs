@@ -21,8 +21,8 @@ use rusoto_core::{HttpClient, Region, RusotoError};
 use rusoto_credential::AutoRefreshingProvider;
 use rusoto_dynamodb::{
     AttributeDefinition, AttributeValue, CreateTableError, CreateTableInput, DynamoDb,
-    DynamoDbClient, GetItemInput, KeySchemaElement, PutItemError, PutItemInput, QueryInput,
-    UpdateItemError, UpdateItemInput,
+    DynamoDbClient, GetItemError, GetItemInput, KeySchemaElement, PutItemError, PutItemInput,
+    QueryError, QueryInput, UpdateItemError, UpdateItemInput,
 };
 use rusoto_sts::WebIdentityProvider;
 use url::Url;
@@ -156,7 +156,7 @@ impl DynamoDbLockClient {
 
     /// Create the lock table where DynamoDb stores the commit information for all delta tables.
     ///
-    /// Transparently handles the case where that table already exists, so it's to call.
+    /// Transparently handles the case where that table already exists, so it's safe to call.
     /// After `create_table` operation is executed, the table state in DynamoDb is `creating`, and
     /// it's not immediately useable. This method does not wait for the table state to become
     /// `active`, so transient failures might occurr when immediately using the lock client.
@@ -223,7 +223,16 @@ impl DynamoDbLockClient {
             key: self.get_primary_key(version, table_path),
             ..Default::default()
         };
-        let item = self.dynamodb_client.get_item(input).await?;
+        let item = retry(|| async {
+            match self.dynamodb_client.get_item(input.clone()).await {
+                Ok(x) => Ok(x),
+                Err(RusotoError::Service(GetItemError::ProvisionedThroughputExceeded(_))) => Err(
+                    backoff::Error::transient(LockClientError::ProvisionedThroughputExceeded),
+                ),
+                Err(err) => Err(backoff::Error::permanent(err.into())),
+            }
+        })
+        .await?;
         item.item.as_ref().map(CommitEntry::try_from).transpose()
     }
 
@@ -240,22 +249,25 @@ impl DynamoDbLockClient {
             item,
             ..Default::default()
         };
-        match self.dynamodb_client.put_item(input).await {
-            Ok(_) => Ok(()),
-            Err(RusotoError::Service(PutItemError::ConditionalCheckFailed(_))) => {
-                Err(LockClientError::VersionAlreadyExists {
-                    table_path: table_path.to_owned(),
-                    version: entry.version,
-                })
+        retry(|| async {
+            match self.dynamodb_client.put_item(input.clone()).await {
+                Ok(_) => Ok(()),
+                Err(RusotoError::Service(PutItemError::ProvisionedThroughputExceeded(_))) => Err(
+                    backoff::Error::transient(LockClientError::ProvisionedThroughputExceeded),
+                ),
+                Err(RusotoError::Service(PutItemError::ConditionalCheckFailed(_))) => Err(
+                    backoff::Error::permanent(LockClientError::VersionAlreadyExists {
+                        table_path: table_path.to_owned(),
+                        version: entry.version,
+                    }),
+                ),
+                Err(RusotoError::Service(PutItemError::ResourceNotFound(_))) => Err(
+                    backoff::Error::permanent(LockClientError::LockTableNotFound),
+                ),
+                Err(err) => Err(backoff::Error::permanent(err.into())),
             }
-            Err(RusotoError::Service(PutItemError::ProvisionedThroughputExceeded(_))) => {
-                Err(LockClientError::ProvisionedThroughputExceeded)
-            }
-            Err(RusotoError::Service(PutItemError::ResourceNotFound(_))) => {
-                Err(LockClientError::LockTableNotFound)
-            }
-            Err(err) => Err(err.into()),
-        }
+        })
+        .await
     }
 
     /// Get the latest entry (entry with highest version).
@@ -287,7 +299,17 @@ impl DynamoDbLockClient {
             ),
             ..Default::default()
         };
-        let query_result = self.dynamodb_client.query(input).await?;
+        let query_result = retry(|| async {
+            match self.dynamodb_client.query(input.clone()).await {
+                Ok(result) => Ok(result),
+                Err(RusotoError::Service(QueryError::ProvisionedThroughputExceeded(_))) => Err(
+                    backoff::Error::transient(LockClientError::ProvisionedThroughputExceeded),
+                ),
+                Err(err) => Err(backoff::Error::permanent(err.into())),
+            }
+        })
+        .await?;
+
         query_result
             .items
             .unwrap()
@@ -320,14 +342,35 @@ impl DynamoDbLockClient {
             ..Default::default()
         };
 
-        match self.dynamodb_client.update_item(input).await {
-            Ok(_) => Ok(UpdateLogEntryResult::UpdatePerformed),
-            Err(RusotoError::Service(UpdateItemError::ConditionalCheckFailed(_))) => {
-                Ok(UpdateLogEntryResult::AlreadyCompleted)
+        retry(|| async {
+            match self.dynamodb_client.update_item(input.clone()).await {
+                Ok(_) => Ok(UpdateLogEntryResult::UpdatePerformed),
+                Err(RusotoError::Service(UpdateItemError::ConditionalCheckFailed(_))) => {
+                    Ok(UpdateLogEntryResult::AlreadyCompleted)
+                }
+                Err(RusotoError::Service(UpdateItemError::ProvisionedThroughputExceeded(_))) => {
+                    Err(backoff::Error::transient(
+                        LockClientError::ProvisionedThroughputExceeded,
+                    ))
+                }
+                Err(err) => Err(backoff::Error::permanent(err.into())),
             }
-            Err(err) => Err(err)?,
-        }
+        })
+        .await
     }
+}
+
+async fn retry<I, E, Fn, Fut>(operation: Fn) -> Result<I, E>
+where
+    Fn: FnMut() -> Fut,
+    Fut: std::future::Future<Output = Result<I, backoff::Error<E>>>,
+{
+    let backoff = backoff::ExponentialBackoffBuilder::new()
+        .with_multiplier(2.)
+        .with_max_interval(Duration::from_secs(15))
+        .with_max_elapsed_time(Some(Duration::from_secs(60)))
+        .build();
+    backoff::future::retry(backoff, operation).await
 }
 
 #[derive(Debug, PartialEq)]
