@@ -78,7 +78,7 @@ jobs:
         run: |
           source python/venv/bin/activate
           var=$(echo ${{ github.event.client_payload.tag || github.ref_name }} | sed 's/^python-v//')
-          mike set-default --push latest
+          mike set-default latest
           mike deploy --push --update-aliases $var latest
 
       - name: Deploy
