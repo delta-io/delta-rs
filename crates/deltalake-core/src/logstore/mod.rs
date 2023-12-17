@@ -7,11 +7,13 @@ use serde::{
     ser::SerializeSeq,
     Deserialize, Serialize,
 };
+use std::io::{BufRead, BufReader, Cursor};
 use std::{cmp::max, collections::HashMap, sync::Arc};
 use url::Url;
 
 use crate::{
     errors::DeltaResult,
+    kernel::Action,
     operations::transaction::TransactionError,
     protocol::{get_last_checkpoint, ProtocolError},
     storage::{commit_uri_from_version, config::StorageOptions},
@@ -19,14 +21,14 @@ use crate::{
 };
 use bytes::Bytes;
 use log::debug;
-use object_store::{
-    path::Path, Error as ObjectStoreError, ObjectStore, Result as ObjectStoreResult,
-};
+use object_store::{path::Path, Error as ObjectStoreError, ObjectStore};
 
 #[cfg(feature = "datafusion")]
 use datafusion::datasource::object_store::ObjectStoreUrl;
 
 pub mod default_logstore;
+#[cfg(any(feature = "s3", feature = "s3-native-tls"))]
+pub mod s3;
 
 /// Sharable reference to [`LogStore`]
 pub type LogStoreRef = Arc<dyn LogStore>;
@@ -57,7 +59,7 @@ pub struct LogStoreConfig {
 #[async_trait::async_trait]
 pub trait LogStore: Sync + Send {
     /// Read data for commit entry with the given version.
-    async fn read_commit_entry(&self, version: i64) -> DeltaResult<Bytes>;
+    async fn read_commit_entry(&self, version: i64) -> DeltaResult<Option<Bytes>>;
 
     /// Write list of actions as delta commit entry for given version.
     ///
@@ -89,7 +91,7 @@ pub trait LogStore: Sync + Send {
     }
 
     /// Check if the location is a delta table location
-    async fn is_delta_table_location(&self) -> ObjectStoreResult<bool> {
+    async fn is_delta_table_location(&self) -> DeltaResult<bool> {
         // TODO We should really be using HEAD here, but this fails in windows tests
         let object_store = self.object_store();
         let mut stream = object_store.list(Some(self.log_path())).await?;
@@ -97,7 +99,7 @@ pub trait LogStore: Sync + Send {
             match res {
                 Ok(_) => Ok(true),
                 Err(ObjectStoreError::NotFound { .. }) => Ok(false),
-                Err(err) => Err(err),
+                Err(err) => Err(err)?,
             }
         } else {
             Ok(false)
@@ -114,6 +116,28 @@ pub trait LogStore: Sync + Send {
 
     /// Get configuration representing configured log store.
     fn config(&self) -> &LogStoreConfig;
+}
+
+/// Reads a commit and gets list of actions
+pub async fn get_actions(
+    version: i64,
+    commit_log_bytes: bytes::Bytes,
+) -> Result<Vec<Action>, DeltaTableError> {
+    debug!("parsing commit with version {version}...");
+    let reader = BufReader::new(Cursor::new(commit_log_bytes));
+
+    let mut actions = Vec::new();
+    for re_line in reader.lines() {
+        let line = re_line?;
+        let lstr = line.as_str();
+        let action = serde_json::from_str(lstr).map_err(|e| DeltaTableError::InvalidJsonLog {
+            json_err: e,
+            line,
+            version,
+        })?;
+        actions.push(action);
+    }
+    Ok(actions)
 }
 
 // TODO: maybe a bit of a hack, required to `#[derive(Debug)]` for the operation builders
@@ -271,10 +295,14 @@ async fn get_latest_version(log_store: &dyn LogStore, current_version: i64) -> D
     Ok(version)
 }
 
-async fn read_commit_entry(storage: &dyn ObjectStore, version: i64) -> DeltaResult<Bytes> {
+/// Read delta log for a specific version
+async fn read_commit_entry(storage: &dyn ObjectStore, version: i64) -> DeltaResult<Option<Bytes>> {
     let commit_uri = commit_uri_from_version(version);
-    let data = storage.get(&commit_uri).await?.bytes().await?;
-    Ok(data)
+    match storage.get(&commit_uri).await {
+        Ok(res) => Ok(Some(res.bytes().await?)),
+        Err(ObjectStoreError::NotFound { .. }) => Ok(None),
+        Err(err) => Err(err.into()),
+    }
 }
 
 async fn write_commit_entry(

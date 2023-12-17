@@ -30,7 +30,7 @@ impl DeltaTableState {
     }
 
     fn _arrow_schema(&self, wrap_partitions: bool) -> DeltaResult<ArrowSchemaRef> {
-        let meta = self.current_metadata().ok_or(DeltaTableError::NoMetadata)?;
+        let meta = self.metadata().ok_or(DeltaTableError::NoMetadata)?;
         let fields = meta
             .schema
             .fields()
@@ -299,7 +299,7 @@ impl PruningStatistics for DeltaTableState {
     /// return the minimum values for the named column, if known.
     /// Note: the returned array must contain `num_containers()` rows
     fn min_values(&self, column: &Column) -> Option<ArrayRef> {
-        let partition_columns = &self.current_metadata()?.partition_columns;
+        let partition_columns = &self.metadata()?.partition_columns;
         let container =
             AddContainer::new(self.files(), partition_columns, self.arrow_schema().ok()?);
         container.min_values(column)
@@ -308,7 +308,7 @@ impl PruningStatistics for DeltaTableState {
     /// return the maximum values for the named column, if known.
     /// Note: the returned array must contain `num_containers()` rows.
     fn max_values(&self, column: &Column) -> Option<ArrayRef> {
-        let partition_columns = &self.current_metadata()?.partition_columns;
+        let partition_columns = &self.metadata()?.partition_columns;
         let container =
             AddContainer::new(self.files(), partition_columns, self.arrow_schema().ok()?);
         container.max_values(column)
@@ -325,7 +325,7 @@ impl PruningStatistics for DeltaTableState {
     ///
     /// Note: the returned array must contain `num_containers()` rows.
     fn null_counts(&self, column: &Column) -> Option<ArrayRef> {
-        let partition_columns = &self.current_metadata()?.partition_columns;
+        let partition_columns = &self.metadata()?.partition_columns;
         let container =
             AddContainer::new(self.files(), partition_columns, self.arrow_schema().ok()?);
         container.null_counts(column)

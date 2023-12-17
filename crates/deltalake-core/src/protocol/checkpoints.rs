@@ -82,8 +82,12 @@ pub async fn create_checkpoint(table: &DeltaTable) -> Result<(), ProtocolError> 
 /// Delete expires log files before given version from table. The table log retention is based on
 /// the `logRetentionDuration` property of the Delta Table, 30 days by default.
 pub async fn cleanup_metadata(table: &DeltaTable) -> Result<usize, ProtocolError> {
-    let log_retention_timestamp =
-        Utc::now().timestamp_millis() - table.get_state().log_retention_millis();
+    let log_retention_timestamp = Utc::now().timestamp_millis()
+        - table
+            .get_state()
+            .table_config()
+            .log_retention_duration()
+            .as_millis() as i64;
     cleanup_expired_logs_for(
         table.version(),
         table.log_store.as_ref(),
@@ -105,8 +109,12 @@ pub async fn create_checkpoint_from_table_uri_and_cleanup(
         .map_err(|err| ProtocolError::Generic(err.to_string()))?;
     create_checkpoint_for(version, table.get_state(), table.log_store.as_ref()).await?;
 
-    let enable_expired_log_cleanup =
-        cleanup.unwrap_or_else(|| table.get_state().enable_expired_log_cleanup());
+    let enable_expired_log_cleanup = cleanup.unwrap_or_else(|| {
+        table
+            .get_state()
+            .table_config()
+            .enable_expired_log_cleanup()
+    });
 
     if table.version() >= 0 && enable_expired_log_cleanup {
         let deleted_log_num = cleanup_metadata(&table).await?;
@@ -213,7 +221,7 @@ pub async fn cleanup_expired_logs_for(
 fn parquet_bytes_from_state(
     state: &DeltaTableState,
 ) -> Result<(CheckPoint, bytes::Bytes), ProtocolError> {
-    let current_metadata = state.current_metadata().ok_or(ProtocolError::NoMetaData)?;
+    let current_metadata = state.metadata().ok_or(ProtocolError::NoMetaData)?;
 
     let partition_col_data_types = current_metadata.get_partition_col_data_types();
 
@@ -247,8 +255,8 @@ fn parquet_bytes_from_state(
 
     // protocol
     let jsons = std::iter::once(Action::Protocol(Protocol {
-        min_reader_version: state.min_reader_version(),
-        min_writer_version: state.min_writer_version(),
+        min_reader_version: state.protocol().min_reader_version,
+        min_writer_version: state.protocol().min_writer_version,
         writer_features: None,
         reader_features: None,
     }))
@@ -511,7 +519,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(table.version(), 0);
-        assert_eq!(table.get_metadata().unwrap().schema, table_schema);
+        assert_eq!(table.get_schema().unwrap(), &table_schema);
         let res = create_checkpoint_for(0, table.get_state(), table.log_store.as_ref()).await;
         assert!(res.is_ok());
 
@@ -540,7 +548,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(table.version(), 0);
-        assert_eq!(table.get_metadata().unwrap().schema, table_schema);
+        assert_eq!(table.get_schema().unwrap(), &table_schema);
         match create_checkpoint_for(1, table.get_state(), table.log_store.as_ref()).await {
             Ok(_) => {
                 /*

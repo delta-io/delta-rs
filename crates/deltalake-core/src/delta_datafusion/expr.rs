@@ -42,6 +42,8 @@ use sqlparser::tokenizer::Tokenizer;
 
 use crate::{DeltaResult, DeltaTableError};
 
+use super::DeltaParserOptions;
+
 pub(crate) struct DeltaContextProvider<'a> {
     state: &'a SessionState,
 }
@@ -97,7 +99,8 @@ pub(crate) fn parse_predicate_expression(
         })?;
 
     let context_provider = DeltaContextProvider { state: df_state };
-    let sql_to_rel = SqlToRel::new(&context_provider);
+    let sql_to_rel =
+        SqlToRel::new_with_options(&context_provider, DeltaParserOptions::default().into());
 
     Ok(sql_to_rel.sql_to_expr(sql, schema, &mut Default::default())?)
 }

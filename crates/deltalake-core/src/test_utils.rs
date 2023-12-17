@@ -4,7 +4,9 @@ use crate::DeltaTableBuilder;
 use chrono::Utc;
 use fs_extra::dir::{copy, CopyOptions};
 use object_store::DynObjectStore;
+use rand::Rng;
 use serde_json::json;
+use std::collections::HashMap;
 use std::env;
 use std::sync::Arc;
 use tempdir::TempDir;
@@ -17,6 +19,8 @@ pub struct IntegrationContext {
     bucket: String,
     store: Arc<DynObjectStore>,
     tmp_dir: TempDir,
+    /// environment variables valid before `prepare_env()` modified them
+    env_vars: HashMap<String, String>,
 }
 
 impl IntegrationContext {
@@ -27,6 +31,9 @@ impl IntegrationContext {
         // default values based on the default setting of the respective emulators are set.
         #[cfg(test)]
         dotenvy::dotenv().ok();
+
+        // save existing environment variables
+        let env_vars = std::env::vars().collect();
 
         integration.prepare_env();
 
@@ -96,6 +103,7 @@ impl IntegrationContext {
             bucket,
             store,
             tmp_dir,
+            env_vars,
         })
     }
 
@@ -161,6 +169,18 @@ impl IntegrationContext {
         };
         Ok(())
     }
+
+    fn restore_env(&self) {
+        let env_vars: HashMap<_, _> = std::env::vars().collect();
+        for (key, _) in env_vars {
+            if !self.env_vars.contains_key(&key) {
+                std::env::remove_var(key)
+            }
+        }
+        for (key, value) in self.env_vars.iter() {
+            std::env::set_var(key, value);
+        }
+    }
 }
 
 impl Drop for IntegrationContext {
@@ -183,6 +203,7 @@ impl Drop for IntegrationContext {
                 hdfs_cli::delete_dir(&self.bucket).unwrap();
             }
         };
+        self.restore_env();
     }
 }
 
@@ -219,6 +240,10 @@ impl StorageIntegration {
             Self::Onelake => Ok(()),
             Self::OnelakeAbfs => Ok(()),
             Self::Amazon => {
+                std::env::set_var(
+                    "DELTA_DYNAMO_TABLE_NAME",
+                    format!("delta_log_it_{}", rand::thread_rng().gen::<u16>()),
+                );
                 s3_cli::create_bucket(format!("s3://{}", name.as_ref()))?;
                 set_env_if_not_set(
                     "DYNAMO_LOCK_PARTITION_KEY_VALUE",
@@ -390,20 +415,8 @@ pub mod s3_cli {
 
     /// Create a new bucket
     pub fn create_bucket(bucket_name: impl AsRef<str>) -> std::io::Result<ExitStatus> {
-        let endpoint = std::env::var(s3_storage_options::AWS_ENDPOINT_URL)
-            .expect("variable ENDPOINT must be set to connect to S3");
-        let region = std::env::var(s3_storage_options::AWS_REGION)
-            .expect("variable AWS_REGION must be set to connect to S3");
         let mut child = Command::new("aws")
-            .args([
-                "s3",
-                "mb",
-                bucket_name.as_ref(),
-                "--endpoint-url",
-                &endpoint,
-                "--region",
-                &region,
-            ])
+            .args(["s3", "mb", bucket_name.as_ref()])
             .spawn()
             .expect("aws command is installed");
         child.wait()
@@ -411,17 +424,8 @@ pub mod s3_cli {
 
     /// delete bucket
     pub fn delete_bucket(bucket_name: impl AsRef<str>) -> std::io::Result<ExitStatus> {
-        let endpoint = std::env::var(s3_storage_options::AWS_ENDPOINT_URL)
-            .expect("variable ENDPOINT must be set to connect to S3");
         let mut child = Command::new("aws")
-            .args([
-                "s3",
-                "rb",
-                bucket_name.as_ref(),
-                "--endpoint-url",
-                &endpoint,
-                "--force",
-            ])
+            .args(["s3", "rb", bucket_name.as_ref(), "--force"])
             .spawn()
             .expect("aws command is installed");
         child.wait()
@@ -432,16 +436,12 @@ pub mod s3_cli {
         source: impl AsRef<str>,
         destination: impl AsRef<str>,
     ) -> std::io::Result<ExitStatus> {
-        let endpoint = std::env::var(s3_storage_options::AWS_ENDPOINT_URL)
-            .expect("variable ENDPOINT must be set to connect to S3");
         let mut child = Command::new("aws")
             .args([
                 "s3",
                 "cp",
                 source.as_ref(),
                 destination.as_ref(),
-                "--endpoint-url",
-                &endpoint,
                 "--recursive",
             ])
             .spawn()
@@ -451,13 +451,18 @@ pub mod s3_cli {
 
     /// prepare_env
     pub fn prepare_env() {
-        set_env_if_not_set(
-            s3_storage_options::AWS_ENDPOINT_URL,
-            "http://localhost:4566",
-        );
+        match std::env::var(s3_storage_options::AWS_ENDPOINT_URL).ok() {
+            Some(endpoint_url) if endpoint_url.to_lowercase() == "none" => {
+                std::env::remove_var(s3_storage_options::AWS_ENDPOINT_URL)
+            }
+            Some(_) => (),
+            None => std::env::set_var(
+                s3_storage_options::AWS_ENDPOINT_URL,
+                "http://localhost:4566",
+            ),
+        }
         set_env_if_not_set(s3_storage_options::AWS_ACCESS_KEY_ID, "deltalake");
         set_env_if_not_set(s3_storage_options::AWS_SECRET_ACCESS_KEY, "weloverust");
-        set_env_if_not_set("AWS_DEFAULT_REGION", "us-east-1");
         set_env_if_not_set(s3_storage_options::AWS_REGION, "us-east-1");
         set_env_if_not_set(s3_storage_options::AWS_S3_LOCKING_PROVIDER, "dynamodb");
         set_env_if_not_set("DYNAMO_LOCK_TABLE_NAME", "test_table");
@@ -465,26 +470,74 @@ pub mod s3_cli {
         set_env_if_not_set("DYNAMO_LOCK_ADDITIONAL_TIME_TO_WAIT_MILLIS", "100");
     }
 
-    pub fn create_lock_table() -> std::io::Result<ExitStatus> {
-        let endpoint = std::env::var(s3_storage_options::AWS_ENDPOINT_URL)
-            .expect("variable AWS_ENDPOINT_URL must be set to connect to S3 emulator");
-        let table_name =
-            std::env::var("DYNAMO_LOCK_TABLE_NAME").unwrap_or_else(|_| "test_table".into());
+    fn create_dynamodb_table(
+        table_name: &str,
+        attr_definitions: &[&str],
+        key_schema: &[&str],
+    ) -> std::io::Result<ExitStatus> {
+        let args = [
+            "dynamodb",
+            "create-table",
+            "--table-name",
+            &table_name,
+            "--provisioned-throughput",
+            "ReadCapacityUnits=10,WriteCapacityUnits=10",
+            "--attribute-definitions",
+        ];
         let mut child = Command::new("aws")
-            .args([
-                "dynamodb",
-                "create-table",
-                "--table-name",
-                &table_name,
-                "--endpoint-url",
-                &endpoint,
-                "--attribute-definitions",
-                "AttributeName=key,AttributeType=S",
-                "--key-schema",
-                "AttributeName=key,KeyType=HASH",
-                "--provisioned-throughput",
-                "ReadCapacityUnits=10,WriteCapacityUnits=10",
-            ])
+            .args(args)
+            .args(attr_definitions.iter())
+            .arg("--key-schema")
+            .args(key_schema)
+            .stdout(Stdio::null())
+            .spawn()
+            .expect("aws command is installed");
+        let status = child.wait()?;
+        wait_for_table(table_name)?;
+        Ok(status)
+    }
+
+    fn find_subsequence(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+        haystack
+            .windows(needle.len())
+            .position(|window| window == needle)
+    }
+
+    fn wait_for_table(table_name: &str) -> std::io::Result<()> {
+        let args = ["dynamodb", "describe-table", "--table-name", &table_name];
+        loop {
+            let output = Command::new("aws")
+                .args(args)
+                .output()
+                .expect("aws command is installed");
+            if find_subsequence(&output.stdout, "CREATING".as_bytes()).is_some() {
+                std::thread::sleep(std::time::Duration::from_millis(200));
+                continue;
+            } else {
+                return Ok(());
+            }
+        }
+    }
+
+    pub fn create_lock_table() -> std::io::Result<ExitStatus> {
+        let table_name =
+            std::env::var("DELTA_DYNAMO_TABLE_NAME").unwrap_or_else(|_| "delta_log".into());
+        create_dynamodb_table(
+            &table_name,
+            &[
+                "AttributeName=tablePath,AttributeType=S",
+                "AttributeName=fileName,AttributeType=S",
+            ],
+            &[
+                "AttributeName=tablePath,KeyType=HASH",
+                "AttributeName=fileName,KeyType=RANGE",
+            ],
+        )
+    }
+
+    fn delete_dynamodb_table(table_name: &str) -> std::io::Result<ExitStatus> {
+        let mut child = Command::new("aws")
+            .args(["dynamodb", "delete-table", "--table-name", &table_name])
             .stdout(Stdio::null())
             .spawn()
             .expect("aws command is installed");
@@ -492,23 +545,9 @@ pub mod s3_cli {
     }
 
     pub fn delete_lock_table() -> std::io::Result<ExitStatus> {
-        let endpoint = std::env::var(s3_storage_options::AWS_ENDPOINT_URL)
-            .expect("variable AWS_ENDPOINT_URL must be set to connect to S3 emulator");
         let table_name =
-            std::env::var("DYNAMO_LOCK_TABLE_NAME").unwrap_or_else(|_| "test_table".into());
-        let mut child = Command::new("aws")
-            .args([
-                "dynamodb",
-                "delete-table",
-                "--table-name",
-                &table_name,
-                "--endpoint-url",
-                &endpoint,
-            ])
-            .stdout(Stdio::null())
-            .spawn()
-            .expect("aws command is installed");
-        child.wait()
+            std::env::var("DELTA_DYNAMO_TABLE_NAME").unwrap_or_else(|_| "delta_log".into());
+        delete_dynamodb_table(&table_name)
     }
 }
 

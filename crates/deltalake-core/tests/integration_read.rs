@@ -3,7 +3,6 @@
 use deltalake_core::test_utils::{IntegrationContext, StorageIntegration, TestResult, TestTables};
 use deltalake_core::{DeltaTableBuilder, ObjectStore};
 #[cfg(any(feature = "s3", feature = "s3-native-tls"))]
-use dynamodb_lock::dynamo_lock_options;
 #[cfg(any(feature = "s3", feature = "s3-native-tls"))]
 use maplit::hashmap;
 use object_store::path::Path;
@@ -189,9 +188,10 @@ async fn read_simple_table(integration: &IntegrationContext) -> TestResult {
     let table_uri = integration.uri_for_table(TestTables::Simple);
     // the s3 options don't hurt us for other integrations ...
     #[cfg(any(feature = "s3", feature = "s3-native-tls"))]
-    let table = DeltaTableBuilder::from_uri(table_uri).with_allow_http(true).with_storage_options(hashmap! {
-        dynamo_lock_options::DYNAMO_LOCK_OWNER_NAME.to_string() => "s3::deltars/simple".to_string(),
-    }).load().await?;
+    let table = DeltaTableBuilder::from_uri(table_uri)
+        .with_allow_http(true)
+        .load()
+        .await?;
     #[cfg(not(any(feature = "s3", feature = "s3-native-tls")))]
     let table = DeltaTableBuilder::from_uri(table_uri)
         .with_allow_http(true)
@@ -199,8 +199,8 @@ async fn read_simple_table(integration: &IntegrationContext) -> TestResult {
         .await?;
 
     assert_eq!(table.version(), 4);
-    assert_eq!(table.get_min_writer_version(), 2);
-    assert_eq!(table.get_min_reader_version(), 1);
+    assert_eq!(table.protocol().min_writer_version, 2);
+    assert_eq!(table.protocol().min_reader_version, 1);
     assert_eq!(
         table.get_files(),
         vec![
@@ -239,8 +239,8 @@ async fn read_simple_table_with_version(integration: &IntegrationContext) -> Tes
         .await?;
 
     assert_eq!(table.version(), 3);
-    assert_eq!(table.get_min_writer_version(), 2);
-    assert_eq!(table.get_min_reader_version(), 1);
+    assert_eq!(table.protocol().min_writer_version, 2);
+    assert_eq!(table.protocol().min_reader_version, 1);
     assert_eq!(
         table.get_files(),
         vec![
@@ -280,8 +280,8 @@ async fn read_golden(integration: &IntegrationContext) -> TestResult {
         .unwrap();
 
     assert_eq!(table.version(), 0);
-    assert_eq!(table.get_min_writer_version(), 2);
-    assert_eq!(table.get_min_reader_version(), 1);
+    assert_eq!(table.protocol().min_writer_version, 2);
+    assert_eq!(table.protocol().min_reader_version, 1);
 
     Ok(())
 }
@@ -309,8 +309,8 @@ mod gcs {
             .await
             .unwrap();
         assert_eq!(table.version(), 4);
-        assert_eq!(table.get_min_writer_version(), 2);
-        assert_eq!(table.get_min_reader_version(), 1);
+        assert_eq!(table.protocol().min_writer_version, 2);
+        assert_eq!(table.protocol().min_reader_version, 1);
         assert_eq!(
             table.get_files(),
             vec![

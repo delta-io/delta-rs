@@ -439,7 +439,10 @@ impl MergePlan {
         let mut read_stream = read_stream.await?;
 
         while let Some(maybe_batch) = read_stream.next().await {
-            let batch = maybe_batch?;
+            let mut batch = maybe_batch?;
+
+            batch =
+                super::cast::cast_record_batch(&batch, task_parameters.file_schema.clone(), false)?;
             partial_metrics.num_batches += 1;
             writer.write(&batch).await.map_err(DeltaTableError::from)?;
         }
@@ -767,7 +770,7 @@ pub fn create_merge_plan(
     let target_size = target_size.unwrap_or_else(|| snapshot.table_config().target_file_size());
 
     let partitions_keys = &snapshot
-        .current_metadata()
+        .metadata()
         .ok_or(DeltaTableError::NoMetadata)?
         .partition_columns;
 
@@ -785,7 +788,7 @@ pub fn create_merge_plan(
         &Arc::new(
             <ArrowSchema as TryFrom<&crate::kernel::StructType>>::try_from(
                 &snapshot
-                    .current_metadata()
+                    .metadata()
                     .ok_or(DeltaTableError::NoMetadata)?
                     .schema,
             )?,
@@ -937,7 +940,7 @@ fn build_zorder_plan(
         )));
     }
     let field_names = snapshot
-        .current_metadata()
+        .metadata()
         .unwrap()
         .schema
         .fields()

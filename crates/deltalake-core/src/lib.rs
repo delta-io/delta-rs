@@ -40,7 +40,6 @@
 //! - `s3`, `gcs`, `azure` - enable the storage backends for AWS S3, Google Cloud Storage (GCS),
 //!   or Azure Blob Storage / Azure Data Lake Storage Gen2 (ADLS2). Use `s3-native-tls` to use native TLS
 //!   instead of Rust TLS implementation.
-//! - `glue` - enable the Glue data catalog to work with Delta Tables with AWS Glue.
 //! - `datafusion` - enable the `datafusion::datasource::TableProvider` trait implementation
 //!   for Delta Tables, allowing them to be queried using [DataFusion](https://github.com/apache/arrow-datafusion).
 //! - `datafusion-ext` - DEPRECATED: alias for `datafusion` feature.
@@ -105,7 +104,7 @@ pub mod writer;
 
 use std::collections::HashMap;
 
-pub use self::data_catalog::{get_data_catalog, DataCatalog, DataCatalogError};
+pub use self::data_catalog::{DataCatalog, DataCatalogError};
 pub use self::errors::*;
 pub use self::schema::partitions::*;
 pub use self::schema::*;
@@ -196,6 +195,8 @@ pub fn crate_version() -> &'static str {
 
 #[cfg(test)]
 mod tests {
+    use itertools::Itertools;
+
     use super::*;
     use crate::table::PeekCommit;
     use std::collections::HashMap;
@@ -204,10 +205,10 @@ mod tests {
     async fn read_delta_2_0_table_without_version() {
         let table = crate::open_table("./tests/data/delta-0.2.0").await.unwrap();
         assert_eq!(table.version(), 3);
-        assert_eq!(table.get_min_writer_version(), 2);
-        assert_eq!(table.get_min_reader_version(), 1);
+        assert_eq!(table.protocol().min_writer_version, 2);
+        assert_eq!(table.protocol().min_reader_version, 1);
         assert_eq!(
-            table.get_files(),
+            table.get_files_iter().collect_vec(),
             vec![
                 Path::from("part-00000-cb6b150b-30b8-4662-ad28-ff32ddab96d2-c000.snappy.parquet"),
                 Path::from("part-00000-7c2deba3-1994-4fb8-bc07-d46c948aa415-c000.snappy.parquet"),
@@ -241,8 +242,8 @@ mod tests {
         table_to_update.update().await.unwrap();
 
         assert_eq!(
-            table_newest_version.get_files(),
-            table_to_update.get_files()
+            table_newest_version.get_files_iter().collect_vec(),
+            table_to_update.get_files_iter().collect_vec()
         );
     }
     #[tokio::test]
@@ -251,10 +252,10 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(table.version(), 0);
-        assert_eq!(table.get_min_writer_version(), 2);
-        assert_eq!(table.get_min_reader_version(), 1);
+        assert_eq!(table.protocol().min_writer_version, 2);
+        assert_eq!(table.protocol().min_reader_version, 1);
         assert_eq!(
-            table.get_files(),
+            table.get_files_iter().collect_vec(),
             vec![
                 Path::from("part-00000-b44fcdb0-8b06-4f3a-8606-f8311a96f6dc-c000.snappy.parquet"),
                 Path::from("part-00001-185eca06-e017-4dea-ae49-fc48b973e37e-c000.snappy.parquet"),
@@ -265,10 +266,10 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(table.version(), 2);
-        assert_eq!(table.get_min_writer_version(), 2);
-        assert_eq!(table.get_min_reader_version(), 1);
+        assert_eq!(table.protocol().min_writer_version, 2);
+        assert_eq!(table.protocol().min_reader_version, 1);
         assert_eq!(
-            table.get_files(),
+            table.get_files_iter().collect_vec(),
             vec![
                 Path::from("part-00000-7c2deba3-1994-4fb8-bc07-d46c948aa415-c000.snappy.parquet"),
                 Path::from("part-00001-c373a5bd-85f0-4758-815e-7eb62007a15c-c000.snappy.parquet"),
@@ -279,10 +280,10 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(table.version(), 3);
-        assert_eq!(table.get_min_writer_version(), 2);
-        assert_eq!(table.get_min_reader_version(), 1);
+        assert_eq!(table.protocol().min_writer_version, 2);
+        assert_eq!(table.protocol().min_reader_version, 1);
         assert_eq!(
-            table.get_files(),
+            table.get_files_iter().collect_vec(),
             vec![
                 Path::from("part-00000-cb6b150b-30b8-4662-ad28-ff32ddab96d2-c000.snappy.parquet"),
                 Path::from("part-00000-7c2deba3-1994-4fb8-bc07-d46c948aa415-c000.snappy.parquet"),
@@ -295,10 +296,10 @@ mod tests {
     async fn read_delta_8_0_table_without_version() {
         let table = crate::open_table("./tests/data/delta-0.8.0").await.unwrap();
         assert_eq!(table.version(), 1);
-        assert_eq!(table.get_min_writer_version(), 2);
-        assert_eq!(table.get_min_reader_version(), 1);
+        assert_eq!(table.protocol().min_writer_version, 2);
+        assert_eq!(table.protocol().min_reader_version, 1);
         assert_eq!(
-            table.get_files(),
+            table.get_files_iter().collect_vec(),
             vec![
                 Path::from("part-00000-c9b90f86-73e6-46c8-93ba-ff6bfaf892a1-c000.snappy.parquet"),
                 Path::from("part-00000-04ec9591-0b73-459e-8d18-ba5711d6cbe1-c000.snappy.parquet")
@@ -341,10 +342,10 @@ mod tests {
     async fn read_delta_8_0_table_with_load_version() {
         let mut table = crate::open_table("./tests/data/delta-0.8.0").await.unwrap();
         assert_eq!(table.version(), 1);
-        assert_eq!(table.get_min_writer_version(), 2);
-        assert_eq!(table.get_min_reader_version(), 1);
+        assert_eq!(table.protocol().min_writer_version, 2);
+        assert_eq!(table.protocol().min_reader_version, 1);
         assert_eq!(
-            table.get_files(),
+            table.get_files_iter().collect_vec(),
             vec![
                 Path::from("part-00000-c9b90f86-73e6-46c8-93ba-ff6bfaf892a1-c000.snappy.parquet"),
                 Path::from("part-00000-04ec9591-0b73-459e-8d18-ba5711d6cbe1-c000.snappy.parquet"),
@@ -352,10 +353,10 @@ mod tests {
         );
         table.load_version(0).await.unwrap();
         assert_eq!(table.version(), 0);
-        assert_eq!(table.get_min_writer_version(), 2);
-        assert_eq!(table.get_min_reader_version(), 1);
+        assert_eq!(table.protocol().min_writer_version, 2);
+        assert_eq!(table.protocol().min_reader_version, 1);
         assert_eq!(
-            table.get_files(),
+            table.get_files_iter().collect_vec(),
             vec![
                 Path::from("part-00000-c9b90f86-73e6-46c8-93ba-ff6bfaf892a1-c000.snappy.parquet"),
                 Path::from("part-00001-911a94a2-43f6-4acb-8620-5e68c2654989-c000.snappy.parquet"),
@@ -483,7 +484,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(
-            table.get_files(),
+            table.get_files_iter().collect_vec(),
             vec![
                 Path::parse(
                     "x=A%2FA/part-00007-b350e235-2832-45df-9918-6cab4f7578f7.c000.snappy.parquet"
@@ -683,7 +684,7 @@ mod tests {
             .unwrap();
         assert_eq!(table.version(), 2);
         assert_eq!(
-            table.get_files(),
+            table.get_files_iter().collect_vec(),
             vec![Path::from(
                 "part-00000-7444aec4-710a-4a4c-8abe-3323499043e9.c000.snappy.parquet"
             ),]

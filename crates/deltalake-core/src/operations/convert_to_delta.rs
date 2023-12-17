@@ -7,7 +7,6 @@ use crate::{
     operations::create::CreateBuilder,
     protocol::SaveMode,
     storage::config::configure_log_store,
-    table::builder::ensure_table_uri,
     table::config::DeltaConfigKey,
     DeltaResult, DeltaTable, DeltaTableError, DeltaTablePartition, ObjectStoreError,
     NULL_PARTITION_VALUE_DATA_PATH,
@@ -153,8 +152,6 @@ impl ConvertToDeltaBuilder {
     /// Options may be passed in the HashMap or set as environment variables.
     ///
     /// [crate::table::builder::s3_storage_options] describes the available options for the AWS or S3-compliant backend.
-    /// [dynamodb_lock::DynamoDbLockClient] describes additional options for the AWS atomic rename client.
-    ///
     /// If an object store is also passed using `with_log_store()`, these options will be ignored.
     pub fn with_storage_options(mut self, storage_options: HashMap<String, String>) -> Self {
         self.storage_options = Some(storage_options);
@@ -234,10 +231,7 @@ impl ConvertToDeltaBuilder {
         let log_store = if let Some(log_store) = self.log_store {
             log_store
         } else if let Some(location) = self.location {
-            configure_log_store(
-                ensure_table_uri(location)?,
-                self.storage_options.unwrap_or_default(),
-            )?
+            configure_log_store(&location, self.storage_options.unwrap_or_default(), None)?
         } else {
             return Err(Error::MissingLocation);
         };
@@ -395,16 +389,14 @@ impl std::future::IntoFuture for ConvertToDeltaBuilder {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        configure_log_store, ensure_table_uri, ConvertToDeltaBuilder, DeltaTable, LogStoreRef,
-        StructField,
-    };
+    use super::{configure_log_store, ConvertToDeltaBuilder, DeltaTable, LogStoreRef, StructField};
     use crate::{
         kernel::schema::{DataType, PrimitiveType},
         open_table,
         storage::config::StorageOptions,
         Path,
     };
+    use itertools::Itertools;
     use pretty_assertions::assert_eq;
     use std::fs;
     use tempfile::tempdir;
@@ -432,11 +424,8 @@ mod tests {
     }
 
     fn log_store(path: impl Into<String>) -> LogStoreRef {
-        configure_log_store(
-            ensure_table_uri(path.into()).expect("Failed to convert to table URI"),
-            StorageOptions::default(),
-        )
-        .expect("Failed to create an object store")
+        configure_log_store(&path.into(), StorageOptions::default(), None)
+            .expect("Failed to create an object store")
     }
 
     async fn create_delta_table(
@@ -501,7 +490,7 @@ mod tests {
             "Testing location: {test_data_from:?}"
         );
 
-        let mut files = table.get_files();
+        let mut files = table.get_files_iter().collect_vec();
         files.sort();
         assert_eq!(
             files, expected_paths,

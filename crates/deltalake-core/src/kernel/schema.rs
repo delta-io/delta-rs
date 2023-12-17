@@ -6,6 +6,7 @@ use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 use std::{collections::HashMap, fmt::Display};
 
+use crate::kernel::DataCheck;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -94,6 +95,16 @@ impl Invariant {
             field_name: field_name.to_string(),
             invariant_sql: invariant_sql.to_string(),
         }
+    }
+}
+
+impl DataCheck for Invariant {
+    fn get_name(&self) -> &str {
+        &self.field_name
+    }
+
+    fn get_expression(&self) -> &str {
+        &self.invariant_sql
     }
 }
 

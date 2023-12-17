@@ -66,6 +66,7 @@ pub enum ListTableSummariesResponse {
     /// Successful response
     Success {
         /// Basic table infos
+        #[serde(default)]
         tables: Vec<TableSummary>,
         /// Continuation token
         next_page_token: Option<String>,
@@ -441,6 +442,16 @@ pub(crate) mod tests {
       }
     "#;
 
+    pub(crate) const LIST_TABLES: &str = r#"
+        {
+	        "tables": [{
+                "full_name": "catalog.schema.table_name",
+                "table_type": "MANAGED"
+            }]
+		}
+		"#;
+    pub(crate) const LIST_TABLES_EMPTY: &str = "{}";
+
     #[test]
     fn test_responses() {
         let list_schemas: Result<ListSchemasResponse, _> =
@@ -456,6 +467,21 @@ pub(crate) mod tests {
         assert!(matches!(
             get_table.unwrap(),
             GetTableResponse::Success { .. }
+        ));
+
+        let list_tables: Result<ListTableSummariesResponse, _> = serde_json::from_str(LIST_TABLES);
+        assert!(list_tables.is_ok());
+        assert!(matches!(
+            list_tables.unwrap(),
+            ListTableSummariesResponse::Success { .. }
+        ));
+
+        let list_tables: Result<ListTableSummariesResponse, _> =
+            serde_json::from_str(LIST_TABLES_EMPTY);
+        assert!(list_tables.is_ok());
+        assert!(matches!(
+            list_tables.unwrap(),
+            ListTableSummariesResponse::Success { .. }
         ));
 
         let get_schema: Result<GetSchemaResponse, _> = serde_json::from_str(GET_SCHEMA_RESPONSE);

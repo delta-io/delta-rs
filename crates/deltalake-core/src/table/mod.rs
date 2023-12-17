@@ -4,7 +4,6 @@ use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::fmt;
 use std::fmt::Formatter;
-use std::io::{BufRead, BufReader, Cursor};
 use std::{cmp::max, cmp::Ordering, collections::HashSet};
 
 use chrono::{DateTime, Utc};
@@ -22,11 +21,11 @@ use self::builder::DeltaTableConfig;
 use self::state::DeltaTableState;
 use crate::errors::DeltaTableError;
 use crate::kernel::{
-    Action, Add, CommitInfo, DataType, Format, Metadata, ReaderFeatures, Remove, StructType,
-    WriterFeatures,
+    Action, Add, CommitInfo, DataCheck, DataType, Format, Metadata, Protocol, ReaderFeatures,
+    Remove, StructType, WriterFeatures,
 };
-use crate::logstore::LogStoreConfig;
 use crate::logstore::LogStoreRef;
+use crate::logstore::{self, LogStoreConfig};
 use crate::partitions::PartitionFilter;
 use crate::protocol::{
     find_latest_check_point_for_version, get_last_checkpoint, ProtocolError, Stats,
@@ -137,6 +136,35 @@ impl PartialEq for CheckPoint {
 
 impl Eq for CheckPoint {}
 
+/// A constraint in a check constraint
+#[derive(Eq, PartialEq, Debug, Default, Clone)]
+pub struct Constraint {
+    /// The full path to the field.
+    pub name: String,
+    /// The SQL string that must always evaluate to true.
+    pub expr: String,
+}
+
+impl Constraint {
+    /// Create a new invariant
+    pub fn new(field_name: &str, invariant_sql: &str) -> Self {
+        Self {
+            name: field_name.to_string(),
+            expr: invariant_sql.to_string(),
+        }
+    }
+}
+
+impl DataCheck for Constraint {
+    fn get_name(&self) -> &str {
+        &self.name
+    }
+
+    fn get_expression(&self) -> &str {
+        &self.expr
+    }
+}
+
 /// Delta table metadata
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct DeltaTableMetaData {
@@ -186,6 +214,20 @@ impl DeltaTableMetaData {
     /// Return the configurations of the DeltaTableMetaData; could be empty
     pub fn get_configuration(&self) -> &HashMap<String, Option<String>> {
         &self.configuration
+    }
+
+    /// Return the check constraints on the current table
+    pub fn get_constraints(&self) -> Vec<Constraint> {
+        self.configuration
+            .iter()
+            .filter_map(|(field, value)| {
+                if field.starts_with("delta.constraints") {
+                    value.as_ref().map(|f| Constraint::new("*", f))
+                } else {
+                    None
+                }
+            })
+            .collect()
     }
 
     /// Return partition fields along with their data type from the current schema.
@@ -305,9 +347,12 @@ impl<'de> Deserialize<'de> for DeltaTable {
                 let storage_config: LogStoreConfig = seq
                     .next_element()?
                     .ok_or_else(|| A::Error::invalid_length(0, &self))?;
-                let log_store =
-                    configure_log_store(storage_config.location, storage_config.options)
-                        .map_err(|_| A::Error::custom("Failed deserializing LogStore"))?;
+                let log_store = configure_log_store(
+                    storage_config.location.as_ref(),
+                    storage_config.options,
+                    None,
+                )
+                .map_err(|_| A::Error::custom("Failed deserializing LogStore"))?;
                 let last_check_point = seq
                     .next_element()?
                     .ok_or_else(|| A::Error::invalid_length(0, &self))?;
@@ -435,8 +480,9 @@ impl DeltaTable {
 
         Ok(())
     }
+
     /// returns the latest available version of the table
-    pub async fn get_latest_version(&mut self) -> Result<i64, DeltaTableError> {
+    pub async fn get_latest_version(&self) -> Result<i64, DeltaTableError> {
         self.log_store.get_latest_version(self.version()).await
     }
 
@@ -459,38 +505,13 @@ impl DeltaTable {
     ) -> Result<PeekCommit, DeltaTableError> {
         let next_version = current_version + 1;
         let commit_log_bytes = match self.log_store.read_commit_entry(next_version).await {
-            Ok(bytes) => Ok(bytes),
-            Err(DeltaTableError::ObjectStore {
-                source: ObjectStoreError::NotFound { .. },
-            }) => return Ok(PeekCommit::UpToDate),
+            Ok(Some(bytes)) => Ok(bytes),
+            Ok(None) => return Ok(PeekCommit::UpToDate),
             Err(err) => Err(err),
         }?;
 
-        let actions = Self::get_actions(next_version, commit_log_bytes).await;
+        let actions = logstore::get_actions(next_version, commit_log_bytes).await;
         Ok(PeekCommit::New(next_version, actions.unwrap()))
-    }
-
-    /// Reads a commit and gets list of actions
-    async fn get_actions(
-        version: i64,
-        commit_log_bytes: bytes::Bytes,
-    ) -> Result<Vec<Action>, DeltaTableError> {
-        debug!("parsing commit with version {version}...");
-        let reader = BufReader::new(Cursor::new(commit_log_bytes));
-
-        let mut actions = Vec::new();
-        for re_line in reader.lines() {
-            let line = re_line?;
-            let lstr = line.as_str();
-            let action =
-                serde_json::from_str(lstr).map_err(|e| DeltaTableError::InvalidJsonLog {
-                    json_err: e,
-                    line,
-                    version,
-                })?;
-            actions.push(action);
-        }
-        Ok(actions)
     }
 
     /// Updates the DeltaTable to the most recent state committed to the transaction log by
@@ -547,19 +568,19 @@ impl DeltaTable {
             .map(|version| {
                 let log_store = log_store.clone();
                 async move {
-                    let data = log_store.read_commit_entry(version).await?;
-                    let actions = Self::get_actions(version, data).await?;
-                    Ok((version, actions))
+                    if let Some(data) = log_store.read_commit_entry(version).await? {
+                        Ok(Some((version, logstore::get_actions(version, data).await?)))
+                    } else {
+                        Ok(None)
+                    }
                 }
             })
             .buffered(buf_size);
 
         while let Some(res) = log_stream.next().await {
             let (new_version, actions) = match res {
-                Ok((version, actions)) => (version, actions),
-                Err(DeltaTableError::ObjectStore {
-                    source: ObjectStoreError::NotFound { .. },
-                }) => break, // no more files in the log
+                Ok(Some((version, actions))) => (version, actions),
+                Ok(None) => break,
                 Err(err) => return Err(err),
             };
 
@@ -727,12 +748,14 @@ impl DeltaTable {
     }
 
     /// Returns a collection of file names present in the loaded state
+    #[deprecated(since = "0.17.0", note = "use get_files_iter() instead")]
     #[inline]
     pub fn get_files(&self) -> Vec<Path> {
         self.state.file_paths_iter().collect()
     }
 
     /// Returns file names present in the loaded state in HashSet
+    #[deprecated(since = "0.17.0", note = "use get_files_iter() instead")]
     pub fn get_file_set(&self) -> HashSet<Path> {
         self.state.file_paths_iter().collect()
     }
@@ -764,11 +787,20 @@ impl DeltaTable {
         &self.state
     }
 
+    /// Returns current table protocol
+    pub fn protocol(&self) -> &Protocol {
+        self.state.protocol()
+    }
+
     /// Returns the metadata associated with the loaded state.
+    pub fn metadata(&self) -> Result<&Metadata, DeltaTableError> {
+        Ok(self.state.metadata_action()?)
+    }
+
+    /// Returns the metadata associated with the loaded state.
+    #[deprecated(since = "0.17.0", note = "use metadata() instead")]
     pub fn get_metadata(&self) -> Result<&DeltaTableMetaData, DeltaTableError> {
-        self.state
-            .current_metadata()
-            .ok_or(DeltaTableError::NoMetadata)
+        self.state.metadata().ok_or(DeltaTableError::NoMetadata)
     }
 
     /// Returns a vector of active tombstones (i.e. `Remove` actions present in the current delta log).
@@ -783,24 +815,28 @@ impl DeltaTable {
 
     /// Returns the minimum reader version supported by the DeltaTable based on the loaded
     /// metadata.
+    #[deprecated(since = "0.17.0", note = "use protocol().min_reader_version instead")]
     pub fn get_min_reader_version(&self) -> i32 {
-        self.state.min_reader_version()
+        self.state.protocol().min_reader_version
     }
 
     /// Returns the minimum writer version supported by the DeltaTable based on the loaded
     /// metadata.
+    #[deprecated(since = "0.17.0", note = "use protocol().min_writer_version instead")]
     pub fn get_min_writer_version(&self) -> i32 {
-        self.state.min_writer_version()
+        self.state.protocol().min_writer_version
     }
 
     /// Returns current supported reader features by this table
+    #[deprecated(since = "0.17.0", note = "use protocol().reader_features instead")]
     pub fn get_reader_features(&self) -> Option<&HashSet<ReaderFeatures>> {
-        self.state.reader_features()
+        self.state.protocol().reader_features.as_ref()
     }
 
     /// Returns current supported writer features by this table
+    #[deprecated(since = "0.17.0", note = "use protocol().writer_features instead")]
     pub fn get_writer_features(&self) -> Option<&HashSet<WriterFeatures>> {
-        self.state.writer_features()
+        self.state.protocol().writer_features.as_ref()
     }
 
     /// Return table schema parsed from transaction log. Return None if table hasn't been loaded or
@@ -816,10 +852,14 @@ impl DeltaTable {
     }
 
     /// Return the tables configurations that are encapsulated in the DeltaTableStates currentMetaData field
+    #[deprecated(
+        since = "0.17.0",
+        note = "use metadata().configuration or get_state().table_config() instead"
+    )]
     pub fn get_configurations(&self) -> Result<&HashMap<String, Option<String>>, DeltaTableError> {
         Ok(self
             .state
-            .current_metadata()
+            .metadata()
             .ok_or(DeltaTableError::NoMetadata)?
             .get_configuration())
     }
@@ -869,7 +909,7 @@ impl fmt::Display for DeltaTable {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         writeln!(f, "DeltaTable({})", self.table_uri())?;
         writeln!(f, "\tversion: {}", self.version())?;
-        match self.state.current_metadata() {
+        match self.state.metadata() {
             Some(metadata) => {
                 writeln!(f, "\tmetadata: {metadata}")?;
             }
@@ -880,8 +920,8 @@ impl fmt::Display for DeltaTable {
         writeln!(
             f,
             "\tmin_version: read={}, write={}",
-            self.state.min_reader_version(),
-            self.state.min_writer_version()
+            self.state.protocol().min_reader_version,
+            self.state.protocol().min_writer_version
         )?;
         writeln!(f, "\tfiles count: {}", self.state.files().len())
     }
@@ -956,6 +996,27 @@ mod tests {
             let table = DeltaTableBuilder::from_uri(table_uri).build().unwrap();
             assert_eq!(table.table_uri(), "s3://tests/data/delta-0.8.0");
         }
+    }
+
+    #[test]
+    fn get_table_constraints() {
+        let state = DeltaTableMetaData::new(
+            None,
+            None,
+            None,
+            StructType::new(vec![]),
+            vec![],
+            HashMap::from_iter(vec![
+                (
+                    "delta.constraints.id".to_string(),
+                    Some("id > 0".to_string()),
+                ),
+                ("delta.blahblah".to_string(), None),
+            ]),
+        );
+
+        let constraints = state.get_constraints();
+        assert_eq!(constraints.len(), 1)
     }
 
     async fn create_test_table() -> (DeltaTable, TempDir) {

@@ -410,6 +410,13 @@ pub enum DeltaOperation {
         /// The update predicate
         predicate: Option<String>,
     },
+    /// Add constraints to a table
+    AddConstraint {
+        /// Constraints name
+        name: String,
+        /// Expression to check against
+        expr: String,
+    },
 
     /// Merge data with a source data with the following predicate
     #[serde(rename_all = "camelCase")]
@@ -497,6 +504,7 @@ impl DeltaOperation {
             DeltaOperation::Restore { .. } => "RESTORE",
             DeltaOperation::VacuumStart { .. } => "VACUUM START",
             DeltaOperation::VacuumEnd { .. } => "VACUUM END",
+            DeltaOperation::AddConstraint { .. } => "ADD CONSTRAINT",
         }
     }
 
@@ -532,7 +540,10 @@ impl DeltaOperation {
     /// Denotes if the operation changes the data contained in the table
     pub fn changes_data(&self) -> bool {
         match self {
-            Self::Optimize { .. } | Self::VacuumStart { .. } | Self::VacuumEnd { .. } => false,
+            Self::Optimize { .. }
+            | Self::VacuumStart { .. }
+            | Self::VacuumEnd { .. }
+            | Self::AddConstraint { .. } => false,
             Self::Create { .. }
             | Self::FileSystemCheck {}
             | Self::StreamingUpdate { .. }
@@ -623,8 +634,7 @@ pub(crate) async fn get_last_checkpoint(
 ) -> Result<CheckPoint, ProtocolError> {
     let last_checkpoint_path = Path::from_iter(["_delta_log", "_last_checkpoint"]);
     debug!("loading checkpoint from {last_checkpoint_path}");
-    let object_store = log_store.object_store();
-    match object_store.get(&last_checkpoint_path).await {
+    match log_store.object_store().get(&last_checkpoint_path).await {
         Ok(data) => Ok(serde_json::from_slice(&data.bytes().await?)?),
         Err(ObjectStoreError::NotFound { .. }) => {
             match find_latest_check_point_for_version(log_store, i64::MAX).await {
@@ -721,6 +731,7 @@ mod tests {
             modification_time: 0,
             base_row_id: None,
             default_row_commit_version: None,
+            clustering_provider: None,
         };
 
         let stats = action.get_stats().unwrap().unwrap();
@@ -796,6 +807,7 @@ mod tests {
             modification_time: 0,
             base_row_id: None,
             default_row_commit_version: None,
+            clustering_provider: None,
         };
 
         let stats = action.get_stats().unwrap().unwrap();
