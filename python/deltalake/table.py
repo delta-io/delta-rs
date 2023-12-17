@@ -103,7 +103,7 @@ class WriterProperties:
             f"max_row_group_size: {self.max_row_group_size}, compression: {self.compression})"
         )
 
-    def _to_dict(self) -> dict[str, str | None]:
+    def _to_dict(self) -> dict[str, Optional[str]]:
         values = {}
         for key, value in self.__dict__.items():
             values[key] = str(value) if isinstance(value, int) else value

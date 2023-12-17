@@ -64,7 +64,7 @@ class RawDeltaTable:
         target_size: Optional[int],
         max_concurrent_tasks: Optional[int],
         min_commit_interval: Optional[int],
-        writer_properties: Optional[Dict[str, str | None]],
+        writer_properties: Optional[Dict[str, Optional[str]]],
     ) -> str: ...
     def z_order_optimize(
         self,
@@ -74,7 +74,7 @@ class RawDeltaTable:
         max_concurrent_tasks: Optional[int],
         max_spill_size: Optional[int],
         min_commit_interval: Optional[int],
-        writer_properties: Optional[Dict[str, str | None]],
+        writer_properties: Optional[Dict[str, Optional[str]]],
     ) -> str: ...
     def restore(
         self,
@@ -92,14 +92,14 @@ class RawDeltaTable:
     def delete(
         self,
         predicate: Optional[str],
-        writer_properties: Optional[Dict[str, str | None]],
+        writer_properties: Optional[Dict[str, Optional[str]]],
     ) -> str: ...
     def repair(self, dry_run: bool) -> str: ...
     def update(
         self,
         updates: Dict[str, str],
         predicate: Optional[str],
-        writer_properties: Optional[Dict[str, str | None]],
+        writer_properties: Optional[Dict[str, Optional[str]]],
         safe_cast: bool = False,
     ) -> str: ...
     def merge_execute(
@@ -108,7 +108,7 @@ class RawDeltaTable:
         predicate: str,
         source_alias: Optional[str],
         target_alias: Optional[str],
-        writer_properties: Optional[Dict[str, str | None]],
+        writer_properties: Optional[Dict[str, Optional[str]]],
         safe_cast: bool,
         matched_update_updates: Optional[List[Dict[str, str]]],
         matched_update_predicate: Optional[List[Optional[str]]],
@@ -158,7 +158,7 @@ def write_to_deltalake(
     description: Optional[str],
     configuration: Optional[Mapping[str, Optional[str]]],
     storage_options: Optional[Dict[str, str]],
-    writer_properties: Optional[Dict[str, str | None]],
+    writer_properties: Optional[Dict[str, Optional[str]]],
 ) -> None: ...
 def convert_to_deltalake(
     uri: str,
