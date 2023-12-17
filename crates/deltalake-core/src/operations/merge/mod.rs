@@ -61,21 +61,25 @@ use parquet::file::properties::WriterProperties;
 use serde::Serialize;
 use serde_json::Value;
 
+use self::barrier::{MergeBarrier, MergeBarrierExec};
+
 use super::datafusion_utils::{into_expr, maybe_into_expr, Expression};
 use super::transaction::{commit, PROTOCOL};
-use crate::delta_datafusion::barrier::{MergeBarrier, MergeBarrierExec};
 use crate::delta_datafusion::expr::{fmt_expr_to_sql, parse_predicate_expression};
 use crate::delta_datafusion::logical::MetricObserver;
-use crate::delta_datafusion::physical::{find_barrier_node, find_metric_node, MetricObserverExec};
+use crate::delta_datafusion::physical::{find_metric_node, MetricObserverExec};
 use crate::delta_datafusion::{
     register_store, DeltaColumn, DeltaScanConfigBuilder, DeltaSessionConfig, DeltaTableProvider,
 };
 use crate::kernel::{Action, Remove};
 use crate::logstore::LogStoreRef;
+use crate::operations::merge::barrier::find_barrier_node;
 use crate::operations::write::write_execution_plan;
 use crate::protocol::{DeltaOperation, MergePredicate};
 use crate::table::state::DeltaTableState;
 use crate::{DeltaResult, DeltaTable, DeltaTableError};
+
+mod barrier;
 
 const SOURCE_COLUMN: &str = "__delta_rs_source";
 const TARGET_COLUMN: &str = "__delta_rs_target";

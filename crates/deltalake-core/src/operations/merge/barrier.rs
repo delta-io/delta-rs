@@ -26,9 +26,10 @@ use datafusion_expr::{Expr, LogicalPlan, UserDefinedLogicalNodeCore};
 use datafusion_physical_expr::{Distribution, PhysicalExpr};
 use futures::{Stream, StreamExt};
 
-use crate::operations::merge::{TARGET_DELETE_COLUMN, TARGET_INSERT_COLUMN, TARGET_UPDATE_COLUMN};
-
-use super::get_path_column;
+use crate::{
+    delta_datafusion::get_path_column,
+    operations::merge::{TARGET_DELETE_COLUMN, TARGET_INSERT_COLUMN, TARGET_UPDATE_COLUMN},
+};
 
 pub(crate) type BarrierSurvivorSet = Arc<Mutex<HashSet<String>>>;
 
@@ -412,9 +413,25 @@ impl UserDefinedLogicalNodeCore for MergeBarrier {
     }
 }
 
+pub(crate) fn find_barrier_node(parent: &Arc<dyn ExecutionPlan>) -> Option<Arc<dyn ExecutionPlan>> {
+    //! Used to locate the physical Barrier Node after the planner converts the logical node
+    if parent.as_any().downcast_ref::<MergeBarrierExec>().is_some() {
+        return Some(parent.to_owned());
+    }
+
+    for child in &parent.children() {
+        let res = find_barrier_node(child);
+        if res.is_some() {
+            return res;
+        }
+    }
+
+    None
+}
+
 #[cfg(test)]
 mod tests {
-    use crate::delta_datafusion::barrier::MergeBarrierExec;
+    use crate::operations::merge::MergeBarrierExec;
     use crate::operations::merge::{
         TARGET_DELETE_COLUMN, TARGET_INSERT_COLUMN, TARGET_UPDATE_COLUMN,
     };
