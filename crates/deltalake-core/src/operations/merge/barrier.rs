@@ -29,6 +29,7 @@ use futures::{Stream, StreamExt};
 use crate::{
     delta_datafusion::get_path_column,
     operations::merge::{TARGET_DELETE_COLUMN, TARGET_INSERT_COLUMN, TARGET_UPDATE_COLUMN},
+    DeltaTableError,
 };
 
 pub(crate) type BarrierSurvivorSet = Arc<Mutex<HashSet<String>>>;
@@ -158,12 +159,12 @@ impl MergeBarrierPartition {
         }
     }
 
-    pub fn feed(&mut self, batch: RecordBatch) {
+    pub fn feed(&mut self, batch: RecordBatch) -> DataFusionResult<()> {
         match self.state {
             PartitionBarrierState::Closed => {
-                let delete_count = get_count(&batch, TARGET_DELETE_COLUMN);
-                let update_count = get_count(&batch, TARGET_UPDATE_COLUMN);
-                let insert_count = get_count(&batch, TARGET_INSERT_COLUMN);
+                let delete_count = get_count(&batch, TARGET_DELETE_COLUMN)?;
+                let update_count = get_count(&batch, TARGET_UPDATE_COLUMN)?;
+                let insert_count = get_count(&batch, TARGET_INSERT_COLUMN)?;
                 self.buffer.push(batch);
 
                 if insert_count > 0 || update_count > 0 || delete_count > 0 {
@@ -174,6 +175,7 @@ impl MergeBarrierPartition {
                 self.buffer.push(batch);
             }
         }
+        Ok(())
     }
 
     pub fn drain(&mut self) -> Option<RecordBatch> {
@@ -216,8 +218,10 @@ impl MergeBarrierStream {
     }
 }
 
-fn get_count(batch: &RecordBatch, column: &str) -> usize {
-    batch.column_by_name(column).unwrap().null_count()
+fn get_count(batch: &RecordBatch, column: &str) -> DataFusionResult<usize> {
+    batch.column_by_name(column)
+    .map(|array| array.null_count())
+    .ok_or_else(|| DataFusionError::External(Box::new(DeltaTableError::Generic("Required operation column is missing".to_string()))))
 }
 
 impl Stream for MergeBarrierStream {
@@ -288,6 +292,7 @@ impl Stream for MergeBarrierStream {
                                             })
                                             .collect::<DataFusionResult<Vec<ArrayRef>>>()?;
 
+                                        // This unwrap is safe since the processed batched has the same schema
                                         let batch =
                                             RecordBatch::try_new(batch.schema(), columns).unwrap();
 
@@ -298,7 +303,7 @@ impl Stream for MergeBarrierStream {
                             for batch in batches {
                                 match batch {
                                     Ok((partition, batch)) => {
-                                        self.file_partitions[partition].feed(batch);
+                                        self.file_partitions[partition].feed(batch)?;
                                     }
                                     Err(err) => {
                                         self.state = State::Abort;
@@ -339,7 +344,11 @@ impl Stream for MergeBarrierStream {
                     }
 
                     {
-                        let mut lock = self.survivors.lock().unwrap();
+                        let mut lock = self.survivors.lock().map_err(|_| {
+                            DataFusionError::External(Box::new(DeltaTableError::Generic(
+                                "MergeBarrier mutex is poisoned".to_string(),
+                            )))
+                        })?;
                         for part in &self.file_partitions {
                             match part.state {
                                 PartitionBarrierState::Closed => {}
