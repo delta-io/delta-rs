@@ -10,15 +10,13 @@
 //! they can be removed from the delta log.
 
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     pin::Pin,
     sync::{Arc, Mutex},
     task::{Context, Poll},
 };
 
-use arrow_array::{
-    builder::UInt64Builder, types::UInt16Type, ArrayRef, DictionaryArray, RecordBatch, StringArray,
-};
+use arrow_array::{builder::UInt64Builder, ArrayRef, RecordBatch};
 use arrow_schema::SchemaRef;
 use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, RecordBatchStream, SendableRecordBatchStream,
@@ -28,10 +26,11 @@ use datafusion_expr::{Expr, LogicalPlan, UserDefinedLogicalNodeCore};
 use datafusion_physical_expr::{Distribution, PhysicalExpr};
 use futures::{Stream, StreamExt};
 
-use crate::{
-    operations::merge::{TARGET_DELETE_COLUMN, TARGET_INSERT_COLUMN, TARGET_UPDATE_COLUMN},
-    DeltaTableError,
-};
+use crate::operations::merge::{TARGET_DELETE_COLUMN, TARGET_INSERT_COLUMN, TARGET_UPDATE_COLUMN};
+
+use super::get_path_column;
+
+pub(crate) type BarrierSurvivorSet = Arc<Mutex<HashSet<String>>>;
 
 #[derive(Debug)]
 /// Physical Node for the MergeBarrier
@@ -40,7 +39,7 @@ use crate::{
 pub struct MergeBarrierExec {
     input: Arc<dyn ExecutionPlan>,
     file_column: Arc<String>,
-    survivors: Arc<Mutex<Vec<String>>>,
+    survivors: BarrierSurvivorSet,
     expr: Arc<dyn PhysicalExpr>,
 }
 
@@ -50,18 +49,17 @@ impl MergeBarrierExec {
         input: Arc<dyn ExecutionPlan>,
         file_column: Arc<String>,
         expr: Arc<dyn PhysicalExpr>,
-        survivors: Arc<Mutex<Vec<String>>>,
     ) -> Self {
         MergeBarrierExec {
             input,
             file_column,
-            survivors,
+            survivors: Arc::new(Mutex::new(HashSet::new())),
             expr,
         }
     }
 
     /// Files that have modifications to them and need to removed from the delta log
-    pub fn survivors(&self) -> Arc<Mutex<Vec<String>>> {
+    pub fn survivors(&self) -> BarrierSurvivorSet {
         self.survivors.clone()
     }
 }
@@ -99,7 +97,6 @@ impl ExecutionPlan for MergeBarrierExec {
             children[0].clone(),
             self.file_column.clone(),
             self.expr.clone(),
-            self.survivors.clone(),
         )))
     }
 
@@ -191,7 +188,7 @@ struct MergeBarrierStream {
     state: State,
     input: SendableRecordBatchStream,
     file_column: Arc<String>,
-    survivors: Arc<Mutex<Vec<String>>>,
+    survivors: BarrierSurvivorSet,
     map: HashMap<String, usize>,
     file_partitions: Vec<MergeBarrierPartition>,
 }
@@ -200,7 +197,7 @@ impl MergeBarrierStream {
     pub fn new(
         input: SendableRecordBatchStream,
         schema: SchemaRef,
-        survivors: Arc<Mutex<Vec<String>>>,
+        survivors: BarrierSurvivorSet,
         file_column: Arc<String>,
     ) -> Self {
         // Always allocate for a null bucket at index 0;
@@ -231,21 +228,7 @@ impl Stream for MergeBarrierStream {
                 State::Feed => {
                     match self.input.poll_next_unpin(cx) {
                         Poll::Ready(Some(Ok(batch))) => {
-                            let path_column = &self.file_column;
-                            let file_dictionary = batch
-                                .column_by_name(path_column)
-                                .unwrap()
-                                .as_any()
-                                .downcast_ref::<DictionaryArray<UInt16Type>>()
-                                .ok_or(DeltaTableError::Generic(format!(
-                                    "Unable to downcast column {}",
-                                    path_column
-                                )))?
-                                .downcast_dict::<StringArray>()
-                                .ok_or(DeltaTableError::Generic(format!(
-                                    "Unable to downcast column {}",
-                                    path_column
-                                )))?;
+                            let file_dictionary = get_path_column(&batch, &self.file_column)?;
 
                             // For each record batch, the key for a file path is not stable.
                             // We can iterate through the dictionary and lookup the correspond string for each record and then lookup the correct `file_partition` for that value.
@@ -361,7 +344,7 @@ impl Stream for MergeBarrierStream {
                                 PartitionBarrierState::Closed => {}
                                 PartitionBarrierState::Open => {
                                     if let Some(file_name) = &part.file_name {
-                                        lock.push(file_name.to_owned())
+                                        lock.insert(file_name.to_owned());
                                     }
                                 }
                             }
@@ -431,10 +414,231 @@ impl UserDefinedLogicalNodeCore for MergeBarrier {
 
 #[cfg(test)]
 mod tests {
+    use crate::delta_datafusion::barrier::MergeBarrierExec;
+    use crate::operations::merge::{
+        TARGET_DELETE_COLUMN, TARGET_INSERT_COLUMN, TARGET_UPDATE_COLUMN,
+    };
+    use arrow::datatypes::Schema as ArrowSchema;
+    use arrow_array::RecordBatch;
+    use arrow_array::StringArray;
+    use arrow_array::{DictionaryArray, UInt16Array};
+    use arrow_schema::DataType as ArrowDataType;
+    use arrow_schema::Field;
+    use datafusion::assert_batches_sorted_eq;
+    use datafusion::execution::TaskContext;
+    use datafusion::physical_plan::coalesce_batches::CoalesceBatchesExec;
+    use datafusion::physical_plan::memory::MemoryExec;
+    use datafusion::physical_plan::ExecutionPlan;
+    use datafusion_physical_expr::expressions::Column;
+    use futures::StreamExt;
+    use std::sync::Arc;
+
+    use super::BarrierSurvivorSet;
 
     #[tokio::test]
-    // TODO:
-    // Need to check if when null exist in dictionary keys
-    // Need to check nulls when in dictionary values
-    async fn test_barrier() {}
+    async fn test_barrier() {
+        // Validate that files without modifications are dropped and that files with changes passthrough
+        // File 0: No Changes
+        // File 1: Contains an update
+        // File 2: Contains a delete
+        // null (id: 3): is a insert
+
+        let schema = get_schema();
+        let keys = UInt16Array::from(vec![Some(0), Some(1), Some(2), None]);
+        let values = StringArray::from(vec![Some("file0"), Some("file1"), Some("file2")]);
+        let dict = DictionaryArray::new(keys, Arc::new(values));
+
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(arrow::array::StringArray::from(vec!["0", "1", "2", "3"])),
+                Arc::new(dict),
+                //insert column
+                Arc::new(arrow::array::BooleanArray::from(vec![
+                    Some(false),
+                    Some(false),
+                    Some(false),
+                    None,
+                ])),
+                //update column
+                Arc::new(arrow::array::BooleanArray::from(vec![
+                    Some(false),
+                    None,
+                    Some(false),
+                    Some(false),
+                ])),
+                //delete column
+                Arc::new(arrow::array::BooleanArray::from(vec![
+                    Some(false),
+                    Some(false),
+                    None,
+                    Some(false),
+                ])),
+            ],
+        )
+        .unwrap();
+
+        let (actual, survivors) = execute(vec![batch]).await;
+        let expected = vec![
+            "+----+-----------------+--------------------------+--------------------------+--------------------------+",
+            "| id | __delta_rs_path | __delta_rs_target_insert | __delta_rs_target_update | __delta_rs_target_delete |",
+            "+----+-----------------+--------------------------+--------------------------+--------------------------+",
+            "| 1  | file1           | false                    |                          | false                    |",
+            "| 2  | file2           | false                    | false                    |                          |",
+            "| 3  |                 |                          | false                    | false                    |",
+            "+----+-----------------+--------------------------+--------------------------+--------------------------+",
+        ];
+        assert_batches_sorted_eq!(&expected, &actual);
+
+        let s = survivors.lock().unwrap();
+        assert!(!s.contains(&"file0".to_string()));
+        assert!(s.contains(&"file1".to_string()));
+        assert!(s.contains(&"file2".to_string()));
+        assert_eq!(s.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_barrier_changing_indicies() {
+        // Validate implementation can handle different dictionary indicies between batches
+
+        let schema = get_schema();
+        let mut batches = vec![];
+
+        // Batch 1
+        let keys = UInt16Array::from(vec![Some(0), Some(1)]);
+        let values = StringArray::from(vec![Some("file0"), Some("file1")]);
+        let dict = DictionaryArray::new(keys, Arc::new(values));
+
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(arrow::array::StringArray::from(vec!["0", "1"])),
+                Arc::new(dict),
+                //insert column
+                Arc::new(arrow::array::BooleanArray::from(vec![
+                    Some(false),
+                    Some(false),
+                ])),
+                //update column
+                Arc::new(arrow::array::BooleanArray::from(vec![
+                    Some(false),
+                    Some(false),
+                ])),
+                //delete column
+                Arc::new(arrow::array::BooleanArray::from(vec![
+                    Some(false),
+                    Some(false),
+                ])),
+            ],
+        )
+        .unwrap();
+        batches.push(batch);
+        // Batch 2
+
+        let keys = UInt16Array::from(vec![Some(0), Some(1)]);
+        let values = StringArray::from(vec![Some("file1"), Some("file0")]);
+        let dict = DictionaryArray::new(keys, Arc::new(values));
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(arrow::array::StringArray::from(vec!["2", "3"])),
+                Arc::new(dict),
+                //insert column
+                Arc::new(arrow::array::BooleanArray::from(vec![
+                    Some(false),
+                    Some(false),
+                ])),
+                //update column
+                Arc::new(arrow::array::BooleanArray::from(vec![None, Some(false)])),
+                //delete column
+                Arc::new(arrow::array::BooleanArray::from(vec![Some(false), None])),
+            ],
+        )
+        .unwrap();
+        batches.push(batch);
+
+        let (actual, _survivors) = execute(batches).await;
+        let expected = vec!
+            [
+                "+----+-----------------+--------------------------+--------------------------+--------------------------+",
+                "| id | __delta_rs_path | __delta_rs_target_insert | __delta_rs_target_update | __delta_rs_target_delete |",
+                "+----+-----------------+--------------------------+--------------------------+--------------------------+",
+                "| 0  | file0           | false                    | false                    | false                    |",
+                "| 1  | file1           | false                    | false                    | false                    |",
+                "| 2  | file1           | false                    |                          | false                    |",
+                "| 3  | file0           | false                    | false                    |                          |",
+                "+----+-----------------+--------------------------+--------------------------+--------------------------+",
+            ];
+        assert_batches_sorted_eq!(&expected, &actual);
+    }
+
+    #[tokio::test]
+    async fn test_barrier_null_paths() {
+        // Arrow dictionaries are interesting since a null value can be either in the keys of the dict or in the values.
+        // Validate they can be processed without issue
+
+        let schema = get_schema();
+        let keys = UInt16Array::from(vec![Some(0), None, Some(1)]);
+        let values = StringArray::from(vec![Some("file1"), None]);
+        let dict = DictionaryArray::new(keys, Arc::new(values));
+
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(arrow::array::StringArray::from(vec!["1", "2", "3"])),
+                Arc::new(dict),
+                Arc::new(arrow::array::BooleanArray::from(vec![
+                    Some(false),
+                    None,
+                    None,
+                ])),
+                Arc::new(arrow::array::BooleanArray::from(vec![false, false, false])),
+                Arc::new(arrow::array::BooleanArray::from(vec![false, false, false])),
+            ],
+        )
+        .unwrap();
+
+        let (actual, _) = execute(vec![batch]).await;
+        let expected = vec![
+            "+----+-----------------+--------------------------+--------------------------+--------------------------+",
+            "| id | __delta_rs_path | __delta_rs_target_insert | __delta_rs_target_update | __delta_rs_target_delete |",
+            "+----+-----------------+--------------------------+--------------------------+--------------------------+",
+            "| 2  |                 |                          | false                    | false                    |",
+            "| 3  |                 |                          | false                    | false                    |",
+            "+----+-----------------+--------------------------+--------------------------+--------------------------+",
+        ];
+        assert_batches_sorted_eq!(&expected, &actual);
+    }
+
+    async fn execute(input: Vec<RecordBatch>) -> (Vec<RecordBatch>, BarrierSurvivorSet) {
+        let schema = get_schema();
+        let repartition = Arc::new(Column::new("__delta_rs_path", 2));
+        let exec = Arc::new(MemoryExec::try_new(&[input], schema.clone(), None).unwrap());
+
+        let task_ctx = Arc::new(TaskContext::default());
+        let merge =
+            MergeBarrierExec::new(exec, Arc::new("__delta_rs_path".to_string()), repartition);
+
+        let survivors = merge.survivors();
+        let coalsece = CoalesceBatchesExec::new(Arc::new(merge), 100);
+        let mut stream = coalsece.execute(0, task_ctx).unwrap();
+        (vec![stream.next().await.unwrap().unwrap()], survivors)
+    }
+
+    fn get_schema() -> Arc<ArrowSchema> {
+        Arc::new(ArrowSchema::new(vec![
+            Field::new("id", ArrowDataType::Utf8, true),
+            Field::new(
+                "__delta_rs_path",
+                ArrowDataType::Dictionary(
+                    Box::new(ArrowDataType::UInt16),
+                    Box::new(ArrowDataType::Utf8),
+                ),
+                true,
+            ),
+            Field::new(TARGET_INSERT_COLUMN, ArrowDataType::Boolean, true),
+            Field::new(TARGET_UPDATE_COLUMN, ArrowDataType::Boolean, true),
+            Field::new(TARGET_DELETE_COLUMN, ArrowDataType::Boolean, true),
+        ]))
+    }
 }

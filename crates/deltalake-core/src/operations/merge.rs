@@ -33,7 +33,7 @@
 //! ````
 
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use arrow_schema::Schema as ArrowSchema;
@@ -81,7 +81,7 @@ const SOURCE_COLUMN: &str = "__delta_rs_source";
 const TARGET_COLUMN: &str = "__delta_rs_target";
 
 const OPERATION_COLUMN: &str = "__delta_rs_operation";
-pub(crate) const DELETE_COLUMN: &str = "__delta_rs_delete";
+const DELETE_COLUMN: &str = "__delta_rs_delete";
 pub(crate) const TARGET_INSERT_COLUMN: &str = "__delta_rs_target_insert";
 pub(crate) const TARGET_UPDATE_COLUMN: &str = "__delta_rs_target_update";
 pub(crate) const TARGET_DELETE_COLUMN: &str = "__delta_rs_target_delete";
@@ -653,12 +653,10 @@ impl ExtensionPlanner for MergeMetricExtensionPlanner {
         if let Some(barrier) = node.as_any().downcast_ref::<MergeBarrier>() {
             let schema = barrier.input.schema();
             let exec_schema: ArrowSchema = schema.as_ref().to_owned().into();
-            let survivors = Arc::new(Mutex::new(Vec::new()));
             return Ok(Some(Arc::new(MergeBarrierExec::new(
                 physical_inputs.get(0).unwrap().clone(),
                 barrier.file_column.clone(),
                 planner.create_physical_expr(&barrier.expr, schema, &exec_schema, session_state)?,
-                survivors,
             ))));
         }
 
@@ -737,12 +735,14 @@ async fn execute(
 
     let target = LogicalPlanBuilder::scan(target_name, target_provider, None)?.build()?;
 
-    // TODO: This is here to prevent predicate pushdowns. In the future we can replace this node to allow pushdowns depending on which operations are being used.
+    // Not match operations imply a full scan of the target table is required
+    let enable_pushdown =
+        not_match_source_operations.is_empty() && not_match_target_operations.is_empty();
     let target = LogicalPlan::Extension(Extension {
         node: Arc::new(MetricObserver {
             id: TARGET_COUNT_ID.into(),
             input: target,
-            enable_pushdown: false,
+            enable_pushdown,
         }),
     });
     let target = DataFrame::new(state.clone(), target);
