@@ -219,9 +219,14 @@ impl MergeBarrierStream {
 }
 
 fn get_count(batch: &RecordBatch, column: &str) -> DataFusionResult<usize> {
-    batch.column_by_name(column)
-    .map(|array| array.null_count())
-    .ok_or_else(|| DataFusionError::External(Box::new(DeltaTableError::Generic("Required operation column is missing".to_string()))))
+    batch
+        .column_by_name(column)
+        .map(|array| array.null_count())
+        .ok_or_else(|| {
+            DataFusionError::External(Box::new(DeltaTableError::Generic(
+                "Required operation column is missing".to_string(),
+            )))
+        })
 }
 
 impl Stream for MergeBarrierStream {

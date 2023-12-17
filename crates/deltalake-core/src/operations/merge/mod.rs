@@ -1255,16 +1255,16 @@ mod tests {
         let schema = get_arrow_schema(&None);
         let table = setup_table_with_configuration(DeltaConfigKey::AppendOnly, Some("true")).await;
         // append some data
-        let _table = write_data(table, &schema).await;
+        let table = write_data(table, &schema).await;
         // merge
-        /*
         let _err = DeltaOps(table)
             .merge(merge_source(schema), col("target.id").eq(col("source.id")))
             .with_source_alias("source")
             .with_target_alias("target")
+            .when_not_matched_by_source_delete(|delete| delete)
+            .unwrap()
             .await
             .expect_err("Remove action is included when Delta table is append-only. Should error");
-        */
     }
 
     async fn write_data(table: DeltaTable, schema: &Arc<ArrowSchema>) -> DeltaTable {
