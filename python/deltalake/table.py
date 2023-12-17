@@ -1523,7 +1523,6 @@ class TableAlterer:
             )
 
         self.table._table.add_constraints(constraints)
-        self.table._metadata = Metadata(self.table._table)
 
 
 class TableOptimizer:
