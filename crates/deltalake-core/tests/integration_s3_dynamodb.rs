@@ -148,7 +148,7 @@ async fn test_repair_on_update() -> TestResult<()> {
 const WORKERS: i64 = 3;
 const COMMITS: i64 = 5;
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[serial]
 async fn test_concurrent_writers() -> TestResult<()> {
     // Goal: a test with multiple writers, very similar to `integration_concurrent_writes`
@@ -260,7 +260,6 @@ fn add_action(name: &str) -> Action {
 }
 
 async fn prepare_table(context: &IntegrationContext, table_name: &str) -> TestResult<DeltaTable> {
-    make_client()?.try_create_lock_table().await?;
     let table_name = format!("{}_{}", table_name, uuid::Uuid::new_v4());
     let table_uri = context.uri_for_table(TestTables::Custom(table_name.to_owned()));
     let schema = StructType::new(vec![StructField::new(

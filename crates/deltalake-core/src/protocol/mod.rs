@@ -410,6 +410,13 @@ pub enum DeltaOperation {
         /// The update predicate
         predicate: Option<String>,
     },
+    /// Add constraints to a table
+    AddConstraint {
+        /// Constraints name
+        name: String,
+        /// Expression to check against
+        expr: String,
+    },
 
     /// Merge data with a source data with the following predicate
     #[serde(rename_all = "camelCase")]
@@ -497,6 +504,7 @@ impl DeltaOperation {
             DeltaOperation::Restore { .. } => "RESTORE",
             DeltaOperation::VacuumStart { .. } => "VACUUM START",
             DeltaOperation::VacuumEnd { .. } => "VACUUM END",
+            DeltaOperation::AddConstraint { .. } => "ADD CONSTRAINT",
         }
     }
 
@@ -532,7 +540,10 @@ impl DeltaOperation {
     /// Denotes if the operation changes the data contained in the table
     pub fn changes_data(&self) -> bool {
         match self {
-            Self::Optimize { .. } | Self::VacuumStart { .. } | Self::VacuumEnd { .. } => false,
+            Self::Optimize { .. }
+            | Self::VacuumStart { .. }
+            | Self::VacuumEnd { .. }
+            | Self::AddConstraint { .. } => false,
             Self::Create { .. }
             | Self::FileSystemCheck {}
             | Self::StreamingUpdate { .. }
