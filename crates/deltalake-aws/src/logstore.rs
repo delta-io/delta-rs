@@ -45,8 +45,18 @@ impl S3DynamoDbLogStore {
         object_store: ObjectStoreRef,
     ) -> DeltaResult<Self> {
         let lock_client = DynamoDbLockClient::try_new(
-            s3_options.extra_opts.get(constants::LOCK_TABLE_KEY_NAME),
-            s3_options.extra_opts.get(constants::BILLING_MODE_KEY_NAME),
+            s3_options
+                .extra_opts
+                .get(constants::LOCK_TABLE_KEY_NAME)
+                .cloned(),
+            s3_options
+                .extra_opts
+                .get(constants::BILLING_MODE_KEY_NAME)
+                .cloned(),
+            s3_options
+                .extra_opts
+                .get(constants::MAX_ELAPSED_REQUEST_TIME_KEY_NAME)
+                .cloned(),
             s3_options.region.clone(),
             s3_options.use_web_identity,
         )
@@ -56,7 +66,6 @@ impl S3DynamoDbLogStore {
                 source: err.into(),
             },
         })?;
-        debug!("S3DynamoDbLogStore configured with lock client: {lock_client:?}");
         let table_path = to_uri(&location, &Path::from(""));
         Ok(Self {
             storage: object_store,
