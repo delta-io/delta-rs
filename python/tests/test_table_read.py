@@ -63,6 +63,25 @@ def test_read_simple_table_using_options_to_dict():
     assert dt.to_pyarrow_dataset().to_table().to_pydict() == {"value": [1, 2, 3]}
 
 
+def test_simple_table_lazy_loading():
+    table_path = "../crates/deltalake-core/tests/data/simple_table"
+    dt = DeltaTable(table_path, load_lazy=True)
+    dt.load_version(2)
+    assert dt.version() == 2
+
+
+def test_simple_table_lazy_loading_with_options():
+    table_path = "../crates/deltalake-core/tests/data/simple_table"
+    dt = DeltaTable(
+        table_path,
+        storage_options={},
+        without_files=False,
+        log_buffer_size=1,
+        load_lazy=True,
+    )
+    assert isinstance(dt, DeltaTable)
+
+
 def test_load_with_datetime():
     log_dir = "../crates/deltalake-core/tests/data/simple_table/_delta_log"
     log_mtime_pair = [

@@ -236,6 +236,7 @@ class DeltaTable:
         storage_options: Optional[Dict[str, str]] = None,
         without_files: bool = False,
         log_buffer_size: Optional[int] = None,
+        load_lazy: bool = False,
     ):
         """
         Create the Delta Table from a path with an optional version.
@@ -254,7 +255,7 @@ class DeltaTable:
                                 This can decrease latency if there are many files in the log since the last checkpoint,
                                 but will also increase memory usage. Possible rate limits of the storage backend should
                                 also be considered for optimal performance. Defaults to 4 * number of cpus.
-
+            load_lazy: when true the table metadata isn't loaded
         """
         self._storage_options = storage_options
         self._table = RawDeltaTable(
@@ -263,8 +264,12 @@ class DeltaTable:
             storage_options=storage_options,
             without_files=without_files,
             log_buffer_size=log_buffer_size,
+            load_lazy=load_lazy,
         )
-        self._metadata = Metadata(self._table)
+        if load_lazy:
+            self._metadata = None
+        else:
+            self._metadata = Metadata(self._table)
 
     @classmethod
     def from_data_catalog(
@@ -499,6 +504,8 @@ class DeltaTable:
         Returns:
             the current Metadata registered in the transaction log
         """
+        if not self._metadata:
+            self._metadata = Metadata(self._table)
         return self._metadata
 
     def protocol(self) -> ProtocolVersions:

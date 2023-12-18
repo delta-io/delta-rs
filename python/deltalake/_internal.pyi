@@ -31,6 +31,7 @@ class RawDeltaTable:
         storage_options: Optional[Dict[str, str]],
         without_files: bool,
         log_buffer_size: Optional[int],
+        load_lazy: bool,
     ) -> None: ...
     @staticmethod
     def get_table_uri_from_data_catalog(
