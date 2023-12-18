@@ -48,7 +48,6 @@ impl<'a, S: ContextProvider> DeltaSqlToRel<'a, S> {
             }
             Statement::Describe(describe) => self.describe_to_plan(describe),
             Statement::Vacuum(vacuum) => self.vacuum_to_plan(vacuum),
-            _ => todo!(),
         }
     }
 
@@ -92,7 +91,6 @@ mod tests {
     use arrow_schema::{DataType, Field, Schema};
     use datafusion_common::config::ConfigOptions;
     use datafusion_common::DataFusionError;
-
     use datafusion_expr::logical_plan::builder::LogicalTableSource;
     use datafusion_expr::{AggregateUDF, ScalarUDF, TableSource};
     use datafusion_sql::TableReference;

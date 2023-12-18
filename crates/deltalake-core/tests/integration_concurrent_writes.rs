@@ -6,12 +6,14 @@ use deltalake_core::operations::DeltaOps;
 use deltalake_core::protocol::{DeltaOperation, SaveMode};
 use deltalake_core::test_utils::{IntegrationContext, StorageIntegration, TestResult, TestTables};
 use deltalake_core::{DeltaTable, DeltaTableBuilder};
+use serial_test::serial;
 use std::collections::HashMap;
 use std::future::Future;
 use std::iter::FromIterator;
 use std::time::Duration;
 
 #[tokio::test]
+#[serial]
 async fn test_concurrent_writes_local() -> TestResult {
     test_concurrent_writes(StorageIntegration::Local).await?;
     Ok(())
@@ -19,6 +21,7 @@ async fn test_concurrent_writes_local() -> TestResult {
 
 #[cfg(feature = "s3")]
 #[tokio::test]
+#[serial]
 async fn concurrent_writes_s3() -> TestResult {
     test_concurrent_writes(StorageIntegration::Amazon).await?;
     Ok(())
@@ -26,6 +29,7 @@ async fn concurrent_writes_s3() -> TestResult {
 
 #[cfg(feature = "azure")]
 #[tokio::test]
+#[serial]
 async fn test_concurrent_writes_azure() -> TestResult {
     test_concurrent_writes(StorageIntegration::Microsoft).await?;
     Ok(())
@@ -35,6 +39,7 @@ async fn test_concurrent_writes_azure() -> TestResult {
 #[ignore]
 #[cfg(feature = "hdfs")]
 #[tokio::test]
+#[serial]
 async fn test_concurrent_writes_hdfs() -> TestResult {
     test_concurrent_writes(StorageIntegration::Hdfs).await?;
     Ok(())
