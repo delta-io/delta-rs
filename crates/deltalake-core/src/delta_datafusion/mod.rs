@@ -1033,7 +1033,7 @@ impl DeltaDataChecker {
         Self {
             invariants,
             constraints: vec![],
-            ctx: SessionContext::new(),
+            ctx: DeltaSessionContext::default().into(),
         }
     }
 
@@ -1042,8 +1042,14 @@ impl DeltaDataChecker {
         Self {
             constraints,
             invariants: vec![],
-            ctx: SessionContext::new(),
+            ctx: DeltaSessionContext::default().into(),
         }
+    }
+
+    /// Specify the Datafusion context
+    pub fn with_session_context(mut self, context: SessionContext) -> Self {
+        self.ctx = context;
+        self
     }
 
     /// Create a new DeltaDataChecker
@@ -1059,7 +1065,7 @@ impl DeltaDataChecker {
         Self {
             invariants,
             constraints,
-            ctx: SessionContext::new(),
+            ctx: DeltaSessionContext::default().into(),
         }
     }
 
