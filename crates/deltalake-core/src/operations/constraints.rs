@@ -220,7 +220,32 @@ mod tests {
     use datafusion_expr::{col, lit};
 
     use crate::writer::test_utils::{create_bare_table, get_arrow_schema, get_record_batch};
-    use crate::{DeltaOps, DeltaResult};
+    use crate::{DeltaOps, DeltaResult, DeltaTable};
+
+    fn get_constraint(table: &DeltaTable, name: &str) -> String {
+        table
+            .metadata()
+            .unwrap()
+            .configuration
+            .get(name)
+            .unwrap()
+            .clone()
+            .unwrap()
+    }
+
+    async fn get_constraint_op_params(table: &mut DeltaTable) -> String {
+        let commit_info = table.history(None).await.unwrap();
+        let last_commit = &commit_info[commit_info.len() - 1];
+        last_commit
+            .operation_parameters
+            .as_ref()
+            .unwrap()
+            .get("expr")
+            .unwrap()
+            .as_str()
+            .unwrap()
+            .to_owned()
+    }
 
     #[tokio::test]
     async fn add_constraint_with_invalid_data() -> DeltaResult<()> {
@@ -252,15 +277,13 @@ mod tests {
             .await?;
         let version = table.version();
         assert_eq!(version, 1);
-        let commit_info = table.history(None).await?;
-        let last_commit = &commit_info[commit_info.len() - 1];
-        let expr = last_commit
-            .operation_parameters
-            .as_ref()
-            .unwrap()
-            .get("expr")
-            .unwrap();
-        assert_eq!(expr, "value < 1000");
+
+        let expected_expr = "value < 1000";
+        assert_eq!(get_constraint_op_params(&mut table).await, expected_expr);
+        assert_eq!(
+            get_constraint(&table, "delta.constraints.id"),
+            expected_expr
+        );
         Ok(())
     }
 
@@ -280,15 +303,12 @@ mod tests {
         let version = table.version();
         assert_eq!(version, 1);
 
-        let commit_info = table.history(None).await?;
-        let last_commit = &commit_info[commit_info.len() - 1];
-        let expr = last_commit
-            .operation_parameters
-            .as_ref()
-            .unwrap()
-            .get("expr")
-            .unwrap();
-        assert_eq!(expr, "value < 1000");
+        let expected_expr = "value < 1000";
+        assert_eq!(get_constraint_op_params(&mut table).await, expected_expr);
+        assert_eq!(
+            get_constraint(&table, "delta.constraints.valid_values"),
+            expected_expr
+        );
 
         Ok(())
     }
@@ -324,15 +344,12 @@ mod tests {
         let version = table.version();
         assert_eq!(version, 1);
 
-        let commit_info = table.history(None).await?;
-        let last_commit = &commit_info[commit_info.len() - 1];
-        let expr = last_commit
-            .operation_parameters
-            .as_ref()
-            .unwrap()
-            .get("expr")
-            .unwrap();
-        assert_eq!(expr, "vAlue < 1000");
+        let expected_expr = "vAlue < 1000";
+        assert_eq!(get_constraint_op_params(&mut table).await, expected_expr);
+        assert_eq!(
+            get_constraint(&table, "delta.constraints.valid_values"),
+            expected_expr
+        );
 
         Ok(())
     }
