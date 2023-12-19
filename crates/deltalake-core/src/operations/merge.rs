@@ -1474,6 +1474,7 @@ mod tests {
     use datafusion_expr::lit;
     use datafusion_expr::Expr;
     use datafusion_expr::LogicalPlanBuilder;
+    use datafusion_expr::Operator;
     use serde_json::json;
     use std::collections::HashMap;
     use std::ops::Neg;
@@ -2569,17 +2570,43 @@ mod tests {
 
         assert!(pred.is_some());
 
-        let expected_pred = ["C", "X", "B"]
-            .into_iter()
-            .map(|id| {
-                lit(ScalarValue::Utf8(id.to_owned().into())).eq(col(Column {
-                    relation: Some(target_name.clone()),
-                    name: "id".to_owned(),
-                }))
-            })
-            .reduce(Expr::or)
-            .unwrap();
+        let split_pred = {
+            fn split(expr: Expr, parts: &mut Vec<(String, String)>) {
+                match expr {
+                    Expr::BinaryExpr(ex) if ex.op == Operator::Or => {
+                        split(*ex.left, parts);
+                        split(*ex.right, parts);
+                    }
+                    Expr::BinaryExpr(ex) if ex.op == Operator::Eq => {
+                        let col = match *ex.right {
+                            Expr::Column(col) => col.name,
+                            ex => panic!("expected column in pred, got {ex}!"),
+                        };
 
-        assert_eq!(pred.unwrap(), expected_pred);
+                        let value = match *ex.left {
+                            Expr::Literal(ScalarValue::Utf8(Some(value))) => value,
+                            ex => panic!("expected value in predicate, got {ex}!"),
+                        };
+
+                        parts.push((col, value))
+                    }
+
+                    expr => panic!("expected either = or OR, got {expr}"),
+                }
+            }
+
+            let mut parts = vec![];
+            split(pred.unwrap(), &mut parts);
+            parts.sort();
+            parts
+        };
+
+        let expected_pred_parts = [
+            ("id".to_owned(), "B".to_owned()),
+            ("id".to_owned(), "C".to_owned()),
+            ("id".to_owned(), "X".to_owned()),
+        ];
+
+        assert_eq!(split_pred, expected_pred_parts);
     }
 }
