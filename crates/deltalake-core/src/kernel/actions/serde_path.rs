@@ -54,7 +54,7 @@ fn encode_path(path: &str) -> String {
     percent_encode(path.as_bytes(), INVALID).to_string()
 }
 
-fn decode_path(path: &str) -> Result<String, Utf8Error> {
+pub fn decode_path(path: &str) -> Result<String, Utf8Error> {
     Ok(percent_decode_str(path).decode_utf8()?.to_string())
 }
 
