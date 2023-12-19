@@ -644,7 +644,7 @@ impl DeltaTable {
                     .object_store()
                     .head(&commit_uri_from_version(version))
                     .await?;
-                let ts = meta.last_modified.timestamp();
+                let ts = meta.last_modified.timestamp_millis();
                 // also cache timestamp for version
                 self.version_timestamp.insert(version, ts);
 
@@ -875,14 +875,13 @@ impl DeltaTable {
         let mut min_version = 0;
         let mut max_version = self.get_latest_version().await?;
         let mut version = min_version;
-        let target_ts = datetime.timestamp();
+        let target_ts = datetime.timestamp_millis();
 
         // binary search
         while min_version <= max_version {
             let pivot = (max_version + min_version) / 2;
             version = pivot;
             let pts = self.get_version_timestamp(pivot).await?;
-
             match pts.cmp(&target_ts) {
                 Ordering::Equal => {
                     break;

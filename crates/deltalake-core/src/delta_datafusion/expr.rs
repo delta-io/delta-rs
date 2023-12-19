@@ -345,9 +345,10 @@ impl<'a> fmt::Display for ScalarValueFormat<'a> {
 mod test {
     use arrow_schema::DataType as ArrowDataType;
     use datafusion::prelude::SessionContext;
-    use datafusion_common::{DFSchema, ScalarValue};
+    use datafusion_common::{Column, DFSchema, ScalarValue};
     use datafusion_expr::{col, decode, lit, substring, Cast, Expr, ExprSchemable};
 
+    use crate::delta_datafusion::DeltaSessionContext;
     use crate::kernel::{DataType, PrimitiveType, StructField, StructType};
     use crate::{DeltaOps, DeltaTable};
 
@@ -383,6 +384,11 @@ mod test {
             ),
             StructField::new(
                 "value2".to_string(),
+                DataType::Primitive(PrimitiveType::Integer),
+                true,
+            ),
+            StructField::new(
+                "Value3".to_string(),
                 DataType::Primitive(PrimitiveType::Integer),
                 true,
             ),
@@ -440,7 +446,10 @@ mod test {
                 }),
                 "arrow_cast(1, 'Int32')".to_string()
             ),
-            simple!(col("value").eq(lit(3_i64)), "value = 3".to_string()),
+            simple!(
+                Expr::Column(Column::from_qualified_name_ignore_case("Value3")).eq(lit(3_i64)),
+                "Value3 = 3".to_string()
+            ),
             simple!(col("active").is_true(), "active IS TRUE".to_string()),
             simple!(col("active"), "active".to_string()),
             simple!(col("active").eq(lit(true)), "active = true".to_string()),
@@ -534,7 +543,7 @@ mod test {
             ),
         ];
 
-        let session = SessionContext::new();
+        let session: SessionContext = DeltaSessionContext::default().into();
 
         for test in tests {
             let actual = fmt_expr_to_sql(&test.expr).unwrap();

@@ -533,6 +533,7 @@ impl MergePlan {
         context: Arc<zorder::ZOrderExecContext>,
     ) -> Result<BoxStream<'static, Result<RecordBatch, ParquetError>>, DeltaTableError> {
         use datafusion::prelude::{col, ParquetReadOptions};
+        use datafusion_common::Column;
         use datafusion_expr::{expr::ScalarFunction, Expr};
 
         let locations = files
@@ -548,12 +549,16 @@ impl MergePlan {
             .schema()
             .fields()
             .iter()
-            .map(|f| col(f.name()))
+            .map(|f| Expr::Column(Column::from_qualified_name_ignore_case(f.name())))
             .collect_vec();
 
         // Add a temporary z-order column we will sort by, and then drop.
         const ZORDER_KEY_COLUMN: &str = "__zorder_key";
-        let cols = context.columns.iter().map(col).collect_vec();
+        let cols = context
+            .columns
+            .iter()
+            .map(|col| Expr::Column(Column::from_qualified_name_ignore_case(col)))
+            .collect_vec();
         let expr = Expr::ScalarFunction(ScalarFunction::new_udf(
             Arc::new(zorder::datafusion::zorder_key_udf()),
             cols,
@@ -1207,6 +1212,7 @@ pub(super) mod zorder {
             use ::datafusion::assert_batches_eq;
             use arrow_array::{Int32Array, StringArray};
             use arrow_ord::sort::sort_to_indices;
+            use arrow_schema::Field;
             use arrow_select::take::take;
             use rand::Rng;
             #[test]
@@ -1298,6 +1304,42 @@ pub(super) mod zorder {
                     array.swap(i, j);
                 }
                 array
+            }
+
+            #[tokio::test]
+            async fn test_zorder_mixed_case() {
+                let schema = Arc::new(ArrowSchema::new(vec![
+                    Field::new("moDified", DataType::Utf8, true),
+                    Field::new("ID", DataType::Utf8, true),
+                    Field::new("vaLue", DataType::Int32, true),
+                ]));
+
+                let batch = RecordBatch::try_new(
+                    schema.clone(),
+                    vec![
+                        Arc::new(arrow::array::StringArray::from(vec![
+                            "2021-02-01",
+                            "2021-02-01",
+                            "2021-02-02",
+                            "2021-02-02",
+                        ])),
+                        Arc::new(arrow::array::StringArray::from(vec!["A", "B", "C", "D"])),
+                        Arc::new(arrow::array::Int32Array::from(vec![1, 10, 20, 100])),
+                    ],
+                )
+                .unwrap();
+                // write some data
+                let table = crate::DeltaOps::new_in_memory()
+                    .write(vec![batch.clone()])
+                    .with_save_mode(crate::protocol::SaveMode::Append)
+                    .await
+                    .unwrap();
+
+                let res = crate::DeltaOps(table)
+                    .optimize()
+                    .with_type(OptimizeType::ZOrder(vec!["moDified".into()]))
+                    .await;
+                assert!(res.is_ok());
             }
         }
     }
