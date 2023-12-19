@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 
 pub(crate) mod schemas;
-mod serde_path;
+pub(crate) mod serde_path;
 pub(crate) mod types;
 
 pub use types::*;
