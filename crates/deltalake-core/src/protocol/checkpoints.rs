@@ -70,6 +70,13 @@ impl From<CheckpointError> for ProtocolError {
     }
 }
 
+use core::str::Utf8Error;
+impl From<Utf8Error> for ProtocolError {
+    fn from(value: Utf8Error) -> Self {
+        Self::Generic(value.to_string())
+    }
+}
+
 /// The record batch size for checkpoint parquet file
 pub const CHECKPOINT_RECORD_BATCH_SIZE: usize = 5000;
 
