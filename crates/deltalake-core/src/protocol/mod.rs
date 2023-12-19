@@ -659,7 +659,7 @@ pub(crate) async fn find_latest_check_point_for_version(
 
     let mut cp: Option<CheckPoint> = None;
     let object_store = log_store.object_store();
-    let mut stream = object_store.list(Some(log_store.log_path())).await?;
+    let mut stream = object_store.list(Some(log_store.log_path()));
 
     while let Some(obj_meta) = stream.next().await {
         // Exit early if any objects can't be listed.

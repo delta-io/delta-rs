@@ -37,7 +37,7 @@ pub async fn sync_stores(
     to_store: Arc<DynObjectStore>,
 ) -> Result<(), DeltaTableError> {
     // TODO if a table is copied within the same root store (i.e bucket), using copy would be MUCH more efficient
-    let mut meta_stream = from_store.list(None).await?;
+    let mut meta_stream = from_store.list(None);
     while let Some(file) = meta_stream.next().await {
         if let Ok(meta) = file {
             let bytes = from_store.get(&meta.location).await?.bytes().await?;
@@ -54,7 +54,6 @@ pub async fn flatten_list_stream(
 ) -> ObjectStoreResult<Vec<Path>> {
     storage
         .list(prefix)
-        .await?
         .map_ok(|meta| meta.location)
         .try_collect::<Vec<Path>>()
         .await
@@ -94,6 +93,7 @@ impl TryFrom<&Add> for ObjectMeta {
             last_modified,
             size: value.size as usize,
             e_tag: None,
+            version: None,
         })
     }
 }

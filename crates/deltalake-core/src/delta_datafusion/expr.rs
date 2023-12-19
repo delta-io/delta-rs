@@ -31,8 +31,7 @@ use datafusion::execution::context::SessionState;
 use datafusion_common::Result as DFResult;
 use datafusion_common::{config::ConfigOptions, DFSchema, Result, ScalarValue, TableReference};
 use datafusion_expr::{
-    expr::{InList, ScalarUDF},
-    AggregateUDF, Between, BinaryExpr, Cast, Expr, Like, TableSource,
+    expr::InList, AggregateUDF, Between, BinaryExpr, Cast, Expr, Like, TableSource,
 };
 use datafusion_sql::planner::{ContextProvider, SqlToRel};
 use sqlparser::ast::escape_quoted_string;
@@ -186,8 +185,7 @@ impl<'a> Display for SqlFormat<'a> {
             Expr::IsNotFalse(expr) => write!(f, "{} IS NOT FALSE", SqlFormat { expr }),
             Expr::IsNotUnknown(expr) => write!(f, "{} IS NOT UNKNOWN", SqlFormat { expr }),
             Expr::BinaryExpr(expr) => write!(f, "{}", BinaryExprFormat { expr }),
-            Expr::ScalarFunction(func) => fmt_function(f, &func.fun.to_string(), false, &func.args),
-            Expr::ScalarUDF(ScalarUDF { fun, args }) => fmt_function(f, &fun.name, false, args),
+            Expr::ScalarFunction(func) => fmt_function(f, &func.func_def.name(), false, &func.args),
             Expr::Cast(Cast { expr, data_type }) => {
                 write!(f, "arrow_cast({}, '{}')", SqlFormat { expr }, data_type)
             }

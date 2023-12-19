@@ -1,9 +1,5 @@
 [workspace]
-members = [
-    "crates/*",
-    "delta-inspect",
-    "python",
-]
+members = ["crates/*", "delta-inspect", "python"]
 exclude = ["proofs"]
 resolver = "2"
 
@@ -19,24 +15,26 @@ debug = "line-tables-only"
 
 [workspace.dependencies]
 # arrow
-arrow = { version = "48.0.1" }
-arrow-arith = { version = "48.0.1" }
-arrow-array = { version = "48.0.1" }
-arrow-buffer = { version = "48.0.1" }
-arrow-cast = { version = "48.0.1" }
-arrow-ord = { version = "48.0.1" }
-arrow-row = { version = "48.0.1" }
-arrow-schema = { version = "48.0.1" }
-arrow-select = { version = "48.0.1" }
-parquet = { version = "48.0.1" }
+arrow = { version = "49.0.0" }
+arrow-arith = { version = "49.0.0" }
+arrow-array = { version = "49.0.0" }
+arrow-buffer = { version = "49.0.0" }
+arrow-cast = { version = "49.0.0" }
+arrow-ord = { version = "49.0.0" }
+arrow-row = { version = "49.0.0" }
+arrow-schema = { version = "49.0.0" }
+arrow-select = { version = "49.0.0" }
+parquet = { version = "49.0.0" }
+
+object_store = "0.8"
 
 # datafusion
-datafusion = { version = "33.0.0" }
-datafusion-expr = { version = "33.0.0" }
-datafusion-common = { version = "33.0.0" }
-datafusion-proto = { version = "33.0.0" }
-datafusion-sql = { version = "33.0.0" }
-datafusion-physical-expr = { version = "33.0.0" }
+datafusion = { version = "34.0.0" }
+datafusion-expr = { version = "34.0.0" }
+datafusion-common = { version = "34.0.0" }
+datafusion-proto = { version = "34.0.0" }
+datafusion-sql = { version = "34.0.0" }
+datafusion-physical-expr = { version = "34.0.0" }
 
 
 # serde

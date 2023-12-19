@@ -191,7 +191,6 @@ pub async fn cleanup_expired_logs_for(
         .delete_stream(
             object_store
                 .list(Some(log_store.log_path()))
-                .await?
                 // This predicate function will filter out any locations that don't
                 // match the given timestamp range
                 .filter_map(|meta: Result<crate::ObjectMeta, _>| async move {

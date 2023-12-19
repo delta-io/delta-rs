@@ -459,7 +459,7 @@ impl DeltaTable {
 
         // Get file objects from table.
         let storage = self.object_store();
-        let mut stream = storage.list(Some(self.log_store.log_path())).await?;
+        let mut stream = storage.list(Some(self.log_store.log_path()));
         while let Some(obj_meta) = stream.next().await {
             let obj_meta = obj_meta?;
 

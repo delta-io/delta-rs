@@ -9,6 +9,7 @@ use object_store::{
     GetResult, ListResult, MultipartId, ObjectMeta as ObjStoreObjectMeta, ObjectStore,
     Result as ObjectStoreResult,
 };
+use object_store::{PutOptions, PutResult};
 use std::ops::Range;
 use std::sync::Arc;
 use tokio::io::AsyncWrite;
@@ -166,8 +167,17 @@ impl std::fmt::Display for FileStorageBackend {
 
 #[async_trait::async_trait]
 impl ObjectStore for FileStorageBackend {
-    async fn put(&self, location: &ObjectStorePath, bytes: Bytes) -> ObjectStoreResult<()> {
+    async fn put(&self, location: &ObjectStorePath, bytes: Bytes) -> ObjectStoreResult<PutResult> {
         self.inner.put(location, bytes).await
+    }
+
+    async fn put_opts(
+        &self,
+        location: &ObjectStorePath,
+        bytes: Bytes,
+        options: PutOptions,
+    ) -> ObjectStoreResult<PutResult> {
+        self.inner.put_opts(location, bytes, options).await
     }
 
     async fn get(&self, location: &ObjectStorePath) -> ObjectStoreResult<GetResult> {
@@ -198,11 +208,11 @@ impl ObjectStore for FileStorageBackend {
         self.inner.delete(location).await
     }
 
-    async fn list(
+    fn list(
         &self,
         prefix: Option<&ObjectStorePath>,
-    ) -> ObjectStoreResult<BoxStream<'_, ObjectStoreResult<ObjStoreObjectMeta>>> {
-        self.inner.list(prefix).await
+    ) -> BoxStream<ObjectStoreResult<ObjStoreObjectMeta>> {
+        self.inner.list(prefix)
     }
 
     async fn list_with_delimiter(

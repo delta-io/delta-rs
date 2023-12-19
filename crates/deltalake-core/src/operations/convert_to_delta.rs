@@ -250,7 +250,6 @@ impl ConvertToDeltaBuilder {
         let mut files = Vec::new();
         object_store
             .list(None)
-            .await?
             .try_for_each_concurrent(10, |meta| {
                 if Some("parquet") == meta.location.extension() {
                     debug!("Found parquet file {:#?}", meta.location);

@@ -6,10 +6,10 @@ use arrow::datatypes::{
 };
 use datafusion::datasource::physical_plan::wrap_partition_type_in_dict;
 use datafusion::execution::context::SessionState;
-use datafusion::optimizer::utils::conjunction;
 use datafusion::physical_optimizer::pruning::{PruningPredicate, PruningStatistics};
 use datafusion_common::scalar::ScalarValue;
 use datafusion_common::{Column, DFSchema};
+use datafusion_expr::utils::conjunction;
 use datafusion_expr::Expr;
 use itertools::Either;
 use object_store::ObjectStore;
