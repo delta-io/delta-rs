@@ -185,7 +185,7 @@ impl<'a> Display for SqlFormat<'a> {
             Expr::IsNotFalse(expr) => write!(f, "{} IS NOT FALSE", SqlFormat { expr }),
             Expr::IsNotUnknown(expr) => write!(f, "{} IS NOT UNKNOWN", SqlFormat { expr }),
             Expr::BinaryExpr(expr) => write!(f, "{}", BinaryExprFormat { expr }),
-            Expr::ScalarFunction(func) => fmt_function(f, &func.func_def.name(), false, &func.args),
+            Expr::ScalarFunction(func) => fmt_function(f, func.func_def.name(), false, &func.args),
             Expr::Cast(Cast { expr, data_type }) => {
                 write!(f, "arrow_cast({}, '{}')", SqlFormat { expr }, data_type)
             }
