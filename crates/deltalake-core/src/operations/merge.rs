@@ -815,76 +815,81 @@ async fn try_construct_early_filter(
     source: &LogicalPlan,
     source_name: &TableReference<'_>,
     target_name: &TableReference<'_>,
-) -> Option<Expr> {
-    let table_metadata = table_snapshot.metadata()?;
+) -> DeltaResult<Option<Expr>> {
+    let table_metadata = table_snapshot.metadata();
+
+    if table_metadata.is_none() {
+        return Ok(None);
+    }
+
+    let table_metadata = table_metadata.unwrap();
 
     let partition_columns = &table_metadata.partition_columns;
 
     if partition_columns.is_empty() {
-        return None;
+        return Ok(None);
     }
 
     let mut placeholders = HashMap::default();
 
-    let filter = generalize_filter(
+    match generalize_filter(
         join_predicate,
         partition_columns,
         source_name,
         target_name,
         &mut placeholders,
-    )?;
+    ) {
+        None => Ok(None),
+        Some(filter) => {
+            if placeholders.is_empty() {
+                // if we haven't recognised any partition-based predicates in the join predicate, return our reduced filter
+                Ok(Some(filter))
+            } else {
+                // if we have some recognised partitions, then discover the distinct set of partitions in the source data and
+                // make a new filter, which expands out the placeholders for each distinct partition (and then OR these together)
+                let distinct_partitions = LogicalPlan::Distinct(Distinct {
+                    input: LogicalPlan::Projection(Projection::try_new(
+                        placeholders
+                            .into_iter()
+                            .map(|(alias, expr)| expr.alias(alias))
+                            .collect_vec(),
+                        source.clone().into(),
+                    )?)
+                    .into(),
+                });
 
-    if placeholders.is_empty() {
-        // if we haven't recognised any partition-based predicates in the join predicate, return our reduced filter
-        Some(filter)
-    } else {
-        // if we have some recognised partitions, then discover the distinct set of partitions in the source data and
-        // make a new filter, which expands out the placeholders for each distinct partition (and then OR these together)
-        let distinct_partitions = LogicalPlan::Distinct(Distinct {
-            input: LogicalPlan::Projection(
-                Projection::try_new(
-                    placeholders
-                        .into_iter()
-                        .map(|(alias, expr)| expr.alias(alias))
-                        .collect_vec(),
-                    source.clone().into(),
-                )
-                .unwrap(),
-            )
-            .into(),
-        });
+                let execution_plan = session_state
+                    .create_physical_plan(&distinct_partitions)
+                    .await?;
 
-        let execution_plan = session_state
-            .create_physical_plan(&distinct_partitions)
-            .await
-            .unwrap();
+                let items = execute_plan_to_batch(session_state, execution_plan).await?;
 
-        let items = execute_plan_to_batch(session_state, execution_plan)
-            .await
-            .unwrap();
-
-        let placeholder_names = items
-            .schema()
-            .fields()
-            .iter()
-            .map(|f| f.name().to_owned())
-            .collect_vec();
-
-        (0..items.num_rows())
-            .map(|i| {
-                let replacements = placeholder_names
+                let placeholder_names = items
+                    .schema()
+                    .fields()
                     .iter()
-                    .map(|placeholder| {
-                        let col = items.column_by_name(placeholder).unwrap();
-                        let value = ScalarValue::try_from_array(col, i).unwrap();
-                        (placeholder.to_owned(), value)
+                    .map(|f| f.name().to_owned())
+                    .collect_vec();
+
+                let expr = (0..items.num_rows())
+                    .map(|i| {
+                        let replacements = placeholder_names
+                            .iter()
+                            .map(|placeholder| {
+                                let col = items.column_by_name(placeholder).unwrap();
+                                let value = ScalarValue::try_from_array(col, i)?;
+                                DeltaResult::Ok((placeholder.to_owned(), value))
+                            })
+                            .try_collect()?;
+                        Ok(replace_placeholders(filter.clone(), &replacements))
                     })
-                    .collect();
-                replace_placeholders(filter.clone(), &replacements)
-            })
-            .reduce(Expr::or)
-            .unwrap()
-            .into()
+                    .collect::<DeltaResult<Vec<_>>>()?
+                    .into_iter()
+                    .reduce(Expr::or);
+
+                Ok(expr)
+            }
+        }
     }
 }
 
@@ -980,7 +985,7 @@ async fn execute(
             &source_name,
             &target_name,
         )
-        .await
+        .await?
         {
             let file_filter = filter
                 .clone()
@@ -2559,7 +2564,8 @@ mod tests {
             &source_name,
             &target_name,
         )
-        .await;
+        .await
+        .unwrap();
 
         assert!(pred.is_some());
 
