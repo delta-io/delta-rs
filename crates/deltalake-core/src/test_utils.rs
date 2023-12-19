@@ -479,7 +479,7 @@ pub mod s3_cli {
             "dynamodb",
             "create-table",
             "--table-name",
-            &table_name,
+            table_name,
             "--provisioned-throughput",
             "ReadCapacityUnits=10,WriteCapacityUnits=10",
             "--attribute-definitions",
@@ -504,7 +504,7 @@ pub mod s3_cli {
     }
 
     fn wait_for_table(table_name: &str) -> std::io::Result<()> {
-        let args = ["dynamodb", "describe-table", "--table-name", &table_name];
+        let args = ["dynamodb", "describe-table", "--table-name", table_name];
         loop {
             let output = Command::new("aws")
                 .args(args)
@@ -537,7 +537,7 @@ pub mod s3_cli {
 
     fn delete_dynamodb_table(table_name: &str) -> std::io::Result<ExitStatus> {
         let mut child = Command::new("aws")
-            .args(["dynamodb", "delete-table", "--table-name", &table_name])
+            .args(["dynamodb", "delete-table", "--table-name", table_name])
             .stdout(Stdio::null())
             .spawn()
             .expect("aws command is installed");

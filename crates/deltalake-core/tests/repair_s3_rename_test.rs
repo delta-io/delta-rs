@@ -9,7 +9,7 @@ use futures::stream::BoxStream;
 use object_store::path::Path;
 use object_store::{
     DynObjectStore, Error as ObjectStoreError, GetOptions, GetResult, ListResult, MultipartId,
-    ObjectMeta, Result as ObjectStoreResult,
+    ObjectMeta, PutOptions, PutResult, Result as ObjectStoreResult,
 };
 use serial_test::serial;
 use std::ops::Range;
@@ -165,8 +165,17 @@ impl ObjectStore for DelayedObjectStore {
         self.delete(from).await
     }
 
-    async fn put(&self, location: &Path, bytes: Bytes) -> ObjectStoreResult<()> {
+    async fn put(&self, location: &Path, bytes: Bytes) -> ObjectStoreResult<PutResult> {
         self.inner.put(location, bytes).await
+    }
+
+    async fn put_opts(
+        &self,
+        location: &Path,
+        bytes: Bytes,
+        options: PutOptions,
+    ) -> ObjectStoreResult<PutResult> {
+        self.inner.put_opts(location, bytes, options).await
     }
 
     async fn get(&self, location: &Path) -> ObjectStoreResult<GetResult> {
@@ -189,11 +198,8 @@ impl ObjectStore for DelayedObjectStore {
         self.inner.delete(location).await
     }
 
-    async fn list(
-        &self,
-        prefix: Option<&Path>,
-    ) -> ObjectStoreResult<BoxStream<'_, ObjectStoreResult<ObjectMeta>>> {
-        self.inner.list(prefix).await
+    fn list(&self, prefix: Option<&Path>) -> BoxStream<'_, ObjectStoreResult<ObjectMeta>> {
+        self.inner.list(prefix)
     }
 
     async fn list_with_delimiter(&self, prefix: Option<&Path>) -> ObjectStoreResult<ListResult> {
