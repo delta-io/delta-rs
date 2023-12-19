@@ -49,7 +49,7 @@ pub mod write;
 pub mod writer;
 
 /// Maximum supported writer version
-pub const MAX_SUPPORTED_WRITER_VERSION: i32 = 1;
+pub const MAX_SUPPORTED_WRITER_VERSION: i32 = 2;
 /// Maximum supported reader version
 pub const MAX_SUPPORTED_READER_VERSION: i32 = 1;
 
