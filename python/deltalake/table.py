@@ -323,7 +323,6 @@ class DeltaTable:
             without_files=without_files,
             log_buffer_size=log_buffer_size,
         )
-        self._metadata = Metadata(self._table)
 
     @classmethod
     def from_data_catalog(
@@ -558,7 +557,7 @@ class DeltaTable:
         Returns:
             the current Metadata registered in the transaction log
         """
-        return self._metadata
+        return Metadata(self._table)
 
     def protocol(self) -> ProtocolVersions:
         """
