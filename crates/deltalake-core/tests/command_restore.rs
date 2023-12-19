@@ -11,6 +11,8 @@ use rand::Rng;
 use std::error::Error;
 use std::fs;
 use std::sync::Arc;
+use std::thread;
+use std::time::Duration;
 use tempdir::TempDir;
 
 #[derive(Debug)]
@@ -42,19 +44,21 @@ async fn setup_test() -> Result<Context, Box<dyn Error>> {
         .await?;
 
     let batch = get_record_batch();
-
+    thread::sleep(Duration::from_secs(1));
     let table = DeltaOps(table)
         .write(vec![batch.clone()])
         .with_save_mode(SaveMode::Append)
         .await
         .unwrap();
 
+    thread::sleep(Duration::from_secs(1));
     let table = DeltaOps(table)
         .write(vec![batch.clone()])
         .with_save_mode(SaveMode::Overwrite)
         .await
         .unwrap();
 
+    thread::sleep(Duration::from_secs(1));
     let table = DeltaOps(table)
         .write(vec![batch.clone()])
         .with_save_mode(SaveMode::Append)
