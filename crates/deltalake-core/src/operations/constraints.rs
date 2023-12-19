@@ -319,7 +319,7 @@ mod tests {
 
         let mut table = DeltaOps(table)
             .add_constraint()
-            .with_constraint("valid_values", col("vAlue").lt(lit(1000)))
+            .with_constraint("valid_values", "vAlue < 1000")
             .await?;
         let version = table.version();
         assert_eq!(version, 1);

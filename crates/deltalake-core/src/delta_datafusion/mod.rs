@@ -1042,7 +1042,7 @@ impl DeltaDataChecker {
         Self {
             constraints,
             invariants: vec![],
-            ctx: SessionContext::new(),
+            ctx: DeltaSessionContext::default().into(),
         }
     }
 
@@ -1065,7 +1065,7 @@ impl DeltaDataChecker {
         Self {
             invariants,
             constraints,
-            ctx: SessionContext::new(),
+            ctx: DeltaSessionContext::default().into(),
         }
     }
 
