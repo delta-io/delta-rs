@@ -63,7 +63,15 @@ def test_read_simple_table_using_options_to_dict():
     assert dt.to_pyarrow_dataset().to_table().to_pydict() == {"value": [1, 2, 3]}
 
 
-def test_load_with_datetime():
+@pytest.mark.parametrize(
+    ["date_value", "expected_version"],
+    [
+        ("2020-05-01T00:47:31-07:00", 0),
+        ("2020-05-02T22:47:31-07:00", 1),
+        ("2020-05-25T22:47:31-07:00", 4),
+    ],
+)
+def test_load_as_version_datetime(date_value: str, expected_version):
     log_dir = "../crates/deltalake-core/tests/data/simple_table/_delta_log"
     log_mtime_pair = [
         ("00000000000000000000.json", 1588398451.0),
@@ -78,15 +86,14 @@ def test_load_with_datetime():
 
     table_path = "../crates/deltalake-core/tests/data/simple_table"
     dt = DeltaTable(table_path)
-    dt.load_with_datetime("2020-05-01T00:47:31-07:00")
-    assert dt.version() == 0
-    dt.load_with_datetime("2020-05-02T22:47:31-07:00")
-    assert dt.version() == 1
-    dt.load_with_datetime("2020-05-25T22:47:31-07:00")
-    assert dt.version() == 4
+    dt.load_as_version(date_value)
+    assert dt.version() == expected_version
+    dt = DeltaTable(table_path)
+    dt.load_as_version(datetime.fromisoformat(date_value))
+    assert dt.version() == expected_version
 
 
-def test_load_with_datetime_bad_format():
+def test_load_as_version_datetime_bad_format():
     table_path = "../crates/deltalake-core/tests/data/simple_table"
     dt = DeltaTable(table_path)
 
@@ -96,7 +103,7 @@ def test_load_with_datetime_bad_format():
         "2020-05-01T00:47:31+08",
     ]:
         with pytest.raises(Exception, match="Failed to parse datetime string:"):
-            dt.load_with_datetime(bad_format)
+            dt.load_as_version(bad_format)
 
 
 def test_read_simple_table_update_incremental():
