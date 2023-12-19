@@ -511,19 +511,68 @@ class DeltaTable:
 
     file_uris.__doc__ = ""
 
+    def load_as_version(self, version: Union[int, str, datetime]) -> None:
+        """
+        Load/time travel a DeltaTable to a specified version number, or a timestamp version of the table. If a
+        string is passed then the argument should be an RFC 3339 and ISO 8601 date and time string format.
+
+        Args:
+            version: the identifier of the version of the DeltaTable to load
+
+        Example:
+            **Use a version number**
+            ```
+            dt = DeltaTable("test_table")
+            dt.load_as_version(1)
+            ```
+
+            **Use a datetime object**
+            ```
+            dt.load_as_version(datetime(2023,1,1))
+            ```
+
+            **Use a datetime in string format**
+            ```
+            dt.load_as_version("2018-01-26T18:30:09Z")
+            dt.load_as_version("2018-12-19T16:39:57-08:00")
+            dt.load_as_version("2018-01-26T18:30:09.453+00:00")
+            ```
+        """
+        if isinstance(version, int):
+            self._table.load_version(version)
+        elif isinstance(version, datetime):
+            self._table.load_with_datetime(version.isoformat())
+        elif isinstance(version, str):
+            self._table.load_with_datetime(version)
+        else:
+            raise TypeError(
+                "Invalid datatype provided for version, only int, str or datetime are accepted."
+            )
+
     def load_version(self, version: int) -> None:
         """
         Load a DeltaTable with a specified version.
 
+        !!! warning "Deprecated"
+            Load_version and load_with_datetime have been combined into `DeltaTable.load_as_version`.
+
         Args:
             version: the identifier of the version of the DeltaTable to load
         """
+        warnings.warn(
+            "Call to deprecated method DeltaTable.load_version. Use DeltaTable.load_as_version() instead.",
+            category=DeprecationWarning,
+            stacklevel=2,
+        )
         self._table.load_version(version)
 
     def load_with_datetime(self, datetime_string: str) -> None:
         """
         Time travel Delta table to the latest version that's created at or before provided `datetime_string` argument.
         The `datetime_string` argument should be an RFC 3339 and ISO 8601 date and time string.
+
+        !!! warning "Deprecated"
+            Load_version and load_with_datetime have been combined into `DeltaTable.load_as_version`.
 
         Args:
             datetime_string: the identifier of the datetime point of the DeltaTable to load
@@ -535,6 +584,11 @@ class DeltaTable:
             "2018-01-26T18:30:09.453+00:00"
             ```
         """
+        warnings.warn(
+            "Call to deprecated method DeltaTable.load_with_datetime. Use DeltaTable.load_as_version() instead.",
+            category=DeprecationWarning,
+            stacklevel=2,
+        )
         self._table.load_with_datetime(datetime_string)
 
     @property
