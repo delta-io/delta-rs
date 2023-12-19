@@ -51,6 +51,65 @@ MAX_SUPPORTED_READER_VERSION = 1
 MAX_SUPPORTED_WRITER_VERSION = 2
 
 
+@dataclass(init=True)
+class WriterProperties:
+    """A Writer Properties instance for the Rust parquet writer."""
+
+    def __init__(
+        self,
+        data_page_size_limit: Optional[int] = None,
+        dictionary_page_size_limit: Optional[int] = None,
+        data_page_row_count_limit: Optional[int] = None,
+        write_batch_size: Optional[int] = None,
+        max_row_group_size: Optional[int] = None,
+        compression: Optional[str] = None,
+        compression_level: Optional[int] = None,
+    ):
+        """Create a Writer Properties instance for the Rust parquet writer,
+        see options https://arrow.apache.org/rust/parquet/file/properties/struct.WriterProperties.html:
+
+        Args:
+            data_page_size_limit: Limit DataPage size to this in bytes.
+            dictionary_page_size_limit: Limit the size of each DataPage to store dicts to this amount in bytes.
+            data_page_row_count_limit: Limit the number of rows in each DataPage.
+            write_batch_size: Splits internally to smaller batch size.
+            max_row_group_size: Max number of rows in row group.
+            compression: compression type
+            compression_level: level of compression, only relevant for subset of compression types
+        """
+        self.data_page_size_limit = data_page_size_limit
+        self.dictionary_page_size_limit = dictionary_page_size_limit
+        self.data_page_row_count_limit = data_page_row_count_limit
+        self.write_batch_size = write_batch_size
+        self.max_row_group_size = max_row_group_size
+
+        if compression_level is not None and compression is None:
+            raise ValueError(
+                """Providing a compression level without the compression type is not possible, 
+                             please provide the compression as well."""
+            )
+
+        if compression in ["gzip", "brotli", "zstd"]:
+            if compression_level is not None:
+                compression = compression = f"{compression}({compression_level})"
+            else:
+                raise ValueError("""Gzip, brotli, ztsd require a compression level""")
+        self.compression = compression
+
+    def __str__(self) -> str:
+        return (
+            f"WriterProperties(data_page_size_limit: {self.data_page_size_limit}, dictionary_page_size_limit: {self.dictionary_page_size_limit}, "
+            f"data_page_row_count_limit: {self.data_page_row_count_limit}, write_batch_size: {self.write_batch_size}, "
+            f"max_row_group_size: {self.max_row_group_size}, compression: {self.compression})"
+        )
+
+    def _to_dict(self) -> Dict[str, Optional[str]]:
+        values = {}
+        for key, value in self.__dict__.items():
+            values[key] = str(value) if isinstance(value, int) else value
+        return values
+
+
 @dataclass(init=False)
 class Metadata:
     """Create a Metadata instance."""
@@ -628,7 +687,7 @@ class DeltaTable:
             Dict[str, Union[int, float, str, datetime, bool, List[Any]]]
         ] = None,
         predicate: Optional[str] = None,
-        writer_properties: Optional[Dict[str, int]] = None,
+        writer_properties: Optional[WriterProperties] = None,
         error_on_type_mismatch: bool = True,
     ) -> Dict[str, Any]:
         """`UPDATE` records in the Delta Table that matches an optional predicate. Either updates or new_values needs
@@ -638,9 +697,7 @@ class DeltaTable:
             updates: a mapping of column name to update SQL expression.
             new_values: a mapping of column name to python datatype.
             predicate: a logical expression.
-            writer_properties: Pass writer properties to the Rust parquet writer, see options https://arrow.apache.org/rust/parquet/file/properties/struct.WriterProperties.html,
-                only the following fields are supported: `data_page_size_limit`, `dictionary_page_size_limit`,
-                `data_page_row_count_limit`, `write_batch_size`, `max_row_group_size`.
+            writer_properties: Pass writer properties to the Rust parquet writer.
             error_on_type_mismatch: specify if update will return error if data types are mismatching :default = True
 
         Returns:
@@ -719,7 +776,7 @@ class DeltaTable:
         metrics = self._table.update(
             updates,
             predicate,
-            writer_properties,
+            writer_properties._to_dict() if writer_properties else None,
             safe_cast=not error_on_type_mismatch,
         )
         return json.loads(metrics)
@@ -750,6 +807,7 @@ class DeltaTable:
         source_alias: Optional[str] = None,
         target_alias: Optional[str] = None,
         error_on_type_mismatch: bool = True,
+        writer_properties: Optional[WriterProperties] = None,
     ) -> "TableMerger":
         """Pass the source data which you want to merge on the target delta table, providing a
         predicate in SQL query like format. You can also specify on what to do when the underlying data types do not
@@ -761,6 +819,7 @@ class DeltaTable:
             source_alias: Alias for the source table
             target_alias: Alias for the target table
             error_on_type_mismatch: specify if merge will return error if data types are mismatching :default = True
+            writer_properties: Pass writer properties to the Rust parquet writer
 
         Returns:
             TableMerger: TableMerger Object
@@ -807,6 +866,7 @@ class DeltaTable:
             source_alias=source_alias,
             target_alias=target_alias,
             safe_cast=not error_on_type_mismatch,
+            writer_properties=writer_properties,
         )
 
     def restore(
@@ -1024,7 +1084,11 @@ class DeltaTable:
         """
         return self._table.get_add_actions(flatten)
 
-    def delete(self, predicate: Optional[str] = None) -> Dict[str, Any]:
+    def delete(
+        self,
+        predicate: Optional[str] = None,
+        writer_properties: Optional[WriterProperties] = None,
+    ) -> Dict[str, Any]:
         """Delete records from a Delta Table that statisfy a predicate.
 
         When a predicate is not provided then all records are deleted from the Delta
@@ -1038,7 +1102,9 @@ class DeltaTable:
         Returns:
             the metrics from delete.
         """
-        metrics = self._table.delete(predicate)
+        metrics = self._table.delete(
+            predicate, writer_properties._to_dict() if writer_properties else None
+        )
         return json.loads(metrics)
 
     def repair(self, dry_run: bool = False) -> Dict[str, Any]:
@@ -1080,6 +1146,7 @@ class TableMerger:
         source_alias: Optional[str] = None,
         target_alias: Optional[str] = None,
         safe_cast: bool = True,
+        writer_properties: Optional[WriterProperties] = None,
     ):
         self.table = table
         self.source = source
@@ -1087,7 +1154,7 @@ class TableMerger:
         self.source_alias = source_alias
         self.target_alias = target_alias
         self.safe_cast = safe_cast
-        self.writer_properties: Optional[Dict[str, Optional[int]]] = None
+        self.writer_properties = writer_properties
         self.matched_update_updates: Optional[List[Dict[str, str]]] = None
         self.matched_update_predicate: Optional[List[Optional[str]]] = None
         self.matched_delete_predicate: Optional[List[str]] = None
@@ -1121,14 +1188,20 @@ class TableMerger:
         Returns:
             TableMerger: TableMerger Object
         """
-        writer_properties = {
+        warnings.warn(
+            "Call to deprecated method TableMerger.with_writer_properties. Use DeltaTable.merge(writer_properties=WriterProperties()) instead.",
+            category=DeprecationWarning,
+            stacklevel=2,
+        )
+
+        writer_properties: Dict[str, Any] = {
             "data_page_size_limit": data_page_size_limit,
             "dictionary_page_size_limit": dictionary_page_size_limit,
             "data_page_row_count_limit": data_page_row_count_limit,
             "write_batch_size": write_batch_size,
             "max_row_group_size": max_row_group_size,
         }
-        self.writer_properties = writer_properties
+        self.writer_properties = WriterProperties(**writer_properties)
         return self
 
     def when_matched_update(
@@ -1525,7 +1598,9 @@ class TableMerger:
             source_alias=self.source_alias,
             target_alias=self.target_alias,
             safe_cast=self.safe_cast,
-            writer_properties=self.writer_properties,
+            writer_properties=self.writer_properties._to_dict()
+            if self.writer_properties
+            else None,
             matched_update_updates=self.matched_update_updates,
             matched_update_predicate=self.matched_update_predicate,
             matched_delete_predicate=self.matched_delete_predicate,
@@ -1609,6 +1684,7 @@ class TableOptimizer:
         target_size: Optional[int] = None,
         max_concurrent_tasks: Optional[int] = None,
         min_commit_interval: Optional[Union[int, timedelta]] = None,
+        writer_properties: Optional[WriterProperties] = None,
     ) -> Dict[str, Any]:
         """
         Compacts small files to reduce the total number of files in the table.
@@ -1630,6 +1706,7 @@ class TableOptimizer:
             min_commit_interval: minimum interval in seconds or as timedeltas before a new commit is
                                     created. Interval is useful for long running executions. Set to 0 or timedelta(0), if you
                                     want a commit per partition.
+            writer_properties: Pass writer properties to the Rust parquet writer.
 
         Returns:
             the metrics from optimize
@@ -1654,7 +1731,11 @@ class TableOptimizer:
             min_commit_interval = int(min_commit_interval.total_seconds())
 
         metrics = self.table._table.compact_optimize(
-            partition_filters, target_size, max_concurrent_tasks, min_commit_interval
+            partition_filters,
+            target_size,
+            max_concurrent_tasks,
+            min_commit_interval,
+            writer_properties._to_dict() if writer_properties else None,
         )
         self.table.update_incremental()
         return json.loads(metrics)
@@ -1667,6 +1748,7 @@ class TableOptimizer:
         max_concurrent_tasks: Optional[int] = None,
         max_spill_size: int = 20 * 1024 * 1024 * 1024,
         min_commit_interval: Optional[Union[int, timedelta]] = None,
+        writer_properties: Optional[WriterProperties] = None,
     ) -> Dict[str, Any]:
         """
         Reorders the data using a Z-order curve to improve data skipping.
@@ -1686,6 +1768,7 @@ class TableOptimizer:
             min_commit_interval: minimum interval in seconds or as timedeltas before a new commit is
                                     created. Interval is useful for long running executions. Set to 0 or timedelta(0), if you
                                     want a commit per partition.
+            writer_properties: Pass writer properties to the Rust parquet writer.
 
         Returns:
             the metrics from optimize
@@ -1716,6 +1799,7 @@ class TableOptimizer:
             max_concurrent_tasks,
             max_spill_size,
             min_commit_interval,
+            writer_properties._to_dict() if writer_properties else None,
         )
         self.table.update_incremental()
         return json.loads(metrics)
