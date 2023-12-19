@@ -9,7 +9,7 @@ use deltalake_core::storage::config::configure_store;
 use deltalake_core::storage::{GetResult, ObjectStoreResult};
 use deltalake_core::DeltaTable;
 use object_store::path::Path as StorePath;
-use object_store::ObjectStore;
+use object_store::{ObjectStore, PutOptions, PutResult};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::fs;
@@ -160,8 +160,17 @@ impl SlowStore {
 #[async_trait::async_trait]
 impl ObjectStore for SlowStore {
     /// Save the provided bytes to the specified location.
-    async fn put(&self, location: &StorePath, bytes: bytes::Bytes) -> ObjectStoreResult<()> {
+    async fn put(&self, location: &StorePath, bytes: bytes::Bytes) -> ObjectStoreResult<PutResult> {
         self.inner.put(location, bytes).await
+    }
+
+    async fn put_opts(
+        &self,
+        location: &StorePath,
+        bytes: bytes::Bytes,
+        options: PutOptions,
+    ) -> ObjectStoreResult<PutResult> {
+        self.inner.put_opts(location, bytes, options).await
     }
 
     /// Return the bytes that are stored at the specified location.
@@ -205,27 +214,23 @@ impl ObjectStore for SlowStore {
     ///
     /// Prefixes are evaluated on a path segment basis, i.e. `foo/bar/` is a prefix of `foo/bar/x` but not of
     /// `foo/bar_baz/x`.
-    async fn list(
+    fn list(
         &self,
         prefix: Option<&StorePath>,
-    ) -> ObjectStoreResult<
-        futures::stream::BoxStream<'_, ObjectStoreResult<object_store::ObjectMeta>>,
-    > {
-        self.inner.list(prefix).await
+    ) -> futures::stream::BoxStream<'_, ObjectStoreResult<object_store::ObjectMeta>> {
+        self.inner.list(prefix)
     }
 
     /// List all the objects with the given prefix and a location greater than `offset`
     ///
     /// Some stores, such as S3 and GCS, may be able to push `offset` down to reduce
     /// the number of network requests required
-    async fn list_with_offset(
+    fn list_with_offset(
         &self,
         prefix: Option<&StorePath>,
         offset: &StorePath,
-    ) -> ObjectStoreResult<
-        futures::stream::BoxStream<'_, ObjectStoreResult<object_store::ObjectMeta>>,
-    > {
-        self.inner.list_with_offset(prefix, offset).await
+    ) -> futures::stream::BoxStream<'_, ObjectStoreResult<object_store::ObjectMeta>> {
+        self.inner.list_with_offset(prefix, offset)
     }
 
     /// List objects with the given prefix and an implementation specific
