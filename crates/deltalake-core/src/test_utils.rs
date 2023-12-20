@@ -67,7 +67,7 @@ impl IntegrationContext {
         if let StorageIntegration::Google = integration {
             gs_cli::prepare_env();
             let base_url = std::env::var("GOOGLE_BASE_URL")?;
-            let token = json!({"gcs_base_url": base_url, "disable_oauth": true, "client_email": "", "private_key": ""});
+            let token = json!({"gcs_base_url": base_url, "disable_oauth": true, "client_email": "", "private_key": "", "private_key_id": ""});
             let account_path = tmp_dir.path().join("gcs.json");
             std::fs::write(&account_path, serde_json::to_vec(&token)?)?;
             set_env_if_not_set(
