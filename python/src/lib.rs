@@ -27,6 +27,7 @@ use deltalake::datafusion::prelude::SessionContext;
 use deltalake::delta_datafusion::DeltaDataChecker;
 use deltalake::errors::DeltaTableError;
 use deltalake::kernel::{Action, Add, Invariant, Remove, StructType};
+use deltalake::operations::constraints::ConstraintBuilder;
 use deltalake::operations::convert_to_delta::{ConvertToDeltaBuilder, PartitionStrategy};
 use deltalake::operations::delete::DeleteBuilder;
 use deltalake::operations::filesystem_check::FileSystemCheckBuilder;
@@ -36,11 +37,13 @@ use deltalake::operations::restore::RestoreBuilder;
 use deltalake::operations::transaction::commit;
 use deltalake::operations::update::UpdateBuilder;
 use deltalake::operations::vacuum::VacuumBuilder;
+use deltalake::parquet::basic::Compression;
+use deltalake::parquet::errors::ParquetError;
 use deltalake::parquet::file::properties::WriterProperties;
 use deltalake::partitions::PartitionFilter;
 use deltalake::protocol::{ColumnCountStat, ColumnValueStat, DeltaOperation, SaveMode, Stats};
-use deltalake::DeltaOps;
 use deltalake::DeltaTableBuilder;
+use deltalake::{DeltaOps, DeltaResult};
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::PyFrozenSet;
@@ -270,36 +273,16 @@ impl RawDeltaTable {
         &mut self,
         updates: HashMap<String, String>,
         predicate: Option<String>,
-        writer_properties: Option<HashMap<String, usize>>,
+        writer_properties: Option<HashMap<String, Option<String>>>,
         safe_cast: bool,
     ) -> PyResult<String> {
         let mut cmd = UpdateBuilder::new(self._table.log_store(), self._table.state.clone())
             .with_safe_cast(safe_cast);
 
         if let Some(writer_props) = writer_properties {
-            let mut properties = WriterProperties::builder();
-            let data_page_size_limit = writer_props.get("data_page_size_limit");
-            let dictionary_page_size_limit = writer_props.get("dictionary_page_size_limit");
-            let data_page_row_count_limit = writer_props.get("data_page_row_count_limit");
-            let write_batch_size = writer_props.get("write_batch_size");
-            let max_row_group_size = writer_props.get("max_row_group_size");
-
-            if let Some(data_page_size) = data_page_size_limit {
-                properties = properties.set_data_page_size_limit(*data_page_size);
-            }
-            if let Some(dictionary_page_size) = dictionary_page_size_limit {
-                properties = properties.set_dictionary_page_size_limit(*dictionary_page_size);
-            }
-            if let Some(data_page_row_count) = data_page_row_count_limit {
-                properties = properties.set_data_page_row_count_limit(*data_page_row_count);
-            }
-            if let Some(batch_size) = write_batch_size {
-                properties = properties.set_write_batch_size(*batch_size);
-            }
-            if let Some(row_group_size) = max_row_group_size {
-                properties = properties.set_max_row_group_size(*row_group_size);
-            }
-            cmd = cmd.with_writer_properties(properties.build());
+            cmd = cmd.with_writer_properties(
+                set_writer_properties(writer_props).map_err(PythonError::from)?,
+            );
         }
 
         for (col_name, expression) in updates {
@@ -318,13 +301,20 @@ impl RawDeltaTable {
     }
 
     /// Run the optimize command on the Delta Table: merge small files into a large file by bin-packing.
-    #[pyo3(signature = (partition_filters = None, target_size = None, max_concurrent_tasks = None, min_commit_interval = None))]
+    #[pyo3(signature = (
+        partition_filters = None,
+        target_size = None,
+        max_concurrent_tasks = None,
+        min_commit_interval = None,
+        writer_properties=None,
+    ))]
     pub fn compact_optimize(
         &mut self,
         partition_filters: Option<Vec<(&str, &str, PartitionFilterValue)>>,
         target_size: Option<i64>,
         max_concurrent_tasks: Option<usize>,
         min_commit_interval: Option<u64>,
+        writer_properties: Option<HashMap<String, Option<String>>>,
     ) -> PyResult<String> {
         let mut cmd = OptimizeBuilder::new(self._table.log_store(), self._table.state.clone())
             .with_max_concurrent_tasks(max_concurrent_tasks.unwrap_or_else(num_cpus::get));
@@ -334,6 +324,13 @@ impl RawDeltaTable {
         if let Some(commit_interval) = min_commit_interval {
             cmd = cmd.with_min_commit_interval(time::Duration::from_secs(commit_interval));
         }
+
+        if let Some(writer_props) = writer_properties {
+            cmd = cmd.with_writer_properties(
+                set_writer_properties(writer_props).map_err(PythonError::from)?,
+            );
+        }
+
         let converted_filters = convert_partition_filters(partition_filters.unwrap_or_default())
             .map_err(PythonError::from)?;
         cmd = cmd.with_filters(&converted_filters);
@@ -346,7 +343,14 @@ impl RawDeltaTable {
     }
 
     /// Run z-order variation of optimize
-    #[pyo3(signature = (z_order_columns, partition_filters = None, target_size = None, max_concurrent_tasks = None, max_spill_size = 20 * 1024 * 1024 * 1024, min_commit_interval = None))]
+    #[allow(clippy::too_many_arguments)]
+    #[pyo3(signature = (z_order_columns,
+        partition_filters = None,
+        target_size = None,
+        max_concurrent_tasks = None,
+        max_spill_size = 20 * 1024 * 1024 * 1024,
+        min_commit_interval = None,
+        writer_properties=None))]
     pub fn z_order_optimize(
         &mut self,
         z_order_columns: Vec<String>,
@@ -355,6 +359,7 @@ impl RawDeltaTable {
         max_concurrent_tasks: Option<usize>,
         max_spill_size: usize,
         min_commit_interval: Option<u64>,
+        writer_properties: Option<HashMap<String, Option<String>>>,
     ) -> PyResult<String> {
         let mut cmd = OptimizeBuilder::new(self._table.log_store(), self._table.state.clone())
             .with_max_concurrent_tasks(max_concurrent_tasks.unwrap_or_else(num_cpus::get))
@@ -367,6 +372,12 @@ impl RawDeltaTable {
             cmd = cmd.with_min_commit_interval(time::Duration::from_secs(commit_interval));
         }
 
+        if let Some(writer_props) = writer_properties {
+            cmd = cmd.with_writer_properties(
+                set_writer_properties(writer_props).map_err(PythonError::from)?,
+            );
+        }
+
         let converted_filters = convert_partition_filters(partition_filters.unwrap_or_default())
             .map_err(PythonError::from)?;
         cmd = cmd.with_filters(&converted_filters);
@@ -376,6 +387,22 @@ impl RawDeltaTable {
             .map_err(PythonError::from)?;
         self._table.state = table.state;
         Ok(serde_json::to_string(&metrics).unwrap())
+    }
+
+    #[pyo3(signature = (constraints))]
+    pub fn add_constraints(&mut self, constraints: HashMap<String, String>) -> PyResult<()> {
+        let mut cmd =
+            ConstraintBuilder::new(self._table.log_store(), self._table.get_state().clone());
+
+        for (col_name, expression) in constraints {
+            cmd = cmd.with_constraint(col_name.clone(), expression.clone());
+        }
+
+        let table = rt()?
+            .block_on(cmd.into_future())
+            .map_err(PythonError::from)?;
+        self._table.state = table.state;
+        Ok(())
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -403,7 +430,7 @@ impl RawDeltaTable {
         source_alias: Option<String>,
         target_alias: Option<String>,
         safe_cast: bool,
-        writer_properties: Option<HashMap<String, usize>>,
+        writer_properties: Option<HashMap<String, Option<String>>>,
         matched_update_updates: Option<Vec<HashMap<String, String>>>,
         matched_update_predicate: Option<Vec<Option<String>>>,
         matched_delete_predicate: Option<Vec<String>>,
@@ -439,29 +466,9 @@ impl RawDeltaTable {
         }
 
         if let Some(writer_props) = writer_properties {
-            let mut properties = WriterProperties::builder();
-            let data_page_size_limit = writer_props.get("data_page_size_limit");
-            let dictionary_page_size_limit = writer_props.get("dictionary_page_size_limit");
-            let data_page_row_count_limit = writer_props.get("data_page_row_count_limit");
-            let write_batch_size = writer_props.get("write_batch_size");
-            let max_row_group_size = writer_props.get("max_row_group_size");
-
-            if let Some(data_page_size) = data_page_size_limit {
-                properties = properties.set_data_page_size_limit(*data_page_size);
-            }
-            if let Some(dictionary_page_size) = dictionary_page_size_limit {
-                properties = properties.set_dictionary_page_size_limit(*dictionary_page_size);
-            }
-            if let Some(data_page_row_count) = data_page_row_count_limit {
-                properties = properties.set_data_page_row_count_limit(*data_page_row_count);
-            }
-            if let Some(batch_size) = write_batch_size {
-                properties = properties.set_write_batch_size(*batch_size);
-            }
-            if let Some(row_group_size) = max_row_group_size {
-                properties = properties.set_max_row_group_size(*row_group_size);
-            }
-            cmd = cmd.with_writer_properties(properties.build());
+            cmd = cmd.with_writer_properties(
+                set_writer_properties(writer_props).map_err(PythonError::from)?,
+            );
         }
 
         if let Some(mu_updates) = matched_update_updates {
@@ -846,12 +853,23 @@ impl RawDeltaTable {
     }
 
     /// Run the delete command on the delta table: delete records following a predicate and return the delete metrics.
-    #[pyo3(signature = (predicate = None))]
-    pub fn delete(&mut self, predicate: Option<String>) -> PyResult<String> {
+    #[pyo3(signature = (predicate = None, writer_properties=None))]
+    pub fn delete(
+        &mut self,
+        predicate: Option<String>,
+        writer_properties: Option<HashMap<String, Option<String>>>,
+    ) -> PyResult<String> {
         let mut cmd = DeleteBuilder::new(self._table.log_store(), self._table.state.clone());
         if let Some(predicate) = predicate {
             cmd = cmd.with_predicate(predicate);
         }
+
+        if let Some(writer_props) = writer_properties {
+            cmd = cmd.with_writer_properties(
+                set_writer_properties(writer_props).map_err(PythonError::from)?,
+            );
+        }
+
         let (table, metrics) = rt()?
             .block_on(cmd.into_future())
             .map_err(PythonError::from)?;
@@ -872,6 +890,46 @@ impl RawDeltaTable {
         self._table.state = table.state;
         Ok(serde_json::to_string(&metrics).unwrap())
     }
+}
+
+fn set_writer_properties(
+    writer_properties: HashMap<String, Option<String>>,
+) -> DeltaResult<WriterProperties> {
+    let mut properties = WriterProperties::builder();
+    let data_page_size_limit = writer_properties.get("data_page_size_limit");
+    let dictionary_page_size_limit = writer_properties.get("dictionary_page_size_limit");
+    let data_page_row_count_limit = writer_properties.get("data_page_row_count_limit");
+    let write_batch_size = writer_properties.get("write_batch_size");
+    let max_row_group_size = writer_properties.get("max_row_group_size");
+    let compression = writer_properties.get("compression");
+
+    if let Some(Some(data_page_size)) = data_page_size_limit {
+        dbg!(data_page_size.clone());
+        properties = properties.set_data_page_size_limit(data_page_size.parse::<usize>().unwrap());
+    }
+    if let Some(Some(dictionary_page_size)) = dictionary_page_size_limit {
+        properties = properties
+            .set_dictionary_page_size_limit(dictionary_page_size.parse::<usize>().unwrap());
+    }
+    if let Some(Some(data_page_row_count)) = data_page_row_count_limit {
+        properties =
+            properties.set_data_page_row_count_limit(data_page_row_count.parse::<usize>().unwrap());
+    }
+    if let Some(Some(batch_size)) = write_batch_size {
+        properties = properties.set_write_batch_size(batch_size.parse::<usize>().unwrap());
+    }
+    if let Some(Some(row_group_size)) = max_row_group_size {
+        properties = properties.set_max_row_group_size(row_group_size.parse::<usize>().unwrap());
+    }
+
+    if let Some(Some(compression)) = compression {
+        let compress: Compression = compression
+            .parse()
+            .map_err(|err: ParquetError| DeltaTableError::Generic(err.to_string()))?;
+
+        properties = properties.set_compression(compress);
+    }
+    Ok(properties.build())
 }
 
 fn convert_partition_filters<'a>(
@@ -1114,6 +1172,7 @@ fn write_to_deltalake(
     description: Option<String>,
     configuration: Option<HashMap<String, Option<String>>>,
     storage_options: Option<HashMap<String, String>>,
+    writer_properties: Option<HashMap<String, Option<String>>>,
 ) -> PyResult<()> {
     let batches = data.0.map(|batch| batch.unwrap()).collect::<Vec<_>>();
     let save_mode = mode.parse().map_err(PythonError::from)?;
@@ -1133,6 +1192,12 @@ fn write_to_deltalake(
 
     if let Some(partition_columns) = partition_by {
         builder = builder.with_partition_columns(partition_columns);
+    }
+
+    if let Some(writer_props) = writer_properties {
+        builder = builder.with_writer_properties(
+            set_writer_properties(writer_props).map_err(PythonError::from)?,
+        );
     }
 
     if let Some(name) = &name {

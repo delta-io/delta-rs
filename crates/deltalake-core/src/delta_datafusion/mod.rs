@@ -68,6 +68,7 @@ use datafusion_physical_expr::{create_physical_expr, PhysicalExpr};
 use datafusion_proto::logical_plan::LogicalExtensionCodec;
 use datafusion_proto::physical_plan::PhysicalExtensionCodec;
 use datafusion_sql::planner::ParserOptions;
+use futures::TryStreamExt;
 
 use itertools::Itertools;
 use log::error;
@@ -1019,6 +1020,31 @@ pub(crate) fn logical_expr_to_physical_expr(
     create_physical_expr(expr, &df_schema, schema, &execution_props).unwrap()
 }
 
+pub(crate) async fn execute_plan_to_batch(
+    state: &SessionState,
+    plan: Arc<dyn ExecutionPlan>,
+) -> DeltaResult<arrow::record_batch::RecordBatch> {
+    let data =
+        futures::future::try_join_all((0..plan.output_partitioning().partition_count()).map(|p| {
+            let plan_copy = plan.clone();
+            let task_context = state.task_ctx().clone();
+            async move {
+                let batch_stream = plan_copy.execute(p, task_context)?;
+
+                let schema = batch_stream.schema();
+
+                let batches = batch_stream.try_collect::<Vec<_>>().await?;
+
+                DataFusionResult::<_>::Ok(arrow::compute::concat_batches(&schema, batches.iter())?)
+            }
+        }))
+        .await?;
+
+    let batch = arrow::compute::concat_batches(&plan.schema(), data.iter())?;
+
+    Ok(batch)
+}
+
 /// Responsible for checking batches of data conform to table's invariants.
 #[derive(Clone)]
 pub struct DeltaDataChecker {
@@ -1033,7 +1059,7 @@ impl DeltaDataChecker {
         Self {
             invariants,
             constraints: vec![],
-            ctx: SessionContext::new(),
+            ctx: DeltaSessionContext::default().into(),
         }
     }
 
@@ -1042,8 +1068,14 @@ impl DeltaDataChecker {
         Self {
             constraints,
             invariants: vec![],
-            ctx: SessionContext::new(),
+            ctx: DeltaSessionContext::default().into(),
         }
+    }
+
+    /// Specify the Datafusion context
+    pub fn with_session_context(mut self, context: SessionContext) -> Self {
+        self.ctx = context;
+        self
     }
 
     /// Create a new DeltaDataChecker
@@ -1059,7 +1091,7 @@ impl DeltaDataChecker {
         Self {
             invariants,
             constraints,
-            ctx: SessionContext::new(),
+            ctx: DeltaSessionContext::default().into(),
         }
     }
 
