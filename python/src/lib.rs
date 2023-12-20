@@ -27,6 +27,7 @@ use deltalake::datafusion::prelude::SessionContext;
 use deltalake::delta_datafusion::DeltaDataChecker;
 use deltalake::errors::DeltaTableError;
 use deltalake::kernel::{Action, Add, Invariant, Remove, StructType};
+use deltalake::operations::constraints::ConstraintBuilder;
 use deltalake::operations::convert_to_delta::{ConvertToDeltaBuilder, PartitionStrategy};
 use deltalake::operations::delete::DeleteBuilder;
 use deltalake::operations::filesystem_check::FileSystemCheckBuilder;
@@ -386,6 +387,22 @@ impl RawDeltaTable {
             .map_err(PythonError::from)?;
         self._table.state = table.state;
         Ok(serde_json::to_string(&metrics).unwrap())
+    }
+
+    #[pyo3(signature = (constraints))]
+    pub fn add_constraints(&mut self, constraints: HashMap<String, String>) -> PyResult<()> {
+        let mut cmd =
+            ConstraintBuilder::new(self._table.log_store(), self._table.get_state().clone());
+
+        for (col_name, expression) in constraints {
+            cmd = cmd.with_constraint(col_name.clone(), expression.clone());
+        }
+
+        let table = rt()?
+            .block_on(cmd.into_future())
+            .map_err(PythonError::from)?;
+        self._table.state = table.state;
+        Ok(())
     }
 
     #[allow(clippy::too_many_arguments)]

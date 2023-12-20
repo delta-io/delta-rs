@@ -76,6 +76,10 @@ class RawDeltaTable:
         min_commit_interval: Optional[int],
         writer_properties: Optional[Dict[str, Optional[str]]],
     ) -> str: ...
+    def add_constraints(
+        self,
+        constraints: Dict[str, str],
+    ) -> None: ...
     def restore(
         self,
         target: Optional[Any],

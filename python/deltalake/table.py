@@ -787,6 +787,13 @@ class DeltaTable:
     ) -> "TableOptimizer":
         return TableOptimizer(self)
 
+    @property
+    def alter(
+        self,
+    ) -> "TableAlterer":
+        """Namespace for all table alter related methods"""
+        return TableAlterer(self)
+
     def merge(
         self,
         source: Union[
@@ -1607,6 +1614,43 @@ class TableMerger:
         )
         self.table.update_incremental()
         return json.loads(metrics)
+
+
+class TableAlterer:
+    """API for various table alteration commands."""
+
+    def __init__(self, table: DeltaTable) -> None:
+        self.table = table
+
+    def add_constraint(self, constraints: Dict[str, str]) -> None:
+        """
+        Add constraints to the table. Limited to `single constraint` at once.
+
+        Args:
+            constraints: mapping of constraint name to SQL-expression to evaluate on write
+
+        Example:
+            ```python
+            from deltalake import DeltaTable
+            dt = DeltaTable("test_table_constraints")
+            dt.alter.add_constraint({
+                "value_gt_5": "value > 5",
+            })
+            ```
+
+            **Check configuration**
+            ```
+            dt.metadata().configuration
+            {'delta.constraints.value_gt_5': 'value > 5'}
+            ```
+        """
+        if len(constraints.keys()) > 1:
+            raise ValueError(
+                """add_constraints is limited to a single constraint addition at once for now. 
+                Please execute add_constraints multiple times with each time a different constraint."""
+            )
+
+        self.table._table.add_constraints(constraints)
 
 
 class TableOptimizer:
