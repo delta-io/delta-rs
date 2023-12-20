@@ -21,8 +21,8 @@ use self::builder::DeltaTableConfig;
 use self::state::DeltaTableState;
 use crate::errors::DeltaTableError;
 use crate::kernel::{
-    Action, Add, CommitInfo, DataType, Format, Metadata, Protocol, ReaderFeatures, Remove,
-    StructType, WriterFeatures,
+    Action, Add, CommitInfo, DataCheck, DataType, Format, Metadata, Protocol, ReaderFeatures,
+    Remove, StructType, WriterFeatures,
 };
 use crate::logstore::LogStoreRef;
 use crate::logstore::{self, LogStoreConfig};
@@ -136,6 +136,35 @@ impl PartialEq for CheckPoint {
 
 impl Eq for CheckPoint {}
 
+/// A constraint in a check constraint
+#[derive(Eq, PartialEq, Debug, Default, Clone)]
+pub struct Constraint {
+    /// The full path to the field.
+    pub name: String,
+    /// The SQL string that must always evaluate to true.
+    pub expr: String,
+}
+
+impl Constraint {
+    /// Create a new invariant
+    pub fn new(field_name: &str, invariant_sql: &str) -> Self {
+        Self {
+            name: field_name.to_string(),
+            expr: invariant_sql.to_string(),
+        }
+    }
+}
+
+impl DataCheck for Constraint {
+    fn get_name(&self) -> &str {
+        &self.name
+    }
+
+    fn get_expression(&self) -> &str {
+        &self.expr
+    }
+}
+
 /// Delta table metadata
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct DeltaTableMetaData {
@@ -185,6 +214,20 @@ impl DeltaTableMetaData {
     /// Return the configurations of the DeltaTableMetaData; could be empty
     pub fn get_configuration(&self) -> &HashMap<String, Option<String>> {
         &self.configuration
+    }
+
+    /// Return the check constraints on the current table
+    pub fn get_constraints(&self) -> Vec<Constraint> {
+        self.configuration
+            .iter()
+            .filter_map(|(field, value)| {
+                if field.starts_with("delta.constraints") {
+                    value.as_ref().map(|f| Constraint::new("*", f))
+                } else {
+                    None
+                }
+            })
+            .collect()
     }
 
     /// Return partition fields along with their data type from the current schema.
@@ -601,7 +644,7 @@ impl DeltaTable {
                     .object_store()
                     .head(&commit_uri_from_version(version))
                     .await?;
-                let ts = meta.last_modified.timestamp();
+                let ts = meta.last_modified.timestamp_millis();
                 // also cache timestamp for version
                 self.version_timestamp.insert(version, ts);
 
@@ -832,14 +875,13 @@ impl DeltaTable {
         let mut min_version = 0;
         let mut max_version = self.get_latest_version().await?;
         let mut version = min_version;
-        let target_ts = datetime.timestamp();
+        let target_ts = datetime.timestamp_millis();
 
         // binary search
         while min_version <= max_version {
             let pivot = (max_version + min_version) / 2;
             version = pivot;
             let pts = self.get_version_timestamp(pivot).await?;
-
             match pts.cmp(&target_ts) {
                 Ordering::Equal => {
                     break;
@@ -953,6 +995,27 @@ mod tests {
             let table = DeltaTableBuilder::from_uri(table_uri).build().unwrap();
             assert_eq!(table.table_uri(), "s3://tests/data/delta-0.8.0");
         }
+    }
+
+    #[test]
+    fn get_table_constraints() {
+        let state = DeltaTableMetaData::new(
+            None,
+            None,
+            None,
+            StructType::new(vec![]),
+            vec![],
+            HashMap::from_iter(vec![
+                (
+                    "delta.constraints.id".to_string(),
+                    Some("id > 0".to_string()),
+                ),
+                ("delta.blahblah".to_string(), None),
+            ]),
+        );
+
+        let constraints = state.get_constraints();
+        assert_eq!(constraints.len(), 1)
     }
 
     async fn create_test_table() -> (DeltaTable, TempDir) {

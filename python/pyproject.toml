@@ -18,7 +18,8 @@ classifiers = [
     "Programming Language :: Python :: 3.12"
 ]
 dependencies = [
-    "pyarrow>=8"
+    "pyarrow>=8",
+    "pyarrow-hotfix",    
 ]
 
 [project.optional-dependencies]
@@ -42,7 +43,7 @@ devel = [
 pyspark = [
     "pyspark",
     "delta-spark",
-    "numpy==1.22.2" # pyspark is no compatible with latest numpy
+    "numpy==1.22.2" # pyspark is not compatible with latest numpy
 ]
 
 [project.urls]
@@ -69,7 +70,6 @@ warn_unused_ignores = true
 warn_return_any = false
 implicit_reexport = true
 strict_equality = true
-
 
 [tool.black]
 include = '\.pyi?$'
