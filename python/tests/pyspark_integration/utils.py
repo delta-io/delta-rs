@@ -26,8 +26,16 @@ def get_spark():
             "spark.sql.catalog.spark_catalog",
             "org.apache.spark.sql.delta.catalog.DeltaCatalog",
         )
+        # log store setting must be present at SparkSession creation, and can't be configured later
+        .config("spark.delta.logStore.s3a.impl", "io.delta.storage.S3DynamoDBLogStore")
     )
-    return delta.pip_utils.configure_spark_with_delta_pip(builder).getOrCreate()
+    extra_packages = [
+        "io.delta:delta-storage-s3-dynamodb:3.0.0",
+        "org.apache.hadoop:hadoop-aws:3.3.1",
+    ]
+    return delta.pip_utils.configure_spark_with_delta_pip(
+        builder, extra_packages
+    ).getOrCreate()
 
 
 def assert_spark_read_equal(
