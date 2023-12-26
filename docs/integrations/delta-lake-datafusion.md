@@ -6,7 +6,7 @@ Delta Lake offers DataFusion users better performance and more features compared
 
 Delta Lake works well with the DataFusion Rust API and the DataFusion Python API.  It's a great option for all DataFusion users.
 
-Delta Lake also depends on DataFusion to implement some functionality under the hood.  We will also discuss this dependency at the end of this guide in case you're interested in learning more about the symbiotic relationship between the two libraries.
+Delta Lake also depends on DataFusion to implement SQL-related functionality under the hood.  We will also discuss this dependency at the end of this guide in case you're interested in learning more about the symbiotic relationship between the two libraries.
 
 ## Delta Lake performance benefits for DataFusion users
 
@@ -67,7 +67,12 @@ Delta Lake also provides other features that are useful for DataFusion users lik
 
 Delta Lake depends on DataFusion to provide some end-user features.
 
-TODO: Explain how Delta Lake uses DataFusion to provide features.
+DataFusion is useful in providing SQL-related Delta Lake features. Some examples:
+
+* Update and merge are written in terms of SQL expressions.
+* Invariants and constraints are written in terms of SQL expressions.
+
+Anytime we have to evaluate SQL, we need some sort of SQL engine.  We use DataFusion for that.
 
 ## Conclusion
 
