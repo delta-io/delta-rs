@@ -30,7 +30,7 @@ pub mod vacuum;
 #[cfg(feature = "datafusion")]
 use self::{
     constraints::ConstraintBuilder, datafusion_utils::Expression, delete::DeleteBuilder,
-    load::LoadBuilder, merge::MergeBuilder, update::UpdateBuilder, write::WriteBuilder,
+    load::LoadBuilder, merge::MergeBuilder, update::UpdateBuilder, write::WriteBuilder, load_cdf::CdfLoadBuilder
 };
 #[cfg(feature = "datafusion")]
 pub use ::datafusion::physical_plan::common::collect as collect_sendable_stream;
@@ -40,12 +40,15 @@ use arrow::record_batch::RecordBatch;
 use optimize::OptimizeBuilder;
 use restore::RestoreBuilder;
 
+
 #[cfg(feature = "datafusion")]
 pub mod constraints;
 #[cfg(feature = "datafusion")]
 pub mod delete;
 #[cfg(feature = "datafusion")]
 mod load;
+#[cfg(feature = "datafusion")]
+mod load_cdf;
 #[cfg(feature = "datafusion")]
 pub mod merge;
 #[cfg(feature = "datafusion")]
@@ -133,6 +136,12 @@ impl DeltaOps {
     #[must_use]
     pub fn load(self) -> LoadBuilder {
         LoadBuilder::new(self.0.log_store, self.0.state)
+    }
+
+    #[cfg(feature = "datafusion")]
+    #[must_use]
+    pub fn load_cdf(self) -> CdfLoadBuilder {
+        CdfLoadBuilder::new(self.0.log_store, self.0.state)
     }
 
     /// Write data to Delta table

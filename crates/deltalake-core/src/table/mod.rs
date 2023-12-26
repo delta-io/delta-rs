@@ -583,7 +583,6 @@ impl DeltaTable {
                 Ok(None) => break,
                 Err(err) => return Err(err),
             };
-
             debug!("merging table state with version: {new_version}");
             let s = DeltaTableState::from_actions(actions, new_version)?;
             self.state

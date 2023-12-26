@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 
 use super::config::TableConfig;
 use crate::errors::DeltaTableError;
-use crate::kernel::{Action, Add, CommitInfo, DataType, DomainMetadata, Remove, StructType};
+use crate::kernel::{Action, Add, AddCDCFile, CommitInfo, DataType, DomainMetadata, Remove, StructType};
 use crate::kernel::{Metadata, Protocol};
 use crate::partitions::{DeltaTablePartition, PartitionFilter};
 use crate::protocol::ProtocolError;
@@ -34,6 +34,8 @@ pub struct DeltaTableState {
     tombstones: HashSet<Remove>,
     // active files for table state
     files: Vec<Add>,
+    // cdf files for table
+    cdc_files: Vec<AddCDCFile>,
     // Information added to individual commits
     commit_infos: Vec<CommitInfo>,
     // Domain metadatas provided by the system or user
@@ -188,6 +190,9 @@ impl DeltaTableState {
         self.files.as_ref()
     }
 
+    /// Full list of all of the CDC files added as part of the changeDataFeed feature
+    pub fn cdc_files(&self) -> &Vec<AddCDCFile> { self.cdc_files.as_ref() }
+
     /// Returns an iterator of file names present in the loaded state
     #[inline]
     pub fn file_paths_iter(&self) -> impl Iterator<Item = Path> + '_ {
@@ -272,6 +277,8 @@ impl DeltaTableState {
             self.files.append(&mut new_state.files);
         }
 
+        self.cdc_files.append(&mut new_state.cdc_files);
+
         if new_state.current_metadata.is_some() {
             self.current_metadata = new_state.current_metadata.take();
         }
@@ -309,9 +316,11 @@ impl DeltaTableState {
         require_tombstones: bool,
         require_files: bool,
     ) -> Result<(), ProtocolError> {
+
         match action {
-            // TODO: optionally load CDC into TableState
-            Action::Cdc(_v) => {}
+            Action::Cdc(v) => {
+                self.cdc_files.push(v);
+            }
             Action::Add(v) => {
                 if require_files {
                     self.files.push(v);
@@ -397,6 +406,7 @@ mod tests {
             version: 0,
             tombstones: Default::default(),
             files: vec![],
+            cdc_files: vec![],
             commit_infos: vec![],
             domain_metadatas: vec![],
             app_transaction_version: Default::default(),
@@ -418,6 +428,7 @@ mod tests {
         let mut state = DeltaTableState {
             version: -1,
             files: vec![],
+            cdc_files: vec![],
             commit_infos: vec![],
             domain_metadatas: vec![],
             tombstones: HashSet::new(),
