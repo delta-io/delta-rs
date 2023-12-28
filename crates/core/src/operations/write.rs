@@ -27,26 +27,36 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use arrow_array::RecordBatch;
 use arrow_cast::can_cast_types;
 use arrow_schema::{DataType, Fields, SchemaRef as ArrowSchemaRef};
 use datafusion::execution::context::{SessionContext, SessionState, TaskContext};
+use datafusion::physical_expr::create_physical_expr;
+use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::{memory::MemoryExec, ExecutionPlan};
+use datafusion_common::DFSchema;
+use datafusion_expr::Expr;
 use futures::future::BoxFuture;
 use futures::StreamExt;
 use parquet::file::properties::WriterProperties;
 
+use super::datafusion_utils::Expression;
 use super::transaction::PROTOCOL;
 use super::writer::{DeltaWriter, WriterConfig};
 use super::{transaction::commit, CreateBuilder};
+use crate::delta_datafusion::expr::fmt_expr_to_sql;
+use crate::delta_datafusion::expr::parse_predicate_expression;
 use crate::delta_datafusion::DeltaDataChecker;
+use crate::delta_datafusion::{find_files, register_store, DeltaScanBuilder};
 use crate::errors::{DeltaResult, DeltaTableError};
-use crate::kernel::{Action, Add, PartitionsExt, StructType};
+use crate::kernel::{Action, Add, PartitionsExt, Remove, StructType};
 use crate::logstore::LogStoreRef;
 use crate::protocol::{DeltaOperation, SaveMode};
 use crate::storage::ObjectStoreRef;
 use crate::table::state::DeltaTableState;
+use crate::table::Constraint as DeltaConstraint;
 use crate::writer::record_batch::divide_by_partition_values;
 use crate::DeltaTable;
 
@@ -79,7 +89,6 @@ impl From<WriteError> for DeltaTableError {
 }
 
 /// Write data into a DeltaTable
-#[derive(Debug, Clone)]
 pub struct WriteBuilder {
     /// A snapshot of the to-be-loaded table's state
     snapshot: Option<DeltaTableState>,
@@ -94,7 +103,7 @@ pub struct WriteBuilder {
     /// Column names for table partitioning
     partition_columns: Option<Vec<String>>,
     /// When using `Overwrite` mode, replace data that matches a predicate
-    predicate: Option<String>,
+    predicate: Option<Expression>,
     /// Size above which we will write a buffered parquet file to disk.
     target_file_size: Option<usize>,
     /// Number of records to be written in single batch to underlying writer
@@ -154,7 +163,7 @@ impl WriteBuilder {
     }
 
     /// When using `Overwrite` mode, replace data that matches a predicate
-    pub fn with_replace_where(mut self, predicate: impl Into<String>) -> Self {
+    pub fn with_replace_where(mut self, predicate: impl Into<Expression>) -> Self {
         self.predicate = Some(predicate.into());
         self
     }
@@ -292,7 +301,8 @@ impl WriteBuilder {
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(crate) async fn write_execution_plan(
+async fn write_execution_plan_with_predicate(
+    predicate: Option<Expr>,
     snapshot: Option<&DeltaTableState>,
     state: SessionState,
     plan: Arc<dyn ExecutionPlan>,
@@ -317,6 +327,14 @@ pub(crate) async fn write_execution_plan(
         DeltaDataChecker::new(snapshot)
     } else {
         DeltaDataChecker::empty()
+    };
+    let checker = match predicate {
+        Some(pred) => {
+            // TODO: get the name of the outer-most column? `*` will also work but would it be slower?
+            let chk = DeltaConstraint::new("*", &fmt_expr_to_sql(&pred)?);
+            checker.with_extra_constraints(vec![chk])
+        }
+        _ => checker,
     };
 
     // Write data to disk
@@ -361,6 +379,134 @@ pub(crate) async fn write_execution_plan(
         .concat()
         .into_iter()
         .collect::<Vec<_>>())
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn write_execution_plan(
+    snapshot: Option<&DeltaTableState>,
+    state: SessionState,
+    plan: Arc<dyn ExecutionPlan>,
+    partition_columns: Vec<String>,
+    object_store: ObjectStoreRef,
+    target_file_size: Option<usize>,
+    write_batch_size: Option<usize>,
+    writer_properties: Option<WriterProperties>,
+    safe_cast: bool,
+    overwrite_schema: bool,
+) -> DeltaResult<Vec<Add>> {
+    write_execution_plan_with_predicate(
+        None,
+        snapshot,
+        state,
+        plan,
+        partition_columns,
+        object_store,
+        target_file_size,
+        write_batch_size,
+        writer_properties,
+        safe_cast,
+        overwrite_schema,
+    )
+    .await
+}
+
+async fn execute_non_empty_expr(
+    snapshot: &DeltaTableState,
+    log_store: LogStoreRef,
+    state: SessionState,
+    partition_columns: Vec<String>,
+    expression: &Expr,
+    rewrite: &[Add],
+    writer_properties: Option<WriterProperties>,
+) -> DeltaResult<Vec<Add>> {
+    // For each identified file perform a parquet scan + filter + limit (1) + count.
+    // If returned count is not zero then append the file to be rewritten and removed from the log. Otherwise do nothing to the file.
+
+    let input_schema = snapshot.input_schema()?;
+    let input_dfschema: DFSchema = input_schema.clone().as_ref().clone().try_into()?;
+
+    let scan = DeltaScanBuilder::new(snapshot, log_store.clone(), &state)
+        .with_files(rewrite)
+        .build()
+        .await?;
+    let scan = Arc::new(scan);
+
+    // Apply the negation of the filter and rewrite files
+    let negated_expression = Expr::Not(Box::new(Expr::IsTrue(Box::new(expression.clone()))));
+
+    let predicate_expr = create_physical_expr(
+        &negated_expression,
+        &input_dfschema,
+        &input_schema,
+        state.execution_props(),
+    )?;
+    let filter: Arc<dyn ExecutionPlan> =
+        Arc::new(FilterExec::try_new(predicate_expr, scan.clone())?);
+
+    // We don't want to verify the predicate against existing data
+    let add_actions = write_execution_plan(
+        Some(snapshot),
+        state,
+        filter,
+        partition_columns,
+        log_store.object_store(),
+        Some(snapshot.table_config().target_file_size() as usize),
+        None,
+        writer_properties,
+        false,
+        false,
+    )
+    .await?;
+
+    Ok(add_actions)
+}
+
+// This should only be called wth a valid predicate
+async fn prepare_predicate_actions(
+    predicate: Expr,
+    log_store: LogStoreRef,
+    snapshot: &DeltaTableState,
+    state: SessionState,
+    partition_columns: Vec<String>,
+    writer_properties: Option<WriterProperties>,
+    deletion_timestamp: i64,
+) -> DeltaResult<Vec<Action>> {
+    let candidates =
+        find_files(snapshot, log_store.clone(), &state, Some(predicate.clone())).await?;
+
+    let add = if candidates.partition_scan {
+        Vec::new()
+    } else {
+        execute_non_empty_expr(
+            snapshot,
+            log_store,
+            state,
+            partition_columns,
+            &predicate,
+            &candidates.candidates,
+            writer_properties,
+        )
+        .await?
+    };
+    let remove = candidates.candidates;
+
+    let mut actions: Vec<Action> = add.into_iter().map(Action::Add).collect();
+
+    for action in remove {
+        actions.push(Action::Remove(Remove {
+            path: action.path,
+            deletion_timestamp: Some(deletion_timestamp),
+            data_change: true,
+            extended_file_metadata: Some(true),
+            partition_values: Some(action.partition_values),
+            size: Some(action.size),
+            deletion_vector: action.deletion_vector,
+            tags: None,
+            base_row_id: action.base_row_id,
+            default_row_commit_version: action.default_row_commit_version,
+        }))
+    }
+    Ok(actions)
 }
 
 impl std::future::IntoFuture for WriteBuilder {
@@ -465,19 +611,37 @@ impl std::future::IntoFuture for WriteBuilder {
                 Some(state) => state,
                 None => {
                     let ctx = SessionContext::new();
+                    register_store(this.log_store.clone(), ctx.runtime_env());
                     ctx.state()
                 }
             };
 
-            let add_actions = write_execution_plan(
+            let (predicate_str, predicate) = match this.predicate {
+                Some(predicate) => {
+                    let pred = match predicate {
+                        Expression::DataFusion(expr) => expr,
+                        Expression::String(s) => {
+                            let df_schema = DFSchema::try_from(schema.as_ref().to_owned())?;
+                            parse_predicate_expression(&df_schema, s, &state)?
+                            // this.snapshot.unwrap().parse_predicate_expression(s, &state)?
+                        }
+                    };
+                    (Some(fmt_expr_to_sql(&pred)?), Some(pred))
+                }
+                _ => (None, None),
+            };
+
+            // Here we need to validate if the new data conforms to a predicate if one is provided
+            let add_actions = write_execution_plan_with_predicate(
+                predicate.clone(),
                 this.snapshot.as_ref(),
-                state,
+                state.clone(),
                 plan,
                 partition_columns.clone(),
                 this.log_store.object_store().clone(),
                 this.target_file_size,
                 this.write_batch_size,
-                this.writer_properties,
+                this.writer_properties.clone(),
                 this.safe_cast,
                 this.overwrite_schema,
             )
@@ -501,12 +665,26 @@ impl std::future::IntoFuture for WriteBuilder {
                         actions.push(Action::Metadata(metadata));
                     }
 
-                    match this.predicate {
-                        Some(_pred) => {
-                            return Err(DeltaTableError::Generic(
-                                "Overwriting data based on predicate is not yet implemented"
-                                    .to_string(),
-                            ));
+                    let deletion_timestamp = SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .unwrap()
+                        .as_millis() as i64;
+
+                    match predicate {
+                        Some(pred) => {
+                            let predicate_actions = prepare_predicate_actions(
+                                pred,
+                                this.log_store.clone(),
+                                snapshot,
+                                state,
+                                partition_columns.clone(),
+                                this.writer_properties,
+                                deletion_timestamp,
+                            )
+                            .await?;
+                            if !predicate_actions.is_empty() {
+                                actions.extend(predicate_actions);
+                            }
                         }
                         _ => {
                             let remove_actions = snapshot
@@ -515,8 +693,8 @@ impl std::future::IntoFuture for WriteBuilder {
                                 .map(|p| p.remove_action(true).into());
                             actions.extend(remove_actions);
                         }
-                    }
-                };
+                    };
+                }
             }
 
             let operation = DeltaOperation::Write {
@@ -526,8 +704,9 @@ impl std::future::IntoFuture for WriteBuilder {
                 } else {
                     None
                 },
-                predicate: this.predicate,
+                predicate: predicate_str,
             };
+
             let version = commit(
                 this.log_store.as_ref(),
                 &actions,
@@ -577,10 +756,10 @@ mod tests {
     use super::*;
     use crate::operations::{collect_sendable_stream, DeltaOps};
     use crate::protocol::SaveMode;
-    use crate::writer::test_utils::datafusion::get_data;
     use crate::writer::test_utils::datafusion::write_batch;
+    use crate::writer::test_utils::datafusion::{get_data, get_data_sorted};
     use crate::writer::test_utils::{
-        get_delta_schema, get_delta_schema_with_nested_struct, get_record_batch,
+        get_arrow_schema, get_delta_schema, get_delta_schema_with_nested_struct, get_record_batch,
         get_record_batch_with_nested_struct, setup_table_with_configuration,
     };
     use crate::DeltaConfigKey;
@@ -588,6 +767,7 @@ mod tests {
     use arrow::datatypes::Schema as ArrowSchema;
     use arrow_array::{Int32Array, StringArray, TimestampMicrosecondArray};
     use arrow_schema::{DataType, TimeUnit};
+    use datafusion::prelude::*;
     use datafusion::{assert_batches_eq, assert_batches_sorted_eq};
     use serde_json::{json, Value};
 
@@ -939,5 +1119,168 @@ mod tests {
         ];
 
         assert_batches_eq!(&expected, &data);
+    }
+
+    #[tokio::test]
+    async fn test_replace_where() {
+        let schema = get_arrow_schema(&None);
+
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(arrow::array::StringArray::from(vec!["A", "B", "C", "C"])),
+                Arc::new(arrow::array::Int32Array::from(vec![0, 20, 10, 100])),
+                Arc::new(arrow::array::StringArray::from(vec![
+                    "2021-02-02",
+                    "2021-02-03",
+                    "2021-02-02",
+                    "2021-02-04",
+                ])),
+            ],
+        )
+        .unwrap();
+
+        let table = DeltaOps::new_in_memory()
+            .write(vec![batch])
+            .with_save_mode(SaveMode::Append)
+            .await
+            .unwrap();
+        assert_eq!(table.version(), 0);
+
+        let batch_add = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(arrow::array::StringArray::from(vec!["C"])),
+                Arc::new(arrow::array::Int32Array::from(vec![50])),
+                Arc::new(arrow::array::StringArray::from(vec!["2023-01-01"])),
+            ],
+        )
+        .unwrap();
+
+        let table = DeltaOps(table)
+            .write(vec![batch_add])
+            .with_save_mode(SaveMode::Overwrite)
+            .with_replace_where(col("id").eq(lit("C")))
+            .await
+            .unwrap();
+        assert_eq!(table.version(), 1);
+
+        let expected = [
+            "+----+-------+------------+",
+            "| id | value | modified   |",
+            "+----+-------+------------+",
+            "| A  | 0     | 2021-02-02 |",
+            "| B  | 20    | 2021-02-03 |",
+            "| C  | 50    | 2023-01-01 |",
+            "+----+-------+------------+",
+        ];
+        let actual = get_data(&table).await;
+        assert_batches_sorted_eq!(&expected, &actual);
+    }
+
+    #[tokio::test]
+    async fn test_replace_where_fail_not_matching_predicate() {
+        let schema = get_arrow_schema(&None);
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(arrow::array::StringArray::from(vec!["A", "B", "C", "C"])),
+                Arc::new(arrow::array::Int32Array::from(vec![0, 20, 10, 100])),
+                Arc::new(arrow::array::StringArray::from(vec![
+                    "2021-02-02",
+                    "2021-02-03",
+                    "2021-02-02",
+                    "2021-02-04",
+                ])),
+            ],
+        )
+        .unwrap();
+
+        let table = DeltaOps::new_in_memory()
+            .write(vec![batch])
+            .with_save_mode(SaveMode::Append)
+            .await
+            .unwrap();
+        assert_eq!(table.version(), 0);
+
+        // Take clones of these before an operation resulting in error, otherwise it will
+        // be impossible to refer to an in-memory table
+        let table_logstore = table.log_store.clone();
+        let table_state = table.state.clone().unwrap();
+
+        // An attempt to write records non comforming to predicate should fail
+        let batch_fail = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(arrow::array::StringArray::from(vec!["D"])),
+                Arc::new(arrow::array::Int32Array::from(vec![1000])),
+                Arc::new(arrow::array::StringArray::from(vec!["2023-01-01"])),
+            ],
+        )
+        .unwrap();
+
+        let table = DeltaOps(table)
+            .write(vec![batch_fail])
+            .with_save_mode(SaveMode::Overwrite)
+            .with_replace_where(col("id").eq(lit("C")))
+            .await;
+        assert!(table.is_err());
+
+        // Verify that table state hasn't changed
+        let table = DeltaTable::new_with_state(table_logstore, table_state);
+        assert_eq!(table.get_latest_version().await.unwrap(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_replace_where_partitioned() {
+        let schema = get_arrow_schema(&None);
+
+        let batch = get_record_batch(None, false);
+
+        let table = DeltaOps::new_in_memory()
+            .write(vec![batch])
+            .with_partition_columns(["id", "value"])
+            .with_save_mode(SaveMode::Append)
+            .await
+            .unwrap();
+        assert_eq!(table.version(), 0);
+
+        let batch_add = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(arrow::array::StringArray::from(vec!["A", "A", "A"])),
+                Arc::new(arrow::array::Int32Array::from(vec![11, 13, 15])),
+                Arc::new(arrow::array::StringArray::from(vec![
+                    "2024-02-02",
+                    "2024-02-02",
+                    "2024-02-01",
+                ])),
+            ],
+        )
+        .unwrap();
+
+        let table = DeltaOps(table)
+            .write(vec![batch_add])
+            .with_save_mode(SaveMode::Overwrite)
+            .with_replace_where(col("id").eq(lit("A")))
+            .await
+            .unwrap();
+        assert_eq!(table.version(), 1);
+
+        let expected = [
+            "+----+-------+------------+",
+            "| id | value | modified   |",
+            "+----+-------+------------+",
+            "| A  | 11    | 2024-02-02 |",
+            "| A  | 13    | 2024-02-02 |",
+            "| A  | 15    | 2024-02-01 |",
+            "| B  | 2     | 2021-02-02 |",
+            "| B  | 4     | 2021-02-01 |",
+            "| B  | 8     | 2021-02-01 |",
+            "| B  | 9     | 2021-02-01 |",
+            "+----+-------+------------+",
+        ];
+        let actual = get_data_sorted(&table, "id,value,modified").await;
+        assert_batches_sorted_eq!(&expected, &actual);
     }
 }
