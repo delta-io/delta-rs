@@ -355,6 +355,7 @@ struct MergePrefArgs {
 
 #[tokio::main]
 async fn main() {
+    type MergeOp = fn(DataFrame, DeltaTable) -> Result<MergeBuilder, DeltaTableError>;
     match MergePrefArgs::parse().command {
         Command::Convert(Convert {
             tpcds_path,
@@ -364,11 +365,9 @@ async fn main() {
                 .await
                 .unwrap();
         }
+
         Command::Bench(BenchArg { table_path, name }) => {
-            let (merge_op, params): (
-                fn(DataFrame, DeltaTable) -> Result<MergeBuilder, DeltaTableError>,
-                MergePerfParams,
-            ) = match name {
+            let (merge_op, params): (MergeOp, MergePerfParams) = match name {
                 MergeBench::Upsert(params) => (merge_upsert, params),
                 MergeBench::Delete(params) => (merge_delete, params),
                 MergeBench::Insert(params) => (merge_insert, params),
