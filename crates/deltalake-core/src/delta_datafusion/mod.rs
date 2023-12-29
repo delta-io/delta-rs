@@ -146,7 +146,7 @@ impl DeltaTableState {
         let files = self.files();
 
         // Initalize statistics
-        let mut table_stats = match files.get(0) {
+        let mut table_stats = match files.first() {
             Some(file) => match file.get_stats() {
                 Ok(Some(stats)) => {
                     let mut column_statistics = Vec::with_capacity(schema.fields().size());

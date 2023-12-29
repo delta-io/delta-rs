@@ -51,8 +51,8 @@ mod simple_checkpoint {
         // delta table should load just fine with the checkpoint in place
         let table_result = deltalake_core::open_table(table_location).await.unwrap();
         let table = table_result;
-        let files = table.get_files();
-        assert_eq!(12, files.len());
+        let files = table.get_files_iter();
+        assert_eq!(12, files.count());
     }
 
     fn get_last_checkpoint_version(log_path: &Path) -> i64 {
@@ -138,7 +138,7 @@ mod delete_expired_delta_log_in_checkpoint {
 
         table.update().await.unwrap(); // make table to read the checkpoint
         assert_eq!(
-            table.get_files(),
+            table.get_files_iter().collect::<Vec<_>>(),
             vec![
                 ObjectStorePath::from(a1.path.as_ref()),
                 ObjectStorePath::from(a2.path.as_ref())
@@ -186,7 +186,7 @@ mod delete_expired_delta_log_in_checkpoint {
         .unwrap();
         table.update().await.unwrap(); // make table to read the checkpoint
         assert_eq!(
-            table.get_files(),
+            table.get_files_iter().collect::<Vec<_>>(),
             vec![
                 ObjectStorePath::from(a1.path.as_ref()),
                 ObjectStorePath::from(a2.path.as_ref())
@@ -249,7 +249,7 @@ mod checkpoints_with_tombstones {
         checkpoints::create_checkpoint(&table).await.unwrap();
         table.update().await.unwrap(); // make table to read the checkpoint
         assert_eq!(
-            table.get_files(),
+            table.get_files_iter().collect::<Vec<_>>(),
             vec![
                 ObjectStorePath::from(a1.path.as_ref()),
                 ObjectStorePath::from(a2.path.as_ref())
@@ -258,7 +258,7 @@ mod checkpoints_with_tombstones {
 
         let (removes1, opt1) = pseudo_optimize(&mut table, 5 * 59 * 1000).await;
         assert_eq!(
-            table.get_files(),
+            table.get_files_iter().collect::<Vec<_>>(),
             vec![ObjectStorePath::from(opt1.path.as_ref())]
         );
         assert_eq!(table.get_state().all_tombstones(), &removes1);
@@ -266,7 +266,7 @@ mod checkpoints_with_tombstones {
         checkpoints::create_checkpoint(&table).await.unwrap();
         table.update().await.unwrap(); // make table to read the checkpoint
         assert_eq!(
-            table.get_files(),
+            table.get_files_iter().collect::<Vec<_>>(),
             vec![ObjectStorePath::from(opt1.path.as_ref())]
         );
         assert_eq!(table.get_state().all_tombstones().len(), 0); // stale removes are deleted from the state
@@ -335,8 +335,7 @@ mod checkpoints_with_tombstones {
 
     async fn pseudo_optimize(table: &mut DeltaTable, offset_millis: i64) -> (HashSet<Remove>, Add) {
         let removes: HashSet<Remove> = table
-            .get_files()
-            .iter()
+            .get_files_iter()
             .map(|p| Remove {
                 path: p.to_string(),
                 deletion_timestamp: Some(Utc::now().timestamp_millis() - offset_millis),
