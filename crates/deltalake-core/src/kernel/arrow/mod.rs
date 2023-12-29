@@ -686,7 +686,7 @@ mod tests {
         let partition_values_parsed = add_field_map.get("partitionValues_parsed").unwrap();
         if let ArrowDataType::Struct(fields) = partition_values_parsed.data_type() {
             assert_eq!(1, fields.len());
-            let field = fields.get(0).unwrap().to_owned();
+            let field = fields.first().unwrap().to_owned();
             assert_eq!(
                 Arc::new(ArrowField::new("pcol", ArrowDataType::Int32, true)),
                 field
@@ -708,7 +708,7 @@ mod tests {
                     "minValues" | "maxValues" | "nullCount" => match v.data_type() {
                         ArrowDataType::Struct(fields) => {
                             assert_eq!(1, fields.len());
-                            let field = fields.get(0).unwrap().to_owned();
+                            let field = fields.first().unwrap().to_owned();
                             let data_type = if k == "nullCount" {
                                 ArrowDataType::Int64
                             } else {
