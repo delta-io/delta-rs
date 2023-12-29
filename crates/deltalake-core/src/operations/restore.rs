@@ -150,7 +150,7 @@ async fn execute(
             table.version()
         }
     };
-
+    println!("--> Found version to restore: {}", version);
     if version >= snapshot.version() {
         return Err(DeltaTableError::from(RestoreError::TooLargeRestoreVersion(
             version,
@@ -163,6 +163,12 @@ async fn execute(
         HashSet::<Add>::from_iter(state_to_restore_files.iter().cloned());
     let latest_state_files_set = HashSet::<Add>::from_iter(latest_state_files.iter().cloned());
 
+    println!(
+        "--> Files to add before filter[{}]: {:?}",
+        &state_to_restore_files.len(),
+        &state_to_restore_files
+    );
+
     let files_to_add: Vec<Add> = state_to_restore_files
         .into_iter()
         .filter(|a: &Add| !latest_state_files_set.contains(a))
@@ -171,6 +177,12 @@ async fn execute(
             a
         })
         .collect();
+
+    println!(
+        "--> Files to add[{}]: {:?}",
+        &files_to_add.len(),
+        &files_to_add
+    );
 
     let deletion_timestamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -198,6 +210,12 @@ async fn execute(
     if !ignore_missing_files {
         check_files_available(log_store.object_store().as_ref(), &files_to_add).await?;
     }
+
+    println!(
+        "--> Files to add after check_files_available[{}]: {:?}",
+        &files_to_add.len(),
+        &files_to_add
+    );
 
     let metrics = RestoreMetrics {
         num_removed_file: files_to_remove.len(),
