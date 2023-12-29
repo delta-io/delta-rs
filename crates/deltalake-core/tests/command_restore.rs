@@ -123,7 +123,10 @@ async fn test_restore_by_datetime() -> Result<(), Box<dyn Error>> {
     let naive = NaiveDateTime::from_timestamp_millis(timestamp).unwrap();
     let datetime: DateTime<Utc> = Utc.from_utc_datetime(&naive);
 
-    let mut table_ts = history.iter().map(|h| h.timestamp.unwrap()).collect::<Vec<_>>();
+    let mut table_ts = history
+        .iter()
+        .map(|h| h.timestamp.unwrap())
+        .collect::<Vec<_>>();
     table_ts.extend(vec![timestamp, datetime.timestamp_millis()]);
     let random_ts = vec![0, 1, 2, 3, 4, 5, 6];
     println!("--> Can i see this without nocapture?");
