@@ -32,7 +32,7 @@ use arrow::datatypes::{DataType as ArrowDataType, Schema as ArrowSchema, SchemaR
 use arrow::error::ArrowError;
 use arrow::record_batch::RecordBatch;
 use arrow_array::types::UInt16Type;
-use arrow_array::{Array, DictionaryArray, StringArray};
+use arrow_array::{Array, DictionaryArray, StringArray, TypedDictionaryArray};
 use arrow_cast::display::array_value_to_string;
 
 use arrow_schema::Field;
@@ -68,6 +68,7 @@ use datafusion_physical_expr::{create_physical_expr, PhysicalExpr};
 use datafusion_proto::logical_plan::LogicalExtensionCodec;
 use datafusion_proto::physical_plan::PhysicalExtensionCodec;
 use datafusion_sql::planner::ParserOptions;
+use futures::TryStreamExt;
 
 use itertools::Itertools;
 use log::error;
@@ -131,6 +132,21 @@ fn get_scalar_value(value: Option<&ColumnValueStat>, field: &Arc<Field>) -> Prec
     }
 }
 
+pub(crate) fn get_path_column<'a>(
+    batch: &'a RecordBatch,
+    path_column: &str,
+) -> DeltaResult<TypedDictionaryArray<'a, UInt16Type, StringArray>> {
+    let err = || DeltaTableError::Generic("Unable to obtain Delta-rs path column".to_string());
+    batch
+        .column_by_name(path_column)
+        .unwrap()
+        .as_any()
+        .downcast_ref::<DictionaryArray<UInt16Type>>()
+        .ok_or_else(err)?
+        .downcast_dict::<StringArray>()
+        .ok_or_else(err)
+}
+
 impl DeltaTableState {
     /// Provide table level statistics to Datafusion
     pub fn datafusion_table_statistics(&self) -> DataFusionResult<Statistics> {
@@ -145,7 +161,7 @@ impl DeltaTableState {
         let files = self.files();
 
         // Initalize statistics
-        let mut table_stats = match files.get(0) {
+        let mut table_stats = match files.first() {
             Some(file) => match file.get_stats() {
                 Ok(Some(stats)) => {
                     let mut column_statistics = Vec::with_capacity(schema.fields().size());
@@ -1019,6 +1035,31 @@ pub(crate) fn logical_expr_to_physical_expr(
     create_physical_expr(expr, &df_schema, schema, &execution_props).unwrap()
 }
 
+pub(crate) async fn execute_plan_to_batch(
+    state: &SessionState,
+    plan: Arc<dyn ExecutionPlan>,
+) -> DeltaResult<arrow::record_batch::RecordBatch> {
+    let data =
+        futures::future::try_join_all((0..plan.output_partitioning().partition_count()).map(|p| {
+            let plan_copy = plan.clone();
+            let task_context = state.task_ctx().clone();
+            async move {
+                let batch_stream = plan_copy.execute(p, task_context)?;
+
+                let schema = batch_stream.schema();
+
+                let batches = batch_stream.try_collect::<Vec<_>>().await?;
+
+                DataFusionResult::<_>::Ok(arrow::compute::concat_batches(&schema, batches.iter())?)
+            }
+        }))
+        .await?;
+
+    let batch = arrow::compute::concat_batches(&plan.schema(), data.iter())?;
+
+    Ok(batch)
+}
+
 /// Responsible for checking batches of data conform to table's invariants.
 #[derive(Clone)]
 pub struct DeltaDataChecker {
@@ -1033,7 +1074,7 @@ impl DeltaDataChecker {
         Self {
             invariants,
             constraints: vec![],
-            ctx: SessionContext::new(),
+            ctx: DeltaSessionContext::default().into(),
         }
     }
 
@@ -1042,8 +1083,14 @@ impl DeltaDataChecker {
         Self {
             constraints,
             invariants: vec![],
-            ctx: SessionContext::new(),
+            ctx: DeltaSessionContext::default().into(),
         }
+    }
+
+    /// Specify the Datafusion context
+    pub fn with_session_context(mut self, context: SessionContext) -> Self {
+        self.ctx = context;
+        self
     }
 
     /// Create a new DeltaDataChecker
@@ -1059,7 +1106,7 @@ impl DeltaDataChecker {
         Self {
             invariants,
             constraints,
-            ctx: SessionContext::new(),
+            ctx: DeltaSessionContext::default().into(),
         }
     }
 
@@ -1330,31 +1377,20 @@ fn join_batches_with_add_actions(
 
     let mut files = Vec::with_capacity(batches.iter().map(|batch| batch.num_rows()).sum());
     for batch in batches {
-        let array = batch.column_by_name(path_column).ok_or_else(|| {
-            DeltaTableError::Generic(format!("Unable to find column {}", path_column))
-        })?;
+        let err = || DeltaTableError::Generic("Unable to obtain Delta-rs path column".to_string());
 
-        let iter: Box<dyn Iterator<Item = Option<&str>>> =
-            if dict_array {
-                let array = array
-                    .as_any()
-                    .downcast_ref::<DictionaryArray<UInt16Type>>()
-                    .ok_or(DeltaTableError::Generic(format!(
-                        "Unable to downcast column {}",
-                        path_column
-                    )))?
-                    .downcast_dict::<StringArray>()
-                    .ok_or(DeltaTableError::Generic(format!(
-                        "Unable to downcast column {}",
-                        path_column
-                    )))?;
-                Box::new(array.into_iter())
-            } else {
-                let array = array.as_any().downcast_ref::<StringArray>().ok_or(
-                    DeltaTableError::Generic(format!("Unable to downcast column {}", path_column)),
-                )?;
-                Box::new(array.into_iter())
-            };
+        let iter: Box<dyn Iterator<Item = Option<&str>>> = if dict_array {
+            let array = get_path_column(&batch, path_column)?;
+            Box::new(array.into_iter())
+        } else {
+            let array = batch
+                .column_by_name(path_column)
+                .ok_or_else(err)?
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .ok_or_else(err)?;
+            Box::new(array.into_iter())
+        };
 
         for path in iter {
             let path = path.ok_or(DeltaTableError::Generic(format!(

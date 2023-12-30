@@ -2,7 +2,7 @@
 
 Delta Lake tables can be exposed as Arrow tables and Arrow datasets, which allows for interoperability with a variety of query engines.
 
-This page shows you how to convert Delta tables to Arrow data structures and teaches you the difference between Arrow tables and Arrow datasets.
+This page shows you how to convert Delta tables to Arrow data structures and teaches you the difference between Arrow tables and Arrow datasets.  Tables are "eager" and datasets are "lazy", which has important performance implications, keep reading to learn more!
 
 ## Delta Lake to Arrow Dataset
 
