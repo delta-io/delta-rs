@@ -36,6 +36,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
+use arrow_schema::Schema as ArrowSchema;
 use async_trait::async_trait;
 use datafusion::datasource::provider_as_source;
 use datafusion::error::Result as DataFusionResult;
@@ -64,31 +65,36 @@ use parquet::file::properties::WriterProperties;
 use serde::Serialize;
 use serde_json::Value;
 
+use self::barrier::{MergeBarrier, MergeBarrierExec};
+
 use super::datafusion_utils::{into_expr, maybe_into_expr, Expression};
 use super::transaction::{commit, PROTOCOL};
 use crate::delta_datafusion::expr::{fmt_expr_to_sql, parse_predicate_expression};
 use crate::delta_datafusion::logical::MetricObserver;
 use crate::delta_datafusion::physical::{find_metric_node, MetricObserverExec};
 use crate::delta_datafusion::{
-    execute_plan_to_batch, register_store, DeltaColumn, DeltaScanConfig, DeltaSessionConfig,
+    execute_plan_to_batch, register_store, DeltaColumn, DeltaScanConfigBuilder, DeltaSessionConfig,
     DeltaTableProvider,
 };
 use crate::kernel::{Action, Remove};
 use crate::logstore::LogStoreRef;
+use crate::operations::merge::barrier::find_barrier_node;
 use crate::operations::write::write_execution_plan;
 use crate::protocol::{DeltaOperation, MergePredicate};
 use crate::table::state::DeltaTableState;
 use crate::{DeltaResult, DeltaTable, DeltaTableError};
+
+mod barrier;
 
 const SOURCE_COLUMN: &str = "__delta_rs_source";
 const TARGET_COLUMN: &str = "__delta_rs_target";
 
 const OPERATION_COLUMN: &str = "__delta_rs_operation";
 const DELETE_COLUMN: &str = "__delta_rs_delete";
-const TARGET_INSERT_COLUMN: &str = "__delta_rs_target_insert";
-const TARGET_UPDATE_COLUMN: &str = "__delta_rs_target_update";
-const TARGET_DELETE_COLUMN: &str = "__delta_rs_target_delete";
-const TARGET_COPY_COLUMN: &str = "__delta_rs_target_copy";
+pub(crate) const TARGET_INSERT_COLUMN: &str = "__delta_rs_target_insert";
+pub(crate) const TARGET_UPDATE_COLUMN: &str = "__delta_rs_target_update";
+pub(crate) const TARGET_DELETE_COLUMN: &str = "__delta_rs_target_delete";
+pub(crate) const TARGET_COPY_COLUMN: &str = "__delta_rs_target_copy";
 
 const SOURCE_COUNT_METRIC: &str = "num_source_rows";
 const TARGET_COUNT_METRIC: &str = "num_target_rows";
@@ -580,11 +586,11 @@ struct MergeMetricExtensionPlanner {}
 impl ExtensionPlanner for MergeMetricExtensionPlanner {
     async fn plan_extension(
         &self,
-        _planner: &dyn PhysicalPlanner,
+        planner: &dyn PhysicalPlanner,
         node: &dyn UserDefinedLogicalNode,
         _logical_inputs: &[&LogicalPlan],
         physical_inputs: &[Arc<dyn ExecutionPlan>],
-        _session_state: &SessionState,
+        session_state: &SessionState,
     ) -> DataFusionResult<Option<Arc<dyn ExecutionPlan>>> {
         if let Some(metric_observer) = node.as_any().downcast_ref::<MetricObserver>() {
             if metric_observer.id.eq(SOURCE_COUNT_ID) {
@@ -651,6 +657,16 @@ impl ExtensionPlanner for MergeMetricExtensionPlanner {
                     },
                 )?));
             }
+        }
+
+        if let Some(barrier) = node.as_any().downcast_ref::<MergeBarrier>() {
+            let schema = barrier.input.schema();
+            let exec_schema: ArrowSchema = schema.as_ref().to_owned().into();
+            return Ok(Some(Arc::new(MergeBarrierExec::new(
+                physical_inputs.get(0).unwrap().clone(),
+                barrier.file_column.clone(),
+                planner.create_physical_expr(&barrier.expr, schema, &exec_schema, session_state)?,
+            ))));
         }
 
         Ok(None)
@@ -945,13 +961,20 @@ async fn execute(
         node: Arc::new(MetricObserver {
             id: SOURCE_COUNT_ID.into(),
             input: source,
+            enable_pushdown: false,
         }),
     });
+
+    let scan_config = DeltaScanConfigBuilder::default()
+        .with_file_column(true)
+        .build(snapshot)?;
+
+    let file_column = Arc::new(scan_config.file_column_name.clone().unwrap());
 
     let target_provider = Arc::new(DeltaTableProvider::try_new(
         snapshot.clone(),
         log_store.clone(),
-        DeltaScanConfig::default(),
+        scan_config,
     )?);
 
     let target_provider = provider_as_source(target_provider);
@@ -968,7 +991,7 @@ async fn execute(
 
     let state = state.with_query_planner(Arc::new(MergePlanner {}));
 
-    let (target, files) = {
+    let target = {
         // Attempt to construct an early filter that we can apply to the Add action list and the delta scan.
         // In the case where there are partition columns in the join predicate, we can scan the source table
         // to get the distinct list of partitions affected and constrain the search to those.
@@ -976,7 +999,7 @@ async fn execute(
         if !not_match_source_operations.is_empty() {
             // It's only worth trying to create an early filter where there are no `when_not_matched_source` operators, since
             // that implies a full scan
-            (target, snapshot.files().iter().collect_vec())
+            target
         } else if let Some(filter) = try_construct_early_filter(
             predicate.clone(),
             snapshot,
@@ -987,35 +1010,23 @@ async fn execute(
         )
         .await?
         {
-            let file_filter = filter
-                .clone()
-                .transform(&|expr| match expr {
-                    Expr::Column(c) => Ok(Transformed::Yes(Expr::Column(Column {
-                        relation: None, // the file filter won't be looking at columns like `target.partition`, it'll just be `partition`
-                        name: c.name,
-                    }))),
-                    expr => Ok(Transformed::No(expr)),
-                })
-                .unwrap();
-            let files = snapshot
-                .files_matching_predicate(&[file_filter])?
-                .collect_vec();
-
-            let new_target = LogicalPlan::Filter(Filter::try_new(filter, target.into())?);
-            (new_target, files)
+            LogicalPlan::Filter(Filter::try_new(filter, target.into())?)
         } else {
-            (target, snapshot.files().iter().collect_vec())
+            target
         }
     };
 
     let source = DataFrame::new(state.clone(), source);
     let source = source.with_column(SOURCE_COLUMN, lit(true))?;
 
-    // TODO: This is here to prevent predicate pushdowns. In the future we can replace this node to allow pushdowns depending on which operations are being used.
+    // Not match operations imply a full scan of the target table is required
+    let enable_pushdown =
+        not_match_source_operations.is_empty() && not_match_target_operations.is_empty();
     let target = LogicalPlan::Extension(Extension {
         node: Arc::new(MetricObserver {
             id: TARGET_COUNT_ID.into(),
             input: target,
+            enable_pushdown,
         }),
     });
     let target = DataFrame::new(state.clone(), target);
@@ -1272,11 +1283,23 @@ async fn execute(
     )?;
     new_columns = new_columns.with_column(TARGET_COPY_COLUMN, build_case(copy_when, copy_then)?)?;
 
-    let new_columns = new_columns.into_optimized_plan()?;
+    let new_columns = new_columns.into_unoptimized_plan();
+
+    let distrbute_expr = col(file_column.as_str());
+
+    let merge_barrier = LogicalPlan::Extension(Extension {
+        node: Arc::new(MergeBarrier {
+            input: new_columns,
+            expr: distrbute_expr,
+            file_column,
+        }),
+    });
+
     let operation_count = LogicalPlan::Extension(Extension {
         node: Arc::new(MetricObserver {
             id: OUTPUT_COUNT_ID.into(),
-            input: new_columns,
+            input: merge_barrier,
+            enable_pushdown: false,
         }),
     });
 
@@ -1284,13 +1307,14 @@ async fn execute(
     let filtered = operation_count.filter(col(DELETE_COLUMN).is_false())?;
 
     let project = filtered.select(write_projection)?;
-    let optimized = &project.into_optimized_plan()?;
+    let merge_final = &project.into_unoptimized_plan();
 
-    let write = state.create_physical_plan(optimized).await?;
+    let write = state.create_physical_plan(merge_final).await?;
 
     let err = || DeltaTableError::Generic("Unable to locate expected metric node".into());
     let source_count = find_metric_node(SOURCE_COUNT_ID, &write).ok_or_else(err)?;
     let op_count = find_metric_node(OUTPUT_COUNT_ID, &write).ok_or_else(err)?;
+    let barrier = find_barrier_node(&write).ok_or_else(err)?;
 
     // write projected records
     let table_partition_cols = current_metadata.partition_columns.clone();
@@ -1320,20 +1344,31 @@ async fn execute(
     let mut actions: Vec<Action> = add_actions.into_iter().map(Action::Add).collect();
     metrics.num_target_files_added = actions.len();
 
-    for action in files {
-        metrics.num_target_files_removed += 1;
-        actions.push(Action::Remove(Remove {
-            path: action.path.clone(),
-            deletion_timestamp: Some(deletion_timestamp),
-            data_change: true,
-            extended_file_metadata: Some(true),
-            partition_values: Some(action.partition_values.clone()),
-            deletion_vector: action.deletion_vector.clone(),
-            size: Some(action.size),
-            tags: None,
-            base_row_id: action.base_row_id,
-            default_row_commit_version: action.default_row_commit_version,
-        }))
+    let survivors = barrier
+        .as_any()
+        .downcast_ref::<MergeBarrierExec>()
+        .unwrap()
+        .survivors();
+
+    {
+        let lock = survivors.lock().unwrap();
+        for action in snapshot.files() {
+            if lock.contains(&action.path) {
+                metrics.num_target_files_removed += 1;
+                actions.push(Action::Remove(Remove {
+                    path: action.path.clone(),
+                    deletion_timestamp: Some(deletion_timestamp),
+                    data_change: true,
+                    extended_file_metadata: Some(true),
+                    partition_values: Some(action.partition_values.clone()),
+                    deletion_vector: action.deletion_vector.clone(),
+                    size: Some(action.size),
+                    tags: None,
+                    base_row_id: action.base_row_id,
+                    default_row_commit_version: action.default_row_commit_version,
+                }))
+            }
+        }
     }
 
     let mut version = snapshot.version();
@@ -1506,6 +1541,8 @@ mod tests {
             .merge(merge_source(schema), col("target.id").eq(col("source.id")))
             .with_source_alias("source")
             .with_target_alias("target")
+            .when_not_matched_by_source_delete(|delete| delete)
+            .unwrap()
             .await
             .expect_err("Remove action is included when Delta table is append-only. Should error");
     }
@@ -2004,7 +2041,7 @@ mod tests {
 
         assert_eq!(table.version(), 2);
         assert!(table.get_file_uris().count() >= 2);
-        assert!(metrics.num_target_files_added >= 2);
+        assert_eq!(metrics.num_target_files_added, 2);
         assert_eq!(metrics.num_target_files_removed, 2);
         assert_eq!(metrics.num_target_rows_copied, 2);
         assert_eq!(metrics.num_target_rows_updated, 0);
@@ -2068,13 +2105,13 @@ mod tests {
 
         assert_eq!(table.version(), 2);
         assert!(table.get_file_uris().count() >= 2);
-        assert!(metrics.num_target_files_added >= 2);
-        assert_eq!(metrics.num_target_files_removed, 2);
-        assert_eq!(metrics.num_target_rows_copied, 3);
+        assert_eq!(metrics.num_target_files_added, 1);
+        assert_eq!(metrics.num_target_files_removed, 1);
+        assert_eq!(metrics.num_target_rows_copied, 1);
         assert_eq!(metrics.num_target_rows_updated, 0);
         assert_eq!(metrics.num_target_rows_inserted, 0);
         assert_eq!(metrics.num_target_rows_deleted, 1);
-        assert_eq!(metrics.num_output_rows, 3);
+        assert_eq!(metrics.num_output_rows, 1);
         assert_eq!(metrics.num_source_rows, 3);
 
         let commit_info = table.history(None).await.unwrap();
@@ -2201,13 +2238,13 @@ mod tests {
             .unwrap();
 
         assert_eq!(table.version(), 2);
-        assert!(metrics.num_target_files_added >= 2);
-        assert_eq!(metrics.num_target_files_removed, 2);
-        assert_eq!(metrics.num_target_rows_copied, 3);
+        assert!(metrics.num_target_files_added == 1);
+        assert_eq!(metrics.num_target_files_removed, 1);
+        assert_eq!(metrics.num_target_rows_copied, 1);
         assert_eq!(metrics.num_target_rows_updated, 0);
         assert_eq!(metrics.num_target_rows_inserted, 0);
         assert_eq!(metrics.num_target_rows_deleted, 1);
-        assert_eq!(metrics.num_output_rows, 3);
+        assert_eq!(metrics.num_output_rows, 1);
         assert_eq!(metrics.num_source_rows, 3);
 
         let commit_info = table.history(None).await.unwrap();
