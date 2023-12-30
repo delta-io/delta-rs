@@ -586,6 +586,7 @@ impl DeltaTable {
 
             debug!("merging table state with version: {new_version}");
             let s = DeltaTableState::from_actions(actions, new_version)?;
+
             self.state
                 .merge(s, self.config.require_tombstones, self.config.require_files);
             if self.version() == max_version {
@@ -640,14 +641,23 @@ impl DeltaTable {
         match self.version_timestamp.get(&version) {
             Some(ts) => Ok(*ts),
             None => {
-                let meta = self
-                    .object_store()
-                    .head(&commit_uri_from_version(version))
-                    .await?;
-                let ts = meta.last_modified.timestamp_millis();
+                let timestamp: Option<i64> = if !self.state.commit_infos().is_empty() {
+                    self.state.commit_infos().last().unwrap().timestamp
+                } else {
+                    None
+                };
+                let ts = match timestamp {
+                    Some(ts) => ts,
+                    _ => {
+                        let meta = self
+                            .object_store()
+                            .head(&commit_uri_from_version(version))
+                            .await?;
+                        meta.last_modified.timestamp_millis()
+                    }
+                };
                 // also cache timestamp for version
                 self.version_timestamp.insert(version, ts);
-
                 Ok(ts)
             }
         }
@@ -881,6 +891,7 @@ impl DeltaTable {
         while min_version <= max_version {
             let pivot = (max_version + min_version) / 2;
             version = pivot;
+            self.load_version(version).await?;
             let pts = self.get_version_timestamp(pivot).await?;
             match pts.cmp(&target_ts) {
                 Ordering::Equal => {

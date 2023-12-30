@@ -11,8 +11,6 @@ use rand::Rng;
 use std::error::Error;
 use std::fs;
 use std::sync::Arc;
-use std::thread;
-use std::time::Duration;
 use tempdir::TempDir;
 
 #[derive(Debug)]
@@ -44,21 +42,18 @@ async fn setup_test() -> Result<Context, Box<dyn Error>> {
         .await?;
 
     let batch = get_record_batch();
-    thread::sleep(Duration::from_secs(1));
     let table = DeltaOps(table)
         .write(vec![batch.clone()])
         .with_save_mode(SaveMode::Append)
         .await
         .unwrap();
 
-    thread::sleep(Duration::from_secs(1));
     let table = DeltaOps(table)
         .write(vec![batch.clone()])
         .with_save_mode(SaveMode::Overwrite)
         .await
         .unwrap();
 
-    thread::sleep(Duration::from_secs(1));
     let table = DeltaOps(table)
         .write(vec![batch.clone()])
         .with_save_mode(SaveMode::Append)
@@ -123,24 +118,27 @@ async fn test_restore_by_datetime() -> Result<(), Box<dyn Error>> {
     let naive = NaiveDateTime::from_timestamp_millis(timestamp).unwrap();
     let datetime: DateTime<Utc> = Utc.from_utc_datetime(&naive);
 
-    let table_ts = history
-        .iter()
-        .map(|h| h.timestamp.unwrap())
-        .collect::<Vec<_>>();
-    println!(
-        "--> All: {:?}, looking for: {} (from datetime: {})",
-        table_ts,
-        timestamp,
-        datetime.timestamp_millis()
-    );
-
-    let result = DeltaOps(table)
+    let (table, metrics) = DeltaOps(table)
         .restore()
         .with_datetime_to_restore(datetime)
         .await?;
-    assert_eq!(result.1.num_restored_file, 1);
-    assert_eq!(result.1.num_removed_file, 2);
-    assert_eq!(result.0.state.version(), 4);
+    assert_eq!(metrics.num_restored_file, 1);
+    assert_eq!(metrics.num_removed_file, 2);
+    assert_eq!(table.state.version(), 4);
+
+    // Pick another version right before the restore
+    let timestamp = history.get(3).unwrap().timestamp.unwrap();
+    let naive = NaiveDateTime::from_timestamp_millis(timestamp).unwrap();
+    let datetime: DateTime<Utc> = Utc.from_utc_datetime(&naive);
+
+    let (table, metrics) = DeltaOps(table)
+        .restore()
+        .with_datetime_to_restore(datetime)
+        .await?;
+    assert_eq!(metrics.num_restored_file, 2);
+    assert_eq!(metrics.num_removed_file, 1);
+    assert_eq!(table.state.version(), 5);
+
     Ok(())
 }
 
