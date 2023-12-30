@@ -265,6 +265,14 @@ async fn benchmark_merge_tpcds(
         .object_store()
         .delete(&Path::parse("_delta_log/00000000000000000002.json")?)
         .await?;
+    table
+        .object_store()
+        .delete(&Path::parse("_delta_log/00000000000000000003.json")?)
+        .await?;
+    let _ = table
+        .object_store()
+        .delete(&Path::parse("_delta_log/00000000000000000004.json")?)
+        .await;
 
     Ok((duration, metrics))
 }
