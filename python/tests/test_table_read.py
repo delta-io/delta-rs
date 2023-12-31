@@ -91,7 +91,10 @@ def test_load_as_version_datetime(date_value: str, expected_version):
         new_contents = re.sub(regex, rf"\1:{dt_epoch}\2", contents)
         with open(file_path, "w") as out:
             out.write(new_contents)
-        os.utime(file_path, (dt_epoch, dt_epoch))
+
+        # File timestamps are in seconds
+        file_ts = dt_epoch / 1000
+        os.utime(file_path, (file_ts, file_ts))
 
     table_path = "../crates/deltalake-core/tests/data/simple_table"
     dt = DeltaTable(table_path)
