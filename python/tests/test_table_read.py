@@ -1,4 +1,5 @@
 import os
+import re
 from datetime import date, datetime
 from pathlib import Path
 from threading import Barrier, Thread
@@ -74,14 +75,22 @@ def test_read_simple_table_using_options_to_dict():
 def test_load_as_version_datetime(date_value: str, expected_version):
     log_dir = "../crates/deltalake-core/tests/data/simple_table/_delta_log"
     log_mtime_pair = [
-        ("00000000000000000000.json", 1588398451.0),
-        ("00000000000000000001.json", 1588484851.0),
-        ("00000000000000000002.json", 1588571251.0),
-        ("00000000000000000003.json", 1588657651.0),
-        ("00000000000000000004.json", 1588744051.0),
+        ("00000000000000000000.json", 1588398451000),
+        ("00000000000000000001.json", 1588484851000),
+        ("00000000000000000002.json", 1588571251000),
+        ("00000000000000000003.json", 1588657651000),
+        ("00000000000000000004.json", 1588744051000),
     ]
+
+    # Need to set both the commit timestamp in each log file and, as a secondary, the modifed time of the file in case the timestamp is not defined
     for file_name, dt_epoch in log_mtime_pair:
         file_path = os.path.join(log_dir, file_name)
+        with open(file_path, "r") as out:
+            contents = out.read()
+        regex = r'("timestamp"):\s*\d+([\s,}])'
+        new_contents = re.sub(regex, rf"\1:{dt_epoch}\2", contents)
+        with open(file_path, "w") as out:
+            out.write(new_contents)
         os.utime(file_path, (dt_epoch, dt_epoch))
 
     table_path = "../crates/deltalake-core/tests/data/simple_table"

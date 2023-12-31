@@ -12,9 +12,19 @@ async fn time_travel_by_ds() {
         ("00000000000000000003.json", "2020-05-04T22:47:31-07:00"),
         ("00000000000000000004.json", "2020-05-05T22:47:31-07:00"),
     ];
+
+    // Need to set both the commit timestamp in each log file and, as a secondary, the modifed time of the file in case the timestamp is not defined
+    let log_dir_path = Path::new(log_dir);
     for (fname, ds) in log_mtime_pair {
         let ts = ds_to_ts(ds);
-        utime::set_file_times(Path::new(log_dir).join(fname), ts, ts).unwrap();
+        let file = log_dir_path.join(fname);
+        let contents = std::fs::read_to_string(&file).unwrap();
+        let my_reg = regex::Regex::new(r#"("timestamp"):\s*\d+([\s,}])"#).unwrap();
+        let new_contents = my_reg
+            .replace(&contents, format!("$1:{}$2", ts))
+            .to_string();
+        std::fs::write(&file, new_contents).unwrap();
+        utime::set_file_times(file, ts, ts).unwrap();
     }
 
     let mut table = deltalake_core::open_table_with_ds(
@@ -85,5 +95,5 @@ async fn time_travel_by_ds() {
 
 fn ds_to_ts(ds: &str) -> i64 {
     let fixed_dt = DateTime::<FixedOffset>::parse_from_rfc3339(ds).unwrap();
-    DateTime::<Utc>::from(fixed_dt).timestamp()
+    DateTime::<Utc>::from(fixed_dt).timestamp_millis()
 }

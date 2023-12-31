@@ -638,9 +638,14 @@ impl DeltaTable {
         &mut self,
         version: i64,
     ) -> Result<i64, DeltaTableError> {
+        // Use a cached timestamp info if available
         match self.version_timestamp.get(&version) {
             Some(ts) => Ok(*ts),
             None => {
+                // Load the version specified
+                if self.version() != version {
+                    self.load_version(version).await?;
+                }
                 let timestamp: Option<i64> = if !self.state.commit_infos().is_empty() {
                     self.state.commit_infos().last().unwrap().timestamp
                 } else {
@@ -891,7 +896,6 @@ impl DeltaTable {
         while min_version <= max_version {
             let pivot = (max_version + min_version) / 2;
             version = pivot;
-            self.load_version(version).await?;
             let pts = self.get_version_timestamp(pivot).await?;
             match pts.cmp(&target_ts) {
                 Ordering::Equal => {
