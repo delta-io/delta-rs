@@ -553,7 +553,7 @@ impl MergeOperationConfig {
     }
 }
 
-#[derive(Default, Serialize, Debug)]
+#[derive(Default, Serialize, Clone, Debug)]
 /// Metrics for the Merge Operation
 pub struct MergeMetrics {
     /// Number of rows in the source data
@@ -1390,6 +1390,21 @@ async fn execute(
 
     metrics.execution_time_ms = Instant::now().duration_since(exec_start).as_millis() as u64;
 
+
+    let mut c_metadata = match app_metadata {
+        Some(meta) => meta,
+        None => HashMap::new()
+        };
+    
+    c_metadata.insert("readVersion".to_owned(), snapshot.version().into());
+
+    let merge_metrics = serde_json::to_value(metrics.clone());
+
+    if let Ok(map) = merge_metrics {
+        c_metadata.insert("operationMetrics".to_owned(), map);
+    }
+    
+
     // Do not make a commit when there are zero updates to the state
     if !actions.is_empty() {
         let operation = DeltaOperation::Merge {
@@ -1403,7 +1418,7 @@ async fn execute(
             &actions,
             operation,
             snapshot,
-            app_metadata,
+            Some(c_metadata),
         )
         .await?;
     }
