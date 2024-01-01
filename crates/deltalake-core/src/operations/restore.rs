@@ -21,7 +21,7 @@
 //! ````
 
 use std::cmp::max;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::ops::BitXor;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -33,7 +33,7 @@ use serde::Serialize;
 
 use crate::kernel::{Action, Add, Protocol, Remove};
 use crate::logstore::LogStoreRef;
-use crate::operations::transaction::{prepare_commit, TransactionError};
+use crate::operations::transaction::commit;
 use crate::protocol::DeltaOperation;
 use crate::table::state::DeltaTableState;
 use crate::{DeltaResult, DeltaTable, DeltaTableConfig, DeltaTableError, ObjectStoreError};
@@ -60,7 +60,7 @@ impl From<RestoreError> for DeltaTableError {
 }
 
 /// Metrics from Restore
-#[derive(Default, Debug, Serialize)]
+#[derive(Default, Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RestoreMetrics {
     /// Number of files removed
@@ -238,27 +238,28 @@ async fn execute(
     actions.extend(files_to_add.into_iter().map(Action::Add));
     actions.extend(files_to_remove.into_iter().map(Action::Remove));
 
-    let commit = prepare_commit(
-        log_store.object_store().as_ref(),
-        &DeltaOperation::Restore {
-            version: version_to_restore,
-            datetime: datetime_to_restore.map(|time| -> i64 { time.timestamp_millis() }),
-        },
+    let mut app_metadata = HashMap::new();
+    let restore_metrics = serde_json::to_value(metrics.clone());
+
+    app_metadata.insert("readVersion".to_owned(), snapshot.version().into());
+
+    if let Ok(map) = restore_metrics {
+        app_metadata.insert("operationMetrics".to_owned(), map);
+    }
+
+    let operation = DeltaOperation::Restore {
+        version: version_to_restore,
+        datetime: datetime_to_restore.map(|time| -> i64 { time.timestamp_millis() }),
+    };
+
+    commit(
+        log_store.as_ref(),
         &actions,
-        None,
+        operation,
+        &snapshot,
+        Some(app_metadata),
     )
     .await?;
-    let commit_version = snapshot.version() + 1;
-    match log_store.write_commit_entry(commit_version, &commit).await {
-        Ok(_) => {}
-        Err(err @ TransactionError::VersionAlreadyExists(_)) => {
-            return Err(err.into());
-        }
-        Err(err) => {
-            log_store.object_store().delete(&commit).await?;
-            return Err(err.into());
-        }
-    }
 
     Ok(metrics)
 }
