@@ -411,9 +411,9 @@ async fn execute(
 
     let mut app_metadata = match app_metadata {
         Some(meta) => meta,
-        None => HashMap::new()
-        };
-    
+        None => HashMap::new(),
+    };
+
     app_metadata.insert("readVersion".to_owned(), snapshot.version().into());
 
     let update_metrics = serde_json::to_value(metrics.clone());
