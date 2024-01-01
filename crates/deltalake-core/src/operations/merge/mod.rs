@@ -1391,17 +1391,17 @@ async fn execute(
     metrics.execution_time_ms = Instant::now().duration_since(exec_start).as_millis() as u64;
 
 
-    let mut c_metadata = match app_metadata {
+    let mut app_metadata = match app_metadata {
         Some(meta) => meta,
         None => HashMap::new()
         };
     
-    c_metadata.insert("readVersion".to_owned(), snapshot.version().into());
+    app_metadata.insert("readVersion".to_owned(), snapshot.version().into());
 
     let merge_metrics = serde_json::to_value(metrics.clone());
 
     if let Ok(map) = merge_metrics {
-        c_metadata.insert("operationMetrics".to_owned(), map);
+        app_metadata.insert("operationMetrics".to_owned(), map);
     }
     
 
@@ -1418,7 +1418,7 @@ async fn execute(
             &actions,
             operation,
             snapshot,
-            Some(c_metadata),
+            Some(app_metadata),
         )
         .await?;
     }

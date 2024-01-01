@@ -63,7 +63,7 @@ pub struct DeleteBuilder {
     app_metadata: Option<HashMap<String, serde_json::Value>>,
 }
 
-#[derive(Default, Debug, Serialize)]
+#[derive(Default, Debug, Clone, Serialize)]
 /// Metrics for the Delete Operation
 pub struct DeleteMetrics {
     /// Number of files added
@@ -249,6 +249,21 @@ async fn execute(
 
     metrics.execution_time_ms = Instant::now().duration_since(exec_start).as_micros();
 
+
+    let mut app_metadata = match app_metadata {
+        Some(meta) => meta,
+        None => HashMap::new()
+        };
+    
+    app_metadata.insert("readVersion".to_owned(), snapshot.version().into());
+
+    let delete_metrics = serde_json::to_value(metrics.clone());
+
+    if let Ok(map) = delete_metrics {
+        app_metadata.insert("operationMetrics".to_owned(), map);
+    }
+    
+
     // Do not make a commit when there are zero updates to the state
     if !actions.is_empty() {
         let operation = DeltaOperation::Delete {
@@ -259,7 +274,7 @@ async fn execute(
             &actions,
             operation,
             snapshot,
-            app_metadata,
+            Some(app_metadata),
         )
         .await?;
     }

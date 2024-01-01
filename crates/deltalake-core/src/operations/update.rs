@@ -78,7 +78,7 @@ pub struct UpdateBuilder {
     safe_cast: bool,
 }
 
-#[derive(Default, Serialize, Debug)]
+#[derive(Default, Clone, Serialize, Debug)]
 /// Metrics collected during the Update operation
 pub struct UpdateMetrics {
     /// Number of files added.
@@ -408,12 +408,26 @@ async fn execute(
     let operation = DeltaOperation::Update {
         predicate: Some(fmt_expr_to_sql(&predicate)?),
     };
+
+    let mut app_metadata = match app_metadata {
+        Some(meta) => meta,
+        None => HashMap::new()
+        };
+    
+    app_metadata.insert("readVersion".to_owned(), snapshot.version().into());
+
+    let update_metrics = serde_json::to_value(metrics.clone());
+
+    if let Ok(map) = update_metrics {
+        app_metadata.insert("operationMetrics".to_owned(), map);
+    }
+
     version = commit(
         log_store.as_ref(),
         &actions,
         operation,
         snapshot,
-        app_metadata,
+        Some(app_metadata),
     )
     .await?;
 

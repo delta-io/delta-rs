@@ -45,7 +45,7 @@ pub struct FileSystemCheckBuilder {
 }
 
 /// Details of the FSCK operation including which files were removed from the log
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct FileSystemCheckMetrics {
     /// Was this a dry run
     pub dry_run: bool,
@@ -154,6 +154,18 @@ impl FileSystemCheckPlan {
                 default_row_commit_version: file.default_row_commit_version,
             }));
         }
+        let metrics = FileSystemCheckMetrics {
+            dry_run: false,
+            files_removed: removed_file_paths,
+        };
+
+        let mut app_metadata = HashMap::new();
+        let fsck_metrics = serde_json::to_value(metrics.clone());
+
+        app_metadata.insert("readVersion".to_owned(), snapshot.version().into());
+        if let Ok(map) = fsck_metrics {
+            app_metadata.insert("operationMetrics".to_owned(), map);
+        }
 
         commit(
             self.log_store.as_ref(),
@@ -161,14 +173,11 @@ impl FileSystemCheckPlan {
             DeltaOperation::FileSystemCheck {},
             snapshot,
             // TODO pass through metadata
-            None,
+            Some(app_metadata),
         )
         .await?;
 
-        Ok(FileSystemCheckMetrics {
-            dry_run: false,
-            files_removed: removed_file_paths,
-        })
+        Ok(metrics)
     }
 }
 
