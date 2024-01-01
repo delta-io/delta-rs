@@ -22,7 +22,7 @@ use super::utils::{
     arrow_schema_without_partitions, next_data_path, record_batch_from_message,
     record_batch_without_partitions,
 };
-use super::{DeltaWriter, DeltaWriterError};
+use super::{DeltaWriter, DeltaWriterError, WriteMode};
 use crate::errors::DeltaTableError;
 use crate::kernel::{Add, PartitionsExt, Scalar, StructType};
 use crate::table::builder::DeltaTableBuilder;
@@ -286,8 +286,20 @@ impl JsonWriter {
 
 #[async_trait::async_trait]
 impl DeltaWriter<Vec<Value>> for JsonWriter {
-    /// Writes the given values to internal parquet buffers for each represented partition.
+    /// Write a chunk of values into the internal write buffers with the default write mode
     async fn write(&mut self, values: Vec<Value>) -> Result<(), DeltaTableError> {
+        self.write_with_mode(values, WriteMode::Default).await
+    }
+
+    /// Writes the given values to internal parquet buffers for each represented partition.
+    async fn write_with_mode(
+        &mut self,
+        values: Vec<Value>,
+        mode: WriteMode,
+    ) -> Result<(), DeltaTableError> {
+        if mode != WriteMode::Default {
+            warn!("The JsonWriter does not currently support non-default write modes, falling back to default mode");
+        }
         let mut partial_writes: Vec<(Value, ParquetError)> = Vec::new();
         let arrow_schema = self.arrow_schema();
         let divided = self.divide_by_partition_values(values)?;
@@ -543,5 +555,104 @@ mod tests {
                 source: ArrowError::JsonError(_)
             })
         ));
+    }
+
+    // The following sets of tests are related to #1386 and mergeSchema support
+    // <https://github.com/delta-io/delta-rs/issues/1386>
+    mod schema_evolution {
+        use super::*;
+
+        #[tokio::test]
+        async fn test_json_write_mismatched_values() {
+            let table_dir = tempfile::tempdir().unwrap();
+            let schema = get_delta_schema();
+            let path = table_dir.path().to_str().unwrap().to_string();
+
+            let arrow_schema = <ArrowSchema as TryFrom<&StructType>>::try_from(&schema).unwrap();
+            let mut writer = JsonWriter::try_new(
+                path.clone(),
+                Arc::new(arrow_schema),
+                Some(vec!["modified".to_string()]),
+                None,
+            )
+            .unwrap();
+
+            let data = serde_json::json!(
+                {
+                    "id" : "A",
+                    "value": 42,
+                    "modified": "2021-02-01"
+                }
+            );
+
+            writer.write(vec![data]).await.unwrap();
+            let add_actions = writer.flush().await.unwrap();
+            assert_eq!(add_actions.len(), 1);
+
+            let second_data = serde_json::json!(
+                {
+                    "id" : 1,
+                    "name" : "Ion"
+                }
+            );
+
+            match writer.write(vec![second_data]).await {
+                Ok(_) => {
+                    assert!(false, "Should not have successfully written");
+                }
+                _ => {}
+            }
+        }
+
+        #[tokio::test]
+        async fn test_json_write_mismatched_schema() {
+            use crate::operations::create::CreateBuilder;
+            let table_dir = tempfile::tempdir().unwrap();
+            let schema = get_delta_schema();
+            let path = table_dir.path().to_str().unwrap().to_string();
+
+            let mut table = CreateBuilder::new()
+                .with_location(&path)
+                .with_table_name("test-table")
+                .with_comment("A table for running tests")
+                .with_columns(schema.fields().clone())
+                .await
+                .unwrap();
+            table.load().await.expect("Failed to load table");
+            assert_eq!(table.version(), 0);
+
+            let arrow_schema = <ArrowSchema as TryFrom<&StructType>>::try_from(&schema).unwrap();
+            let mut writer = JsonWriter::try_new(
+                path.clone(),
+                Arc::new(arrow_schema),
+                Some(vec!["modified".to_string()]),
+                None,
+            )
+            .unwrap();
+
+            let data = serde_json::json!(
+                {
+                    "id" : "A",
+                    "value": 42,
+                    "modified": "2021-02-01"
+                }
+            );
+
+            writer.write(vec![data]).await.unwrap();
+            let add_actions = writer.flush().await.unwrap();
+            assert_eq!(add_actions.len(), 1);
+
+            let second_data = serde_json::json!(
+                {
+                    "postcode" : 1,
+                    "name" : "Ion"
+                }
+            );
+
+            // TODO This should fail because we haven't asked to evolve the schema
+            writer.write(vec![second_data]).await.unwrap();
+            writer.flush_and_commit(&mut table).await.unwrap();
+            assert_eq!(table.version(), 1);
+        }
     }
 }
