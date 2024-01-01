@@ -2066,6 +2066,11 @@ mod tests {
         let commit_info = table.history(None).await.unwrap();
         let last_commit = &commit_info[commit_info.len() - 1];
         let parameters = last_commit.operation_parameters.clone().unwrap();
+        let extra_info = last_commit.info.clone();
+        assert_eq!(
+            extra_info["operationMetrics"],
+            serde_json::to_value(metrics.clone()).unwrap()
+        );
         assert_eq!(parameters["predicate"], json!("target.id = source.id"));
         assert_eq!(
             parameters["matchedPredicates"],
