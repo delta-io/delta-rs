@@ -46,7 +46,7 @@ def _convert_pa_schema_to_delta(
 
     def dtype_to_delta_dtype(dtype: pa.DataType) -> pa.DataType:
         # Handle nested types
-        if isinstance(dtype, (pa.LargeListType, pa.ListType)):
+        if isinstance(dtype, (pa.LargeListType, pa.ListType, pa.FixedSizeListType)):
             return list_to_delta_dtype(dtype)
         elif isinstance(dtype, pa.StructType):
             return struct_to_delta_dtype(dtype)
