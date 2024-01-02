@@ -100,6 +100,7 @@ def write_deltalake(
     partition_filters: Optional[List[Tuple[str, str, Any]]] = ...,
     large_dtypes: bool = ...,
     engine: Literal["pyarrow"] = ...,
+    custom_metadata: Optional[Dict[str, str]] = ...,
 ) -> None:
     ...
 
@@ -128,6 +129,7 @@ def write_deltalake(
     large_dtypes: bool = ...,
     engine: Literal["rust"],
     writer_properties: WriterProperties = ...,
+    custom_metadata: Optional[Dict[str, str]] = ...,
 ) -> None:
     ...
 
@@ -163,6 +165,7 @@ def write_deltalake(
     large_dtypes: bool = False,
     engine: Literal["pyarrow", "rust"] = "pyarrow",
     writer_properties: Optional[WriterProperties] = None,
+    custom_metadata: Optional[Dict[str, str]] = None,
 ) -> None:
     """Write to a Delta Lake table
 
@@ -236,6 +239,7 @@ def write_deltalake(
         engine: writer engine to write the delta table. `Rust` engine is still experimental but you may
             see up to 4x performance improvements over pyarrow.
         writer_properties: Pass writer properties to the Rust parquet writer.
+        custom_metadata: Custom metadata to add to the commitInfo.
     """
     table, table_uri = try_get_table_and_table_uri(table_or_uri, storage_options)
     if table is not None:
@@ -300,6 +304,7 @@ def write_deltalake(
             writer_properties=writer_properties._to_dict()
             if writer_properties
             else None,
+            custom_metadata=custom_metadata,
         )
         if table:
             table.update_incremental()
@@ -492,6 +497,7 @@ def write_deltalake(
                 description,
                 configuration,
                 storage_options,
+                custom_metadata,
             )
         else:
             table._table.create_write_transaction(
@@ -500,6 +506,7 @@ def write_deltalake(
                 partition_by or [],
                 schema,
                 partition_filters,
+                custom_metadata,
             )
             table.update_incremental()
     else:
