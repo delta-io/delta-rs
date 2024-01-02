@@ -36,6 +36,11 @@
          <changefreq>daily</changefreq>
     </url>
     <url>
+         <loc>https://github.com/delta-io/delta-rs/api/delta_table/delta_table_alterer/</loc>
+         <lastmod>2024-01-02</lastmod>
+         <changefreq>daily</changefreq>
+    </url>
+    <url>
          <loc>https://github.com/delta-io/delta-rs/api/delta_table/delta_table_merger/</loc>
          <lastmod>2024-01-02</lastmod>
          <changefreq>daily</changefreq>
