@@ -1128,7 +1128,10 @@ impl DeltaDataChecker {
             return Ok(());
         }
         let table = MemTable::try_new(record_batch.schema(), vec![vec![record_batch.clone()]])?;
-        self.ctx.register_table("data", Arc::new(table))?;
+
+        // Use a random table name to avoid clashes when running multiple parallel tasks, e.g. when using a partitioned table
+        let table_name: String = uuid::Uuid::new_v4().to_string();
+        self.ctx.register_table(&table_name, Arc::new(table))?;
 
         let mut violations: Vec<String> = Vec::new();
 
@@ -1140,8 +1143,9 @@ impl DeltaDataChecker {
             }
 
             let sql = format!(
-                "SELECT {} FROM data WHERE NOT ({}) LIMIT 1",
+                "SELECT {} FROM `{}` WHERE NOT ({}) LIMIT 1",
                 check.get_name(),
+                table_name,
                 check.get_expression()
             );
 
@@ -1162,7 +1166,7 @@ impl DeltaDataChecker {
             }
         }
 
-        self.ctx.deregister_table("data")?;
+        self.ctx.deregister_table(&table_name)?;
         if !violations.is_empty() {
             Err(DeltaTableError::InvalidData { violations })
         } else {
