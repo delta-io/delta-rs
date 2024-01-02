@@ -514,15 +514,22 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#using-pip" class="md-nav__link">
-    Using Pip
+  <a href="#install-delta-lake-for-python" class="md-nav__link">
+    Install Delta Lake for Python
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#using-cargo" class="md-nav__link">
-    Using Cargo
+  <a href="#install-delta-lake-for-rust" class="md-nav__link">
+    Install Delta Lake for Rust
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#run-delta-lake-and-pandas-in-a-jupyter-notebook" class="md-nav__link">
+    Run Delta Lake and pandas in a Jupyter Notebook
   </a>
   
 </li>
@@ -1302,15 +1309,22 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#using-pip" class="md-nav__link">
-    Using Pip
+  <a href="#install-delta-lake-for-python" class="md-nav__link">
+    Install Delta Lake for Python
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#using-cargo" class="md-nav__link">
-    Using Cargo
+  <a href="#install-delta-lake-for-rust" class="md-nav__link">
+    Install Delta Lake for Rust
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#run-delta-lake-and-pandas-in-a-jupyter-notebook" class="md-nav__link">
+    Run Delta Lake and pandas in a Jupyter Notebook
   </a>
   
 </li>
@@ -1334,14 +1348,40 @@
 
 
 <h1 id="installation">Installation</h1>
-<p>The <code>deltalake</code> project can be installed via Pip for Python or Cargo for Rust.</p>
-<h2 id="using-pip">Using Pip</h2>
+<p>The <code>deltalake</code> project can be installed via pip for Python or Cargo for Rust.</p>
+<h2 id="install-delta-lake-for-python">Install Delta Lake for Python</h2>
+<p>With pip:</p>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>pip<span class="w"> </span>install<span class="w"> </span>deltalake
 </span></code></pre></div>
-<p>NOTE: official binary wheels are linked against openssl statically for remote objection store communication. Please file Github issue to request for critical openssl upgrade.</p>
-<h2 id="using-cargo">Using Cargo</h2>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>cargo<span class="w"> </span>add<span class="w"> </span>deltalake
+<p>With Conda:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>conda<span class="w"> </span>install<span class="w"> </span>-c<span class="w"> </span>conda-forge<span class="w"> </span>deltalake
 </span></code></pre></div>
+<h2 id="install-delta-lake-for-rust">Install Delta Lake for Rust</h2>
+<p>With Cargo:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>cargo<span class="w"> </span>add<span class="w"> </span>deltalake
+</span></code></pre></div>
+<h2 id="run-delta-lake-and-pandas-in-a-jupyter-notebook">Run Delta Lake and pandas in a Jupyter Notebook</h2>
+<p>You can easily run Delta Lake and pandas in a Jupyter notebook.</p>
+<p>Create an environment file with the dependencies as follows:</p>
+<div class="language-yaml highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">deltalake-minimal</span>
+</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="nt">channels</span><span class="p">:</span>
+</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">conda-forge</span>
+</span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">defaults</span>
+</span><span id="__span-3-5"><a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a><span class="nt">dependencies</span><span class="p">:</span>
+</span><span id="__span-3-6"><a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a><span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">python=3.11</span>
+</span><span id="__span-3-7"><a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a><span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">ipykernel</span>
+</span><span id="__span-3-8"><a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a><span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">pandas</span>
+</span><span id="__span-3-9"><a id="__codelineno-3-9" name="__codelineno-3-9" href="#__codelineno-3-9"></a><span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">polars</span>
+</span><span id="__span-3-10"><a id="__codelineno-3-10" name="__codelineno-3-10" href="#__codelineno-3-10"></a><span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">jupyterlab</span>
+</span><span id="__span-3-11"><a id="__codelineno-3-11" name="__codelineno-3-11" href="#__codelineno-3-11"></a><span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">pip</span>
+</span><span id="__span-3-12"><a id="__codelineno-3-12" name="__codelineno-3-12" href="#__codelineno-3-12"></a><span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">pip</span><span class="p">:</span>
+</span><span id="__span-3-13"><a id="__codelineno-3-13" name="__codelineno-3-13" href="#__codelineno-3-13"></a><span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">deltalake</span>
+</span></code></pre></div>
+<p>Create a virtual environment with the dependencies:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>conda<span class="w"> </span>env<span class="w"> </span>create<span class="w"> </span>-f<span class="w"> </span>deltalake-minimal.yml
+</span></code></pre></div>
+<p>Open the Jupyter notebook and run commands as follows:</p>
+<p><img alt="" src="../jupyter-example.png" /></p>
 
 
 

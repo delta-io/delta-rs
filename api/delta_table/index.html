@@ -1256,6 +1256,13 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
+  <a href="#deltalake.DeltaTable.alter" class="md-nav__link">
+    alter
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#deltalake.DeltaTable.cleanup_metadata" class="md-nav__link">
     cleanup_metadata()
   </a>
@@ -1307,6 +1314,13 @@
           <li class="md-nav__item">
   <a href="#deltalake.DeltaTable.history" class="md-nav__link">
     history()
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#deltalake.DeltaTable.load_as_version" class="md-nav__link">
+    load_as_version()
   </a>
   
 </li>
@@ -1571,6 +1585,30 @@ Depending on the storage backend used, you could provide options values using th
 
 
 
+<div class="doc doc-object doc-attribute">
+
+
+
+
+<h4 id="deltalake.DeltaTable.alter" class="doc doc-heading">
+          <span class="doc doc-object-name doc-attribute-name">alter</span>
+
+  
+  <span class="doc doc-labels">
+      <small class="doc doc-label doc-label-property"><code>property</code></small>
+  </span>
+
+</h4>
+<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">alter</span><span class="p">:</span> <span class="n">TableAlterer</span>
+</span></code></pre></div>
+
+  <div class="doc doc-contents ">
+  
+      <p>Namespace for all table alter related methods</p>
+  </div>
+
+</div>
+
 
 
 
@@ -1804,7 +1842,7 @@ If 'ignore', will not do anything if table already exists. Defaults to "error".<
 
 
 </h4>
-<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">delete</span><span class="p">(</span><span class="n">predicate</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]</span>
+<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">delete</span><span class="p">(</span><span class="n">predicate</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">writer_properties</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">WriterProperties</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]</span>
 </span></code></pre></div>
 
   <div class="doc doc-contents ">
@@ -2379,6 +2417,74 @@ The operations are returned in reverse chronological order.</p>
 
 
 
+<h4 id="deltalake.DeltaTable.load_as_version" class="doc doc-heading">
+          <span class="doc doc-object-name doc-function-name">load_as_version</span>
+
+
+</h4>
+<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">load_as_version</span><span class="p">(</span><span class="n">version</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="nb">str</span><span class="p">,</span> <span class="n">datetime</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="kc">None</span>
+</span></code></pre></div>
+
+  <div class="doc doc-contents ">
+  
+      <p>Load/time travel a DeltaTable to a specified version number, or a timestamp version of the table. If a
+string is passed then the argument should be an RFC 3339 and ISO 8601 date and time string format.</p>
+
+
+
+  <p><strong>Parameters:</strong></p>
+  <table>
+    <thead>
+      <tr>
+        <th>Name</th>
+        <th>Type</th>
+        <th>Description</th>
+        <th>Default</th>
+      </tr>
+    </thead>
+    <tbody>
+        <tr>
+          <td><code>version</code></td>
+          <td>
+                <code><span title="typing.Union">Union</span>[int, str, <span title="datetime.datetime">datetime</span>]</code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>the identifier of the version of the DeltaTable to load</p>
+            </div>
+          </td>
+          <td>
+              <em>required</em>
+          </td>
+        </tr>
+    </tbody>
+  </table>
+
+<details class="example" open>
+  <summary>Example</summary>
+  <p><strong>Use a version number</strong>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>dt = DeltaTable(&quot;test_table&quot;)
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>dt.load_as_version(1)
+</span></code></pre></div></p>
+<p><strong>Use a datetime object</strong>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>dt.load_as_version(datetime(2023,1,1))
+</span></code></pre></div></p>
+<p><strong>Use a datetime in string format</strong>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>dt.load_as_version(&quot;2018-01-26T18:30:09Z&quot;)
+</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>dt.load_as_version(&quot;2018-12-19T16:39:57-08:00&quot;)
+</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>dt.load_as_version(&quot;2018-01-26T18:30:09.453+00:00&quot;)
+</span></code></pre></div></p>
+</details>
+  </div>
+
+</div>
+
+
+<div class="doc doc-object doc-function">
+
+
+
+
 <h4 id="deltalake.DeltaTable.load_version" class="doc doc-heading">
           <span class="doc doc-object-name doc-function-name">load_version</span>
 
@@ -2390,6 +2496,10 @@ The operations are returned in reverse chronological order.</p>
   <div class="doc doc-contents ">
   
       <p>Load a DeltaTable with a specified version.</p>
+<div class="admonition warning">
+<p class="admonition-title">Deprecated</p>
+<p>Load_version and load_with_datetime have been combined into <code>DeltaTable.load_as_version</code>.</p>
+</div>
 
 
 
@@ -2443,6 +2553,10 @@ The operations are returned in reverse chronological order.</p>
   
       <p>Time travel Delta table to the latest version that's created at or before provided <code>datetime_string</code> argument.
 The <code>datetime_string</code> argument should be an RFC 3339 and ISO 8601 date and time string.</p>
+<div class="admonition warning">
+<p class="admonition-title">Deprecated</p>
+<p>Load_version and load_with_datetime have been combined into <code>DeltaTable.load_as_version</code>.</p>
+</div>
 
 
 
@@ -2496,7 +2610,7 @@ The <code>datetime_string</code> argument should be an RFC 3339 and ISO 8601 dat
 
 
 </h4>
-<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">merge</span><span class="p">(</span><span class="n">source</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="n">pyarrow</span><span class="o">.</span><span class="n">Table</span><span class="p">,</span> <span class="n">pyarrow</span><span class="o">.</span><span class="n">RecordBatch</span><span class="p">,</span> <span class="n">pyarrow</span><span class="o">.</span><span class="n">RecordBatchReader</span><span class="p">,</span> <span class="n">ds</span><span class="o">.</span><span class="n">Dataset</span><span class="p">,</span> <span class="n">pandas</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">],</span> <span class="n">predicate</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">source_alias</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">target_alias</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">error_on_type_mismatch</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">TableMerger</span>
+<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">merge</span><span class="p">(</span><span class="n">source</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="n">pyarrow</span><span class="o">.</span><span class="n">Table</span><span class="p">,</span> <span class="n">pyarrow</span><span class="o">.</span><span class="n">RecordBatch</span><span class="p">,</span> <span class="n">pyarrow</span><span class="o">.</span><span class="n">RecordBatchReader</span><span class="p">,</span> <span class="n">ds</span><span class="o">.</span><span class="n">Dataset</span><span class="p">,</span> <span class="n">pandas</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">],</span> <span class="n">predicate</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">source_alias</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">target_alias</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">error_on_type_mismatch</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span> <span class="n">writer_properties</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">WriterProperties</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">large_dtypes</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">TableMerger</span>
 </span></code></pre></div>
 
   <div class="doc doc-contents ">
@@ -2582,6 +2696,34 @@ match the underlying table.</p>
           <td>
             <div class="doc-md-description">
               <p>specify if merge will return error if data types are mismatching :default = True</p>
+            </div>
+          </td>
+          <td>
+                <code>True</code>
+          </td>
+        </tr>
+        <tr>
+          <td><code>writer_properties</code></td>
+          <td>
+                <code><span title="typing.Optional">Optional</span>[<a class="autorefs autorefs-internal" title="deltalake.table.WriterProperties" href="../delta_writer/#deltalake.WriterProperties">WriterProperties</a>]</code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>Pass writer properties to the Rust parquet writer</p>
+            </div>
+          </td>
+          <td>
+                <code>None</code>
+          </td>
+        </tr>
+        <tr>
+          <td><code>large_dtypes</code></td>
+          <td>
+                <code>bool</code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>If True, the data schema is kept in large_dtypes.</p>
             </div>
           </td>
           <td>
@@ -3233,7 +3375,7 @@ Results in
 
 
 </h4>
-<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">update</span><span class="p">(</span><span class="n">updates</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">new_values</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Union</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="nb">float</span><span class="p">,</span> <span class="nb">str</span><span class="p">,</span> <span class="n">datetime</span><span class="p">,</span> <span class="nb">bool</span><span class="p">,</span> <span class="n">List</span><span class="p">[</span><span class="n">Any</span><span class="p">]]]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">predicate</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">writer_properties</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">int</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">error_on_type_mismatch</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]</span>
+<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">update</span><span class="p">(</span><span class="n">updates</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">new_values</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Union</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="nb">float</span><span class="p">,</span> <span class="nb">str</span><span class="p">,</span> <span class="n">datetime</span><span class="p">,</span> <span class="nb">bool</span><span class="p">,</span> <span class="n">List</span><span class="p">[</span><span class="n">Any</span><span class="p">]]]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">predicate</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">writer_properties</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">WriterProperties</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">error_on_type_mismatch</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]</span>
 </span></code></pre></div>
 
   <div class="doc doc-contents ">
@@ -3299,13 +3441,11 @@ to be passed for it to execute.</p>
         <tr>
           <td><code>writer_properties</code></td>
           <td>
-                <code><span title="typing.Optional">Optional</span>[<span title="typing.Dict">Dict</span>[str, int]]</code>
+                <code><span title="typing.Optional">Optional</span>[<a class="autorefs autorefs-internal" title="deltalake.table.WriterProperties" href="../delta_writer/#deltalake.WriterProperties">WriterProperties</a>]</code>
           </td>
           <td>
             <div class="doc-md-description">
-              <p>Pass writer properties to the Rust parquet writer, see options https://arrow.apache.org/rust/parquet/file/properties/struct.WriterProperties.html,
-only the following fields are supported: <code>data_page_size_limit</code>, <code>dictionary_page_size_limit</code>,
-<code>data_page_row_count_limit</code>, <code>write_batch_size</code>, <code>max_row_group_size</code>.</p>
+              <p>Pass writer properties to the Rust parquet writer.</p>
             </div>
           </td>
           <td>
