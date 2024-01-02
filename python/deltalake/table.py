@@ -1178,7 +1178,10 @@ class TableMerger:
         write_batch_size: Optional[int] = None,
         max_row_group_size: Optional[int] = None,
     ) -> "TableMerger":
-        """Pass writer properties to the Rust parquet writer, see options https://arrow.apache.org/rust/parquet/file/properties/struct.WriterProperties.html:
+        """
+        !!! warning "Deprecated"
+            Use `.merge(writer_properties = WriterProperties())` instead
+        Pass writer properties to the Rust parquet writer, see options https://arrow.apache.org/rust/parquet/file/properties/struct.WriterProperties.html:
 
         Args:
             data_page_size_limit: Limit DataPage size to this in bytes.
