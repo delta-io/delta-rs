@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use futures::future::BoxFuture;
-use serde_json::{Map, Value};
+use serde_json::Value;
 
 use super::transaction::{commit, PROTOCOL};
 use crate::errors::{DeltaResult, DeltaTableError};
@@ -56,7 +56,7 @@ pub struct CreateBuilder {
     actions: Vec<Action>,
     log_store: Option<LogStoreRef>,
     configuration: HashMap<String, Option<String>>,
-    metadata: Option<Map<String, Value>>,
+    metadata: Option<HashMap<String, Value>>,
 }
 
 impl Default for CreateBuilder {
@@ -181,8 +181,11 @@ impl CreateBuilder {
     ///
     /// This might include provenance information such as an id of the
     /// user that made the commit or the program that created it.
-    pub fn with_metadata(mut self, metadata: Map<String, Value>) -> Self {
-        self.metadata = Some(metadata);
+    pub fn with_metadata(
+        mut self,
+        metadata: impl IntoIterator<Item = (String, serde_json::Value)>,
+    ) -> Self {
+        self.metadata = Some(HashMap::from_iter(metadata));
         self
     }
 
@@ -286,6 +289,7 @@ impl std::future::IntoFuture for CreateBuilder {
         let this = self;
         Box::pin(async move {
             let mode = this.mode.clone();
+            let app_metadata = this.metadata.clone();
             let (mut table, actions, operation) = this.into_table_and_actions()?;
             let log_store = table.log_store();
             let table_state = if log_store.is_delta_table_location().await? {
@@ -310,7 +314,7 @@ impl std::future::IntoFuture for CreateBuilder {
                 &actions,
                 operation,
                 table_state,
-                None,
+                app_metadata,
             )
             .await?;
             table.load_version(version).await?;
