@@ -786,7 +786,7 @@ class DeltaTable:
         self,
     ) -> "TableOptimizer":
         """Namespace for all table optimize related methods.
-        
+
         Returns:
             TableOptimizer: TableOptimizer Object
         """
@@ -796,8 +796,8 @@ class DeltaTable:
     def alter(
         self,
     ) -> "TableAlterer":
-        """Namespace for all table alter related methods
-        
+        """Namespace for all table alter related methods.
+
         Returns:
             TableAlterer: TableAlterer Object
         """
