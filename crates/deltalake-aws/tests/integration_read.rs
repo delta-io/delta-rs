@@ -1,12 +1,11 @@
 #![cfg(feature = "integration_test")]
 
-use deltalake_core::{DeltaTableBuilder, ObjectStore};
+use deltalake_core::{DeltaTableBuilder, Path};
 use deltalake_test::utils::*;
-use object_store::path::Path;
 use serial_test::serial;
 
-#[allow(dead_code)]
-mod fs_common;
+mod common;
+use common::*;
 
 static TEST_PREFIXES: &[&str] = &["my table", "你好/😊"];
 
@@ -15,65 +14,16 @@ static TEST_PREFIXES_ENCODED: &[&str] = &["my%20table", "%E4%BD%A0%E5%A5%BD/%F0%
 
 #[tokio::test]
 #[serial]
-async fn test_read_tables_local() -> TestResult {
-    let storage = Box::new(LocalStorageIntegration::default());
-    let context = IntegrationContext::new(storage)?;
+async fn test_read_tables_aws() -> TestResult {
+    let context = IntegrationContext::new(Box::new(S3Integration::default()))?;
+
     read_tables(&context).await?;
 
-    for prefix in TEST_PREFIXES {
-        read_table_paths(&context, prefix, prefix).await?;
+    for (prefix, prefix_encoded) in TEST_PREFIXES.iter().zip(TEST_PREFIXES_ENCODED.iter()) {
+        read_table_paths(&context, prefix, prefix_encoded).await?;
     }
 
     Ok(())
-}
-
-#[tokio::test]
-async fn test_action_reconciliation() {
-    let path = "./tests/data/action_reconciliation";
-    let mut table = fs_common::create_table(path, None).await;
-
-    // Add a file.
-    let a = fs_common::add(3 * 60 * 1000);
-    assert_eq!(1, fs_common::commit_add(&mut table, &a).await);
-    assert_eq!(
-        table.get_files_iter().collect::<Vec<_>>(),
-        vec![Path::from(a.path.clone())]
-    );
-
-    // Remove added file.
-    let r = deltalake_core::kernel::Remove {
-        path: a.path.clone(),
-        deletion_timestamp: Some(chrono::Utc::now().timestamp_millis()),
-        data_change: false,
-        extended_file_metadata: None,
-        partition_values: None,
-        size: None,
-        tags: None,
-        deletion_vector: None,
-        base_row_id: None,
-        default_row_commit_version: None,
-    };
-
-    assert_eq!(2, fs_common::commit_removes(&mut table, vec![&r]).await);
-    assert_eq!(table.get_files_iter().count(), 0);
-    assert_eq!(
-        table
-            .get_state()
-            .all_tombstones()
-            .iter()
-            .map(|r| r.path.as_str())
-            .collect::<Vec<_>>(),
-        vec![a.path.as_str()]
-    );
-
-    // Add removed file back.
-    assert_eq!(3, fs_common::commit_add(&mut table, &a).await);
-    assert_eq!(
-        table.get_files_iter().collect::<Vec<_>>(),
-        vec![Path::from(a.path)]
-    );
-    // tombstone is removed.
-    assert_eq!(table.get_state().all_tombstones().len(), 0);
 }
 
 async fn read_tables(context: &IntegrationContext) -> TestResult {
@@ -99,6 +49,7 @@ async fn read_table_paths(
         .load_table_with_name(TestTables::Delta0_8_0SpecialPartitioned, upload_path)
         .await?;
 
+    println!("table_root: {}", table_root);
     verify_store(&context, table_root).await?;
 
     read_encoded_table(&context, table_root).await?;
@@ -108,12 +59,14 @@ async fn read_table_paths(
 
 async fn verify_store(integration: &IntegrationContext, root_path: &str) -> TestResult {
     let table_uri = format!("{}/{}", integration.root_uri(), root_path);
+    println!("working with table_uri: {}", table_uri);
     let storage = DeltaTableBuilder::from_uri(table_uri.clone())
         .with_allow_http(true)
         .build_storage()?
         .object_store();
 
     let files = storage.list_with_delimiter(None).await?;
+    println!("files: {files:?}");
     assert_eq!(
         vec![
             Path::parse("_delta_log").unwrap(),

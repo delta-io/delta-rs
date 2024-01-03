@@ -5,7 +5,6 @@ use deltalake_core::kernel::{
 use deltalake_core::operations::create::CreateBuilder;
 use deltalake_core::operations::transaction::commit;
 use deltalake_core::protocol::{DeltaOperation, SaveMode};
-use deltalake_core::storage::config::configure_store;
 use deltalake_core::storage::{GetResult, ObjectStoreResult};
 use deltalake_core::DeltaTable;
 use object_store::path::Path as StorePath;
@@ -37,7 +36,7 @@ pub async fn create_table_from_json(
     partition_columns: Vec<&str>,
     config: Value,
 ) -> DeltaTable {
-    assert!(path.starts_with("./tests/data"));
+    assert!(path.starts_with("../deltalake-test/tests/data"));
     std::fs::create_dir_all(path).unwrap();
     std::fs::remove_dir_all(path).unwrap();
     std::fs::create_dir_all(path).unwrap();
@@ -144,15 +143,13 @@ impl std::fmt::Display for SlowStore {
     }
 }
 
-#[allow(dead_code)]
 impl SlowStore {
     pub fn new(
         location: Url,
-        options: impl Into<deltalake_core::storage::config::StorageOptions> + Clone,
+        _options: impl Into<deltalake_core::storage::StorageOptions> + Clone,
     ) -> deltalake_core::DeltaResult<Self> {
-        let mut options = options.into();
         Ok(Self {
-            inner: configure_store(&location, &mut options).unwrap(),
+            inner: deltalake_core::storage::store_for(&location)?,
         })
     }
 }

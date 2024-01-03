@@ -1,23 +1,67 @@
 #![allow(dead_code, missing_docs)]
-use crate::storage::utils::copy_table;
-use crate::DeltaTableBuilder;
-use chrono::Utc;
+use deltalake_core::storage::ObjectStoreRef;
+use deltalake_core::{DeltaResult, DeltaTableBuilder};
 use fs_extra::dir::{copy, CopyOptions};
-use object_store::DynObjectStore;
-use rand::Rng;
-use serde_json::json;
 use std::collections::HashMap;
 use std::env;
-use std::sync::Arc;
-use tempdir::TempDir;
+use std::process::ExitStatus;
+use tempfile::{tempdir, TempDir};
 
 pub type TestResult = Result<(), Box<dyn std::error::Error + 'static>>;
 
+pub trait StorageIntegration {
+    fn create_bucket(&self) -> std::io::Result<ExitStatus>;
+    fn prepare_env(&self);
+    fn bucket_name(&self) -> String;
+    fn root_uri(&self) -> String;
+    fn copy_directory(&self, source: &str, destination: &str) -> std::io::Result<ExitStatus>;
+
+    fn object_store(&self) -> DeltaResult<ObjectStoreRef> {
+        Ok(DeltaTableBuilder::from_uri(self.root_uri())
+            .with_allow_http(true)
+            .build_storage()?
+            .object_store())
+    }
+}
+
+pub struct LocalStorageIntegration {
+    tmp_dir: TempDir,
+}
+
+impl Default for LocalStorageIntegration {
+    fn default() -> Self {
+        Self {
+            tmp_dir: tempdir().expect("Failed to make temp dir"),
+        }
+    }
+}
+impl StorageIntegration for LocalStorageIntegration {
+    fn create_bucket(&self) -> std::io::Result<ExitStatus> {
+        Ok(ExitStatus::default())
+    }
+
+    fn prepare_env(&self) {}
+    fn bucket_name(&self) -> String {
+        self.tmp_dir.as_ref().to_str().unwrap().to_owned()
+    }
+    fn root_uri(&self) -> String {
+        format!("file://{}", self.bucket_name())
+    }
+    fn copy_directory(&self, source: &str, destination: &str) -> std::io::Result<ExitStatus> {
+        let mut options = CopyOptions::new();
+        options.content_only = true;
+        let dest_path = self.tmp_dir.path().join(destination);
+        std::fs::create_dir_all(&dest_path)?;
+        copy(source, &dest_path, &options).expect("Failed to copy");
+        Ok(ExitStatus::default())
+    }
+}
+
 /// The IntegrationContext provides temporary resources to test against cloud storage services.
 pub struct IntegrationContext {
-    pub integration: StorageIntegration,
+    pub integration: Box<dyn StorageIntegration>,
     bucket: String,
-    store: Arc<DynObjectStore>,
+    store: ObjectStoreRef,
     tmp_dir: TempDir,
     /// environment variables valid before `prepare_env()` modified them
     env_vars: HashMap<String, String>,
@@ -25,7 +69,7 @@ pub struct IntegrationContext {
 
 impl IntegrationContext {
     pub fn new(
-        integration: StorageIntegration,
+        integration: Box<dyn StorageIntegration>,
     ) -> Result<Self, Box<dyn std::error::Error + 'static>> {
         // environment variables are loaded from .env files if found. Otherwise
         // default values based on the default setting of the respective emulators are set.
@@ -37,66 +81,11 @@ impl IntegrationContext {
 
         integration.prepare_env();
 
-        let tmp_dir = TempDir::new("")?;
+        let tmp_dir = tempdir()?;
         // create a fresh bucket in every context. THis is done via CLI...
-        let bucket = match integration {
-            StorageIntegration::Local => tmp_dir.as_ref().to_str().unwrap().to_owned(),
-            StorageIntegration::Onelake => {
-                let account_name =
-                    env::var("AZURE_STORAGE_ACCOUNT_NAME").unwrap_or(String::from("onelake"));
-                let container_name =
-                    env::var("AZURE_STORAGE_CONTAINER_NAME").unwrap_or(String::from("delta-rs"));
-                format!(
-                    "{0}.dfs.fabric.microsoft.com/{1}",
-                    account_name, container_name
-                )
-            }
-            StorageIntegration::OnelakeAbfs => {
-                let account_name =
-                    env::var("AZURE_STORAGE_ACCOUNT_NAME").unwrap_or(String::from("onelake"));
-                let container_name =
-                    env::var("AZURE_STORAGE_CONTAINER_NAME").unwrap_or(String::from("delta-rs"));
-                format!(
-                    "{0}@{1}.dfs.fabric.microsoft.com",
-                    container_name, account_name
-                )
-            }
-            _ => format!("test-delta-table-{}", Utc::now().timestamp()),
-        };
-
-        if let StorageIntegration::Google = integration {
-            gs_cli::prepare_env();
-            let base_url = std::env::var("GOOGLE_BASE_URL")?;
-            let token = json!({"gcs_base_url": base_url, "disable_oauth": true, "client_email": "", "private_key": "", "private_key_id": ""});
-            let account_path = tmp_dir.path().join("gcs.json");
-            std::fs::write(&account_path, serde_json::to_vec(&token)?)?;
-            set_env_if_not_set(
-                "GOOGLE_SERVICE_ACCOUNT",
-                account_path.as_path().to_str().unwrap(),
-            );
-        }
-
-        integration.create_bucket(&bucket)?;
-        let store_uri = match integration {
-            StorageIntegration::Amazon => format!("s3://{}", &bucket),
-            StorageIntegration::Microsoft => format!("az://{}", &bucket),
-            StorageIntegration::Onelake => format!("https://{}", &bucket),
-            StorageIntegration::OnelakeAbfs => format!("abfss://{}", &bucket),
-            StorageIntegration::Google => format!("gs://{}", &bucket),
-            StorageIntegration::Local => format!("file://{}", &bucket),
-            StorageIntegration::Hdfs => format!("hdfs://localhost:9000/{}", &bucket),
-        };
-        // the "storage_backend" will always point to the root ofg the object store.
-        // TODO should we provide the store via object_Store builders?
-        let store = match integration {
-            StorageIntegration::Local => Arc::new(
-                object_store::local::LocalFileSystem::new_with_prefix(tmp_dir.path())?,
-            ),
-            _ => DeltaTableBuilder::from_uri(store_uri)
-                .with_allow_http(true)
-                .build_storage()?
-                .object_store(),
-        };
+        integration.create_bucket()?;
+        let store = integration.object_store()?;
+        let bucket = integration.bucket_name();
 
         Ok(Self {
             integration,
@@ -108,21 +97,13 @@ impl IntegrationContext {
     }
 
     /// Get a a reference to the root object store
-    pub fn object_store(&self) -> Arc<DynObjectStore> {
+    pub fn object_store(&self) -> ObjectStoreRef {
         self.store.clone()
     }
 
     /// Get the URI for initializing a store at the root
     pub fn root_uri(&self) -> String {
-        match self.integration {
-            StorageIntegration::Amazon => format!("s3://{}", &self.bucket),
-            StorageIntegration::Microsoft => format!("az://{}", &self.bucket),
-            StorageIntegration::Onelake => format!("https://{}", &self.bucket),
-            StorageIntegration::OnelakeAbfs => format!("abfss://{}", &self.bucket),
-            StorageIntegration::Google => format!("gs://{}", &self.bucket),
-            StorageIntegration::Local => format!("file://{}", &self.bucket),
-            StorageIntegration::Hdfs => format!("hdfs://localhost:9000/{}", &self.bucket),
-        }
+        self.integration.root_uri()
     }
 
     pub fn table_builder(&self, table: TestTables) -> DeltaTableBuilder {
@@ -145,28 +126,8 @@ impl IntegrationContext {
         table: TestTables,
         name: impl AsRef<str>,
     ) -> TestResult {
-        match self.integration {
-            StorageIntegration::Local => {
-                let mut options = CopyOptions::new();
-                options.content_only = true;
-                let dest_path = self.tmp_dir.path().join(name.as_ref());
-                std::fs::create_dir_all(&dest_path)?;
-                copy(table.as_path(), &dest_path, &options)?;
-            }
-            StorageIntegration::Amazon => {
-                let dest = format!("{}/{}", self.root_uri(), name.as_ref());
-                s3_cli::copy_directory(table.as_path(), dest)?;
-            }
-            StorageIntegration::Microsoft => {
-                let dest = format!("{}/{}", self.bucket, name.as_ref());
-                az_cli::copy_directory(table.as_path(), dest)?;
-            }
-            _ => {
-                let from = table.as_path().as_str().to_owned();
-                let to = format!("{}/{}", self.root_uri(), name.as_ref());
-                copy_table(from, None, to, None, true).await?;
-            }
-        };
+        self.integration
+            .copy_directory(&table.as_path(), name.as_ref())?;
         Ok(())
     }
 
@@ -179,88 +140,6 @@ impl IntegrationContext {
         }
         for (key, value) in self.env_vars.iter() {
             std::env::set_var(key, value);
-        }
-    }
-}
-
-impl Drop for IntegrationContext {
-    fn drop(&mut self) {
-        match self.integration {
-            StorageIntegration::Amazon => {
-                s3_cli::delete_bucket(self.root_uri()).unwrap();
-                s3_cli::delete_lock_table().unwrap();
-            }
-            StorageIntegration::Microsoft => {
-                az_cli::delete_container(&self.bucket).unwrap();
-            }
-            StorageIntegration::Google => {
-                gs_cli::delete_bucket(&self.bucket).unwrap();
-            }
-            StorageIntegration::Onelake => (),
-            StorageIntegration::OnelakeAbfs => (),
-            StorageIntegration::Local => (),
-            StorageIntegration::Hdfs => {
-                hdfs_cli::delete_dir(&self.bucket).unwrap();
-            }
-        };
-        self.restore_env();
-    }
-}
-
-/// Kinds of storage integration
-pub enum StorageIntegration {
-    Amazon,
-    Microsoft,
-    Onelake,
-    Google,
-    Local,
-    Hdfs,
-    OnelakeAbfs,
-}
-
-impl StorageIntegration {
-    fn prepare_env(&self) {
-        match self {
-            Self::Microsoft => az_cli::prepare_env(),
-            Self::Onelake => onelake_cli::prepare_env(),
-            Self::Amazon => s3_cli::prepare_env(),
-            Self::Google => gs_cli::prepare_env(),
-            Self::OnelakeAbfs => onelake_cli::prepare_env(),
-            Self::Local => (),
-            Self::Hdfs => (),
-        }
-    }
-
-    fn create_bucket(&self, name: impl AsRef<str>) -> std::io::Result<()> {
-        match self {
-            Self::Microsoft => {
-                az_cli::create_container(name)?;
-                Ok(())
-            }
-            Self::Onelake => Ok(()),
-            Self::OnelakeAbfs => Ok(()),
-            Self::Amazon => {
-                std::env::set_var(
-                    "DELTA_DYNAMO_TABLE_NAME",
-                    format!("delta_log_it_{}", rand::thread_rng().gen::<u16>()),
-                );
-                s3_cli::create_bucket(format!("s3://{}", name.as_ref()))?;
-                set_env_if_not_set(
-                    "DYNAMO_LOCK_PARTITION_KEY_VALUE",
-                    format!("s3://{}", name.as_ref()),
-                );
-                s3_cli::create_lock_table()?;
-                Ok(())
-            }
-            Self::Google => {
-                gs_cli::create_bucket(name)?;
-                Ok(())
-            }
-            Self::Local => Ok(()),
-            Self::Hdfs => {
-                hdfs_cli::create_dir(name)?;
-                Ok(())
-            }
         }
     }
 }
@@ -407,6 +286,7 @@ pub mod az_cli {
     }
 }
 
+/*
 /// small wrapper around s3 cli
 pub mod s3_cli {
     use super::set_env_if_not_set;
@@ -550,6 +430,7 @@ pub mod s3_cli {
         delete_dynamodb_table(&table_name)
     }
 }
+*/
 
 /// small wrapper around google api
 pub mod gs_cli {

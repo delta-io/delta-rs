@@ -1,16 +1,22 @@
 //! Lock client implementation based on DynamoDb.
 
 pub mod errors;
+pub mod logstore;
+pub mod storage;
 
 use lazy_static::lazy_static;
 use regex::Regex;
 use std::{
     collections::HashMap,
     str::FromStr,
+    sync::Arc,
     time::{Duration, SystemTime},
 };
+use tracing::debug;
 
-use object_store::path::Path;
+use deltalake_core::logstore::{logstores, LogStore, LogStoreFactory};
+use deltalake_core::storage::{factories, url_prefix_handler, ObjectStoreRef, StorageOptions};
+use deltalake_core::{DeltaResult, Path};
 use rusoto_core::{HttpClient, Region, RusotoError};
 use rusoto_credential::AutoRefreshingProvider;
 use rusoto_dynamodb::{
@@ -19,8 +25,48 @@ use rusoto_dynamodb::{
     UpdateItemError, UpdateItemInput,
 };
 use rusoto_sts::WebIdentityProvider;
+use url::Url;
 
 use errors::{DynamoDbConfigError, LockClientError};
+use storage::{S3ObjectStoreFactory, S3StorageOptions};
+
+#[derive(Clone, Debug, Default)]
+struct S3LogStoreFactory {}
+
+impl LogStoreFactory for S3LogStoreFactory {
+    fn with_options(
+        &self,
+        store: ObjectStoreRef,
+        location: &Url,
+        options: &StorageOptions,
+    ) -> DeltaResult<Arc<dyn LogStore>> {
+        let store = url_prefix_handler(store, Path::parse(location.path())?)?;
+        let s3_options = S3StorageOptions::from_map(&options.0);
+
+        if s3_options.locking_provider.as_deref() != Some("dynamodb") {
+            debug!("S3LogStoreFactory has been asked to create a LogStore without the dynamodb locking provider");
+            return Ok(deltalake_core::logstore::default_logstore(
+                store, location, options,
+            ));
+        }
+
+        Ok(Arc::new(logstore::S3DynamoDbLogStore::try_new(
+            location.clone(),
+            options.clone(),
+            &s3_options,
+            store,
+        )?))
+    }
+}
+
+/// Register an [ObjectStoreFactory] for common S3 [Url] schemes
+pub fn register_handlers(_additional_prefixes: Option<Url>) {
+    for scheme in ["s3", "s3a"].iter() {
+        let url = Url::parse(&format!("{}://", scheme)).unwrap();
+        factories().insert(url.clone(), Arc::new(S3ObjectStoreFactory::default()));
+        logstores().insert(url.clone(), Arc::new(S3LogStoreFactory::default()));
+    }
+}
 
 /// Representation of a log entry stored in DynamoDb
 /// dynamo db item consists of:
@@ -60,6 +106,12 @@ pub struct DynamoDbLockClient {
     dynamodb_client: DynamoDbClient,
     /// configuration of the
     config: DynamoDbConfig,
+}
+
+impl std::fmt::Debug for DynamoDbLockClient {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
+        write!(f, "DynamoDbLockClient(config: {:?})", self.config)
+    }
 }
 
 impl DynamoDbLockClient {
@@ -514,8 +566,9 @@ fn extract_version_from_filename(name: &str) -> Option<i64> {
 
 #[cfg(test)]
 mod tests {
-
     use super::*;
+    use object_store::memory::InMemory;
+    use serial_test::serial;
 
     fn commit_entry_roundtrip(c: &CommitEntry) -> Result<(), LockClientError> {
         let item_data: HashMap<String, AttributeValue> = create_value_map(c, "some_table");
@@ -546,5 +599,20 @@ mod tests {
             expire_time: None,
         })?;
         Ok(())
+    }
+
+    /// In cases where there is no dynamodb specified locking provider, this should get a default
+    /// logstore
+    #[test]
+    #[serial]
+    fn test_logstore_factory_default() {
+        let factory = S3LogStoreFactory::default();
+        let store = InMemory::new();
+        let url = Url::parse("s3://test-bucket").unwrap();
+        std::env::remove_var(storage::s3_constants::AWS_S3_LOCKING_PROVIDER);
+        let logstore = factory
+            .with_options(Arc::new(store), &url, &StorageOptions::from(HashMap::new()))
+            .unwrap();
+        assert_eq!(logstore.name(), "DefaultLogStore");
     }
 }

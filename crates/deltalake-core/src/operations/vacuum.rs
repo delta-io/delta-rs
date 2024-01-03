@@ -404,7 +404,9 @@ mod tests {
 
     #[tokio::test]
     async fn vacuum_delta_8_0_table() {
-        let table = open_table("./tests/data/delta-0.8.0").await.unwrap();
+        let table = open_table("../deltalake-test/tests/data/delta-0.8.0")
+            .await
+            .unwrap();
 
         let result = VacuumBuilder::new(table.log_store, table.state.clone())
             .with_retention_period(Duration::hours(1))
@@ -413,7 +415,9 @@ mod tests {
 
         assert!(result.is_err());
 
-        let table = open_table("./tests/data/delta-0.8.0").await.unwrap();
+        let table = open_table("../deltalake-test/tests/data/delta-0.8.0")
+            .await
+            .unwrap();
         let (table, result) = VacuumBuilder::new(table.log_store, table.state)
             .with_retention_period(Duration::hours(0))
             .with_dry_run(true)

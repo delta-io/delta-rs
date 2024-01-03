@@ -2,3 +2,6 @@
  * The deltalake crate is currently just a meta-package shim for deltalake-core
  */
 pub use deltalake_core::*;
+
+#[cfg(any(feature = "s3", feature = "s3-native-tls"))]
+pub use deltalake_aws as aws;
