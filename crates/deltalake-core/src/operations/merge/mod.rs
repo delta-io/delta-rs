@@ -827,7 +827,7 @@ async fn try_construct_early_filter(
 ) -> DeltaResult<Option<Expr>> {
     let table_metadata = table_snapshot.metadata();
 
-    if table_metadata.is_none() {
+    if table_metadata.is_err() {
         return Ok(None);
     }
 
@@ -921,7 +921,7 @@ async fn execute(
     let mut metrics = MergeMetrics::default();
     let exec_start = Instant::now();
 
-    let current_metadata = snapshot.metadata().ok_or(DeltaTableError::NoMetadata)?;
+    let current_metadata = snapshot.metadata()?;
 
     // TODO: Given the join predicate, remove any expression that involve the
     // source table and keep expressions that only involve the target table.

@@ -38,7 +38,7 @@ use super::datafusion_utils::Expression;
 use super::transaction::PROTOCOL;
 use crate::delta_datafusion::expr::fmt_expr_to_sql;
 use crate::delta_datafusion::{find_files, register_store, DeltaScanBuilder, DeltaSessionContext};
-use crate::errors::{DeltaResult, DeltaTableError};
+use crate::errors::DeltaResult;
 use crate::kernel::{Action, Add, Remove};
 use crate::operations::transaction::commit;
 use crate::operations::write::write_execution_plan;
@@ -138,11 +138,7 @@ async fn excute_non_empty_expr(
     let input_schema = snapshot.input_schema()?;
     let input_dfschema: DFSchema = input_schema.clone().as_ref().clone().try_into()?;
 
-    let table_partition_cols = snapshot
-        .metadata()
-        .ok_or(DeltaTableError::NoMetadata)?
-        .partition_columns
-        .clone();
+    let table_partition_cols = snapshot.metadata()?.partition_columns.clone();
 
     let scan = DeltaScanBuilder::new(snapshot, log_store.clone(), state)
         .with_files(rewrite)
