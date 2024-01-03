@@ -774,10 +774,7 @@ pub fn create_merge_plan(
 ) -> Result<MergePlan, DeltaTableError> {
     let target_size = target_size.unwrap_or_else(|| snapshot.table_config().target_file_size());
 
-    let partitions_keys = &snapshot
-        .metadata()
-        .ok_or(DeltaTableError::NoMetadata)?
-        .partition_columns;
+    let partitions_keys = &snapshot.metadata()?.partition_columns;
 
     let (operations, metrics) = match optimize_type {
         OptimizeType::Compact => {
@@ -792,10 +789,7 @@ pub fn create_merge_plan(
     let file_schema = arrow_schema_without_partitions(
         &Arc::new(
             <ArrowSchema as TryFrom<&crate::kernel::StructType>>::try_from(
-                &snapshot
-                    .metadata()
-                    .ok_or(DeltaTableError::NoMetadata)?
-                    .schema,
+                &snapshot.metadata()?.schema()?,
             )?,
         ),
         partitions_keys,
@@ -945,9 +939,8 @@ fn build_zorder_plan(
         )));
     }
     let field_names = snapshot
-        .metadata()
-        .unwrap()
-        .schema
+        .metadata()?
+        .schema()?
         .fields()
         .iter()
         .map(|field| field.name().to_string())
