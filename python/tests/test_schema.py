@@ -303,7 +303,7 @@ def test_delta_schema():
             pa.schema(
                 [
                     ("some_list", pa.large_list(pa.large_string())),
-                    ("some_fixed_list_int", pa.list_(pa.int32())),
+                    ("some_fixed_list_int", pa.large_list(pa.int32())),
                     ("some_list_binary", pa.large_list(pa.large_binary())),
                     ("some_string", pa.large_string()),
                 ]
