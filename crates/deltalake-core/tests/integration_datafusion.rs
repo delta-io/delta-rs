@@ -1130,7 +1130,7 @@ mod date_partitions {
             ),
         ];
 
-        let tmp_dir = tempdir::TempDir::new("opt_table").unwrap();
+        let tmp_dir = tempfile::tempdir().unwrap();
         let table_uri = tmp_dir.path().to_str().to_owned().unwrap();
         let dt = DeltaOps::try_from_uri(table_uri)
             .await?

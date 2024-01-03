@@ -9,13 +9,15 @@ rusoto_core = { version = "0.47", default-features = false, optional = true }
 rusoto_credential = { version = "0.47" }
 rusoto_sts = { version = "0.47", default-features = false, optional = true }
 rusoto_dynamodb = { version = "0.47", default-features = false, optional = true }
-object_store = { version = "0.7.1", features = ["aws"]}
 lazy_static = "1"
 maplit = "1"
+
+# workspace dependencies
 async-trait = { workspace = true }
 bytes = { workspace = true }
 futures = { workspace = true }
-log = { workspace = true }
+tracing = { workspace = true }
+object_store = { workspace = true, features = ["aws"]}
 thiserror = { workspace = true }
 tokio = { workspace = true }
 regex = { workspace = true }

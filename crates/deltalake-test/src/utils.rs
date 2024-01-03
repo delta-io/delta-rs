@@ -5,7 +5,7 @@ use fs_extra::dir::{copy, CopyOptions};
 use std::collections::HashMap;
 use std::env;
 use std::process::ExitStatus;
-use tempdir::TempDir;
+use tempfile::{tempdir, TempDir};
 
 pub type TestResult = Result<(), Box<dyn std::error::Error + 'static>>;
 
@@ -31,7 +31,7 @@ pub struct LocalStorageIntegration {
 impl Default for LocalStorageIntegration {
     fn default() -> Self {
         Self {
-            tmp_dir: TempDir::new("").expect("Failed to make temp dir"),
+            tmp_dir: tempdir().expect("Failed to make temp dir"),
         }
     }
 }
@@ -81,7 +81,7 @@ impl IntegrationContext {
 
         integration.prepare_env();
 
-        let tmp_dir = TempDir::new("")?;
+        let tmp_dir = tempdir()?;
         // create a fresh bucket in every context. THis is done via CLI...
         integration.create_bucket()?;
         let store = integration.object_store()?;

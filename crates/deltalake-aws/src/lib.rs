@@ -5,7 +5,6 @@ pub mod logstore;
 pub mod storage;
 
 use lazy_static::lazy_static;
-use log::*;
 use regex::Regex;
 use std::{
     collections::HashMap,
@@ -13,6 +12,7 @@ use std::{
     sync::Arc,
     time::{Duration, SystemTime},
 };
+use tracing::debug;
 
 use deltalake_core::logstore::{logstores, LogStore, LogStoreFactory};
 use deltalake_core::storage::{factories, url_prefix_handler, ObjectStoreRef, StorageOptions};

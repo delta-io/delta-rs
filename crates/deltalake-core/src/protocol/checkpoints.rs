@@ -10,12 +10,12 @@ use arrow_schema::{ArrowError, Schema as ArrowSchema};
 use chrono::{Datelike, Utc};
 use futures::{StreamExt, TryStreamExt};
 use lazy_static::lazy_static;
-use log::*;
 use object_store::ObjectStore;
 use parquet::arrow::ArrowWriter;
 use parquet::errors::ParquetError;
 use regex::Regex;
 use serde_json::Value;
+use tracing::{debug, error};
 
 use super::{time_utils, ProtocolError};
 use crate::kernel::arrow::delta_log_schema_for_table;

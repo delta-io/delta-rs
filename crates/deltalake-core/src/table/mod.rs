@@ -9,12 +9,12 @@ use std::{cmp::max, cmp::Ordering, collections::HashSet};
 use chrono::{DateTime, Utc};
 use futures::StreamExt;
 use lazy_static::lazy_static;
-use log::debug;
 use object_store::{path::Path, Error as ObjectStoreError, ObjectStore};
 use regex::Regex;
 use serde::de::{Error, SeqAccess, Visitor};
 use serde::ser::SerializeSeq;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use tracing::debug;
 use uuid::Uuid;
 
 use self::builder::DeltaTableConfig;
@@ -931,7 +931,7 @@ impl std::fmt::Debug for DeltaTable {
 #[cfg(test)]
 mod tests {
     use pretty_assertions::assert_eq;
-    use tempdir::TempDir;
+    use tempfile::TempDir;
 
     use super::*;
     use crate::kernel::{DataType, PrimitiveType, StructField};
@@ -975,24 +975,6 @@ mod tests {
         drop(tmp_dir);
     }
 
-    /* TODO move into deltalake-aws crate
-    #[cfg(any(feature = "s3", feature = "s3-native-tls"))]
-    #[test]
-    fn normalize_table_uri_s3() {
-        std::env::set_var("AWS_DEFAULT_REGION", "us-east-1");
-        for table_uri in [
-            "s3://tests/data/delta-0.8.0/",
-            "s3://tests/data/delta-0.8.0//",
-            "s3://tests/data/delta-0.8.0",
-        ]
-        .iter()
-        {
-            let table = crate::DeltaTableBuilder::from_uri(table_uri).build().unwrap();
-            assert_eq!(table.table_uri(), "s3://tests/data/delta-0.8.0");
-        }
-    }
-    */
-
     #[test]
     fn get_table_constraints() {
         let state = DeltaTableMetaData::new(
@@ -1015,7 +997,7 @@ mod tests {
     }
 
     async fn create_test_table() -> (DeltaTable, TempDir) {
-        let tmp_dir = TempDir::new("create_table_test").unwrap();
+        let tmp_dir = tempfile::tempdir().unwrap();
         let table_dir = tmp_dir.path().join("test_create");
         std::fs::create_dir(&table_dir).unwrap();
 
