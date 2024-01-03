@@ -1,4 +1,4 @@
-name: docs_release
+name: Release documentation
 
 on:
   pull_request:
@@ -12,6 +12,8 @@ on:
 jobs:
   release-docs:
     if: github.event.pull_request.merged == true
+    permissions:
+      contents: write
     runs-on: ubuntu-latest
     steps:
       - name: Trigger the docs release event
