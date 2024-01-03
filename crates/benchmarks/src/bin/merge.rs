@@ -214,7 +214,7 @@ async fn benchmark_merge_tpcds(
         .filter(col("r").lt_eq(lit(parameters.sample_files)))?;
 
     let file_sample = files.collect_partitioned().await?;
-    let schema = file_sample.get(0).unwrap().get(0).unwrap().schema();
+    let schema = file_sample.first().unwrap().first().unwrap().schema();
     let mem_table = Arc::new(MemTable::try_new(schema, file_sample)?);
     ctx.register_table("file_sample", mem_table)?;
     let file_sample_count = ctx.table("file_sample").await?.count().await?;
