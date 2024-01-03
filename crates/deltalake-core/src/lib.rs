@@ -369,18 +369,18 @@ mod tests {
         ];
 
         assert_eq!(
-        table.get_files_by_partitions(&filters).unwrap(),
-        vec![
-            Path::from("year=2020/month=2/day=3/part-00000-94d16827-f2fd-42cd-a060-f67ccc63ced9.c000.snappy.parquet"),
-            Path::from("year=2020/month=2/day=5/part-00000-89cdd4c8-2af7-4add-8ea3-3990b2f027b5.c000.snappy.parquet")
-        ]
-    );
+            table.get_files_by_partitions(&filters).unwrap(),
+            vec![
+                Path::from("year=2020/month=2/day=3/part-00000-94d16827-f2fd-42cd-a060-f67ccc63ced9.c000.snappy.parquet"),
+                Path::from("year=2020/month=2/day=5/part-00000-89cdd4c8-2af7-4add-8ea3-3990b2f027b5.c000.snappy.parquet")
+            ]
+        );
         assert_eq!(
-        table.get_file_uris_by_partitions(&filters).unwrap(),
-        vec![
-            std::fs::canonicalize("../deltalake-test/tests/data/delta-0.8.0-partitioned/year=2020/month=2/day=3/part-00000-94d16827-f2fd-42cd-a060-f67ccc63ced9.c000.snappy.parquet").unwrap().as_path().to_string_lossy(),
-            std::fs::canonicalize("../deltalake-test/tests/data/delta-0.8.0-partitioned/year=2020/month=2/day=5/part-00000-89cdd4c8-2af7-4add-8ea3-3990b2f027b5.c000.snappy.parquet").unwrap().as_path().to_string_lossy(),
-        ]
+            table.get_file_uris_by_partitions(&filters).unwrap().into_iter().map(|p| std::fs::canonicalize(p).unwrap()).collect::<Vec<_>>(),
+            vec![
+                std::fs::canonicalize("../deltalake-test/tests/data/delta-0.8.0-partitioned/year=2020/month=2/day=3/part-00000-94d16827-f2fd-42cd-a060-f67ccc63ced9.c000.snappy.parquet").unwrap(),
+                std::fs::canonicalize("../deltalake-test/tests/data/delta-0.8.0-partitioned/year=2020/month=2/day=5/part-00000-89cdd4c8-2af7-4add-8ea3-3990b2f027b5.c000.snappy.parquet").unwrap(),
+            ]
         );
 
         let filters = vec![crate::PartitionFilter {

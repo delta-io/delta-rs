@@ -99,7 +99,7 @@ lazy_static! {
 /// # use deltalake_core::logstore::*;
 /// # use std::collections::HashMap;
 /// # use url::Url;
-/// let location = Url::parse("file:///tmp").expect("Failed to make location");
+/// let location = Url::parse("memory:///").expect("Failed to make location");
 /// let logstore = logstore_for(location, HashMap::new()).expect("Failed to get a logstore");
 /// ```
 pub fn logstore_for(

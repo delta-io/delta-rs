@@ -13,7 +13,7 @@ use url::Url;
 use super::DeltaTable;
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::logstore::LogStoreRef;
-use crate::storage::StorageOptions;
+use crate::storage::{factories, StorageOptions};
 
 #[allow(dead_code)]
 #[derive(Debug, thiserror::Error)]
@@ -163,7 +163,7 @@ impl DeltaTableBuilder {
     ///
     /// ```rust
     /// # use deltalake_core::table::builder::*;
-    /// let builder = DeltaTableBuilder::from_valid_uri("/tmp");
+    /// let builder = DeltaTableBuilder::from_valid_uri("memory:///");
     /// assert!(builder.is_ok(), "Builder failed with {builder:?}");
     /// ```
     pub fn from_valid_uri(table_uri: impl AsRef<str>) -> DeltaResult<Self> {
@@ -323,17 +323,45 @@ impl DeltaTableBuilder {
     }
 }
 
-fn create_filetree_from_path(path: &PathBuf) -> DeltaResult<()> {
-    if !path.exists() {
-        std::fs::create_dir_all(path).map_err(|err| {
-            let msg = format!(
-                "Could not create local directory: {:?}\nError: {:?}",
-                path, err
-            );
-            DeltaTableError::InvalidTableLocation(msg)
-        })?;
+enum UriType {
+    LocalPath(PathBuf),
+    Url(Url),
+}
+
+/// Utility function to figure out whether string representation of the path
+/// is either local path or some kind or URL.
+///
+/// Will return an error if the path is not valid.
+fn resolve_uri_type(table_uri: impl AsRef<str>) -> DeltaResult<UriType> {
+    let table_uri = table_uri.as_ref();
+    let known_schemes: Vec<_> = factories()
+        .iter()
+        .map(|v| v.key().scheme().to_owned())
+        .collect();
+
+    if let Ok(url) = Url::parse(table_uri) {
+        let scheme = url.scheme().to_string();
+        if url.scheme() == "file" {
+            Ok(UriType::LocalPath(url.to_file_path().map_err(|err| {
+                let msg = format!("Invalid table location: {}\nError: {:?}", table_uri, err);
+                DeltaTableError::InvalidTableLocation(msg)
+            })?))
+        // NOTE this check is required to support absolute windows paths which may properly parse as url
+        } else if known_schemes.contains(&scheme) {
+            Ok(UriType::Url(url))
+        // NOTE this check is required to support absolute windows paths which may properly parse as url
+        // we assume here that a single character scheme is a windows drive letter
+        } else if scheme.len() == 1 {
+            Ok(UriType::LocalPath(PathBuf::from(table_uri)))
+        } else {
+            Err(DeltaTableError::InvalidTableLocation(format!(
+                "Unknown scheme: {}",
+                scheme
+            )))
+        }
+    } else {
+        Ok(UriType::LocalPath(PathBuf::from(table_uri)))
     }
-    Ok(())
 }
 
 /// Attempt to create a Url from given table location.
@@ -350,35 +378,35 @@ fn create_filetree_from_path(path: &PathBuf) -> DeltaResult<()> {
 pub fn ensure_table_uri(table_uri: impl AsRef<str>) -> DeltaResult<Url> {
     let table_uri = table_uri.as_ref();
 
-    debug!("ensure_table_uri {table_uri}");
-    let mut url = match Url::parse(table_uri) {
-        Ok(url) => {
-            if url.scheme() == "file" {
-                create_filetree_from_path(
-                    &url.to_file_path()
-                        .expect("Failed to convert a file:// URL to a file path"),
-                )?;
+    let uri_type: UriType = resolve_uri_type(table_uri)?;
+
+    // If it is a local path, we need to create it if it does not exist.
+    let mut url = match uri_type {
+        UriType::LocalPath(path) => {
+            if !path.exists() {
+                std::fs::create_dir_all(&path).map_err(|err| {
+                    let msg = format!(
+                        "Could not create local directory: {}\nError: {:?}",
+                        table_uri, err
+                    );
+                    DeltaTableError::InvalidTableLocation(msg)
+                })?;
             }
-            Ok(url)
-        }
-        Err(_) => {
-            let path = PathBuf::from(table_uri);
-            create_filetree_from_path(&path)?;
-            let path = std::fs::canonicalize(path.clone()).map_err(|err| {
-                let msg = format!("Invalid table location: {:?}\nError: {:?}", path, err);
+            let path = std::fs::canonicalize(path).map_err(|err| {
+                let msg = format!("Invalid table location: {}\nError: {:?}", table_uri, err);
                 DeltaTableError::InvalidTableLocation(msg)
             })?;
-
-            Url::from_directory_path(path.clone()).map_err(|_| {
+            Url::from_directory_path(path).map_err(|_| {
                 let msg = format!(
-                    "Could not construct a URL from canonicalized path: {:?}.\n\
+                    "Could not construct a URL from canonicalized path: {}.\n\
                     Something must be very wrong with the table path.",
-                    path,
+                    table_uri
                 );
                 DeltaTableError::InvalidTableLocation(msg)
-            })
+            })?
         }
-    }?;
+        UriType::Url(url) => url,
+    };
 
     let trimmed_path = url.path().trim_end_matches('/').to_owned();
     url.set_path(&trimmed_path);
@@ -400,21 +428,31 @@ fn ensure_file_location_exists(path: PathBuf) -> DeltaResult<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use itertools::Itertools;
     use object_store::path::Path;
 
+    use super::*;
+    use crate::storage::DefaultObjectStoreFactory;
+
     #[test]
     fn test_ensure_table_uri() {
+        factories().insert(
+            Url::parse("s3://").unwrap(),
+            Arc::new(DefaultObjectStoreFactory::default()),
+        );
+
         // parse an existing relative directory
         let uri = ensure_table_uri(".");
         assert!(uri.is_ok());
-        let _uri = ensure_table_uri("./nonexistent");
-        assert!(uri.is_ok());
-        let uri = ensure_table_uri("file:///tmp/nonexistent/some/path");
+        let uri = ensure_table_uri("./nonexistent");
         assert!(uri.is_ok());
         let uri = ensure_table_uri("s3://container/path");
         assert!(uri.is_ok());
+        #[cfg(not(windows))]
+        {
+            let uri = ensure_table_uri("file:///tmp/nonexistent/some/path");
+            assert!(uri.is_ok());
+        }
 
         // These cases should all roundtrip to themselves
         cfg_if::cfg_if! {
@@ -497,7 +535,7 @@ mod tests {
     #[test]
     fn test_ensure_table_uri_url() {
         // Urls should round trips as-is
-        let expected = Url::parse("s3://deltalake-test/tests/data/delta-0.8.0").unwrap();
+        let expected = Url::parse("memory:///deltalake-test/tests/data/delta-0.8.0").unwrap();
         let url = ensure_table_uri(&expected).unwrap();
         assert_eq!(expected, url);
 
