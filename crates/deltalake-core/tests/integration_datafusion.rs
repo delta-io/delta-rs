@@ -1,4 +1,4 @@
-#![cfg(all(feature = "integration_test", feature = "datafusion"))]
+#![cfg(feature = "datafusion")]
 
 use arrow::array::Int64Array;
 use deltalake_test::datafusion::*;

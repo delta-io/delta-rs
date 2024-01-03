@@ -34,9 +34,6 @@ s3-native-tls = ["deltalake-aws/native-tls"]
 s3 = ["deltalake-aws/rustls"]
 unity-experimental = ["deltalake-core/unity-experimental"]
 
-# used only for integration testing
-integration_test = ["deltalake-core/integration_test"]
-
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 chrono = { workspace = true, default-features = false, features = ["clock"] }

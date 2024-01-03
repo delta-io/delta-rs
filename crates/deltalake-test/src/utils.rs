@@ -7,7 +7,7 @@ use std::env;
 use std::process::ExitStatus;
 use tempfile::{tempdir, TempDir};
 
-pub type TestResult = Result<(), Box<dyn std::error::Error + 'static>>;
+pub type TestResult<T = ()> = Result<T, Box<dyn std::error::Error + 'static>>;
 
 pub trait StorageIntegration {
     fn create_bucket(&self) -> std::io::Result<ExitStatus>;

@@ -1,5 +1,3 @@
-#![cfg(feature = "integration_test")]
-
 use std::collections::HashMap;
 use std::future::Future;
 use std::iter::FromIterator;
@@ -10,19 +8,10 @@ use deltalake_core::operations::transaction::commit;
 use deltalake_core::operations::DeltaOps;
 use deltalake_core::protocol::{DeltaOperation, SaveMode};
 use deltalake_core::{DeltaTable, DeltaTableBuilder};
-use deltalake_test::utils::*;
-use serial_test::serial;
 
-#[tokio::test]
-#[serial]
-async fn test_concurrent_writes_local() -> TestResult {
-    let storage = Box::new(LocalStorageIntegration::default());
-    let context = IntegrationContext::new(storage)?;
-    test_concurrent_writes(&context).await?;
-    Ok(())
-}
+use crate::utils::*;
 
-async fn test_concurrent_writes(context: &IntegrationContext) -> TestResult {
+pub async fn test_concurrent_writes(context: &IntegrationContext) -> TestResult {
     let (_table, table_uri) = prepare_table(&context).await?;
     run_test(|name| Worker::new(&table_uri, name)).await;
     Ok(())
