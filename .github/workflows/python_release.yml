@@ -1,4 +1,4 @@
-name: Release to PyPI
+name: Release to PyPI and documentation
 
 on:
   push:
@@ -103,6 +103,8 @@ jobs:
         release-pypi-mac,
         release-pypi-windows,
       ]
+    permissions:
+      contents: write
     runs-on: ubuntu-latest
     steps:
       - name: Trigger the docs release event
