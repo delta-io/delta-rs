@@ -28,7 +28,7 @@ use tracing::{debug, warn};
 #[cfg(feature = "datafusion")]
 use datafusion::datasource::object_store::ObjectStoreUrl;
 
-pub mod default_logstore;
+pub(crate) mod default_logstore;
 
 /// Trait for generating [LogStore] implementations
 pub trait LogStoreFactory: Send + Sync {

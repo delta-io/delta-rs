@@ -61,20 +61,22 @@ impl LogStoreFactory for S3LogStoreFactory {
 
 /// Register an [ObjectStoreFactory] for common S3 [Url] schemes
 pub fn register_handlers(_additional_prefixes: Option<Url>) {
+    let object_stores = Arc::new(S3ObjectStoreFactory::default());
+    let log_stores = Arc::new(S3LogStoreFactory::default());
     for scheme in ["s3", "s3a"].iter() {
         let url = Url::parse(&format!("{}://", scheme)).unwrap();
-        factories().insert(url.clone(), Arc::new(S3ObjectStoreFactory::default()));
-        logstores().insert(url.clone(), Arc::new(S3LogStoreFactory::default()));
+        factories().insert(url.clone(), object_stores.clone());
+        logstores().insert(url.clone(), log_stores.clone());
     }
 }
 
 /// Representation of a log entry stored in DynamoDb
 /// dynamo db item consists of:
-/// - tablePath: String - tracked in the log store implementation
-/// - fileName: String - commit version.json (part of primary key), stored as i64 in this struct
-/// - tempPath: String - name of temporary file containing commit info
+/// - table_path: String - tracked in the log store implementation
+/// - file_name: String - commit version.json (part of primary key), stored as i64 in this struct
+/// - temp_path: String - name of temporary file containing commit info
 /// - complete: bool - operation completed, i.e. atomic rename from `tempPath` to `fileName` succeeded
-/// - expireTime: `Option<SystemTime>` - epoch seconds at which this external commit entry is safe to be deleted
+/// - expire_time: `Option<SystemTime>` - epoch seconds at which this external commit entry is safe to be deleted
 #[derive(Debug, PartialEq)]
 pub struct CommitEntry {
     /// Commit version, stored as file name (e.g., 00000N.json) in dynamodb (relative to `_delta_log/`
