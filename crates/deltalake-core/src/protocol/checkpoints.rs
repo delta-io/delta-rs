@@ -227,7 +227,7 @@ pub async fn cleanup_expired_logs_for(
 fn parquet_bytes_from_state(
     state: &DeltaTableState,
 ) -> Result<(CheckPoint, bytes::Bytes), ProtocolError> {
-    let current_metadata = state.metadata().ok_or(ProtocolError::NoMetaData)?;
+    let current_metadata = state.delta_metadata().ok_or(ProtocolError::NoMetaData)?;
 
     let partition_col_data_types = current_metadata.get_partition_col_data_types();
 

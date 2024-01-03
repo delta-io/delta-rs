@@ -54,7 +54,7 @@ use crate::kernel::{Action, Remove};
 use crate::logstore::LogStoreRef;
 use crate::protocol::DeltaOperation;
 use crate::table::state::DeltaTableState;
-use crate::{DeltaResult, DeltaTable, DeltaTableError};
+use crate::{DeltaResult, DeltaTable};
 
 /// Updates records in the Delta Table.
 /// See this module's documentation for more information
@@ -209,7 +209,7 @@ async fn execute(
         })
         .collect::<Result<HashMap<Column, Expr>, _>>()?;
 
-    let current_metadata = snapshot.metadata().ok_or(DeltaTableError::NoMetadata)?;
+    let current_metadata = snapshot.metadata()?;
     let table_partition_cols = current_metadata.partition_columns.clone();
 
     let scan_start = Instant::now();

@@ -137,26 +137,20 @@ impl TryFrom<&DataType> for ArrowDataType {
             DataType::Struct(s) => Ok(ArrowDataType::Struct(
                 s.fields()
                     .iter()
-                    .map(<ArrowField as TryFrom<&StructField>>::try_from)
+                    .map(TryInto::try_into)
                     .collect::<Result<Vec<ArrowField>, ArrowError>>()?
                     .into(),
             )),
-            DataType::Array(a) => Ok(ArrowDataType::List(Arc::new(<ArrowField as TryFrom<
-                &ArrayType,
-            >>::try_from(a)?))),
+            DataType::Array(a) => Ok(ArrowDataType::List(Arc::new(a.as_ref().try_into()?))),
             DataType::Map(m) => Ok(ArrowDataType::Map(
                 Arc::new(ArrowField::new(
                     "entries",
                     ArrowDataType::Struct(
                         vec![
-                            ArrowField::new(
-                                MAP_KEYS_NAME,
-                                <ArrowDataType as TryFrom<&DataType>>::try_from(m.key_type())?,
-                                false,
-                            ),
+                            ArrowField::new(MAP_KEYS_NAME, m.key_type().try_into()?, false),
                             ArrowField::new(
                                 MAP_VALUES_NAME,
-                                <ArrowDataType as TryFrom<&DataType>>::try_from(m.value_type())?,
+                                m.value_type().try_into()?,
                                 m.value_contains_null(),
                             ),
                         ]

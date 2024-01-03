@@ -17,7 +17,7 @@ use crate::delta_datafusion::expr::fmt_expr_to_sql;
 use crate::delta_datafusion::{
     register_store, DeltaDataChecker, DeltaScanBuilder, DeltaSessionContext,
 };
-use crate::kernel::{Action, CommitInfo, IsolationLevel, Metadata, Protocol};
+use crate::kernel::{Action, CommitInfo, IsolationLevel, Protocol};
 use crate::logstore::LogStoreRef;
 use crate::operations::datafusion_utils::Expression;
 use crate::operations::transaction::commit;
@@ -86,11 +86,7 @@ impl std::future::IntoFuture for ConstraintBuilder {
                 .expr
                 .ok_or_else(|| DeltaTableError::Generic("No Expresion provided".to_string()))?;
 
-            let mut metadata = this
-                .snapshot
-                .metadata()
-                .ok_or(DeltaTableError::NoMetadata)?
-                .clone();
+            let mut metadata = this.snapshot.metadata()?.clone();
             let configuration_key = format!("delta.constraints.{}", name);
 
             if metadata.configuration.contains_key(&configuration_key) {
@@ -190,7 +186,7 @@ impl std::future::IntoFuture for ConstraintBuilder {
 
             let actions = vec![
                 Action::CommitInfo(commit_info),
-                Action::Metadata(Metadata::try_from(metadata)?),
+                Action::Metadata(metadata),
                 Action::Protocol(protocol),
             ];
 

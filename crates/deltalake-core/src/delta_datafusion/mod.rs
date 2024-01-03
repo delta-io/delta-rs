@@ -588,11 +588,7 @@ impl<'a> DeltaScanBuilder<'a> {
         // However we may want to do some additional balancing in case we are far off from the above.
         let mut file_groups: HashMap<Vec<ScalarValue>, Vec<PartitionedFile>> = HashMap::new();
 
-        let table_partition_cols = &self
-            .snapshot
-            .metadata()
-            .ok_or(DeltaTableError::NoMetadata)?
-            .partition_columns;
+        let table_partition_cols = &self.snapshot.metadata()?.partition_columns;
 
         for action in files.iter() {
             let mut part = partitioned_file_from_action(action, table_partition_cols, &schema);
@@ -1095,7 +1091,7 @@ impl DeltaDataChecker {
 
     /// Create a new DeltaDataChecker
     pub fn new(snapshot: &DeltaTableState) -> Self {
-        let metadata = snapshot.metadata();
+        let metadata = snapshot.delta_metadata();
 
         let invariants = metadata
             .and_then(|meta| meta.schema.get_invariants().ok())
@@ -1539,7 +1535,7 @@ pub async fn find_files<'a>(
     state: &SessionState,
     predicate: Option<Expr>,
 ) -> DeltaResult<FindFiles> {
-    let current_metadata = snapshot.metadata().ok_or(DeltaTableError::NoMetadata)?;
+    let current_metadata = snapshot.metadata()?;
 
     match &predicate {
         Some(predicate) => {

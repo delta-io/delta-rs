@@ -790,13 +790,15 @@ impl DeltaTable {
 
     /// Returns the metadata associated with the loaded state.
     pub fn metadata(&self) -> Result<&Metadata, DeltaTableError> {
-        Ok(self.state.metadata_action()?)
+        Ok(self.state.metadata()?)
     }
 
     /// Returns the metadata associated with the loaded state.
     #[deprecated(since = "0.17.0", note = "use metadata() instead")]
     pub fn get_metadata(&self) -> Result<&DeltaTableMetaData, DeltaTableError> {
-        self.state.metadata().ok_or(DeltaTableError::NoMetadata)
+        self.state
+            .delta_metadata()
+            .ok_or(DeltaTableError::NoMetadata)
     }
 
     /// Returns a vector of active tombstones (i.e. `Remove` actions present in the current delta log).
@@ -855,7 +857,7 @@ impl DeltaTable {
     pub fn get_configurations(&self) -> Result<&HashMap<String, Option<String>>, DeltaTableError> {
         Ok(self
             .state
-            .metadata()
+            .delta_metadata()
             .ok_or(DeltaTableError::NoMetadata)?
             .get_configuration())
     }
@@ -905,10 +907,10 @@ impl fmt::Display for DeltaTable {
         writeln!(f, "DeltaTable({})", self.table_uri())?;
         writeln!(f, "\tversion: {}", self.version())?;
         match self.state.metadata() {
-            Some(metadata) => {
-                writeln!(f, "\tmetadata: {metadata}")?;
+            Ok(metadata) => {
+                writeln!(f, "\tmetadata: {metadata:?}")?;
             }
-            None => {
+            _ => {
                 writeln!(f, "\tmetadata: None")?;
             }
         }
