@@ -920,7 +920,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_special_characters_write_read() {
-        let tmp_dir = tempdir::TempDir::new("test").unwrap();
+        let tmp_dir = tempfile::tempdir().unwrap();
         let tmp_path = std::fs::canonicalize(tmp_dir.path()).unwrap();
 
         let schema = Arc::new(ArrowSchema::new(vec![

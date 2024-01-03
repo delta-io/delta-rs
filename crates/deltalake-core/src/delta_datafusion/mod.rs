@@ -71,9 +71,9 @@ use datafusion_sql::planner::ParserOptions;
 use futures::TryStreamExt;
 
 use itertools::Itertools;
-use log::error;
 use object_store::ObjectMeta;
 use serde::{Deserialize, Serialize};
+use tracing::error;
 use url::Url;
 
 use crate::errors::{DeltaResult, DeltaTableError};

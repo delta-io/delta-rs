@@ -14,7 +14,7 @@ use std::fs;
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
-use tempdir::TempDir;
+use tempfile::TempDir;
 
 #[derive(Debug)]
 struct Context {
@@ -36,7 +36,7 @@ async fn setup_test() -> Result<Context, Box<dyn Error>> {
         ),
     ];
 
-    let tmp_dir = tempdir::TempDir::new("restore_table").unwrap();
+    let tmp_dir = tempfile::tempdir().unwrap();
     let table_uri = tmp_dir.path().to_str().to_owned().unwrap();
     let table = DeltaOps::try_from_uri(table_uri)
         .await?

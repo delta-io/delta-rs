@@ -12,7 +12,7 @@ use deltalake_core::{ObjectStore, Path};
 use std::any::Any;
 use std::collections::HashMap;
 use std::sync::Arc;
-use tempdir::TempDir;
+use tempfile::TempDir;
 
 pub mod clock;
 #[cfg(feature = "datafusion")]
@@ -88,7 +88,7 @@ impl TestContext {
 }
 
 pub async fn setup_local_context() -> TestContext {
-    let tmp_dir = tempdir::TempDir::new("delta-rs_tests").unwrap();
+    let tmp_dir = tempfile::tempdir().unwrap();
     let mut config = HashMap::new();
     config.insert(
         "URI".to_owned(),

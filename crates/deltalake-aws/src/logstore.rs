@@ -9,7 +9,7 @@ use crate::{constants, CommitEntry, DynamoDbLockClient, UpdateLogEntryResult};
 
 use bytes::Bytes;
 use deltalake_core::{ObjectStoreError, Path};
-use log::*;
+use tracing::{debug, error, warn};
 use url::Url;
 
 use deltalake_core::logstore::*;

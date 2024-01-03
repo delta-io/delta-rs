@@ -18,8 +18,8 @@ use deltalake::parquet::{
 use deltalake::writer::{DeltaWriter, RecordBatchWriter};
 use deltalake::Path;
 use deltalake::*;
-use log::*;
 use std::sync::Arc;
+use tracing::*;
 
 /*
  * The main function gets everything started, but does not contain any meaningful
