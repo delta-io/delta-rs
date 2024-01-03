@@ -5,8 +5,8 @@ use std::str::FromStr;
 // use std::sync::Arc;
 
 // use roaring::RoaringTreemap;
-use log::warn;
 use serde::{Deserialize, Serialize};
+use tracing::warn;
 use url::Url;
 
 use super::super::schema::StructType;

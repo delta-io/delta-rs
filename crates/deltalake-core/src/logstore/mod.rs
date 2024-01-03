@@ -22,8 +22,8 @@ use crate::{
     DeltaTableError,
 };
 use bytes::Bytes;
-use log::*;
 use object_store::{path::Path, Error as ObjectStoreError, ObjectStore};
+use tracing::{debug, warn};
 
 #[cfg(feature = "datafusion")]
 use datafusion::datasource::object_store::ObjectStoreUrl;

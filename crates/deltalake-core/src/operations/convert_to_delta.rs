@@ -16,7 +16,6 @@ use futures::{
     future::{self, BoxFuture},
     TryStreamExt,
 };
-use log::{debug, info};
 use parquet::{
     arrow::async_reader::{ParquetObjectReader, ParquetRecordBatchStreamBuilder},
     errors::ParquetError,
@@ -29,6 +28,7 @@ use std::{
     str::{FromStr, Utf8Error},
     sync::Arc,
 };
+use tracing::{debug, info};
 
 /// Error converting a Parquet table to a Delta table
 #[derive(Debug, thiserror::Error)]

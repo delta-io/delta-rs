@@ -30,13 +30,13 @@ use futures::future::BoxFuture;
 use futures::stream::BoxStream;
 use futures::{Future, StreamExt, TryStreamExt};
 use itertools::Itertools;
-use log::debug;
 use num_cpus;
 use parquet::arrow::async_reader::{ParquetObjectReader, ParquetRecordBatchStreamBuilder};
 use parquet::basic::{Compression, ZstdLevel};
 use parquet::errors::ParquetError;
 use parquet::file::properties::WriterProperties;
 use serde::{Deserialize, Serialize};
+use tracing::debug;
 
 use super::transaction::{commit, PROTOCOL};
 use super::writer::{PartitionWriter, PartitionWriterConfig};

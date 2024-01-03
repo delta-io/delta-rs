@@ -69,11 +69,6 @@
 #![allow(rustdoc::invalid_html_tags)]
 #![allow(clippy::nonminimal_bool)]
 
-#[cfg(all(feature = "glue", feature = "glue-native-tls"))]
-compile_error!(
-    "Features glue and glue-native-tls are mutually exclusive and cannot be enabled together"
-);
-
 pub mod data_catalog;
 pub mod errors;
 pub mod kernel;

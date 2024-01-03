@@ -35,7 +35,10 @@ async fn test_action_reconciliation() {
     // Add a file.
     let a = fs_common::add(3 * 60 * 1000);
     assert_eq!(1, fs_common::commit_add(&mut table, &a).await);
-    assert_eq!(table.get_files(), vec![Path::from(a.path.clone())]);
+    assert_eq!(
+        table.get_files_iter().collect::<Vec<_>>(),
+        vec![Path::from(a.path.clone())]
+    );
 
     // Remove added file.
     let r = deltalake_core::kernel::Remove {
@@ -52,7 +55,7 @@ async fn test_action_reconciliation() {
     };
 
     assert_eq!(2, fs_common::commit_removes(&mut table, vec![&r]).await);
-    assert_eq!(table.get_files().len(), 0);
+    assert_eq!(table.get_files_iter().count(), 0);
     assert_eq!(
         table
             .get_state()
@@ -65,7 +68,10 @@ async fn test_action_reconciliation() {
 
     // Add removed file back.
     assert_eq!(3, fs_common::commit_add(&mut table, &a).await);
-    assert_eq!(table.get_files(), vec![Path::from(a.path)]);
+    assert_eq!(
+        table.get_files_iter().collect::<Vec<_>>(),
+        vec![Path::from(a.path)]
+    );
     // tombstone is removed.
     assert_eq!(table.get_state().all_tombstones().len(), 0);
 }
@@ -129,7 +135,7 @@ async fn read_encoded_table(integration: &IntegrationContext, root_path: &str) -
         .await?;
 
     assert_eq!(table.version(), 0);
-    assert_eq!(table.get_files().len(), 2);
+    assert_eq!(table.get_files_iter().count(), 2);
 
     Ok(())
 }
@@ -145,7 +151,7 @@ async fn read_simple_table(integration: &IntegrationContext) -> TestResult {
     assert_eq!(table.protocol().min_writer_version, 2);
     assert_eq!(table.protocol().min_reader_version, 1);
     assert_eq!(
-        table.get_files(),
+        table.get_files_iter().collect::<Vec<_>>(),
         vec![
             Path::from("part-00000-c1777d7d-89d9-4790-b38a-6ee7e24456b1-c000.snappy.parquet"),
             Path::from("part-00001-7891c33d-cedc-47c3-88a6-abcfb049d3b4-c000.snappy.parquet"),
@@ -185,7 +191,7 @@ async fn read_simple_table_with_version(integration: &IntegrationContext) -> Tes
     assert_eq!(table.protocol().min_writer_version, 2);
     assert_eq!(table.protocol().min_reader_version, 1);
     assert_eq!(
-        table.get_files(),
+        table.get_files_iter().collect::<Vec<_>>(),
         vec![
             Path::from("part-00000-c1777d7d-89d9-4790-b38a-6ee7e24456b1-c000.snappy.parquet"),
             Path::from("part-00001-7891c33d-cedc-47c3-88a6-abcfb049d3b4-c000.snappy.parquet"),

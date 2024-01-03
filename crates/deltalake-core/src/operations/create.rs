@@ -330,7 +330,7 @@ mod tests {
     use crate::operations::DeltaOps;
     use crate::table::config::DeltaConfigKey;
     use crate::writer::test_utils::get_delta_schema;
-    use tempdir::TempDir;
+    use tempfile::TempDir;
 
     #[tokio::test]
     async fn test_create() {
@@ -349,7 +349,7 @@ mod tests {
     #[tokio::test]
     async fn test_create_local_relative_path() {
         let table_schema = get_delta_schema();
-        let tmp_dir = TempDir::new_in(".", "tmp_").unwrap();
+        let tmp_dir = TempDir::new_in(".").unwrap();
         let relative_path = format!(
             "./{}",
             tmp_dir.path().file_name().unwrap().to_str().unwrap()
@@ -369,7 +369,7 @@ mod tests {
     #[tokio::test]
     async fn test_create_table_local_path() {
         let schema = get_delta_schema();
-        let tmp_dir = TempDir::new_in(".", "tmp_").unwrap();
+        let tmp_dir = TempDir::new_in(".").unwrap();
         let relative_path = format!(
             "./{}",
             tmp_dir.path().file_name().unwrap().to_str().unwrap()

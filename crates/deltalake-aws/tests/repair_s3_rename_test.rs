@@ -7,7 +7,7 @@ use deltalake_core::storage::object_store::{
     ObjectMeta, Result as ObjectStoreResult,
 };
 use deltalake_core::{DeltaTableBuilder, ObjectStore, Path};
-use deltalake_test::utils::{IntegrationContext, StorageIntegration};
+use deltalake_test::utils::IntegrationContext;
 use futures::stream::BoxStream;
 use serial_test::serial;
 use std::ops::Range;

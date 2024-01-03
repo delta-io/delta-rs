@@ -22,5 +22,5 @@ features = ["azure", "gcs"]
 
 [features]
 default = ["rustls"]
-native-tls = ["deltalake/s3-native-tls", "deltalake/glue-native-tls"]
+native-tls = ["deltalake/s3-native-tls", "deltalake/glue"]
 rustls = ["deltalake/s3", "deltalake/glue"]

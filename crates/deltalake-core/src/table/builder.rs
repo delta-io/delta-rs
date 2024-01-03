@@ -5,9 +5,9 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use chrono::{DateTime, FixedOffset, Utc};
-use log::*;
 use object_store::DynObjectStore;
 use serde::{Deserialize, Serialize};
+use tracing::debug;
 use url::Url;
 
 use super::DeltaTable;
@@ -509,7 +509,7 @@ mod tests {
 
     #[test]
     fn test_ensure_table_uri_path() {
-        let tmp_dir = tempdir::TempDir::new("test").unwrap();
+        let tmp_dir = tempfile::tempdir().unwrap();
         let tmp_path = std::fs::canonicalize(tmp_dir.path()).unwrap();
         let paths = &[
             tmp_path.join("data/delta-0.8.0"),
@@ -539,7 +539,7 @@ mod tests {
         let url = ensure_table_uri(&expected).unwrap();
         assert_eq!(expected, url);
 
-        let tmp_dir = tempdir::TempDir::new("test").unwrap();
+        let tmp_dir = tempfile::tempdir().unwrap();
         let tmp_path = std::fs::canonicalize(tmp_dir.path()).unwrap();
         let path = tmp_path.join("data/delta-0.8.0");
         let expected = Url::from_directory_path(path).unwrap();

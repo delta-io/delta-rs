@@ -12,7 +12,6 @@ mod time_utils;
 use arrow_schema::ArrowError;
 use futures::StreamExt;
 use lazy_static::lazy_static;
-use log::debug;
 use object_store::{path::Path, Error as ObjectStoreError, ObjectStore};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -22,6 +21,7 @@ use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::mem::take;
 use std::str::FromStr;
+use tracing::{debug, error};
 
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::{Add, CommitInfo, Metadata, Protocol, Remove};
@@ -266,7 +266,7 @@ impl Add {
             Ok(Some(stats)) => Ok(Some(stats)),
             Ok(None) => self.get_json_stats(),
             Err(e) => {
-                log::error!(
+                error!(
                     "Error when reading parquet stats {:?} {e}. Attempting to read json stats",
                     self.stats_parsed
                 );
