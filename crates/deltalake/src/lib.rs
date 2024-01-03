@@ -5,3 +5,5 @@ pub use deltalake_core::*;
 
 #[cfg(any(feature = "s3", feature = "s3-native-tls"))]
 pub use deltalake_aws as aws;
+#[cfg(feature = "azure")]
+pub use deltalake_azure as azure;

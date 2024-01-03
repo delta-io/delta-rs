@@ -14,13 +14,14 @@ edition = "2021"
 
 [dependencies]
 deltalake-core = { path = "../deltalake-core" }
-deltalake-aws = { path = "../deltalake-aws", default-features = false ,optional = true }
+deltalake-aws = { path = "../deltalake-aws", default-features = false, optional = true }
+deltalake-azure = { path = "../deltalake-azure", optional = true }
 deltalake-catalog-glue = { path = "../deltalake-catalog-glue", optional = true }
 
 [features]
 # All of these features are just reflected into the core crate until that
 # functionality is broken apart
-azure = ["deltalake-core/azure"]
+azure = ["deltalake-azure"]
 arrow = ["deltalake-core/arrow"]
 default = ["arrow"]
 datafusion = ["deltalake-core/datafusion"]
