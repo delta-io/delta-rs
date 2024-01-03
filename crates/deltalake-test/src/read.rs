@@ -1,82 +1,9 @@
-#![cfg(feature = "integration_test")]
-
-use deltalake_core::{DeltaTableBuilder, ObjectStore};
-use deltalake_test::utils::*;
+use deltalake_core::DeltaTableBuilder;
 use object_store::path::Path;
-use serial_test::serial;
 
-#[allow(dead_code)]
-mod fs_common;
+use crate::utils::{IntegrationContext, TestResult, TestTables};
 
-static TEST_PREFIXES: &[&str] = &["my table", "你好/😊"];
-
-/// TEST_PREFIXES as they should appear in object stores.
-static TEST_PREFIXES_ENCODED: &[&str] = &["my%20table", "%E4%BD%A0%E5%A5%BD/%F0%9F%98%8A"];
-
-#[tokio::test]
-#[serial]
-async fn test_read_tables_local() -> TestResult {
-    let storage = Box::new(LocalStorageIntegration::default());
-    let context = IntegrationContext::new(storage)?;
-    read_tables(&context).await?;
-
-    for prefix in TEST_PREFIXES {
-        read_table_paths(&context, prefix, prefix).await?;
-    }
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn test_action_reconciliation() {
-    let path = "./tests/data/action_reconciliation";
-    let mut table = fs_common::create_table(path, None).await;
-
-    // Add a file.
-    let a = fs_common::add(3 * 60 * 1000);
-    assert_eq!(1, fs_common::commit_add(&mut table, &a).await);
-    assert_eq!(
-        table.get_files_iter().collect::<Vec<_>>(),
-        vec![Path::from(a.path.clone())]
-    );
-
-    // Remove added file.
-    let r = deltalake_core::kernel::Remove {
-        path: a.path.clone(),
-        deletion_timestamp: Some(chrono::Utc::now().timestamp_millis()),
-        data_change: false,
-        extended_file_metadata: None,
-        partition_values: None,
-        size: None,
-        tags: None,
-        deletion_vector: None,
-        base_row_id: None,
-        default_row_commit_version: None,
-    };
-
-    assert_eq!(2, fs_common::commit_removes(&mut table, vec![&r]).await);
-    assert_eq!(table.get_files_iter().count(), 0);
-    assert_eq!(
-        table
-            .get_state()
-            .all_tombstones()
-            .iter()
-            .map(|r| r.path.as_str())
-            .collect::<Vec<_>>(),
-        vec![a.path.as_str()]
-    );
-
-    // Add removed file back.
-    assert_eq!(3, fs_common::commit_add(&mut table, &a).await);
-    assert_eq!(
-        table.get_files_iter().collect::<Vec<_>>(),
-        vec![Path::from(a.path)]
-    );
-    // tombstone is removed.
-    assert_eq!(table.get_state().all_tombstones().len(), 0);
-}
-
-async fn read_tables(context: &IntegrationContext) -> TestResult {
+pub async fn test_read_tables(context: &IntegrationContext) -> TestResult {
     context.load_table(TestTables::Simple).await?;
     context.load_table(TestTables::Golden).await?;
     context
@@ -90,7 +17,7 @@ async fn read_tables(context: &IntegrationContext) -> TestResult {
     Ok(())
 }
 
-async fn read_table_paths(
+pub async fn read_table_paths(
     context: &IntegrationContext,
     table_root: &str,
     upload_path: &str,
@@ -102,40 +29,6 @@ async fn read_table_paths(
     verify_store(&context, table_root).await?;
 
     read_encoded_table(&context, table_root).await?;
-
-    Ok(())
-}
-
-async fn verify_store(integration: &IntegrationContext, root_path: &str) -> TestResult {
-    let table_uri = format!("{}/{}", integration.root_uri(), root_path);
-    let storage = DeltaTableBuilder::from_uri(table_uri.clone())
-        .with_allow_http(true)
-        .build_storage()?
-        .object_store();
-
-    let files = storage.list_with_delimiter(None).await?;
-    assert_eq!(
-        vec![
-            Path::parse("_delta_log").unwrap(),
-            Path::parse("x=A%2FA").unwrap(),
-            Path::parse("x=B%20B").unwrap(),
-        ],
-        files.common_prefixes
-    );
-
-    Ok(())
-}
-
-async fn read_encoded_table(integration: &IntegrationContext, root_path: &str) -> TestResult {
-    let table_uri = format!("{}/{}", integration.root_uri(), root_path);
-
-    let table = DeltaTableBuilder::from_uri(table_uri)
-        .with_allow_http(true)
-        .load()
-        .await?;
-
-    assert_eq!(table.version(), 0);
-    assert_eq!(table.get_files_iter().count(), 2);
 
     Ok(())
 }
@@ -231,6 +124,41 @@ async fn read_golden(integration: &IntegrationContext) -> TestResult {
     assert_eq!(table.version(), 0);
     assert_eq!(table.protocol().min_writer_version, 2);
     assert_eq!(table.protocol().min_reader_version, 1);
+
+    Ok(())
+}
+
+async fn verify_store(integration: &IntegrationContext, root_path: &str) -> TestResult {
+    let table_uri = format!("{}/{}", integration.root_uri(), root_path);
+
+    let storage = DeltaTableBuilder::from_uri(table_uri.clone())
+        .with_allow_http(true)
+        .build_storage()?
+        .object_store();
+
+    let files = storage.list_with_delimiter(None).await?;
+    assert_eq!(
+        vec![
+            Path::parse("_delta_log").unwrap(),
+            Path::parse("x=A%2FA").unwrap(),
+            Path::parse("x=B%20B").unwrap(),
+        ],
+        files.common_prefixes
+    );
+
+    Ok(())
+}
+
+async fn read_encoded_table(integration: &IntegrationContext, root_path: &str) -> TestResult {
+    let table_uri = format!("{}/{}", integration.root_uri(), root_path);
+
+    let table = DeltaTableBuilder::from_uri(table_uri)
+        .with_allow_http(true)
+        .load()
+        .await?;
+
+    assert_eq!(table.version(), 0);
+    assert_eq!(table.get_files_iter().count(), 2);
 
     Ok(())
 }

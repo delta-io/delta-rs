@@ -137,8 +137,6 @@ datafusion = [
 ]
 datafusion-ext = ["datafusion"]
 gcs = ["object_store/gcp"]
-# used only for integration testing
-integration_test = []
 json = ["parquet/json"]
 python = ["arrow/pyarrow"]
 unity-experimental = ["reqwest", "hyper"]
