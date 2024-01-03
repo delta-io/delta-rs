@@ -172,7 +172,6 @@ def test_roundtrip_s3_direct(s3_localstack_creds, sample_data: pa.Table):
 
 
 @pytest.mark.azure
-@pytest.mark.skip
 @pytest.mark.integration
 @pytest.mark.timeout(timeout=60, method="thread")
 def test_roundtrip_azure_env(azurite_env_vars, sample_data: pa.Table):
@@ -195,7 +194,6 @@ def test_roundtrip_azure_env(azurite_env_vars, sample_data: pa.Table):
 
 
 @pytest.mark.azure
-@pytest.mark.skip
 @pytest.mark.integration
 @pytest.mark.timeout(timeout=60, method="thread")
 def test_roundtrip_azure_direct(azurite_creds, sample_data: pa.Table):
@@ -218,7 +216,6 @@ def test_roundtrip_azure_direct(azurite_creds, sample_data: pa.Table):
 
 
 @pytest.mark.azure
-@pytest.mark.skip
 @pytest.mark.integration
 @pytest.mark.timeout(timeout=60, method="thread")
 def test_roundtrip_azure_sas(azurite_sas_creds, sample_data: pa.Table):
@@ -232,7 +229,6 @@ def test_roundtrip_azure_sas(azurite_sas_creds, sample_data: pa.Table):
 
 
 @pytest.mark.azure
-@pytest.mark.skip
 @pytest.mark.integration
 @pytest.mark.timeout(timeout=60, method="thread")
 def test_roundtrip_azure_decoded_sas(azurite_sas_creds, sample_data: pa.Table):
