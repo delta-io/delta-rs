@@ -60,7 +60,7 @@ impl From<RestoreError> for DeltaTableError {
 }
 
 /// Metrics from Restore
-#[derive(Default, Debug, Clone, Serialize)]
+#[derive(Default, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RestoreMetrics {
     /// Number of files removed

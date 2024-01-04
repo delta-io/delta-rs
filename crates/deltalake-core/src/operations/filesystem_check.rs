@@ -45,7 +45,7 @@ pub struct FileSystemCheckBuilder {
 }
 
 /// Details of the FSCK operation including which files were removed from the log
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Serialize)]
 pub struct FileSystemCheckMetrics {
     /// Was this a dry run
     pub dry_run: bool,
@@ -160,10 +160,9 @@ impl FileSystemCheckPlan {
         };
 
         let mut app_metadata = HashMap::new();
-        let fsck_metrics = serde_json::to_value(metrics.clone());
 
         app_metadata.insert("readVersion".to_owned(), snapshot.version().into());
-        if let Ok(map) = fsck_metrics {
+        if let Ok(map) = serde_json::to_value(&metrics) {
             app_metadata.insert("operationMetrics".to_owned(), map);
         }
 

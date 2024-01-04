@@ -63,7 +63,7 @@ pub struct DeleteBuilder {
     app_metadata: Option<HashMap<String, serde_json::Value>>,
 }
 
-#[derive(Default, Debug, Clone, Serialize)]
+#[derive(Default, Debug, Serialize)]
 /// Metrics for the Delete Operation
 pub struct DeleteMetrics {
     /// Number of files added
@@ -415,7 +415,7 @@ mod tests {
         let extra_info = last_commit.info.clone();
         assert_eq!(
             extra_info["operationMetrics"],
-            serde_json::to_value(metrics.clone()).unwrap()
+            serde_json::to_value(&metrics).unwrap()
         );
 
         // rewrite is not required

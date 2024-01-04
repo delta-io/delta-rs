@@ -553,7 +553,7 @@ impl MergeOperationConfig {
     }
 }
 
-#[derive(Default, Serialize, Clone, Debug)]
+#[derive(Default, Serialize, Debug)]
 /// Metrics for the Merge Operation
 pub struct MergeMetrics {
     /// Number of rows in the source data
@@ -1390,9 +1390,7 @@ async fn execute(
 
     app_metadata.insert("readVersion".to_owned(), snapshot.version().into());
 
-    let merge_metrics = serde_json::to_value(metrics.clone());
-
-    if let Ok(map) = merge_metrics {
+    if let Ok(map) = serde_json::to_value(&metrics) {
         app_metadata.insert("operationMetrics".to_owned(), map);
     }
 
@@ -2062,7 +2060,7 @@ mod tests {
         let extra_info = last_commit.info.clone();
         assert_eq!(
             extra_info["operationMetrics"],
-            serde_json::to_value(metrics.clone()).unwrap()
+            serde_json::to_value(&metrics).unwrap()
         );
         assert_eq!(parameters["predicate"], json!("target.id = source.id"));
         assert_eq!(

@@ -78,7 +78,7 @@ pub struct UpdateBuilder {
     safe_cast: bool,
 }
 
-#[derive(Default, Clone, Serialize, Debug)]
+#[derive(Default, Serialize, Debug)]
 /// Metrics collected during the Update operation
 pub struct UpdateMetrics {
     /// Number of files added.
@@ -416,9 +416,7 @@ async fn execute(
 
     app_metadata.insert("readVersion".to_owned(), snapshot.version().into());
 
-    let update_metrics = serde_json::to_value(metrics.clone());
-
-    if let Ok(map) = update_metrics {
+    if let Ok(map) = serde_json::to_value(&metrics) {
         app_metadata.insert("operationMetrics".to_owned(), map);
     }
 
@@ -876,7 +874,7 @@ mod tests {
         let extra_info = last_commit.info.clone();
         assert_eq!(
             extra_info["operationMetrics"],
-            serde_json::to_value(metrics.clone()).unwrap()
+            serde_json::to_value(&metrics).unwrap()
         );
 
         let expected = [
