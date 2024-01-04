@@ -209,3 +209,14 @@ async fn test_restore_allow_file_missing() -> Result<(), Box<dyn Error>> {
     assert!(result.is_ok());
     Ok(())
 }
+
+#[tokio::test]
+async fn test_restore_transaction_conflict() -> Result<(), Box<dyn Error>> {
+    let context = setup_test().await?;
+    let mut table = context.table;
+    table.load_version(2).await?;
+
+    let result = DeltaOps(table).restore().with_version_to_restore(1).await;
+    assert!(result.is_err());
+    Ok(())
+}
