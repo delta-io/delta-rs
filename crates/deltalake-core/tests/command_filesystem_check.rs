@@ -1,5 +1,3 @@
-#![cfg(feature = "integration_test")]
-
 use deltalake_core::Path;
 use deltalake_core::{errors::DeltaTableError, DeltaOps};
 use deltalake_test::utils::*;

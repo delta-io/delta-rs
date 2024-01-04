@@ -53,7 +53,7 @@ impl ObjectStoreFactory for DefaultObjectStoreFactory {
         match url.scheme() {
             "memory" => {
                 let path = Path::from_url_path(url.path())?;
-                let store = Arc::new(InMemory::new()) as ObjectStoreRef;
+                let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new()) as ObjectStoreRef;
                 Ok((url_prefix_handler(store, path.clone())?, path))
             }
             "file" => {
@@ -123,10 +123,19 @@ pub fn commit_uri_from_version(version: i64) -> Path {
     DELTA_LOG_PATH.child(version.as_str())
 }
 
-#[allow(unused)]
 /// Return true for all the stringly values typically associated with true
 ///
 /// aka YAML booleans
+///
+/// ```rust
+/// # use deltalake_core::storage::*;
+/// for value in ["1", "true", "on", "YES", "Y"] {
+///     assert!(str_is_truthy(value));
+/// }
+/// for value in ["0", "FALSE", "off", "NO", "n", "bork"] {
+///     assert!(!str_is_truthy(value));
+/// }
+/// ```
 pub fn str_is_truthy(val: &str) -> bool {
     val.eq_ignore_ascii_case("1")
         | val.eq_ignore_ascii_case("true")
@@ -159,16 +168,5 @@ mod tests {
 
         let prefixed = url_prefix_handler(store, path);
         assert!(prefixed.is_ok());
-    }
-
-    #[test]
-    fn test_str_is_truthy() {
-        for value in ["1", "true", "on", "YES", "Y"].iter() {
-            assert!(str_is_truthy(value));
-        }
-
-        for value in ["0", "FALSE", "off", "NO", "n", "bork"].iter() {
-            assert!(!str_is_truthy(value));
-        }
     }
 }

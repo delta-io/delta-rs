@@ -1422,6 +1422,8 @@ fn _internal(py: Python, m: &PyModule) -> PyResult<()> {
     use crate::error::{CommitFailedError, DeltaError, TableNotFoundError};
 
     deltalake::aws::register_handlers(None);
+    deltalake::azure::register_handlers(None);
+
     m.add("DeltaError", py.get_type::<DeltaError>())?;
     m.add("CommitFailedError", py.get_type::<CommitFailedError>())?;
     m.add("DeltaProtocolError", py.get_type::<DeltaProtocolError>())?;

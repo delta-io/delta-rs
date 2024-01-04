@@ -15,9 +15,15 @@ use std::sync::Arc;
 use tempfile::TempDir;
 
 pub mod clock;
+pub mod concurrent;
 #[cfg(feature = "datafusion")]
 pub mod datafusion;
+pub mod read;
 pub mod utils;
+
+pub use concurrent::test_concurrent_writes;
+pub use read::test_read_tables;
+pub use utils::{IntegrationContext, TestResult};
 
 #[derive(Default)]
 pub struct TestContext {
