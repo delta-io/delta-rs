@@ -62,11 +62,20 @@ class WriterProperties:
         data_page_row_count_limit: Optional[int] = None,
         write_batch_size: Optional[int] = None,
         max_row_group_size: Optional[int] = None,
-        compression: Optional[str] = None,
+        compression: Optional[
+            Literal[
+                "UNCOMPRESSED",
+                "SNAPPY",
+                "GZIP",
+                "BROTLI",
+                "LZ4",
+                "ZSTD",
+                "LZ4_RAW",
+            ]
+        ] = None,
         compression_level: Optional[int] = None,
     ):
-        """Create a Writer Properties instance for the Rust parquet writer,
-        see options https://arrow.apache.org/rust/parquet/file/properties/struct.WriterProperties.html:
+        """Create a Writer Properties instance for the Rust parquet writer:
 
         Args:
             data_page_size_limit: Limit DataPage size to this in bytes.
@@ -74,27 +83,51 @@ class WriterProperties:
             data_page_row_count_limit: Limit the number of rows in each DataPage.
             write_batch_size: Splits internally to smaller batch size.
             max_row_group_size: Max number of rows in row group.
-            compression: compression type
-            compression_level: level of compression, only relevant for subset of compression types
+            compression: compression type.
+            compression_level: level of compression, only relevant for
+                GZIP: levels (1-9),
+                BROTLI: levels (1-11),
+                ZSTD: levels (1-22),
         """
         self.data_page_size_limit = data_page_size_limit
         self.dictionary_page_size_limit = dictionary_page_size_limit
         self.data_page_row_count_limit = data_page_row_count_limit
         self.write_batch_size = write_batch_size
         self.max_row_group_size = max_row_group_size
+        self.compression = None
 
         if compression_level is not None and compression is None:
             raise ValueError(
                 """Providing a compression level without the compression type is not possible, 
                              please provide the compression as well."""
             )
+        if isinstance(compression, str):
+            parquet_compression = compression.upper()
 
-        if compression in ["gzip", "brotli", "zstd"]:
-            if compression_level is not None:
-                compression = compression = f"{compression}({compression_level})"
-            else:
-                raise ValueError("""Gzip, brotli, ztsd require a compression level""")
-        self.compression = compression
+            if parquet_compression in ["GZIP", "BROTLI", "ZSTD"]:
+                if compression_level is not None:
+                    if parquet_compression == "GZIP":
+                        MIN_LEVEL = 0
+                        MAX_LEVEL = 10
+                    elif parquet_compression == "BROTLI":
+                        MIN_LEVEL = 0
+                        MAX_LEVEL = 11
+                    elif parquet_compression == "ZSTD":
+                        MIN_LEVEL = 1
+                        MAX_LEVEL = 22
+                    else:
+                        raise SyntaxError()
+                    if compression_level < MIN_LEVEL or compression_level > MAX_LEVEL:
+                        raise ValueError(
+                            f"Compression level for {parquet_compression} should fall between {MIN_LEVEL}-{MAX_LEVEL}"
+                        )
+
+                    parquet_compression = f"{parquet_compression}({compression_level})"
+                else:
+                    raise ValueError(
+                        """GZIP, BROTLI, ZSTD require a compression level."""
+                    )
+            self.compression = parquet_compression
 
     def __str__(self) -> str:
         return (
