@@ -47,7 +47,6 @@ use datafusion::datasource::{listing::PartitionedFile, MemTable, TableProvider, 
 use datafusion::execution::context::{SessionConfig, SessionContext, SessionState, TaskContext};
 use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::execution::FunctionRegistry;
-use datafusion::optimizer::utils::conjunction;
 use datafusion::physical_expr::PhysicalSortExpr;
 use datafusion::physical_optimizer::pruning::{PruningPredicate, PruningStatistics};
 use datafusion::physical_plan::filter::FilterExec;
@@ -60,8 +59,9 @@ use datafusion_common::scalar::ScalarValue;
 use datafusion_common::stats::Precision;
 use datafusion_common::tree_node::{TreeNode, TreeNodeVisitor, VisitRecursion};
 use datafusion_common::{Column, DataFusionError, Result as DataFusionResult, ToDFSchema};
-use datafusion_expr::expr::{ScalarFunction, ScalarUDF};
+use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::logical_plan::CreateExternalTable;
+use datafusion_expr::utils::conjunction;
 use datafusion_expr::{col, Expr, Extension, LogicalPlan, TableProviderFilterPushDown, Volatility};
 use datafusion_physical_expr::execution_props::ExecutionProps;
 use datafusion_physical_expr::{create_physical_expr, PhysicalExpr};
@@ -1329,22 +1329,21 @@ impl TreeNodeVisitor for FindFilesExprProperties {
             | Expr::Case(_)
             | Expr::Cast(_)
             | Expr::TryCast(_) => (),
-            Expr::ScalarFunction(ScalarFunction { fun, .. }) => {
-                let v = fun.volatility();
+            Expr::ScalarFunction(ScalarFunction { func_def, .. }) => {
+                let v = match func_def {
+                    datafusion_expr::ScalarFunctionDefinition::BuiltIn(f) => f.volatility(),
+                    datafusion_expr::ScalarFunctionDefinition::UDF(u) => u.signature().volatility,
+                    datafusion_expr::ScalarFunctionDefinition::Name(n) => {
+                        self.result = Err(DeltaTableError::Generic(format!(
+                            "Cannot determine volatility of find files predicate function {n}",
+                        )));
+                        return Ok(VisitRecursion::Stop);
+                    }
+                };
                 if v > Volatility::Immutable {
                     self.result = Err(DeltaTableError::Generic(format!(
                         "Find files predicate contains nondeterministic function {}",
-                        fun
-                    )));
-                    return Ok(VisitRecursion::Stop);
-                }
-            }
-            Expr::ScalarUDF(ScalarUDF { fun, .. }) => {
-                let v = fun.signature.volatility;
-                if v > Volatility::Immutable {
-                    self.result = Err(DeltaTableError::Generic(format!(
-                        "Find files predicate contains nondeterministic function {}",
-                        fun.name
+                        func_def.name()
                     )));
                     return Ok(VisitRecursion::Stop);
                 }
@@ -1804,7 +1803,8 @@ mod tests {
                 location: Path::from("year=2015/month=1/part-00000-4dcb50d3-d017-450c-9df7-a7257dbd3c5d-c000.snappy.parquet".to_string()), 
                 last_modified: Utc.timestamp_millis_opt(1660497727833).unwrap(),
                 size: 10644,
-                e_tag: None
+                e_tag: None,
+                version: None,
             },
             partition_values: [ScalarValue::Int64(Some(2015)), ScalarValue::Int64(Some(1))].to_vec(),
             range: None,
@@ -1894,7 +1894,7 @@ mod tests {
         ]));
         let exec_plan = Arc::from(DeltaScan {
             table_uri: "s3://my_bucket/this/is/some/path".to_string(),
-            parquet_scan: Arc::from(EmptyExec::new(false, schema.clone())),
+            parquet_scan: Arc::from(EmptyExec::new(schema.clone())),
             config: DeltaScanConfig::default(),
             logical_schema: schema.clone(),
         });

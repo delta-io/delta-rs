@@ -534,7 +534,7 @@ impl MergePlan {
     ) -> Result<BoxStream<'static, Result<RecordBatch, ParquetError>>, DeltaTableError> {
         use datafusion::prelude::{col, ParquetReadOptions};
         use datafusion_common::Column;
-        use datafusion_expr::expr::ScalarUDF;
+        use datafusion_expr::expr::ScalarFunction;
         use datafusion_expr::Expr;
 
         let locations = files
@@ -560,7 +560,7 @@ impl MergePlan {
             .iter()
             .map(|col| Expr::Column(Column::from_qualified_name_ignore_case(col)))
             .collect_vec();
-        let expr = Expr::ScalarUDF(ScalarUDF::new(
+        let expr = Expr::ScalarFunction(ScalarFunction::new_udf(
             Arc::new(zorder::datafusion::zorder_key_udf()),
             cols,
         ));
@@ -1141,7 +1141,10 @@ pub(super) mod zorder {
         };
         use arrow_schema::DataType;
         use datafusion_common::DataFusionError;
-        use datafusion_expr::{ColumnarValue, ScalarUDF, Signature, TypeSignature, Volatility};
+        use datafusion_expr::{
+            ColumnarValue, ReturnTypeFunction, ScalarFunctionImplementation, ScalarUDF, Signature,
+            TypeSignature, Volatility,
+        };
         use itertools::Itertools;
 
         pub const ZORDER_UDF_NAME: &str = "zorder_key";
@@ -1177,12 +1180,9 @@ pub(super) mod zorder {
                 type_signature: TypeSignature::VariadicAny,
                 volatility: Volatility::Immutable,
             };
-            ScalarUDF {
-                name: ZORDER_UDF_NAME.to_string(),
-                signature,
-                return_type: Arc::new(|_| Ok(Arc::new(DataType::Binary))),
-                fun: Arc::new(zorder_key_datafusion),
-            }
+            let return_type: ReturnTypeFunction = Arc::new(|_| Ok(Arc::new(DataType::Binary)));
+            let fun: ScalarFunctionImplementation = Arc::new(zorder_key_datafusion);
+            ScalarUDF::new(ZORDER_UDF_NAME, &signature, &return_type, &fun)
         }
 
         /// Datafusion zorder UDF body
