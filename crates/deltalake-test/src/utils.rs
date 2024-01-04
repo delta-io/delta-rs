@@ -152,6 +152,7 @@ pub enum TestTables {
     Golden,
     Delta0_8_0Partitioned,
     Delta0_8_0SpecialPartitioned,
+    Checkpoints,
     Custom(String),
 }
 
@@ -180,6 +181,7 @@ impl TestTables {
                 .to_str()
                 .unwrap()
                 .to_owned(),
+            Self::Checkpoints => data_path.join("checkpoints").to_str().unwrap().to_owned(),
             // the data path for upload does not apply to custom tables.
             Self::Custom(_) => todo!(),
         }
@@ -192,6 +194,7 @@ impl TestTables {
             Self::Golden => "golden".into(),
             Self::Delta0_8_0Partitioned => "delta-0.8.0-partitioned".into(),
             Self::Delta0_8_0SpecialPartitioned => "delta-0.8.0-special-partition".into(),
+            Self::Checkpoints => "checkpoints".into(),
             Self::Custom(name) => name.to_owned(),
         }
     }

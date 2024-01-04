@@ -8,6 +8,7 @@ pub mod client;
 pub mod error;
 pub mod expressions;
 pub mod schema;
+mod snapshot;
 
 pub use actions::*;
 pub use error::*;
