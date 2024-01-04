@@ -3,7 +3,7 @@
 use bytes::Bytes;
 use deltalake_core::storage::object_store::{
     aws::AmazonS3ConfigKey, parse_url_opts, GetOptions, GetResult, ListResult, MultipartId,
-    ObjectMeta, ObjectStore, Result as ObjectStoreResult,
+    ObjectMeta, ObjectStore, PutOptions, PutResult, Result as ObjectStoreResult,
 };
 use deltalake_core::storage::{str_is_truthy, ObjectStoreFactory, ObjectStoreRef, StorageOptions};
 use deltalake_core::{DeltaResult, ObjectStoreError, Path};
@@ -220,8 +220,17 @@ impl std::fmt::Debug for S3StorageBackend {
 
 #[async_trait::async_trait]
 impl ObjectStore for S3StorageBackend {
-    async fn put(&self, location: &Path, bytes: Bytes) -> ObjectStoreResult<()> {
+    async fn put(&self, location: &Path, bytes: Bytes) -> ObjectStoreResult<PutResult> {
         self.inner.put(location, bytes).await
+    }
+
+    async fn put_opts(
+        &self,
+        location: &Path,
+        bytes: Bytes,
+        options: PutOptions,
+    ) -> ObjectStoreResult<PutResult> {
+        self.inner.put_opts(location, bytes, options).await
     }
 
     async fn get(&self, location: &Path) -> ObjectStoreResult<GetResult> {
@@ -244,19 +253,16 @@ impl ObjectStore for S3StorageBackend {
         self.inner.delete(location).await
     }
 
-    async fn list(
-        &self,
-        prefix: Option<&Path>,
-    ) -> ObjectStoreResult<BoxStream<'_, ObjectStoreResult<ObjectMeta>>> {
-        self.inner.list(prefix).await
+    fn list(&self, prefix: Option<&Path>) -> BoxStream<'_, ObjectStoreResult<ObjectMeta>> {
+        self.inner.list(prefix)
     }
 
-    async fn list_with_offset(
+    fn list_with_offset(
         &self,
         prefix: Option<&Path>,
         offset: &Path,
-    ) -> ObjectStoreResult<BoxStream<'_, ObjectStoreResult<ObjectMeta>>> {
-        self.inner.list_with_offset(prefix, offset).await
+    ) -> BoxStream<'_, ObjectStoreResult<ObjectMeta>> {
+        self.inner.list_with_offset(prefix, offset)
     }
 
     async fn list_with_delimiter(&self, prefix: Option<&Path>) -> ObjectStoreResult<ListResult> {

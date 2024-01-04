@@ -103,7 +103,7 @@ impl FileSystemCheckBuilder {
         }
 
         let object_store = log_store.object_store();
-        let mut files = object_store.list(None).await?;
+        let mut files = object_store.list(None);
         while let Some(result) = files.next().await {
             let file = result?;
             files_relative.remove(file.location.as_ref());
