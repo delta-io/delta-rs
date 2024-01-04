@@ -268,13 +268,14 @@ impl RawDeltaTable {
     }
 
     /// Run the UPDATE command on the Delta Table
-    #[pyo3(signature = (updates, predicate=None, writer_properties=None, safe_cast = false))]
+    #[pyo3(signature = (updates, predicate=None, writer_properties=None, safe_cast = false, custom_metadata = None))]
     pub fn update(
         &mut self,
         updates: HashMap<String, String>,
         predicate: Option<String>,
         writer_properties: Option<HashMap<String, Option<String>>>,
         safe_cast: bool,
+        custom_metadata: Option<HashMap<String, String>>,
     ) -> PyResult<String> {
         let mut cmd = UpdateBuilder::new(self._table.log_store(), self._table.state.clone())
             .with_safe_cast(safe_cast);
@@ -293,6 +294,12 @@ impl RawDeltaTable {
             cmd = cmd.with_predicate(update_predicate);
         }
 
+        if let Some(metadata) = custom_metadata {
+            let json_metadata: Map<String, Value> =
+                metadata.into_iter().map(|(k, v)| (k, v.into())).collect();
+            cmd = cmd.with_metadata(json_metadata);
+        };
+
         let (table, metrics) = rt()?
             .block_on(cmd.into_future())
             .map_err(PythonError::from)?;
@@ -307,6 +314,7 @@ impl RawDeltaTable {
         max_concurrent_tasks = None,
         min_commit_interval = None,
         writer_properties=None,
+        custom_metadata=None,
     ))]
     pub fn compact_optimize(
         &mut self,
@@ -315,6 +323,7 @@ impl RawDeltaTable {
         max_concurrent_tasks: Option<usize>,
         min_commit_interval: Option<u64>,
         writer_properties: Option<HashMap<String, Option<String>>>,
+        custom_metadata: Option<HashMap<String, String>>,
     ) -> PyResult<String> {
         let mut cmd = OptimizeBuilder::new(self._table.log_store(), self._table.state.clone())
             .with_max_concurrent_tasks(max_concurrent_tasks.unwrap_or_else(num_cpus::get));
@@ -330,6 +339,12 @@ impl RawDeltaTable {
                 set_writer_properties(writer_props).map_err(PythonError::from)?,
             );
         }
+
+        if let Some(metadata) = custom_metadata {
+            let json_metadata: Map<String, Value> =
+                metadata.into_iter().map(|(k, v)| (k, v.into())).collect();
+            cmd = cmd.with_metadata(json_metadata);
+        };
 
         let converted_filters = convert_partition_filters(partition_filters.unwrap_or_default())
             .map_err(PythonError::from)?;
@@ -350,7 +365,8 @@ impl RawDeltaTable {
         max_concurrent_tasks = None,
         max_spill_size = 20 * 1024 * 1024 * 1024,
         min_commit_interval = None,
-        writer_properties=None))]
+        writer_properties=None,
+        custom_metadata=None,))]
     pub fn z_order_optimize(
         &mut self,
         z_order_columns: Vec<String>,
@@ -360,6 +376,7 @@ impl RawDeltaTable {
         max_spill_size: usize,
         min_commit_interval: Option<u64>,
         writer_properties: Option<HashMap<String, Option<String>>>,
+        custom_metadata: Option<HashMap<String, String>>,
     ) -> PyResult<String> {
         let mut cmd = OptimizeBuilder::new(self._table.log_store(), self._table.state.clone())
             .with_max_concurrent_tasks(max_concurrent_tasks.unwrap_or_else(num_cpus::get))
@@ -377,6 +394,12 @@ impl RawDeltaTable {
                 set_writer_properties(writer_props).map_err(PythonError::from)?,
             );
         }
+
+        if let Some(metadata) = custom_metadata {
+            let json_metadata: Map<String, Value> =
+                metadata.into_iter().map(|(k, v)| (k, v.into())).collect();
+            cmd = cmd.with_metadata(json_metadata);
+        };
 
         let converted_filters = convert_partition_filters(partition_filters.unwrap_or_default())
             .map_err(PythonError::from)?;
@@ -412,6 +435,7 @@ impl RawDeltaTable {
         target_alias = None,
         safe_cast = false,
         writer_properties = None,
+        custom_metadata = None,
         matched_update_updates = None,
         matched_update_predicate = None,
         matched_delete_predicate = None,
@@ -431,6 +455,7 @@ impl RawDeltaTable {
         target_alias: Option<String>,
         safe_cast: bool,
         writer_properties: Option<HashMap<String, Option<String>>>,
+        custom_metadata: Option<HashMap<String, String>>,
         matched_update_updates: Option<Vec<HashMap<String, String>>>,
         matched_update_predicate: Option<Vec<Option<String>>>,
         matched_delete_predicate: Option<Vec<String>>,
@@ -470,6 +495,12 @@ impl RawDeltaTable {
                 set_writer_properties(writer_props).map_err(PythonError::from)?,
             );
         }
+
+        if let Some(metadata) = custom_metadata {
+            let json_metadata: Map<String, Value> =
+                metadata.into_iter().map(|(k, v)| (k, v.into())).collect();
+            cmd = cmd.with_metadata(json_metadata);
+        };
 
         if let Some(mu_updates) = matched_update_updates {
             if let Some(mu_predicate) = matched_update_predicate {
@@ -858,11 +889,12 @@ impl RawDeltaTable {
     }
 
     /// Run the delete command on the delta table: delete records following a predicate and return the delete metrics.
-    #[pyo3(signature = (predicate = None, writer_properties=None))]
+    #[pyo3(signature = (predicate = None, writer_properties=None, custom_metadata=None))]
     pub fn delete(
         &mut self,
         predicate: Option<String>,
         writer_properties: Option<HashMap<String, Option<String>>>,
+        custom_metadata: Option<HashMap<String, String>>,
     ) -> PyResult<String> {
         let mut cmd = DeleteBuilder::new(self._table.log_store(), self._table.state.clone());
         if let Some(predicate) = predicate {
@@ -874,6 +906,12 @@ impl RawDeltaTable {
                 set_writer_properties(writer_props).map_err(PythonError::from)?,
             );
         }
+
+        if let Some(metadata) = custom_metadata {
+            let json_metadata: Map<String, Value> =
+                metadata.into_iter().map(|(k, v)| (k, v.into())).collect();
+            cmd = cmd.with_metadata(json_metadata);
+        };
 
         let (table, metrics) = rt()?
             .block_on(cmd.into_future())
@@ -1246,6 +1284,7 @@ fn create_deltalake(
     description: Option<String>,
     configuration: Option<HashMap<String, Option<String>>>,
     storage_options: Option<HashMap<String, String>>,
+    custom_metadata: Option<HashMap<String, String>>,
 ) -> PyResult<()> {
     let table = DeltaTableBuilder::from_uri(table_uri)
         .with_storage_options(storage_options.unwrap_or_default())
@@ -1271,6 +1310,12 @@ fn create_deltalake(
 
     if let Some(config) = configuration {
         builder = builder.with_configuration(config);
+    };
+
+    if let Some(metadata) = custom_metadata {
+        let json_metadata: Map<String, Value> =
+            metadata.into_iter().map(|(k, v)| (k, v.into())).collect();
+        builder = builder.with_metadata(json_metadata);
     };
 
     rt()?
