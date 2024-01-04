@@ -83,7 +83,6 @@ def test_write_with_writerproperties(
     )
 
     parquet_path = DeltaTable(tmp_path).file_uris()[0]
-    print(parquet_path)
     metadata = pq.read_metadata(parquet_path)
 
     assert metadata.to_dict()["row_groups"][0]["columns"][0]["compression"] == "GZIP"

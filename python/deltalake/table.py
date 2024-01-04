@@ -62,7 +62,7 @@ class Compression(Enum):
     LZ4_RAW = "LZ4_RAW"
 
     @classmethod
-    def __from_str__(cls, value: str) -> "Compression":
+    def from_str(cls, value: str) -> "Compression":
         try:
             return cls(value.upper())
         except ValueError:
@@ -156,7 +156,7 @@ class WriterProperties:
                              please provide the compression as well."""
             )
         if isinstance(compression, str):
-            compression_enum = Compression.__from_str__(compression)
+            compression_enum = Compression.from_str(compression)
             if compression_enum in [
                 Compression.GZIP,
                 Compression.BROTLI,
