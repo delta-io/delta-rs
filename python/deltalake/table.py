@@ -3,6 +3,7 @@ import operator
 import warnings
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from enum import Enum
 from functools import reduce
 from pathlib import Path
 from typing import (
@@ -49,6 +50,48 @@ from deltalake.schema import Schema as DeltaSchema
 
 MAX_SUPPORTED_READER_VERSION = 1
 MAX_SUPPORTED_WRITER_VERSION = 2
+
+
+class Compression(Enum):
+    UNCOMPRESSED = "UNCOMPRESSED"
+    SNAPPY = "SNAPPY"
+    GZIP = "GZIP"
+    BROTLI = "BROTLI"
+    LZ4 = "LZ4"
+    ZSTD = "ZSTD"
+    LZ4_RAW = "LZ4_RAW"
+
+    @classmethod
+    def __from_str__(cls, value: str) -> "Compression":
+        try:
+            return cls(value.upper())
+        except ValueError:
+            raise ValueError(
+                f"{value} is not a valid Compression. Valid values are: {[item.value for item in Compression]}"
+            )
+
+    def get_level_range(self) -> Tuple[int, int]:
+        if self == Compression.GZIP:
+            MIN_LEVEL = 0
+            MAX_LEVEL = 10
+        elif self == Compression.BROTLI:
+            MIN_LEVEL = 0
+            MAX_LEVEL = 11
+        elif self == Compression.ZSTD:
+            MIN_LEVEL = 1
+            MAX_LEVEL = 22
+        else:
+            raise KeyError(f"{self.value} does not have a compression level.")
+        return MIN_LEVEL, MAX_LEVEL
+
+    def check_valid_level(self, level: int) -> bool:
+        MIN_LEVEL, MAX_LEVEL = self.get_level_range()
+        if level < MIN_LEVEL or level > MAX_LEVEL:
+            raise ValueError(
+                f"Compression level for {self.value} should fall between {MIN_LEVEL}-{MAX_LEVEL}"
+            )
+        else:
+            return True
 
 
 @dataclass(init=True)
@@ -102,29 +145,23 @@ class WriterProperties:
                              please provide the compression as well."""
             )
         if isinstance(compression, str):
-            parquet_compression = compression.upper()
-
-            if parquet_compression in ["GZIP", "BROTLI", "ZSTD"]:
+            compression_enum = Compression.__from_str__(compression)
+            if compression_enum in [
+                Compression.GZIP,
+                Compression.BROTLI,
+                Compression.ZSTD,
+            ]:
                 if compression_level is not None:
-                    if parquet_compression == "GZIP":
-                        MIN_LEVEL = 0
-                        MAX_LEVEL = 10
-                    elif parquet_compression == "BROTLI":
-                        MIN_LEVEL = 0
-                        MAX_LEVEL = 11
-                    else:
-                        MIN_LEVEL = 1
-                        MAX_LEVEL = 22
-                    if compression_level < MIN_LEVEL or compression_level > MAX_LEVEL:
-                        raise ValueError(
-                            f"Compression level for {parquet_compression} should fall between {MIN_LEVEL}-{MAX_LEVEL}"
+                    if compression_enum.check_valid_level(compression_level):
+                        parquet_compression = (
+                            f"{compression_enum.value}({compression_level})"
                         )
-
-                    parquet_compression = f"{parquet_compression}({compression_level})"
                 else:
                     raise ValueError(
                         """GZIP, BROTLI, ZSTD require a compression level."""
                     )
+            else:
+                parquet_compression = compression_enum.value
             self.compression = parquet_compression
 
     def __str__(self) -> str:
