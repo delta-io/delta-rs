@@ -204,7 +204,7 @@ pub trait LogStore: Sync + Send {
     async fn is_delta_table_location(&self) -> DeltaResult<bool> {
         // TODO We should really be using HEAD here, but this fails in windows tests
         let object_store = self.object_store();
-        let mut stream = object_store.list(Some(self.log_path())).await?;
+        let mut stream = object_store.list(Some(self.log_path()));
         if let Some(res) = stream.next().await {
             match res {
                 Ok(_) => Ok(true),
@@ -386,7 +386,7 @@ pub async fn get_latest_version(
         let prefix = Some(log_store.log_path());
         let offset_path = commit_uri_from_version(max_version);
         let object_store = log_store.object_store();
-        let mut files = object_store.list_with_offset(prefix, &offset_path).await?;
+        let mut files = object_store.list_with_offset(prefix, &offset_path);
 
         while let Some(obj_meta) = files.next().await {
             let obj_meta = obj_meta?;

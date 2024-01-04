@@ -74,7 +74,7 @@ fn list_with_delimiter_recursive(
 
 pub async fn delete_dir(storage: &dyn ObjectStore, prefix: &Path) -> ObjectStoreResult<()> {
     // TODO batch delete would be really useful now...
-    let mut stream = storage.list(Some(prefix)).await?;
+    let mut stream = storage.list(Some(prefix));
     while let Some(maybe_meta) = stream.next().await {
         let meta = maybe_meta?;
         storage.delete(&meta.location).await?;
