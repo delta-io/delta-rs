@@ -8,29 +8,27 @@ use std::sync::Arc;
 
 use crate::DeltaResult;
 
-fn cast_record_batch_columns(
-    batch: &RecordBatch,
+fn cast_struct(
+    struct_array: &StructArray,
     fields: &Fields,
     cast_options: &CastOptions,
 ) -> Result<Vec<Arc<(dyn Array)>>, arrow_schema::ArrowError> {
     fields
         .iter()
-        .map(|f| {
-            let col = batch.column_by_name(f.name()).unwrap();
-
+        .map(|field| {
+            let col = struct_array.column_by_name(field.name()).unwrap();
             if let (DataType::Struct(_), DataType::Struct(child_fields)) =
-                (col.data_type(), f.data_type())
+                (col.data_type(), field.data_type())
             {
-                let child_batch = RecordBatch::from(StructArray::from(col.into_data()));
-                let child_columns =
-                    cast_record_batch_columns(&child_batch, child_fields, cast_options)?;
+                let child_struct = StructArray::from(col.into_data());
+                let s = cast_struct(&child_struct, child_fields, cast_options)?;
                 Ok(Arc::new(StructArray::new(
                     child_fields.clone(),
-                    child_columns.clone(),
-                    None,
+                    s,
+                    child_struct.nulls().map(ToOwned::to_owned),
                 )) as ArrayRef)
-            } else if is_cast_required(col.data_type(), f.data_type()) {
-                cast_with_options(col, f.data_type(), cast_options)
+            } else if is_cast_required(col.data_type(), field.data_type()) {
+                cast_with_options(col, field.data_type(), cast_options)
             } else {
                 Ok(col.clone())
             }
@@ -59,7 +57,13 @@ pub fn cast_record_batch(
         ..Default::default()
     };
 
-    let columns = cast_record_batch_columns(batch, target_schema.fields(), &cast_options)?;
+    let s = StructArray::new(
+        batch.schema().as_ref().to_owned().fields,
+        batch.columns().to_owned(),
+        None,
+    );
+
+    let columns = cast_struct(&s, target_schema.fields(), &cast_options)?;
     Ok(RecordBatch::try_new(target_schema, columns)?)
 }
 

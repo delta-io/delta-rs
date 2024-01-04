@@ -32,7 +32,7 @@ use datafusion_common::Result as DFResult;
 use datafusion_common::{config::ConfigOptions, DFSchema, Result, ScalarValue, TableReference};
 use datafusion_expr::{
     expr::{InList, ScalarUDF},
-    AggregateUDF, Between, BinaryExpr, Cast, Expr, Like, TableSource,
+    AggregateUDF, Between, BinaryExpr, Cast, Expr, GetIndexedField, Like, TableSource,
 };
 use datafusion_sql::planner::{ContextProvider, SqlToRel};
 use sqlparser::ast::escape_quoted_string;
@@ -265,6 +265,28 @@ impl<'a> Display for SqlFormat<'a> {
                     write!(f, "{expr} IN ({})", expr_vec_fmt!(list))
                 }
             }
+            Expr::GetIndexedField(GetIndexedField { expr, field }) => match field {
+                datafusion_expr::GetFieldAccess::NamedStructField { name } => {
+                    write!(
+                        f,
+                        "{}[{}]",
+                        SqlFormat { expr },
+                        ScalarValueFormat { scalar: name }
+                    )
+                }
+                datafusion_expr::GetFieldAccess::ListIndex { key } => {
+                    write!(f, "{}[{}]", SqlFormat { expr }, SqlFormat { expr: key })
+                }
+                datafusion_expr::GetFieldAccess::ListRange { start, stop } => {
+                    write!(
+                        f,
+                        "{}[{}:{}]",
+                        SqlFormat { expr },
+                        SqlFormat { expr: start },
+                        SqlFormat { expr: stop }
+                    )
+                }
+            },
             _ => Err(fmt::Error),
         }
     }
@@ -348,10 +370,10 @@ mod test {
     use arrow_schema::DataType as ArrowDataType;
     use datafusion::prelude::SessionContext;
     use datafusion_common::{Column, DFSchema, ScalarValue};
-    use datafusion_expr::{col, decode, lit, substring, Cast, Expr, ExprSchemable};
+    use datafusion_expr::{cardinality, col, decode, lit, substring, Cast, Expr, ExprSchemable};
 
     use crate::delta_datafusion::DeltaSessionContext;
-    use crate::kernel::{DataType, PrimitiveType, StructField, StructType};
+    use crate::kernel::{ArrayType, DataType, PrimitiveType, StructField, StructType};
     use crate::{DeltaOps, DeltaTable};
 
     use super::fmt_expr_to_sql;
@@ -422,6 +444,30 @@ mod test {
             StructField::new(
                 "_binary".to_string(),
                 DataType::Primitive(PrimitiveType::Binary),
+                true,
+            ),
+            StructField::new(
+                "_struct".to_string(),
+                DataType::Struct(Box::new(StructType::new(vec![
+                    StructField::new("a", DataType::Primitive(PrimitiveType::Integer), true),
+                    StructField::new(
+                        "nested",
+                        DataType::Struct(Box::new(StructType::new(vec![StructField::new(
+                            "b",
+                            DataType::Primitive(PrimitiveType::Integer),
+                            true,
+                        )]))),
+                        true,
+                    ),
+                ]))),
+                true,
+            ),
+            StructField::new(
+                "_list".to_string(),
+                DataType::Array(Box::new(ArrayType::new(
+                    DataType::Primitive(PrimitiveType::Integer),
+                    true,
+                ))),
                 true,
             ),
         ]);
@@ -542,6 +588,22 @@ mod test {
                     .unwrap()
                     .eq(lit("1")),
                 "arrow_cast(value, 'Utf8') = '1'".to_string()
+            ),
+            simple!(
+                col("_struct").field("a").eq(lit(20_i64)),
+                "_struct['a'] = 20".to_string()
+            ),
+            simple!(
+                col("_struct").field("nested").field("b").eq(lit(20_i64)),
+                "_struct['nested']['b'] = 20".to_string()
+            ),
+            simple!(
+                col("_list").index(lit(1_i64)).eq(lit(20_i64)),
+                "_list[1] = 20".to_string()
+            ),
+            simple!(
+                cardinality(col("_list").range(col("value"), lit(10_i64))),
+                "cardinality(_list[value:10])".to_string()
             ),
         ];
 
