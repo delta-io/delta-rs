@@ -256,9 +256,7 @@ async fn execute(
 
     app_metadata.insert("readVersion".to_owned(), snapshot.version().into());
 
-    let delete_metrics = serde_json::to_value(metrics.clone());
-
-    if let Ok(map) = delete_metrics {
+    if let Ok(map) = serde_json::to_value(&metrics) {
         app_metadata.insert("operationMetrics".to_owned(), map);
     }
 
