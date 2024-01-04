@@ -44,10 +44,14 @@ def test_writer_properties_lower_case_compression():
     assert wp._to_dict() == expected
 
 
-@pytest.mark.parametrize("compression", ("GZIP", "BROTLI", "ZSTD"))
-def test_writer_properties_missing_compression_level(compression):
-    with pytest.raises(ValueError):
-        WriterProperties(compression=compression)
+@pytest.mark.parametrize(
+    "compression,expected",
+    [("GZIP", "GZIP(6)"), ("BROTLI", "BROTLI(1)"), ("ZSTD", "ZSTD(1)")],
+)
+def test_writer_properties_missing_compression_level(compression, expected):
+    wp = WriterProperties(compression=compression)
+
+    assert wp.compression == expected
 
 
 @pytest.mark.parametrize(

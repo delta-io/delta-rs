@@ -84,6 +84,17 @@ class Compression(Enum):
             raise KeyError(f"{self.value} does not have a compression level.")
         return MIN_LEVEL, MAX_LEVEL
 
+    def get_default_level(self) -> int:
+        if self == Compression.GZIP:
+            DEFAULT = 6
+        elif self == Compression.BROTLI:
+            DEFAULT = 1
+        elif self == Compression.ZSTD:
+            DEFAULT = 1
+        else:
+            raise KeyError(f"{self.value} does not have a compression level.")
+        return DEFAULT
+
     def check_valid_level(self, level: int) -> bool:
         MIN_LEVEL, MAX_LEVEL = self.get_level_range()
         if level < MIN_LEVEL or level > MAX_LEVEL:
@@ -127,7 +138,7 @@ class WriterProperties:
             write_batch_size: Splits internally to smaller batch size.
             max_row_group_size: Max number of rows in row group.
             compression: compression type.
-            compression_level: level of compression, only relevant for
+            compression_level: If none and compression has a level, the default level will be used, only relevant for
                 GZIP: levels (1-9),
                 BROTLI: levels (1-11),
                 ZSTD: levels (1-22),
@@ -157,9 +168,7 @@ class WriterProperties:
                             f"{compression_enum.value}({compression_level})"
                         )
                 else:
-                    raise ValueError(
-                        """GZIP, BROTLI, ZSTD require a compression level."""
-                    )
+                    parquet_compression = f"{compression_enum.value}({compression_enum.get_default_level()})"
             else:
                 parquet_compression = compression_enum.value
             self.compression = parquet_compression
