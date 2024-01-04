@@ -408,12 +408,24 @@ async fn execute(
     let operation = DeltaOperation::Update {
         predicate: Some(fmt_expr_to_sql(&predicate)?),
     };
+
+    let mut app_metadata = match app_metadata {
+        Some(meta) => meta,
+        None => HashMap::new(),
+    };
+
+    app_metadata.insert("readVersion".to_owned(), snapshot.version().into());
+
+    if let Ok(map) = serde_json::to_value(&metrics) {
+        app_metadata.insert("operationMetrics".to_owned(), map);
+    }
+
     version = commit(
         log_store.as_ref(),
         &actions,
         operation,
         snapshot,
-        app_metadata,
+        Some(app_metadata),
     )
     .await?;
 
@@ -844,7 +856,7 @@ mod tests {
 
         // Validate order operators do not include nulls
         let table = prepare_values_table().await;
-        let (table, metrics) = DeltaOps(table)
+        let (mut table, metrics) = DeltaOps(table)
             .update()
             .with_predicate(col("value").gt(lit(2)).or(col("value").lt(lit(2))))
             .with_update("value", lit(10))
@@ -856,6 +868,14 @@ mod tests {
         assert_eq!(metrics.num_removed_files, 1);
         assert_eq!(metrics.num_updated_rows, 2);
         assert_eq!(metrics.num_copied_rows, 3);
+
+        let commit_info = table.history(None).await.unwrap();
+        let last_commit = &commit_info[commit_info.len() - 1];
+        let extra_info = last_commit.info.clone();
+        assert_eq!(
+            extra_info["operationMetrics"],
+            serde_json::to_value(&metrics).unwrap()
+        );
 
         let expected = [
             "+-------+",
