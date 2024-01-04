@@ -3,21 +3,21 @@
 //! when the underlying object storage does not support atomic `put_if_absent`
 //! or `rename_if_absent` operations, as is the case for S3.
 
-use deltalake_aws::errors::LockClientError;
-use deltalake_aws::{constants, CommitEntry, DynamoDbLockClient, UpdateLogEntryResult};
+use crate::errors::LockClientError;
+use crate::storage::S3StorageOptions;
+use crate::{constants, CommitEntry, DynamoDbLockClient, UpdateLogEntryResult};
 
 use bytes::Bytes;
-use object_store::path::Path;
-use object_store::Error as ObjectStoreError;
+use deltalake_core::{ObjectStoreError, Path};
+use tracing::{debug, error, warn};
 use url::Url;
 
-use crate::{
+use deltalake_core::logstore::*;
+use deltalake_core::{
     operations::transaction::TransactionError,
-    storage::{config::StorageOptions, s3::S3StorageOptions, ObjectStoreRef},
+    storage::{ObjectStoreRef, StorageOptions},
     DeltaResult, DeltaTableError,
 };
-
-use super::{LogStore, LogStoreConfig};
 
 const STORE_NAME: &str = "DeltaS3ObjectStore";
 const MAX_REPAIR_RETRIES: i64 = 3;
@@ -28,6 +28,12 @@ pub struct S3DynamoDbLogStore {
     lock_client: DynamoDbLockClient,
     config: LogStoreConfig,
     table_path: String,
+}
+
+impl std::fmt::Debug for S3DynamoDbLogStore {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
+        write!(f, "S3DynamoDbLogStore({})", self.table_path)
+    }
 }
 
 impl S3DynamoDbLogStore {
@@ -45,12 +51,13 @@ impl S3DynamoDbLogStore {
             s3_options.use_web_identity,
         )
         .map_err(|err| DeltaTableError::ObjectStore {
-            source: object_store::Error::Generic {
+            source: ObjectStoreError::Generic {
                 store: STORE_NAME,
                 source: err.into(),
             },
         })?;
-        let table_path = super::to_uri(&location, &Path::from(""));
+        debug!("S3DynamoDbLogStore configured with lock client: {lock_client:?}");
+        let table_path = to_uri(&location, &Path::from(""));
         Ok(Self {
             storage: object_store,
             lock_client,
@@ -73,22 +80,22 @@ impl S3DynamoDbLogStore {
             return Ok(RepairLogEntryResult::AlreadyCompleted);
         }
         for retry in 0..=MAX_REPAIR_RETRIES {
-            match super::write_commit_entry(self.storage.as_ref(), entry.version, &entry.temp_path)
-                .await
-            {
+            match write_commit_entry(&self.storage, entry.version, &entry.temp_path).await {
                 Ok(()) => {
+                    debug!("Successfully committed entry for version {}", entry.version);
                     return self.try_complete_entry(entry, true).await;
                 }
                 // `N.json` has already been moved, complete the entry in DynamoDb just in case
                 Err(TransactionError::ObjectStore {
                     source: ObjectStoreError::NotFound { .. },
                 }) => {
+                    warn!("It looks like the {}.json has already been moved, we got 404 from ObjectStorage.", entry.version);
                     return self.try_complete_entry(entry, false).await;
                 }
                 Err(err) if retry == MAX_REPAIR_RETRIES => return Err(err),
-                Err(err) => log::debug!(
-                    "retry #{retry} on log entry {entry:?} failed to move commit: '{err}'"
-                ),
+                Err(err) => {
+                    debug!("retry #{retry} on log entry {entry:?} failed to move commit: '{err}'")
+                }
             }
         }
         unreachable!("for loop yields Ok or Err in body when retry = MAX_REPAIR_RETRIES")
@@ -100,6 +107,7 @@ impl S3DynamoDbLogStore {
         entry: &CommitEntry,
         copy_performed: bool,
     ) -> Result<RepairLogEntryResult, TransactionError> {
+        debug!("try_complete_entry for {:?}, {}", entry, copy_performed);
         for retry in 0..=MAX_REPAIR_RETRIES {
             match self
                 .lock_client
@@ -114,7 +122,7 @@ impl S3DynamoDbLogStore {
                 }) {
                 Ok(x) => return Ok(Self::map_retry_result(x, copy_performed)),
                 Err(err) if retry == MAX_REPAIR_RETRIES => return Err(err),
-                Err(err) => log::debug!(
+                Err(err) => error!(
                     "retry #{retry} on log entry {entry:?} failed to update lock db: '{err}'"
                 ),
             }
@@ -141,6 +149,10 @@ impl S3DynamoDbLogStore {
 
 #[async_trait::async_trait]
 impl LogStore for S3DynamoDbLogStore {
+    fn name(&self) -> String {
+        "S3DynamoDbLogStore".into()
+    }
+
     fn root_uri(&self) -> String {
         self.table_path.clone()
     }
@@ -153,7 +165,7 @@ impl LogStore for S3DynamoDbLogStore {
         if let Ok(Some(entry)) = entry {
             self.repair_entry(&entry).await?;
         }
-        super::read_commit_entry(self.storage.as_ref(), version).await
+        read_commit_entry(&self.storage, version).await
     }
 
     /// Tries to commit a prepared commit file. Returns [DeltaTableError::VersionAlreadyExists]
@@ -167,26 +179,34 @@ impl LogStore for S3DynamoDbLogStore {
         tmp_commit: &Path,
     ) -> Result<(), TransactionError> {
         let entry = CommitEntry::new(version, tmp_commit.clone());
+        debug!("Writing commit entry for {self:?}: {entry:?}");
         // create log entry in dynamo db: complete = false, no expireTime
         self.lock_client
             .put_commit_entry(&self.table_path, &entry)
             .await
             .map_err(|err| match err {
                 LockClientError::VersionAlreadyExists { version, .. } => {
+                    warn!("LockClientError::VersionAlreadyExists({version})");
                     TransactionError::VersionAlreadyExists(version)
                 }
-                LockClientError::ProvisionedThroughputExceeded => todo!(),
-                LockClientError::LockTableNotFound => TransactionError::LogStoreError {
-                    msg: format!(
-                        "lock table '{}' not found",
-                        self.lock_client.get_lock_table_name()
-                    ),
-                    source: Box::new(err),
-                },
-                err => TransactionError::LogStoreError {
-                    msg: "dynamodb client failed to write log entry".to_owned(),
-                    source: Box::new(err),
-                },
+                LockClientError::ProvisionedThroughputExceeded => todo!(
+                    "deltalake-aws does not yet handle DynamoDB provisioned throughput errors"
+                ),
+                LockClientError::LockTableNotFound => {
+                    let table_name = self.lock_client.get_lock_table_name();
+                    error!("Lock table '{table_name}' not found");
+                    TransactionError::LogStoreError {
+                        msg: format!("lock table '{table_name}' not found"),
+                        source: Box::new(err),
+                    }
+                }
+                err => {
+                    error!("dynamodb client failed to write log entry: {err:?}");
+                    TransactionError::LogStoreError {
+                        msg: "dynamodb client failed to write log entry".to_owned(),
+                        source: Box::new(err),
+                    }
+                }
             })?;
         // `repair_entry` performs the exact steps required to finalize the commit, but contains
         // retry logic and more robust error handling under the assumption that any other client
@@ -198,6 +218,7 @@ impl LogStore for S3DynamoDbLogStore {
     }
 
     async fn get_latest_version(&self, current_version: i64) -> DeltaResult<i64> {
+        debug!("Retrieving latest version of {self:?} at v{current_version}");
         let entry = self
             .lock_client
             .get_latest_entry(&self.table_path)
@@ -210,21 +231,12 @@ impl LogStore for S3DynamoDbLogStore {
             self.repair_entry(&entry).await?;
             Ok(entry.version)
         } else {
-            super::get_latest_version(self, current_version).await
+            get_latest_version(self, current_version).await
         }
     }
 
     fn object_store(&self) -> ObjectStoreRef {
         self.storage.clone()
-    }
-
-    fn to_uri(&self, location: &Path) -> String {
-        super::to_uri(&self.config.location, location)
-    }
-
-    #[cfg(feature = "datafusion")]
-    fn object_store_url(&self) -> datafusion::execution::object_store::ObjectStoreUrl {
-        super::object_store_url(&self.config.location)
     }
 
     fn config(&self) -> &LogStoreConfig {

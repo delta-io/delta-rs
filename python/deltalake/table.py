@@ -816,13 +816,22 @@ class DeltaTable:
     def optimize(
         self,
     ) -> "TableOptimizer":
+        """Namespace for all table optimize related methods.
+
+        Returns:
+            TableOptimizer: TableOptimizer Object
+        """
         return TableOptimizer(self)
 
     @property
     def alter(
         self,
     ) -> "TableAlterer":
-        """Namespace for all table alter related methods"""
+        """Namespace for all table alter related methods.
+
+        Returns:
+            TableAlterer: TableAlterer Object
+        """
         return TableAlterer(self)
 
     def merge(
@@ -839,6 +848,7 @@ class DeltaTable:
         target_alias: Optional[str] = None,
         error_on_type_mismatch: bool = True,
         writer_properties: Optional[WriterProperties] = None,
+        large_dtypes: bool = True,
     ) -> "TableMerger":
         """Pass the source data which you want to merge on the target delta table, providing a
         predicate in SQL query like format. You can also specify on what to do when the underlying data types do not
@@ -851,6 +861,7 @@ class DeltaTable:
             target_alias: Alias for the target table
             error_on_type_mismatch: specify if merge will return error if data types are mismatching :default = True
             writer_properties: Pass writer properties to the Rust parquet writer
+            large_dtypes: If True, the data schema is kept in large_dtypes.
 
         Returns:
             TableMerger: TableMerger Object
@@ -866,16 +877,16 @@ class DeltaTable:
         )
 
         if isinstance(source, pyarrow.RecordBatchReader):
-            source = convert_pyarrow_recordbatchreader(source, large_dtypes=True)
+            source = convert_pyarrow_recordbatchreader(source, large_dtypes)
         elif isinstance(source, pyarrow.RecordBatch):
-            source = convert_pyarrow_recordbatch(source, large_dtypes=True)
+            source = convert_pyarrow_recordbatch(source, large_dtypes)
         elif isinstance(source, pyarrow.Table):
-            source = convert_pyarrow_table(source, large_dtypes=True)
+            source = convert_pyarrow_table(source, large_dtypes)
         elif isinstance(source, ds.Dataset):
-            source = convert_pyarrow_dataset(source, large_dtypes=True)
+            source = convert_pyarrow_dataset(source, large_dtypes)
         elif isinstance(source, pandas.DataFrame):
             source = convert_pyarrow_table(
-                pyarrow.Table.from_pandas(source), large_dtypes=True
+                pyarrow.Table.from_pandas(source), large_dtypes
             )
         else:
             raise TypeError(
@@ -1207,7 +1218,10 @@ class TableMerger:
         write_batch_size: Optional[int] = None,
         max_row_group_size: Optional[int] = None,
     ) -> "TableMerger":
-        """Pass writer properties to the Rust parquet writer, see options https://arrow.apache.org/rust/parquet/file/properties/struct.WriterProperties.html:
+        """
+        !!! warning "Deprecated"
+            Use `.merge(writer_properties = WriterProperties())` instead
+        Pass writer properties to the Rust parquet writer, see options https://arrow.apache.org/rust/parquet/file/properties/struct.WriterProperties.html:
 
         Args:
             data_page_size_limit: Limit DataPage size to this in bytes.

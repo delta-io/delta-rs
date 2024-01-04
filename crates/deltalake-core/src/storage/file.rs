@@ -379,9 +379,9 @@ mod tests {
     use std::io::Write;
     use std::path::{Path, PathBuf};
 
-    #[tokio::test()]
+    #[tokio::test]
     async fn test_rename_noreplace() {
-        let tmp_dir = tempdir::TempDir::new_in(".", "test_rename_noreplace").unwrap();
+        let tmp_dir = tempfile::tempdir().unwrap();
         let a = create_file(tmp_dir.path(), "a");
         let b = create_file(tmp_dir.path(), "b");
         let c = &tmp_dir.path().join("c");

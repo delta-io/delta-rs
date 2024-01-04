@@ -6,7 +6,7 @@
 //!
 //! ```rust
 //! async {
-//!   let table = deltalake_core::open_table("./tests/data/simple_table").await.unwrap();
+//!   let table = deltalake_core::open_table("../deltalake-test/tests/data/simple_table").await.unwrap();
 //!   let files = table.get_files();
 //! };
 //! ```
@@ -15,7 +15,7 @@
 //!
 //! ```rust
 //! async {
-//!   let table = deltalake_core::open_table_with_version("./tests/data/simple_table", 0).await.unwrap();
+//!   let table = deltalake_core::open_table_with_version("../deltalake-test/tests/data/simple_table", 0).await.unwrap();
 //!   let files = table.get_files_by_partitions(&[deltalake_core::PartitionFilter {
 //!       key: "month".to_string(),
 //!       value: deltalake_core::PartitionValue::Equal("12".to_string()),
@@ -28,7 +28,7 @@
 //! ```rust
 //! async {
 //!   let table = deltalake_core::open_table_with_ds(
-//!       "./tests/data/simple_table",
+//!       "../deltalake-test/tests/data/simple_table",
 //!       "2020-05-02T23:47:31-07:00",
 //!   ).await.unwrap();
 //!   let files = table.get_files();
@@ -43,8 +43,6 @@
 //! - `datafusion` - enable the `datafusion::datasource::TableProvider` trait implementation
 //!   for Delta Tables, allowing them to be queried using [DataFusion](https://github.com/apache/arrow-datafusion).
 //! - `datafusion-ext` - DEPRECATED: alias for `datafusion` feature.
-//! - `parquet2` - use parquet2 for checkpoint deserialization. Since `arrow` and `parquet` features
-//!   are enabled by default for backwards compatibility, this feature needs to be used with `--no-default-features`.
 //!
 //! # Querying Delta Tables with Datafusion
 //!
@@ -55,7 +53,7 @@
 //!
 //! async {
 //!   let mut ctx = SessionContext::new();
-//!   let table = deltalake_core::open_table("./tests/data/simple_table")
+//!   let table = deltalake_core::open_table("../deltalake-test/tests/data/simple_table")
 //!       .await
 //!       .unwrap();
 //!   ctx.register_table("demo", Arc::new(table)).unwrap();
@@ -70,21 +68,6 @@
 #![deny(missing_docs)]
 #![allow(rustdoc::invalid_html_tags)]
 #![allow(clippy::nonminimal_bool)]
-
-#[cfg(all(feature = "parquet", feature = "parquet2"))]
-compile_error!(
-    "Features parquet and parquet2 are mutually exclusive and cannot be enabled together"
-);
-
-#[cfg(all(feature = "s3", feature = "s3-native-tls"))]
-compile_error!(
-    "Features s3 and s3-native-tls are mutually exclusive and cannot be enabled together"
-);
-
-#[cfg(all(feature = "glue", feature = "glue-native-tls"))]
-compile_error!(
-    "Features glue and glue-native-tls are mutually exclusive and cannot be enabled together"
-);
 
 pub mod data_catalog;
 pub mod errors;
@@ -122,15 +105,8 @@ pub use arrow;
 pub use datafusion;
 #[cfg(feature = "parquet")]
 pub use parquet;
-#[cfg(feature = "parquet2")]
-pub use parquet2;
 #[cfg(all(feature = "arrow", feature = "parquet"))]
 pub use protocol::checkpoints;
-
-// needed only for integration tests
-// TODO can / should we move this into the test crate?
-#[cfg(feature = "integration_test")]
-pub mod test_utils;
 
 /// Creates and loads a DeltaTable from the given path with current metadata.
 /// Infers the storage backend to use from the scheme in the given table path.
@@ -202,7 +178,9 @@ mod tests {
 
     #[tokio::test]
     async fn read_delta_2_0_table_without_version() {
-        let table = crate::open_table("./tests/data/delta-0.2.0").await.unwrap();
+        let table = crate::open_table("../deltalake-test/tests/data/delta-0.2.0")
+            .await
+            .unwrap();
         assert_eq!(table.version(), 3);
         assert_eq!(table.protocol().min_writer_version, 2);
         assert_eq!(table.protocol().min_reader_version, 1);
@@ -232,7 +210,7 @@ mod tests {
 
     #[tokio::test]
     async fn read_delta_table_with_update() {
-        let path = "./tests/data/simple_table_with_checkpoint/";
+        let path = "../deltalake-test/tests/data/simple_table_with_checkpoint/";
         let table_newest_version = crate::open_table(path).await.unwrap();
         let mut table_to_update = crate::open_table_with_version(path, 0).await.unwrap();
         // calling update several times should not produce any duplicates
@@ -247,9 +225,10 @@ mod tests {
     }
     #[tokio::test]
     async fn read_delta_2_0_table_with_version() {
-        let mut table = crate::open_table_with_version("./tests/data/delta-0.2.0", 0)
-            .await
-            .unwrap();
+        let mut table =
+            crate::open_table_with_version("../deltalake-test/tests/data/delta-0.2.0", 0)
+                .await
+                .unwrap();
         assert_eq!(table.version(), 0);
         assert_eq!(table.protocol().min_writer_version, 2);
         assert_eq!(table.protocol().min_reader_version, 1);
@@ -261,7 +240,7 @@ mod tests {
             ],
         );
 
-        table = crate::open_table_with_version("./tests/data/delta-0.2.0", 2)
+        table = crate::open_table_with_version("../deltalake-test/tests/data/delta-0.2.0", 2)
             .await
             .unwrap();
         assert_eq!(table.version(), 2);
@@ -275,7 +254,7 @@ mod tests {
             ]
         );
 
-        table = crate::open_table_with_version("./tests/data/delta-0.2.0", 3)
+        table = crate::open_table_with_version("../deltalake-test/tests/data/delta-0.2.0", 3)
             .await
             .unwrap();
         assert_eq!(table.version(), 3);
@@ -293,7 +272,9 @@ mod tests {
 
     #[tokio::test]
     async fn read_delta_8_0_table_without_version() {
-        let table = crate::open_table("./tests/data/delta-0.8.0").await.unwrap();
+        let table = crate::open_table("../deltalake-test/tests/data/delta-0.8.0")
+            .await
+            .unwrap();
         assert_eq!(table.version(), 1);
         assert_eq!(table.protocol().min_writer_version, 2);
         assert_eq!(table.protocol().min_reader_version, 1);
@@ -339,7 +320,9 @@ mod tests {
 
     #[tokio::test]
     async fn read_delta_8_0_table_with_load_version() {
-        let mut table = crate::open_table("./tests/data/delta-0.8.0").await.unwrap();
+        let mut table = crate::open_table("../deltalake-test/tests/data/delta-0.8.0")
+            .await
+            .unwrap();
         assert_eq!(table.version(), 1);
         assert_eq!(table.protocol().min_writer_version, 2);
         assert_eq!(table.protocol().min_reader_version, 1);
@@ -365,8 +348,7 @@ mod tests {
 
     #[tokio::test]
     async fn read_delta_8_0_table_with_partitions() {
-        let current_dir = Path::from_filesystem_path(std::env::current_dir().unwrap()).unwrap();
-        let table = crate::open_table("./tests/data/delta-0.8.0-partitioned")
+        let table = crate::open_table("../deltalake-test/tests/data/delta-0.8.0-partitioned")
             .await
             .unwrap();
 
@@ -382,29 +364,19 @@ mod tests {
         ];
 
         assert_eq!(
-        table.get_files_by_partitions(&filters).unwrap(),
-        vec![
-            Path::from("year=2020/month=2/day=3/part-00000-94d16827-f2fd-42cd-a060-f67ccc63ced9.c000.snappy.parquet"),
-            Path::from("year=2020/month=2/day=5/part-00000-89cdd4c8-2af7-4add-8ea3-3990b2f027b5.c000.snappy.parquet")
-        ]
-    );
-
-        #[cfg(unix)]
+            table.get_files_by_partitions(&filters).unwrap(),
+            vec![
+                Path::from("year=2020/month=2/day=3/part-00000-94d16827-f2fd-42cd-a060-f67ccc63ced9.c000.snappy.parquet"),
+                Path::from("year=2020/month=2/day=5/part-00000-89cdd4c8-2af7-4add-8ea3-3990b2f027b5.c000.snappy.parquet")
+            ]
+        );
         assert_eq!(
-        table.get_file_uris_by_partitions(&filters).unwrap(),
-        vec![
-            format!("/{}/tests/data/delta-0.8.0-partitioned/year=2020/month=2/day=3/part-00000-94d16827-f2fd-42cd-a060-f67ccc63ced9.c000.snappy.parquet", current_dir.as_ref()),
-            format!("/{}/tests/data/delta-0.8.0-partitioned/year=2020/month=2/day=5/part-00000-89cdd4c8-2af7-4add-8ea3-3990b2f027b5.c000.snappy.parquet", current_dir.as_ref())
-        ]
-    );
-        #[cfg(windows)]
-        assert_eq!(
-        table.get_file_uris_by_partitions(&filters).unwrap(),
-        vec![
-            format!("{}/tests/data/delta-0.8.0-partitioned/year=2020/month=2/day=3/part-00000-94d16827-f2fd-42cd-a060-f67ccc63ced9.c000.snappy.parquet", current_dir.as_ref()),
-            format!("{}/tests/data/delta-0.8.0-partitioned/year=2020/month=2/day=5/part-00000-89cdd4c8-2af7-4add-8ea3-3990b2f027b5.c000.snappy.parquet", current_dir.as_ref())
-        ]
-    );
+            table.get_file_uris_by_partitions(&filters).unwrap().into_iter().map(|p| std::fs::canonicalize(p).unwrap()).collect::<Vec<_>>(),
+            vec![
+                std::fs::canonicalize("../deltalake-test/tests/data/delta-0.8.0-partitioned/year=2020/month=2/day=3/part-00000-94d16827-f2fd-42cd-a060-f67ccc63ced9.c000.snappy.parquet").unwrap(),
+                std::fs::canonicalize("../deltalake-test/tests/data/delta-0.8.0-partitioned/year=2020/month=2/day=5/part-00000-89cdd4c8-2af7-4add-8ea3-3990b2f027b5.c000.snappy.parquet").unwrap(),
+            ]
+        );
 
         let filters = vec![crate::PartitionFilter {
             key: "month".to_string(),
@@ -449,7 +421,7 @@ mod tests {
 
     #[tokio::test]
     async fn read_delta_8_0_table_with_null_partition() {
-        let table = crate::open_table("./tests/data/delta-0.8.0-null-partition")
+        let table = crate::open_table("../deltalake-test/tests/data/delta-0.8.0-null-partition")
             .await
             .unwrap();
 
@@ -478,7 +450,7 @@ mod tests {
 
     #[tokio::test]
     async fn read_delta_8_0_table_with_special_partition() {
-        let table = crate::open_table("./tests/data/delta-0.8.0-special-partition")
+        let table = crate::open_table("../deltalake-test/tests/data/delta-0.8.0-special-partition")
             .await
             .unwrap();
 
@@ -511,7 +483,7 @@ mod tests {
 
     #[tokio::test]
     async fn read_delta_8_0_table_partition_with_compare_op() {
-        let table = crate::open_table("./tests/data/delta-0.8.0-numeric-partition")
+        let table = crate::open_table("../deltalake-test/tests/data/delta-0.8.0-numeric-partition")
             .await
             .unwrap();
 
@@ -538,11 +510,10 @@ mod tests {
         );
     }
 
-    // TODO: enable this for parquet2
     #[cfg(feature = "parquet")]
     #[tokio::test]
     async fn read_delta_1_2_1_struct_stats_table() {
-        let table_uri = "./tests/data/delta-1.2.1-only-struct-stats";
+        let table_uri = "../deltalake-test/tests/data/delta-1.2.1-only-struct-stats";
         let table_from_struct_stats = crate::open_table(table_uri).await.unwrap();
         let table_from_json_stats = crate::open_table_with_version(table_uri, 1).await.unwrap();
 
@@ -574,7 +545,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_table_history() {
-        let path = "./tests/data/simple_table_with_checkpoint";
+        let path = "../deltalake-test/tests/data/simple_table_with_checkpoint";
         let mut latest_table = crate::open_table(path).await.unwrap();
 
         let mut table = crate::open_table_with_version(path, 1).await.unwrap();
@@ -596,7 +567,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_poll_table_commits() {
-        let path = "./tests/data/simple_table_with_checkpoint";
+        let path = "../deltalake-test/tests/data/simple_table_with_checkpoint";
         let mut table = crate::open_table_with_version(path, 9).await.unwrap();
         let peek = table.peek_next_commit(table.version()).await.unwrap();
         assert!(matches!(peek, PeekCommit::New(..)));
@@ -626,14 +597,14 @@ mod tests {
 
     #[tokio::test]
     async fn test_read_vacuumed_log() {
-        let path = "./tests/data/checkpoints_vacuumed";
+        let path = "../deltalake-test/tests/data/checkpoints_vacuumed";
         let table = crate::open_table(path).await.unwrap();
         assert_eq!(table.version(), 12);
     }
 
     #[tokio::test]
     async fn test_read_vacuumed_log_history() {
-        let path = "./tests/data/checkpoints_vacuumed";
+        let path = "../deltalake-test/tests/data/checkpoints_vacuumed";
         let mut table = crate::open_table(path).await.unwrap();
 
         // load history for table version with available log file
@@ -678,7 +649,7 @@ mod tests {
 
     #[tokio::test]
     async fn read_delta_table_with_cdc() {
-        let table = crate::open_table("./tests/data/simple_table_with_cdc")
+        let table = crate::open_table("../deltalake-test/tests/data/simple_table_with_cdc")
             .await
             .unwrap();
         assert_eq!(table.version(), 2);
@@ -692,7 +663,7 @@ mod tests {
 
     #[tokio::test()]
     async fn test_version_zero_table_load() {
-        let path = "./tests/data/COVID-19_NYT";
+        let path = "../deltalake-test/tests/data/COVID-19_NYT";
         let mut latest_table: DeltaTable = crate::open_table(path).await.unwrap();
 
         let mut version_0_table = crate::open_table_with_version(path, 0).await.unwrap();
@@ -713,7 +684,7 @@ mod tests {
     async fn test_fail_fast_on_not_existing_path() {
         use std::path::Path as FolderPath;
 
-        let non_existing_path_str = "./tests/data/folder_doesnt_exist";
+        let non_existing_path_str = "../deltalake-test/tests/data/folder_doesnt_exist";
 
         // Check that there is no such path at the beginning
         let path_doesnt_exist = !FolderPath::new(non_existing_path_str).exists();
