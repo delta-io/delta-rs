@@ -154,6 +154,17 @@ impl FileSystemCheckPlan {
                 default_row_commit_version: file.default_row_commit_version,
             }));
         }
+        let metrics = FileSystemCheckMetrics {
+            dry_run: false,
+            files_removed: removed_file_paths,
+        };
+
+        let mut app_metadata = HashMap::new();
+
+        app_metadata.insert("readVersion".to_owned(), snapshot.version().into());
+        if let Ok(map) = serde_json::to_value(&metrics) {
+            app_metadata.insert("operationMetrics".to_owned(), map);
+        }
 
         commit(
             self.log_store.as_ref(),
@@ -161,14 +172,11 @@ impl FileSystemCheckPlan {
             DeltaOperation::FileSystemCheck {},
             snapshot,
             // TODO pass through metadata
-            None,
+            Some(app_metadata),
         )
         .await?;
 
-        Ok(FileSystemCheckMetrics {
-            dry_run: false,
-            files_removed: removed_file_paths,
-        })
+        Ok(metrics)
     }
 }
 
