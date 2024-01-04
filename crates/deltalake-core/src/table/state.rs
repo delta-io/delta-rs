@@ -188,12 +188,12 @@ impl DeltaTableState {
     }
 
     /// The most recent metadata of the table.
-    pub fn metadata_action(&self) -> Result<&Metadata, ProtocolError> {
+    pub fn metadata(&self) -> Result<&Metadata, ProtocolError> {
         self.metadata.as_ref().ok_or(ProtocolError::NoMetaData)
     }
 
     /// The most recent metadata of the table.
-    pub fn metadata(&self) -> Option<&DeltaTableMetaData> {
+    pub fn delta_metadata(&self) -> Option<&DeltaTableMetaData> {
         self.current_metadata.as_ref()
     }
 
@@ -328,7 +328,7 @@ impl DeltaTableState {
         &'a self,
         filters: &'a [PartitionFilter],
     ) -> Result<impl Iterator<Item = &Add> + '_, DeltaTableError> {
-        let current_metadata = self.metadata().ok_or(DeltaTableError::NoMetadata)?;
+        let current_metadata = self.delta_metadata().ok_or(DeltaTableError::NoMetadata)?;
 
         let nonpartitioned_columns: Vec<String> = filters
             .iter()

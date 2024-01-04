@@ -59,6 +59,9 @@ enum VacuumError {
     /// Error returned
     #[error(transparent)]
     DeltaTable(#[from] DeltaTableError),
+
+    #[error(transparent)]
+    Protocol(#[from] crate::protocol::ProtocolError),
 }
 
 impl From<VacuumError> for DeltaTableError {
@@ -190,15 +193,8 @@ impl VacuumBuilder {
         let mut files_to_delete = vec![];
         let mut file_sizes = vec![];
         let object_store = self.log_store.object_store();
-        let mut all_files = object_store
-            .list(None)
-            .await
-            .map_err(DeltaTableError::from)?;
-        let partition_columns = &self
-            .snapshot
-            .metadata()
-            .ok_or(DeltaTableError::NoMetadata)?
-            .partition_columns;
+        let mut all_files = object_store.list(None);
+        let partition_columns = &self.snapshot.metadata()?.partition_columns;
 
         while let Some(obj_meta) = all_files.next().await {
             // TODO should we allow NotFound here in case we have a temporary commit file in the list
