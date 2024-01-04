@@ -6,7 +6,6 @@ use std::sync::Arc;
 use arrow::datatypes::{Schema as ArrowSchema, SchemaRef as ArrowSchemaRef};
 use arrow::record_batch::*;
 use bytes::Bytes;
-use log::{info, warn};
 use object_store::path::Path;
 use object_store::ObjectStore;
 use parquet::{
@@ -14,6 +13,7 @@ use parquet::{
     file::properties::WriterProperties,
 };
 use serde_json::Value;
+use tracing::{info, warn};
 use uuid::Uuid;
 
 use super::stats::create_add;

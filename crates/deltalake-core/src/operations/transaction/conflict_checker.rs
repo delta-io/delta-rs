@@ -463,7 +463,7 @@ impl<'a> ConflictChecker<'a> {
                         .txn_info
                         .read_snapshot
                         .metadata()
-                        .ok_or(CommitConflictError::NoMetadata)?
+                        .map_err(|_|CommitConflictError::NoMetadata)?
                         .partition_columns;
                     AddContainer::new(&added_files_to_check, partition_columns, arrow_schema)
                         .predicate_matches(predicate.clone())

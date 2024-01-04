@@ -20,7 +20,7 @@ use crate::storage::commit_uri_from_version;
 use crate::table::DeltaTableMetaData;
 use crate::DeltaTable;
 
-#[cfg(any(feature = "parquet", feature = "parquet2"))]
+#[cfg(feature = "parquet")]
 use super::{CheckPoint, DeltaTableConfig};
 
 /// State snapshot currently held by the Delta Table instance.
@@ -92,58 +92,34 @@ impl DeltaTableState {
     }
 
     /// Update DeltaTableState with checkpoint data.
-    #[cfg(any(feature = "parquet", feature = "parquet2"))]
+    #[cfg(feature = "parquet")]
     pub fn process_checkpoint_bytes(
         &mut self,
         data: bytes::Bytes,
         table_config: &DeltaTableConfig,
     ) -> Result<(), DeltaTableError> {
-        #[cfg(feature = "parquet")]
-        {
-            use parquet::file::reader::{FileReader, SerializedFileReader};
+        use parquet::file::reader::{FileReader, SerializedFileReader};
 
-            let preader = SerializedFileReader::new(data)?;
-            let schema = preader.metadata().file_metadata().schema();
-            if !schema.is_group() {
-                return Err(DeltaTableError::from(ProtocolError::Generic(
-                    "Action record in checkpoint should be a struct".to_string(),
-                )));
-            }
-            for record in preader.get_row_iter(None)? {
-                self.process_action(
-                    Action::from_parquet_record(schema, &record.unwrap())?,
-                    table_config.require_tombstones,
-                    table_config.require_files,
-                )?;
-            }
+        let preader = SerializedFileReader::new(data)?;
+        let schema = preader.metadata().file_metadata().schema();
+        if !schema.is_group() {
+            return Err(DeltaTableError::from(ProtocolError::Generic(
+                "Action record in checkpoint should be a struct".to_string(),
+            )));
         }
-
-        #[cfg(feature = "parquet2")]
-        {
-            use crate::protocol::parquet2_read::actions_from_row_group;
-            use parquet2::read::read_metadata;
-
-            let mut reader = std::io::Cursor::new(data);
-            let metadata = read_metadata(&mut reader)?;
-
-            for row_group in metadata.row_groups {
-                for action in
-                    actions_from_row_group(row_group, &mut reader).map_err(ProtocolError::from)?
-                {
-                    self.process_action(
-                        action,
-                        table_config.require_tombstones,
-                        table_config.require_files,
-                    )?;
-                }
-            }
+        for record in preader.get_row_iter(None)? {
+            self.process_action(
+                Action::from_parquet_record(schema, &record.unwrap())?,
+                table_config.require_tombstones,
+                table_config.require_files,
+            )?;
         }
 
         Ok(())
     }
 
     /// Construct a delta table state object from checkpoint.
-    #[cfg(any(feature = "parquet", feature = "parquet2"))]
+    #[cfg(feature = "parquet")]
     pub async fn from_checkpoint(
         table: &DeltaTable,
         check_point: &CheckPoint,
@@ -212,12 +188,12 @@ impl DeltaTableState {
     }
 
     /// The most recent metadata of the table.
-    pub fn metadata_action(&self) -> Result<&Metadata, ProtocolError> {
+    pub fn metadata(&self) -> Result<&Metadata, ProtocolError> {
         self.metadata.as_ref().ok_or(ProtocolError::NoMetaData)
     }
 
     /// The most recent metadata of the table.
-    pub fn metadata(&self) -> Option<&DeltaTableMetaData> {
+    pub fn delta_metadata(&self) -> Option<&DeltaTableMetaData> {
         self.current_metadata.as_ref()
     }
 
@@ -352,7 +328,7 @@ impl DeltaTableState {
         &'a self,
         filters: &'a [PartitionFilter],
     ) -> Result<impl Iterator<Item = &Add> + '_, DeltaTableError> {
-        let current_metadata = self.metadata().ok_or(DeltaTableError::NoMetadata)?;
+        let current_metadata = self.delta_metadata().ok_or(DeltaTableError::NoMetadata)?;
 
         let nonpartitioned_columns: Vec<String> = filters
             .iter()

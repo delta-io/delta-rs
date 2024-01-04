@@ -59,6 +59,9 @@ enum VacuumError {
     /// Error returned
     #[error(transparent)]
     DeltaTable(#[from] DeltaTableError),
+
+    #[error(transparent)]
+    Protocol(#[from] crate::protocol::ProtocolError),
 }
 
 impl From<VacuumError> for DeltaTableError {
@@ -190,15 +193,8 @@ impl VacuumBuilder {
         let mut files_to_delete = vec![];
         let mut file_sizes = vec![];
         let object_store = self.log_store.object_store();
-        let mut all_files = object_store
-            .list(None)
-            .await
-            .map_err(DeltaTableError::from)?;
-        let partition_columns = &self
-            .snapshot
-            .metadata()
-            .ok_or(DeltaTableError::NoMetadata)?
-            .partition_columns;
+        let mut all_files = object_store.list(None);
+        let partition_columns = &self.snapshot.metadata()?.partition_columns;
 
         while let Some(obj_meta) = all_files.next().await {
             // TODO should we allow NotFound here in case we have a temporary commit file in the list
@@ -404,7 +400,9 @@ mod tests {
 
     #[tokio::test]
     async fn vacuum_delta_8_0_table() {
-        let table = open_table("./tests/data/delta-0.8.0").await.unwrap();
+        let table = open_table("../deltalake-test/tests/data/delta-0.8.0")
+            .await
+            .unwrap();
 
         let result = VacuumBuilder::new(table.log_store, table.state.clone())
             .with_retention_period(Duration::hours(1))
@@ -413,7 +411,9 @@ mod tests {
 
         assert!(result.is_err());
 
-        let table = open_table("./tests/data/delta-0.8.0").await.unwrap();
+        let table = open_table("../deltalake-test/tests/data/delta-0.8.0")
+            .await
+            .unwrap();
         let (table, result) = VacuumBuilder::new(table.log_store, table.state)
             .with_retention_period(Duration::hours(0))
             .with_dry_run(true)

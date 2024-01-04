@@ -48,7 +48,7 @@ from .schema import (
     convert_pyarrow_recordbatchreader,
     convert_pyarrow_table,
 )
-from .table import MAX_SUPPORTED_WRITER_VERSION, DeltaTable
+from .table import MAX_SUPPORTED_WRITER_VERSION, DeltaTable, WriterProperties
 
 try:
     import pandas as pd  # noqa: F811
@@ -100,6 +100,7 @@ def write_deltalake(
     partition_filters: Optional[List[Tuple[str, str, Any]]] = ...,
     large_dtypes: bool = ...,
     engine: Literal["pyarrow"] = ...,
+    custom_metadata: Optional[Dict[str, str]] = ...,
 ) -> None:
     ...
 
@@ -119,7 +120,6 @@ def write_deltalake(
     schema: Optional[Union[pa.Schema, DeltaSchema]] = ...,
     partition_by: Optional[Union[List[str], str]] = ...,
     mode: Literal["error", "append", "overwrite", "ignore"] = ...,
-    max_rows_per_group: int = ...,
     name: Optional[str] = ...,
     description: Optional[str] = ...,
     configuration: Optional[Mapping[str, Optional[str]]] = ...,
@@ -128,6 +128,8 @@ def write_deltalake(
     predicate: Optional[str] = ...,
     large_dtypes: bool = ...,
     engine: Literal["rust"],
+    writer_properties: WriterProperties = ...,
+    custom_metadata: Optional[Dict[str, str]] = ...,
 ) -> None:
     ...
 
@@ -162,6 +164,8 @@ def write_deltalake(
     predicate: Optional[str] = None,
     large_dtypes: bool = False,
     engine: Literal["pyarrow", "rust"] = "pyarrow",
+    writer_properties: Optional[WriterProperties] = None,
+    custom_metadata: Optional[Dict[str, str]] = None,
 ) -> None:
     """Write to a Delta Lake table
 
@@ -234,6 +238,8 @@ def write_deltalake(
         large_dtypes: If True, the data schema is kept in large_dtypes, has no effect on pandas dataframe input.
         engine: writer engine to write the delta table. `Rust` engine is still experimental but you may
             see up to 4x performance improvements over pyarrow.
+        writer_properties: Pass writer properties to the Rust parquet writer.
+        custom_metadata: Custom metadata to add to the commitInfo.
     """
     table, table_uri = try_get_table_and_table_uri(table_or_uri, storage_options)
     if table is not None:
@@ -295,6 +301,10 @@ def write_deltalake(
             description=description,
             configuration=configuration,
             storage_options=storage_options,
+            writer_properties=writer_properties._to_dict()
+            if writer_properties
+            else None,
+            custom_metadata=custom_metadata,
         )
         if table:
             table.update_incremental()
@@ -487,6 +497,7 @@ def write_deltalake(
                 description,
                 configuration,
                 storage_options,
+                custom_metadata,
             )
         else:
             table._table.create_write_transaction(
@@ -495,6 +506,7 @@ def write_deltalake(
                 partition_by or [],
                 schema,
                 partition_filters,
+                custom_metadata,
             )
             table.update_incremental()
     else:

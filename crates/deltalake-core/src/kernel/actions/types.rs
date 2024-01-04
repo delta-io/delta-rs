@@ -5,8 +5,8 @@ use std::str::FromStr;
 // use std::sync::Arc;
 
 // use roaring::RoaringTreemap;
-use log::warn;
 use serde::{Deserialize, Serialize};
+use tracing::warn;
 use url::Url;
 
 use super::super::schema::StructType;
@@ -187,7 +187,7 @@ pub enum ReaderFeatures {
     Other(String),
 }
 
-#[cfg(all(not(feature = "parquet2"), feature = "parquet"))]
+#[cfg(feature = "parquet")]
 impl From<&parquet::record::Field> for ReaderFeatures {
     fn from(value: &parquet::record::Field) -> Self {
         match value {
@@ -330,7 +330,7 @@ impl fmt::Display for WriterFeatures {
     }
 }
 
-#[cfg(all(not(feature = "parquet2"), feature = "parquet"))]
+#[cfg(feature = "parquet")]
 impl From<&parquet::record::Field> for WriterFeatures {
     fn from(value: &parquet::record::Field) -> Self {
         match value {
@@ -599,10 +599,6 @@ pub struct Add {
     #[cfg(feature = "parquet")]
     #[serde(skip_serializing, skip_deserializing)]
     pub partition_values_parsed: Option<parquet::record::Row>,
-    /// Partition values parsed for parquet2
-    #[cfg(feature = "parquet2")]
-    #[serde(skip_serializing, skip_deserializing)]
-    pub partition_values_parsed: Option<String>,
 
     /// Contains statistics (e.g., count, min/max values for columns) about the data in this file in
     /// raw parquet format. This field needs to be written when statistics are available and the
@@ -612,10 +608,6 @@ pub struct Add {
     #[cfg(feature = "parquet")]
     #[serde(skip_serializing, skip_deserializing)]
     pub stats_parsed: Option<parquet::record::Row>,
-    /// Stats parsed for parquet2
-    #[cfg(feature = "parquet2")]
-    #[serde(skip_serializing, skip_deserializing)]
-    pub stats_parsed: Option<String>,
 }
 
 impl Add {
@@ -952,8 +944,10 @@ mod tests {
         let inline = dv_inline();
         assert_eq!(None, inline.absolute_path(&parent).unwrap());
 
-        let path =
-            std::fs::canonicalize(PathBuf::from("./tests/data/table-with-dv-small/")).unwrap();
+        let path = std::fs::canonicalize(PathBuf::from(
+            "../deltalake-test/tests/data/table-with-dv-small/",
+        ))
+        .unwrap();
         let parent = url::Url::from_directory_path(path).unwrap();
         let dv_url = parent
             .join("deletion_vector_61d16c75-6994-46b7-a15b-8b538852e50e.bin")
@@ -972,7 +966,7 @@ mod tests {
     // fn test_deletion_vector_read() {
     //     let store = Arc::new(LocalFileSystem::new());
     //     let path =
-    //         std::fs::canonicalize(PathBuf::from("./tests/data/table-with-dv-small/")).unwrap();
+    //         std::fs::canonicalize(PathBuf::from("../deltalake-test/tests/data/table-with-dv-small/")).unwrap();
     //     let parent = url::Url::from_directory_path(path).unwrap();
     //     let root = object_store::path::Path::from(parent.path());
     //     let fs_client = Arc::new(ObjectStoreFileSystemClient::new(

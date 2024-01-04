@@ -14,7 +14,7 @@ use object_store::ObjectStore;
 
 use crate::errors::DeltaResult;
 use crate::open_table_with_storage_options;
-use crate::storage::config::{configure_store, StorageOptions};
+use crate::storage::*;
 use crate::table::builder::ensure_table_uri;
 
 const DELTA_LOG_FOLDER: &str = "_delta_log";
@@ -47,9 +47,9 @@ impl ListingSchemaProvider {
         storage_options: Option<HashMap<String, String>>,
     ) -> DeltaResult<Self> {
         let uri = ensure_table_uri(root_uri)?;
-        let mut storage_options = storage_options.unwrap_or_default().into();
+        let storage_options = storage_options.unwrap_or_default().into();
         // We already parsed the url, so unwrapping is safe.
-        let store = configure_store(&uri, &mut storage_options)?;
+        let store = store_for(&uri)?;
         Ok(Self {
             authority: uri.to_string(),
             store,
@@ -60,7 +60,7 @@ impl ListingSchemaProvider {
 
     /// Reload table information from ObjectStore
     pub async fn refresh(&self) -> datafusion_common::Result<()> {
-        let entries: Vec<_> = self.store.list(None).await?.try_collect().await?;
+        let entries: Vec<_> = self.store.list(None).try_collect().await?;
         let mut tables = HashSet::new();
         for file in entries.iter() {
             let mut parent = Path::new(file.location.as_ref());
@@ -163,7 +163,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_table_names() {
-        let fs = ListingSchemaProvider::try_new("./tests/data/", None).unwrap();
+        let fs = ListingSchemaProvider::try_new("../deltalake-test/tests/data/", None).unwrap();
         fs.refresh().await.unwrap();
         let table_names = fs.table_names();
         assert!(table_names.len() > 20);
@@ -172,7 +172,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_query_table() {
-        let schema = Arc::new(ListingSchemaProvider::try_new("./tests/data/", None).unwrap());
+        let schema = Arc::new(
+            ListingSchemaProvider::try_new("../deltalake-test/tests/data/", None).unwrap(),
+        );
         schema.refresh().await.unwrap();
 
         let ctx = SessionContext::new();

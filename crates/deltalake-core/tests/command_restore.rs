@@ -6,12 +6,15 @@ use arrow_schema::{DataType as ArrowDataType, Field};
 use chrono::{DateTime, NaiveDateTime, TimeZone, Utc};
 use deltalake_core::kernel::{DataType, PrimitiveType, StructField};
 use deltalake_core::protocol::SaveMode;
+use deltalake_core::storage::commit_uri_from_version;
 use deltalake_core::{DeltaOps, DeltaTable};
 use rand::Rng;
 use std::error::Error;
 use std::fs;
 use std::sync::Arc;
-use tempdir::TempDir;
+use std::thread;
+use std::time::Duration;
+use tempfile::TempDir;
 
 #[derive(Debug)]
 struct Context {
@@ -33,7 +36,7 @@ async fn setup_test() -> Result<Context, Box<dyn Error>> {
         ),
     ];
 
-    let tmp_dir = tempdir::TempDir::new("restore_table").unwrap();
+    let tmp_dir = tempfile::tempdir().unwrap();
     let table_uri = tmp_dir.path().to_str().to_owned().unwrap();
     let table = DeltaOps::try_from_uri(table_uri)
         .await?
@@ -42,19 +45,21 @@ async fn setup_test() -> Result<Context, Box<dyn Error>> {
         .await?;
 
     let batch = get_record_batch();
-
+    thread::sleep(Duration::from_secs(1));
     let table = DeltaOps(table)
         .write(vec![batch.clone()])
         .with_save_mode(SaveMode::Append)
         .await
         .unwrap();
 
+    thread::sleep(Duration::from_secs(1));
     let table = DeltaOps(table)
         .write(vec![batch.clone()])
         .with_save_mode(SaveMode::Overwrite)
         .await
         .unwrap();
 
+    thread::sleep(Duration::from_secs(1));
     let table = DeltaOps(table)
         .write(vec![batch.clone()])
         .with_save_mode(SaveMode::Append)
@@ -113,9 +118,15 @@ async fn test_restore_by_version() -> Result<(), Box<dyn Error>> {
 #[tokio::test]
 async fn test_restore_by_datetime() -> Result<(), Box<dyn Error>> {
     let context = setup_test().await?;
-    let mut table = context.table;
-    let history = table.history(Some(10)).await?;
-    let timestamp = history.get(1).unwrap().timestamp.unwrap();
+    let table = context.table;
+    let version = 1;
+
+    // The way we obtain a timestamp for a version will have to change when/if we start using CommitInfo for timestamps
+    let meta = table
+        .object_store()
+        .head(&commit_uri_from_version(version))
+        .await?;
+    let timestamp = meta.last_modified.timestamp_millis();
     let naive = NaiveDateTime::from_timestamp_millis(timestamp).unwrap();
     let datetime: DateTime<Utc> = Utc.from_utc_datetime(&naive);
 

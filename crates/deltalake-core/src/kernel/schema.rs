@@ -6,11 +6,11 @@ use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 use std::{collections::HashMap, fmt::Display};
 
-use crate::kernel::DataCheck;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use super::error::Error;
+use crate::kernel::DataCheck;
 
 /// Type alias for a top level schema
 pub type Schema = StructType;
