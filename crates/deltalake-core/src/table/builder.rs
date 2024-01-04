@@ -7,12 +7,13 @@ use std::sync::Arc;
 use chrono::{DateTime, FixedOffset, Utc};
 use object_store::DynObjectStore;
 use serde::{Deserialize, Serialize};
+use tracing::debug;
 use url::Url;
 
 use super::DeltaTable;
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::logstore::LogStoreRef;
-use crate::storage::config::{self, StorageOptions};
+use crate::storage::{factories, StorageOptions};
 
 #[allow(dead_code)]
 #[derive(Debug, thiserror::Error)]
@@ -134,11 +135,6 @@ impl DeltaTableLoadOptions {
     }
 }
 
-enum UriType {
-    LocalPath(PathBuf),
-    Url(Url),
-}
-
 /// builder for configuring a delta table load.
 #[derive(Debug)]
 pub struct DeltaTableBuilder {
@@ -150,31 +146,48 @@ pub struct DeltaTableBuilder {
 
 impl DeltaTableBuilder {
     /// Creates `DeltaTableBuilder` from table uri
+    ///
+    /// Can panic on an invalid URI
+    ///
+    /// ```rust
+    /// # use deltalake_core::table::builder::*;
+    /// let builder = DeltaTableBuilder::from_uri("../deltalake-test/tests/data/delta-0.8.0");
+    /// assert!(true);
+    /// ```
     pub fn from_uri(table_uri: impl AsRef<str>) -> Self {
-        Self {
-            options: DeltaTableLoadOptions::new(table_uri.as_ref()),
-            storage_options: None,
-            allow_http: None,
-        }
+        let url = ensure_table_uri(&table_uri).expect("The specified table_uri is not valid");
+        DeltaTableBuilder::from_valid_uri(url).expect("Failed to create valid builder")
     }
 
     /// Creates `DeltaTableBuilder` from verified table uri.
-    /// Will fail fast if specified `table_uri` is a local path but doesn't exist.
+    ///
+    /// ```rust
+    /// # use deltalake_core::table::builder::*;
+    /// let builder = DeltaTableBuilder::from_valid_uri("memory:///");
+    /// assert!(builder.is_ok(), "Builder failed with {builder:?}");
+    /// ```
     pub fn from_valid_uri(table_uri: impl AsRef<str>) -> DeltaResult<Self> {
-        let table_uri = table_uri.as_ref();
-
-        if let UriType::LocalPath(path) = resolve_uri_type(table_uri)? {
-            if !path.exists() {
-                let msg = format!(
-                    "Local path \"{}\" does not exist or you don't have access!",
-                    table_uri
-                );
-                return Err(DeltaTableError::InvalidTableLocation(msg));
+        if let Ok(url) = Url::parse(table_uri.as_ref()) {
+            if url.scheme() == "file" {
+                let path = url.to_file_path().map_err(|_| {
+                    DeltaTableError::InvalidTableLocation(table_uri.as_ref().to_string())
+                })?;
+                ensure_file_location_exists(path)?;
             }
+        } else {
+            ensure_file_location_exists(PathBuf::from(table_uri.as_ref()))?;
         }
 
-        Ok(DeltaTableBuilder::from_uri(table_uri))
+        let url = ensure_table_uri(&table_uri).expect("The specified table_uri is not valid");
+        debug!("creating table builder with {url}");
+
+        Ok(Self {
+            options: DeltaTableLoadOptions::new(url),
+            storage_options: None,
+            allow_http: None,
+        })
     }
+
     /// Sets `require_tombstones=false` to the builder
     pub fn without_tombstones(mut self) -> Self {
         self.options.require_tombstones = false;
@@ -266,11 +279,22 @@ impl DeltaTableBuilder {
 
     /// Build a delta storage backend for the given config
     pub fn build_storage(self) -> DeltaResult<LogStoreRef> {
-        config::configure_log_store(
-            &self.options.table_uri,
-            self.storage_options(),
-            self.options.storage_backend,
-        )
+        debug!("build_storage() with {}", &self.options.table_uri);
+        let location = Url::parse(&self.options.table_uri).map_err(|_| {
+            DeltaTableError::NotATable(format!(
+                "Could not turn {} into a URL",
+                self.options.table_uri
+            ))
+        })?;
+
+        if let Some((store, _url)) = self.options.storage_backend.as_ref() {
+            debug!("Loading a logstore with a custom store: {store:?}");
+            crate::logstore::logstore_with(store.clone(), location, self.storage_options())
+        } else {
+            // If there has been no backend defined just default to the normal logstore look up
+            debug!("Loading a logstore based off the location: {location:?}");
+            crate::logstore::logstore_for(location, self.storage_options())
+        }
     }
 
     /// Build the [`DeltaTable`] from specified options.
@@ -299,102 +323,9 @@ impl DeltaTableBuilder {
     }
 }
 
-/// Storage option keys to use when creating [crate::storage::s3::S3StorageOptions].
-/// The same key should be used whether passing a key in the hashmap or setting it as an environment variable.
-/// Provided keys may include configuration for the S3 backend and also the optional DynamoDb lock used for atomic rename.
-pub mod s3_storage_options {
-    /// Custom S3 endpoint.
-    pub const AWS_ENDPOINT_URL: &str = "AWS_ENDPOINT_URL";
-    /// The AWS region.
-    pub const AWS_REGION: &str = "AWS_REGION";
-    /// The AWS profile.
-    pub const AWS_PROFILE: &str = "AWS_PROFILE";
-    /// The AWS_ACCESS_KEY_ID to use for S3.
-    pub const AWS_ACCESS_KEY_ID: &str = "AWS_ACCESS_KEY_ID";
-    /// The AWS_SECRET_ACCESS_KEY to use for S3.
-    pub const AWS_SECRET_ACCESS_KEY: &str = "AWS_SECRET_ACCESS_KEY";
-    /// The AWS_SESSION_TOKEN to use for S3.
-    pub const AWS_SESSION_TOKEN: &str = "AWS_SESSION_TOKEN";
-    /// Uses either "path" (the default) or "virtual", which turns on
-    /// [virtual host addressing](http://docs.aws.amazon.com/AmazonS3/latest/dev/VirtualHosting.html).
-    pub const AWS_S3_ADDRESSING_STYLE: &str = "AWS_S3_ADDRESSING_STYLE";
-    /// Locking provider to use for safe atomic rename.
-    /// `dynamodb` is currently the only supported locking provider.
-    /// If not set, safe atomic rename is not available.
-    pub const AWS_S3_LOCKING_PROVIDER: &str = "AWS_S3_LOCKING_PROVIDER";
-    /// The role to assume for S3 writes.
-    pub const AWS_S3_ASSUME_ROLE_ARN: &str = "AWS_S3_ASSUME_ROLE_ARN";
-    /// The role session name to use when a role is assumed. If not provided a random session name is generated.
-    pub const AWS_S3_ROLE_SESSION_NAME: &str = "AWS_S3_ROLE_SESSION_NAME";
-    /// The `pool_idle_timeout` option of aws http client. Has to be lower than 20 seconds, which is
-    /// default S3 server timeout <https://aws.amazon.com/premiumsupport/knowledge-center/s3-socket-connection-timeout-error/>.
-    /// However, since rusoto uses hyper as a client, its default timeout is 90 seconds
-    /// <https://docs.rs/hyper/0.13.2/hyper/client/struct.Builder.html#method.keep_alive_timeout>.
-    /// Hence, the `connection closed before message completed` could occur.
-    /// To avoid that, the default value of this setting is 15 seconds if it's not set otherwise.
-    pub const AWS_S3_POOL_IDLE_TIMEOUT_SECONDS: &str = "AWS_S3_POOL_IDLE_TIMEOUT_SECONDS";
-    /// The `pool_idle_timeout` for the as3_storage_options sts client. See
-    /// the reasoning in `AWS_S3_POOL_IDLE_TIMEOUT_SECONDS`.
-    pub const AWS_STS_POOL_IDLE_TIMEOUT_SECONDS: &str = "AWS_STS_POOL_IDLE_TIMEOUT_SECONDS";
-    /// The number of retries for S3 GET requests failed with 500 Internal Server Error.
-    pub const AWS_S3_GET_INTERNAL_SERVER_ERROR_RETRIES: &str =
-        "AWS_S3_GET_INTERNAL_SERVER_ERROR_RETRIES";
-    /// The web identity token file to use when using a web identity provider.
-    /// NOTE: web identity related options are set in the environment when
-    /// creating an instance of [crate::storage::s3::S3StorageOptions].
-    /// See also <https://docs.rs/rusoto_sts/0.47.0/rusoto_sts/struct.WebIdentityProvider.html#method.from_k8s_env>.
-    pub const AWS_WEB_IDENTITY_TOKEN_FILE: &str = "AWS_WEB_IDENTITY_TOKEN_FILE";
-    /// The role name to use for web identity.
-    /// NOTE: web identity related options are set in the environment when
-    /// creating an instance of [crate::storage::s3::S3StorageOptions].
-    /// See also <https://docs.rs/rusoto_sts/0.47.0/rusoto_sts/struct.WebIdentityProvider.html#method.from_k8s_env>.
-    pub const AWS_ROLE_ARN: &str = "AWS_ROLE_ARN";
-    /// The role session name to use for web identity.
-    /// NOTE: web identity related options are set in the environment when
-    /// creating an instance of [crate::storage::s3::S3StorageOptions].
-    /// See also <https://docs.rs/rusoto_sts/0.47.0/rusoto_sts/struct.WebIdentityProvider.html#method.from_k8s_env>.
-    pub const AWS_ROLE_SESSION_NAME: &str = "AWS_ROLE_SESSION_NAME";
-    /// Allow http connections - mainly useful for integration tests
-    pub const AWS_ALLOW_HTTP: &str = "AWS_ALLOW_HTTP";
-
-    /// If set to "true", allows creating commits without concurrent writer protection.
-    /// Only safe if there is one writer to a given table.
-    pub const AWS_S3_ALLOW_UNSAFE_RENAME: &str = "AWS_S3_ALLOW_UNSAFE_RENAME";
-
-    /// The list of option keys owned by the S3 module.
-    /// Option keys not contained in this list will be added to the `extra_opts`
-    /// field of [crate::storage::s3::S3StorageOptions].
-    pub const S3_OPTS: &[&str] = &[
-        AWS_ENDPOINT_URL,
-        AWS_REGION,
-        AWS_PROFILE,
-        AWS_ACCESS_KEY_ID,
-        AWS_SECRET_ACCESS_KEY,
-        AWS_SESSION_TOKEN,
-        AWS_S3_LOCKING_PROVIDER,
-        AWS_S3_ASSUME_ROLE_ARN,
-        AWS_S3_ROLE_SESSION_NAME,
-        AWS_WEB_IDENTITY_TOKEN_FILE,
-        AWS_ROLE_ARN,
-        AWS_ROLE_SESSION_NAME,
-        AWS_S3_POOL_IDLE_TIMEOUT_SECONDS,
-        AWS_STS_POOL_IDLE_TIMEOUT_SECONDS,
-        AWS_S3_GET_INTERNAL_SERVER_ERROR_RETRIES,
-    ];
-}
-
-#[allow(dead_code)]
-pub(crate) fn str_option(map: &HashMap<String, String>, key: &str) -> Option<String> {
-    map.get(key)
-        .map_or_else(|| std::env::var(key).ok(), |v| Some(v.to_owned()))
-}
-
-lazy_static::lazy_static! {
-    static ref KNOWN_SCHEMES: Vec<&'static str> =
-        Vec::from([
-            "file", "memory", "az", "abfs", "abfss", "azure", "wasb", "wasbs", "adl", "s3", "s3a",
-            "gs", "hdfs", "https", "http",
-        ]);
+enum UriType {
+    LocalPath(PathBuf),
+    Url(Url),
 }
 
 /// Utility function to figure out whether string representation of the path
@@ -403,18 +334,30 @@ lazy_static::lazy_static! {
 /// Will return an error if the path is not valid.
 fn resolve_uri_type(table_uri: impl AsRef<str>) -> DeltaResult<UriType> {
     let table_uri = table_uri.as_ref();
+    let known_schemes: Vec<_> = factories()
+        .iter()
+        .map(|v| v.key().scheme().to_owned())
+        .collect();
 
     if let Ok(url) = Url::parse(table_uri) {
+        let scheme = url.scheme().to_string();
         if url.scheme() == "file" {
             Ok(UriType::LocalPath(url.to_file_path().map_err(|err| {
                 let msg = format!("Invalid table location: {}\nError: {:?}", table_uri, err);
                 DeltaTableError::InvalidTableLocation(msg)
             })?))
         // NOTE this check is required to support absolute windows paths which may properly parse as url
-        } else if KNOWN_SCHEMES.contains(&url.scheme()) {
+        } else if known_schemes.contains(&scheme) {
             Ok(UriType::Url(url))
-        } else {
+        // NOTE this check is required to support absolute windows paths which may properly parse as url
+        // we assume here that a single character scheme is a windows drive letter
+        } else if scheme.len() == 1 {
             Ok(UriType::LocalPath(PathBuf::from(table_uri)))
+        } else {
+            Err(DeltaTableError::InvalidTableLocation(format!(
+                "Unknown scheme: {}",
+                scheme
+            )))
         }
     } else {
         Ok(UriType::LocalPath(PathBuf::from(table_uri)))
@@ -470,21 +413,46 @@ pub fn ensure_table_uri(table_uri: impl AsRef<str>) -> DeltaResult<Url> {
     Ok(url)
 }
 
+/// Validate that the given [PathBuf] does exist, otherwise return a
+/// [DeltaTableError::InvalidTableLocation]
+fn ensure_file_location_exists(path: PathBuf) -> DeltaResult<()> {
+    if !path.exists() {
+        let msg = format!(
+            "Local path \"{}\" does not exist or you don't have access!",
+            path.as_path().display(),
+        );
+        return Err(DeltaTableError::InvalidTableLocation(msg));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
-    use super::*;
     use itertools::Itertools;
     use object_store::path::Path;
 
+    use super::*;
+    use crate::storage::DefaultObjectStoreFactory;
+
     #[test]
     fn test_ensure_table_uri() {
+        factories().insert(
+            Url::parse("s3://").unwrap(),
+            Arc::new(DefaultObjectStoreFactory::default()),
+        );
+
         // parse an existing relative directory
         let uri = ensure_table_uri(".");
         assert!(uri.is_ok());
-        let _uri = ensure_table_uri("./nonexistent");
+        let uri = ensure_table_uri("./nonexistent");
         assert!(uri.is_ok());
         let uri = ensure_table_uri("s3://container/path");
         assert!(uri.is_ok());
+        #[cfg(not(windows))]
+        {
+            let uri = ensure_table_uri("file:///tmp/nonexistent/some/path");
+            assert!(uri.is_ok());
+        }
 
         // These cases should all roundtrip to themselves
         cfg_if::cfg_if! {
@@ -541,7 +509,7 @@ mod tests {
 
     #[test]
     fn test_ensure_table_uri_path() {
-        let tmp_dir = tempdir::TempDir::new("test").unwrap();
+        let tmp_dir = tempfile::tempdir().unwrap();
         let tmp_path = std::fs::canonicalize(tmp_dir.path()).unwrap();
         let paths = &[
             tmp_path.join("data/delta-0.8.0"),
@@ -567,11 +535,11 @@ mod tests {
     #[test]
     fn test_ensure_table_uri_url() {
         // Urls should round trips as-is
-        let expected = Url::parse("s3://tests/data/delta-0.8.0").unwrap();
+        let expected = Url::parse("memory:///deltalake-test/tests/data/delta-0.8.0").unwrap();
         let url = ensure_table_uri(&expected).unwrap();
         assert_eq!(expected, url);
 
-        let tmp_dir = tempdir::TempDir::new("test").unwrap();
+        let tmp_dir = tempfile::tempdir().unwrap();
         let tmp_path = std::fs::canonicalize(tmp_dir.path()).unwrap();
         let path = tmp_path.join("data/delta-0.8.0");
         let expected = Url::from_directory_path(path).unwrap();
@@ -581,7 +549,7 @@ mod tests {
 
     #[tokio::test]
     async fn read_delta_table_ignoring_tombstones() {
-        let table = DeltaTableBuilder::from_uri("./tests/data/delta-0.8.0")
+        let table = DeltaTableBuilder::from_uri("../deltalake-test/tests/data/delta-0.8.0")
             .without_tombstones()
             .load()
             .await
@@ -602,7 +570,7 @@ mod tests {
 
     #[tokio::test]
     async fn read_delta_table_ignoring_files() {
-        let table = DeltaTableBuilder::from_uri("./tests/data/delta-0.8.0")
+        let table = DeltaTableBuilder::from_uri("../deltalake-test/tests/data/delta-0.8.0")
             .without_files()
             .load()
             .await
@@ -617,7 +585,7 @@ mod tests {
 
     #[tokio::test]
     async fn read_delta_table_with_ignoring_files_on_apply_log() {
-        let mut table = DeltaTableBuilder::from_uri("./tests/data/delta-0.8.0")
+        let mut table = DeltaTableBuilder::from_uri("../deltalake-test/tests/data/delta-0.8.0")
             .with_version(0)
             .without_files()
             .load()

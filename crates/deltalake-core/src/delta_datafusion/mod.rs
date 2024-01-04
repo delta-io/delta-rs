@@ -32,7 +32,7 @@ use arrow::datatypes::{DataType as ArrowDataType, Schema as ArrowSchema, SchemaR
 use arrow::error::ArrowError;
 use arrow::record_batch::RecordBatch;
 use arrow_array::types::UInt16Type;
-use arrow_array::{Array, DictionaryArray, StringArray};
+use arrow_array::{Array, DictionaryArray, StringArray, TypedDictionaryArray};
 use arrow_cast::display::array_value_to_string;
 
 use arrow_schema::Field;
@@ -71,9 +71,9 @@ use datafusion_sql::planner::ParserOptions;
 use futures::TryStreamExt;
 
 use itertools::Itertools;
-use log::error;
 use object_store::ObjectMeta;
 use serde::{Deserialize, Serialize};
+use tracing::error;
 use url::Url;
 
 use crate::errors::{DeltaResult, DeltaTableError};
@@ -132,6 +132,21 @@ fn get_scalar_value(value: Option<&ColumnValueStat>, field: &Arc<Field>) -> Prec
     }
 }
 
+pub(crate) fn get_path_column<'a>(
+    batch: &'a RecordBatch,
+    path_column: &str,
+) -> DeltaResult<TypedDictionaryArray<'a, UInt16Type, StringArray>> {
+    let err = || DeltaTableError::Generic("Unable to obtain Delta-rs path column".to_string());
+    batch
+        .column_by_name(path_column)
+        .unwrap()
+        .as_any()
+        .downcast_ref::<DictionaryArray<UInt16Type>>()
+        .ok_or_else(err)?
+        .downcast_dict::<StringArray>()
+        .ok_or_else(err)
+}
+
 impl DeltaTableState {
     /// Provide table level statistics to Datafusion
     pub fn datafusion_table_statistics(&self) -> DataFusionResult<Statistics> {
@@ -146,7 +161,7 @@ impl DeltaTableState {
         let files = self.files();
 
         // Initalize statistics
-        let mut table_stats = match files.get(0) {
+        let mut table_stats = match files.first() {
             Some(file) => match file.get_stats() {
                 Ok(Some(stats)) => {
                     let mut column_statistics = Vec::with_capacity(schema.fields().size());
@@ -1113,7 +1128,10 @@ impl DeltaDataChecker {
             return Ok(());
         }
         let table = MemTable::try_new(record_batch.schema(), vec![vec![record_batch.clone()]])?;
-        self.ctx.register_table("data", Arc::new(table))?;
+
+        // Use a random table name to avoid clashes when running multiple parallel tasks, e.g. when using a partitioned table
+        let table_name: String = uuid::Uuid::new_v4().to_string();
+        self.ctx.register_table(&table_name, Arc::new(table))?;
 
         let mut violations: Vec<String> = Vec::new();
 
@@ -1125,8 +1143,9 @@ impl DeltaDataChecker {
             }
 
             let sql = format!(
-                "SELECT {} FROM data WHERE NOT ({}) LIMIT 1",
+                "SELECT {} FROM `{}` WHERE NOT ({}) LIMIT 1",
                 check.get_name(),
+                table_name,
                 check.get_expression()
             );
 
@@ -1147,7 +1166,7 @@ impl DeltaDataChecker {
             }
         }
 
-        self.ctx.deregister_table("data")?;
+        self.ctx.deregister_table(&table_name)?;
         if !violations.is_empty() {
             Err(DeltaTableError::InvalidData { violations })
         } else {
@@ -1362,31 +1381,20 @@ fn join_batches_with_add_actions(
 
     let mut files = Vec::with_capacity(batches.iter().map(|batch| batch.num_rows()).sum());
     for batch in batches {
-        let array = batch.column_by_name(path_column).ok_or_else(|| {
-            DeltaTableError::Generic(format!("Unable to find column {}", path_column))
-        })?;
+        let err = || DeltaTableError::Generic("Unable to obtain Delta-rs path column".to_string());
 
-        let iter: Box<dyn Iterator<Item = Option<&str>>> =
-            if dict_array {
-                let array = array
-                    .as_any()
-                    .downcast_ref::<DictionaryArray<UInt16Type>>()
-                    .ok_or(DeltaTableError::Generic(format!(
-                        "Unable to downcast column {}",
-                        path_column
-                    )))?
-                    .downcast_dict::<StringArray>()
-                    .ok_or(DeltaTableError::Generic(format!(
-                        "Unable to downcast column {}",
-                        path_column
-                    )))?;
-                Box::new(array.into_iter())
-            } else {
-                let array = array.as_any().downcast_ref::<StringArray>().ok_or(
-                    DeltaTableError::Generic(format!("Unable to downcast column {}", path_column)),
-                )?;
-                Box::new(array.into_iter())
-            };
+        let iter: Box<dyn Iterator<Item = Option<&str>>> = if dict_array {
+            let array = get_path_column(&batch, path_column)?;
+            Box::new(array.into_iter())
+        } else {
+            let array = batch
+                .column_by_name(path_column)
+                .ok_or_else(err)?
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .ok_or_else(err)?;
+            Box::new(array.into_iter())
+        };
 
         for path in iter {
             let path = path.ok_or(DeltaTableError::Generic(format!(
@@ -1903,7 +1911,7 @@ mod tests {
 
     #[tokio::test]
     async fn delta_table_provider_with_config() {
-        let table = crate::open_table("tests/data/delta-2.2.0-partitioned-types")
+        let table = crate::open_table("../deltalake-test/tests/data/delta-2.2.0-partitioned-types")
             .await
             .unwrap();
         let config = DeltaScanConfigBuilder::new()

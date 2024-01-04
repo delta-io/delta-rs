@@ -741,6 +741,7 @@ impl RawDeltaTable {
         partition_by: Vec<String>,
         schema: PyArrowType<ArrowSchema>,
         partitions_filters: Option<Vec<(&str, &str, PartitionFilterValue)>>,
+        custom_metadata: Option<HashMap<String, String>>,
     ) -> PyResult<()> {
         let mode = mode.parse().map_err(PythonError::from)?;
 
@@ -803,6 +804,10 @@ impl RawDeltaTable {
             partition_by: Some(partition_by),
             predicate: None,
         };
+
+        let app_metadata =
+            custom_metadata.map(|md| md.into_iter().map(|(k, v)| (k, v.into())).collect());
+
         let store = self._table.log_store();
 
         rt()?
@@ -811,7 +816,7 @@ impl RawDeltaTable {
                 &actions,
                 operation,
                 self._table.get_state(),
-                None,
+                app_metadata,
             ))
             .map_err(PythonError::from)?;
 
@@ -1173,6 +1178,7 @@ fn write_to_deltalake(
     configuration: Option<HashMap<String, Option<String>>>,
     storage_options: Option<HashMap<String, String>>,
     writer_properties: Option<HashMap<String, Option<String>>>,
+    custom_metadata: Option<HashMap<String, String>>,
 ) -> PyResult<()> {
     let batches = data.0.map(|batch| batch.unwrap()).collect::<Vec<_>>();
     let save_mode = mode.parse().map_err(PythonError::from)?;
@@ -1214,6 +1220,12 @@ fn write_to_deltalake(
 
     if let Some(config) = configuration {
         builder = builder.with_configuration(config);
+    };
+
+    if let Some(metadata) = custom_metadata {
+        let json_metadata: Map<String, Value> =
+            metadata.into_iter().map(|(k, v)| (k, v.into())).collect();
+        builder = builder.with_metadata(json_metadata);
     };
 
     rt()?
@@ -1280,6 +1292,7 @@ fn write_new_deltalake(
     description: Option<String>,
     configuration: Option<HashMap<String, Option<String>>>,
     storage_options: Option<HashMap<String, String>>,
+    custom_metadata: Option<HashMap<String, String>>,
 ) -> PyResult<()> {
     let table = DeltaTableBuilder::from_uri(table_uri)
         .with_storage_options(storage_options.unwrap_or_default())
@@ -1304,6 +1317,12 @@ fn write_new_deltalake(
 
     if let Some(config) = configuration {
         builder = builder.with_configuration(config);
+    };
+
+    if let Some(metadata) = custom_metadata {
+        let json_metadata: Map<String, Value> =
+            metadata.into_iter().map(|(k, v)| (k, v.into())).collect();
+        builder = builder.with_metadata(json_metadata);
     };
 
     rt()?
@@ -1401,6 +1420,10 @@ impl PyDeltaDataChecker {
 // module name need to match project name
 fn _internal(py: Python, m: &PyModule) -> PyResult<()> {
     use crate::error::{CommitFailedError, DeltaError, TableNotFoundError};
+
+    deltalake::aws::register_handlers(None);
+    deltalake::azure::register_handlers(None);
+
     m.add("DeltaError", py.get_type::<DeltaError>())?;
     m.add("CommitFailedError", py.get_type::<CommitFailedError>())?;
     m.add("DeltaProtocolError", py.get_type::<DeltaProtocolError>())?;

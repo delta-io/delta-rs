@@ -23,17 +23,13 @@ pub enum DeltaTableError {
     },
 
     /// Error returned when parsing checkpoint parquet.
-    #[cfg(any(feature = "parquet", feature = "parquet2"))]
+    #[cfg(feature = "parquet")]
     #[error("Failed to parse parquet: {}", .source)]
     Parquet {
         /// Parquet error details returned when reading the checkpoint failed.
         #[cfg(feature = "parquet")]
         #[from]
         source: parquet::errors::ParquetError,
-        /// Parquet error details returned when reading the checkpoint failed.
-        #[cfg(feature = "parquet2")]
-        #[from]
-        source: parquet2::error::Error,
     },
 
     /// Error returned when converting the schema in Arrow format failed.
@@ -231,6 +227,7 @@ impl From<ProtocolError> for DeltaTableError {
             ProtocolError::Arrow { source } => DeltaTableError::Arrow { source },
             ProtocolError::IO { source } => DeltaTableError::Io { source },
             ProtocolError::ObjectStore { source } => DeltaTableError::ObjectStore { source },
+            #[cfg(feature = "parquet")]
             ProtocolError::ParquetParseError { source } => DeltaTableError::Parquet { source },
             _ => DeltaTableError::Protocol { source: value },
         }

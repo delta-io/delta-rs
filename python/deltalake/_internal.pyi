@@ -135,6 +135,7 @@ class RawDeltaTable:
         partition_by: List[str],
         schema: pyarrow.Schema,
         partitions_filters: Optional[FilterType],
+        custom_metadata: Optional[Dict[str, str]],
     ) -> None: ...
     def cleanup_metadata(self) -> None: ...
 
@@ -149,6 +150,7 @@ def write_new_deltalake(
     description: Optional[str],
     configuration: Optional[Mapping[str, Optional[str]]],
     storage_options: Optional[Dict[str, str]],
+    custom_metadata: Optional[Dict[str, str]],
 ) -> None: ...
 def write_to_deltalake(
     table_uri: str,
@@ -163,6 +165,7 @@ def write_to_deltalake(
     configuration: Optional[Mapping[str, Optional[str]]],
     storage_options: Optional[Dict[str, str]],
     writer_properties: Optional[Dict[str, Optional[str]]],
+    custom_metadata: Optional[Dict[str, str]],
 ) -> None: ...
 def convert_to_deltalake(
     uri: str,

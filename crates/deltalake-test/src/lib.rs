@@ -8,21 +8,22 @@ use deltalake_core::operations::transaction::commit;
 use deltalake_core::protocol::{DeltaOperation, SaveMode};
 use deltalake_core::DeltaTable;
 use deltalake_core::DeltaTableBuilder;
-use object_store::{path::Path, ObjectStore};
+use deltalake_core::{ObjectStore, Path};
 use std::any::Any;
 use std::collections::HashMap;
 use std::sync::Arc;
-use tempdir::TempDir;
+use tempfile::TempDir;
 
-#[cfg(feature = "azure")]
-pub mod adls;
 pub mod clock;
+pub mod concurrent;
 #[cfg(feature = "datafusion")]
 pub mod datafusion;
-#[cfg(feature = "hdfs")]
-pub mod hdfs;
-#[cfg(any(feature = "s3", feature = "s3-native-tls"))]
-pub mod s3;
+pub mod read;
+pub mod utils;
+
+pub use concurrent::test_concurrent_writes;
+pub use read::test_read_tables;
+pub use utils::{IntegrationContext, TestResult};
 
 #[derive(Default)]
 pub struct TestContext {
@@ -47,8 +48,6 @@ impl TestContext {
             Ok("LOCALFS") | Err(std::env::VarError::NotPresent) => setup_local_context().await,
             #[cfg(feature = "azure")]
             Ok("AZURE_GEN2") => adls::setup_azure_gen2_context().await,
-            #[cfg(any(feature = "s3", feature = "s3-native-tls"))]
-            Ok("S3_LOCAL_STACK") => s3::setup_s3_context().await,
             #[cfg(feature = "hdfs")]
             Ok("HDFS") => hdfs::setup_hdfs_context(),
             _ => panic!("Invalid backend for delta-rs tests"),
@@ -95,7 +94,7 @@ impl TestContext {
 }
 
 pub async fn setup_local_context() -> TestContext {
-    let tmp_dir = tempdir::TempDir::new("delta-rs_tests").unwrap();
+    let tmp_dir = tempfile::tempdir().unwrap();
     let mut config = HashMap::new();
     config.insert(
         "URI".to_owned(),
