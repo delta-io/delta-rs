@@ -112,11 +112,9 @@ class WriterProperties:
                     elif parquet_compression == "BROTLI":
                         MIN_LEVEL = 0
                         MAX_LEVEL = 11
-                    elif parquet_compression == "ZSTD":
+                    else:
                         MIN_LEVEL = 1
                         MAX_LEVEL = 22
-                    else:
-                        raise SyntaxError()
                     if compression_level < MIN_LEVEL or compression_level > MAX_LEVEL:
                         raise ValueError(
                             f"Compression level for {parquet_compression} should fall between {MIN_LEVEL}-{MAX_LEVEL}"
