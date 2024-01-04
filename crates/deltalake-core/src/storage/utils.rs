@@ -15,7 +15,6 @@ pub async fn flatten_list_stream(
 ) -> ObjectStoreResult<Vec<Path>> {
     storage
         .list(prefix)
-        .await?
         .map_ok(|meta| meta.location)
         .try_collect::<Vec<Path>>()
         .await
@@ -47,6 +46,7 @@ impl TryFrom<&Add> for ObjectMeta {
             last_modified,
             size: value.size as usize,
             e_tag: None,
+            version: None,
         })
     }
 }

@@ -723,13 +723,6 @@ fn generalize_filter(
                     None
                 }
             }
-            Expr::ScalarUDF(udf) => {
-                if udf.args.len() == 1 {
-                    references_table(&udf.args[0], table)
-                } else {
-                    None
-                }
-            }
             _ => None,
         }
     }
@@ -863,8 +856,8 @@ async fn try_construct_early_filter(
             } else {
                 // if we have some recognised partitions, then discover the distinct set of partitions in the source data and
                 // make a new filter, which expands out the placeholders for each distinct partition (and then OR these together)
-                let distinct_partitions = LogicalPlan::Distinct(Distinct {
-                    input: LogicalPlan::Projection(Projection::try_new(
+                let distinct_partitions = LogicalPlan::Distinct(Distinct::All(
+                    LogicalPlan::Projection(Projection::try_new(
                         placeholders
                             .into_iter()
                             .map(|(alias, expr)| expr.alias(alias))
@@ -872,7 +865,7 @@ async fn try_construct_early_filter(
                         source.clone().into(),
                     )?)
                     .into(),
-                });
+                ));
 
                 let execution_plan = session_state
                     .create_physical_plan(&distinct_partitions)
