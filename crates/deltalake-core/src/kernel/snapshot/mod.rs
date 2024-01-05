@@ -8,7 +8,10 @@ use object_store::ObjectStore;
 use self::log_segment::LogSegment;
 use self::replay::ReplayStream;
 use crate::kernel::{actions::ActionType, StructType};
+use crate::table::config::TableConfig;
 use crate::{DeltaResult, DeltaTableConfig};
+
+use super::{Metadata, Protocol};
 
 mod extract;
 mod log_segment;
@@ -19,6 +22,9 @@ pub struct Snapshot {
     log_segment: LogSegment,
     store: Arc<dyn ObjectStore>,
     config: DeltaTableConfig,
+    protocol: Protocol,
+    metadata: Metadata,
+    schema: StructType,
 }
 
 impl Snapshot {
@@ -30,16 +36,46 @@ impl Snapshot {
         version: Option<i64>,
     ) -> DeltaResult<Self> {
         let log_segment = LogSegment::try_new(table_root, version, store.as_ref()).await?;
+        let (protocol, metadata) = log_segment.read_metadata(store.clone(), &config).await?;
+        let schema = serde_json::from_str(&metadata.schema_string)?;
         Ok(Self {
             log_segment,
             store,
             config,
+            protocol,
+            metadata,
+            schema,
         })
     }
 
     /// Get the table version of the snapshot
     pub fn version(&self) -> i64 {
         self.log_segment.version
+    }
+
+    /// Get the table schema of the snapshot
+    pub fn schema(&self) -> &StructType {
+        &self.schema
+    }
+
+    /// Get the table metadata of the snapshot
+    pub fn metadata(&self) -> &Metadata {
+        &self.metadata
+    }
+
+    /// Get the table protocol of the snapshot
+    pub fn protocol(&self) -> &Protocol {
+        &self.protocol
+    }
+
+    /// Get the table root of the snapshot
+    pub fn table_root(&self) -> &Path {
+        &self.log_segment.table_root
+    }
+
+    /// Well known table configuration
+    pub fn table_config(&self) -> TableConfig<'_> {
+        TableConfig(&self.metadata.configuration)
     }
 
     /// Get the files in the snapshot
@@ -78,8 +114,8 @@ mod tests {
     #[tokio::test]
     async fn test_snapshot_files() -> TestResult {
         let context = IntegrationContext::new(Box::new(LocalStorageIntegration::default()))?;
-        context.load_table(TestTables::Checkpoints).await?;
         context.load_table(TestTables::Simple).await?;
+        context.load_table(TestTables::Checkpoints).await?;
 
         let store = context
             .table_builder(TestTables::Simple)
@@ -88,8 +124,12 @@ mod tests {
 
         let snapshot =
             Snapshot::try_new(&Path::default(), store.clone(), Default::default(), None).await?;
-        let batches = snapshot.files()?.try_collect::<Vec<_>>().await?;
 
+        let schema_string = r#"{"type":"struct","fields":[{"name":"id","type":"long","nullable":true,"metadata":{}}]}"#;
+        let expected: StructType = serde_json::from_str(schema_string)?;
+        assert_eq!(snapshot.schema(), &expected);
+
+        let batches = snapshot.files()?.try_collect::<Vec<_>>().await?;
         let expected = [
             "+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+",
             "| add                                                                                                                                                                                                                                                             |",
