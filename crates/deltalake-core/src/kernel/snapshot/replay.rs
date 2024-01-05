@@ -21,14 +21,18 @@ pin_project! {
 
         #[pin]
         stream: S,
+
+        #[pin]
+        checkpoint: S,
     }
 }
 
 impl<S> ReplayStream<S> {
-    pub(super) fn new(stream: S) -> Self {
+    pub(super) fn new(stream: S, checkpoint: S) -> Self {
         Self {
             stream,
             scanner: LogReplayScanner::new(),
+            checkpoint,
         }
     }
 }
@@ -41,14 +45,26 @@ where
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let this = self.project();
-        this.stream.poll_next(cx).map(|b| match b {
+        let res = this.stream.poll_next(cx).map(|b| match b {
             Some(Ok(batch)) => match this.scanner.process_files_batch(&batch, true) {
                 Ok(filtered) => Some(Ok(filtered)),
                 Err(e) => Some(Err(e)),
             },
             Some(Err(e)) => Some(Err(e)),
             None => None,
-        })
+        });
+        if matches!(res, Poll::Ready(None)) {
+            this.checkpoint.poll_next(cx).map(|b| match b {
+                Some(Ok(batch)) => match this.scanner.process_files_batch(&batch, false) {
+                    Ok(filtered) => Some(Ok(filtered)),
+                    Err(e) => Some(Err(e)),
+                },
+                Some(Err(e)) => Some(Err(e)),
+                None => None,
+            })
+        } else {
+            res
+        }
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {

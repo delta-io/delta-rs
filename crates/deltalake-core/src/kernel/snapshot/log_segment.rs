@@ -12,6 +12,8 @@ use object_store::path::Path;
 use object_store::{
     Error as ObjectStoreError, ObjectMeta, ObjectStore, Result as ObjectStoreResult,
 };
+use parquet::arrow::arrow_reader::ArrowReaderOptions;
+use parquet::arrow::async_reader::{ParquetObjectReader, ParquetRecordBatchStreamBuilder};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 
@@ -19,6 +21,7 @@ use crate::kernel::schema::Schema;
 use crate::{DeltaResult, DeltaTableConfig, DeltaTableError};
 
 const LAST_CHECKPOINT_FILE_NAME: &str = "_last_checkpoint";
+const BATCH_SIZE: usize = 1024;
 
 lazy_static! {
     static ref CHECKPOINT_FILE_PATTERN: Regex =
@@ -63,7 +66,7 @@ impl PathExt for Path {
     }
 }
 
-pub(crate) struct LogSegment {
+pub(super) struct LogSegment {
     pub version: i64,
     pub log_root: Path,
     pub commit_files: Vec<ObjectMeta>,
@@ -72,7 +75,7 @@ pub(crate) struct LogSegment {
 
 impl LogSegment {
     /// Try to create a new [`LogSegment`]
-    pub async fn try_new(
+    pub(super) async fn try_new(
         table_root: &Path,
         version: Option<i64>,
         store: &dyn ObjectStore,
@@ -125,7 +128,7 @@ impl LogSegment {
         config: &DeltaTableConfig,
     ) -> DeltaResult<BoxStream<'_, DeltaResult<RecordBatch>>> {
         let decoder = ReaderBuilder::new(Arc::new(read_schema.try_into()?))
-            .with_batch_size(1024)
+            .with_batch_size(BATCH_SIZE)
             .build_decoder()?;
 
         let stream = futures::stream::iter(self.commit_files.iter())
@@ -136,6 +139,29 @@ impl LogSegment {
             .buffered(config.log_buffer_size);
 
         Ok(decode_stream(decoder, stream).boxed())
+    }
+
+    pub(super) fn checkpoint_stream(
+        &self,
+        store: Arc<dyn ObjectStore>,
+        _read_schema: &Schema,
+        config: &DeltaTableConfig,
+    ) -> BoxStream<'_, DeltaResult<RecordBatch>> {
+        futures::stream::iter(self.checkpoint_files.clone())
+            .map(move |meta| {
+                let store = store.clone();
+                async move {
+                    let reader = ParquetObjectReader::new(store, meta);
+                    let options = ArrowReaderOptions::new(); //.with_page_index(enable_page_index);
+                    let builder =
+                        ParquetRecordBatchStreamBuilder::new_with_options(reader, options).await?;
+                    builder.with_batch_size(BATCH_SIZE).build()
+                }
+            })
+            .buffered(config.log_buffer_size)
+            .try_flatten()
+            .map_err(Into::into)
+            .boxed()
     }
 }
 

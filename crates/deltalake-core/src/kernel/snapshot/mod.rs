@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use arrow_array::RecordBatch;
-use futures::{stream::BoxStream, Stream, StreamExt, TryStreamExt};
+use futures::stream::BoxStream;
 use object_store::path::Path;
 use object_store::ObjectStore;
 
@@ -44,22 +44,34 @@ impl Snapshot {
 
     /// Get the files in the snapshot
     pub fn files(&self) -> DeltaResult<ReplayStream<BoxStream<'_, DeltaResult<RecordBatch>>>> {
-        let read_schema = Arc::new(StructType::new(vec![
-            ActionType::Add.schema_field().clone(),
-            ActionType::Remove.schema_field().clone(),
-        ]));
+        lazy_static::lazy_static! {
+            static ref COMMIT_SCHEMA: StructType = StructType::new(vec![
+                ActionType::Add.schema_field().clone(),
+                ActionType::Remove.schema_field().clone(),
+            ]);
+            static ref CHECKPOINT_SCHEMA: StructType = StructType::new(vec![
+                ActionType::Add.schema_field().clone(),
+            ]);
+        }
 
-        let batches =
+        let log_stream =
             self.log_segment
-                .commit_stream(self.store.clone(), &read_schema, &self.config)?;
+                .commit_stream(self.store.clone(), &COMMIT_SCHEMA, &self.config)?;
 
-        Ok(ReplayStream::new(batches))
+        let checkpoint_stream = self.log_segment.checkpoint_stream(
+            self.store.clone(),
+            &CHECKPOINT_SCHEMA,
+            &self.config,
+        );
+
+        Ok(ReplayStream::new(log_stream, checkpoint_stream))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use deltalake_test::utils::*;
+    use futures::TryStreamExt;
 
     use super::*;
 
@@ -90,6 +102,24 @@ mod tests {
             "+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+",
         ];
         assert_batches_sorted_eq!(expected, &batches);
+
+        let store = context
+            .table_builder(TestTables::Checkpoints)
+            .build_storage()?
+            .object_store();
+
+        for version in 0..=12 {
+            let snapshot = Snapshot::try_new(
+                &Path::default(),
+                store.clone(),
+                Default::default(),
+                Some(version),
+            )
+            .await?;
+            let batches = snapshot.files()?.try_collect::<Vec<_>>().await?;
+            let num_files = batches.iter().map(|b| b.num_rows() as i64).sum::<i64>();
+            assert_eq!(num_files, version);
+        }
 
         Ok(())
     }
