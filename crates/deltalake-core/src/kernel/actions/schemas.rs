@@ -266,8 +266,3 @@ impl ActionType {
         }
     }
 }
-
-#[cfg(test)]
-pub(crate) fn log_schema() -> &'static StructType {
-    &LOG_SCHEMA
-}

@@ -1,16 +1,22 @@
 use std::cmp::Ordering;
+use std::sync::Arc;
+use std::task::{ready, Poll};
 
-use futures::TryStreamExt;
+use arrow_array::RecordBatch;
+use arrow_json::{reader::Decoder, ReaderBuilder};
+use bytes::{Buf, Bytes};
+use futures::{stream::BoxStream, Stream, StreamExt, TryStreamExt};
 use itertools::Itertools;
 use lazy_static::lazy_static;
 use object_store::path::Path;
-use object_store::{Error as ObjectStoreError, ObjectMeta, ObjectStore};
+use object_store::{
+    Error as ObjectStoreError, ObjectMeta, ObjectStore, Result as ObjectStoreResult,
+};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
-use url::Url;
 
 use crate::kernel::schema::Schema;
-use crate::{DeltaResult, DeltaTableError};
+use crate::{DeltaResult, DeltaTableConfig, DeltaTableError};
 
 const LAST_CHECKPOINT_FILE_NAME: &str = "_last_checkpoint";
 
@@ -47,21 +53,6 @@ trait PathExt {
     }
 }
 
-impl PathExt for Url {
-    fn child(&self, path: impl AsRef<str>) -> DeltaResult<Path> {
-        let mut url = self.clone();
-        url.path_segments_mut().unwrap().push(path.as_ref());
-        Ok(Path::from(url.path()))
-    }
-
-    fn filename(&self) -> Option<&str> {
-        match self.path().is_empty() || self.path().ends_with('/') {
-            true => None,
-            false => self.path().split('/').last(),
-        }
-    }
-}
-
 impl PathExt for Path {
     fn child(&self, path: impl AsRef<str>) -> DeltaResult<Path> {
         Ok(self.child(path.as_ref()))
@@ -80,6 +71,7 @@ pub(crate) struct LogSegment {
 }
 
 impl LogSegment {
+    /// Try to create a new [`LogSegment`]
     pub async fn try_new(
         table_root: &Path,
         version: Option<i64>,
@@ -125,6 +117,55 @@ impl LogSegment {
             checkpoint_files,
         })
     }
+
+    pub(super) fn log_stream(
+        &self,
+        store: Arc<dyn ObjectStore>,
+        read_schema: &Schema,
+        config: &DeltaTableConfig,
+    ) -> DeltaResult<BoxStream<'_, DeltaResult<RecordBatch>>> {
+        let decoder = ReaderBuilder::new(Arc::new(read_schema.try_into()?))
+            .with_batch_size(1024)
+            .build_decoder()?;
+
+        let stream = futures::stream::iter(self.commit_files.iter())
+            .map(move |meta| {
+                let store = store.clone();
+                async move { store.get(&meta.location).await?.bytes().await }
+            })
+            .buffered(config.log_buffer_size);
+
+        Ok(decode_stream(decoder, stream).boxed())
+    }
+}
+
+fn decode_stream<S: Stream<Item = ObjectStoreResult<Bytes>> + Unpin>(
+    mut decoder: Decoder,
+    mut input: S,
+) -> impl Stream<Item = Result<RecordBatch, DeltaTableError>> {
+    let mut buffered = Bytes::new();
+    futures::stream::poll_fn(move |cx| {
+        loop {
+            if buffered.is_empty() {
+                buffered = match ready!(input.poll_next_unpin(cx)) {
+                    Some(Ok(b)) => b,
+                    Some(Err(e)) => return Poll::Ready(Some(Err(e.into()))),
+                    None => break,
+                };
+            }
+            let decoded = match decoder.decode(buffered.as_ref()) {
+                Ok(decoded) => decoded,
+                Err(e) => return Poll::Ready(Some(Err(e.into()))),
+            };
+            let read = buffered.len();
+            buffered.advance(decoded);
+            if decoded != read {
+                break;
+            }
+        }
+
+        Poll::Ready(decoder.flush().map_err(DeltaTableError::from).transpose())
+    })
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -272,6 +313,8 @@ mod tests {
     async fn test_read_log_files() -> TestResult {
         let context = IntegrationContext::new(Box::new(LocalStorageIntegration::default()))?;
         context.load_table(TestTables::Checkpoints).await?;
+        context.load_table(TestTables::Simple).await?;
+
         let store = context
             .table_builder(TestTables::Checkpoints)
             .build_storage()?
@@ -305,6 +348,19 @@ mod tests {
         assert_eq!(segment.commit_files.len(), 3);
         assert_eq!(segment.checkpoint_files.len(), 1);
 
+        let store = context
+            .table_builder(TestTables::Simple)
+            .build_storage()?
+            .object_store();
+
+        let (log, check) = list_log_files(store.as_ref(), &log_path, None).await?;
+        assert_eq!(log.len(), 5);
+        assert_eq!(check.len(), 0);
+
+        let (log, check) = list_log_files(store.as_ref(), &log_path, Some(2)).await?;
+        assert_eq!(log.len(), 3);
+        assert_eq!(check.len(), 0);
+
         Ok(())
     }
 }
@@ -322,15 +378,6 @@ mod tests {
 //     use crate::kernel::executor::tokio::TokioBackgroundExecutor;
 //     use crate::kernel::filesystem::ObjectStoreFileSystemClient;
 //     use crate::kernel::schema::StructType;
-//
-//     fn default_table_client(url: &Url) -> DefaultTableClient<TokioBackgroundExecutor> {
-//         DefaultTableClient::try_new(
-//             url,
-//             HashMap::<String, String>::new(),
-//             Arc::new(TokioBackgroundExecutor::new()),
-//         )
-//         .unwrap()
-//     }
 //
 //     #[test]
 //     fn test_snapshot_read_metadata() {
