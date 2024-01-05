@@ -33,6 +33,7 @@ parquet = { workspace = true, features = [
     "async",
     "object_store",
 ], optional = true }
+pin-project-lite = "^0.2.7"
 
 # datafusion
 datafusion = { workspace = true, optional = true }
@@ -49,6 +50,7 @@ serde_json = { workspace = true }
 # "stdlib"
 bytes = { workspace = true }
 chrono = { workspace = true, default-features = false, features = ["clock"] }
+hashbrown = "*"
 regex = { workspace = true }
 thiserror = { workspace = true }
 uuid = { workspace = true, features = ["serde", "v4"] }

@@ -14,6 +14,7 @@ pub use actions::*;
 pub use error::*;
 pub use expressions::*;
 pub use schema::*;
+pub use snapshot::*;
 
 /// A trait for all kernel types that are used as part of data checking
 pub trait DataCheck {

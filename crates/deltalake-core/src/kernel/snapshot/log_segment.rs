@@ -118,7 +118,7 @@ impl LogSegment {
         })
     }
 
-    pub(super) fn log_stream(
+    pub(super) fn commit_stream(
         &self,
         store: Arc<dyn ObjectStore>,
         read_schema: &Schema,
