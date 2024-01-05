@@ -723,13 +723,6 @@ fn generalize_filter(
                     None
                 }
             }
-            Expr::ScalarUDF(udf) => {
-                if udf.args.len() == 1 {
-                    references_table(&udf.args[0], table)
-                } else {
-                    None
-                }
-            }
             _ => None,
         }
     }
@@ -834,7 +827,7 @@ async fn try_construct_early_filter(
 ) -> DeltaResult<Option<Expr>> {
     let table_metadata = table_snapshot.metadata();
 
-    if table_metadata.is_none() {
+    if table_metadata.is_err() {
         return Ok(None);
     }
 
@@ -863,8 +856,8 @@ async fn try_construct_early_filter(
             } else {
                 // if we have some recognised partitions, then discover the distinct set of partitions in the source data and
                 // make a new filter, which expands out the placeholders for each distinct partition (and then OR these together)
-                let distinct_partitions = LogicalPlan::Distinct(Distinct {
-                    input: LogicalPlan::Projection(Projection::try_new(
+                let distinct_partitions = LogicalPlan::Distinct(Distinct::All(
+                    LogicalPlan::Projection(Projection::try_new(
                         placeholders
                             .into_iter()
                             .map(|(alias, expr)| expr.alias(alias))
@@ -872,7 +865,7 @@ async fn try_construct_early_filter(
                         source.clone().into(),
                     )?)
                     .into(),
-                });
+                ));
 
                 let execution_plan = session_state
                     .create_physical_plan(&distinct_partitions)
@@ -928,7 +921,7 @@ async fn execute(
     let mut metrics = MergeMetrics::default();
     let exec_start = Instant::now();
 
-    let current_metadata = snapshot.metadata().ok_or(DeltaTableError::NoMetadata)?;
+    let current_metadata = snapshot.metadata()?;
 
     // TODO: Given the join predicate, remove any expression that involve the
     // source table and keep expressions that only involve the target table.
@@ -1390,6 +1383,17 @@ async fn execute(
 
     metrics.execution_time_ms = Instant::now().duration_since(exec_start).as_millis() as u64;
 
+    let mut app_metadata = match app_metadata {
+        Some(meta) => meta,
+        None => HashMap::new(),
+    };
+
+    app_metadata.insert("readVersion".to_owned(), snapshot.version().into());
+
+    if let Ok(map) = serde_json::to_value(&metrics) {
+        app_metadata.insert("operationMetrics".to_owned(), map);
+    }
+
     // Do not make a commit when there are zero updates to the state
     if !actions.is_empty() {
         let operation = DeltaOperation::Merge {
@@ -1403,7 +1407,7 @@ async fn execute(
             &actions,
             operation,
             snapshot,
-            app_metadata,
+            Some(app_metadata),
         )
         .await?;
     }
@@ -2053,6 +2057,11 @@ mod tests {
         let commit_info = table.history(None).await.unwrap();
         let last_commit = &commit_info[commit_info.len() - 1];
         let parameters = last_commit.operation_parameters.clone().unwrap();
+        let extra_info = last_commit.info.clone();
+        assert_eq!(
+            extra_info["operationMetrics"],
+            serde_json::to_value(&metrics).unwrap()
+        );
         assert_eq!(parameters["predicate"], json!("target.id = source.id"));
         assert_eq!(
             parameters["matchedPredicates"],
