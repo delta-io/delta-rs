@@ -9,211 +9,220 @@ lazy_static! {
     // https://github.com/delta-io/delta/blob/master/PROTOCOL.md#change-metadata
     static ref METADATA_FIELD: StructField = StructField::new(
         "metaData",
-        DataType::Struct(Box::new(StructType::new(vec![
-            StructField::new("id", DataType::string(), false),
-            StructField::new("name", DataType::string(), true),
-            StructField::new("description", DataType::string(), true),
+        StructType::new(vec![
+            StructField::new("id", DataType::STRING, true),
+            StructField::new("name", DataType::STRING, true),
+            StructField::new("description", DataType::STRING, true),
             StructField::new(
                 "format",
-                DataType::Struct(Box::new(StructType::new(vec![
-                    StructField::new("provider", DataType::string(), false),
+                StructType::new(vec![
+                    StructField::new("provider", DataType::STRING, true),
                     StructField::new(
-                        "configuration",
-                        DataType::Map(Box::new(MapType::new(
-                            DataType::string(),
-                            DataType::string(),
+                        "options",
+                        MapType::new(
+                            DataType::STRING,
+                            DataType::STRING,
                             true,
-                        ))),
-                        true,
+                        ),
+                        false,
                     ),
-                ]))),
+                ]),
                 false,
             ),
-            StructField::new("schemaString", DataType::string(), false),
+            StructField::new("schemaString", DataType::STRING, true),
             StructField::new(
                 "partitionColumns",
-                DataType::Array(Box::new(ArrayType::new(DataType::string(), false))),
-                false,
+                ArrayType::new(DataType::STRING, false),
+                true,
             ),
-            StructField::new("createdTime", DataType::long(), true),
+            StructField::new("createdTime", DataType::LONG, true),
             StructField::new(
                 "configuration",
-                DataType::Map(Box::new(MapType::new(
-                    DataType::string(),
-                    DataType::string(),
+                MapType::new(
+                    DataType::STRING,
+                    DataType::STRING,
                     true,
-                ))),
+                ),
                 false,
             ),
-        ]))),
+        ]),
         true,
     );
     // https://github.com/delta-io/delta/blob/master/PROTOCOL.md#protocol-evolution
     static ref PROTOCOL_FIELD: StructField = StructField::new(
         "protocol",
-        DataType::Struct(Box::new(StructType::new(vec![
-            StructField::new("minReaderVersion", DataType::integer(), false),
-            StructField::new("minWriterVersion", DataType::integer(), false),
+        StructType::new(vec![
+            StructField::new("minReaderVersion", DataType::INTEGER, true),
+            StructField::new("minWriterVersion", DataType::INTEGER, true),
             StructField::new(
                 "readerFeatures",
-                DataType::Array(Box::new(ArrayType::new(DataType::string(), false))),
+                ArrayType::new(DataType::STRING, true),
                 true,
             ),
             StructField::new(
                 "writerFeatures",
-                DataType::Array(Box::new(ArrayType::new(DataType::string(), false))),
+                ArrayType::new(DataType::STRING, true),
                 true,
             ),
-        ]))),
+        ]),
         true,
     );
     // https://github.com/delta-io/delta/blob/master/PROTOCOL.md#commit-provenance-information
     static ref COMMIT_INFO_FIELD: StructField = StructField::new(
         "commitInfo",
-        DataType::Struct(Box::new(StructType::new(vec![
-            StructField::new("timestamp", DataType::timestamp(), false),
-            StructField::new("operation", DataType::string(), false),
-            StructField::new("isolationLevel", DataType::string(), true),
-            StructField::new("isBlindAppend", DataType::boolean(), true),
-            StructField::new("txnId", DataType::string(), true),
-            StructField::new("readVersion", DataType::long(), true),
+        StructType::new(vec![
+            StructField::new("timestamp", DataType::LONG, false),
+            StructField::new("operation", DataType::STRING, false),
+            StructField::new("isolationLevel", DataType::STRING, true),
+            StructField::new("isBlindAppend", DataType::BOOLEAN, true),
+            StructField::new("txnId", DataType::STRING, true),
+            StructField::new("readVersion", DataType::LONG, true),
             StructField::new(
                 "operationParameters",
-                DataType::Map(Box::new(MapType::new(
-                    DataType::string(),
-                    DataType::string(),
+                MapType::new(
+                    DataType::STRING,
+                    DataType::STRING,
                     true,
-                ))),
+                ),
                 true,
             ),
             StructField::new(
                 "operationMetrics",
-                DataType::Map(Box::new(MapType::new(
-                    DataType::string(),
-                    DataType::string(),
+                MapType::new(
+                    DataType::STRING,
+                    DataType::STRING,
                     true,
-                ))),
+                ),
                 true,
             ),
-        ]))),
+        ]),
         true,
     );
     // https://github.com/delta-io/delta/blob/master/PROTOCOL.md#add-file-and-remove-file
     static ref ADD_FIELD: StructField = StructField::new(
         "add",
-        DataType::Struct(Box::new(StructType::new(vec![
-            StructField::new("path", DataType::string(), false),
+        StructType::new(vec![
+            StructField::new("path", DataType::STRING, true),
             partition_values_field(),
-            StructField::new("size", DataType::long(), false),
-            StructField::new("modificationTime", DataType::timestamp(), false),
-            StructField::new("dataChange", DataType::boolean(), false),
-            StructField::new("stats", DataType::string(), true),
+            StructField::new("size", DataType::LONG, true),
+            StructField::new("modificationTime", DataType::LONG, true),
+            StructField::new("dataChange", DataType::BOOLEAN, true),
+            StructField::new("stats", DataType::STRING, true),
             tags_field(),
             deletion_vector_field(),
-            StructField::new("baseRowId", DataType::long(), true),
-            StructField::new("defaultRowCommitVersion", DataType::long(), true),
-            StructField::new("clusteringProvider", DataType::string(), true),
-        ]))),
+            StructField::new("baseRowId", DataType::LONG, true),
+            StructField::new("defaultRowCommitVersion", DataType::LONG, true),
+            StructField::new("clusteringProvider", DataType::STRING, true),
+        ]),
         true,
     );
     // https://github.com/delta-io/delta/blob/master/PROTOCOL.md#add-file-and-remove-file
     static ref REMOVE_FIELD: StructField = StructField::new(
         "remove",
-        DataType::Struct(Box::new(StructType::new(vec![
-            StructField::new("path", DataType::string(), false),
-            StructField::new("deletionTimestamp", DataType::timestamp(), true),
-            StructField::new("dataChange", DataType::boolean(), false),
-            StructField::new("extendedFileMetadata", DataType::boolean(), true),
+        StructType::new(vec![
+            StructField::new("path", DataType::STRING, true),
+            StructField::new("deletionTimestamp", DataType::LONG, true),
+            StructField::new("dataChange", DataType::BOOLEAN, true),
+            StructField::new("extendedFileMetadata", DataType::BOOLEAN, true),
             partition_values_field(),
-            StructField::new("size", DataType::long(), true),
-            StructField::new("stats", DataType::string(), true),
+            StructField::new("size", DataType::LONG, true),
+            StructField::new("stats", DataType::STRING, true),
             tags_field(),
             deletion_vector_field(),
-            StructField::new("baseRowId", DataType::long(), true),
-            StructField::new("defaultRowCommitVersion", DataType::long(), true),
-        ]))),
+            StructField::new("baseRowId", DataType::LONG, true),
+            StructField::new("defaultRowCommitVersion", DataType::LONG, true),
+        ]),
         true,
     );
     static ref REMOVE_FIELD_CHECKPOINT: StructField = StructField::new(
         "remove",
-        DataType::Struct(Box::new(StructType::new(vec![
-            StructField::new("path", DataType::string(), false),
-            StructField::new("deletionTimestamp", DataType::timestamp(), true),
-            StructField::new("dataChange", DataType::boolean(), false),
-        ]))),
+        StructType::new(vec![
+            StructField::new("path", DataType::STRING, false),
+            StructField::new("deletionTimestamp", DataType::LONG, true),
+            StructField::new("dataChange", DataType::BOOLEAN, false),
+        ]),
         true,
     );
     // https://github.com/delta-io/delta/blob/master/PROTOCOL.md#add-cdc-file
     static ref CDC_FIELD: StructField = StructField::new(
         "cdc",
-        DataType::Struct(Box::new(StructType::new(vec![
-            StructField::new("path", DataType::string(), false),
+        StructType::new(vec![
+            StructField::new("path", DataType::STRING, false),
             partition_values_field(),
-            StructField::new("size", DataType::long(), false),
-            StructField::new("dataChange", DataType::boolean(), false),
+            StructField::new("size", DataType::LONG, false),
+            StructField::new("dataChange", DataType::BOOLEAN, false),
             tags_field(),
-        ]))),
+        ]),
         true,
     );
     // https://github.com/delta-io/delta/blob/master/PROTOCOL.md#transaction-identifiers
     static ref TXN_FIELD: StructField = StructField::new(
         "txn",
-        DataType::Struct(Box::new(StructType::new(vec![
-            StructField::new("appId", DataType::string(), false),
-            StructField::new("version", DataType::long(), false),
-            StructField::new("lastUpdated", DataType::timestamp(), true),
-        ]))),
+        StructType::new(vec![
+            StructField::new("appId", DataType::STRING, false),
+            StructField::new("version", DataType::LONG, false),
+            StructField::new("lastUpdated", DataType::LONG, true),
+        ]),
         true,
     );
     // https://github.com/delta-io/delta/blob/master/PROTOCOL.md#domain-metadata
     static ref DOMAIN_METADATA_FIELD: StructField = StructField::new(
         "domainMetadata",
-        DataType::Struct(Box::new(StructType::new(vec![
-            StructField::new("domain", DataType::string(), false),
+        StructType::new(vec![
+            StructField::new("domain", DataType::STRING, false),
             StructField::new(
                 "configuration",
-                DataType::Map(Box::new(MapType::new(
-                    DataType::string(),
-                    DataType::string(),
+                MapType::new(
+                    DataType::STRING,
+                    DataType::STRING,
                     true,
-                ))),
-                false,
+                ),
+                true,
             ),
-            StructField::new("removed", DataType::boolean(), false),
-        ]))),
+            StructField::new("removed", DataType::BOOLEAN, false),
+        ]),
         true,
     );
     // https://github.com/delta-io/delta/blob/master/PROTOCOL.md#checkpoint-metadata
     static ref CHECKPOINT_METADATA_FIELD: StructField = StructField::new(
         "checkpointMetadata",
-        DataType::Struct(Box::new(StructType::new(vec![
-            StructField::new("flavor", DataType::string(), false),
+        StructType::new(vec![
+            StructField::new("flavor", DataType::STRING, false),
             tags_field(),
-        ]))),
+        ]),
         true,
     );
     // https://github.com/delta-io/delta/blob/master/PROTOCOL.md#sidecar-file-information
     static ref SIDECAR_FIELD: StructField = StructField::new(
         "sidecar",
-        DataType::Struct(Box::new(StructType::new(vec![
-            StructField::new("path", DataType::string(), false),
-            StructField::new("sizeInBytes", DataType::long(), false),
-            StructField::new("modificationTime", DataType::timestamp(), false),
-            StructField::new("type", DataType::string(), false),
+        StructType::new(vec![
+            StructField::new("path", DataType::STRING, false),
+            StructField::new("sizeInBytes", DataType::LONG, true),
+            StructField::new("modificationTime", DataType::LONG, false),
+            StructField::new("type", DataType::STRING, false),
             tags_field(),
-        ]))),
+        ]),
         true,
+    );
+
+    static ref LOG_SCHEMA: StructType = StructType::new(
+        vec![
+            ADD_FIELD.clone(),
+            CDC_FIELD.clone(),
+            COMMIT_INFO_FIELD.clone(),
+            DOMAIN_METADATA_FIELD.clone(),
+            METADATA_FIELD.clone(),
+            PROTOCOL_FIELD.clone(),
+            REMOVE_FIELD.clone(),
+            TXN_FIELD.clone(),
+        ]
     );
 }
 
 fn tags_field() -> StructField {
     StructField::new(
         "tags",
-        DataType::Map(Box::new(MapType::new(
-            DataType::string(),
-            DataType::string(),
-            true,
-        ))),
+        MapType::new(DataType::STRING, DataType::STRING, true),
         true,
     )
 }
@@ -221,12 +230,8 @@ fn tags_field() -> StructField {
 fn partition_values_field() -> StructField {
     StructField::new(
         "partitionValues",
-        DataType::Map(Box::new(MapType::new(
-            DataType::string(),
-            DataType::string(),
-            true,
-        ))),
-        false,
+        MapType::new(DataType::STRING, DataType::STRING, true),
+        true,
     )
 }
 
@@ -234,11 +239,11 @@ fn deletion_vector_field() -> StructField {
     StructField::new(
         "deletionVector",
         DataType::Struct(Box::new(StructType::new(vec![
-            StructField::new("storageType", DataType::string(), false),
-            StructField::new("pathOrInlineDv", DataType::string(), false),
-            StructField::new("offset", DataType::integer(), true),
-            StructField::new("sizeInBytes", DataType::integer(), false),
-            StructField::new("cardinality", DataType::long(), false),
+            StructField::new("storageType", DataType::STRING, true),
+            StructField::new("pathOrInlineDv", DataType::STRING, true),
+            StructField::new("offset", DataType::INTEGER, true),
+            StructField::new("sizeInBytes", DataType::INTEGER, true),
+            StructField::new("cardinality", DataType::LONG, true),
         ]))),
         true,
     )
@@ -260,4 +265,9 @@ impl ActionType {
             Self::Sidecar => &SIDECAR_FIELD,
         }
     }
+}
+
+#[cfg(test)]
+pub(crate) fn log_schema() -> &'static StructType {
+    &LOG_SCHEMA
 }

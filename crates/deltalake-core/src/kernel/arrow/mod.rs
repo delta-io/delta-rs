@@ -8,12 +8,25 @@ use arrow_schema::{
 };
 use lazy_static::lazy_static;
 
-use super::schema::{ArrayType, DataType, MapType, PrimitiveType, StructField, StructType};
+use super::{
+    schema::{ArrayType, DataType, MapType, PrimitiveType, StructField, StructType},
+    ActionType,
+};
 
 pub mod schemas;
 
-const MAP_KEYS_NAME: &str = "keys";
-const MAP_VALUES_NAME: &str = "values";
+const MAP_ROOT_DEFAULT: &str = "entries";
+const MAP_KEY_DEFAULT: &str = "key";
+const MAP_VALUE_DEFAULT: &str = "value";
+const LIST_ROOT_DEFAULT: &str = "element";
+
+impl TryFrom<ActionType> for ArrowField {
+    type Error = ArrowError;
+
+    fn try_from(value: ActionType) -> Result<Self, Self::Error> {
+        value.schema_field().try_into()
+    }
+}
 
 impl TryFrom<&StructType> for ArrowSchema {
     type Error = ArrowError;
@@ -22,7 +35,7 @@ impl TryFrom<&StructType> for ArrowSchema {
         let fields = s
             .fields()
             .iter()
-            .map(<ArrowField as TryFrom<&StructField>>::try_from)
+            .map(TryInto::try_into)
             .collect::<Result<Vec<ArrowField>, ArrowError>>()?;
 
         Ok(ArrowSchema::new(fields))
@@ -53,12 +66,12 @@ impl TryFrom<&StructField> for ArrowField {
 
 impl TryFrom<&ArrayType> for ArrowField {
     type Error = ArrowError;
-
     fn try_from(a: &ArrayType) -> Result<Self, ArrowError> {
         Ok(ArrowField::new(
-            "item",
+            LIST_ROOT_DEFAULT,
             ArrowDataType::try_from(a.element_type())?,
-            a.contains_null(),
+            // TODO check how to handle nullability
+            true, // a.contains_null(),
         ))
     }
 }
@@ -68,19 +81,24 @@ impl TryFrom<&MapType> for ArrowField {
 
     fn try_from(a: &MapType) -> Result<Self, ArrowError> {
         Ok(ArrowField::new(
-            "entries",
+            MAP_ROOT_DEFAULT,
             ArrowDataType::Struct(
                 vec![
-                    ArrowField::new(MAP_KEYS_NAME, ArrowDataType::try_from(a.key_type())?, false),
                     ArrowField::new(
-                        MAP_VALUES_NAME,
+                        MAP_KEY_DEFAULT,
+                        ArrowDataType::try_from(a.key_type())?,
+                        false,
+                    ),
+                    ArrowField::new(
+                        MAP_VALUE_DEFAULT,
                         ArrowDataType::try_from(a.value_type())?,
                         a.value_contains_null(),
                     ),
                 ]
                 .into(),
             ),
-            false, // always non-null
+            // always non-null
+            false,
         ))
     }
 }
@@ -102,20 +120,10 @@ impl TryFrom<&DataType> for ArrowDataType {
                     PrimitiveType::Boolean => Ok(ArrowDataType::Boolean),
                     PrimitiveType::Binary => Ok(ArrowDataType::Binary),
                     PrimitiveType::Decimal(precision, scale) => {
-                        let precision = u8::try_from(*precision).map_err(|_| {
-                            ArrowError::SchemaError(format!(
-                                "Invalid precision for decimal: {}",
-                                precision
-                            ))
-                        })?;
-                        let scale = i8::try_from(*scale).map_err(|_| {
-                            ArrowError::SchemaError(format!("Invalid scale for decimal: {}", scale))
-                        })?;
-
-                        if precision <= 38 {
-                            Ok(ArrowDataType::Decimal128(precision, scale))
-                        } else if precision <= 76 {
-                            Ok(ArrowDataType::Decimal256(precision, scale))
+                        if precision <= &38 {
+                            Ok(ArrowDataType::Decimal128(*precision, *scale))
+                        } else if precision <= &76 {
+                            Ok(ArrowDataType::Decimal256(*precision, *scale))
                         } else {
                             Err(ArrowError::SchemaError(format!(
                                 "Precision too large to be represented in Arrow: {}",
@@ -142,24 +150,7 @@ impl TryFrom<&DataType> for ArrowDataType {
                     .into(),
             )),
             DataType::Array(a) => Ok(ArrowDataType::List(Arc::new(a.as_ref().try_into()?))),
-            DataType::Map(m) => Ok(ArrowDataType::Map(
-                Arc::new(ArrowField::new(
-                    "entries",
-                    ArrowDataType::Struct(
-                        vec![
-                            ArrowField::new(MAP_KEYS_NAME, m.key_type().try_into()?, false),
-                            ArrowField::new(
-                                MAP_VALUES_NAME,
-                                m.value_type().try_into()?,
-                                m.value_contains_null(),
-                            ),
-                        ]
-                        .into(),
-                    ),
-                    false,
-                )),
-                false,
-            )),
+            DataType::Map(m) => Ok(ArrowDataType::Map(Arc::new(m.as_ref().try_into()?), false)),
         }
     }
 }
@@ -191,7 +182,7 @@ impl TryFrom<&ArrowField> for StructField {
     fn try_from(arrow_field: &ArrowField) -> Result<Self, ArrowError> {
         Ok(StructField::new(
             arrow_field.name().clone(),
-            arrow_field.data_type().try_into()?,
+            DataType::try_from(arrow_field.data_type())?,
             arrow_field.is_nullable(),
         )
         .with_metadata(arrow_field.metadata().iter().map(|(k, v)| (k.clone(), v))))
@@ -219,12 +210,12 @@ impl TryFrom<&ArrowDataType> for DataType {
             ArrowDataType::Binary => Ok(DataType::Primitive(PrimitiveType::Binary)),
             ArrowDataType::FixedSizeBinary(_) => Ok(DataType::Primitive(PrimitiveType::Binary)),
             ArrowDataType::LargeBinary => Ok(DataType::Primitive(PrimitiveType::Binary)),
-            ArrowDataType::Decimal128(p, s) => Ok(DataType::Primitive(PrimitiveType::Decimal(
-                *p as i32, *s as i32,
-            ))),
-            ArrowDataType::Decimal256(p, s) => Ok(DataType::Primitive(PrimitiveType::Decimal(
-                *p as i32, *s as i32,
-            ))),
+            ArrowDataType::Decimal128(p, s) => {
+                Ok(DataType::Primitive(PrimitiveType::Decimal(*p, *s)))
+            }
+            ArrowDataType::Decimal256(p, s) => {
+                Ok(DataType::Primitive(PrimitiveType::Decimal(*p, *s)))
+            }
             ArrowDataType::Date32 => Ok(DataType::Primitive(PrimitiveType::Date)),
             ArrowDataType::Date64 => Ok(DataType::Primitive(PrimitiveType::Date)),
             ArrowDataType::Timestamp(TimeUnit::Microsecond, None) => {

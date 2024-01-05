@@ -40,9 +40,7 @@ impl Scalar {
             Self::Timestamp(_) => DataType::Primitive(PrimitiveType::Timestamp),
             Self::Date(_) => DataType::Primitive(PrimitiveType::Date),
             Self::Binary(_) => DataType::Primitive(PrimitiveType::Binary),
-            Self::Decimal(_, precision, scale) => {
-                DataType::decimal(*precision as usize, *scale as usize)
-            }
+            Self::Decimal(_, precision, scale) => DataType::decimal(*precision, *scale),
             Self::Null(data_type) => data_type.clone(),
         }
     }

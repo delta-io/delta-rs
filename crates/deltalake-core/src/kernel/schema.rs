@@ -139,10 +139,10 @@ impl Eq for StructField {}
 
 impl StructField {
     /// Creates a new field
-    pub fn new(name: impl Into<String>, data_type: DataType, nullable: bool) -> Self {
+    pub fn new(name: impl Into<String>, data_type: impl Into<DataType>, nullable: bool) -> Self {
         Self {
             name: name.into(),
-            data_type,
+            data_type: data_type.into(),
             nullable,
             metadata: HashMap::default(),
         }
@@ -325,6 +325,33 @@ impl StructType {
     }
 }
 
+impl FromIterator<StructField> for StructType {
+    fn from_iter<T: IntoIterator<Item = StructField>>(iter: T) -> Self {
+        Self {
+            type_name: "struct".into(),
+            fields: iter.into_iter().collect(),
+        }
+    }
+}
+
+impl<const N: usize> From<[StructField; N]> for StructType {
+    fn from(value: [StructField; N]) -> Self {
+        Self {
+            type_name: "struct".into(),
+            fields: value.to_vec(),
+        }
+    }
+}
+
+impl<'a> IntoIterator for &'a StructType {
+    type Item = &'a StructField;
+    type IntoIter = std::slice::Iter<'a, StructField>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.fields.iter()
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize, PartialEq, Clone)]
 #[serde(rename_all = "camelCase")]
 /// An array stores a variable length collection of items of some type.
@@ -444,18 +471,18 @@ pub enum PrimitiveType {
         untagged
     )]
     /// Decimal: arbitrary precision decimal numbers
-    Decimal(i32, i32),
+    Decimal(u8, i8),
 }
 
 fn serialize_decimal<S: serde::Serializer>(
-    precision: &i32,
-    scale: &i32,
+    precision: &u8,
+    scale: &i8,
     serializer: S,
 ) -> Result<S::Ok, S::Error> {
     serializer.serialize_str(&format!("decimal({},{})", precision, scale))
 }
 
-fn deserialize_decimal<'de, D>(deserializer: D) -> Result<(i32, i32), D::Error>
+fn deserialize_decimal<'de, D>(deserializer: D) -> Result<(u8, i8), D::Error>
 where
     D: serde::Deserializer<'de>,
 {
@@ -470,13 +497,13 @@ where
     let mut parts = str_value[8..str_value.len() - 1].split(',');
     let precision = parts
         .next()
-        .and_then(|part| part.trim().parse::<i32>().ok())
+        .and_then(|part| part.trim().parse::<u8>().ok())
         .ok_or_else(|| {
             serde::de::Error::custom(format!("Invalid precision in decimal: {}", str_value))
         })?;
     let scale = parts
         .next()
-        .and_then(|part| part.trim().parse::<i32>().ok())
+        .and_then(|part| part.trim().parse::<i8>().ok())
         .ok_or_else(|| {
             serde::de::Error::custom(format!("Invalid scale in decimal: {}", str_value))
         })?;
@@ -488,10 +515,10 @@ impl Display for PrimitiveType {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             PrimitiveType::String => write!(f, "string"),
-            PrimitiveType::Long => write!(f, "long"),
-            PrimitiveType::Integer => write!(f, "integer"),
-            PrimitiveType::Short => write!(f, "short"),
-            PrimitiveType::Byte => write!(f, "byte"),
+            PrimitiveType::Long => write!(f, "bigint"),
+            PrimitiveType::Integer => write!(f, "int"),
+            PrimitiveType::Short => write!(f, "smallint"),
+            PrimitiveType::Byte => write!(f, "tinyint"),
             PrimitiveType::Float => write!(f, "float"),
             PrimitiveType::Double => write!(f, "double"),
             PrimitiveType::Boolean => write!(f, "boolean"),
@@ -499,7 +526,7 @@ impl Display for PrimitiveType {
             PrimitiveType::Date => write!(f, "date"),
             PrimitiveType::Timestamp => write!(f, "timestamp"),
             PrimitiveType::Decimal(precision, scale) => {
-                write!(f, "decimal({},{})", precision, scale)
+                write!(f, "decimal({}, {})", precision, scale)
             }
         }
     }
@@ -507,7 +534,7 @@ impl Display for PrimitiveType {
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Clone)]
 #[serde(untagged, rename_all = "camelCase")]
-/// The data type of a column
+/// Top level delta tdatatypes
 pub enum DataType {
     /// UTF-8 encoded string of characters
     Primitive(PrimitiveType),
@@ -521,65 +548,40 @@ pub enum DataType {
     Map(Box<MapType>),
 }
 
+impl From<MapType> for DataType {
+    fn from(map_type: MapType) -> Self {
+        DataType::Map(Box::new(map_type))
+    }
+}
+
+impl From<StructType> for DataType {
+    fn from(struct_type: StructType) -> Self {
+        DataType::Struct(Box::new(struct_type))
+    }
+}
+
+impl From<ArrayType> for DataType {
+    fn from(array_type: ArrayType) -> Self {
+        DataType::Array(Box::new(array_type))
+    }
+}
+
+#[allow(missing_docs)]
 impl DataType {
-    /// create a new string type
-    pub fn string() -> Self {
-        DataType::Primitive(PrimitiveType::String)
-    }
+    pub const STRING: Self = DataType::Primitive(PrimitiveType::String);
+    pub const LONG: Self = DataType::Primitive(PrimitiveType::Long);
+    pub const INTEGER: Self = DataType::Primitive(PrimitiveType::Integer);
+    pub const SHORT: Self = DataType::Primitive(PrimitiveType::Short);
+    pub const BYTE: Self = DataType::Primitive(PrimitiveType::Byte);
+    pub const FLOAT: Self = DataType::Primitive(PrimitiveType::Float);
+    pub const DOUBLE: Self = DataType::Primitive(PrimitiveType::Double);
+    pub const BOOLEAN: Self = DataType::Primitive(PrimitiveType::Boolean);
+    pub const BINARY: Self = DataType::Primitive(PrimitiveType::Binary);
+    pub const DATE: Self = DataType::Primitive(PrimitiveType::Date);
+    pub const TIMESTAMP: Self = DataType::Primitive(PrimitiveType::Timestamp);
 
-    /// create a new long type
-    pub fn long() -> Self {
-        DataType::Primitive(PrimitiveType::Long)
-    }
-
-    /// create a new integer type
-    pub fn integer() -> Self {
-        DataType::Primitive(PrimitiveType::Integer)
-    }
-
-    /// create a new short type
-    pub fn short() -> Self {
-        DataType::Primitive(PrimitiveType::Short)
-    }
-
-    /// create a new byte type
-    pub fn byte() -> Self {
-        DataType::Primitive(PrimitiveType::Byte)
-    }
-
-    /// create a new float type
-    pub fn float() -> Self {
-        DataType::Primitive(PrimitiveType::Float)
-    }
-
-    /// create a new double type
-    pub fn double() -> Self {
-        DataType::Primitive(PrimitiveType::Double)
-    }
-
-    /// create a new boolean type
-    pub fn boolean() -> Self {
-        DataType::Primitive(PrimitiveType::Boolean)
-    }
-
-    /// create a new binary type
-    pub fn binary() -> Self {
-        DataType::Primitive(PrimitiveType::Binary)
-    }
-
-    /// create a new date type
-    pub fn date() -> Self {
-        DataType::Primitive(PrimitiveType::Date)
-    }
-
-    /// create a new timestamp type
-    pub fn timestamp() -> Self {
-        DataType::Primitive(PrimitiveType::Timestamp)
-    }
-
-    /// create a new decimal type
-    pub fn decimal(precision: usize, scale: usize) -> Self {
-        DataType::Primitive(PrimitiveType::Decimal(precision as i32, scale as i32))
+    pub fn decimal(precision: u8, scale: i8) -> Self {
+        DataType::Primitive(PrimitiveType::Decimal(precision, scale))
     }
 }
 
