@@ -7,7 +7,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use deltalake_aws::logstore::{RepairLogEntryResult, S3DynamoDbLogStore};
 use deltalake_aws::storage::S3StorageOptions;
-use deltalake_aws::{CommitEntry, DynamoDbLockClient};
+use deltalake_aws::{CommitEntry, DynamoDbConfig, DynamoDbLockClient};
 use deltalake_core::kernel::{Action, Add, DataType, PrimitiveType, StructField, StructType};
 use deltalake_core::logstore::LogStore;
 use deltalake_core::operations::transaction::{commit, prepare_commit};
@@ -35,21 +35,46 @@ lazy_static! {
 }
 
 fn make_client() -> TestResult<DynamoDbLockClient> {
+    let options: S3StorageOptions = S3StorageOptions::default();
     Ok(DynamoDbLockClient::try_new(
         None,
         None,
-        S3_OPTIONS.region.clone(),
+        None,
+        options.region.clone(),
         false,
     )?)
 }
 
 #[test]
 #[serial]
-fn client_config_picks_up_lock_table_name() -> TestResult<()> {
-    let _context = IntegrationContext::new(Box::new(S3Integration::default()))?;
-    assert!(make_client()?
-        .get_lock_table_name()
-        .starts_with("delta_log_it_"));
+fn client_configs_via_env_variables() -> TestResult<()> {
+    std::env::set_var(
+        deltalake_aws::constants::MAX_ELAPSED_REQUEST_TIME_KEY_NAME,
+        "64",
+    );
+    std::env::set_var(
+        deltalake_aws::constants::LOCK_TABLE_KEY_NAME,
+        "some_table".to_owned(),
+    );
+    std::env::set_var(
+        deltalake_aws::constants::BILLING_MODE_KEY_NAME,
+        "PAY_PER_REQUEST".to_owned(),
+    );
+    let client = make_client()?;
+    let config = client.get_dynamodb_config();
+    assert_eq!(
+        DynamoDbConfig {
+            billing_mode: deltalake_aws::BillingMode::PayPerRequest,
+            lock_table_name: "some_table".to_owned(),
+            max_elapsed_request_time: Duration::from_secs(64),
+            use_web_identity: false,
+            region: config.region.clone(),
+        },
+        *config,
+    );
+    std::env::remove_var(deltalake_aws::constants::LOCK_TABLE_KEY_NAME);
+    std::env::remove_var(deltalake_aws::constants::MAX_ELAPSED_REQUEST_TIME_KEY_NAME);
+    std::env::remove_var(deltalake_aws::constants::BILLING_MODE_KEY_NAME);
     Ok(())
 }
 
@@ -143,7 +168,7 @@ async fn test_repair_on_update() -> TestResult<()> {
 }
 
 const WORKERS: i64 = 3;
-const COMMITS: i64 = 5;
+const COMMITS: i64 = 15;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[serial]
