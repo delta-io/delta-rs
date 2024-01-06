@@ -506,7 +506,13 @@ fn apply_stats_conversion(
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use super::*;
+    use arrow_array::{ArrayRef, RecordBatch, StructArray};
+    use arrow_buffer::NullBuffer;
+    use arrow_schema::Fields;
+    use chrono::Duration;
     use lazy_static::lazy_static;
     use serde_json::json;
 
@@ -700,6 +706,105 @@ mod tests {
             ),
             paths[1]
         );
+    }
+
+    #[tokio::test]
+    async fn test_cleanup_no_checkpoints() {
+        use arrow_schema::{DataType, Field, Schema as ArrowSchema};
+        // Test that metadata clean up does corrupt the table no checkpoints exist
+        let schema = Arc::new(ArrowSchema::new(vec![Field::new(
+            "id",
+            DataType::Utf8,
+            false,
+        )]));
+
+        let data =
+            vec![Arc::new(arrow::array::StringArray::from(vec!["A", "B", "C", "D"])) as ArrayRef];
+        let batches = vec![RecordBatch::try_new(schema.clone(), data).unwrap()];
+
+        let table = DeltaOps::new_in_memory()
+            .write(batches.clone())
+            .await
+            .unwrap();
+
+        let table = DeltaOps(table)
+            .write(batches)
+            .with_save_mode(crate::protocol::SaveMode::Overwrite)
+            .await
+            .unwrap();
+
+        let log_retention_timestamp = (Utc::now().timestamp_millis()
+            + Duration::days(31).num_milliseconds())
+            - table
+                .get_state()
+                .table_config()
+                .log_retention_duration()
+                .as_millis() as i64;
+        let count = cleanup_expired_logs_for(
+            table.version(),
+            table.log_store().as_ref(),
+            log_retention_timestamp,
+        )
+        .await
+        .unwrap();
+        assert_eq!(count, 0);
+        println!("{:?}", count);
+
+        let path = Path::from("00000000000000000000.json");
+        let res = table.log_store().object_store().get(&path).await;
+        assert!(res.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_cleanup_with_checkpoints() {
+        use arrow_schema::{DataType, Field, Schema as ArrowSchema};
+        // Test that metadata clean up does corrupt the table no checkpoints exist
+        let schema = Arc::new(ArrowSchema::new(vec![Field::new(
+            "id",
+            DataType::Utf8,
+            false,
+        )]));
+
+        let data =
+            vec![Arc::new(arrow::array::StringArray::from(vec!["A", "B", "C", "D"])) as ArrayRef];
+        let batches = vec![RecordBatch::try_new(schema.clone(), data).unwrap()];
+
+        let table = DeltaOps::new_in_memory()
+            .write(batches.clone())
+            .await
+            .unwrap();
+
+        let table = DeltaOps(table)
+            .write(batches)
+            .with_save_mode(crate::protocol::SaveMode::Overwrite)
+            .await
+            .unwrap();
+
+        create_checkpoint(&table).await.unwrap();
+
+        let log_retention_timestamp = (Utc::now().timestamp_millis()
+            + Duration::days(31).num_milliseconds())
+            - table
+                .get_state()
+                .table_config()
+                .log_retention_duration()
+                .as_millis() as i64;
+        let count = cleanup_expired_logs_for(
+            table.version(),
+            table.log_store().as_ref(),
+            log_retention_timestamp,
+        )
+        .await
+        .unwrap();
+        assert_eq!(count, 1);
+
+        let path = Path::from("_delta_log/00000000000000000000.json");
+        let res = table.log_store().object_store().get(&path).await;
+        assert!(res.is_err());
+
+        let path = Path::from("_delta_log/00000000000000000001.checkpoint.parquet");
+        let res = table.log_store().object_store().get(&path).await;
+        assert!(res.is_ok());
     }
 
     #[test]
