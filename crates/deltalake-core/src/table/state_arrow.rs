@@ -145,14 +145,15 @@ impl DeltaTableState {
         &self,
         flatten: bool,
     ) -> Result<arrow::record_batch::RecordBatch, DeltaTableError> {
-        let metadata = self.delta_metadata().ok_or(DeltaTableError::NoMetadata)?;
+        let metadata = self.metadata()?;
         let column_mapping_mode = self.table_config().column_mapping_mode();
         let partition_column_types: Vec<arrow::datatypes::DataType> = metadata
             .partition_columns
             .iter()
             .map(
                 |name| -> Result<arrow::datatypes::DataType, DeltaTableError> {
-                    let field = metadata.schema.field_with_name(name)?;
+                    let schema = metadata.schema()?;
+                    let field = schema.field_with_name(name)?;
                     Ok(field.data_type().try_into()?)
                 },
             )
@@ -175,17 +176,18 @@ impl DeltaTableState {
                 .iter()
                 .map(|name| -> Result<_, DeltaTableError> {
                     let physical_name = metadata
-                        .schema
+                        .schema()?
                         .field_with_name(name)
                         .or(Err(DeltaTableError::MetadataError(format!(
                             "Invalid partition column {0}",
                             name
                         ))))?
                         .physical_name()
-                        .map_err(|e| DeltaTableError::Kernel { source: e })?;
+                        .map_err(|e| DeltaTableError::Kernel { source: e })?
+                        .to_string();
                     Ok((physical_name, name.as_str()))
                 })
-                .collect::<Result<HashMap<&str, &str>, DeltaTableError>>()?,
+                .collect::<Result<HashMap<String, &str>, DeltaTableError>>()?,
         };
         // Append values
         for action in self.files() {

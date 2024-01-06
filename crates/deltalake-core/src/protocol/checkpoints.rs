@@ -20,12 +20,11 @@ use tracing::{debug, error};
 use super::{time_utils, ProtocolError};
 use crate::kernel::arrow::delta_log_schema_for_table;
 use crate::kernel::{
-    Action, Add as AddAction, DataType, Metadata, PrimitiveType, Protocol, StructField, StructType,
-    Txn,
+    Action, Add as AddAction, DataType, PrimitiveType, Protocol, StructField, StructType, Txn,
 };
 use crate::logstore::LogStore;
 use crate::table::state::DeltaTableState;
-use crate::table::{CheckPoint, CheckPointBuilder};
+use crate::table::{get_partition_col_data_types, CheckPoint, CheckPointBuilder};
 use crate::{open_table_with_version, DeltaTable};
 
 type SchemaPath = Vec<String>;
@@ -240,16 +239,14 @@ pub async fn cleanup_expired_logs_for(
 fn parquet_bytes_from_state(
     state: &DeltaTableState,
 ) -> Result<(CheckPoint, bytes::Bytes), ProtocolError> {
-    let current_metadata = state.delta_metadata().ok_or(ProtocolError::NoMetaData)?;
+    let current_metadata = state.metadata()?;
+    let schema = current_metadata.schema()?;
 
-    let partition_col_data_types = current_metadata.get_partition_col_data_types();
+    let partition_col_data_types = get_partition_col_data_types(&schema, &current_metadata);
 
     // Collect a map of paths that require special stats conversion.
     let mut stats_conversions: Vec<(SchemaPath, DataType)> = Vec::new();
-    collect_stats_conversions(
-        &mut stats_conversions,
-        current_metadata.schema.fields().as_slice(),
-    );
+    collect_stats_conversions(&mut stats_conversions, schema.fields().as_slice());
 
     let mut tombstones = state.unexpired_tombstones().cloned().collect::<Vec<_>>();
 
@@ -280,9 +277,7 @@ fn parquet_bytes_from_state(
         reader_features: None,
     }))
     // metaData
-    .chain(std::iter::once(Action::Metadata(Metadata::try_from(
-        current_metadata.clone(),
-    )?)))
+    .chain(std::iter::once(Action::Metadata(current_metadata.clone())))
     // txns
     .chain(
         state
@@ -316,7 +311,7 @@ fn parquet_bytes_from_state(
 
     // Create the arrow schema that represents the Checkpoint parquet file.
     let arrow_schema = delta_log_schema_for_table(
-        <ArrowSchema as TryFrom<&StructType>>::try_from(&current_metadata.schema)?,
+        <ArrowSchema as TryFrom<&StructType>>::try_from(&schema)?,
         current_metadata.partition_columns.as_slice(),
         use_extended_remove_schema,
     );

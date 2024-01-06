@@ -1091,14 +1091,14 @@ impl DeltaDataChecker {
 
     /// Create a new DeltaDataChecker
     pub fn new(snapshot: &DeltaTableState) -> Self {
-        let metadata = snapshot.delta_metadata();
+        // TODO remove unwrap
+        let invariants = if let Ok(m) = snapshot.metadata() {
+            m.schema().unwrap().get_invariants().unwrap()
+        } else {
+            vec![]
+        };
 
-        let invariants = metadata
-            .and_then(|meta| meta.schema.get_invariants().ok())
-            .unwrap_or_default();
-        let constraints = metadata
-            .map(|meta| meta.get_constraints())
-            .unwrap_or_default();
+        let constraints = snapshot.table_config().get_constraints();
         Self {
             invariants,
             constraints,

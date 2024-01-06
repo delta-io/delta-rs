@@ -11,6 +11,7 @@ use object_store::{path::Path, Error as ObjectStoreError, ObjectStore};
 use serde::{Deserialize, Serialize};
 
 use super::config::TableConfig;
+use super::get_partition_col_data_types;
 use crate::errors::DeltaTableError;
 use crate::kernel::{Action, Add, CommitInfo, DataType, DomainMetadata, Remove, StructType};
 use crate::kernel::{Metadata, Protocol};
@@ -194,11 +195,6 @@ impl DeltaTableState {
         self.metadata.as_ref().ok_or(ProtocolError::NoMetaData)
     }
 
-    /// The most recent metadata of the table.
-    pub fn delta_metadata(&self) -> Option<&DeltaTableMetaData> {
-        self.current_metadata.as_ref()
-    }
-
     /// The table schema
     pub fn schema(&self) -> Option<&StructType> {
         self.current_metadata.as_ref().map(|m| &m.schema)
@@ -209,7 +205,7 @@ impl DeltaTableState {
         lazy_static! {
             static ref DUMMY_CONF: HashMap<String, Option<String>> = HashMap::new();
         }
-        self.current_metadata
+        self.metadata
             .as_ref()
             .map(|meta| TableConfig(&meta.configuration))
             .unwrap_or_else(|| TableConfig(&DUMMY_CONF))
@@ -339,7 +335,7 @@ impl DeltaTableState {
         &'a self,
         filters: &'a [PartitionFilter],
     ) -> Result<impl Iterator<Item = &Add> + '_, DeltaTableError> {
-        let current_metadata = self.delta_metadata().ok_or(DeltaTableError::NoMetadata)?;
+        let current_metadata = self.metadata()?;
 
         let nonpartitioned_columns: Vec<String> = filters
             .iter()
@@ -353,10 +349,12 @@ impl DeltaTableState {
             });
         }
 
-        let partition_col_data_types: HashMap<&String, &DataType> = current_metadata
-            .get_partition_col_data_types()
-            .into_iter()
-            .collect();
+        let partition_col_data_types: HashMap<&String, &DataType> = get_partition_col_data_types(
+            self.schema().ok_or(DeltaTableError::NoMetadata)?,
+            current_metadata,
+        )
+        .into_iter()
+        .collect();
 
         let actions = self.files().iter().filter(move |add| {
             let partitions = add

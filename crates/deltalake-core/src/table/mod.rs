@@ -229,27 +229,30 @@ impl DeltaTableMetaData {
             })
             .collect()
     }
+}
 
-    /// Return partition fields along with their data type from the current schema.
-    pub fn get_partition_col_data_types(&self) -> Vec<(&String, &DataType)> {
-        // JSON add actions contain a `partitionValues` field which is a map<string, string>.
-        // When loading `partitionValues_parsed` we have to convert the stringified partition values back to the correct data type.
-        self.schema
-            .fields()
-            .iter()
-            .filter_map(|f| {
-                if self
-                    .partition_columns
-                    .iter()
-                    .any(|s| s.as_str() == f.name())
-                {
-                    Some((f.name(), f.data_type()))
-                } else {
-                    None
-                }
-            })
-            .collect()
-    }
+/// Return partition fields along with their data type from the current schema.
+pub(crate) fn get_partition_col_data_types<'a>(
+    schema: &'a StructType,
+    metadata: &'a Metadata,
+) -> Vec<(&'a String, &'a DataType)> {
+    // JSON add actions contain a `partitionValues` field which is a map<string, string>.
+    // When loading `partitionValues_parsed` we have to convert the stringified partition values back to the correct data type.
+    schema
+        .fields()
+        .iter()
+        .filter_map(|f| {
+            if metadata
+                .partition_columns
+                .iter()
+                .any(|s| s.as_str() == f.name())
+            {
+                Some((f.name(), f.data_type()))
+            } else {
+                None
+            }
+        })
+        .collect()
 }
 
 impl fmt::Display for DeltaTableMetaData {
@@ -805,14 +808,6 @@ impl DeltaTable {
         Ok(self.state.metadata()?)
     }
 
-    /// Returns the metadata associated with the loaded state.
-    #[deprecated(since = "0.17.0", note = "use metadata() instead")]
-    pub fn get_metadata(&self) -> Result<&DeltaTableMetaData, DeltaTableError> {
-        self.state
-            .delta_metadata()
-            .ok_or(DeltaTableError::NoMetadata)
-    }
-
     /// Returns a vector of active tombstones (i.e. `Remove` actions present in the current delta log).
     pub fn get_tombstones(&self) -> impl Iterator<Item = &Remove> {
         self.state.unexpired_tombstones()
@@ -859,19 +854,6 @@ impl DeltaTable {
     /// been loaded or no metadata was found in the log.
     pub fn get_schema(&self) -> Result<&StructType, DeltaTableError> {
         self.schema().ok_or(DeltaTableError::NoSchema)
-    }
-
-    /// Return the tables configurations that are encapsulated in the DeltaTableStates currentMetaData field
-    #[deprecated(
-        since = "0.17.0",
-        note = "use metadata().configuration or get_state().table_config() instead"
-    )]
-    pub fn get_configurations(&self) -> Result<&HashMap<String, Option<String>>, DeltaTableError> {
-        Ok(self
-            .state
-            .delta_metadata()
-            .ok_or(DeltaTableError::NoMetadata)?
-            .get_configuration())
     }
 
     /// Time travel Delta table to the latest version that's created at or before provided

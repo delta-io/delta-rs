@@ -376,8 +376,9 @@ impl std::future::IntoFuture for WriteBuilder {
 
             let active_partitions = this
                 .snapshot
-                .delta_metadata()
-                .map(|meta| meta.partition_columns.clone());
+                .metadata()
+                .map(|meta| meta.partition_columns.clone())
+                .ok();
 
             // validate partition columns
             let partition_columns = if let Some(active_part) = active_partitions {

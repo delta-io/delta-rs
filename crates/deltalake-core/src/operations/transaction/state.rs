@@ -18,7 +18,7 @@ use crate::delta_datafusion::expr::parse_predicate_expression;
 use crate::delta_datafusion::{
     get_null_of_arrow_type, logical_expr_to_physical_expr, to_correct_scalar_value,
 };
-use crate::errors::{DeltaResult, DeltaTableError};
+use crate::errors::DeltaResult;
 use crate::kernel::Add;
 use crate::table::state::DeltaTableState;
 
@@ -29,15 +29,15 @@ impl DeltaTableState {
     }
 
     fn _arrow_schema(&self, wrap_partitions: bool) -> DeltaResult<ArrowSchemaRef> {
-        let meta = self.delta_metadata().ok_or(DeltaTableError::NoMetadata)?;
+        let meta = self.metadata()?;
         let fields = meta
-            .schema
+            .schema()?
             .fields()
             .iter()
             .filter(|f| !meta.partition_columns.contains(&f.name().to_string()))
             .map(|f| f.try_into())
             .chain(
-                meta.schema
+                meta.schema()?
                     .fields()
                     .iter()
                     .filter(|f| meta.partition_columns.contains(&f.name().to_string()))
