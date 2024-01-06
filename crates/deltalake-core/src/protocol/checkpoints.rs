@@ -10,7 +10,7 @@ use arrow_schema::{ArrowError, Schema as ArrowSchema};
 use chrono::{Datelike, Utc};
 use futures::{StreamExt, TryStreamExt};
 use lazy_static::lazy_static;
-use object_store::ObjectStore;
+use object_store::{Error, ObjectStore};
 use parquet::arrow::ArrowWriter;
 use parquet::errors::ParquetError;
 use regex::Regex;
@@ -182,6 +182,19 @@ pub async fn cleanup_expired_logs_for(
         static ref DELTA_LOG_REGEX: Regex =
             Regex::new(r"_delta_log/(\d{20})\.(json|checkpoint).*$").unwrap();
     }
+
+    let object_store = log_store.object_store();
+    let maybe_last_checkpoint = object_store
+        .get(&log_store.log_path().child("_last_checkpoint.json"))
+        .await;
+
+    if let Err(Error::NotFound { path: _, source: _ }) = maybe_last_checkpoint {
+        return Ok(0);
+    }
+
+    let last_checkpoint = maybe_last_checkpoint?.bytes().await?;
+    let last_checkpoint: CheckPoint = serde_json::from_slice(&last_checkpoint)?;
+    let until_version = i64::min(until_version, last_checkpoint.version);
 
     // Feed a stream of candidate deletion files directly into the delete_stream
     // function to try to improve the speed of cleanup and reduce the need for
@@ -509,13 +522,12 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
-    use arrow_array::{ArrayRef, RecordBatch, StructArray};
-    use arrow_buffer::NullBuffer;
-    use arrow_schema::Fields;
+    use arrow_array::{ArrayRef, RecordBatch};
     use chrono::Duration;
     use lazy_static::lazy_static;
     use serde_json::json;
 
+    use crate::logstore;
     use crate::operations::DeltaOps;
     use crate::writer::test_utils::get_delta_schema;
     use object_store::path::Path;
@@ -708,10 +720,8 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn test_cleanup_no_checkpoints() {
-        use arrow_schema::{DataType, Field, Schema as ArrowSchema};
-        // Test that metadata clean up does corrupt the table no checkpoints exist
+    async fn setup_table() -> DeltaTable {
+        use arrow_schema::{DataType, Field};
         let schema = Arc::new(ArrowSchema::new(vec![Field::new(
             "id",
             DataType::Utf8,
@@ -727,11 +737,17 @@ mod tests {
             .await
             .unwrap();
 
-        let table = DeltaOps(table)
+        DeltaOps(table)
             .write(batches)
             .with_save_mode(crate::protocol::SaveMode::Overwrite)
             .await
-            .unwrap();
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn test_cleanup_no_checkpoints() {
+        // Test that metadata clean up does not corrupt the table when no checkpoints exist
+        let table = setup_table().await;
 
         let log_retention_timestamp = (Utc::now().timestamp_millis()
             + Duration::days(31).num_milliseconds())
@@ -750,36 +766,14 @@ mod tests {
         assert_eq!(count, 0);
         println!("{:?}", count);
 
-        let path = Path::from("00000000000000000000.json");
+        let path = Path::from("_delta_log/00000000000000000000.json");
         let res = table.log_store().object_store().get(&path).await;
         assert!(res.is_ok());
     }
 
     #[tokio::test]
     async fn test_cleanup_with_checkpoints() {
-        use arrow_schema::{DataType, Field, Schema as ArrowSchema};
-        // Test that metadata clean up does corrupt the table no checkpoints exist
-        let schema = Arc::new(ArrowSchema::new(vec![Field::new(
-            "id",
-            DataType::Utf8,
-            false,
-        )]));
-
-        let data =
-            vec![Arc::new(arrow::array::StringArray::from(vec!["A", "B", "C", "D"])) as ArrayRef];
-        let batches = vec![RecordBatch::try_new(schema.clone(), data).unwrap()];
-
-        let table = DeltaOps::new_in_memory()
-            .write(batches.clone())
-            .await
-            .unwrap();
-
-        let table = DeltaOps(table)
-            .write(batches)
-            .with_save_mode(crate::protocol::SaveMode::Overwrite)
-            .await
-            .unwrap();
-
+        let table = setup_table().await;
         create_checkpoint(&table).await.unwrap();
 
         let log_retention_timestamp = (Utc::now().timestamp_millis()
@@ -798,11 +792,19 @@ mod tests {
         .unwrap();
         assert_eq!(count, 1);
 
-        let path = Path::from("_delta_log/00000000000000000000.json");
+        let log_store = table.log_store();
+
+        let path = log_store.log_path().child("00000000000000000000.json");
         let res = table.log_store().object_store().get(&path).await;
         assert!(res.is_err());
 
-        let path = Path::from("_delta_log/00000000000000000001.checkpoint.parquet");
+        let path = log_store
+            .log_path()
+            .child("00000000000000000001.checkpoint.parquet");
+        let res = table.log_store().object_store().get(&path).await;
+        assert!(res.is_ok());
+
+        let path = log_store.log_path().child("00000000000000000001.json");
         let res = table.log_store().object_store().get(&path).await;
         assert!(res.is_ok());
     }
