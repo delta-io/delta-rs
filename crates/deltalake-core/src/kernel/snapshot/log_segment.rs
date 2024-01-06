@@ -1,4 +1,6 @@
 use std::cmp::Ordering;
+use std::collections::{HashMap, VecDeque};
+use std::io::{BufRead, BufReader, Cursor};
 use std::sync::Arc;
 use std::task::{ready, Poll};
 
@@ -6,7 +8,9 @@ use arrow_array::{
     Array, Int32Array, Int64Array, ListArray, RecordBatch, StringArray, StructArray,
 };
 use arrow_json::{reader::Decoder, ReaderBuilder};
+use arrow_schema::SchemaRef as ArrowSchemaRef;
 use bytes::{Buf, Bytes};
+use chrono::Utc;
 use futures::{stream::BoxStream, Stream, StreamExt, TryStreamExt};
 use itertools::Itertools;
 use lazy_static::lazy_static;
@@ -18,10 +22,13 @@ use parquet::arrow::arrow_reader::ArrowReaderOptions;
 use parquet::arrow::async_reader::{ParquetObjectReader, ParquetRecordBatchStreamBuilder};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 use crate::kernel::schema::Schema;
 use crate::kernel::snapshot::extract::{extract_and_cast, extract_and_cast_opt};
-use crate::kernel::{ActionType, Metadata, Protocol, StructType};
+use crate::kernel::{Action, ActionType, Metadata, Protocol, StructType};
+use crate::operations::transaction::get_commit_bytes;
+use crate::protocol::DeltaOperation;
 use crate::{DeltaResult, DeltaTableConfig, DeltaTableError};
 
 use super::extract::{read_primitive, read_primitive_opt, read_str, read_str_opt};
@@ -33,6 +40,12 @@ lazy_static! {
     static ref CHECKPOINT_FILE_PATTERN: Regex =
         Regex::new(r"\d+\.checkpoint(\.\d+\.\d+)?\.parquet").unwrap();
     static ref DELTA_FILE_PATTERN: Regex = Regex::new(r"\d+\.json").unwrap();
+    pub(super) static ref COMMIT_SCHEMA: StructType = StructType::new(vec![
+        ActionType::Add.schema_field().clone(),
+        ActionType::Remove.schema_field().clone(),
+    ]);
+    pub(super) static ref CHECKPOINT_SCHEMA: StructType =
+        StructType::new(vec![ActionType::Add.schema_field().clone(),]);
 }
 
 trait PathExt {
@@ -72,16 +85,27 @@ impl PathExt for Path {
     }
 }
 
+#[inline]
+fn get_decoder(schema: ArrowSchemaRef, config: &DeltaTableConfig) -> DeltaResult<Decoder> {
+    Ok(ReaderBuilder::new(schema)
+        .with_batch_size(config.log_batch_size)
+        .build_decoder()?)
+}
+
+#[inline]
+fn get_reader(data: &[u8]) -> BufReader<Cursor<&[u8]>> {
+    BufReader::new(Cursor::new(data))
+}
+
 pub(super) struct LogSegment {
-    pub version: i64,
-    pub table_root: Path,
-    pub commit_files: Vec<ObjectMeta>,
-    pub checkpoint_files: Vec<ObjectMeta>,
+    version: i64,
+    commit_files: VecDeque<ObjectMeta>,
+    checkpoint_files: Vec<ObjectMeta>,
 }
 
 impl LogSegment {
     /// Try to create a new [`LogSegment`]
-    pub(super) async fn try_new(
+    pub async fn try_new(
         table_root: &Path,
         version: Option<i64>,
         store: &dyn ObjectStore,
@@ -121,10 +145,13 @@ impl LogSegment {
 
         Ok(Self {
             version: version_eff,
-            table_root: table_root.clone(),
-            commit_files,
+            commit_files: commit_files.into(),
             checkpoint_files,
         })
+    }
+
+    pub fn version(&self) -> i64 {
+        self.version
     }
 
     pub(super) fn commit_stream(
@@ -133,17 +160,13 @@ impl LogSegment {
         read_schema: &Schema,
         config: &DeltaTableConfig,
     ) -> DeltaResult<BoxStream<'_, DeltaResult<RecordBatch>>> {
-        let decoder = ReaderBuilder::new(Arc::new(read_schema.try_into()?))
-            .with_batch_size(BATCH_SIZE)
-            .build_decoder()?;
-
+        let decoder = get_decoder(Arc::new(read_schema.try_into()?), config)?;
         let stream = futures::stream::iter(self.commit_files.iter())
             .map(move |meta| {
                 let store = store.clone();
                 async move { store.get(&meta.location).await?.bytes().await }
             })
             .buffered(config.log_buffer_size);
-
         Ok(decode_stream(decoder, stream).boxed())
     }
 
@@ -234,6 +257,46 @@ impl LogSegment {
                 "Missing protocol and metadata actions".to_string(),
             )),
         }
+    }
+
+    /// Advance the log segment with new commits
+    ///
+    /// Returns an iterator over record batches, as if the commits were read from the log.
+    /// The input commits should be in order in which they would be commited to the table.
+    pub(super) fn advance<'a>(
+        &mut self,
+        commits: impl IntoIterator<
+            Item = &'a (Vec<Action>, DeltaOperation, Option<HashMap<String, Value>>),
+        >,
+        table_root: &Path,
+        read_schema: &Schema,
+        config: &DeltaTableConfig,
+    ) -> DeltaResult<impl Iterator<Item = Result<RecordBatch, DeltaTableError>> + '_> {
+        let log_path = table_root.child("_delta_log");
+        let mut decoder = get_decoder(Arc::new(read_schema.try_into()?), config)?;
+
+        let mut commit_data = Vec::new();
+        for (actions, operation, app_metadata) in commits {
+            self.version += 1;
+            let path = log_path.child(format!("{:020}.json", self.version));
+            let bytes = get_commit_bytes(operation, actions, app_metadata.clone())?;
+            let meta = ObjectMeta {
+                location: path,
+                size: bytes.len(),
+                last_modified: Utc::now(),
+                e_tag: None,
+                version: None,
+            };
+            // NOTE: We always assume the commit files are sorted in reverse order
+            self.commit_files.push_front(meta);
+            let reader = get_reader(&bytes);
+            let batches = read_from_json(reader, &mut decoder).collect::<Result<Vec<_>, _>>()?;
+            commit_data.push(batches);
+        }
+
+        // NOTE: Most recent commits need to be processed first
+        commit_data.reverse();
+        Ok(commit_data.into_iter().flatten().map(Ok))
     }
 }
 
@@ -338,6 +401,29 @@ fn decode_stream<S: Stream<Item = ObjectStoreResult<Bytes>> + Unpin>(
 
         Poll::Ready(decoder.flush().map_err(DeltaTableError::from).transpose())
     })
+}
+
+fn read_from_json<'a, R: BufRead + 'a>(
+    mut reader: R,
+    decoder: &'a mut Decoder,
+) -> impl Iterator<Item = Result<RecordBatch, DeltaTableError>> + '_ {
+    let mut next = move || {
+        loop {
+            let buf = reader.fill_buf()?;
+            if buf.is_empty() {
+                break; // Input exhausted
+            }
+            let read = buf.len();
+            let decoded = decoder.decode(buf)?;
+
+            reader.consume(decoded);
+            if decoded != read {
+                break; // Read batch size
+            }
+        }
+        decoder.flush()
+    };
+    std::iter::from_fn(move || next().map_err(DeltaTableError::from).transpose())
 }
 
 #[derive(Debug, Deserialize, Serialize)]

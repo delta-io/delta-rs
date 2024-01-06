@@ -76,6 +76,9 @@ pub struct DeltaTableConfig {
     /// last checkpoint, but will also increase memory usage. Possible rate limits of the storage backend should
     /// also be considered for optimal performance.
     pub log_buffer_size: usize,
+    /// Control the number of records to read / process from the commit / checkpoint files
+    /// when processing record batches.
+    pub log_batch_size: usize,
 }
 
 impl Default for DeltaTableConfig {
@@ -84,6 +87,7 @@ impl Default for DeltaTableConfig {
             require_tombstones: true,
             require_files: true,
             log_buffer_size: num_cpus::get() * 4,
+            log_batch_size: 1024,
         }
     }
 }
@@ -119,6 +123,9 @@ pub struct DeltaTableLoadOptions {
     /// last checkpoint, but will also increase memory usage. Possible rate limits of the storage backend should
     /// also be considered for optimal performance.
     pub log_buffer_size: usize,
+    /// Control the number of records to read / process from the commit / checkpoint files
+    /// when processing record batches.
+    pub log_batch_size: usize,
 }
 
 impl DeltaTableLoadOptions {
@@ -131,6 +138,7 @@ impl DeltaTableLoadOptions {
             require_files: true,
             log_buffer_size: num_cpus::get() * 4,
             version: DeltaVersion::default(),
+            log_batch_size: 1024,
         }
     }
 }
@@ -306,6 +314,7 @@ impl DeltaTableBuilder {
             require_tombstones: self.options.require_tombstones,
             require_files: self.options.require_files,
             log_buffer_size: self.options.log_buffer_size,
+            log_batch_size: self.options.log_batch_size,
         };
         Ok(DeltaTable::new(self.build_storage()?, config))
     }

@@ -23,27 +23,34 @@ pub(super) fn extract_adds<'a>(array: &'a dyn ProvidesColumnByName) -> DeltaResu
         let tags = extract_and_cast_opt::<MapArray>(arr, "partitionValues");
         let dv = extract_and_cast_opt::<StructArray>(arr, "deletionVector");
 
-        for i in 0..arr.len() {
-            let deletion_vector = dv.and_then(|d| {
-                let storage_type = extract_and_cast_opt::<StringArray>(d, "storageType")?;
-                let path_or_inline_dv = extract_and_cast_opt::<StringArray>(d, "pathOrInlineDv")?;
-                let offset = extract_and_cast_opt::<Int32Array>(d, "offset")?;
-                let size_in_bytes = extract_and_cast_opt::<Int32Array>(d, "sizeInBytes")?;
-                let cardinality = extract_and_cast_opt::<Int64Array>(d, "cardinality")?;
-                if read_str(storage_type, i).is_ok() {
+        let get_dv: Box<dyn Fn(usize) -> Option<DeletionVectorDescriptor>> = if let Some(d) = dv {
+            let storage_type = extract_and_cast::<StringArray>(d, "storageType")?;
+            let path_or_inline_dv = extract_and_cast::<StringArray>(d, "pathOrInlineDv")?;
+            let offset = extract_and_cast::<Int32Array>(d, "offset")?;
+            let size_in_bytes = extract_and_cast::<Int32Array>(d, "sizeInBytes")?;
+            let cardinality = extract_and_cast::<Int64Array>(d, "cardinality")?;
+
+            Box::new(|idx: usize| {
+                if read_str(storage_type, idx).is_ok() {
                     Some(DeletionVectorDescriptor {
-                        storage_type: std::str::FromStr::from_str(read_str(storage_type, i).ok()?)
-                            .ok()?,
-                        path_or_inline_dv: read_str(path_or_inline_dv, i).ok()?.to_string(),
-                        offset: read_primitive_opt(offset, i),
-                        size_in_bytes: read_primitive(size_in_bytes, i).ok()?,
-                        cardinality: read_primitive(cardinality, i).ok()?,
+                        storage_type: std::str::FromStr::from_str(
+                            read_str(storage_type, idx).ok()?,
+                        )
+                        .ok()?,
+                        path_or_inline_dv: read_str(path_or_inline_dv, idx).ok()?.to_string(),
+                        offset: read_primitive_opt(offset, idx),
+                        size_in_bytes: read_primitive(size_in_bytes, idx).ok()?,
+                        cardinality: read_primitive(cardinality, idx).ok()?,
                     })
                 } else {
                     None
                 }
-            });
+            })
+        } else {
+            Box::new(|_| None)
+        };
 
+        for i in 0..arr.len() {
             result.push(Add {
                 path: read_str(path, i)?.to_string(),
                 size: read_primitive(size, i)?,
@@ -53,8 +60,8 @@ pub(super) fn extract_adds<'a>(array: &'a dyn ProvidesColumnByName) -> DeltaResu
                 partition_values: pvs
                     .and_then(|pv| collect_map(&pv.value(i)).map(|m| m.collect()))
                     .unwrap_or_default(),
-                tags: tags.and_then(|pv| collect_map(&pv.value(i)).map(|m| m.collect())),
-                deletion_vector,
+                tags: tags.and_then(|t| collect_map(&t.value(i)).map(|m| m.collect())),
+                deletion_vector: get_dv(i),
                 base_row_id: None,
                 default_row_commit_version: None,
                 clustering_provider: None,

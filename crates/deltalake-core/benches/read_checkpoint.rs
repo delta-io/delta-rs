@@ -14,6 +14,7 @@ fn read_null_partitions_checkpoint(c: &mut Criterion) {
         require_tombstones: true,
         require_files: true,
         log_buffer_size: num_cpus::get() * 4,
+        log_batch_size: 1024,
     };
 
     c.bench_function("process checkpoint for table state", |b| {

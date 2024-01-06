@@ -102,7 +102,7 @@ fn seen_key(info: &FileInfo<'_>) -> String {
     }
 }
 
-struct LogReplayScanner {
+pub(super) struct LogReplayScanner {
     // filter: Option<DataSkippingFilter>,
     /// A set of (data file path, dv_unique_id) pairs that have been seen thus
     /// far in the log. This is used to filter out files with Remove actions as
@@ -112,7 +112,7 @@ struct LogReplayScanner {
 
 impl LogReplayScanner {
     /// Creates a new [`LogReplayScanner`] instance.
-    fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             seen: HashSet::new(),
         }
@@ -120,7 +120,7 @@ impl LogReplayScanner {
 
     /// Takes a record batch of add and protentially remove actions and returns a
     /// filtered batch of actions that contains only active rows.
-    fn process_files_batch<'a>(
+    pub(super) fn process_files_batch<'a>(
         &mut self,
         batch: &'a RecordBatch,
         is_log_batch: bool,

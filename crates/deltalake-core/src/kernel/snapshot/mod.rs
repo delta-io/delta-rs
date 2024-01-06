@@ -2,6 +2,7 @@
 //!
 //! A snapshot represents the state of a Delta Table at a given version.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use arrow_array::RecordBatch;
@@ -9,12 +10,14 @@ use futures::stream::BoxStream;
 use futures::TryStreamExt;
 use object_store::path::Path;
 use object_store::ObjectStore;
+use serde_json::Value;
 
 use self::log_segment::LogSegment;
 use self::parse::extract_adds;
-use self::replay::ReplayStream;
-use super::{Add, Metadata, Protocol};
-use crate::kernel::{actions::ActionType, StructType};
+use self::replay::{LogReplayScanner, ReplayStream};
+use super::{Action, Add, Metadata, Protocol};
+use crate::kernel::StructType;
+use crate::protocol::DeltaOperation;
 use crate::table::config::TableConfig;
 use crate::{DeltaResult, DeltaTableConfig};
 
@@ -31,10 +34,13 @@ pub struct Snapshot {
     protocol: Protocol,
     metadata: Metadata,
     schema: StructType,
+    // TODO make this an URL
+    /// path of the table root within the object store
+    table_url: Path,
 }
 
 impl Snapshot {
-    /// Create a new snapshot from a log segment
+    /// Create a new [`Snapshot`] instance
     pub async fn try_new(
         table_root: &Path,
         store: Arc<dyn ObjectStore>,
@@ -51,12 +57,13 @@ impl Snapshot {
             protocol,
             metadata,
             schema,
+            table_url: table_root.to_owned(),
         })
     }
 
     /// Get the table version of the snapshot
     pub fn version(&self) -> i64 {
-        self.log_segment.version
+        self.log_segment.version()
     }
 
     /// Get the table schema of the snapshot
@@ -76,7 +83,7 @@ impl Snapshot {
 
     /// Get the table root of the snapshot
     pub fn table_root(&self) -> &Path {
-        &self.log_segment.table_root
+        &self.table_url
     }
 
     /// Well known table configuration
@@ -86,26 +93,16 @@ impl Snapshot {
 
     /// Get the files in the snapshot
     pub fn files(&self) -> DeltaResult<ReplayStream<BoxStream<'_, DeltaResult<RecordBatch>>>> {
-        lazy_static::lazy_static! {
-            static ref COMMIT_SCHEMA: StructType = StructType::new(vec![
-                ActionType::Add.schema_field().clone(),
-                ActionType::Remove.schema_field().clone(),
-            ]);
-            static ref CHECKPOINT_SCHEMA: StructType = StructType::new(vec![
-                ActionType::Add.schema_field().clone(),
-            ]);
-        }
-
-        let log_stream =
-            self.log_segment
-                .commit_stream(self.store.clone(), &COMMIT_SCHEMA, &self.config)?;
-
+        let log_stream = self.log_segment.commit_stream(
+            self.store.clone(),
+            &log_segment::COMMIT_SCHEMA,
+            &self.config,
+        )?;
         let checkpoint_stream = self.log_segment.checkpoint_stream(
             self.store.clone(),
-            &CHECKPOINT_SCHEMA,
+            &log_segment::CHECKPOINT_SCHEMA,
             &self.config,
         );
-
         Ok(ReplayStream::new(log_stream, checkpoint_stream))
     }
 }
@@ -168,16 +165,53 @@ impl EagerSnapshot {
             .flatten()
             .flatten())
     }
+
+    /// Advance the snapshot based on the given commit actions
+    pub fn advance<'a>(
+        &mut self,
+        commits: impl IntoIterator<
+            Item = &'a (Vec<Action>, DeltaOperation, Option<HashMap<String, Value>>),
+        >,
+    ) -> DeltaResult<i64> {
+        let actions = self.snapshot.log_segment.advance(
+            commits,
+            &self.snapshot.table_url,
+            &log_segment::COMMIT_SCHEMA,
+            &self.snapshot.config,
+        )?;
+
+        let mut files = Vec::new();
+        let mut scanner = LogReplayScanner::new();
+
+        for batch in actions {
+            files.push(scanner.process_files_batch(&batch?, true)?);
+        }
+        self.files = files
+            .into_iter()
+            .chain(
+                self.files
+                    .iter()
+                    .map(|batch| scanner.process_files_batch(batch, false))
+                    .flatten(),
+            )
+            .collect();
+
+        Ok(self.snapshot.version())
+    }
 }
 
 #[cfg(test)]
 mod tests {
+    use chrono::Utc;
     use deltalake_test::utils::*;
     use futures::TryStreamExt;
+    use itertools::Itertools;
 
     use super::log_segment::tests::test_log_segment;
     use super::replay::tests::test_log_replay;
     use super::*;
+    use crate::kernel::Remove;
+    use crate::protocol::SaveMode;
 
     #[tokio::test]
     async fn test_snapshots() -> TestResult {
@@ -272,6 +306,72 @@ mod tests {
             let batches = snapshot.files()?.collect::<Vec<_>>();
             assert_eq!(batches.len(), version as usize);
         }
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_eager_snapshot_advance() -> TestResult {
+        let context = IntegrationContext::new(Box::new(LocalStorageIntegration::default()))?;
+        context.load_table(TestTables::Simple).await?;
+
+        let store = context
+            .table_builder(TestTables::Simple)
+            .build_storage()?
+            .object_store();
+
+        let mut snapshot =
+            EagerSnapshot::try_new(&Path::default(), store.clone(), Default::default(), None)
+                .await?;
+
+        let version = snapshot.version();
+
+        let files = snapshot.files()?.enumerate().collect_vec();
+        let num_files = files.len();
+
+        let split = files.split(|(idx, _)| *idx == num_files / 2).collect_vec();
+        assert!(split.len() == 2 && split[0].len() > 0 && split[1].len() > 0);
+        let (first, second) = split.into_iter().next_tuple().unwrap();
+
+        let removes = first
+            .iter()
+            .map(|(_, add)| {
+                Action::Remove(Remove {
+                    path: add.path.clone(),
+                    size: Some(add.size.clone()),
+                    data_change: add.data_change,
+                    deletion_timestamp: Some(Utc::now().timestamp_millis()),
+                    extended_file_metadata: Some(true),
+                    partition_values: Some(add.partition_values.clone()),
+                    tags: add.tags.clone(),
+                    deletion_vector: add.deletion_vector.clone(),
+                    base_row_id: add.base_row_id,
+                    default_row_commit_version: add.default_row_commit_version,
+                })
+            })
+            .collect_vec();
+
+        let actions = vec![(
+            removes,
+            DeltaOperation::Write {
+                mode: SaveMode::Append,
+                partition_by: None,
+                predicate: None,
+            },
+            None,
+        )];
+
+        let new_version = snapshot.advance(&actions)?;
+        assert_eq!(new_version, version + 1);
+
+        let new_files = snapshot.files()?.map(|f| f.path).collect::<Vec<_>>();
+        assert_eq!(new_files.len(), num_files - first.len());
+        assert!(first
+            .iter()
+            .all(|(_, add)| { !new_files.contains(&add.path) }));
+        assert!(second
+            .iter()
+            .all(|(_, add)| { new_files.contains(&add.path) }));
 
         Ok(())
     }
