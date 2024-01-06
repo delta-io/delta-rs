@@ -199,7 +199,8 @@ impl VacuumBuilder {
             None => Utc::now().timestamp_millis(),
         };
 
-        let expired_tombstones = get_stale_files(&self.snapshot, retention_period, now_millis);
+        let expired_tombstones =
+            get_stale_files(&self.snapshot, retention_period, now_millis).await?;
         let valid_files = self.snapshot.file_paths_iter().collect::<HashSet<Path>>();
 
         let mut files_to_delete = vec![];
@@ -393,22 +394,25 @@ fn is_hidden_directory(partition_columns: &[String], path: &Path) -> Result<bool
 }
 
 /// List files no longer referenced by a Delta table and are older than the retention threshold.
-fn get_stale_files(
+async fn get_stale_files(
     snapshot: &DeltaTableState,
     retention_period: Duration,
     now_timestamp_millis: i64,
-) -> HashSet<&str> {
+) -> DeltaResult<HashSet<String>> {
     let tombstone_retention_timestamp = now_timestamp_millis - retention_period.num_milliseconds();
-    snapshot
-        .all_tombstones()
-        .iter()
+    Ok(snapshot
+        .all_tombstones()?
+        .try_collect::<Vec<_>>()
+        .await?
+        .into_iter()
+        .flatten()
         .filter(|tombstone| {
             // if the file has a creation time before the `tombstone_retention_timestamp`
             // then it's considered as a stale file
             tombstone.deletion_timestamp.unwrap_or(0) < tombstone_retention_timestamp
         })
-        .map(|tombstone| tombstone.path.as_str())
-        .collect::<HashSet<_>>()
+        .map(|tombstone| tombstone.path)
+        .collect::<HashSet<_>>())
 }
 
 #[cfg(test)]

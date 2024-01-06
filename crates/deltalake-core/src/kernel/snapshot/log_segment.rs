@@ -36,6 +36,8 @@ use super::extract::{read_primitive, read_primitive_opt, read_str, read_str_opt}
 const LAST_CHECKPOINT_FILE_NAME: &str = "_last_checkpoint";
 const BATCH_SIZE: usize = 1024;
 
+pub type CommitData = (Vec<Action>, DeltaOperation, Option<HashMap<String, Value>>);
+
 lazy_static! {
     static ref CHECKPOINT_FILE_PATTERN: Regex =
         Regex::new(r"\d+\.checkpoint(\.\d+\.\d+)?\.parquet").unwrap();
@@ -150,6 +152,27 @@ impl LogSegment {
             commit_files: commit_files.into(),
             checkpoint_files,
         })
+    }
+
+    #[cfg(test)]
+    pub(super) fn new_test(
+        commits: impl IntoIterator<Item = &'a CommitData>,
+    ) -> DeltaResult<(
+        Self,
+        impl Iterator<Item = Result<RecordBatch, DeltaTableError>> + '_,
+    )> {
+        let mut log = Self {
+            version: -1,
+            commit_files: Default::default(),
+            checkpoint_files: Default::default(),
+        };
+        let iter = log.advance(
+            commits,
+            &Path::default(),
+            crate::kernel::actions::schemas::log_schema(),
+            &Default::default(),
+        )?;
+        Ok((log, iter))
     }
 
     pub fn version(&self) -> i64 {
@@ -267,9 +290,7 @@ impl LogSegment {
     /// The input commits should be in order in which they would be commited to the table.
     pub(super) fn advance<'a>(
         &mut self,
-        commits: impl IntoIterator<
-            Item = &'a (Vec<Action>, DeltaOperation, Option<HashMap<String, Value>>),
-        >,
+        commits: impl IntoIterator<Item = &'a CommitData>,
         table_root: &Path,
         read_schema: &Schema,
         config: &DeltaTableConfig,

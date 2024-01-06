@@ -22,7 +22,7 @@ use self::state::DeltaTableState;
 use crate::errors::DeltaTableError;
 use crate::kernel::{
     Action, Add, CommitInfo, DataCheck, DataType, Format, Metadata, Protocol, ReaderFeatures,
-    Remove, StructType, WriterFeatures,
+    StructType, WriterFeatures,
 };
 use crate::logstore::LogStoreRef;
 use crate::logstore::{self, LogStoreConfig};
@@ -806,11 +806,6 @@ impl DeltaTable {
     /// Returns the metadata associated with the loaded state.
     pub fn metadata(&self) -> Result<&Metadata, DeltaTableError> {
         Ok(self.state.metadata()?)
-    }
-
-    /// Returns a vector of active tombstones (i.e. `Remove` actions present in the current delta log).
-    pub fn get_tombstones(&self) -> impl Iterator<Item = &Remove> {
-        self.state.unexpired_tombstones()
     }
 
     /// Returns the current version of the DeltaTable based on the loaded metadata.

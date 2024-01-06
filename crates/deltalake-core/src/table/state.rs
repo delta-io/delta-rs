@@ -6,6 +6,8 @@ use std::convert::TryFrom;
 use std::io::{BufRead, BufReader, Cursor};
 
 use chrono::Utc;
+use futures::stream::BoxStream;
+use futures::TryStreamExt;
 use lazy_static::lazy_static;
 use object_store::{path::Path, Error as ObjectStoreError, ObjectStore};
 use serde::{Deserialize, Serialize};
@@ -20,6 +22,7 @@ use crate::protocol::DeltaOperation;
 use crate::protocol::ProtocolError;
 use crate::storage::commit_uri_from_version;
 use crate::table::DeltaTableMetaData;
+use crate::DeltaResult;
 use crate::DeltaTable;
 
 #[cfg(feature = "parquet")]
@@ -144,21 +147,28 @@ impl DeltaTableState {
     }
 
     /// Full list of tombstones (remove actions) representing files removed from table state).
-    pub fn all_tombstones(&self) -> &HashSet<Remove> {
-        &self.tombstones
+    pub fn all_tombstones(&self) -> DeltaResult<BoxStream<'_, DeltaResult<Vec<Remove>>>> {
+        todo!()
     }
 
     /// List of unexpired tombstones (remove actions) representing files removed from table state.
     /// The retention period is set by `deletedFileRetentionDuration` with default value of 1 week.
-    pub fn unexpired_tombstones(&self) -> impl Iterator<Item = &Remove> {
+    pub async fn unexpired_tombstones(&self) -> DeltaResult<impl Iterator<Item = Remove>> {
         let retention_timestamp = Utc::now().timestamp_millis()
             - self
                 .table_config()
                 .deleted_file_retention_duration()
                 .as_millis() as i64;
-        self.tombstones
-            .iter()
-            .filter(move |t| t.deletion_timestamp.unwrap_or(0) > retention_timestamp)
+        let tombstones = self
+            .all_tombstones()?
+            .try_collect::<Vec<_>>()
+            .await?
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>();
+        Ok(tombstones
+            .into_iter()
+            .filter(move |t| t.deletion_timestamp.unwrap_or(0) > retention_timestamp))
     }
 
     /// Full list of add actions representing all parquet files that are part of the current

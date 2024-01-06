@@ -576,44 +576,4 @@ mod tests {
             ]
         );
     }
-
-    #[tokio::test]
-    async fn read_delta_table_ignoring_files() {
-        let table = DeltaTableBuilder::from_uri("../deltalake-test/tests/data/delta-0.8.0")
-            .without_files()
-            .load()
-            .await
-            .unwrap();
-
-        assert_eq!(table.get_files_iter().count(), 0, "files should be empty");
-        assert!(
-            table.get_tombstones().next().is_none(),
-            "tombstones should be empty"
-        );
-    }
-
-    #[tokio::test]
-    async fn read_delta_table_with_ignoring_files_on_apply_log() {
-        let mut table = DeltaTableBuilder::from_uri("../deltalake-test/tests/data/delta-0.8.0")
-            .with_version(0)
-            .without_files()
-            .load()
-            .await
-            .unwrap();
-
-        assert_eq!(table.version(), 0);
-        assert_eq!(table.get_files_iter().count(), 0, "files should be empty");
-        assert!(
-            table.get_tombstones().next().is_none(),
-            "tombstones should be empty"
-        );
-
-        table.update().await.unwrap();
-        assert_eq!(table.version(), 1);
-        assert_eq!(table.get_files_iter().count(), 0, "files should be empty");
-        assert!(
-            table.get_tombstones().next().is_none(),
-            "tombstones should be empty"
-        );
-    }
 }

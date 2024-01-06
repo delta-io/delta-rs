@@ -2,7 +2,6 @@
 //!
 //! A snapshot represents the state of a Delta Table at a given version.
 
-use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Cursor};
 use std::sync::Arc;
 
@@ -11,14 +10,12 @@ use futures::stream::BoxStream;
 use futures::{StreamExt, TryStreamExt};
 use object_store::path::Path;
 use object_store::ObjectStore;
-use serde_json::Value;
 
-use self::log_segment::LogSegment;
+use self::log_segment::{CommitData, LogSegment};
 use self::parse::{extract_adds, extract_removes};
 use self::replay::{LogReplayScanner, ReplayStream};
 use super::{Action, Add, CommitInfo, Metadata, Protocol, Remove};
 use crate::kernel::StructType;
-use crate::protocol::DeltaOperation;
 use crate::table::config::TableConfig;
 use crate::{DeltaResult, DeltaTableConfig, DeltaTableError};
 
@@ -172,6 +169,11 @@ impl EagerSnapshot {
         Ok(Self { snapshot, files })
     }
 
+    #[cfg(test)]
+    pub(crate) fn new_test(commits: impl IntoIterator<Item = &'a CommitData>) -> Self {
+        Self { snapshot, files }
+    }
+
     /// Get the table version of the snapshot
     pub fn version(&self) -> i64 {
         self.snapshot.version()
@@ -203,16 +205,14 @@ impl EagerSnapshot {
     }
 
     /// Get the files in the snapshot
-    pub fn files(&self) -> DeltaResult<impl Iterator<Item = Add> + '_> {
+    pub fn file_actions(&self) -> DeltaResult<impl Iterator<Item = Add> + '_> {
         Ok(self.files.iter().flat_map(|b| extract_adds(b)).flatten())
     }
 
     /// Advance the snapshot based on the given commit actions
     pub fn advance<'a>(
         &mut self,
-        commits: impl IntoIterator<
-            Item = &'a (Vec<Action>, DeltaOperation, Option<HashMap<String, Value>>),
-        >,
+        commits: impl IntoIterator<Item = &'a CommitData>,
     ) -> DeltaResult<i64> {
         let actions = self.snapshot.log_segment.advance(
             commits,
@@ -351,7 +351,7 @@ mod tests {
                 Some(version),
             )
             .await?;
-            let batches = snapshot.files()?.collect::<Vec<_>>();
+            let batches = snapshot.file_actions()?.collect::<Vec<_>>();
             assert_eq!(batches.len(), version as usize);
         }
 
@@ -374,7 +374,7 @@ mod tests {
 
         let version = snapshot.version();
 
-        let files = snapshot.files()?.enumerate().collect_vec();
+        let files = snapshot.file_actions()?.enumerate().collect_vec();
         let num_files = files.len();
 
         let split = files.split(|(idx, _)| *idx == num_files / 2).collect_vec();
@@ -412,7 +412,7 @@ mod tests {
         let new_version = snapshot.advance(&actions)?;
         assert_eq!(new_version, version + 1);
 
-        let new_files = snapshot.files()?.map(|f| f.path).collect::<Vec<_>>();
+        let new_files = snapshot.file_actions()?.map(|f| f.path).collect::<Vec<_>>();
         assert_eq!(new_files.len(), num_files - first.len());
         assert!(first
             .iter()

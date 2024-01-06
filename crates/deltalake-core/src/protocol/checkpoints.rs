@@ -20,7 +20,8 @@ use tracing::{debug, error};
 use super::{time_utils, ProtocolError};
 use crate::kernel::arrow::delta_log_schema_for_table;
 use crate::kernel::{
-    Action, Add as AddAction, DataType, PrimitiveType, Protocol, StructField, StructType, Txn,
+    Action, Add as AddAction, DataType, PrimitiveType, Protocol, Remove, StructField, StructType,
+    Txn,
 };
 use crate::logstore::LogStore;
 use crate::table::state::DeltaTableState;
@@ -150,7 +151,12 @@ pub async fn create_checkpoint_for(
     let last_checkpoint_path = log_store.log_path().child("_last_checkpoint");
 
     debug!("Writing parquet bytes to checkpoint buffer.");
-    let (checkpoint, parquet_bytes) = parquet_bytes_from_state(state)?;
+    let tombstones = state
+        .unexpired_tombstones()
+        .await
+        .map_err(|_| ProtocolError::Generic("filed to get tombstones".into()))?
+        .collect::<Vec<_>>();
+    let (checkpoint, parquet_bytes) = parquet_bytes_from_state(state, tombstones)?;
 
     let file_name = format!("{version:020}.checkpoint.parquet");
     let checkpoint_path = log_store.log_path().child(file_name);
@@ -238,6 +244,7 @@ pub async fn cleanup_expired_logs_for(
 
 fn parquet_bytes_from_state(
     state: &DeltaTableState,
+    mut tombstones: Vec<Remove>,
 ) -> Result<(CheckPoint, bytes::Bytes), ProtocolError> {
     let current_metadata = state.metadata()?;
     let schema = current_metadata.schema()?;
@@ -247,8 +254,6 @@ fn parquet_bytes_from_state(
     // Collect a map of paths that require special stats conversion.
     let mut stats_conversions: Vec<(SchemaPath, DataType)> = Vec::new();
     collect_stats_conversions(&mut stats_conversions, schema.fields().as_slice());
-
-    let mut tombstones = state.unexpired_tombstones().cloned().collect::<Vec<_>>();
 
     // if any, tombstones do not include extended file metadata, we must omit the extended metadata fields from the remove schema
     // See https://github.com/delta-io/delta/blob/master/PROTOCOL.md#add-file-and-remove-file
