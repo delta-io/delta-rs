@@ -412,14 +412,24 @@ impl RawDeltaTable {
         Ok(serde_json::to_string(&metrics).unwrap())
     }
 
-    #[pyo3(signature = (constraints))]
-    pub fn add_constraints(&mut self, constraints: HashMap<String, String>) -> PyResult<()> {
+    #[pyo3(signature = (constraints, custom_metadata=None))]
+    pub fn add_constraints(
+        &mut self,
+        constraints: HashMap<String, String>,
+        custom_metadata: Option<HashMap<String, String>>,
+    ) -> PyResult<()> {
         let mut cmd =
             ConstraintBuilder::new(self._table.log_store(), self._table.get_state().clone());
 
         for (col_name, expression) in constraints {
             cmd = cmd.with_constraint(col_name.clone(), expression.clone());
         }
+
+        if let Some(metadata) = custom_metadata {
+            let json_metadata: Map<String, Value> =
+                metadata.into_iter().map(|(k, v)| (k, v.into())).collect();
+            cmd = cmd.with_metadata(json_metadata);
+        };
 
         let table = rt()?
             .block_on(cmd.into_future())
