@@ -3,11 +3,12 @@
 //! A snapshot represents the state of a Delta Table at a given version.
 
 use std::collections::HashMap;
+use std::io::{BufRead, BufReader, Cursor};
 use std::sync::Arc;
 
 use arrow_array::RecordBatch;
 use futures::stream::BoxStream;
-use futures::TryStreamExt;
+use futures::{StreamExt, TryStreamExt};
 use object_store::path::Path;
 use object_store::ObjectStore;
 use serde_json::Value;
@@ -15,11 +16,11 @@ use serde_json::Value;
 use self::log_segment::LogSegment;
 use self::parse::extract_adds;
 use self::replay::{LogReplayScanner, ReplayStream};
-use super::{Action, Add, Metadata, Protocol};
+use super::{Action, Add, CommitInfo, Metadata, Protocol};
 use crate::kernel::StructType;
 use crate::protocol::DeltaOperation;
 use crate::table::config::TableConfig;
-use crate::{DeltaResult, DeltaTableConfig};
+use crate::{DeltaResult, DeltaTableConfig, DeltaTableError};
 
 mod extract;
 mod log_segment;
@@ -105,6 +106,30 @@ impl Snapshot {
         );
         Ok(ReplayStream::new(log_stream, checkpoint_stream))
     }
+
+    /// Get the commit infos in the snapshot
+    pub(crate) fn commit_infos(&self) -> BoxStream<'_, DeltaResult<Option<CommitInfo>>> {
+        futures::stream::iter(self.log_segment.commit_files.clone())
+            .map(move |meta| {
+                let store = self.store.clone();
+                async move {
+                    let commit_log_bytes = store.get(&meta.location).await?.bytes().await?;
+                    let reader = BufReader::new(Cursor::new(commit_log_bytes));
+                    for line in reader.lines() {
+                        let action: Action = serde_json::from_str(line?.as_str())?;
+                        match action {
+                            Action::CommitInfo(commit_info) => {
+                                return Ok::<_, DeltaTableError>(Some(commit_info))
+                            }
+                            _ => (),
+                        };
+                    }
+                    Ok(None)
+                }
+            })
+            .buffered(self.config.log_buffer_size)
+            .boxed()
+    }
 }
 
 /// A snapshot of a Delta table that has been eagerly loaded into memory.
@@ -158,11 +183,7 @@ impl EagerSnapshot {
 
     /// Get the files in the snapshot
     pub fn files(&self) -> DeltaResult<impl Iterator<Item = Add> + '_> {
-        Ok(self
-            .files
-            .iter()
-            .flat_map(|b| extract_adds(b))
-            .flatten())
+        Ok(self.files.iter().flat_map(|b| extract_adds(b)).flatten())
     }
 
     /// Advance the snapshot based on the given commit actions
@@ -238,6 +259,10 @@ mod tests {
         let schema_string = r#"{"type":"struct","fields":[{"name":"id","type":"long","nullable":true,"metadata":{}}]}"#;
         let expected: StructType = serde_json::from_str(schema_string)?;
         assert_eq!(snapshot.schema(), &expected);
+
+        let infos = snapshot.commit_infos().try_collect::<Vec<_>>().await?;
+        let infos = infos.into_iter().flatten().collect_vec();
+        assert_eq!(infos.len(), 5);
 
         let batches = snapshot.files()?.try_collect::<Vec<_>>().await?;
         let expected = [

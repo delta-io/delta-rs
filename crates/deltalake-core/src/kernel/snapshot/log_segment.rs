@@ -99,7 +99,7 @@ fn get_reader(data: &[u8]) -> BufReader<Cursor<&[u8]>> {
 
 pub(super) struct LogSegment {
     version: i64,
-    commit_files: VecDeque<ObjectMeta>,
+    pub(super) commit_files: VecDeque<ObjectMeta>,
     checkpoint_files: Vec<ObjectMeta>,
 }
 
@@ -553,8 +553,7 @@ async fn list_log_files(
         }
     }
 
-    commit_files
-        .retain(|f| f.location.commit_version().unwrap_or(0) > max_checkpoint_version);
+    commit_files.retain(|f| f.location.commit_version().unwrap_or(0) > max_checkpoint_version);
     // NOTE this will sort in reverse order
     commit_files.sort_unstable_by(|a, b| b.location.cmp(&a.location));
 
