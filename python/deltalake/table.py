@@ -738,6 +738,7 @@ class DeltaTable:
         retention_hours: Optional[int] = None,
         dry_run: bool = True,
         enforce_retention_duration: bool = True,
+        custom_metadata: Optional[Dict[str, str]] = None,
     ) -> List[str]:
         """
         Run the Vacuum command on the Delta Table: list and delete files no longer referenced by the Delta table and are older than the retention threshold.
@@ -746,7 +747,7 @@ class DeltaTable:
             retention_hours: the retention threshold in hours, if none then the value from `configuration.deletedFileRetentionDuration` is used or default of 1 week otherwise.
             dry_run: when activated, list only the files, delete otherwise
             enforce_retention_duration: when disabled, accepts retention hours smaller than the value from `configuration.deletedFileRetentionDuration`.
-
+            custom_metadata: custom metadata that will be added to the transaction commit.
         Returns:
             the list of files no longer referenced by the Delta Table and are older than the retention threshold.
         """
@@ -758,6 +759,7 @@ class DeltaTable:
             dry_run,
             retention_hours,
             enforce_retention_duration,
+            custom_metadata,
         )
 
     def update(

@@ -57,6 +57,7 @@ class RawDeltaTable:
         dry_run: bool,
         retention_hours: Optional[int],
         enforce_retention_duration: bool,
+        custom_metadata: Optional[Dict[str, str]],
     ) -> List[str]: ...
     def compact_optimize(
         self,

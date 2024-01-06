@@ -94,6 +94,8 @@ pub struct VacuumBuilder {
     dry_run: bool,
     /// Override the source of time
     clock: Option<Arc<dyn Clock>>,
+    /// Additional metadata to be added to commit
+    app_metadata: Option<HashMap<String, serde_json::Value>>,
 }
 
 /// Details for the Vacuum operation including which files were
@@ -136,6 +138,7 @@ impl VacuumBuilder {
             enforce_retention_duration: true,
             dry_run: false,
             clock: None,
+            app_metadata: None,
         }
     }
 
@@ -161,6 +164,15 @@ impl VacuumBuilder {
     #[doc(hidden)]
     pub fn with_clock(mut self, clock: Arc<dyn Clock>) -> Self {
         self.clock = Some(clock);
+        self
+    }
+
+    /// Additional metadata to be added to commit info
+    pub fn with_metadata(
+        mut self,
+        metadata: impl IntoIterator<Item = (String, serde_json::Value)>,
+    ) -> Self {
+        self.app_metadata = Some(HashMap::from_iter(metadata));
         self
     }
 
@@ -240,7 +252,7 @@ impl std::future::IntoFuture for VacuumBuilder {
             }
 
             let metrics = plan
-                .execute(this.log_store.as_ref(), &this.snapshot)
+                .execute(this.log_store.as_ref(), &this.snapshot, this.app_metadata)
                 .await?;
             Ok((
                 DeltaTable::new_with_state(this.log_store, this.snapshot),
@@ -270,6 +282,7 @@ impl VacuumPlan {
         self,
         store: &dyn LogStore,
         snapshot: &DeltaTableState,
+        app_metadata: Option<HashMap<String, serde_json::Value>>,
     ) -> Result<VacuumMetrics, DeltaTableError> {
         if self.files_to_delete.is_empty() {
             return Ok(VacuumMetrics {
@@ -309,7 +322,14 @@ impl VacuumPlan {
 
         let start_actions = vec![Action::CommitInfo(commit_info)];
 
-        commit(store, &start_actions, start_operation, snapshot, None).await?;
+        commit(
+            store,
+            &start_actions,
+            start_operation,
+            snapshot,
+            app_metadata.clone(),
+        )
+        .await?;
         // Finish VACUUM START COMMIT
 
         let locations = futures::stream::iter(self.files_to_delete)
@@ -349,7 +369,7 @@ impl VacuumPlan {
 
         let end_actions = vec![Action::CommitInfo(commit_info)];
 
-        commit(store, &end_actions, end_operation, snapshot, None).await?;
+        commit(store, &end_actions, end_operation, snapshot, app_metadata).await?;
         // Finish VACUUM END COMMIT
 
         Ok(VacuumMetrics {
