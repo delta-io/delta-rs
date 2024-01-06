@@ -626,12 +626,13 @@ impl RawDeltaTable {
     }
 
     // Run the restore command on the Delta Table: restore table to a given version or datetime
-    #[pyo3(signature = (target, *, ignore_missing_files = false, protocol_downgrade_allowed = false))]
+    #[pyo3(signature = (target, *, ignore_missing_files = false, protocol_downgrade_allowed = false, custom_metadata=None))]
     pub fn restore(
         &mut self,
         target: Option<&PyAny>,
         ignore_missing_files: bool,
         protocol_downgrade_allowed: bool,
+        custom_metadata: Option<HashMap<String, String>>,
     ) -> PyResult<String> {
         let mut cmd = RestoreBuilder::new(self._table.log_store(), self._table.state.clone());
         if let Some(val) = target {
@@ -649,6 +650,13 @@ impl RawDeltaTable {
         }
         cmd = cmd.with_ignore_missing_files(ignore_missing_files);
         cmd = cmd.with_protocol_downgrade_allowed(protocol_downgrade_allowed);
+
+        if let Some(metadata) = custom_metadata {
+            let json_metadata: Map<String, Value> =
+                metadata.into_iter().map(|(k, v)| (k, v.into())).collect();
+            cmd = cmd.with_metadata(json_metadata);
+        };
+
         let (table, metrics) = rt()?
             .block_on(cmd.into_future())
             .map_err(PythonError::from)?;
