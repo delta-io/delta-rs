@@ -31,11 +31,18 @@ use super::datafusion_utils::into_expr;
 
 /// Build a constraint to add to a table
 pub struct ConstraintBuilder {
+    /// A snapshot of the table's state
     snapshot: DeltaTableState,
+    /// Name of the constraint
     name: Option<String>,
+    /// Constraint expression
     expr: Option<Expression>,
+    /// Delta object store for handling data files
     log_store: LogStoreRef,
+    /// Datafusion session state relevant for executing the input plan
     state: Option<SessionState>,
+    /// Additional metadata to be added to commit
+    app_metadata: Option<HashMap<String, serde_json::Value>>,
 }
 
 impl ConstraintBuilder {
@@ -47,6 +54,7 @@ impl ConstraintBuilder {
             snapshot,
             log_store,
             state: None,
+            app_metadata: None,
         }
     }
 
@@ -64,6 +72,15 @@ impl ConstraintBuilder {
     /// Specify the datafusion session context
     pub fn with_session_state(mut self, state: SessionState) -> Self {
         self.state = Some(state);
+        self
+    }
+
+    /// Additional metadata to be added to commit info
+    pub fn with_metadata(
+        mut self,
+        metadata: impl IntoIterator<Item = (String, serde_json::Value)>,
+    ) -> Self {
+        self.app_metadata = Some(HashMap::from_iter(metadata));
         self
     }
 }
@@ -195,7 +212,7 @@ impl std::future::IntoFuture for ConstraintBuilder {
                 &actions,
                 operations,
                 &this.snapshot,
-                None,
+                this.app_metadata,
             )
             .await?;
 

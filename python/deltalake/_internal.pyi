@@ -81,6 +81,7 @@ class RawDeltaTable:
     def add_constraints(
         self,
         constraints: Dict[str, str],
+        custom_metadata: Optional[Dict[str, str]],
     ) -> None: ...
     def restore(
         self,
