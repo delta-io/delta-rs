@@ -21,8 +21,8 @@ use rusoto_core::{HttpClient, Region, RusotoError};
 use rusoto_credential::AutoRefreshingProvider;
 use rusoto_dynamodb::{
     AttributeDefinition, AttributeValue, CreateTableError, CreateTableInput, DynamoDb,
-    DynamoDbClient, GetItemInput, KeySchemaElement, PutItemError, PutItemInput, QueryInput,
-    UpdateItemError, UpdateItemInput,
+    DynamoDbClient, GetItemError, GetItemInput, KeySchemaElement, PutItemError, PutItemInput,
+    QueryError, QueryInput, UpdateItemError, UpdateItemInput,
 };
 use rusoto_sts::WebIdentityProvider;
 use url::Url;
@@ -119,32 +119,37 @@ impl std::fmt::Debug for DynamoDbLockClient {
 impl DynamoDbLockClient {
     /// Creates a new DynamoDbLockClient from the supplied storage options.
     pub fn try_new(
-        lock_table_name: Option<&String>,
-        billing_mode: Option<&String>,
+        lock_table_name: Option<String>,
+        billing_mode: Option<String>,
+        max_elapsed_request_time: Option<String>,
         region: Region,
         use_web_identity: bool,
     ) -> Result<Self, DynamoDbConfigError> {
         let dynamodb_client = create_dynamodb_client(region.clone(), use_web_identity)?;
-        let lock_table_name = lock_table_name.map_or_else(
-            || {
-                std::env::var(constants::LOCK_TABLE_KEY_NAME)
-                    .unwrap_or(constants::DEFAULT_LOCK_TABLE_NAME.to_owned())
-            },
-            Clone::clone,
-        );
 
-        let billing_mode: BillingMode = billing_mode.map_or_else(
-            || {
-                std::env::var(constants::BILLING_MODE_KEY_NAME).map_or_else(
-                    |_| Ok(BillingMode::PayPerRequest),
-                    |bm| BillingMode::from_str(&bm),
-                )
-            },
-            |bm| BillingMode::from_str(bm),
-        )?;
+        let lock_table_name = lock_table_name
+            .or_else(|| std::env::var(constants::LOCK_TABLE_KEY_NAME).ok())
+            .unwrap_or(constants::DEFAULT_LOCK_TABLE_NAME.to_owned());
+
+        let billing_mode = billing_mode
+            .or_else(|| std::env::var(constants::BILLING_MODE_KEY_NAME).ok())
+            .map_or_else(
+                || Ok(BillingMode::PayPerRequest),
+                |bm| BillingMode::from_str(&bm),
+            )?;
+
+        let max_elapsed_request_time = max_elapsed_request_time
+            .or_else(|| std::env::var(constants::MAX_ELAPSED_REQUEST_TIME_KEY_NAME).ok())
+            .map_or_else(
+                || Ok(Duration::from_secs(60)),
+                |secs| u64::from_str(&secs).map(Duration::from_secs),
+            )
+            .map_err(|err| DynamoDbConfigError::ParseMaxElapsedRequestTime { source: err })?;
+
         let config = DynamoDbConfig {
             billing_mode,
             lock_table_name,
+            max_elapsed_request_time,
             use_web_identity,
             region,
         };
@@ -156,7 +161,7 @@ impl DynamoDbLockClient {
 
     /// Create the lock table where DynamoDb stores the commit information for all delta tables.
     ///
-    /// Transparently handles the case where that table already exists, so it's to call.
+    /// Transparently handles the case where that table already exists, so it's safe to call.
     /// After `create_table` operation is executed, the table state in DynamoDb is `creating`, and
     /// it's not immediately useable. This method does not wait for the table state to become
     /// `active`, so transient failures might occurr when immediately using the lock client.
@@ -204,6 +209,10 @@ impl DynamoDbLockClient {
         self.config.lock_table_name.clone()
     }
 
+    pub fn get_dynamodb_config(&self) -> &DynamoDbConfig {
+        &self.config
+    }
+
     fn get_primary_key(&self, version: i64, table_path: &str) -> HashMap<String, AttributeValue> {
         maplit::hashmap! {
             constants::ATTR_TABLE_PATH.to_owned()  => string_attr(table_path),
@@ -223,7 +232,19 @@ impl DynamoDbLockClient {
             key: self.get_primary_key(version, table_path),
             ..Default::default()
         };
-        let item = self.dynamodb_client.get_item(input).await?;
+        let item = self
+            .retry(|| async {
+                match self.dynamodb_client.get_item(input.clone()).await {
+                    Ok(x) => Ok(x),
+                    Err(RusotoError::Service(GetItemError::ProvisionedThroughputExceeded(_))) => {
+                        Err(backoff::Error::transient(
+                            LockClientError::ProvisionedThroughputExceeded,
+                        ))
+                    }
+                    Err(err) => Err(backoff::Error::permanent(err.into())),
+                }
+            })
+            .await?;
         item.item.as_ref().map(CommitEntry::try_from).transpose()
     }
 
@@ -240,22 +261,25 @@ impl DynamoDbLockClient {
             item,
             ..Default::default()
         };
-        match self.dynamodb_client.put_item(input).await {
-            Ok(_) => Ok(()),
-            Err(RusotoError::Service(PutItemError::ConditionalCheckFailed(_))) => {
-                Err(LockClientError::VersionAlreadyExists {
-                    table_path: table_path.to_owned(),
-                    version: entry.version,
-                })
+        self.retry(|| async {
+            match self.dynamodb_client.put_item(input.clone()).await {
+                Ok(_) => Ok(()),
+                Err(RusotoError::Service(PutItemError::ProvisionedThroughputExceeded(_))) => Err(
+                    backoff::Error::transient(LockClientError::ProvisionedThroughputExceeded),
+                ),
+                Err(RusotoError::Service(PutItemError::ConditionalCheckFailed(_))) => Err(
+                    backoff::Error::permanent(LockClientError::VersionAlreadyExists {
+                        table_path: table_path.to_owned(),
+                        version: entry.version,
+                    }),
+                ),
+                Err(RusotoError::Service(PutItemError::ResourceNotFound(_))) => Err(
+                    backoff::Error::permanent(LockClientError::LockTableNotFound),
+                ),
+                Err(err) => Err(backoff::Error::permanent(err.into())),
             }
-            Err(RusotoError::Service(PutItemError::ProvisionedThroughputExceeded(_))) => {
-                Err(LockClientError::ProvisionedThroughputExceeded)
-            }
-            Err(RusotoError::Service(PutItemError::ResourceNotFound(_))) => {
-                Err(LockClientError::LockTableNotFound)
-            }
-            Err(err) => Err(err.into()),
-        }
+        })
+        .await
     }
 
     /// Get the latest entry (entry with highest version).
@@ -287,7 +311,18 @@ impl DynamoDbLockClient {
             ),
             ..Default::default()
         };
-        let query_result = self.dynamodb_client.query(input).await?;
+        let query_result = self
+            .retry(|| async {
+                match self.dynamodb_client.query(input.clone()).await {
+                    Ok(result) => Ok(result),
+                    Err(RusotoError::Service(QueryError::ProvisionedThroughputExceeded(_))) => Err(
+                        backoff::Error::transient(LockClientError::ProvisionedThroughputExceeded),
+                    ),
+                    Err(err) => Err(backoff::Error::permanent(err.into())),
+                }
+            })
+            .await?;
+
         query_result
             .items
             .unwrap()
@@ -320,13 +355,34 @@ impl DynamoDbLockClient {
             ..Default::default()
         };
 
-        match self.dynamodb_client.update_item(input).await {
-            Ok(_) => Ok(UpdateLogEntryResult::UpdatePerformed),
-            Err(RusotoError::Service(UpdateItemError::ConditionalCheckFailed(_))) => {
-                Ok(UpdateLogEntryResult::AlreadyCompleted)
+        self.retry(|| async {
+            match self.dynamodb_client.update_item(input.clone()).await {
+                Ok(_) => Ok(UpdateLogEntryResult::UpdatePerformed),
+                Err(RusotoError::Service(UpdateItemError::ConditionalCheckFailed(_))) => {
+                    Ok(UpdateLogEntryResult::AlreadyCompleted)
+                }
+                Err(RusotoError::Service(UpdateItemError::ProvisionedThroughputExceeded(_))) => {
+                    Err(backoff::Error::transient(
+                        LockClientError::ProvisionedThroughputExceeded,
+                    ))
+                }
+                Err(err) => Err(backoff::Error::permanent(err.into())),
             }
-            Err(err) => Err(err)?,
-        }
+        })
+        .await
+    }
+
+    async fn retry<I, E, Fn, Fut>(&self, operation: Fn) -> Result<I, E>
+    where
+        Fn: FnMut() -> Fut,
+        Fut: std::future::Future<Output = Result<I, backoff::Error<E>>>,
+    {
+        let backoff = backoff::ExponentialBackoffBuilder::new()
+            .with_multiplier(2.)
+            .with_max_interval(Duration::from_secs(15))
+            .with_max_elapsed_time(Some(self.config.max_elapsed_request_time))
+            .build();
+        backoff::future::retry(backoff, operation).await
     }
 }
 
@@ -400,7 +456,7 @@ fn create_value_map(
 }
 
 #[derive(Debug, PartialEq)]
-enum BillingMode {
+pub enum BillingMode {
     PayPerRequest,
     Provisioned,
 }
@@ -428,10 +484,11 @@ impl FromStr for BillingMode {
 
 #[derive(Debug, PartialEq)]
 pub struct DynamoDbConfig {
-    billing_mode: BillingMode,
-    lock_table_name: String,
-    use_web_identity: bool,
-    region: Region,
+    pub billing_mode: BillingMode,
+    pub lock_table_name: String,
+    pub max_elapsed_request_time: Duration,
+    pub use_web_identity: bool,
+    pub region: Region,
 }
 
 /// Represents the possible, positive outcomes of calling `DynamoDbClient::try_create_lock_table()`
@@ -452,6 +509,7 @@ pub mod constants {
     pub const DEFAULT_LOCK_TABLE_NAME: &str = "delta_log";
     pub const LOCK_TABLE_KEY_NAME: &str = "DELTA_DYNAMO_TABLE_NAME";
     pub const BILLING_MODE_KEY_NAME: &str = "DELTA_DYNAMO_BILLING_MODE";
+    pub const MAX_ELAPSED_REQUEST_TIME_KEY_NAME: &str = "DELTA_DYNAMO_MAX_ELAPSED_REQUEST_TIME";
 
     pub const ATTR_TABLE_PATH: &str = "tablePath";
     pub const ATTR_FILE_NAME: &str = "fileName";

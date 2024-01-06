@@ -1,5 +1,7 @@
 //! Errors for S3 log store backed by DynamoDb
 
+use std::num::ParseIntError;
+
 use rusoto_core::RusotoError;
 use rusoto_dynamodb::{CreateTableError, GetItemError, PutItemError, QueryError, UpdateItemError};
 
@@ -24,6 +26,13 @@ pub enum DynamoDbConfigError {
     /// Billing mode string invalid
     #[error("Invalid billing mode : {0}, supported values : ['provided', 'pay_per_request']")]
     InvalidBillingMode(String),
+
+    /// Cannot parse max_elapsed_request_time value into u64
+    #[error("Cannot parse max elapsed request time into u64: {source}")]
+    ParseMaxElapsedRequestTime {
+        // config_value: String,
+        source: ParseIntError,
+    },
 }
 
 /// Errors produced by `DynamoDbLockClient`

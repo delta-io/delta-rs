@@ -39,7 +39,7 @@ pub async fn setup_s3_context() -> TestContext {
     config.insert("AWS_ACCESS_KEY_ID".to_owned(), "deltalake".to_owned());
     config.insert("AWS_SECRET_ACCESS_KEY".to_owned(), "weloverust".to_owned());
     config.insert("AWS_S3_LOCKING_PROVIDER".to_owned(), "dynamodb".to_owned());
-    config.insert("DYNAMO_LOCK_TABLE_NAME".to_owned(), lock_table.clone());
+    config.insert(constants::LOCK_TABLE_KEY_NAME.to_owned(), lock_table.clone());
     config.insert("AWS_ALLOW_HTTP".to_owned(), "TRUE".to_string());
 
     TestContext {
