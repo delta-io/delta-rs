@@ -10,9 +10,9 @@ pub async fn test_read_tables(context: &IntegrationContext) -> TestResult {
         .load_table(TestTables::Delta0_8_0SpecialPartitioned)
         .await?;
 
-    read_simple_table(&context).await?;
-    read_simple_table_with_version(&context).await?;
-    read_golden(&context).await?;
+    read_simple_table(context).await?;
+    read_simple_table_with_version(context).await?;
+    read_golden(context).await?;
 
     Ok(())
 }
@@ -26,9 +26,9 @@ pub async fn read_table_paths(
         .load_table_with_name(TestTables::Delta0_8_0SpecialPartitioned, upload_path)
         .await?;
 
-    verify_store(&context, table_root).await?;
+    verify_store(context, table_root).await?;
 
-    read_encoded_table(&context, table_root).await?;
+    read_encoded_table(context, table_root).await?;
 
     Ok(())
 }

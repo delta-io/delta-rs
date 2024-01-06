@@ -12,7 +12,7 @@ use deltalake_core::{DeltaTable, DeltaTableBuilder};
 use crate::utils::*;
 
 pub async fn test_concurrent_writes(context: &IntegrationContext) -> TestResult {
-    let (_table, table_uri) = prepare_table(&context).await?;
+    let (_table, table_uri) = prepare_table(context).await?;
     run_test(|name| Worker::new(&table_uri, name)).await;
     Ok(())
 }

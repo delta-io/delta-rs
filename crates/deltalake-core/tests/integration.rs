@@ -12,7 +12,7 @@ static TEST_PREFIXES: &[&str] = &["my table", "你好/😊"];
 #[tokio::test]
 #[serial]
 async fn test_integration_local() -> TestResult {
-    let context = IntegrationContext::new(Box::new(LocalStorageIntegration::default()))?;
+    let context = IntegrationContext::new(Box::<LocalStorageIntegration>::default())?;
 
     test_read_tables(&context).await?;
 
@@ -26,7 +26,7 @@ async fn test_integration_local() -> TestResult {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[serial]
 async fn test_concurrency_local() -> TestResult {
-    let context = IntegrationContext::new(Box::new(LocalStorageIntegration::default()))?;
+    let context = IntegrationContext::new(Box::<LocalStorageIntegration>::default())?;
 
     test_concurrent_writes(&context).await?;
 

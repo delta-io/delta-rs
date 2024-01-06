@@ -763,7 +763,7 @@ mod tests {
         let decimal_field = DataType::Primitive(PrimitiveType::Decimal(precision, scale));
         assert_eq!(
             <ArrowDataType as TryFrom<&DataType>>::try_from(&decimal_field).unwrap(),
-            ArrowDataType::Decimal128(precision as u8, scale as i8)
+            ArrowDataType::Decimal128(precision, scale)
         );
     }
 

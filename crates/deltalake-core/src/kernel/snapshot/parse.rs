@@ -10,7 +10,7 @@ use crate::{
     DeltaResult,
 };
 
-pub(super) fn extract_adds<'a>(array: &'a dyn ProvidesColumnByName) -> DeltaResult<Vec<Add>> {
+pub(super) fn extract_adds(array: &dyn ProvidesColumnByName) -> DeltaResult<Vec<Add>> {
     let mut result = Vec::new();
 
     if let Some(arr) = extract_and_cast_opt::<StructArray>(array, "add") {

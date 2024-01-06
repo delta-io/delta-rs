@@ -51,7 +51,7 @@ mod local {
     #[tokio::test]
     #[serial]
     async fn test_datafusion_local() -> TestResult {
-        let storage = Box::new(LocalStorageIntegration::default());
+        let storage = Box::<LocalStorageIntegration>::default();
         let context = IntegrationContext::new(storage)?;
         test_datafusion(&context).await
     }
@@ -299,7 +299,7 @@ mod local {
             Precision::Exact((440 + 440) as usize)
         );
 
-        let column_stats = statistics.column_statistics.get(0).unwrap();
+        let column_stats = statistics.column_statistics.first().unwrap();
         assert_eq!(column_stats.null_count, Precision::Exact(0));
         assert_eq!(
             column_stats.max_value,
@@ -339,7 +339,7 @@ mod local {
             statistics.total_byte_size,
             Precision::Exact((400 + 404 + 396) as usize)
         );
-        let column_stats = statistics.column_statistics.get(0).unwrap();
+        let column_stats = statistics.column_statistics.first().unwrap();
         assert_eq!(column_stats.null_count, Precision::Absent);
         assert_eq!(column_stats.max_value, Precision::Absent);
         assert_eq!(column_stats.min_value, Precision::Absent);
@@ -1073,7 +1073,7 @@ mod local {
 async fn test_datafusion(context: &IntegrationContext) -> TestResult {
     context.load_table(TestTables::Simple).await?;
 
-    simple_query(&context).await?;
+    simple_query(context).await?;
 
     Ok(())
 }

@@ -315,7 +315,7 @@ fn read_protocol(batch: &RecordBatch) -> DeltaResult<Option<Protocol>> {
                     match val {
                         Some(val) => val
                             .iter()
-                            .filter_map(|s| s.map(|i| i.try_into().unwrap()))
+                            .filter_map(|s| s.map(|i| i.into()))
                             .collect::<std::collections::HashSet<_>>(),
                         None => std::collections::HashSet::new(),
                     }
@@ -327,7 +327,7 @@ fn read_protocol(batch: &RecordBatch) -> DeltaResult<Option<Protocol>> {
                     match val {
                         Some(val) => val
                             .iter()
-                            .filter_map(|s| s.map(|i| i.try_into().unwrap()))
+                            .filter_map(|s| s.map(|i| i.into()))
                             .collect::<std::collections::HashSet<_>>(),
                         None => std::collections::HashSet::new(),
                     }
@@ -535,7 +535,7 @@ async fn list_log_files(
     {
         if meta.location.commit_version() <= Some(max_version) {
             if meta.location.is_checkpoint_file() {
-                let version = meta.location.commit_version().unwrap_or(0) as i64;
+                let version = meta.location.commit_version().unwrap_or(0);
                 match version.cmp(&max_checkpoint_version) {
                     Ordering::Greater => {
                         max_checkpoint_version = version;
@@ -554,7 +554,7 @@ async fn list_log_files(
     }
 
     commit_files
-        .retain(|f| f.location.commit_version().unwrap_or(0) as i64 > max_checkpoint_version);
+        .retain(|f| f.location.commit_version().unwrap_or(0) > max_checkpoint_version);
     // NOTE this will sort in reverse order
     commit_files.sort_unstable_by(|a, b| b.location.cmp(&a.location));
 
@@ -568,8 +568,8 @@ pub(super) mod tests {
     use super::*;
 
     pub(crate) async fn test_log_segment(context: &IntegrationContext) -> TestResult {
-        read_log_files(&context).await?;
-        read_metadata(&context).await?;
+        read_log_files(context).await?;
+        read_metadata(context).await?;
         Ok(())
     }
 

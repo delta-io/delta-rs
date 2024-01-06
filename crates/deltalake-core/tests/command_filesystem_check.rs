@@ -6,7 +6,7 @@ use serial_test::serial;
 #[tokio::test]
 #[serial]
 async fn test_filesystem_check_local() -> TestResult {
-    let storage = Box::new(LocalStorageIntegration::default());
+    let storage = Box::<LocalStorageIntegration>::default();
     let context = IntegrationContext::new(storage)?;
     test_filesystem_check(&context).await
 }
@@ -53,7 +53,7 @@ async fn test_filesystem_check(context: &IntegrationContext) -> TestResult {
 #[tokio::test]
 #[serial]
 async fn test_filesystem_check_partitioned() -> TestResult {
-    let storage = Box::new(LocalStorageIntegration::default());
+    let storage = Box::<LocalStorageIntegration>::default();
     let context = IntegrationContext::new(storage)?;
     context
         .load_table(TestTables::Delta0_8_0Partitioned)
@@ -87,7 +87,7 @@ async fn test_filesystem_check_partitioned() -> TestResult {
 #[serial]
 async fn test_filesystem_check_fails_for_concurrent_delete() -> TestResult {
     // Validate failure when a non dry only executes on the latest version
-    let storage = Box::new(LocalStorageIntegration::default());
+    let storage = Box::<LocalStorageIntegration>::default();
     let context = IntegrationContext::new(storage)?;
     context.load_table(TestTables::Simple).await?;
     let file = "part-00003-53f42606-6cda-4f13-8d07-599a21197296-c000.snappy.parquet";

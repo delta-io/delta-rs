@@ -161,8 +161,7 @@ impl EagerSnapshot {
         Ok(self
             .files
             .iter()
-            .map(|b| extract_adds(b))
-            .flatten()
+            .flat_map(|b| extract_adds(b))
             .flatten())
     }
 
@@ -191,8 +190,7 @@ impl EagerSnapshot {
             .chain(
                 self.files
                     .iter()
-                    .map(|batch| scanner.process_files_batch(batch, false))
-                    .flatten(),
+                    .flat_map(|batch| scanner.process_files_batch(batch, false)),
             )
             .collect();
 
@@ -215,7 +213,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_snapshots() -> TestResult {
-        let context = IntegrationContext::new(Box::new(LocalStorageIntegration::default()))?;
+        let context = IntegrationContext::new(Box::<LocalStorageIntegration>::default())?;
         context.load_table(TestTables::Checkpoints).await?;
         context.load_table(TestTables::Simple).await?;
         context.load_table(TestTables::WithDvSmall).await?;
@@ -312,7 +310,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_eager_snapshot_advance() -> TestResult {
-        let context = IntegrationContext::new(Box::new(LocalStorageIntegration::default()))?;
+        let context = IntegrationContext::new(Box::<LocalStorageIntegration>::default())?;
         context.load_table(TestTables::Simple).await?;
 
         let store = context
@@ -330,7 +328,7 @@ mod tests {
         let num_files = files.len();
 
         let split = files.split(|(idx, _)| *idx == num_files / 2).collect_vec();
-        assert!(split.len() == 2 && split[0].len() > 0 && split[1].len() > 0);
+        assert!(split.len() == 2 && !split[0].is_empty() && !split[1].is_empty());
         let (first, second) = split.into_iter().next_tuple().unwrap();
 
         let removes = first
@@ -338,7 +336,7 @@ mod tests {
             .map(|(_, add)| {
                 Action::Remove(Remove {
                     path: add.path.clone(),
-                    size: Some(add.size.clone()),
+                    size: Some(add.size),
                     data_change: add.data_change,
                     deletion_timestamp: Some(Utc::now().timestamp_millis()),
                     extended_file_metadata: Some(true),

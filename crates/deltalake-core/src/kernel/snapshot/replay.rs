@@ -98,7 +98,7 @@ fn seen_key(info: &FileInfo<'_>) -> String {
             format!("{}::{}{}", info.path, dv.storage_type, dv.path_or_inline_dv)
         }
     } else {
-        format!("{}", info.path)
+        info.path.to_string()
     }
 }
 
@@ -120,9 +120,9 @@ impl LogReplayScanner {
 
     /// Takes a record batch of add and protentially remove actions and returns a
     /// filtered batch of actions that contains only active rows.
-    pub(super) fn process_files_batch<'a>(
+    pub(super) fn process_files_batch(
         &mut self,
-        batch: &'a RecordBatch,
+        batch: &RecordBatch,
         is_log_batch: bool,
     ) -> DeltaResult<RecordBatch> {
         let add_col = extract_and_cast::<StructArray>(batch, "add")?;
@@ -185,7 +185,7 @@ impl LogReplayScanner {
             .fields()
             .iter()
             .enumerate()
-            .filter_map(|(idx, field)| (field.name() == "add").then(|| idx))
+            .filter_map(|(idx, field)| (field.name() == "add").then_some(idx))
             .collect::<Vec<_>>();
         let filtered = filtered.project(&projection)?;
 
@@ -193,7 +193,7 @@ impl LogReplayScanner {
     }
 }
 
-fn read_file_info<'a>(arr: &'a dyn ProvidesColumnByName) -> DeltaResult<Vec<Option<FileInfo<'a>>>> {
+fn read_file_info(arr: &dyn ProvidesColumnByName) -> DeltaResult<Vec<Option<FileInfo<'_>>>> {
     let path = extract_and_cast::<StringArray>(arr, "path")?;
     let mut adds = Vec::with_capacity(path.len());
 

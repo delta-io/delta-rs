@@ -139,12 +139,12 @@ fn column_as_list<'a>(
 }
 
 #[inline]
-pub(super) fn read_str<'a>(arr: &'a StringArray, idx: usize) -> DeltaResult<&'a str> {
+pub(super) fn read_str(arr: &StringArray, idx: usize) -> DeltaResult<&str> {
     read_str_opt(arr, idx).ok_or(DeltaTableError::Generic("missing value".into()))
 }
 
 #[inline]
-pub(super) fn read_str_opt<'a>(arr: &'a StringArray, idx: usize) -> Option<&'a str> {
+pub(super) fn read_str_opt(arr: &StringArray, idx: usize) -> Option<&str> {
     arr.is_valid(idx).then(|| arr.value(idx))
 }
 
