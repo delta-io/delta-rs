@@ -971,6 +971,7 @@ class DeltaTable:
         *,
         ignore_missing_files: bool = False,
         protocol_downgrade_allowed: bool = False,
+        custom_metadata: Optional[Dict[str, str]] = None,
     ) -> Dict[str, Any]:
         """
         Run the Restore command on the Delta Table: restore table to a given version or datetime.
@@ -979,6 +980,7 @@ class DeltaTable:
             target: the expected version will restore, which represented by int, date str or datetime.
             ignore_missing_files: whether the operation carry on when some data files missing.
             protocol_downgrade_allowed: whether the operation when protocol version upgraded.
+            custom_metadata: custom metadata that will be added to the transaction commit.
 
         Returns:
             the metrics from restore.
@@ -988,12 +990,14 @@ class DeltaTable:
                 target.isoformat(),
                 ignore_missing_files=ignore_missing_files,
                 protocol_downgrade_allowed=protocol_downgrade_allowed,
+                custom_metadata=custom_metadata,
             )
         else:
             metrics = self._table.restore(
                 target,
                 ignore_missing_files=ignore_missing_files,
                 protocol_downgrade_allowed=protocol_downgrade_allowed,
+                custom_metadata=custom_metadata,
             )
         return json.loads(metrics)
 
