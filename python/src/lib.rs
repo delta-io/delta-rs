@@ -684,6 +684,7 @@ impl RawDeltaTable {
     }
 
     pub fn update_incremental(&mut self) -> PyResult<()> {
+        #[allow(deprecated)]
         Ok(rt()?
             .block_on(self._table.update_incremental(None))
             .map_err(PythonError::from)?)

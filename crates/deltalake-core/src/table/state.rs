@@ -15,6 +15,7 @@ use crate::errors::DeltaTableError;
 use crate::kernel::{Action, Add, CommitInfo, DataType, DomainMetadata, Remove, StructType};
 use crate::kernel::{Metadata, Protocol};
 use crate::partitions::{DeltaTablePartition, PartitionFilter};
+use crate::protocol::DeltaOperation;
 use crate::protocol::ProtocolError;
 use crate::storage::commit_uri_from_version;
 use crate::table::DeltaTableMetaData;
@@ -83,6 +84,7 @@ impl DeltaTableState {
     }
 
     /// Construct a delta table state object from a list of actions
+    #[cfg(test)]
     pub fn from_actions(actions: Vec<Action>, version: i64) -> Result<Self, ProtocolError> {
         let mut new_state = DeltaTableState::with_version(version);
         for action in actions {
@@ -223,10 +225,17 @@ impl DeltaTableState {
     /// to the version the merged state represents.
     pub fn merge(
         &mut self,
-        mut new_state: DeltaTableState,
+        actions: Vec<Action>,
+        _operation: &DeltaOperation,
+        version: i64,
         require_tombstones: bool,
         require_files: bool,
-    ) {
+    ) -> Result<(), ProtocolError> {
+        let mut new_state = DeltaTableState::with_version(version);
+        for action in actions {
+            new_state.process_action(action, true, true)?;
+        }
+
         if !new_state.tombstones.is_empty() {
             self.files
                 .retain(|a| !new_state.tombstones.contains(a.path.as_str()));
@@ -276,6 +285,8 @@ impl DeltaTableState {
         if self.version < new_state.version {
             self.version = new_state.version
         }
+
+        Ok(())
     }
 
     /// Process given action by updating current state.

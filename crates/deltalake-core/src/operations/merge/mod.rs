@@ -913,7 +913,7 @@ async fn execute(
     match_operations: Vec<MergeOperationConfig>,
     not_match_target_operations: Vec<MergeOperationConfig>,
     not_match_source_operations: Vec<MergeOperationConfig>,
-) -> DeltaResult<((Vec<Action>, i64), MergeMetrics)> {
+) -> DeltaResult<((Vec<Action>, i64, Option<DeltaOperation>), MergeMetrics)> {
     let mut metrics = MergeMetrics::default();
     let exec_start = Instant::now();
 
@@ -1391,24 +1391,24 @@ async fn execute(
     }
 
     // Do not make a commit when there are zero updates to the state
+    let operation = DeltaOperation::Merge {
+        predicate: Some(fmt_expr_to_sql(&predicate)?),
+        matched_predicates: match_operations,
+        not_matched_predicates: not_match_target_operations,
+        not_matched_by_source_predicates: not_match_source_operations,
+    };
     if !actions.is_empty() {
-        let operation = DeltaOperation::Merge {
-            predicate: Some(fmt_expr_to_sql(&predicate)?),
-            matched_predicates: match_operations,
-            not_matched_predicates: not_match_target_operations,
-            not_matched_by_source_predicates: not_match_source_operations,
-        };
         version = commit(
             log_store.as_ref(),
             &actions,
-            operation,
+            operation.clone(),
             snapshot,
             Some(app_metadata),
         )
         .await?;
     }
-
-    Ok(((actions, version), metrics))
+    let op = (!actions.is_empty()).then(|| operation);
+    Ok(((actions, version, op), metrics))
 }
 
 // TODO: Abstract MergePlanner into DeltaPlanner to support other delta operations in the future.
@@ -1452,7 +1452,7 @@ impl std::future::IntoFuture for MergeBuilder {
                 session.state()
             });
 
-            let ((actions, version), metrics) = execute(
+            let ((actions, version, operation), metrics) = execute(
                 this.predicate,
                 this.source,
                 this.log_store.clone(),
@@ -1469,8 +1469,9 @@ impl std::future::IntoFuture for MergeBuilder {
             )
             .await?;
 
-            this.snapshot
-                .merge(DeltaTableState::from_actions(actions, version)?, true, true);
+            if let Some(op) = &operation {
+                this.snapshot.merge(actions, op, version, true, true)?;
+            }
             let table = DeltaTable::new_with_state(this.log_store, this.snapshot);
 
             Ok((table, metrics))

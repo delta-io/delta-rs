@@ -28,7 +28,8 @@ use crate::logstore::LogStoreRef;
 use crate::logstore::{self, LogStoreConfig};
 use crate::partitions::PartitionFilter;
 use crate::protocol::{
-    find_latest_check_point_for_version, get_last_checkpoint, ProtocolError, Stats,
+    find_latest_check_point_for_version, get_last_checkpoint, DeltaOperation, ProtocolError,
+    SaveMode, Stats,
 };
 use crate::storage::{commit_uri_from_version, ObjectStoreRef};
 
@@ -541,6 +542,7 @@ impl DeltaTable {
 
     /// Updates the DeltaTable to the latest version by incrementally applying newer versions.
     /// It assumes that the table is already updated to the current version `self.version`.
+    #[deprecated(since = "0.17.0")]
     pub async fn update_incremental(
         &mut self,
         max_version: Option<i64>,
@@ -581,9 +583,19 @@ impl DeltaTable {
             };
 
             debug!("merging table state with version: {new_version}");
-            let s = DeltaTableState::from_actions(actions, new_version)?;
-            self.state
-                .merge(s, self.config.require_tombstones, self.config.require_files);
+            // NOTE just a dummy operation for API transitioning.
+            let op = DeltaOperation::Write {
+                mode: SaveMode::Append,
+                partition_by: None,
+                predicate: None,
+            };
+            self.state.merge(
+                actions,
+                &op,
+                new_version,
+                self.config.require_tombstones,
+                self.config.require_files,
+            )?;
             if self.version() == max_version {
                 return Ok(());
             }

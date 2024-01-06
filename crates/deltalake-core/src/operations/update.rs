@@ -172,7 +172,7 @@ async fn execute(
     writer_properties: Option<WriterProperties>,
     app_metadata: Option<HashMap<String, Value>>,
     safe_cast: bool,
-) -> DeltaResult<((Vec<Action>, i64), UpdateMetrics)> {
+) -> DeltaResult<((Vec<Action>, i64, Option<DeltaOperation>), UpdateMetrics)> {
     // Validate the predicate and update expressions.
     //
     // If the predicate is not set, then all files need to be updated.
@@ -188,7 +188,7 @@ async fn execute(
     let mut version = snapshot.version();
 
     if updates.is_empty() {
-        return Ok(((Vec::new(), version), metrics));
+        return Ok(((Vec::new(), version, None), metrics));
     }
 
     let predicate = match predicate {
@@ -217,7 +217,7 @@ async fn execute(
     metrics.scan_time_ms = Instant::now().duration_since(scan_start).as_millis() as u64;
 
     if candidates.candidates.is_empty() {
-        return Ok(((Vec::new(), version), metrics));
+        return Ok(((Vec::new(), version, None), metrics));
     }
 
     let predicate = predicate.unwrap_or(Expr::Literal(ScalarValue::Boolean(Some(true))));
@@ -423,13 +423,13 @@ async fn execute(
     version = commit(
         log_store.as_ref(),
         &actions,
-        operation,
+        operation.clone(),
         snapshot,
         Some(app_metadata),
     )
     .await?;
 
-    Ok(((actions, version), metrics))
+    Ok(((actions, version, Some(operation)), metrics))
 }
 
 impl std::future::IntoFuture for UpdateBuilder {
@@ -453,7 +453,7 @@ impl std::future::IntoFuture for UpdateBuilder {
                 session.state()
             });
 
-            let ((actions, version), metrics) = execute(
+            let ((actions, version, operation), metrics) = execute(
                 this.predicate,
                 this.updates,
                 this.log_store.clone(),
@@ -465,10 +465,11 @@ impl std::future::IntoFuture for UpdateBuilder {
             )
             .await?;
 
-            this.snapshot
-                .merge(DeltaTableState::from_actions(actions, version)?, true, true);
-            let table = DeltaTable::new_with_state(this.log_store, this.snapshot);
+            if let Some(op) = &operation {
+                this.snapshot.merge(actions, op, version, true, true)?;
+            }
 
+            let table = DeltaTable::new_with_state(this.log_store, this.snapshot);
             Ok((table, metrics))
         })
     }

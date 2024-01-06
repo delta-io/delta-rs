@@ -538,18 +538,19 @@ impl std::future::IntoFuture for WriteBuilder {
                 }
             };
 
+            let operation = DeltaOperation::Write {
+                mode: this.mode,
+                partition_by: if !partition_columns.is_empty() {
+                    Some(partition_columns)
+                } else {
+                    None
+                },
+                predicate: this.predicate,
+            };
             let version = commit(
                 this.log_store.as_ref(),
                 &actions,
-                DeltaOperation::Write {
-                    mode: this.mode,
-                    partition_by: if !partition_columns.is_empty() {
-                        Some(partition_columns)
-                    } else {
-                        None
-                    },
-                    predicate: this.predicate,
-                },
+                operation.clone(),
                 &this.snapshot,
                 this.app_metadata,
             )
@@ -559,7 +560,7 @@ impl std::future::IntoFuture for WriteBuilder {
             // created actions, it may be safe to assume, that we want to include all actions.
             // then again, having only some tombstones may be misleading.
             this.snapshot
-                .merge(DeltaTableState::from_actions(actions, version)?, true, true);
+                .merge(actions, &operation, version, true, true)?;
 
             // TODO should we build checkpoints based on config?
 

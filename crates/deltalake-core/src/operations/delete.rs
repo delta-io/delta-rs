@@ -189,7 +189,7 @@ async fn execute(
     state: SessionState,
     writer_properties: Option<WriterProperties>,
     app_metadata: Option<HashMap<String, Value>>,
-) -> DeltaResult<((Vec<Action>, i64), DeleteMetrics)> {
+) -> DeltaResult<((Vec<Action>, i64, Option<DeltaOperation>), DeleteMetrics)> {
     let exec_start = Instant::now();
     let mut metrics = DeleteMetrics::default();
 
@@ -257,21 +257,21 @@ async fn execute(
     }
 
     // Do not make a commit when there are zero updates to the state
+    let operation = DeltaOperation::Delete {
+        predicate: Some(fmt_expr_to_sql(&predicate)?),
+    };
     if !actions.is_empty() {
-        let operation = DeltaOperation::Delete {
-            predicate: Some(fmt_expr_to_sql(&predicate)?),
-        };
         version = commit(
             log_store.as_ref(),
             &actions,
-            operation,
+            operation.clone(),
             snapshot,
             Some(app_metadata),
         )
         .await?;
     }
-
-    Ok(((actions, version), metrics))
+    let op = (!actions.is_empty()).then(|| operation);
+    Ok(((actions, version, op), metrics))
 }
 
 impl std::future::IntoFuture for DeleteBuilder {
@@ -305,7 +305,7 @@ impl std::future::IntoFuture for DeleteBuilder {
                 None => None,
             };
 
-            let ((actions, version), metrics) = execute(
+            let ((actions, version, operation), metrics) = execute(
                 predicate,
                 this.log_store.clone(),
                 &this.snapshot,
@@ -315,10 +315,11 @@ impl std::future::IntoFuture for DeleteBuilder {
             )
             .await?;
 
-            this.snapshot
-                .merge(DeltaTableState::from_actions(actions, version)?, true, true);
-            let table = DeltaTable::new_with_state(this.log_store, this.snapshot);
+            if let Some(op) = &operation {
+                this.snapshot.merge(actions, op, version, true, true)?;
+            }
 
+            let table = DeltaTable::new_with_state(this.log_store, this.snapshot);
             Ok((table, metrics))
         })
     }

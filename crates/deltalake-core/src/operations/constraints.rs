@@ -216,14 +216,14 @@ impl std::future::IntoFuture for ConstraintBuilder {
             let version = commit(
                 this.log_store.as_ref(),
                 &actions,
-                operations,
+                operations.clone(),
                 &this.snapshot,
                 None,
             )
             .await?;
 
             this.snapshot
-                .merge(DeltaTableState::from_actions(actions, version)?, true, true);
+                .merge(actions, &operations, version, true, true)?;
             Ok(DeltaTable::new_with_state(this.log_store, this.snapshot))
         })
     }
