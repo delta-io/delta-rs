@@ -338,6 +338,10 @@ mod tests {
     use arrow::array::Int32Array;
     use arrow::datatypes::{Field, Schema};
     use arrow::record_batch::RecordBatch;
+    use arrow_array::ArrayRef;
+    use arrow_array::StructArray;
+    use arrow_buffer::NullBuffer;
+    use arrow_schema::Fields;
     use datafusion::assert_batches_sorted_eq;
     use datafusion::prelude::*;
     use serde_json::json;
@@ -723,6 +727,58 @@ mod tests {
             "| A  | 10    | 2021-02-02 |",
             "| B  | 20    | 2021-02-03 |",
             "+----+-------+------------+",
+        ];
+        let actual = get_data(&table).await;
+        assert_batches_sorted_eq!(&expected, &actual);
+    }
+
+    #[tokio::test]
+    async fn test_delete_nested() {
+        use arrow_schema::{DataType, Field, Schema as ArrowSchema};
+        // Test Delete with a predicate that references struct fields
+        // See #2019
+        let schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("id", DataType::Utf8, true),
+            Field::new(
+                "props",
+                DataType::Struct(Fields::from(vec![Field::new("a", DataType::Utf8, true)])),
+                true,
+            ),
+        ]));
+
+        let struct_array = StructArray::new(
+            Fields::from(vec![Field::new("a", DataType::Utf8, true)]),
+            vec![Arc::new(arrow::array::StringArray::from(vec![
+                Some("2021-02-01"),
+                Some("2021-02-02"),
+                None,
+                None,
+            ])) as ArrayRef],
+            Some(NullBuffer::from_iter(vec![true, true, true, false])),
+        );
+
+        let data = vec![
+            Arc::new(arrow::array::StringArray::from(vec!["A", "B", "C", "D"])) as ArrayRef,
+            Arc::new(struct_array) as ArrayRef,
+        ];
+        let batches = vec![RecordBatch::try_new(schema.clone(), data).unwrap()];
+
+        let table = DeltaOps::new_in_memory().write(batches).await.unwrap();
+
+        let (table, _metrics) = DeltaOps(table)
+            .delete()
+            .with_predicate("props['a'] = '2021-02-02'")
+            .await
+            .unwrap();
+
+        let expected = [
+            "+----+-----------------+",
+            "| id | props           |",
+            "+----+-----------------+",
+            "| A  | {a: 2021-02-01} |",
+            "| C  | {a: }           |",
+            "| D  |                 |",
+            "+----+-----------------+",
         ];
         let actual = get_data(&table).await;
         assert_batches_sorted_eq!(&expected, &actual);
