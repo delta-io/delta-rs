@@ -14,9 +14,9 @@ use object_store::ObjectStore;
 use serde_json::Value;
 
 use self::log_segment::LogSegment;
-use self::parse::extract_adds;
+use self::parse::{extract_adds, extract_removes};
 use self::replay::{LogReplayScanner, ReplayStream};
-use super::{Action, Add, CommitInfo, Metadata, Protocol};
+use super::{Action, Add, CommitInfo, Metadata, Protocol, Remove};
 use crate::kernel::StructType;
 use crate::protocol::DeltaOperation;
 use crate::table::config::TableConfig;
@@ -129,6 +129,27 @@ impl Snapshot {
             })
             .buffered(self.config.log_buffer_size)
             .boxed()
+    }
+
+    pub(crate) fn tombstones(&self) -> DeltaResult<BoxStream<'_, DeltaResult<Vec<Remove>>>> {
+        let log_stream = self.log_segment.commit_stream(
+            self.store.clone(),
+            &log_segment::TOMBSTONE_SCHEMA,
+            &self.config,
+        )?;
+        let checkpoint_stream = self.log_segment.checkpoint_stream(
+            self.store.clone(),
+            &log_segment::TOMBSTONE_SCHEMA,
+            &self.config,
+        );
+
+        Ok(log_stream
+            .chain(checkpoint_stream)
+            .map(|batch| match batch {
+                Ok(batch) => extract_removes(&batch),
+                Err(e) => Err(e),
+            })
+            .boxed())
     }
 }
 
@@ -263,6 +284,10 @@ mod tests {
         let infos = snapshot.commit_infos().try_collect::<Vec<_>>().await?;
         let infos = infos.into_iter().flatten().collect_vec();
         assert_eq!(infos.len(), 5);
+
+        let tombstones = snapshot.tombstones()?.try_collect::<Vec<_>>().await?;
+        let tombstones = tombstones.into_iter().flatten().collect_vec();
+        assert_eq!(tombstones.len(), 31);
 
         let batches = snapshot.files()?.try_collect::<Vec<_>>().await?;
         let expected = [
