@@ -1729,16 +1729,17 @@ class TableAlterer:
     def __init__(self, table: DeltaTable) -> None:
         self.table = table
 
-    def add_constraint(self, 
-                       constraints: Dict[str, str],
-                       custom_metadata: Optional[Dict[str, str]] = None,
-                       ) -> None:
+    def add_constraint(
+        self,
+        constraints: Dict[str, str],
+        custom_metadata: Optional[Dict[str, str]] = None,
+    ) -> None:
         """
         Add constraints to the table. Limited to `single constraint` at once.
 
         Args:
             constraints: mapping of constraint name to SQL-expression to evaluate on write
-            custom_metadata: custom metadata that will be added to the transaction commit. 
+            custom_metadata: custom metadata that will be added to the transaction commit.
         Example:
             ```python
             from deltalake import DeltaTable
