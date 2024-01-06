@@ -16,8 +16,8 @@ use super::{
 pub mod schemas;
 
 const MAP_ROOT_DEFAULT: &str = "entries";
-const MAP_KEY_DEFAULT: &str = "key";
-const MAP_VALUE_DEFAULT: &str = "value";
+const MAP_KEY_DEFAULT: &str = "keys";
+const MAP_VALUE_DEFAULT: &str = "values";
 const LIST_ROOT_DEFAULT: &str = "element";
 
 impl TryFrom<ActionType> for ArrowField {
@@ -273,11 +273,11 @@ macro_rules! arrow_map {
             stringify!($fieldname),
             ArrowDataType::Map(
                 Arc::new(ArrowField::new(
-                    "entries",
+                    MAP_ROOT_DEFAULT,
                     ArrowDataType::Struct(
                         vec![
-                            ArrowField::new("key", ArrowDataType::Utf8, false),
-                            ArrowField::new("value", ArrowDataType::Utf8, true),
+                            ArrowField::new(MAP_KEY_DEFAULT, ArrowDataType::Utf8, false),
+                            ArrowField::new(MAP_VALUE_DEFAULT, ArrowDataType::Utf8, true),
                         ]
                         .into(),
                     ),
@@ -293,11 +293,11 @@ macro_rules! arrow_map {
             stringify!($fieldname),
             ArrowDataType::Map(
                 Arc::new(ArrowField::new(
-                    "entries",
+                    MAP_ROOT_DEFAULT,
                     ArrowDataType::Struct(
                         vec![
-                            ArrowField::new("key", ArrowDataType::Utf8, false),
-                            ArrowField::new("value", ArrowDataType::Utf8, false),
+                            ArrowField::new(MAP_KEY_DEFAULT, ArrowDataType::Utf8, false),
+                            ArrowField::new(MAP_VALUE_DEFAULT, ArrowDataType::Utf8, false),
                         ]
                         .into(),
                     ),

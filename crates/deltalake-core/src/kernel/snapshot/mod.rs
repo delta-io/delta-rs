@@ -1,20 +1,26 @@
+//! Delta table snapshots
+//!
+//! A snapshot represents the state of a Delta Table at a given version.
+
 use std::sync::Arc;
 
 use arrow_array::RecordBatch;
 use futures::stream::BoxStream;
+use futures::TryStreamExt;
 use object_store::path::Path;
 use object_store::ObjectStore;
 
 use self::log_segment::LogSegment;
+use self::parse::extract_adds;
 use self::replay::ReplayStream;
+use super::{Add, Metadata, Protocol};
 use crate::kernel::{actions::ActionType, StructType};
 use crate::table::config::TableConfig;
 use crate::{DeltaResult, DeltaTableConfig};
 
-use super::{Metadata, Protocol};
-
 mod extract;
 mod log_segment;
+mod parse;
 mod replay;
 
 /// A snapshot of a Delta table
@@ -104,6 +110,66 @@ impl Snapshot {
     }
 }
 
+/// A snapshot of a Delta table that has been eagerly loaded into memory.
+pub struct EagerSnapshot {
+    snapshot: Snapshot,
+    files: Vec<RecordBatch>,
+}
+
+impl EagerSnapshot {
+    /// Create a new [`EagerSnapshot`] instance
+    pub async fn try_new(
+        table_root: &Path,
+        store: Arc<dyn ObjectStore>,
+        config: DeltaTableConfig,
+        version: Option<i64>,
+    ) -> DeltaResult<Self> {
+        let snapshot = Snapshot::try_new(table_root, store, config, version).await?;
+        let files = snapshot.files()?.try_collect().await?;
+        Ok(Self { snapshot, files })
+    }
+
+    /// Get the table version of the snapshot
+    pub fn version(&self) -> i64 {
+        self.snapshot.version()
+    }
+
+    /// Get the table schema of the snapshot
+    pub fn schema(&self) -> &StructType {
+        self.snapshot.schema()
+    }
+
+    /// Get the table metadata of the snapshot
+    pub fn metadata(&self) -> &Metadata {
+        self.snapshot.metadata()
+    }
+
+    /// Get the table protocol of the snapshot
+    pub fn protocol(&self) -> &Protocol {
+        self.snapshot.protocol()
+    }
+
+    /// Get the table root of the snapshot
+    pub fn table_root(&self) -> &Path {
+        self.snapshot.table_root()
+    }
+
+    /// Well known table configuration
+    pub fn table_config(&self) -> TableConfig<'_> {
+        self.snapshot.table_config()
+    }
+
+    /// Get the files in the snapshot
+    pub fn files(&self) -> DeltaResult<impl Iterator<Item = Add> + '_> {
+        Ok(self
+            .files
+            .iter()
+            .map(|b| extract_adds(b))
+            .flatten()
+            .flatten())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use deltalake_test::utils::*;
@@ -159,6 +225,45 @@ mod tests {
             let batches = snapshot.files()?.try_collect::<Vec<_>>().await?;
             let num_files = batches.iter().map(|b| b.num_rows() as i64).sum::<i64>();
             assert_eq!(num_files, version);
+        }
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_eager_snapshot_files() -> TestResult {
+        let context = IntegrationContext::new(Box::new(LocalStorageIntegration::default()))?;
+        context.load_table(TestTables::Simple).await?;
+        context.load_table(TestTables::Checkpoints).await?;
+
+        let store = context
+            .table_builder(TestTables::Simple)
+            .build_storage()?
+            .object_store();
+
+        let snapshot =
+            EagerSnapshot::try_new(&Path::default(), store.clone(), Default::default(), None)
+                .await?;
+
+        let schema_string = r#"{"type":"struct","fields":[{"name":"id","type":"long","nullable":true,"metadata":{}}]}"#;
+        let expected: StructType = serde_json::from_str(schema_string)?;
+        assert_eq!(snapshot.schema(), &expected);
+
+        let store = context
+            .table_builder(TestTables::Checkpoints)
+            .build_storage()?
+            .object_store();
+
+        for version in 0..=12 {
+            let snapshot = EagerSnapshot::try_new(
+                &Path::default(),
+                store.clone(),
+                Default::default(),
+                Some(version),
+            )
+            .await?;
+            let batches = snapshot.files()?.collect::<Vec<_>>();
+            assert_eq!(batches.len(), version as usize);
         }
 
         Ok(())
