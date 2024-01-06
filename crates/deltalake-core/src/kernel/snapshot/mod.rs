@@ -175,14 +175,26 @@ mod tests {
     use deltalake_test::utils::*;
     use futures::TryStreamExt;
 
+    use super::log_segment::tests::test_log_segment;
+    use super::replay::tests::test_log_replay;
     use super::*;
 
     #[tokio::test]
-    async fn test_snapshot_files() -> TestResult {
+    async fn test_snapshots() -> TestResult {
         let context = IntegrationContext::new(Box::new(LocalStorageIntegration::default()))?;
-        context.load_table(TestTables::Simple).await?;
         context.load_table(TestTables::Checkpoints).await?;
+        context.load_table(TestTables::Simple).await?;
+        context.load_table(TestTables::WithDvSmall).await?;
 
+        test_log_segment(&context).await?;
+        test_log_replay(&context).await?;
+        test_snapshot(&context).await?;
+        test_eager_snapshot(&context).await?;
+
+        Ok(())
+    }
+
+    async fn test_snapshot(context: &IntegrationContext) -> TestResult {
         let store = context
             .table_builder(TestTables::Simple)
             .build_storage()?
@@ -230,12 +242,7 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
-    async fn test_eager_snapshot_files() -> TestResult {
-        let context = IntegrationContext::new(Box::new(LocalStorageIntegration::default()))?;
-        context.load_table(TestTables::Simple).await?;
-        context.load_table(TestTables::Checkpoints).await?;
-
+    async fn test_eager_snapshot(context: &IntegrationContext) -> TestResult {
         let store = context
             .table_builder(TestTables::Simple)
             .build_storage()?

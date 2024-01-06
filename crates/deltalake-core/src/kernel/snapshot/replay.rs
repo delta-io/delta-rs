@@ -248,67 +248,76 @@ fn read_file_info<'a>(arr: &'a dyn ProvidesColumnByName) -> DeltaResult<Vec<Opti
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use std::sync::Arc;
 
-    use arrow_cast::pretty::print_batches;
+    use arrow_select::concat::concat_batches;
     use deltalake_test::utils::*;
-    use futures::StreamExt;
+    use futures::TryStreamExt;
     use object_store::path::Path;
 
     use super::super::log_segment::LogSegment;
     use super::*;
     use crate::kernel::{actions::ActionType, StructType};
 
-    #[tokio::test]
-    async fn test_read_log_stram() -> TestResult {
-        let context = IntegrationContext::new(Box::new(LocalStorageIntegration::default()))?;
-        context.load_table(TestTables::Checkpoints).await?;
-        context.load_table(TestTables::Simple).await?;
-        let read_schema = Arc::new(StructType::new(vec![
+    pub(crate) async fn test_log_replay(context: &IntegrationContext) -> TestResult {
+        let log_schema = Arc::new(StructType::new(vec![
             ActionType::Add.schema_field().clone(),
             ActionType::Remove.schema_field().clone(),
         ]));
+        let commit_schema = Arc::new(StructType::new(vec![ActionType::Add
+            .schema_field()
+            .clone()]));
 
-        // let store = context
-        //     .table_builder(TestTables::Checkpoints)
-        //     .build_storage()?
-        //     .object_store();
+        let store = context
+            .table_builder(TestTables::Checkpoints)
+            .build_storage()?
+            .object_store();
 
-        // let segment = LogSegment::try_new(&Path::default(), Some(9), store.as_ref()).await?;
-        // let mut batches = segment.log_stream(store, &read_schema, &Default::default())?;
-        // let mut scanner = LogReplayScanner::new();
-        // while let Some(batch) = batches.next().await {
-        //     let batch = batch?;
-        //     print_batches(&[batch.clone()])?;
-        //     let filtered = scanner.process_batch(&batch, true)?;
-        //     print_batches(&[filtered])?;
-        // }
+        let segment = LogSegment::try_new(&Path::default(), Some(9), store.as_ref()).await?;
+        let mut scanner = LogReplayScanner::new();
 
-        // let segment = LogSegment::try_new(&Path::default(), Some(9), store.as_ref()).await?;
-        // let mut batches = segment.log_stream(store, &read_schema, &Default::default())?;
-        // let mut scanner = LogReplayScanner::new();
-        // while let Some(batch) = batches.next().await {
-        //     let batch = batch?;
-        //     print_batches(&[batch.clone()])?;
-        //     let filtered = scanner.process_batch(&batch, true)?;
-        //     print_batches(&[filtered])?;
-        // }
+        let batches = segment
+            .commit_stream(store.clone(), &log_schema, &Default::default())?
+            .try_collect::<Vec<_>>()
+            .await?;
+        let batch = concat_batches(&batches[0].schema(), &batches)?;
+        assert_eq!(batch.schema().fields().len(), 2);
+        let filtered = scanner.process_files_batch(&batch, true)?;
+        assert_eq!(filtered.schema().fields().len(), 1);
+
+        let batches = segment
+            .checkpoint_stream(store, &commit_schema, &Default::default())
+            .try_collect::<Vec<_>>()
+            .await?;
+        let batch = concat_batches(&batches[0].schema(), &batches)?;
+        // TODO enable once we do selection pushdown in parquet read
+        // assert_eq!(batch.schema().fields().len(), 1);
+        let filtered = scanner.process_files_batch(&batch, true)?;
+        assert_eq!(filtered.schema().fields().len(), 1);
 
         let store = context
             .table_builder(TestTables::Simple)
             .build_storage()?
             .object_store();
-
         let segment = LogSegment::try_new(&Path::default(), None, store.as_ref()).await?;
-        let mut batches = segment.commit_stream(store, &read_schema, &Default::default())?;
-        let mut scanner = LogReplayScanner::new();
-        while let Some(batch) = batches.next().await {
-            let batch = batch?;
-            print_batches(&[batch.clone()])?;
-            let filtered = scanner.process_files_batch(&batch, true)?;
-            print_batches(&[filtered])?;
-        }
+        let batches = segment
+            .commit_stream(store.clone(), &log_schema, &Default::default())?
+            .try_collect::<Vec<_>>()
+            .await?;
+
+        let batch = concat_batches(&batches[0].schema(), &batches)?;
+        let arr_add = batch.column_by_name("add").unwrap();
+        let add_count = arr_add.len() - arr_add.null_count();
+        let arr_rm = batch.column_by_name("remove").unwrap();
+        let rm_count = arr_rm.len() - arr_rm.null_count();
+
+        let filtered = scanner.process_files_batch(&batch, true)?;
+        let arr_add = filtered.column_by_name("add").unwrap();
+        let add_count_after = arr_add.len() - arr_add.null_count();
+        assert_eq!(arr_add.null_count(), 0);
+        assert!(add_count_after < add_count);
+        assert_eq!(add_count_after, add_count - rm_count);
 
         Ok(())
     }

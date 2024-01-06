@@ -476,17 +476,18 @@ async fn list_log_files(
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use deltalake_test::utils::*;
 
     use super::*;
 
-    #[tokio::test]
-    async fn test_read_log_files() -> TestResult {
-        let context = IntegrationContext::new(Box::new(LocalStorageIntegration::default()))?;
-        context.load_table(TestTables::Checkpoints).await?;
-        context.load_table(TestTables::Simple).await?;
+    pub(crate) async fn test_log_segment(context: &IntegrationContext) -> TestResult {
+        read_log_files(&context).await?;
+        read_metadata(&context).await?;
+        Ok(())
+    }
 
+    async fn read_log_files(context: &IntegrationContext) -> TestResult {
         let store = context
             .table_builder(TestTables::Checkpoints)
             .build_storage()?
@@ -536,11 +537,7 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
-    async fn test_snapshot_read_metadata() -> TestResult {
-        let context = IntegrationContext::new(Box::new(LocalStorageIntegration::default()))?;
-        context.load_table(TestTables::WithDvSmall).await?;
-
+    async fn read_metadata(context: &IntegrationContext) -> TestResult {
         let store = context
             .table_builder(TestTables::WithDvSmall)
             .build_storage()?
