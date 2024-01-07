@@ -76,18 +76,16 @@ pub struct Metadata {
 impl Metadata {
     /// Create a new metadata action
     pub fn new(
-        id: impl Into<String>,
-        format: Format,
-        schema_string: impl Into<String>,
+        schema: StructType,
         partition_columns: impl IntoIterator<Item = impl Into<String>>,
-        configuration: Option<HashMap<String, Option<String>>>,
+        configuration: HashMap<String, Option<String>>,
     ) -> Self {
         Self {
-            id: id.into(),
-            format,
-            schema_string: schema_string.into(),
+            id: uuid::Uuid::new_v4().to_string(),
+            format: Default::default(),
+            schema_string: serde_json::to_string(&schema).unwrap(),
             partition_columns: partition_columns.into_iter().map(|c| c.into()).collect(),
-            configuration: configuration.unwrap_or_default(),
+            configuration,
             name: None,
             description: None,
             created_time: None,

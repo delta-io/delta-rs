@@ -334,11 +334,29 @@ impl FromIterator<StructField> for StructType {
     }
 }
 
+impl<'a> FromIterator<&'a StructField> for StructType {
+    fn from_iter<T: IntoIterator<Item = &'a StructField>>(iter: T) -> Self {
+        Self {
+            type_name: "struct".into(),
+            fields: iter.into_iter().cloned().collect(),
+        }
+    }
+}
+
 impl<const N: usize> From<[StructField; N]> for StructType {
     fn from(value: [StructField; N]) -> Self {
         Self {
             type_name: "struct".into(),
             fields: value.to_vec(),
+        }
+    }
+}
+
+impl<'a, const N: usize> From<[&'a StructField; N]> for StructType {
+    fn from(value: [&'a StructField; N]) -> Self {
+        Self {
+            type_name: "struct".into(),
+            fields: value.into_iter().cloned().collect(),
         }
     }
 }

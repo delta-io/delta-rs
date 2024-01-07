@@ -510,13 +510,12 @@ fn parse_int(value: &str) -> Result<i64, DeltaConfigError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::kernel::StructType;
-    use crate::table::DeltaTableMetaData;
+    use crate::kernel::{Metadata, StructType};
     use std::collections::HashMap;
 
-    fn dummy_metadata() -> DeltaTableMetaData {
+    fn dummy_metadata() -> Metadata {
         let schema = StructType::new(Vec::new());
-        DeltaTableMetaData::new(None, None, None, schema, Vec::new(), HashMap::new())
+        Metadata::new(schema, Vec::<String>::new(), HashMap::new())
     }
 
     #[test]

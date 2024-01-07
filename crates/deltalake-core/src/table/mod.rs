@@ -1,7 +1,6 @@
 //! Delta Table read and write implementation
 
 use std::collections::HashMap;
-use std::convert::TryFrom;
 use std::fmt;
 use std::fmt::Formatter;
 use std::{cmp::Ordering, collections::HashSet};
@@ -13,14 +12,13 @@ use serde::de::{Error, SeqAccess, Visitor};
 use serde::ser::SerializeSeq;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use tracing::debug;
-use uuid::Uuid;
 
 use self::builder::DeltaTableConfig;
 use self::state::DeltaTableState;
 use crate::errors::DeltaTableError;
 use crate::kernel::{
-    Action, Add, CommitInfo, DataCheck, DataType, Format, Metadata, Protocol, ReaderFeatures,
-    StructType, WriterFeatures,
+    Action, Add, CommitInfo, DataCheck, DataType, Metadata, Protocol, ReaderFeatures, StructType,
+    WriterFeatures,
 };
 use crate::logstore::LogStoreRef;
 use crate::logstore::{self, LogStoreConfig};
@@ -163,72 +161,6 @@ impl DataCheck for Constraint {
     }
 }
 
-/// Delta table metadata
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
-pub struct DeltaTableMetaData {
-    // TODO make this a UUID?
-    /// Unique identifier for this table
-    pub id: String,
-    /// User-provided identifier for this table
-    pub name: Option<String>,
-    /// User-provided description for this table
-    pub description: Option<String>,
-    /// Specification of the encoding for the files stored in the table
-    pub format: Format,
-    /// Schema of the table
-    pub schema: StructType,
-    /// An array containing the names of columns by which the data should be partitioned
-    pub partition_columns: Vec<String>,
-    /// The time when this metadata action is created, in milliseconds since the Unix epoch
-    pub created_time: Option<i64>,
-    /// table properties
-    pub configuration: HashMap<String, Option<String>>,
-}
-
-impl DeltaTableMetaData {
-    /// Create metadata for a DeltaTable from scratch
-    pub fn new(
-        name: Option<String>,
-        description: Option<String>,
-        format: Option<Format>,
-        schema: StructType,
-        partition_columns: Vec<String>,
-        configuration: HashMap<String, Option<String>>,
-    ) -> Self {
-        // Reference implementation uses uuid v4 to create GUID:
-        // https://github.com/delta-io/delta/blob/master/core/src/main/scala/org/apache/spark/sql/delta/actions/actions.scala#L350
-        Self {
-            id: Uuid::new_v4().to_string(),
-            name,
-            description,
-            format: format.unwrap_or_default(),
-            schema,
-            partition_columns,
-            created_time: Some(Utc::now().timestamp_millis()),
-            configuration,
-        }
-    }
-
-    /// Return the configurations of the DeltaTableMetaData; could be empty
-    pub fn get_configuration(&self) -> &HashMap<String, Option<String>> {
-        &self.configuration
-    }
-
-    /// Return the check constraints on the current table
-    pub fn get_constraints(&self) -> Vec<Constraint> {
-        self.configuration
-            .iter()
-            .filter_map(|(field, value)| {
-                if field.starts_with("delta.constraints") {
-                    value.as_ref().map(|f| Constraint::new("*", f))
-                } else {
-                    None
-                }
-            })
-            .collect()
-    }
-}
-
 /// Return partition fields along with their data type from the current schema.
 pub(crate) fn get_partition_col_data_types<'a>(
     schema: &'a StructType,
@@ -251,34 +183,6 @@ pub(crate) fn get_partition_col_data_types<'a>(
             }
         })
         .collect()
-}
-
-impl fmt::Display for DeltaTableMetaData {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(
-            f,
-            "GUID={}, name={:?}, description={:?}, partitionColumns={:?}, createdTime={:?}, configuration={:?}",
-            self.id, self.name, self.description, self.partition_columns, self.created_time, self.configuration
-        )
-    }
-}
-
-impl TryFrom<Metadata> for DeltaTableMetaData {
-    type Error = ProtocolError;
-
-    fn try_from(action_metadata: Metadata) -> Result<Self, Self::Error> {
-        let schema = action_metadata.schema()?;
-        Ok(Self {
-            id: action_metadata.id,
-            name: action_metadata.name,
-            description: action_metadata.description,
-            format: Format::default(),
-            schema,
-            partition_columns: action_metadata.partition_columns,
-            created_time: action_metadata.created_time,
-            configuration: action_metadata.configuration,
-        })
-    }
 }
 
 /// The next commit that's available from underlying storage
@@ -902,27 +806,6 @@ mod tests {
             "{\"version\":0,\"size\":0,\"num_of_add_files\":4}"
         );
         drop(tmp_dir);
-    }
-
-    #[test]
-    fn get_table_constraints() {
-        let state = DeltaTableMetaData::new(
-            None,
-            None,
-            None,
-            StructType::new(vec![]),
-            vec![],
-            HashMap::from_iter(vec![
-                (
-                    "delta.constraints.id".to_string(),
-                    Some("id > 0".to_string()),
-                ),
-                ("delta.blahblah".to_string(), None),
-            ]),
-        );
-
-        let constraints = state.get_constraints();
-        assert_eq!(constraints.len(), 1)
     }
 
     async fn create_test_table() -> (DeltaTable, TempDir) {

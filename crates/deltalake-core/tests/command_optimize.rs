@@ -607,7 +607,7 @@ async fn test_commit_info() -> Result<(), Box<dyn Error>> {
         .optimize()
         .with_target_size(2_000_000)
         .with_filters(&filter);
-    let (mut dt, metrics) = optimize.await?;
+    let (dt, metrics) = optimize.await?;
 
     let commit_info = dt.history(None).await?;
     let last_commit = &commit_info[commit_info.len() - 1];

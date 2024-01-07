@@ -14,7 +14,6 @@ use crate::logstore::{LogStore, LogStoreRef};
 use crate::protocol::{DeltaOperation, SaveMode};
 use crate::table::builder::ensure_table_uri;
 use crate::table::config::DeltaConfigKey;
-use crate::table::DeltaTableMetaData;
 use crate::{DeltaTable, DeltaTableBuilder};
 
 #[derive(thiserror::Error, Debug)]
@@ -251,14 +250,18 @@ impl CreateBuilder {
                 reader_features: None,
             });
 
-        let metadata = DeltaTableMetaData::new(
-            self.name,
-            self.comment,
-            None,
+        let mut metadata = Metadata::new(
             StructType::new(self.columns),
             self.partition_columns.unwrap_or_default(),
             self.configuration,
-        );
+        )
+        .with_created_time(chrono::Utc::now().timestamp_millis());
+        if let Some(name) = self.name {
+            metadata = metadata.with_name(name);
+        }
+        if let Some(comment) = self.comment {
+            metadata = metadata.with_description(comment);
+        }
 
         let operation = DeltaOperation::Create {
             mode: self.mode.clone(),
@@ -267,10 +270,7 @@ impl CreateBuilder {
             protocol: protocol.clone(),
         };
 
-        let mut actions = vec![
-            Action::Protocol(protocol),
-            Action::Metadata(Metadata::try_from(metadata)?),
-        ];
+        let mut actions = vec![Action::Protocol(protocol), Action::Metadata(metadata)];
         actions.extend(
             self.actions
                 .into_iter()

@@ -28,7 +28,6 @@ use super::{DeltaWriter, DeltaWriterError};
 use crate::errors::DeltaTableError;
 use crate::kernel::{Add, StructType};
 use crate::table::builder::DeltaTableBuilder;
-use crate::table::DeltaTableMetaData;
 use crate::DeltaTable;
 
 /// Writes messages to a delta lake table.
@@ -96,31 +95,6 @@ impl RecordBatchWriter {
             partition_columns,
             arrow_writers: HashMap::new(),
         })
-    }
-
-    /// Retrieves the latest schema from table, compares to the current and updates if changed.
-    /// When schema is updated then `true` is returned which signals the caller that parquet
-    /// created file or arrow batch should be revisited.
-    // TODO Test schema update scenarios
-    pub fn update_schema(
-        &mut self,
-        metadata: &DeltaTableMetaData,
-    ) -> Result<bool, DeltaTableError> {
-        let schema: ArrowSchema =
-            <ArrowSchema as TryFrom<&StructType>>::try_from(&metadata.schema)?;
-
-        let schema_updated = self.arrow_schema_ref.as_ref() != &schema
-            || self.partition_columns != metadata.partition_columns;
-
-        if schema_updated {
-            let _ = std::mem::replace(&mut self.arrow_schema_ref, Arc::new(schema));
-            let _ = std::mem::replace(
-                &mut self.partition_columns,
-                metadata.partition_columns.clone(),
-            );
-        }
-
-        Ok(schema_updated)
     }
 
     /// Returns the current byte length of the in memory buffer.

@@ -27,7 +27,6 @@ use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::{Add, CommitInfo, Metadata, Protocol, Remove};
 use crate::logstore::LogStore;
 use crate::table::CheckPoint;
-use crate::table::DeltaTableMetaData;
 
 /// Error returned when an invalid Delta log action is encountered.
 #[allow(missing_docs)]
@@ -324,25 +323,6 @@ impl PartialEq for Remove {
     }
 }
 
-impl TryFrom<DeltaTableMetaData> for Metadata {
-    type Error = ProtocolError;
-
-    fn try_from(metadata: DeltaTableMetaData) -> Result<Self, Self::Error> {
-        let schema_string = serde_json::to_string(&metadata.schema)
-            .map_err(|source| ProtocolError::SerializeOperation { source })?;
-        Ok(Self {
-            id: metadata.id,
-            name: metadata.name,
-            description: metadata.description,
-            format: metadata.format,
-            schema_string,
-            partition_columns: metadata.partition_columns,
-            created_time: metadata.created_time,
-            configuration: metadata.configuration,
-        })
-    }
-}
-
 #[allow(clippy::large_enum_variant)]
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -372,7 +352,7 @@ pub enum DeltaOperation {
         /// The min reader and writer protocol versions of the table
         protocol: Protocol,
         /// Metadata associated with the new table
-        metadata: DeltaTableMetaData,
+        metadata: Metadata,
     },
 
     /// Represents a Delta `Write` operation.

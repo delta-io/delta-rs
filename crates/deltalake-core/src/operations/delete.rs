@@ -402,7 +402,7 @@ mod tests {
         assert_eq!(table.version(), 1);
         assert_eq!(table.get_file_uris().count(), 1);
 
-        let (mut table, metrics) = DeltaOps(table).delete().await.unwrap();
+        let (table, metrics) = DeltaOps(table).delete().await.unwrap();
 
         assert_eq!(table.version(), 2);
         assert_eq!(table.get_file_uris().count(), 0);
@@ -488,7 +488,7 @@ mod tests {
         assert_eq!(table.version(), 2);
         assert_eq!(table.get_file_uris().count(), 2);
 
-        let (mut table, metrics) = DeltaOps(table)
+        let (table, metrics) = DeltaOps(table)
             .delete()
             .with_predicate(col("value").eq(lit(1)))
             .await

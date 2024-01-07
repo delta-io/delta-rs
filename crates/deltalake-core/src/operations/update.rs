@@ -625,7 +625,7 @@ mod tests {
         assert_eq!(table.version(), 1);
         assert_eq!(table.get_file_uris().count(), 1);
 
-        let (mut table, metrics) = DeltaOps(table)
+        let (table, metrics) = DeltaOps(table)
             .update()
             .with_predicate(col("modified").eq(lit("2021-02-03")))
             .with_update("modified", lit("2023-05-14"))
@@ -857,7 +857,7 @@ mod tests {
 
         // Validate order operators do not include nulls
         let table = prepare_values_table().await;
-        let (mut table, metrics) = DeltaOps(table)
+        let (table, metrics) = DeltaOps(table)
             .update()
             .with_predicate(col("value").gt(lit(2)).or(col("value").lt(lit(2))))
             .with_update("value", lit(10))

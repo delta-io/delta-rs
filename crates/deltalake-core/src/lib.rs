@@ -556,9 +556,9 @@ mod tests {
     #[tokio::test]
     async fn test_table_history() {
         let path = "../deltalake-test/tests/data/simple_table_with_checkpoint";
-        let mut latest_table = crate::open_table(path).await.unwrap();
+        let latest_table = crate::open_table(path).await.unwrap();
 
-        let mut table = crate::open_table_with_version(path, 1).await.unwrap();
+        let table = crate::open_table_with_version(path, 1).await.unwrap();
 
         let history1 = table.history(None).await.expect("Cannot get table history");
         let history2 = latest_table
@@ -615,7 +615,7 @@ mod tests {
     #[tokio::test]
     async fn test_read_vacuumed_log_history() {
         let path = "../deltalake-test/tests/data/checkpoints_vacuumed";
-        let mut table = crate::open_table(path).await.unwrap();
+        let table = crate::open_table(path).await.unwrap();
 
         // load history for table version with available log file
         let history = table
@@ -674,9 +674,9 @@ mod tests {
     #[tokio::test()]
     async fn test_version_zero_table_load() {
         let path = "../deltalake-test/tests/data/COVID-19_NYT";
-        let mut latest_table: DeltaTable = crate::open_table(path).await.unwrap();
+        let latest_table: DeltaTable = crate::open_table(path).await.unwrap();
 
-        let mut version_0_table = crate::open_table_with_version(path, 0).await.unwrap();
+        let version_0_table = crate::open_table_with_version(path, 0).await.unwrap();
 
         let version_0_history = version_0_table
             .history(None)

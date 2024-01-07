@@ -2,7 +2,6 @@
 
 use std::collections::HashMap;
 use std::collections::HashSet;
-use std::convert::TryFrom;
 use std::io::{BufRead, BufReader, Cursor};
 use std::sync::Arc;
 
@@ -22,7 +21,6 @@ use crate::partitions::{DeltaTablePartition, PartitionFilter};
 use crate::protocol::DeltaOperation;
 use crate::protocol::ProtocolError;
 use crate::storage::commit_uri_from_version;
-use crate::table::DeltaTableMetaData;
 use crate::DeltaResult;
 use crate::DeltaTable;
 
@@ -45,8 +43,6 @@ pub struct DeltaTableState {
     // Domain metadatas provided by the system or user
     domain_metadatas: Vec<DomainMetadata>,
     app_transaction_version: HashMap<String, i64>,
-    // table metadata corresponding to current version
-    current_metadata: Option<DeltaTableMetaData>,
     protocol: Option<Protocol>,
     metadata: Option<Metadata>,
     pub(crate) snapshot: Option<EagerSnapshot>,
@@ -212,7 +208,7 @@ impl DeltaTableState {
 
     /// The table schema
     pub fn schema(&self) -> Option<&StructType> {
-        self.current_metadata.as_ref().map(|m| &m.schema)
+        self.snapshot.as_ref().map(|s| s.schema())
     }
 
     /// Well known table configuration
@@ -268,9 +264,6 @@ impl DeltaTableState {
             self.files.append(&mut new_state.files);
         }
 
-        if new_state.current_metadata.is_some() {
-            self.current_metadata = new_state.current_metadata.take();
-        }
         if new_state.metadata.is_some() {
             self.metadata = new_state.metadata.take();
         }
@@ -325,8 +318,6 @@ impl DeltaTableState {
             }
             Action::Metadata(v) => {
                 self.metadata = Some(v.clone());
-                let md = DeltaTableMetaData::try_from(v)?;
-                self.current_metadata = Some(md);
             }
             Action::Txn(v) => {
                 *self
@@ -400,7 +391,6 @@ mod tests {
             commit_infos: vec![],
             domain_metadatas: vec![],
             app_transaction_version: Default::default(),
-            current_metadata: None,
             metadata: None,
             protocol: None,
             snapshot: None,
@@ -422,7 +412,6 @@ mod tests {
             commit_infos: vec![],
             domain_metadatas: vec![],
             tombstones: HashSet::new(),
-            current_metadata: None,
             protocol: None,
             metadata: None,
             app_transaction_version,
