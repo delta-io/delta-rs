@@ -24,6 +24,7 @@ arrow-arith = { workspace = true, optional = true }
 arrow-array = { workspace = true, optional = true }
 arrow-buffer = { workspace = true, optional = true }
 arrow-cast = { workspace = true, optional = true }
+arrow-ipc = { workspace = true, optional = true }
 arrow-json = { workspace = true, optional = true }
 arrow-ord = { workspace = true, optional = true }
 arrow-row = { workspace = true, optional = true }
@@ -120,6 +121,7 @@ arrow = [
     "arrow-array",
     "arrow-cast",
     "arrow-json",
+    "arrow-ipc",
     "arrow-ord",
     "arrow-row",
     "arrow-schema",
@@ -143,7 +145,3 @@ gcs = ["object_store/gcp"]
 json = ["parquet/json"]
 python = ["arrow/pyarrow"]
 unity-experimental = ["reqwest", "hyper"]
-
-[[bench]]
-name = "read_checkpoint"
-harness = false

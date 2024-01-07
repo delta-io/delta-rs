@@ -199,8 +199,13 @@ impl VacuumBuilder {
             None => Utc::now().timestamp_millis(),
         };
 
-        let expired_tombstones =
-            get_stale_files(&self.snapshot, retention_period, now_millis).await?;
+        let expired_tombstones = get_stale_files(
+            &self.snapshot,
+            retention_period,
+            now_millis,
+            self.log_store.object_store().clone(),
+        )
+        .await?;
         let valid_files = self.snapshot.file_paths_iter().collect::<HashSet<Path>>();
 
         let mut files_to_delete = vec![];
@@ -398,14 +403,14 @@ async fn get_stale_files(
     snapshot: &DeltaTableState,
     retention_period: Duration,
     now_timestamp_millis: i64,
+    store: Arc<dyn ObjectStore>,
 ) -> DeltaResult<HashSet<String>> {
     let tombstone_retention_timestamp = now_timestamp_millis - retention_period.num_milliseconds();
     Ok(snapshot
-        .all_tombstones()?
-        .try_collect::<Vec<_>>()
+        .all_tombstones(store)
         .await?
+        .collect::<Vec<_>>()
         .into_iter()
-        .flatten()
         .filter(|tombstone| {
             // if the file has a creation time before the `tombstone_retention_timestamp`
             // then it's considered as a stale file

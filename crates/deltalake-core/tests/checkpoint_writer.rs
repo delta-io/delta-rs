@@ -261,7 +261,15 @@ mod checkpoints_with_tombstones {
             table.get_files_iter().collect::<Vec<_>>(),
             vec![ObjectStorePath::from(opt1.path.as_ref())]
         );
-        assert_eq!(table.get_state().all_tombstones(), &removes1);
+        assert_eq!(
+            table
+                .get_state()
+                .all_tombstones(table.object_store().clone())
+                .await
+                .unwrap()
+                .collect::<HashSet<_>>(),
+            removes1
+        );
 
         checkpoints::create_checkpoint(&table).await.unwrap();
         table.update().await.unwrap(); // make table to read the checkpoint
@@ -269,7 +277,15 @@ mod checkpoints_with_tombstones {
             table.get_files_iter().collect::<Vec<_>>(),
             vec![ObjectStorePath::from(opt1.path.as_ref())]
         );
-        assert_eq!(table.get_state().all_tombstones().len(), 0); // stale removes are deleted from the state
+        assert_eq!(
+            table
+                .get_state()
+                .all_tombstones(table.object_store().clone())
+                .await
+                .unwrap()
+                .count(),
+            0
+        ); // stale removes are deleted from the state
     }
 
     #[tokio::test]

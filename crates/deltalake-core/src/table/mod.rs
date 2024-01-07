@@ -4,13 +4,11 @@ use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::fmt;
 use std::fmt::Formatter;
-use std::{cmp::max, cmp::Ordering, collections::HashSet};
+use std::{cmp::Ordering, collections::HashSet};
 
 use chrono::{DateTime, Utc};
-use futures::StreamExt;
-use lazy_static::lazy_static;
+use futures::{StreamExt, TryStreamExt};
 use object_store::{path::Path, Error as ObjectStoreError, ObjectStore};
-use regex::Regex;
 use serde::de::{Error, SeqAccess, Visitor};
 use serde::ser::SerializeSeq;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -447,33 +445,6 @@ impl DeltaTable {
         checkpoint_data_paths
     }
 
-    /// This method scans delta logs to find the earliest delta log version
-    async fn get_earliest_delta_log_version(&self) -> Result<i64, DeltaTableError> {
-        // TODO check if regex matches against path
-        lazy_static! {
-            static ref DELTA_LOG_REGEX: Regex =
-                Regex::new(r"^_delta_log/(\d{20})\.(json|checkpoint)*$").unwrap();
-        }
-
-        let mut current_delta_log_ver = i64::MAX;
-
-        // Get file objects from table.
-        let storage = self.object_store();
-        let mut stream = storage.list(Some(self.log_store.log_path()));
-        while let Some(obj_meta) = stream.next().await {
-            let obj_meta = obj_meta?;
-
-            if let Some(captures) = DELTA_LOG_REGEX.captures(obj_meta.location.as_ref()) {
-                let log_ver_str = captures.get(1).unwrap().as_str();
-                let log_ver: i64 = log_ver_str.parse().unwrap();
-                if log_ver < current_delta_log_ver {
-                    current_delta_log_ver = log_ver;
-                }
-            }
-        }
-        Ok(current_delta_log_ver)
-    }
-
     #[cfg(feature = "parquet")]
     async fn restore_checkpoint(&mut self, check_point: CheckPoint) -> Result<(), DeltaTableError> {
         self.state = DeltaTableState::from_checkpoint(self, &check_point).await?;
@@ -668,50 +639,17 @@ impl DeltaTable {
     /// The table history retention is based on the `logRetentionDuration` property of the Delta Table, 30 days by default.
     /// If `limit` is given, this returns the information of the latest `limit` commits made to this table. Otherwise,
     /// it returns all commits from the earliest commit.
-    pub async fn history(
-        &mut self,
-        limit: Option<usize>,
-    ) -> Result<Vec<CommitInfo>, DeltaTableError> {
-        let mut version = match limit {
-            Some(l) => max(self.version() - l as i64 + 1, 0),
-            None => self.get_earliest_delta_log_version().await?,
-        };
-        let mut commit_infos_list = vec![];
-        let mut earliest_commit: Option<i64> = None;
-
-        loop {
-            match DeltaTableState::from_commit(self, version).await {
-                Ok(state) => {
-                    commit_infos_list.append(state.commit_infos().clone().as_mut());
-                    version += 1;
-                }
-                Err(e) => {
-                    match e {
-                        ProtocolError::EndOfLog => {
-                            if earliest_commit.is_none() {
-                                earliest_commit =
-                                    Some(self.get_earliest_delta_log_version().await?);
-                            };
-                            if let Some(earliest) = earliest_commit {
-                                if version < earliest {
-                                    version = earliest;
-                                    continue;
-                                }
-                            } else {
-                                version -= 1;
-                                if version == -1 {
-                                    return Err(DeltaTableError::not_a_table(self.table_uri()));
-                                }
-                            }
-                        }
-                        _ => {
-                            return Err(DeltaTableError::from(e));
-                        }
-                    }
-                    return Ok(commit_infos_list);
-                }
-            }
-        }
+    pub async fn history(&self, limit: Option<usize>) -> Result<Vec<CommitInfo>, DeltaTableError> {
+        let infos = self
+            .state
+            .snapshot
+            .as_ref()
+            .unwrap()
+            .snapshot()
+            .commit_infos(self.object_store())
+            .try_collect::<Vec<_>>()
+            .await?;
+        Ok(infos.into_iter().filter_map(|b| b).collect())
     }
 
     /// Obtain Add actions for files that match the filter

@@ -634,7 +634,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(table.version(), 0);
-        assert_eq!(table.state.commit_infos().len(), 1);
+        assert_eq!(table.history(None).await.unwrap().len(), 1);
 
         // write some data
         let metadata = HashMap::from_iter(vec![("k1".to_string(), json!("v1.1"))]);
@@ -647,9 +647,9 @@ mod tests {
         assert_eq!(table.version(), 1);
         assert_eq!(table.get_file_uris().count(), 1);
         table.load().await.unwrap();
-        assert_eq!(table.state.commit_infos().len(), 2);
+        assert_eq!(table.history(None).await.unwrap().len(), 2);
         assert_eq!(
-            table.state.commit_infos()[1]
+            table.history(None).await.unwrap()[1]
                 .info
                 .clone()
                 .into_iter()
@@ -670,9 +670,9 @@ mod tests {
         assert_eq!(table.version(), 2);
         assert_eq!(table.get_file_uris().count(), 2);
         table.load().await.unwrap();
-        assert_eq!(table.state.commit_infos().len(), 3);
+        assert_eq!(table.history(None).await.unwrap().len(), 3);
         assert_eq!(
-            table.state.commit_infos()[2]
+            table.history(None).await.unwrap()[2]
                 .info
                 .clone()
                 .into_iter()
@@ -693,9 +693,9 @@ mod tests {
         assert_eq!(table.version(), 3);
         assert_eq!(table.get_file_uris().count(), 1);
         table.load().await.unwrap();
-        assert_eq!(table.state.commit_infos().len(), 4);
+        assert_eq!(table.history(None).await.unwrap().len(), 4);
         assert_eq!(
-            table.state.commit_infos()[3]
+            table.history(None).await.unwrap()[3]
                 .info
                 .clone()
                 .into_iter()

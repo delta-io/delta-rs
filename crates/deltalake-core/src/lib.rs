@@ -192,7 +192,12 @@ mod tests {
                 Path::from("part-00001-c373a5bd-85f0-4758-815e-7eb62007a15c-c000.snappy.parquet"),
             ]
         );
-        let tombstones = table.get_state().all_tombstones();
+        let tombstones = table
+            .get_state()
+            .all_tombstones(table.object_store().clone())
+            .await
+            .unwrap()
+            .collect_vec();
         assert_eq!(tombstones.len(), 4);
         assert!(tombstones.contains(&crate::kernel::Remove {
             path: "part-00000-512e1537-8aaa-4193-b8b4-bef3de0de409-c000.snappy.parquet".to_string(),
@@ -302,7 +307,12 @@ mod tests {
                 .collect::<Vec<i64>>(),
             vec![0, 0]
         );
-        let tombstones = table.get_state().all_tombstones();
+        let tombstones = table
+            .get_state()
+            .all_tombstones(table.object_store().clone())
+            .await
+            .unwrap()
+            .collect_vec();
         assert_eq!(tombstones.len(), 1);
         assert!(tombstones.contains(&crate::kernel::Remove {
             path: "part-00001-911a94a2-43f6-4acb-8620-5e68c2654989-c000.snappy.parquet".to_string(),

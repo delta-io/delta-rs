@@ -101,10 +101,20 @@ fn get_reader(data: &[u8]) -> BufReader<Cursor<&[u8]>> {
     BufReader::new(Cursor::new(data))
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct FileInfo {
+    location: String,
+    size: usize,
+    last_modified: chrono::DateTime<Utc>,
+    e_tag: Option<String>,
+    version: Option<i64>,
+}
+
+#[derive(Debug, Clone)]
 pub(super) struct LogSegment {
-    version: i64,
+    pub(super) version: i64,
     pub(super) commit_files: VecDeque<ObjectMeta>,
-    checkpoint_files: Vec<ObjectMeta>,
+    pub(super) checkpoint_files: Vec<ObjectMeta>,
 }
 
 impl LogSegment {
@@ -155,23 +165,22 @@ impl LogSegment {
     }
 
     #[cfg(test)]
-    pub(super) fn new_test(
+    pub(super) fn new_test<'a>(
         commits: impl IntoIterator<Item = &'a CommitData>,
-    ) -> DeltaResult<(
-        Self,
-        impl Iterator<Item = Result<RecordBatch, DeltaTableError>> + '_,
-    )> {
+    ) -> DeltaResult<(Self, Vec<Result<RecordBatch, DeltaTableError>>)> {
         let mut log = Self {
             version: -1,
             commit_files: Default::default(),
             checkpoint_files: Default::default(),
         };
-        let iter = log.advance(
-            commits,
-            &Path::default(),
-            crate::kernel::actions::schemas::log_schema(),
-            &Default::default(),
-        )?;
+        let iter = log
+            .advance(
+                commits,
+                &Path::default(),
+                crate::kernel::actions::schemas::log_schema(),
+                &Default::default(),
+            )?
+            .collect_vec();
         Ok((log, iter))
     }
 

@@ -51,7 +51,7 @@ pub enum DeltaVersion {
 }
 
 /// Configuration options for delta table
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct DeltaTableConfig {
     /// Indicates whether our use case requires tracking tombstones.
@@ -564,7 +564,13 @@ mod tests {
             .await
             .unwrap();
         assert!(
-            table.get_state().all_tombstones().is_empty(),
+            table
+                .get_state()
+                .all_tombstones(table.object_store().clone())
+                .await
+                .unwrap()
+                .collect_vec()
+                .is_empty(),
             "loading without tombstones should skip tombstones"
         );
 

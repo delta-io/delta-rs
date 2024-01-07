@@ -5,6 +5,7 @@
 use std::io::{BufRead, BufReader, Cursor};
 use std::sync::Arc;
 
+use ::serde::{Deserialize, Serialize};
 use arrow_array::RecordBatch;
 use futures::stream::BoxStream;
 use futures::{StreamExt, TryStreamExt};
@@ -23,18 +24,19 @@ mod extract;
 mod log_segment;
 mod parse;
 mod replay;
+mod serde;
 
 /// A snapshot of a Delta table
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Snapshot {
     log_segment: LogSegment,
-    store: Arc<dyn ObjectStore>,
     config: DeltaTableConfig,
     protocol: Protocol,
     metadata: Metadata,
     schema: StructType,
     // TODO make this an URL
     /// path of the table root within the object store
-    table_url: Path,
+    table_url: String,
 }
 
 impl Snapshot {
@@ -50,12 +52,12 @@ impl Snapshot {
         let schema = serde_json::from_str(&metadata.schema_string)?;
         Ok(Self {
             log_segment,
-            store,
+            // store,
             config,
             protocol,
             metadata,
             schema,
-            table_url: table_root.to_owned(),
+            table_url: table_root.to_string(),
         })
     }
 
@@ -80,8 +82,8 @@ impl Snapshot {
     }
 
     /// Get the table root of the snapshot
-    pub fn table_root(&self) -> &Path {
-        &self.table_url
+    pub fn table_root(&self) -> Path {
+        Path::from(self.table_url.clone())
     }
 
     /// Well known table configuration
@@ -90,14 +92,17 @@ impl Snapshot {
     }
 
     /// Get the files in the snapshot
-    pub fn files(&self) -> DeltaResult<ReplayStream<BoxStream<'_, DeltaResult<RecordBatch>>>> {
+    pub fn files(
+        &self,
+        store: Arc<dyn ObjectStore>,
+    ) -> DeltaResult<ReplayStream<BoxStream<'_, DeltaResult<RecordBatch>>>> {
         let log_stream = self.log_segment.commit_stream(
-            self.store.clone(),
+            store.clone(),
             &log_segment::COMMIT_SCHEMA,
             &self.config,
         )?;
         let checkpoint_stream = self.log_segment.checkpoint_stream(
-            self.store.clone(),
+            store,
             &log_segment::CHECKPOINT_SCHEMA,
             &self.config,
         );
@@ -105,10 +110,13 @@ impl Snapshot {
     }
 
     /// Get the commit infos in the snapshot
-    pub(crate) fn commit_infos(&self) -> BoxStream<'_, DeltaResult<Option<CommitInfo>>> {
+    pub(crate) fn commit_infos(
+        &self,
+        store: Arc<dyn ObjectStore>,
+    ) -> BoxStream<'_, DeltaResult<Option<CommitInfo>>> {
         futures::stream::iter(self.log_segment.commit_files.clone())
             .map(move |meta| {
-                let store = self.store.clone();
+                let store = store.clone();
                 async move {
                     let commit_log_bytes = store.get(&meta.location).await?.bytes().await?;
                     let reader = BufReader::new(Cursor::new(commit_log_bytes));
@@ -128,17 +136,18 @@ impl Snapshot {
             .boxed()
     }
 
-    pub(crate) fn tombstones(&self) -> DeltaResult<BoxStream<'_, DeltaResult<Vec<Remove>>>> {
+    pub(crate) fn tombstones(
+        &self,
+        store: Arc<dyn ObjectStore>,
+    ) -> DeltaResult<BoxStream<'_, DeltaResult<Vec<Remove>>>> {
         let log_stream = self.log_segment.commit_stream(
-            self.store.clone(),
+            store.clone(),
             &log_segment::TOMBSTONE_SCHEMA,
             &self.config,
         )?;
-        let checkpoint_stream = self.log_segment.checkpoint_stream(
-            self.store.clone(),
-            &log_segment::TOMBSTONE_SCHEMA,
-            &self.config,
-        );
+        let checkpoint_stream =
+            self.log_segment
+                .checkpoint_stream(store, &log_segment::TOMBSTONE_SCHEMA, &self.config);
 
         Ok(log_stream
             .chain(checkpoint_stream)
@@ -151,6 +160,7 @@ impl Snapshot {
 }
 
 /// A snapshot of a Delta table that has been eagerly loaded into memory.
+#[derive(Debug, Clone)]
 pub struct EagerSnapshot {
     snapshot: Snapshot,
     files: Vec<RecordBatch>,
@@ -164,14 +174,13 @@ impl EagerSnapshot {
         config: DeltaTableConfig,
         version: Option<i64>,
     ) -> DeltaResult<Self> {
-        let snapshot = Snapshot::try_new(table_root, store, config, version).await?;
-        let files = snapshot.files()?.try_collect().await?;
+        let snapshot = Snapshot::try_new(table_root, store.clone(), config, version).await?;
+        let files = snapshot.files(store)?.try_collect().await?;
         Ok(Self { snapshot, files })
     }
 
-    #[cfg(test)]
-    pub(crate) fn new_test(commits: impl IntoIterator<Item = &'a CommitData>) -> Self {
-        Self { snapshot, files }
+    pub(crate) fn snapshot(&self) -> &Snapshot {
+        &self.snapshot
     }
 
     /// Get the table version of the snapshot
@@ -195,7 +204,7 @@ impl EagerSnapshot {
     }
 
     /// Get the table root of the snapshot
-    pub fn table_root(&self) -> &Path {
+    pub fn table_root(&self) -> Path {
         self.snapshot.table_root()
     }
 
@@ -216,7 +225,7 @@ impl EagerSnapshot {
     ) -> DeltaResult<i64> {
         let actions = self.snapshot.log_segment.advance(
             commits,
-            &self.snapshot.table_url,
+            &self.table_root(),
             &log_segment::COMMIT_SCHEMA,
             &self.snapshot.config,
         )?;
@@ -251,7 +260,7 @@ mod tests {
     use super::replay::tests::test_log_replay;
     use super::*;
     use crate::kernel::Remove;
-    use crate::protocol::SaveMode;
+    use crate::protocol::{DeltaOperation, SaveMode};
 
     #[tokio::test]
     async fn test_snapshots() -> TestResult {
@@ -281,15 +290,24 @@ mod tests {
         let expected: StructType = serde_json::from_str(schema_string)?;
         assert_eq!(snapshot.schema(), &expected);
 
-        let infos = snapshot.commit_infos().try_collect::<Vec<_>>().await?;
+        let infos = snapshot
+            .commit_infos(store.clone())
+            .try_collect::<Vec<_>>()
+            .await?;
         let infos = infos.into_iter().flatten().collect_vec();
         assert_eq!(infos.len(), 5);
 
-        let tombstones = snapshot.tombstones()?.try_collect::<Vec<_>>().await?;
+        let tombstones = snapshot
+            .tombstones(store.clone())?
+            .try_collect::<Vec<_>>()
+            .await?;
         let tombstones = tombstones.into_iter().flatten().collect_vec();
         assert_eq!(tombstones.len(), 31);
 
-        let batches = snapshot.files()?.try_collect::<Vec<_>>().await?;
+        let batches = snapshot
+            .files(store.clone())?
+            .try_collect::<Vec<_>>()
+            .await?;
         let expected = [
             "+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+",
             "| add                                                                                                                                                                                                                                                             |",
@@ -316,7 +334,10 @@ mod tests {
                 Some(version),
             )
             .await?;
-            let batches = snapshot.files()?.try_collect::<Vec<_>>().await?;
+            let batches = snapshot
+                .files(store.clone())?
+                .try_collect::<Vec<_>>()
+                .await?;
             let num_files = batches.iter().map(|b| b.num_rows() as i64).sum::<i64>();
             assert_eq!(num_files, version);
         }

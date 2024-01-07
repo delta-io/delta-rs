@@ -65,11 +65,12 @@ async fn test_action_reconciliation() {
     assert_eq!(
         table
             .get_state()
-            .all_tombstones()
-            .iter()
-            .map(|r| r.path.as_str())
+            .all_tombstones(table.object_store().clone())
+            .await
+            .unwrap()
+            .map(|r| r.path.clone())
             .collect::<Vec<_>>(),
-        vec![a.path.as_str()]
+        vec![a.path.clone()]
     );
 
     // Add removed file back.
@@ -79,5 +80,13 @@ async fn test_action_reconciliation() {
         vec![Path::from(a.path)]
     );
     // tombstone is removed.
-    assert_eq!(table.get_state().all_tombstones().len(), 0);
+    assert_eq!(
+        table
+            .get_state()
+            .all_tombstones(table.object_store().clone())
+            .await
+            .unwrap()
+            .count(),
+        0
+    );
 }

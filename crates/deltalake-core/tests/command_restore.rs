@@ -143,7 +143,7 @@ async fn test_restore_by_datetime() -> Result<(), Box<dyn Error>> {
 #[tokio::test]
 async fn test_restore_with_error_params() -> Result<(), Box<dyn Error>> {
     let context = setup_test().await?;
-    let mut table = context.table;
+    let table = context.table;
     let history = table.history(Some(10)).await?;
     let timestamp = history.get(1).unwrap().timestamp.unwrap();
     let naive = NaiveDateTime::from_timestamp_millis(timestamp).unwrap();
@@ -174,7 +174,12 @@ async fn test_restore_file_missing() -> Result<(), Box<dyn Error>> {
         fs::remove_file(p).unwrap();
     }
 
-    for file in context.table.state.all_tombstones().iter() {
+    for file in context
+        .table
+        .state
+        .all_tombstones(context.table.object_store().clone())
+        .await?
+    {
         let p = context.tmp_dir.path().join(file.clone().path);
         fs::remove_file(p).unwrap();
     }
@@ -196,7 +201,12 @@ async fn test_restore_allow_file_missing() -> Result<(), Box<dyn Error>> {
         fs::remove_file(p).unwrap();
     }
 
-    for file in context.table.state.all_tombstones().iter() {
+    for file in context
+        .table
+        .state
+        .all_tombstones(context.table.object_store().clone())
+        .await?
+    {
         let p = context.tmp_dir.path().join(file.clone().path);
         fs::remove_file(p).unwrap();
     }

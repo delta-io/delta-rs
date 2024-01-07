@@ -152,7 +152,7 @@ pub async fn create_checkpoint_for(
 
     debug!("Writing parquet bytes to checkpoint buffer.");
     let tombstones = state
-        .unexpired_tombstones()
+        .unexpired_tombstones(log_store.object_store().clone())
         .await
         .map_err(|_| ProtocolError::Generic("filed to get tombstones".into()))?
         .collect::<Vec<_>>();

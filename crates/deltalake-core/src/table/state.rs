@@ -4,9 +4,9 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::convert::TryFrom;
 use std::io::{BufRead, BufReader, Cursor};
+use std::sync::Arc;
 
 use chrono::Utc;
-use futures::stream::BoxStream;
 use futures::TryStreamExt;
 use lazy_static::lazy_static;
 use object_store::{path::Path, Error as ObjectStoreError, ObjectStore};
@@ -15,6 +15,7 @@ use serde::{Deserialize, Serialize};
 use super::config::TableConfig;
 use super::get_partition_col_data_types;
 use crate::errors::DeltaTableError;
+use crate::kernel::EagerSnapshot;
 use crate::kernel::{Action, Add, CommitInfo, DataType, DomainMetadata, Remove, StructType};
 use crate::kernel::{Metadata, Protocol};
 use crate::partitions::{DeltaTablePartition, PartitionFilter};
@@ -29,7 +30,7 @@ use crate::DeltaTable;
 use super::{CheckPoint, DeltaTableConfig};
 
 /// State snapshot currently held by the Delta Table instance.
-#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct DeltaTableState {
     // current table version represented by this table state
@@ -48,6 +49,7 @@ pub struct DeltaTableState {
     current_metadata: Option<DeltaTableMetaData>,
     protocol: Option<Protocol>,
     metadata: Option<Metadata>,
+    pub(crate) snapshot: Option<EagerSnapshot>,
 }
 
 impl DeltaTableState {
@@ -141,31 +143,34 @@ impl DeltaTableState {
         Ok(new_state)
     }
 
-    /// List of commit info maps.
-    pub fn commit_infos(&self) -> &Vec<CommitInfo> {
-        &self.commit_infos
-    }
-
     /// Full list of tombstones (remove actions) representing files removed from table state).
-    pub fn all_tombstones(&self) -> DeltaResult<BoxStream<'_, DeltaResult<Vec<Remove>>>> {
-        todo!()
+    pub async fn all_tombstones(
+        &self,
+        store: Arc<dyn ObjectStore>,
+    ) -> DeltaResult<impl Iterator<Item = Remove>> {
+        Ok(self
+            .snapshot
+            .as_ref()
+            .map(|s| s.snapshot().tombstones(store))
+            .unwrap_or_else(|| Ok(Box::pin(futures::stream::empty())))?
+            .try_collect::<Vec<_>>()
+            .await?
+            .into_iter()
+            .flatten())
     }
 
     /// List of unexpired tombstones (remove actions) representing files removed from table state.
     /// The retention period is set by `deletedFileRetentionDuration` with default value of 1 week.
-    pub async fn unexpired_tombstones(&self) -> DeltaResult<impl Iterator<Item = Remove>> {
+    pub async fn unexpired_tombstones(
+        &self,
+        store: Arc<dyn ObjectStore>,
+    ) -> DeltaResult<impl Iterator<Item = Remove>> {
         let retention_timestamp = Utc::now().timestamp_millis()
             - self
                 .table_config()
                 .deleted_file_retention_duration()
                 .as_millis() as i64;
-        let tombstones = self
-            .all_tombstones()?
-            .try_collect::<Vec<_>>()
-            .await?
-            .into_iter()
-            .flatten()
-            .collect::<Vec<_>>();
+        let tombstones = self.all_tombstones(store).await?.collect::<Vec<_>>();
         Ok(tombstones
             .into_iter()
             .filter(move |t| t.deletion_timestamp.unwrap_or(0) > retention_timestamp))
@@ -398,6 +403,7 @@ mod tests {
             current_metadata: None,
             metadata: None,
             protocol: None,
+            snapshot: None,
         };
         let bytes = serde_json::to_vec(&expected).unwrap();
         let actual: DeltaTableState = serde_json::from_slice(&bytes).unwrap();
@@ -420,6 +426,7 @@ mod tests {
             protocol: None,
             metadata: None,
             app_transaction_version,
+            snapshot: None,
         };
 
         let txn_action = Action::Txn(Txn {

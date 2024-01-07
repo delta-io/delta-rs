@@ -53,7 +53,11 @@ async fn read_simple_table(integration: &IntegrationContext) -> TestResult {
             Path::from("part-00000-2befed33-c358-4768-a43c-3eda0d2a499d-c000.snappy.parquet"),
         ]
     );
-    let tombstones = table.get_state().all_tombstones();
+    let tombstones = table
+        .get_state()
+        .all_tombstones(table.object_store().clone())
+        .await?
+        .collect::<Vec<_>>();
     assert_eq!(tombstones.len(), 31);
     assert!(tombstones.contains(&deltalake_core::kernel::Remove {
         path: "part-00006-63ce9deb-bc0f-482d-b9a1-7e717b67f294-c000.snappy.parquet".to_string(),
@@ -94,7 +98,11 @@ async fn read_simple_table_with_version(integration: &IntegrationContext) -> Tes
             Path::from("part-00001-bb70d2ba-c196-4df2-9c85-f34969ad3aa9-c000.snappy.parquet"),
         ]
     );
-    let tombstones = table.get_state().all_tombstones();
+    let tombstones = table
+        .get_state()
+        .all_tombstones(table.object_store().clone())
+        .await?
+        .collect::<Vec<_>>();
     assert_eq!(tombstones.len(), 29);
     assert!(tombstones.contains(&deltalake_core::kernel::Remove {
         path: "part-00006-63ce9deb-bc0f-482d-b9a1-7e717b67f294-c000.snappy.parquet".to_string(),
