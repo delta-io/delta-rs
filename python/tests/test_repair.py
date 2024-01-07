@@ -23,9 +23,10 @@ def test_repair_wo_dry_run(tmp_path, sample_data):
     dt = DeltaTable(tmp_path)
     os.remove(dt.file_uris()[0])
 
-    metrics = dt.repair(dry_run=False)
+    metrics = dt.repair(dry_run=False, custom_metadata={"userName": "John Doe"})
     last_action = dt.history(1)[0]
 
     assert len(metrics["files_removed"]) == 1
     assert metrics["dry_run"] is False
     assert last_action["operation"] == "FSCK"
+    assert last_action["userName"] == "John Doe"

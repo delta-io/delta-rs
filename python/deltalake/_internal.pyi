@@ -104,7 +104,9 @@ class RawDeltaTable:
         writer_properties: Optional[Dict[str, Optional[str]]],
         custom_metadata: Optional[Dict[str, str]],
     ) -> str: ...
-    def repair(self, dry_run: bool) -> str: ...
+    def repair(
+        self, dry_run: bool, custom_metadata: Optional[Dict[str, str]]
+    ) -> str: ...
     def update(
         self,
         updates: Dict[str, str],

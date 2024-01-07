@@ -1214,7 +1214,9 @@ class DeltaTable:
         )
         return json.loads(metrics)
 
-    def repair(self, dry_run: bool = False) -> Dict[str, Any]:
+    def repair(
+        self, dry_run: bool = False, custom_metadata: Optional[Dict[str, str]] = None
+    ) -> Dict[str, Any]:
         """Repair the Delta Table by auditing active files that do not exist in the underlying
         filesystem and removes them. This can be useful when there are accidental deletions or corrupted files.
 
@@ -1224,6 +1226,7 @@ class DeltaTable:
 
         Args:
             dry_run: when activated, list only the files, otherwise add remove actions to transaction log. Defaults to False.
+            custom_metadata: custom metadata that will be added to the transaction commit.
         Returns:
             The metrics from repair (FSCK) action.
 
@@ -1238,7 +1241,7 @@ class DeltaTable:
             {'dry_run': False, 'files_removed': ['6-0d084325-6885-4847-b008-82c1cf30674c-0.parquet', 5-4fba1d3e-3e20-4de1-933d-a8e13ac59f53-0.parquet']}
             ```
         """
-        metrics = self._table.repair(dry_run)
+        metrics = self._table.repair(dry_run, custom_metadata)
         return json.loads(metrics)
 
 

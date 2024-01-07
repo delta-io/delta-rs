@@ -308,8 +308,10 @@ impl VacuumPlan {
 
         // Begin VACUUM START COMMIT
         let mut commit_info = start_operation.get_commit_info();
-        let mut extra_info = HashMap::<String, Value>::new();
-
+        let mut extra_info = match app_metadata.clone() {
+            Some(meta) => meta,
+            None => HashMap::new(),
+        };
         commit_info.timestamp = Some(Utc::now().timestamp_millis());
         extra_info.insert(
             "clientVersion".to_string(),
@@ -322,14 +324,7 @@ impl VacuumPlan {
 
         let start_actions = vec![Action::CommitInfo(commit_info)];
 
-        commit(
-            store,
-            &start_actions,
-            start_operation,
-            snapshot,
-            app_metadata.clone(),
-        )
-        .await?;
+        commit(store, &start_actions, start_operation, snapshot, None).await?;
         // Finish VACUUM START COMMIT
 
         let locations = futures::stream::iter(self.files_to_delete)
@@ -355,7 +350,11 @@ impl VacuumPlan {
 
         // Begin VACUUM END COMMIT
         let mut commit_info = end_operation.get_commit_info();
-        let mut extra_info = HashMap::<String, Value>::new();
+
+        let mut extra_info = match app_metadata.clone() {
+            Some(meta) => meta,
+            None => HashMap::new(),
+        };
 
         commit_info.timestamp = Some(Utc::now().timestamp_millis());
         extra_info.insert(
@@ -369,7 +368,7 @@ impl VacuumPlan {
 
         let end_actions = vec![Action::CommitInfo(commit_info)];
 
-        commit(store, &end_actions, end_operation, snapshot, app_metadata).await?;
+        commit(store, &end_actions, end_operation, snapshot, None).await?;
         // Finish VACUUM END COMMIT
 
         Ok(VacuumMetrics {
