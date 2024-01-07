@@ -265,8 +265,6 @@ impl RawDeltaTable {
         if let Some(metadata) = custom_metadata {
             let json_metadata: Map<String, Value> =
                 metadata.into_iter().map(|(k, v)| (k, v.into())).collect();
-
-            dbg!(json_metadata.clone());
             cmd = cmd.with_metadata(json_metadata);
         };
 
@@ -986,7 +984,6 @@ fn set_writer_properties(
     let compression = writer_properties.get("compression");
 
     if let Some(Some(data_page_size)) = data_page_size_limit {
-        dbg!(data_page_size.clone());
         properties = properties.set_data_page_size_limit(data_page_size.parse::<usize>().unwrap());
     }
     if let Some(Some(dictionary_page_size)) = dictionary_page_size_limit {
