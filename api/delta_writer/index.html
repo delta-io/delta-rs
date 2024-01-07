@@ -1828,7 +1828,7 @@ see up to 4x performance improvements over pyarrow.</p>
   </span>
 
 </h3>
-<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">WriterProperties</span><span class="p">(</span><span class="n">data_page_size_limit</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">dictionary_page_size_limit</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">data_page_row_count_limit</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">write_batch_size</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">max_row_group_size</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">compression</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">compression_level</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span>
+<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">WriterProperties</span><span class="p">(</span><span class="n">data_page_size_limit</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">dictionary_page_size_limit</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">data_page_row_count_limit</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">write_batch_size</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">max_row_group_size</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">compression</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Literal</span><span class="p">[</span><span class="s1">&#39;UNCOMPRESSED&#39;</span><span class="p">,</span> <span class="s1">&#39;SNAPPY&#39;</span><span class="p">,</span> <span class="s1">&#39;GZIP&#39;</span><span class="p">,</span> <span class="s1">&#39;BROTLI&#39;</span><span class="p">,</span> <span class="s1">&#39;LZ4&#39;</span><span class="p">,</span> <span class="s1">&#39;ZSTD&#39;</span><span class="p">,</span> <span class="s1">&#39;LZ4_RAW&#39;</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">compression_level</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span>
 </span></code></pre></div>
 
   <div class="doc doc-contents first">
@@ -1836,8 +1836,7 @@ see up to 4x performance improvements over pyarrow.</p>
   
       <p>A Writer Properties instance for the Rust parquet writer.</p>
   
-      <p>Create a Writer Properties instance for the Rust parquet writer,
-see options https://arrow.apache.org/rust/parquet/file/properties/struct.WriterProperties.html:</p>
+      <p>Create a Writer Properties instance for the Rust parquet writer:</p>
 
 
 
@@ -1925,11 +1924,11 @@ see options https://arrow.apache.org/rust/parquet/file/properties/struct.WriterP
         <tr>
           <td><code>compression</code></td>
           <td>
-                <code><span title="typing.Optional">Optional</span>[str]</code>
+                <code><span title="typing.Optional">Optional</span>[<span title="typing.Literal">Literal</span>[&#39;UNCOMPRESSED&#39;, &#39;SNAPPY&#39;, &#39;GZIP&#39;, &#39;BROTLI&#39;, &#39;LZ4&#39;, &#39;ZSTD&#39;, &#39;LZ4_RAW&#39;]]</code>
           </td>
           <td>
             <div class="doc-md-description">
-              <p>compression type</p>
+              <p>compression type.</p>
             </div>
           </td>
           <td>
@@ -1943,7 +1942,10 @@ see options https://arrow.apache.org/rust/parquet/file/properties/struct.WriterP
           </td>
           <td>
             <div class="doc-md-description">
-              <p>level of compression, only relevant for subset of compression types</p>
+              <p>If none and compression has a level, the default level will be used, only relevant for
+GZIP: levels (1-9),
+BROTLI: levels (1-11),
+ZSTD: levels (1-22),</p>
             </div>
           </td>
           <td>
