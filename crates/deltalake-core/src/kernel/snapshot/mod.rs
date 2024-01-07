@@ -12,7 +12,7 @@ use futures::{StreamExt, TryStreamExt};
 use object_store::path::Path;
 use object_store::ObjectStore;
 
-use self::log_segment::{CommitData, LogSegment};
+use self::log_segment::{CommitData, LogSegment, PathExt};
 use self::parse::{extract_adds, extract_removes};
 use self::replay::{LogReplayScanner, ReplayStream};
 use super::{Action, Add, CommitInfo, Metadata, Protocol, Remove};
@@ -27,7 +27,7 @@ mod replay;
 mod serde;
 
 /// A snapshot of a Delta table
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct Snapshot {
     log_segment: LogSegment,
     config: DeltaTableConfig,
@@ -49,16 +49,107 @@ impl Snapshot {
     ) -> DeltaResult<Self> {
         let log_segment = LogSegment::try_new(table_root, version, store.as_ref()).await?;
         let (protocol, metadata) = log_segment.read_metadata(store.clone(), &config).await?;
+        if !metadata.is_some() && protocol.is_some() {
+            return Err(DeltaTableError::Generic(
+                "Cannot read metadata from log segment".into(),
+            ));
+        };
+        let metadata = metadata.unwrap();
+        let protocol = protocol.unwrap();
         let schema = serde_json::from_str(&metadata.schema_string)?;
         Ok(Self {
             log_segment,
-            // store,
             config,
             protocol,
             metadata,
             schema,
             table_url: table_root.to_string(),
         })
+    }
+
+    #[cfg(test)]
+    pub fn new_test<'a>(
+        commits: impl IntoIterator<Item = &'a CommitData>,
+    ) -> DeltaResult<(Self, RecordBatch)> {
+        use arrow_select::concat::concat_batches;
+        let (log_segment, batches) = LogSegment::new_test(commits)?;
+        let batch = batches.into_iter().collect::<Result<Vec<_>, _>>()?;
+        let batch = concat_batches(&batch[0].schema(), &batch)?;
+        let protocol = log_segment::read_protocol(&batch)?.unwrap();
+        let metadata = parse::read_metadata(&batch)?.unwrap();
+        let schema = serde_json::from_str(&metadata.schema_string)?;
+        Ok((
+            Self {
+                log_segment,
+                config: Default::default(),
+                protocol,
+                metadata,
+                schema,
+                table_url: Path::default().to_string(),
+            },
+            batch,
+        ))
+    }
+
+    /// Update the snapshot to the given version
+    pub async fn update(
+        &mut self,
+        store: Arc<dyn ObjectStore>,
+        target_version: Option<i64>,
+    ) -> DeltaResult<()> {
+        self.update_inner(store, target_version).await?;
+        Ok(())
+    }
+
+    async fn update_inner(
+        &mut self,
+        store: Arc<dyn ObjectStore>,
+        target_version: Option<i64>,
+    ) -> DeltaResult<Option<LogSegment>> {
+        if let Some(version) = target_version {
+            if version == self.version() {
+                return Ok(None);
+            }
+            if version < self.version() {
+                return Err(DeltaTableError::Generic(
+                    "Cannoit downgrade snapshot".into(),
+                ));
+            }
+        }
+        let log_segment = LogSegment::try_new_slice(
+            &Path::default(),
+            self.version() + 1,
+            target_version,
+            store.as_ref(),
+        )
+        .await?;
+        if log_segment.commit_files.is_empty() && log_segment.checkpoint_files.is_empty() {
+            return Ok(None);
+        }
+
+        let (protocol, metadata) = log_segment
+            .read_metadata(store.clone(), &self.config)
+            .await?;
+        if let Some(protocol) = protocol {
+            self.protocol = protocol;
+        }
+        if let Some(metadata) = metadata {
+            self.metadata = metadata;
+            self.schema = serde_json::from_str(&self.metadata.schema_string)?;
+        }
+
+        if !log_segment.checkpoint_files.is_empty() {
+            self.log_segment.checkpoint_files = log_segment.checkpoint_files.clone();
+            self.log_segment.commit_files = log_segment.commit_files.clone();
+        } else {
+            for file in &log_segment.commit_files {
+                self.log_segment.commit_files.push_front(file.clone());
+            }
+        }
+
+        self.log_segment.version = log_segment.version;
+
+        Ok(Some(log_segment))
     }
 
     /// Get the table version of the snapshot
@@ -110,11 +201,34 @@ impl Snapshot {
     }
 
     /// Get the commit infos in the snapshot
-    pub(crate) fn commit_infos(
+    pub(crate) async fn commit_infos(
         &self,
         store: Arc<dyn ObjectStore>,
-    ) -> BoxStream<'_, DeltaResult<Option<CommitInfo>>> {
-        futures::stream::iter(self.log_segment.commit_files.clone())
+        limit: Option<usize>,
+    ) -> DeltaResult<BoxStream<'_, DeltaResult<Option<CommitInfo>>>> {
+        let log_root = self.table_root().child("_delta_log");
+        let start_from = log_root.child(
+            format!(
+                "{:020}",
+                limit
+                    .map(|l| (self.version() - l as i64 + 1).max(0))
+                    .unwrap_or(0)
+            )
+            .as_str(),
+        );
+
+        let mut commit_files = Vec::new();
+        for meta in store
+            .list_with_offset(Some(&log_root), &start_from)
+            .try_collect::<Vec<_>>()
+            .await?
+        {
+            if meta.location.is_commit_file() {
+                commit_files.push(meta);
+            }
+        }
+        commit_files.sort_unstable_by(|a, b| b.location.cmp(&a.location));
+        Ok(futures::stream::iter(commit_files)
             .map(move |meta| {
                 let store = store.clone();
                 async move {
@@ -133,7 +247,7 @@ impl Snapshot {
                 }
             })
             .buffered(self.config.log_buffer_size)
-            .boxed()
+            .boxed())
     }
 
     pub(crate) fn tombstones(
@@ -160,7 +274,7 @@ impl Snapshot {
 }
 
 /// A snapshot of a Delta table that has been eagerly loaded into memory.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct EagerSnapshot {
     snapshot: Snapshot,
     files: Vec<RecordBatch>,
@@ -179,6 +293,55 @@ impl EagerSnapshot {
         Ok(Self { snapshot, files })
     }
 
+    #[cfg(test)]
+    pub fn new_test<'a>(commits: impl IntoIterator<Item = &'a CommitData>) -> DeltaResult<Self> {
+        let (snapshot, batch) = Snapshot::new_test(commits)?;
+        let mut files = Vec::new();
+        let mut scanner = LogReplayScanner::new();
+        files.push(scanner.process_files_batch(&batch, true)?);
+        Ok(Self { snapshot, files })
+    }
+
+    /// Update the snapshot to the given version
+    pub async fn update(
+        &mut self,
+        store: Arc<dyn ObjectStore>,
+        target_version: Option<i64>,
+    ) -> DeltaResult<()> {
+        if Some(self.version()) == target_version {
+            return Ok(());
+        }
+        let new_slice = self
+            .snapshot
+            .update_inner(store.clone(), target_version)
+            .await?;
+        if let Some(new_slice) = new_slice {
+            let files = std::mem::take(&mut self.files);
+            let log_stream = new_slice.commit_stream(
+                store.clone(),
+                &log_segment::COMMIT_SCHEMA,
+                &self.snapshot.config,
+            )?;
+            let checkpoint_stream = if new_slice.checkpoint_files.is_empty() {
+                futures::stream::iter(files.into_iter().map(Ok)).boxed()
+            } else {
+                new_slice
+                    .checkpoint_stream(
+                        store,
+                        &log_segment::CHECKPOINT_SCHEMA,
+                        &self.snapshot.config,
+                    )
+                    .boxed()
+            };
+            let files = ReplayStream::new(log_stream, checkpoint_stream)
+                .try_collect()
+                .await?;
+
+            self.files = files;
+        }
+        Ok(())
+    }
+
     pub(crate) fn snapshot(&self) -> &Snapshot {
         &self.snapshot
     }
@@ -186,6 +349,14 @@ impl EagerSnapshot {
     /// Get the table version of the snapshot
     pub fn version(&self) -> i64 {
         self.snapshot.version()
+    }
+
+    /// Get the timestamp of the given version
+    pub fn version_timestamp(&self, version: i64) -> Option<i64> {
+        self.snapshot
+            .log_segment
+            .version_timestamp(version)
+            .map(|ts| ts.timestamp_millis())
     }
 
     /// Get the table schema of the snapshot
@@ -213,6 +384,11 @@ impl EagerSnapshot {
         self.snapshot.table_config()
     }
 
+    /// Get the number of files in the snapshot
+    pub fn files_count(&self) -> usize {
+        self.files.iter().map(|f| f.num_rows() as usize).sum()
+    }
+
     /// Get the files in the snapshot
     pub fn file_actions(&self) -> DeltaResult<impl Iterator<Item = Add> + '_> {
         Ok(self.files.iter().flat_map(|b| extract_adds(b)).flatten())
@@ -223,8 +399,26 @@ impl EagerSnapshot {
         &mut self,
         commits: impl IntoIterator<Item = &'a CommitData>,
     ) -> DeltaResult<i64> {
+        let mut metadata = None;
+        let mut protocol = None;
+        let mut send = Vec::new();
+        for commit in commits {
+            if metadata.is_none() {
+                metadata = commit.0.iter().find_map(|a| match a {
+                    Action::Metadata(metadata) => Some(metadata.clone()),
+                    _ => None,
+                });
+            }
+            if protocol.is_none() {
+                protocol = commit.0.iter().find_map(|a| match a {
+                    Action::Protocol(protocol) => Some(protocol.clone()),
+                    _ => None,
+                });
+            }
+            send.push(commit);
+        }
         let actions = self.snapshot.log_segment.advance(
-            commits,
+            send,
             &self.table_root(),
             &log_segment::COMMIT_SCHEMA,
             &self.snapshot.config,
@@ -236,6 +430,7 @@ impl EagerSnapshot {
         for batch in actions {
             files.push(scanner.process_files_batch(&batch?, true)?);
         }
+
         self.files = files
             .into_iter()
             .chain(
@@ -244,6 +439,14 @@ impl EagerSnapshot {
                     .flat_map(|batch| scanner.process_files_batch(batch, false)),
             )
             .collect();
+
+        if let Some(metadata) = metadata {
+            self.snapshot.metadata = metadata;
+            self.snapshot.schema = serde_json::from_str(&self.snapshot.metadata.schema_string)?;
+        }
+        if let Some(protocol) = protocol {
+            self.snapshot.protocol = protocol;
+        }
 
         Ok(self.snapshot.version())
     }
@@ -286,12 +489,17 @@ mod tests {
         let snapshot =
             Snapshot::try_new(&Path::default(), store.clone(), Default::default(), None).await?;
 
+        let bytes = serde_json::to_vec(&snapshot).unwrap();
+        let actual: Snapshot = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(actual, snapshot);
+
         let schema_string = r#"{"type":"struct","fields":[{"name":"id","type":"long","nullable":true,"metadata":{}}]}"#;
         let expected: StructType = serde_json::from_str(schema_string)?;
         assert_eq!(snapshot.schema(), &expected);
 
         let infos = snapshot
-            .commit_infos(store.clone())
+            .commit_infos(store.clone(), None)
+            .await?
             .try_collect::<Vec<_>>()
             .await?;
         let infos = infos.into_iter().flatten().collect_vec();
@@ -354,6 +562,10 @@ mod tests {
         let snapshot =
             EagerSnapshot::try_new(&Path::default(), store.clone(), Default::default(), None)
                 .await?;
+
+        let bytes = serde_json::to_vec(&snapshot).unwrap();
+        let actual: EagerSnapshot = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(actual, snapshot);
 
         let schema_string = r#"{"type":"struct","fields":[{"name":"id","type":"long","nullable":true,"metadata":{}}]}"#;
         let expected: StructType = serde_json::from_str(schema_string)?;

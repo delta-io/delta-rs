@@ -138,7 +138,7 @@ async fn excute_non_empty_expr(
     let input_schema = snapshot.input_schema()?;
     let input_dfschema: DFSchema = input_schema.clone().as_ref().clone().try_into()?;
 
-    let table_partition_cols = snapshot.metadata()?.partition_columns.clone();
+    let table_partition_cols = snapshot.metadata().partition_columns.clone();
 
     let scan = DeltaScanBuilder::new(snapshot, log_store.clone(), state)
         .with_files(rewrite)
@@ -159,7 +159,7 @@ async fn excute_non_empty_expr(
         Arc::new(FilterExec::try_new(predicate_expr, scan.clone())?);
 
     let add_actions = write_execution_plan(
-        snapshot,
+        Some(snapshot),
         state.clone(),
         filter.clone(),
         table_partition_cols.clone(),
@@ -265,7 +265,7 @@ async fn execute(
             log_store.as_ref(),
             &actions,
             operation.clone(),
-            snapshot,
+            Some(snapshot),
             Some(app_metadata),
         )
         .await?;
@@ -316,7 +316,7 @@ impl std::future::IntoFuture for DeleteBuilder {
             .await?;
 
             if let Some(op) = &operation {
-                this.snapshot.merge(actions, op, version, true, true)?;
+                this.snapshot.merge(actions, op, version)?;
             }
 
             let table = DeltaTable::new_with_state(this.log_store, this.snapshot);
@@ -400,19 +400,19 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(table.version(), 1);
-        assert_eq!(table.get_file_uris().count(), 1);
+        assert_eq!(table.get_files_count(), 1);
 
         let (table, metrics) = DeltaOps(table).delete().await.unwrap();
 
         assert_eq!(table.version(), 2);
-        assert_eq!(table.get_file_uris().count(), 0);
+        assert_eq!(table.get_files_count(), 0);
         assert_eq!(metrics.num_added_files, 0);
         assert_eq!(metrics.num_removed_files, 1);
         assert_eq!(metrics.num_deleted_rows, None);
         assert_eq!(metrics.num_copied_rows, None);
 
         let commit_info = table.history(None).await.unwrap();
-        let last_commit = &commit_info[commit_info.len() - 1];
+        let last_commit = &commit_info[0];
         let _extra_info = last_commit.info.clone();
         // assert_eq!(
         //     extra_info["operationMetrics"],
@@ -462,7 +462,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(table.version(), 1);
-        assert_eq!(table.get_file_uris().count(), 1);
+        assert_eq!(table.get_files_count(), 1);
 
         let batch = RecordBatch::try_new(
             Arc::clone(&schema),
@@ -486,7 +486,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(table.version(), 2);
-        assert_eq!(table.get_file_uris().count(), 2);
+        assert_eq!(table.get_files_count(), 2);
 
         let (table, metrics) = DeltaOps(table)
             .delete()
@@ -494,7 +494,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(table.version(), 3);
-        assert_eq!(table.get_file_uris().count(), 2);
+        assert_eq!(table.get_files_count(), 2);
 
         assert_eq!(metrics.num_added_files, 1);
         assert_eq!(metrics.num_removed_files, 1);
@@ -503,7 +503,7 @@ mod tests {
         assert_eq!(metrics.num_copied_rows, Some(3));
 
         let commit_info = table.history(None).await.unwrap();
-        let last_commit = &commit_info[commit_info.len() - 1];
+        let last_commit = &commit_info[0];
         let parameters = last_commit.operation_parameters.clone().unwrap();
         assert_eq!(parameters["predicate"], json!("value = 1"));
 
@@ -642,7 +642,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(table.version(), 1);
-        assert_eq!(table.get_file_uris().count(), 2);
+        assert_eq!(table.get_files_count(), 2);
 
         let (table, metrics) = DeltaOps(table)
             .delete()
@@ -650,7 +650,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(table.version(), 2);
-        assert_eq!(table.get_file_uris().count(), 1);
+        assert_eq!(table.get_files_count(), 1);
 
         assert_eq!(metrics.num_added_files, 0);
         assert_eq!(metrics.num_removed_files, 1);
@@ -700,7 +700,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(table.version(), 1);
-        assert_eq!(table.get_file_uris().count(), 3);
+        assert_eq!(table.get_files_count(), 3);
 
         let (table, metrics) = DeltaOps(table)
             .delete()
@@ -712,7 +712,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(table.version(), 2);
-        assert_eq!(table.get_file_uris().count(), 2);
+        assert_eq!(table.get_files_count(), 2);
 
         assert_eq!(metrics.num_added_files, 0);
         assert_eq!(metrics.num_removed_files, 1);

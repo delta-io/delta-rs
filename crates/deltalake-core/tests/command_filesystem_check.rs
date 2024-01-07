@@ -22,25 +22,25 @@ async fn test_filesystem_check(context: &IntegrationContext) -> TestResult {
     context.object_store().delete(&path).await?;
 
     let table = context.table_builder(TestTables::Simple).load().await?;
-    let version = table.state.version();
-    let active = table.state.files().len();
+    let version = table.snapshot()?.version();
+    let active = table.snapshot()?.files()?.len();
 
     // Validate a Dry run does not mutate the table log and indentifies orphaned add actions
     let op = DeltaOps::from(table);
     let (table, metrics) = op.filesystem_check().with_dry_run(true).await?;
-    assert_eq!(version, table.state.version());
-    assert_eq!(active, table.state.files().len());
+    assert_eq!(version, table.snapshot()?.version());
+    assert_eq!(active, table.snapshot()?.files()?.len());
     assert_eq!(vec![file.to_string()], metrics.files_removed);
 
     // Validate a run updates the table version with proper remove actions
     let op = DeltaOps::from(table);
     let (table, metrics) = op.filesystem_check().await?;
-    assert_eq!(version + 1, table.state.version());
-    assert_eq!(active - 1, table.state.files().len());
+    assert_eq!(version + 1, table.snapshot()?.version());
+    assert_eq!(active - 1, table.snapshot()?.files()?.len());
     assert_eq!(vec![file.to_string()], metrics.files_removed);
 
     let remove = table
-        .state
+        .snapshot()?
         .all_tombstones(table.object_store().clone())
         .await?
         .collect::<HashSet<_>>();
@@ -50,8 +50,8 @@ async fn test_filesystem_check(context: &IntegrationContext) -> TestResult {
     // An additional run should return an empty list of orphaned actions
     let op = DeltaOps::from(table);
     let (table, metrics) = op.filesystem_check().await?;
-    assert_eq!(version + 1, table.state.version());
-    assert_eq!(active - 1, table.state.files().len());
+    assert_eq!(version + 1, table.snapshot()?.version());
+    assert_eq!(active - 1, table.snapshot()?.files()?.len());
     assert!(metrics.files_removed.is_empty());
 
     Ok(())
@@ -75,18 +75,19 @@ async fn test_filesystem_check_partitioned() -> TestResult {
         .table_builder(TestTables::Delta0_8_0Partitioned)
         .load()
         .await?;
-    let version = table.state.version();
-    let active = table.state.files().len();
+
+    let version = table.snapshot()?.version();
+    let active = table.snapshot()?.files()?.len();
 
     // Validate a run updates the table version with proper remove actions
     let op = DeltaOps::from(table);
     let (table, metrics) = op.filesystem_check().await?;
-    assert_eq!(version + 1, table.state.version());
-    assert_eq!(active - 1, table.state.files().len());
+    assert_eq!(version + 1, table.snapshot()?.version());
+    assert_eq!(active - 1, table.snapshot()?.files()?.len());
     assert_eq!(vec![file.to_string()], metrics.files_removed);
 
     let remove = table
-        .state
+        .snapshot()?
         .all_tombstones(table.object_store().clone())
         .await?
         .collect::<HashSet<_>>();

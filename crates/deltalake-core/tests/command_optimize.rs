@@ -170,7 +170,7 @@ async fn test_optimize_non_partitioned_table() -> Result<(), Box<dyn Error>> {
     .await?;
 
     let version = dt.version();
-    assert_eq!(dt.get_state().files().len(), 5);
+    assert_eq!(dt.get_files_count(), 5);
 
     let optimize = DeltaOps(dt).optimize().with_target_size(2_000_000);
     let (dt, metrics) = optimize.await?;
@@ -180,7 +180,7 @@ async fn test_optimize_non_partitioned_table() -> Result<(), Box<dyn Error>> {
     assert_eq!(metrics.num_files_removed, 4);
     assert_eq!(metrics.total_considered_files, 5);
     assert_eq!(metrics.partitions_optimized, 1);
-    assert_eq!(dt.get_state().files().len(), 2);
+    assert_eq!(dt.get_files_count(), 2);
 
     Ok(())
 }
@@ -236,7 +236,7 @@ async fn test_optimize_with_partitions() -> Result<(), Box<dyn Error>> {
     assert_eq!(version + 1, dt.version());
     assert_eq!(metrics.num_files_added, 1);
     assert_eq!(metrics.num_files_removed, 2);
-    assert_eq!(dt.get_state().files().len(), 3);
+    assert_eq!(dt.get_files_count(), 3);
 
     Ok(())
 }
@@ -269,7 +269,7 @@ async fn test_conflict_for_remove_actions() -> Result<(), Box<dyn Error>> {
     let filter = vec![PartitionFilter::try_from(("date", "=", "2022-05-22"))?];
     let plan = create_merge_plan(
         OptimizeType::Compact,
-        &dt.state,
+        dt.snapshot()?,
         &filter,
         None,
         WriterProperties::builder().build(),
@@ -277,7 +277,7 @@ async fn test_conflict_for_remove_actions() -> Result<(), Box<dyn Error>> {
 
     let uri = context.tmp_dir.path().to_str().to_owned().unwrap();
     let other_dt = deltalake_core::open_table(uri).await?;
-    let add = &other_dt.get_state().files()[0];
+    let add = &other_dt.snapshot()?.files()?[0];
     let remove = Remove {
         path: add.path.clone(),
         deletion_timestamp: Some(
@@ -301,13 +301,13 @@ async fn test_conflict_for_remove_actions() -> Result<(), Box<dyn Error>> {
         other_dt.log_store().as_ref(),
         &vec![Action::Remove(remove)],
         operation,
-        &other_dt.state,
+        Some(other_dt.snapshot()?),
         None,
     )
     .await?;
 
     let maybe_metrics = plan
-        .execute(dt.log_store(), &dt.state, 1, 20, None, None)
+        .execute(dt.log_store(), dt.snapshot()?, 1, 20, None, None)
         .await;
 
     assert!(maybe_metrics.is_err());
@@ -341,7 +341,7 @@ async fn test_no_conflict_for_append_actions() -> Result<(), Box<dyn Error>> {
     let filter = vec![PartitionFilter::try_from(("date", "=", "2022-05-22"))?];
     let plan = create_merge_plan(
         OptimizeType::Compact,
-        &dt.state,
+        dt.snapshot()?,
         &filter,
         None,
         WriterProperties::builder().build(),
@@ -358,7 +358,7 @@ async fn test_no_conflict_for_append_actions() -> Result<(), Box<dyn Error>> {
     .await?;
 
     let metrics = plan
-        .execute(dt.log_store(), &dt.state, 1, 20, None, None)
+        .execute(dt.log_store(), dt.snapshot()?, 1, 20, None, None)
         .await?;
     assert_eq!(metrics.num_files_added, 1);
     assert_eq!(metrics.num_files_removed, 2);
@@ -391,7 +391,7 @@ async fn test_commit_interval() -> Result<(), Box<dyn Error>> {
 
     let plan = create_merge_plan(
         OptimizeType::Compact,
-        &dt.state,
+        dt.snapshot()?,
         &[],
         None,
         WriterProperties::builder().build(),
@@ -400,7 +400,7 @@ async fn test_commit_interval() -> Result<(), Box<dyn Error>> {
     let metrics = plan
         .execute(
             dt.log_store(),
-            &dt.state,
+            dt.snapshot()?,
             1,
             20,
             Some(Duration::from_secs(0)), // this will cause as many commits as num_files_added
@@ -610,7 +610,7 @@ async fn test_commit_info() -> Result<(), Box<dyn Error>> {
     let (dt, metrics) = optimize.await?;
 
     let commit_info = dt.history(None).await?;
-    let last_commit = &commit_info[commit_info.len() - 1];
+    let last_commit = &commit_info[0];
 
     let commit_metrics =
         serde_json::from_value::<Metrics>(last_commit.info["operationMetrics"].clone())?;
@@ -719,7 +719,7 @@ async fn test_zorder_unpartitioned() -> Result<(), Box<dyn Error>> {
     assert_eq!(metrics.total_considered_files, 2);
 
     // Check data
-    let files = dt.get_files_iter().collect::<Vec<_>>();
+    let files = dt.get_files_iter()?.collect::<Vec<_>>();
     assert_eq!(files.len(), 1);
 
     let actual = read_parquet_file(&files[0], dt.object_store()).await?;

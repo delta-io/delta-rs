@@ -4,9 +4,7 @@ use std::io::{BufRead, BufReader, Cursor};
 use std::sync::Arc;
 use std::task::{ready, Poll};
 
-use arrow_array::{
-    Array, Int32Array, Int64Array, ListArray, RecordBatch, StringArray, StructArray,
-};
+use arrow_array::{Array, Int32Array, ListArray, RecordBatch, StringArray, StructArray};
 use arrow_json::{reader::Decoder, ReaderBuilder};
 use arrow_schema::SchemaRef as ArrowSchemaRef;
 use bytes::{Buf, Bytes};
@@ -23,15 +21,16 @@ use parquet::arrow::async_reader::{ParquetObjectReader, ParquetRecordBatchStream
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use tracing::debug;
 
 use crate::kernel::schema::Schema;
-use crate::kernel::snapshot::extract::{extract_and_cast, extract_and_cast_opt};
 use crate::kernel::{Action, ActionType, Metadata, Protocol, StructType};
 use crate::operations::transaction::get_commit_bytes;
 use crate::protocol::DeltaOperation;
 use crate::{DeltaResult, DeltaTableConfig, DeltaTableError};
 
-use super::extract::{read_primitive, read_primitive_opt, read_str, read_str_opt};
+use super::extract::{extract_and_cast, extract_and_cast_opt, read_primitive};
+use super::parse::read_metadata;
 
 const LAST_CHECKPOINT_FILE_NAME: &str = "_last_checkpoint";
 const BATCH_SIZE: usize = 1024;
@@ -52,7 +51,7 @@ lazy_static! {
         StructType::new(vec![ActionType::Remove.schema_field().clone(),]);
 }
 
-trait PathExt {
+pub(super) trait PathExt {
     fn child(&self, path: impl AsRef<str>) -> DeltaResult<Path>;
     /// Returns the last path segment if not terminated with a "/"
     fn filename(&self) -> Option<&str>;
@@ -110,7 +109,7 @@ struct FileInfo {
     version: Option<i64>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub(super) struct LogSegment {
     pub(super) version: i64,
     pub(super) commit_files: VecDeque<ObjectMeta>,
@@ -133,7 +132,7 @@ impl LogSegment {
             (Some(cp), Some(v)) if cp.version <= v => {
                 list_log_files_with_checkpoint(&cp, store, &log_url).await?
             }
-            _ => list_log_files(store, &log_url, version).await?,
+            _ => list_log_files(store, &log_url, version, None).await?,
         };
 
         // remove all files above requested version
@@ -141,14 +140,20 @@ impl LogSegment {
             commit_files.retain(|meta| meta.location.commit_version() <= Some(version));
         }
 
+        let mut segment = Self {
+            version: 0,
+            commit_files: commit_files.into(),
+            checkpoint_files,
+        };
+        if segment.commit_files.is_empty() && segment.checkpoint_files.is_empty() {
+            return Err(DeltaTableError::NotATable("no log files".into()));
+        }
         // get the effective version from chosen files
-        let version_eff = commit_files
-            .first()
-            .or(checkpoint_files.first())
-            .and_then(|f| f.location.commit_version())
-            .ok_or(DeltaTableError::Generic(
-                "failed to get effective version".into(),
-            ))?; // TODO: A more descriptive error
+        let version_eff = segment.file_version().ok_or(DeltaTableError::Generic(
+            "failed to get effective version".into(),
+        ))?; // TODO: A more descriptive error
+        segment.version = version_eff;
+        segment.validate()?;
 
         if let Some(v) = version {
             if version_eff != v {
@@ -157,11 +162,64 @@ impl LogSegment {
             }
         }
 
-        Ok(Self {
-            version: version_eff,
+        Ok(segment)
+    }
+
+    pub async fn try_new_slice(
+        table_root: &Path,
+        start_version: i64,
+        end_version: Option<i64>,
+        store: &dyn ObjectStore,
+    ) -> DeltaResult<Self> {
+        debug!(
+            "try_new_slice: start_version: {}, end_version: {:?}",
+            start_version, end_version
+        );
+        let log_url = table_root.child("_delta_log");
+        let (mut commit_files, checkpoint_files) =
+            list_log_files(store, &log_url, end_version, Some(start_version)).await?;
+        // remove all files above requested version
+        if let Some(version) = end_version {
+            commit_files.retain(|meta| meta.location.commit_version() <= Some(version));
+        }
+        let mut segment = Self {
+            version: start_version,
             commit_files: commit_files.into(),
             checkpoint_files,
-        })
+        };
+        segment.version = segment
+            .file_version()
+            .unwrap_or(end_version.unwrap_or(start_version));
+        Ok(segment)
+    }
+
+    pub fn validate(&self) -> DeltaResult<()> {
+        let checkpoint_version = self
+            .checkpoint_files
+            .iter()
+            .filter_map(|f| f.location.commit_version())
+            .max();
+        if let Some(v) = checkpoint_version {
+            if !self
+                .commit_files
+                .iter()
+                .all(|f| f.location.commit_version() > Some(v))
+            {
+                return Err(DeltaTableError::Generic("inconsistent log segment".into()));
+            }
+        }
+        Ok(())
+    }
+
+    pub fn file_version(&self) -> Option<i64> {
+        self.commit_files
+            .iter()
+            .filter_map(|f| f.location.commit_version())
+            .max()
+            .or(self
+                .checkpoint_files
+                .first()
+                .and_then(|f| f.location.commit_version()))
     }
 
     #[cfg(test)]
@@ -186,6 +244,13 @@ impl LogSegment {
 
     pub fn version(&self) -> i64 {
         self.version
+    }
+
+    pub fn version_timestamp(&self, version: i64) -> Option<chrono::DateTime<Utc>> {
+        self.commit_files
+            .iter()
+            .find(|f| f.location.commit_version() == Some(version))
+            .map(|f| f.last_modified)
     }
 
     pub(super) fn commit_stream(
@@ -232,7 +297,7 @@ impl LogSegment {
         &self,
         store: Arc<dyn ObjectStore>,
         config: &DeltaTableConfig,
-    ) -> DeltaResult<(Protocol, Metadata)> {
+    ) -> DeltaResult<(Option<Protocol>, Option<Metadata>)> {
         lazy_static::lazy_static! {
             static ref READ_SCHEMA: StructType = StructType::new(vec![
                 ActionType::Protocol.schema_field().clone(),
@@ -257,7 +322,7 @@ impl LogSegment {
                 };
             }
             if maybe_protocol.is_some() && maybe_metadata.is_some() {
-                return Ok((maybe_protocol.unwrap(), maybe_metadata.unwrap()));
+                return Ok((maybe_protocol, maybe_metadata));
             }
         }
 
@@ -275,22 +340,11 @@ impl LogSegment {
                 };
             }
             if maybe_protocol.is_some() && maybe_metadata.is_some() {
-                return Ok((maybe_protocol.unwrap(), maybe_metadata.unwrap()));
+                return Ok((maybe_protocol, maybe_metadata));
             }
         }
 
-        match (maybe_protocol, maybe_metadata) {
-            (Some(protocol), Some(metadata)) => Ok((protocol, metadata)),
-            (Some(_), None) => Err(DeltaTableError::Generic(
-                "Missing metadata action".to_string(),
-            )),
-            (None, Some(_)) => Err(DeltaTableError::Generic(
-                "Missing protocol action".to_string(),
-            )),
-            (None, None) => Err(DeltaTableError::Generic(
-                "Missing protocol and metadata actions".to_string(),
-            )),
-        }
+        Ok((maybe_protocol, maybe_metadata))
     }
 
     /// Advance the log segment with new commits
@@ -332,7 +386,7 @@ impl LogSegment {
     }
 }
 
-fn read_protocol(batch: &RecordBatch) -> DeltaResult<Option<Protocol>> {
+pub(super) fn read_protocol(batch: &RecordBatch) -> DeltaResult<Option<Protocol>> {
     if let Some(arr) = extract_and_cast_opt::<StructArray>(batch, "protocol") {
         let min_reader_version = extract_and_cast::<Int32Array>(arr, "minReaderVersion")?;
         let min_writer_version = extract_and_cast::<Int32Array>(arr, "minWriterVersion")?;
@@ -370,35 +424,6 @@ fn read_protocol(batch: &RecordBatch) -> DeltaResult<Option<Protocol>> {
                     min_writer_version: read_primitive(min_writer_version, idx)?,
                     reader_features,
                     writer_features,
-                }));
-            }
-        }
-    }
-    Ok(None)
-}
-
-fn read_metadata(batch: &RecordBatch) -> DeltaResult<Option<Metadata>> {
-    if let Some(arr) = extract_and_cast_opt::<StructArray>(batch, "metaData") {
-        let id = extract_and_cast::<StringArray>(arr, "id")?;
-        let name = extract_and_cast::<StringArray>(arr, "name")?;
-        let description = extract_and_cast::<StringArray>(arr, "description")?;
-        // let format = extract_and_cast::<StringArray>(arr, "format")?;
-        let schema_string = extract_and_cast::<StringArray>(arr, "schemaString")?;
-        // let partition_columns = extract_and_cast::<StringArray>(arr, "partitionColumns")?;
-        // let configuration = extract_and_cast::<StringArray>(arr, "configuration")?;
-        let created_time = extract_and_cast::<Int64Array>(arr, "createdTime")?;
-
-        for idx in 0..arr.len() {
-            if arr.is_valid(idx) {
-                return Ok(Some(Metadata {
-                    id: read_str(id, idx)?.to_string(),
-                    name: read_str_opt(name, idx).map(|s| s.to_string()),
-                    description: read_str_opt(description, idx).map(|s| s.to_string()),
-                    format: Default::default(),
-                    schema_string: read_str(schema_string, idx)?.to_string(),
-                    partition_columns: Default::default(),
-                    configuration: Default::default(),
-                    created_time: read_primitive_opt(created_time, idx),
                 }));
             }
         }
@@ -548,13 +573,14 @@ async fn list_log_files_with_checkpoint(
 /// List relevant log files.
 ///
 /// Relevant files are the max checkpoint found and all subsequent commits.
-async fn list_log_files(
+pub(super) async fn list_log_files(
     fs_client: &dyn ObjectStore,
     log_root: &Path,
     max_version: Option<i64>,
+    start_version: Option<i64>,
 ) -> DeltaResult<(Vec<ObjectMeta>, Vec<ObjectMeta>)> {
-    let max_version = max_version.unwrap_or(i64::MAX);
-    let start_from = log_root.child(format!("{:020}", 0).as_str());
+    let max_version = max_version.unwrap_or(i64::MAX - 1);
+    let start_from = log_root.child(format!("{:020}", start_version.unwrap_or(0)).as_str());
 
     let mut max_checkpoint_version = -1_i64;
     let mut commit_files = Vec::with_capacity(25);
@@ -565,7 +591,9 @@ async fn list_log_files(
         .try_collect::<Vec<_>>()
         .await?
     {
-        if meta.location.commit_version() <= Some(max_version) {
+        if meta.location.commit_version().unwrap_or(i64::MAX) <= max_version
+            && meta.location.commit_version() >= start_version
+        {
             if meta.location.is_checkpoint_file() {
                 let version = meta.location.commit_version().unwrap_or(0);
                 match version.cmp(&max_checkpoint_version) {
@@ -601,6 +629,27 @@ pub(super) mod tests {
     pub(crate) async fn test_log_segment(context: &IntegrationContext) -> TestResult {
         read_log_files(context).await?;
         read_metadata(context).await?;
+        log_segment_serde(context).await?;
+
+        Ok(())
+    }
+
+    async fn log_segment_serde(context: &IntegrationContext) -> TestResult {
+        let store = context
+            .table_builder(TestTables::Simple)
+            .build_storage()?
+            .object_store();
+
+        let segment = LogSegment::try_new(&Path::default(), None, store.as_ref()).await?;
+        let bytes = serde_json::to_vec(&segment).unwrap();
+        let actual: LogSegment = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(actual.version(), segment.version());
+        assert_eq!(actual.commit_files.len(), segment.commit_files.len());
+        assert_eq!(
+            actual.checkpoint_files.len(),
+            segment.checkpoint_files.len()
+        );
+
         Ok(())
     }
 
@@ -620,11 +669,11 @@ pub(super) mod tests {
         assert_eq!(log.len(), 2);
         assert_eq!(check.len(), 1);
 
-        let (log, check) = list_log_files(store.as_ref(), &log_path, None).await?;
+        let (log, check) = list_log_files(store.as_ref(), &log_path, None, None).await?;
         assert_eq!(log.len(), 2);
         assert_eq!(check.len(), 1);
 
-        let (log, check) = list_log_files(store.as_ref(), &log_path, Some(8)).await?;
+        let (log, check) = list_log_files(store.as_ref(), &log_path, Some(8), None).await?;
         assert_eq!(log.len(), 3);
         assert_eq!(check.len(), 1);
 
@@ -643,11 +692,11 @@ pub(super) mod tests {
             .build_storage()?
             .object_store();
 
-        let (log, check) = list_log_files(store.as_ref(), &log_path, None).await?;
+        let (log, check) = list_log_files(store.as_ref(), &log_path, None, None).await?;
         assert_eq!(log.len(), 5);
         assert_eq!(check.len(), 0);
 
-        let (log, check) = list_log_files(store.as_ref(), &log_path, Some(2)).await?;
+        let (log, check) = list_log_files(store.as_ref(), &log_path, Some(2), None).await?;
         assert_eq!(log.len(), 3);
         assert_eq!(check.len(), 0);
 
@@ -663,6 +712,7 @@ pub(super) mod tests {
         let (protocol, _metadata) = segment
             .read_metadata(store.clone(), &Default::default())
             .await?;
+        let protocol = protocol.unwrap();
 
         let expected = Protocol {
             min_reader_version: 3,

@@ -84,7 +84,7 @@ impl From<WriteError> for DeltaTableError {
 #[derive(Debug, Clone)]
 pub struct WriteBuilder {
     /// A snapshot of the to-be-loaded table's state
-    snapshot: DeltaTableState,
+    snapshot: Option<DeltaTableState>,
     /// Delta object store for handling data files
     log_store: LogStoreRef,
     /// The input plan
@@ -121,7 +121,7 @@ pub struct WriteBuilder {
 
 impl WriteBuilder {
     /// Create a new [`WriteBuilder`]
-    pub fn new(log_store: LogStoreRef, snapshot: DeltaTableState) -> Self {
+    pub fn new(log_store: LogStoreRef, snapshot: Option<DeltaTableState>) -> Self {
         Self {
             snapshot,
             log_store,
@@ -249,9 +249,9 @@ impl WriteBuilder {
     }
 
     async fn check_preconditions(&self) -> DeltaResult<Vec<Action>> {
-        match self.log_store.is_delta_table_location().await? {
-            true => {
-                PROTOCOL.can_write_to(&self.snapshot)?;
+        match &self.snapshot {
+            Some(snapshot) => {
+                PROTOCOL.can_write_to(snapshot)?;
                 match self.mode {
                     SaveMode::ErrorIfExists => {
                         Err(WriteError::AlreadyExists(self.log_store.root_uri()).into())
@@ -259,7 +259,7 @@ impl WriteBuilder {
                     _ => Ok(vec![]),
                 }
             }
-            false => {
+            None => {
                 let schema: StructType = if let Some(plan) = &self.input {
                     Ok(plan.schema().try_into()?)
                 } else if let Some(batches) = &self.batches {
@@ -295,7 +295,7 @@ impl WriteBuilder {
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn write_execution_plan(
-    snapshot: &DeltaTableState,
+    snapshot: Option<&DeltaTableState>,
     state: SessionState,
     plan: Arc<dyn ExecutionPlan>,
     partition_columns: Vec<String>,
@@ -310,10 +310,16 @@ pub(crate) async fn write_execution_plan(
     let schema: ArrowSchemaRef = if overwrite_schema {
         plan.schema()
     } else {
-        snapshot.input_schema().unwrap_or(plan.schema())
+        snapshot
+            .and_then(|s| s.input_schema().ok())
+            .unwrap_or(plan.schema())
     };
 
-    let checker = DeltaDataChecker::new(snapshot);
+    let checker = if let Some(snapshot) = snapshot {
+        DeltaDataChecker::new(snapshot)
+    } else {
+        DeltaDataChecker::empty()
+    };
 
     // Write data to disk
     let mut tasks = vec![];
@@ -364,11 +370,13 @@ impl std::future::IntoFuture for WriteBuilder {
     type IntoFuture = BoxFuture<'static, Self::Output>;
 
     fn into_future(self) -> Self::IntoFuture {
-        let mut this = self;
+        let this = self;
 
         Box::pin(async move {
             if this.mode == SaveMode::Overwrite {
-                PROTOCOL.check_append_only(&this.snapshot)?;
+                if let Some(snapshot) = &this.snapshot {
+                    PROTOCOL.check_append_only(snapshot)?;
+                }
             }
 
             // Create table actions to initialize table in case it does not yet exist and should be created
@@ -376,9 +384,8 @@ impl std::future::IntoFuture for WriteBuilder {
 
             let active_partitions = this
                 .snapshot
-                .metadata()
-                .map(|meta| meta.partition_columns.clone())
-                .ok();
+                .as_ref()
+                .map(|s| s.metadata().partition_columns.clone());
 
             // validate partition columns
             let partition_columns = if let Some(active_part) = active_partitions {
@@ -406,20 +413,22 @@ impl std::future::IntoFuture for WriteBuilder {
                     Err(WriteError::MissingData)
                 } else {
                     schema = batches[0].schema();
-                    let table_schema = this
-                        .snapshot
-                        .physical_arrow_schema(this.log_store.object_store().clone())
-                        .await
-                        .or_else(|_| this.snapshot.arrow_schema())
-                        .unwrap_or(schema.clone());
 
-                    if !can_cast_batch(schema.fields(), table_schema.fields())
-                        && !(this.overwrite_schema && matches!(this.mode, SaveMode::Overwrite))
-                    {
-                        return Err(DeltaTableError::Generic(
-                            "Schema of data does not match table schema".to_string(),
-                        ));
-                    };
+                    if let Some(snapshot) = &this.snapshot {
+                        let table_schema = snapshot
+                            .physical_arrow_schema(this.log_store.object_store().clone())
+                            .await
+                            .or_else(|_| snapshot.arrow_schema())
+                            .unwrap_or(schema.clone());
+
+                        if !can_cast_batch(schema.fields(), table_schema.fields())
+                            && !(this.overwrite_schema && matches!(this.mode, SaveMode::Overwrite))
+                        {
+                            return Err(DeltaTableError::Generic(
+                                "Schema of data does not match table schema".to_string(),
+                            ));
+                        };
+                    }
 
                     let data = if !partition_columns.is_empty() {
                         // TODO partitioning should probably happen in its own plan ...
@@ -468,7 +477,7 @@ impl std::future::IntoFuture for WriteBuilder {
             };
 
             let add_actions = write_execution_plan(
-                &this.snapshot,
+                this.snapshot.as_ref(),
                 state,
                 plan,
                 partition_columns.clone(),
@@ -483,61 +492,61 @@ impl std::future::IntoFuture for WriteBuilder {
             actions.extend(add_actions.into_iter().map(Action::Add));
 
             // Collect remove actions if we are overwriting the table
-            if matches!(this.mode, SaveMode::Overwrite) {
-                // Update metadata with new schema
-                let table_schema = this
-                    .snapshot
-                    .physical_arrow_schema(this.log_store.object_store().clone())
-                    .await
-                    .or_else(|_| this.snapshot.arrow_schema())
-                    .unwrap_or(schema.clone());
+            if let Some(snapshot) = &this.snapshot {
+                if matches!(this.mode, SaveMode::Overwrite) {
+                    // Update metadata with new schema
+                    let table_schema = snapshot
+                        .physical_arrow_schema(this.log_store.object_store().clone())
+                        .await
+                        .or_else(|_| snapshot.arrow_schema())
+                        .unwrap_or(schema.clone());
 
-                if schema != table_schema {
-                    let mut metadata = this.snapshot.metadata()?.clone();
-                    let delta_schema: StructType = schema.as_ref().try_into()?;
-                    metadata.schema_string = serde_json::to_string(&delta_schema)?;
-                    actions.push(Action::Metadata(metadata));
-                }
-                // This should never error, since now() will always be larger than UNIX_EPOCH
-                let deletion_timestamp = SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .unwrap()
-                    .as_millis() as i64;
+                    if schema != table_schema {
+                        let mut metadata = snapshot.metadata().clone();
+                        let delta_schema: StructType = schema.as_ref().try_into()?;
+                        metadata.schema_string = serde_json::to_string(&delta_schema)?;
+                        actions.push(Action::Metadata(metadata));
+                    }
+                    // This should never error, since now() will always be larger than UNIX_EPOCH
+                    let deletion_timestamp = SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .unwrap()
+                        .as_millis() as i64;
 
-                let to_remove_action = |add: &Add| {
-                    Action::Remove(Remove {
-                        path: add.path.clone(),
-                        deletion_timestamp: Some(deletion_timestamp),
-                        data_change: true,
-                        extended_file_metadata: Some(false),
-                        partition_values: Some(add.partition_values.clone()),
-                        size: Some(add.size),
-                        // TODO add file metadata to remove action (tags missing)
-                        tags: None,
-                        deletion_vector: add.deletion_vector.clone(),
-                        base_row_id: add.base_row_id,
-                        default_row_commit_version: add.default_row_commit_version,
-                    })
+                    let to_remove_action = |add: &Add| {
+                        Action::Remove(Remove {
+                            path: add.path.clone(),
+                            deletion_timestamp: Some(deletion_timestamp),
+                            data_change: true,
+                            extended_file_metadata: Some(false),
+                            partition_values: Some(add.partition_values.clone()),
+                            size: Some(add.size),
+                            // TODO add file metadata to remove action (tags missing)
+                            tags: None,
+                            deletion_vector: add.deletion_vector.clone(),
+                            base_row_id: add.base_row_id,
+                            default_row_commit_version: add.default_row_commit_version,
+                        })
+                    };
+
+                    match this.predicate {
+                        Some(_pred) => {
+                            return Err(DeltaTableError::Generic(
+                                "Overwriting data based on predicate is not yet implemented"
+                                    .to_string(),
+                            ));
+                        }
+                        _ => {
+                            let remove_actions = snapshot
+                                .files()?
+                                .iter()
+                                .map(to_remove_action)
+                                .collect::<Vec<_>>();
+                            actions.extend(remove_actions);
+                        }
+                    }
                 };
-
-                match this.predicate {
-                    Some(_pred) => {
-                        return Err(DeltaTableError::Generic(
-                            "Overwriting data based on predicate is not yet implemented"
-                                .to_string(),
-                        ));
-                    }
-                    _ => {
-                        let remove_actions = this
-                            .snapshot
-                            .files()
-                            .iter()
-                            .map(to_remove_action)
-                            .collect::<Vec<_>>();
-                        actions.extend(remove_actions);
-                    }
-                }
-            };
+            }
 
             let operation = DeltaOperation::Write {
                 mode: this.mode,
@@ -552,7 +561,7 @@ impl std::future::IntoFuture for WriteBuilder {
                 this.log_store.as_ref(),
                 &actions,
                 operation.clone(),
-                &this.snapshot,
+                this.snapshot.as_ref(),
                 this.app_metadata,
             )
             .await?;
@@ -560,12 +569,14 @@ impl std::future::IntoFuture for WriteBuilder {
             // TODO we do not have the table config available, but since we are merging only our newly
             // created actions, it may be safe to assume, that we want to include all actions.
             // then again, having only some tombstones may be misleading.
-            this.snapshot
-                .merge(actions, &operation, version, true, true)?;
-
-            // TODO should we build checkpoints based on config?
-
-            Ok(DeltaTable::new_with_state(this.log_store, this.snapshot))
+            if let Some(mut snapshot) = this.snapshot {
+                snapshot.merge(actions, &operation, version)?;
+                Ok(DeltaTable::new_with_state(this.log_store, snapshot))
+            } else {
+                let mut table = DeltaTable::new(this.log_store, Default::default());
+                table.update().await?;
+                Ok(table)
+            }
         })
     }
 }
@@ -645,11 +656,11 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(table.version(), 1);
-        assert_eq!(table.get_file_uris().count(), 1);
+        assert_eq!(table.get_files_count(), 1);
         table.load().await.unwrap();
         assert_eq!(table.history(None).await.unwrap().len(), 2);
         assert_eq!(
-            table.history(None).await.unwrap()[1]
+            table.history(None).await.unwrap()[0]
                 .info
                 .clone()
                 .into_iter()
@@ -668,11 +679,11 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(table.version(), 2);
-        assert_eq!(table.get_file_uris().count(), 2);
+        assert_eq!(table.get_files_count(), 2);
         table.load().await.unwrap();
         assert_eq!(table.history(None).await.unwrap().len(), 3);
         assert_eq!(
-            table.history(None).await.unwrap()[2]
+            table.history(None).await.unwrap()[0]
                 .info
                 .clone()
                 .into_iter()
@@ -691,11 +702,11 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(table.version(), 3);
-        assert_eq!(table.get_file_uris().count(), 1);
+        assert_eq!(table.get_files_count(), 1);
         table.load().await.unwrap();
         assert_eq!(table.history(None).await.unwrap().len(), 4);
         assert_eq!(
-            table.history(None).await.unwrap()[3]
+            table.history(None).await.unwrap()[0]
                 .info
                 .clone()
                 .into_iter()
@@ -812,7 +823,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(table.version(), 0);
-        assert_eq!(table.get_file_uris().count(), 1)
+        assert_eq!(table.get_files_count(), 1)
     }
 
     #[tokio::test]
@@ -825,7 +836,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(table.version(), 0);
-        assert_eq!(table.get_file_uris().count(), 2);
+        assert_eq!(table.get_files_count(), 2);
 
         let table = DeltaOps::new_in_memory()
             .write(vec![batch])
@@ -834,7 +845,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(table.version(), 0);
-        assert_eq!(table.get_file_uris().count(), 4)
+        assert_eq!(table.get_files_count(), 4)
     }
 
     #[tokio::test]

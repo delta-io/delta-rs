@@ -1,142 +1,95 @@
 //! The module for delta table state.
 
 use std::collections::HashMap;
-use std::collections::HashSet;
-use std::io::{BufRead, BufReader, Cursor};
 use std::sync::Arc;
 
 use chrono::Utc;
 use futures::TryStreamExt;
-use lazy_static::lazy_static;
-use object_store::{path::Path, Error as ObjectStoreError, ObjectStore};
+use object_store::{path::Path, ObjectStore};
 use serde::{Deserialize, Serialize};
 
 use super::config::TableConfig;
 use super::get_partition_col_data_types;
 use crate::errors::DeltaTableError;
 use crate::kernel::EagerSnapshot;
-use crate::kernel::{Action, Add, CommitInfo, DataType, DomainMetadata, Remove, StructType};
+use crate::kernel::{Action, Add, DataType, Remove, StructType};
 use crate::kernel::{Metadata, Protocol};
 use crate::partitions::{DeltaTablePartition, PartitionFilter};
 use crate::protocol::DeltaOperation;
-use crate::protocol::ProtocolError;
-use crate::storage::commit_uri_from_version;
 use crate::DeltaResult;
-use crate::DeltaTable;
 
 #[cfg(feature = "parquet")]
-use super::{CheckPoint, DeltaTableConfig};
+use super::DeltaTableConfig;
 
 /// State snapshot currently held by the Delta Table instance.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DeltaTableState {
-    // current table version represented by this table state
-    version: i64,
-    // A remove action should remain in the state of the table as a tombstone until it has expired.
-    // A tombstone expires when the creation timestamp of the delta file exceeds the expiration
-    tombstones: HashSet<Remove>,
-    // active files for table state
-    files: Vec<Add>,
-    // Information added to individual commits
-    commit_infos: Vec<CommitInfo>,
-    // Domain metadatas provided by the system or user
-    domain_metadatas: Vec<DomainMetadata>,
     app_transaction_version: HashMap<String, i64>,
-    protocol: Option<Protocol>,
-    metadata: Option<Metadata>,
-    pub(crate) snapshot: Option<EagerSnapshot>,
+    pub(crate) snapshot: EagerSnapshot,
 }
 
 impl DeltaTableState {
-    /// Create Table state with specified version
-    pub fn with_version(version: i64) -> Self {
-        Self {
-            version,
-            ..Self::default()
-        }
+    /// Create a new DeltaTableState
+    pub async fn try_new(
+        table_root: &Path,
+        store: Arc<dyn ObjectStore>,
+        config: DeltaTableConfig,
+        version: Option<i64>,
+    ) -> DeltaResult<Self> {
+        let snapshot = EagerSnapshot::try_new(table_root, store.clone(), config, version).await?;
+        Ok(Self {
+            snapshot,
+            app_transaction_version: HashMap::new(),
+        })
     }
 
     /// Return table version
     pub fn version(&self) -> i64 {
-        self.version
+        self.snapshot.version()
     }
 
-    /// Construct a delta table state object from commit version.
-    pub async fn from_commit(table: &DeltaTable, version: i64) -> Result<Self, ProtocolError> {
-        let commit_uri = commit_uri_from_version(version);
-        let commit_log_bytes = match table.object_store().get(&commit_uri).await {
-            Ok(get) => Ok(get.bytes().await?),
-            Err(ObjectStoreError::NotFound { .. }) => Err(ProtocolError::EndOfLog),
-            Err(source) => Err(ProtocolError::ObjectStore { source }),
-        }?;
-        let reader = BufReader::new(Cursor::new(commit_log_bytes));
-
-        let mut new_state = DeltaTableState::with_version(version);
-        for line in reader.lines() {
-            let action: Action = serde_json::from_str(line?.as_str())?;
-            new_state.process_action(
-                action,
-                table.config.require_tombstones,
-                table.config.require_files,
-            )?;
-        }
-
-        Ok(new_state)
+    /// Get the timestamp when a version commit was created.
+    /// This is the timestamp of the commit file.
+    /// If the commit file is not present, None is returned.
+    pub fn version_timestamp(&self, version: i64) -> Option<i64> {
+        self.snapshot.version_timestamp(version)
     }
 
     /// Construct a delta table state object from a list of actions
     #[cfg(test)]
-    pub fn from_actions(actions: Vec<Action>, version: i64) -> Result<Self, ProtocolError> {
-        let mut new_state = DeltaTableState::with_version(version);
-        for action in actions {
-            new_state.process_action(action, true, true)?;
-        }
-        Ok(new_state)
-    }
+    pub fn from_actions(actions: Vec<Action>) -> DeltaResult<Self> {
+        use crate::protocol::SaveMode;
+        let metadata = actions
+            .iter()
+            .find_map(|a| match a {
+                Action::Metadata(m) => Some(m.clone()),
+                _ => None,
+            })
+            .ok_or(DeltaTableError::NotInitialized)?;
+        let protocol = actions
+            .iter()
+            .find_map(|a| match a {
+                Action::Protocol(p) => Some(p.clone()),
+                _ => None,
+            })
+            .ok_or(DeltaTableError::NotInitialized)?;
 
-    /// Update DeltaTableState with checkpoint data.
-    #[cfg(feature = "parquet")]
-    pub fn process_checkpoint_bytes(
-        &mut self,
-        data: bytes::Bytes,
-        table_config: &DeltaTableConfig,
-    ) -> Result<(), DeltaTableError> {
-        use parquet::file::reader::{FileReader, SerializedFileReader};
-
-        let preader = SerializedFileReader::new(data)?;
-        let schema = preader.metadata().file_metadata().schema();
-        if !schema.is_group() {
-            return Err(DeltaTableError::from(ProtocolError::Generic(
-                "Action record in checkpoint should be a struct".to_string(),
-            )));
-        }
-        for record in preader.get_row_iter(None)? {
-            self.process_action(
-                Action::from_parquet_record(schema, &record.unwrap())?,
-                table_config.require_tombstones,
-                table_config.require_files,
-            )?;
-        }
-
-        Ok(())
-    }
-
-    /// Construct a delta table state object from checkpoint.
-    #[cfg(feature = "parquet")]
-    pub async fn from_checkpoint(
-        table: &DeltaTable,
-        check_point: &CheckPoint,
-    ) -> Result<Self, DeltaTableError> {
-        let checkpoint_data_paths = table.get_checkpoint_data_paths(check_point);
-        let mut new_state = Self::with_version(check_point.version);
-
-        for f in &checkpoint_data_paths {
-            let obj = table.object_store().get(f).await?.bytes().await?;
-            new_state.process_checkpoint_bytes(obj, &table.config)?;
-        }
-
-        Ok(new_state)
+        let commit_data = [(
+            actions,
+            DeltaOperation::Create {
+                mode: SaveMode::Append,
+                location: Path::default().to_string(),
+                protocol: protocol.clone(),
+                metadata: metadata.clone(),
+            },
+            None,
+        )];
+        let snapshot = EagerSnapshot::new_test(&commit_data).unwrap();
+        Ok(Self {
+            app_transaction_version: Default::default(),
+            snapshot,
+        })
     }
 
     /// Full list of tombstones (remove actions) representing files removed from table state).
@@ -146,9 +99,8 @@ impl DeltaTableState {
     ) -> DeltaResult<impl Iterator<Item = Remove>> {
         Ok(self
             .snapshot
-            .as_ref()
-            .map(|s| s.snapshot().tombstones(store))
-            .unwrap_or_else(|| Ok(Box::pin(futures::stream::empty())))?
+            .snapshot()
+            .tombstones(store)?
             .try_collect::<Vec<_>>()
             .await?
             .into_iter()
@@ -174,17 +126,25 @@ impl DeltaTableState {
 
     /// Full list of add actions representing all parquet files that are part of the current
     /// delta table state.
-    pub fn files(&self) -> &Vec<Add> {
-        self.files.as_ref()
+    pub fn files(&self) -> DeltaResult<Vec<Add>> {
+        Ok(self.snapshot.file_actions()?.collect())
+    }
+
+    /// Get the number of files in the current table state
+    pub fn files_count(&self) -> usize {
+        self.snapshot.files_count()
     }
 
     /// Returns an iterator of file names present in the loaded state
     #[inline]
-    pub fn file_paths_iter(&self) -> impl Iterator<Item = Path> + '_ {
-        self.files.iter().map(|add| match Path::parse(&add.path) {
-            Ok(path) => path,
-            Err(_) => Path::from(add.path.as_ref()),
-        })
+    pub fn file_paths_iter(&self) -> DeltaResult<impl Iterator<Item = Path> + '_> {
+        Ok(self
+            .snapshot
+            .file_actions()?
+            .map(|add| match Path::parse(&add.path) {
+                Ok(path) => path,
+                Err(_) => Path::from(add.path.as_ref()),
+            }))
     }
 
     /// HashMap containing the last txn version stored for every app id writing txn
@@ -195,31 +155,22 @@ impl DeltaTableState {
 
     /// The most recent protocol of the table.
     pub fn protocol(&self) -> &Protocol {
-        lazy_static! {
-            static ref DEFAULT_PROTOCOL: Protocol = Protocol::default();
-        }
-        self.protocol.as_ref().unwrap_or(&DEFAULT_PROTOCOL)
+        self.snapshot.protocol()
     }
 
     /// The most recent metadata of the table.
-    pub fn metadata(&self) -> Result<&Metadata, ProtocolError> {
-        self.metadata.as_ref().ok_or(ProtocolError::NoMetaData)
+    pub fn metadata(&self) -> &Metadata {
+        self.snapshot.metadata()
     }
 
     /// The table schema
-    pub fn schema(&self) -> Option<&StructType> {
-        self.snapshot.as_ref().map(|s| s.schema())
+    pub fn schema(&self) -> &StructType {
+        self.snapshot.schema()
     }
 
     /// Well known table configuration
     pub fn table_config(&self) -> TableConfig<'_> {
-        lazy_static! {
-            static ref DUMMY_CONF: HashMap<String, Option<String>> = HashMap::new();
-        }
-        self.metadata
-            .as_ref()
-            .map(|meta| TableConfig(&meta.configuration))
-            .unwrap_or_else(|| TableConfig(&DUMMY_CONF))
+        self.snapshot.table_config()
     }
 
     /// Merges new state information into our state
@@ -233,106 +184,24 @@ impl DeltaTableState {
     pub fn merge(
         &mut self,
         actions: Vec<Action>,
-        _operation: &DeltaOperation,
+        operation: &DeltaOperation,
         version: i64,
-        require_tombstones: bool,
-        require_files: bool,
-    ) -> Result<(), ProtocolError> {
-        let mut new_state = DeltaTableState::with_version(version);
-        for action in actions {
-            new_state.process_action(action, true, true)?;
+    ) -> Result<(), DeltaTableError> {
+        let commit_infos = vec![(actions, operation.clone(), None)];
+        let new_version = self.snapshot.advance(&commit_infos)?;
+        if new_version != version {
+            return Err(DeltaTableError::Generic("Version mismatch".to_string()));
         }
-
-        if !new_state.tombstones.is_empty() {
-            self.files
-                .retain(|a| !new_state.tombstones.contains(a.path.as_str()));
-        }
-
-        if require_tombstones && require_files {
-            new_state.tombstones.into_iter().for_each(|r| {
-                self.tombstones.insert(r);
-            });
-
-            if !new_state.files.is_empty() {
-                new_state.files.iter().for_each(|s| {
-                    self.tombstones.remove(s.path.as_str());
-                });
-            }
-        }
-
-        if require_files {
-            self.files.append(&mut new_state.files);
-        }
-
-        if new_state.metadata.is_some() {
-            self.metadata = new_state.metadata.take();
-        }
-
-        if new_state.protocol.is_some() {
-            self.protocol = new_state.protocol.take();
-        }
-
-        new_state
-            .app_transaction_version
-            .drain()
-            .for_each(|(app_id, version)| {
-                *self
-                    .app_transaction_version
-                    .entry(app_id)
-                    .or_insert(version) = version
-            });
-
-        if !new_state.commit_infos.is_empty() {
-            self.commit_infos.append(&mut new_state.commit_infos);
-        }
-
-        if self.version < new_state.version {
-            self.version = new_state.version
-        }
-
         Ok(())
     }
 
-    /// Process given action by updating current state.
-    fn process_action(
+    /// Update the state of the table to the given version.
+    pub async fn update(
         &mut self,
-        action: Action,
-        require_tombstones: bool,
-        require_files: bool,
-    ) -> Result<(), ProtocolError> {
-        match action {
-            // TODO: optionally load CDC into TableState
-            Action::Cdc(_v) => {}
-            Action::Add(v) => {
-                if require_files {
-                    self.files.push(v);
-                }
-            }
-            Action::Remove(v) => {
-                if require_tombstones && require_files {
-                    self.tombstones.insert(v);
-                }
-            }
-            Action::Protocol(v) => {
-                self.protocol = Some(v);
-            }
-            Action::Metadata(v) => {
-                self.metadata = Some(v.clone());
-            }
-            Action::Txn(v) => {
-                *self
-                    .app_transaction_version
-                    .entry(v.app_id)
-                    .or_insert(v.version) = v.version;
-            }
-            Action::CommitInfo(v) => {
-                self.commit_infos.push(v);
-            }
-            Action::DomainMetadata(v) => {
-                self.domain_metadatas.push(v);
-            }
-        }
-
+        store: Arc<dyn ObjectStore>,
+        version: Option<i64>,
+    ) -> Result<(), DeltaTableError> {
+        self.snapshot.update(store, version).await?;
         Ok(())
     }
 
@@ -340,8 +209,8 @@ impl DeltaTableState {
     pub fn get_active_add_actions_by_partitions<'a>(
         &'a self,
         filters: &'a [PartitionFilter],
-    ) -> Result<impl Iterator<Item = &Add> + '_, DeltaTableError> {
-        let current_metadata = self.metadata()?;
+    ) -> Result<impl Iterator<Item = Add> + '_, DeltaTableError> {
+        let current_metadata = self.metadata();
 
         let nonpartitioned_columns: Vec<String> = filters
             .iter()
@@ -355,14 +224,12 @@ impl DeltaTableState {
             });
         }
 
-        let partition_col_data_types: HashMap<&String, &DataType> = get_partition_col_data_types(
-            self.schema().ok_or(DeltaTableError::NoMetadata)?,
-            current_metadata,
-        )
-        .into_iter()
-        .collect();
+        let partition_col_data_types: HashMap<&String, &DataType> =
+            get_partition_col_data_types(self.schema(), current_metadata)
+                .into_iter()
+                .collect();
 
-        let actions = self.files().iter().filter(move |add| {
+        let actions = self.files()?.into_iter().filter(move |add| {
             let partitions = add
                 .partition_values
                 .iter()
@@ -373,60 +240,5 @@ impl DeltaTableState {
                 .all(|filter| filter.match_partitions(&partitions, &partition_col_data_types))
         });
         Ok(actions)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::kernel::Txn;
-    use pretty_assertions::assert_eq;
-
-    #[test]
-    fn state_round_trip() {
-        let expected = DeltaTableState {
-            version: 0,
-            tombstones: Default::default(),
-            files: vec![],
-            commit_infos: vec![],
-            domain_metadatas: vec![],
-            app_transaction_version: Default::default(),
-            metadata: None,
-            protocol: None,
-            snapshot: None,
-        };
-        let bytes = serde_json::to_vec(&expected).unwrap();
-        let actual: DeltaTableState = serde_json::from_slice(&bytes).unwrap();
-        assert_eq!(actual.version, expected.version);
-    }
-
-    #[test]
-    fn state_records_new_txn_version() {
-        let mut app_transaction_version = HashMap::new();
-        app_transaction_version.insert("abc".to_string(), 1);
-        app_transaction_version.insert("xyz".to_string(), 1);
-
-        let mut state = DeltaTableState {
-            version: -1,
-            files: vec![],
-            commit_infos: vec![],
-            domain_metadatas: vec![],
-            tombstones: HashSet::new(),
-            protocol: None,
-            metadata: None,
-            app_transaction_version,
-            snapshot: None,
-        };
-
-        let txn_action = Action::Txn(Txn {
-            app_id: "abc".to_string(),
-            version: 2,
-            last_updated: Some(0),
-        });
-
-        state.process_action(txn_action, false, true).unwrap();
-
-        assert_eq!(2, *state.app_transaction_version().get("abc").unwrap());
-        assert_eq!(1, *state.app_transaction_version().get("xyz").unwrap());
     }
 }

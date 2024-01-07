@@ -322,7 +322,7 @@ async fn append_to_table(
         table.log_store().as_ref(),
         &actions,
         operation,
-        &table.state,
+        Some(table.snapshot()?),
         metadata,
     )
     .await

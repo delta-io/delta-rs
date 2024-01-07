@@ -211,14 +211,15 @@ mod local {
 
         // Trying to execute the write from the input plan without providing Datafusion with a session
         // state containing the referenced object store in the registry results in an error.
-        assert!(
-            WriteBuilder::new(target_table.log_store(), target_table.state.clone())
-                .with_input_execution_plan(source_scan.clone())
-                .await
-                .unwrap_err()
-                .to_string()
-                .contains("No suitable object store found for delta-rs://")
-        );
+        assert!(WriteBuilder::new(
+            target_table.log_store(),
+            target_table.snapshot().ok().cloned()
+        )
+        .with_input_execution_plan(source_scan.clone())
+        .await
+        .unwrap_err()
+        .to_string()
+        .contains("No suitable object store found for delta-rs://"));
 
         // Register the missing source table object store
         let source_uri = Url::parse(
@@ -238,10 +239,13 @@ mod local {
             .register_object_store(source_store_url, source_store.object_store());
 
         // Execute write to the target table with the proper state
-        let target_table = WriteBuilder::new(target_table.log_store(), target_table.state.clone())
-            .with_input_execution_plan(source_scan)
-            .with_input_session_state(state)
-            .await?;
+        let target_table = WriteBuilder::new(
+            target_table.log_store(),
+            target_table.snapshot().ok().cloned(),
+        )
+        .with_input_execution_plan(source_scan)
+        .with_input_session_state(state)
+        .await?;
         ctx.register_table("target", Arc::new(target_table))?;
 
         // Check results
@@ -290,7 +294,7 @@ mod local {
         let table = open_table("../deltalake-test/tests/data/delta-0.8.0")
             .await
             .unwrap();
-        let statistics = table.state.datafusion_table_statistics()?;
+        let statistics = table.snapshot()?.datafusion_table_statistics()?;
 
         assert_eq!(statistics.num_rows, Precision::Exact(4_usize),);
 
@@ -331,7 +335,7 @@ mod local {
         let table = open_table("../deltalake-test/tests/data/delta-0.2.0")
             .await
             .unwrap();
-        let statistics = table.state.datafusion_table_statistics()?;
+        let statistics = table.snapshot()?.datafusion_table_statistics()?;
 
         assert_eq!(statistics.num_rows, Precision::Absent);
 
@@ -370,7 +374,7 @@ mod local {
             .await
             .unwrap();
         let schema = table.get_schema().unwrap();
-        let statistics = table.state.datafusion_table_statistics()?;
+        let statistics = table.snapshot()?.datafusion_table_statistics()?;
         assert_eq!(statistics.num_rows, Precision::Exact(12));
 
         // `new_column` statistics

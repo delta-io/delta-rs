@@ -152,7 +152,7 @@ pub async fn add_file(
             table.log_store().as_ref(),
             &actions,
             operation,
-            &table.state,
+            table.state.as_ref(),
             None,
         )
         .await
@@ -190,7 +190,7 @@ pub async fn remove_file(
         table.log_store().as_ref(),
         &actions,
         operation,
-        &table.state,
+        table.state.as_ref(),
         None,
     )
     .await

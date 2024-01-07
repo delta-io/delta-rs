@@ -148,8 +148,14 @@ impl RawDeltaTable {
 
     pub fn protocol_versions(&self) -> PyResult<(i32, i32)> {
         Ok((
-            self._table.protocol().min_reader_version,
-            self._table.protocol().min_writer_version,
+            self._table
+                .protocol()
+                .map_err(PythonError::from)?
+                .min_reader_version,
+            self._table
+                .protocol()
+                .map_err(PythonError::from)?
+                .min_writer_version,
         ))
     }
 
@@ -219,6 +225,7 @@ impl RawDeltaTable {
             Ok(self
                 ._table
                 .get_files_iter()
+                .map_err(PythonError::from)?
                 .map(|f| f.to_string())
                 .collect())
         }
@@ -235,7 +242,11 @@ impl RawDeltaTable {
                 .get_file_uris_by_partitions(&filters)
                 .map_err(PythonError::from)?)
         } else {
-            Ok(self._table.get_file_uris().collect())
+            Ok(self
+                ._table
+                .get_file_uris()
+                .map_err(PythonError::from)?
+                .collect())
         }
     }
 
@@ -255,9 +266,12 @@ impl RawDeltaTable {
         enforce_retention_duration: bool,
         custom_metadata: Option<HashMap<String, String>>,
     ) -> PyResult<Vec<String>> {
-        let mut cmd = VacuumBuilder::new(self._table.log_store(), self._table.state.clone())
-            .with_enforce_retention_duration(enforce_retention_duration)
-            .with_dry_run(dry_run);
+        let mut cmd = VacuumBuilder::new(
+            self._table.log_store(),
+            self._table.snapshot().map_err(PythonError::from)?.clone(),
+        )
+        .with_enforce_retention_duration(enforce_retention_duration)
+        .with_dry_run(dry_run);
         if let Some(retention_period) = retention_hours {
             cmd = cmd.with_retention_period(Duration::hours(retention_period as i64));
         }
@@ -285,8 +299,11 @@ impl RawDeltaTable {
         safe_cast: bool,
         custom_metadata: Option<HashMap<String, String>>,
     ) -> PyResult<String> {
-        let mut cmd = UpdateBuilder::new(self._table.log_store(), self._table.state.clone())
-            .with_safe_cast(safe_cast);
+        let mut cmd = UpdateBuilder::new(
+            self._table.log_store(),
+            self._table.snapshot().map_err(PythonError::from)?.clone(),
+        )
+        .with_safe_cast(safe_cast);
 
         if let Some(writer_props) = writer_properties {
             cmd = cmd.with_writer_properties(
@@ -333,8 +350,11 @@ impl RawDeltaTable {
         writer_properties: Option<HashMap<String, Option<String>>>,
         custom_metadata: Option<HashMap<String, String>>,
     ) -> PyResult<String> {
-        let mut cmd = OptimizeBuilder::new(self._table.log_store(), self._table.state.clone())
-            .with_max_concurrent_tasks(max_concurrent_tasks.unwrap_or_else(num_cpus::get));
+        let mut cmd = OptimizeBuilder::new(
+            self._table.log_store(),
+            self._table.snapshot().map_err(PythonError::from)?.clone(),
+        )
+        .with_max_concurrent_tasks(max_concurrent_tasks.unwrap_or_else(num_cpus::get));
         if let Some(size) = target_size {
             cmd = cmd.with_target_size(size);
         }
@@ -386,10 +406,13 @@ impl RawDeltaTable {
         writer_properties: Option<HashMap<String, Option<String>>>,
         custom_metadata: Option<HashMap<String, String>>,
     ) -> PyResult<String> {
-        let mut cmd = OptimizeBuilder::new(self._table.log_store(), self._table.state.clone())
-            .with_max_concurrent_tasks(max_concurrent_tasks.unwrap_or_else(num_cpus::get))
-            .with_max_spill_size(max_spill_size)
-            .with_type(OptimizeType::ZOrder(z_order_columns));
+        let mut cmd = OptimizeBuilder::new(
+            self._table.log_store(),
+            self._table.snapshot().map_err(PythonError::from)?.clone(),
+        )
+        .with_max_concurrent_tasks(max_concurrent_tasks.unwrap_or_else(num_cpus::get))
+        .with_max_spill_size(max_spill_size)
+        .with_type(OptimizeType::ZOrder(z_order_columns));
         if let Some(size) = target_size {
             cmd = cmd.with_target_size(size);
         }
@@ -426,8 +449,10 @@ impl RawDeltaTable {
         constraints: HashMap<String, String>,
         custom_metadata: Option<HashMap<String, String>>,
     ) -> PyResult<()> {
-        let mut cmd =
-            ConstraintBuilder::new(self._table.log_store(), self._table.get_state().clone());
+        let mut cmd = ConstraintBuilder::new(
+            self._table.log_store(),
+            self._table.snapshot().map_err(PythonError::from)?.clone(),
+        );
 
         for (col_name, expression) in constraints {
             cmd = cmd.with_constraint(col_name.clone(), expression.clone());
@@ -494,7 +519,7 @@ impl RawDeltaTable {
 
         let mut cmd = MergeBuilder::new(
             self._table.log_store(),
-            self._table.state.clone(),
+            self._table.snapshot().map_err(PythonError::from)?.clone(),
             predicate,
             source_df,
         )
@@ -642,7 +667,10 @@ impl RawDeltaTable {
         protocol_downgrade_allowed: bool,
         custom_metadata: Option<HashMap<String, String>>,
     ) -> PyResult<String> {
-        let mut cmd = RestoreBuilder::new(self._table.log_store(), self._table.state.clone());
+        let mut cmd = RestoreBuilder::new(
+            self._table.log_store(),
+            self._table.snapshot().map_err(PythonError::from)?.clone(),
+        );
         if let Some(val) = target {
             if let Ok(version) = val.extract::<i64>() {
                 cmd = cmd.with_version_to_restore(version)
@@ -705,16 +733,21 @@ impl RawDeltaTable {
 
         self._table
             .get_files_iter()
+            .map_err(PythonError::from)?
             .map(|p| p.to_string())
-            .zip(self._table.get_partition_values())
-            .zip(self._table.get_stats())
+            .zip(
+                self._table
+                    .get_partition_values()
+                    .map_err(PythonError::from)?,
+            )
+            .zip(self._table.get_stats().map_err(PythonError::from)?)
             .filter(|((path, _), _)| match &path_set {
                 Some(path_set) => path_set.contains(path),
                 None => true,
             })
             .map(|((path, partition_values), stats)| {
                 let stats = stats.map_err(PythonError::from)?;
-                let expression = filestats_to_expression(py, &schema, partition_values, stats)?;
+                let expression = filestats_to_expression(py, &schema, &partition_values, stats)?;
                 Ok((path, expression))
             })
             .collect()
@@ -772,11 +805,15 @@ impl RawDeltaTable {
 
         let partition_columns: Vec<&str> = partition_columns.into_iter().collect();
 
-        let active_partitions: HashSet<Vec<(&str, Option<&str>)>> = self
+        let adds = self
             ._table
-            .get_state()
+            .snapshot()
+            .map_err(PythonError::from)?
             .get_active_add_actions_by_partitions(&converted_filters)
             .map_err(PythonError::from)?
+            .collect::<Vec<_>>();
+        let active_partitions: HashSet<Vec<(&str, Option<&str>)>> = adds
+            .iter()
             .map(|add| {
                 partition_columns
                     .iter()
@@ -820,7 +857,8 @@ impl RawDeltaTable {
 
                 let add_actions = self
                     ._table
-                    .get_state()
+                    .snapshot()
+                    .map_err(PythonError::from)?
                     .get_active_add_actions_by_partitions(&converted_filters)
                     .map_err(PythonError::from)?;
 
@@ -873,7 +911,7 @@ impl RawDeltaTable {
                 &*store,
                 &actions,
                 operation,
-                self._table.get_state(),
+                Some(self._table.snapshot().map_err(PythonError::from)?),
                 app_metadata,
             ))
             .map_err(PythonError::from)?;
@@ -909,7 +947,8 @@ impl RawDeltaTable {
     pub fn get_add_actions(&self, flatten: bool) -> PyResult<PyArrowType<RecordBatch>> {
         Ok(PyArrowType(
             self._table
-                .get_state()
+                .snapshot()
+                .map_err(PythonError::from)?
                 .add_actions_table(flatten)
                 .map_err(PythonError::from)?,
         ))
@@ -923,7 +962,10 @@ impl RawDeltaTable {
         writer_properties: Option<HashMap<String, Option<String>>>,
         custom_metadata: Option<HashMap<String, String>>,
     ) -> PyResult<String> {
-        let mut cmd = DeleteBuilder::new(self._table.log_store(), self._table.state.clone());
+        let mut cmd = DeleteBuilder::new(
+            self._table.log_store(),
+            self._table.snapshot().map_err(PythonError::from)?.clone(),
+        );
         if let Some(predicate) = predicate {
             cmd = cmd.with_predicate(predicate);
         }
@@ -955,9 +997,11 @@ impl RawDeltaTable {
         dry_run: bool,
         custom_metadata: Option<HashMap<String, String>>,
     ) -> PyResult<String> {
-        let mut cmd =
-            FileSystemCheckBuilder::new(self._table.log_store(), self._table.state.clone())
-                .with_dry_run(dry_run);
+        let mut cmd = FileSystemCheckBuilder::new(
+            self._table.log_store(),
+            self._table.snapshot().map_err(PythonError::from)?.clone(),
+        )
+        .with_dry_run(dry_run);
 
         if let Some(metadata) = custom_metadata {
             let json_metadata: Map<String, Value> =

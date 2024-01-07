@@ -175,7 +175,7 @@ pub async fn commit(
     log_store: &dyn LogStore,
     actions: &Vec<Action>,
     operation: DeltaOperation,
-    read_snapshot: &DeltaTableState,
+    read_snapshot: Option<&DeltaTableState>,
     app_metadata: Option<HashMap<String, Value>>,
 ) -> DeltaResult<i64> {
     commit_with_retries(
@@ -197,11 +197,14 @@ pub async fn commit_with_retries(
     log_store: &dyn LogStore,
     actions: &Vec<Action>,
     operation: DeltaOperation,
-    read_snapshot: &DeltaTableState,
+    read_snapshot: Option<&DeltaTableState>,
     app_metadata: Option<HashMap<String, Value>>,
     max_retries: usize,
 ) -> DeltaResult<i64> {
-    PROTOCOL.can_commit(read_snapshot, actions)?;
+    if let Some(read_snapshot) = read_snapshot {
+        PROTOCOL.can_commit(read_snapshot, actions)?;
+    }
+
     let tmp_commit = prepare_commit(
         log_store.object_store().as_ref(),
         &operation,
@@ -210,8 +213,14 @@ pub async fn commit_with_retries(
     )
     .await?;
 
-    let mut attempt_number = 1;
+    if read_snapshot.is_none() {
+        log_store.write_commit_entry(0, &tmp_commit).await?;
+        return Ok(0);
+    }
 
+    let read_snapshot = read_snapshot.unwrap();
+
+    let mut attempt_number = 1;
     while attempt_number <= max_retries {
         let version = read_snapshot.version() + attempt_number as i64;
         match log_store.write_commit_entry(version, &tmp_commit).await {

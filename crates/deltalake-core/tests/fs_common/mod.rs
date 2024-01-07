@@ -124,7 +124,7 @@ pub async fn commit_actions(
         table.log_store().as_ref(),
         &actions,
         operation,
-        &table.state,
+        Some(table.snapshot().unwrap()),
         None,
     )
     .await

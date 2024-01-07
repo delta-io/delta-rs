@@ -1,13 +1,13 @@
 //! Delta Table read and write implementation
 
+use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::fmt;
 use std::fmt::Formatter;
-use std::{cmp::Ordering, collections::HashSet};
 
 use chrono::{DateTime, Utc};
-use futures::{StreamExt, TryStreamExt};
-use object_store::{path::Path, Error as ObjectStoreError, ObjectStore};
+use futures::TryStreamExt;
+use object_store::{path::Path, ObjectStore};
 use serde::de::{Error, SeqAccess, Visitor};
 use serde::ser::SerializeSeq;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -16,18 +16,13 @@ use tracing::debug;
 use self::builder::DeltaTableConfig;
 use self::state::DeltaTableState;
 use crate::errors::DeltaTableError;
-use crate::kernel::{
-    Action, Add, CommitInfo, DataCheck, DataType, Metadata, Protocol, ReaderFeatures, StructType,
-    WriterFeatures,
-};
+use crate::kernel::{Action, Add, CommitInfo, DataCheck, DataType, Metadata, Protocol, StructType};
 use crate::logstore::LogStoreRef;
 use crate::logstore::{self, LogStoreConfig};
 use crate::partitions::PartitionFilter;
-use crate::protocol::{
-    find_latest_check_point_for_version, get_last_checkpoint, DeltaOperation, ProtocolError,
-    SaveMode, Stats,
-};
+use crate::protocol::Stats;
 use crate::storage::{commit_uri_from_version, ObjectStoreRef};
+use crate::DeltaResult;
 
 pub mod builder;
 pub mod config;
@@ -199,15 +194,11 @@ pub enum PeekCommit {
 /// In memory representation of a Delta Table
 pub struct DeltaTable {
     /// The state of the table as of the most recent loaded Delta log entry.
-    pub state: DeltaTableState,
+    pub state: Option<DeltaTableState>,
     /// the load options used during load
     pub config: DeltaTableConfig,
     /// log store
     pub(crate) log_store: LogStoreRef,
-    /// file metadata for latest checkpoint
-    last_check_point: Option<CheckPoint>,
-    /// table versions associated with timestamps
-    version_timestamp: HashMap<i64, i64>,
 }
 
 impl Serialize for DeltaTable {
@@ -219,8 +210,6 @@ impl Serialize for DeltaTable {
         seq.serialize_element(&self.state)?;
         seq.serialize_element(&self.config)?;
         seq.serialize_element(self.log_store.config())?;
-        seq.serialize_element(&self.last_check_point)?;
-        seq.serialize_element(&self.version_timestamp)?;
         seq.end()
     }
 }
@@ -255,19 +244,11 @@ impl<'de> Deserialize<'de> for DeltaTable {
                 let log_store =
                     crate::logstore::logstore_for(storage_config.location, storage_config.options)
                         .map_err(|_| A::Error::custom("Failed deserializing LogStore"))?;
-                let last_check_point = seq
-                    .next_element()?
-                    .ok_or_else(|| A::Error::invalid_length(0, &self))?;
-                let version_timestamp = seq
-                    .next_element()?
-                    .ok_or_else(|| A::Error::invalid_length(0, &self))?;
 
                 let table = DeltaTable {
                     state,
                     config,
                     log_store,
-                    last_check_point,
-                    version_timestamp,
                 };
                 Ok(table)
             }
@@ -284,11 +265,9 @@ impl DeltaTable {
     /// call one of the `open_table` helper methods instead.
     pub fn new(log_store: LogStoreRef, config: DeltaTableConfig) -> Self {
         Self {
-            state: DeltaTableState::with_version(-1),
+            state: None,
             log_store,
             config,
-            last_check_point: None,
-            version_timestamp: HashMap::new(),
         }
     }
 
@@ -299,11 +278,9 @@ impl DeltaTable {
     /// please call one of the `open_table` helper methods instead.
     pub(crate) fn new_with_state(log_store: LogStoreRef, state: DeltaTableState) -> Self {
         Self {
-            state,
+            state: Some(state),
             log_store,
             config: Default::default(),
-            last_check_point: None,
-            version_timestamp: HashMap::new(),
         }
     }
 
@@ -349,13 +326,6 @@ impl DeltaTable {
         checkpoint_data_paths
     }
 
-    #[cfg(feature = "parquet")]
-    async fn restore_checkpoint(&mut self, check_point: CheckPoint) -> Result<(), DeltaTableError> {
-        self.state = DeltaTableState::from_checkpoint(self, &check_point).await?;
-
-        Ok(())
-    }
-
     /// returns the latest available version of the table
     pub async fn get_latest_version(&self) -> Result<i64, DeltaTableError> {
         self.log_store.get_latest_version(self.version()).await
@@ -363,14 +333,19 @@ impl DeltaTable {
 
     /// Currently loaded version of the table
     pub fn version(&self) -> i64 {
-        self.state.version()
+        self.state.as_ref().map(|s| s.version()).unwrap_or(-1)
     }
 
     /// Load DeltaTable with data from latest checkpoint
     pub async fn load(&mut self) -> Result<(), DeltaTableError> {
-        self.last_check_point = None;
-        self.state = DeltaTableState::with_version(-1);
-        self.update().await
+        self.update_incremental(None).await
+    }
+
+    /// Updates the DeltaTable to the most recent state committed to the transaction log by
+    /// loading the last checkpoint and incrementally applying each version since.
+    #[cfg(feature = "parquet")]
+    pub async fn update(&mut self) -> Result<(), DeltaTableError> {
+        self.update_incremental(None).await
     }
 
     /// Get the list of actions for the next commit
@@ -389,38 +364,8 @@ impl DeltaTable {
         Ok(PeekCommit::New(next_version, actions.unwrap()))
     }
 
-    /// Updates the DeltaTable to the most recent state committed to the transaction log by
-    /// loading the last checkpoint and incrementally applying each version since.
-    #[cfg(feature = "parquet")]
-    pub async fn update(&mut self) -> Result<(), DeltaTableError> {
-        match get_last_checkpoint(self.log_store.as_ref()).await {
-            Ok(last_check_point) => {
-                debug!("update with latest checkpoint {last_check_point:?}");
-                if Some(last_check_point) == self.last_check_point {
-                    self.update_incremental(None).await
-                } else {
-                    self.last_check_point = Some(last_check_point);
-                    self.restore_checkpoint(last_check_point).await?;
-                    self.update_incremental(None).await
-                }
-            }
-            Err(ProtocolError::CheckpointNotFound) => {
-                debug!("update without checkpoint");
-                self.update_incremental(None).await
-            }
-            Err(err) => Err(DeltaTableError::from(err)),
-        }
-    }
-
-    /// Updates the DeltaTable to the most recent state committed to the transaction log.
-    #[cfg(not(feature = "parquet"))]
-    pub async fn update(&mut self) -> Result<(), DeltaTableError> {
-        self.update_incremental(None).await
-    }
-
     /// Updates the DeltaTable to the latest version by incrementally applying newer versions.
     /// It assumes that the table is already updated to the current version `self.version`.
-    #[deprecated(since = "0.17.0")]
     pub async fn update_incremental(
         &mut self,
         max_version: Option<i64>,
@@ -429,111 +374,49 @@ impl DeltaTable {
             "incremental update with version({}) and max_version({max_version:?})",
             self.version(),
         );
-
-        // update to latest version if given max_version is not larger than current version
-        let max_version = max_version.filter(|x| x > &self.version());
-        let max_version: i64 = match max_version {
-            Some(x) => x,
-            None => self.get_latest_version().await?,
-        };
-
-        let buf_size = self.config.log_buffer_size;
-
-        let log_store = self.log_store.clone();
-        let mut log_stream = futures::stream::iter(self.version() + 1..max_version + 1)
-            .map(|version| {
-                let log_store = log_store.clone();
-                async move {
-                    if let Some(data) = log_store.read_commit_entry(version).await? {
-                        Ok(Some((version, logstore::get_actions(version, data).await?)))
-                    } else {
-                        Ok(None)
-                    }
-                }
-            })
-            .buffered(buf_size);
-
-        while let Some(res) = log_stream.next().await {
-            let (new_version, actions) = match res {
-                Ok(Some((version, actions))) => (version, actions),
-                Ok(None) => break,
-                Err(err) => return Err(err),
-            };
-
-            debug!("merging table state with version: {new_version}");
-            // NOTE just a dummy operation for API transitioning.
-            let op = DeltaOperation::Write {
-                mode: SaveMode::Append,
-                partition_by: None,
-                predicate: None,
-            };
-            self.state.merge(
-                actions,
-                &op,
-                new_version,
-                self.config.require_tombstones,
-                self.config.require_files,
-            )?;
-            if self.version() == max_version {
-                return Ok(());
+        match self.state.as_mut() {
+            Some(state) => {
+                state
+                    .update(self.log_store.object_store(), max_version)
+                    .await
+            }
+            _ => {
+                let state = DeltaTableState::try_new(
+                    &Path::default(),
+                    self.log_store.object_store(),
+                    self.config.clone(),
+                    max_version,
+                )
+                .await?;
+                self.state = Some(state);
+                Ok(())
             }
         }
-
-        if self.version() == -1 {
-            return Err(DeltaTableError::not_a_table(self.table_uri()));
-        }
-
-        Ok(())
     }
 
     /// Loads the DeltaTable state for the given version.
     pub async fn load_version(&mut self, version: i64) -> Result<(), DeltaTableError> {
-        // check if version is valid
-        let commit_uri = commit_uri_from_version(version);
-        match self.object_store().head(&commit_uri).await {
-            Ok(_) => {}
-            Err(ObjectStoreError::NotFound { .. }) => {
-                return Err(DeltaTableError::InvalidVersion(version));
-            }
-            Err(e) => {
-                return Err(DeltaTableError::from(e));
+        if let Some(snapshot) = &self.state {
+            if snapshot.version() > version {
+                self.state = None;
             }
         }
-
-        // 1. find latest checkpoint below version
-        #[cfg(feature = "parquet")]
-        match find_latest_check_point_for_version(self.log_store.as_ref(), version).await? {
-            Some(check_point) => {
-                self.restore_checkpoint(check_point).await?;
-            }
-            None => {
-                // no checkpoint found, clear table state and start from the beginning
-                self.state = DeltaTableState::with_version(-1);
-            }
-        }
-
-        debug!("update incrementally from version {version}");
-        // 2. apply all logs starting from checkpoint
-        self.update_incremental(Some(version)).await?;
-
-        Ok(())
+        self.update_incremental(Some(version)).await
     }
 
-    pub(crate) async fn get_version_timestamp(
-        &mut self,
-        version: i64,
-    ) -> Result<i64, DeltaTableError> {
-        match self.version_timestamp.get(&version) {
-            Some(ts) => Ok(*ts),
+    pub(crate) async fn get_version_timestamp(&self, version: i64) -> Result<i64, DeltaTableError> {
+        match self
+            .state
+            .as_ref()
+            .and_then(|s| s.version_timestamp(version))
+        {
+            Some(ts) => Ok(ts),
             None => {
                 let meta = self
                     .object_store()
                     .head(&commit_uri_from_version(version))
                     .await?;
                 let ts = meta.last_modified.timestamp_millis();
-                // also cache timestamp for version
-                self.version_timestamp.insert(version, ts);
-
                 Ok(ts)
             }
         }
@@ -545,12 +428,11 @@ impl DeltaTable {
     /// it returns all commits from the earliest commit.
     pub async fn history(&self, limit: Option<usize>) -> Result<Vec<CommitInfo>, DeltaTableError> {
         let infos = self
-            .state
+            .snapshot()?
             .snapshot
-            .as_ref()
-            .unwrap()
             .snapshot()
-            .commit_infos(self.object_store())
+            .commit_infos(self.object_store(), limit)
+            .await?
             .try_collect::<Vec<_>>()
             .await?;
         Ok(infos.into_iter().filter_map(|b| b).collect())
@@ -560,8 +442,11 @@ impl DeltaTable {
     pub fn get_active_add_actions_by_partitions<'a>(
         &'a self,
         filters: &'a [PartitionFilter],
-    ) -> Result<impl Iterator<Item = &Add> + '_, DeltaTableError> {
-        self.state.get_active_add_actions_by_partitions(filters)
+    ) -> Result<impl Iterator<Item = Add> + '_, DeltaTableError> {
+        self.state
+            .as_ref()
+            .ok_or(DeltaTableError::NoMetadata)?
+            .get_active_add_actions_by_partitions(filters)
     }
 
     /// Returns the file list tracked in current table state filtered by provided
@@ -596,101 +481,100 @@ impl DeltaTable {
 
     /// Returns an iterator of file names present in the loaded state
     #[inline]
-    pub fn get_files_iter(&self) -> impl Iterator<Item = Path> + '_ {
-        self.state.file_paths_iter()
-    }
-
-    /// Returns a collection of file names present in the loaded state
-    #[deprecated(since = "0.17.0", note = "use get_files_iter() instead")]
-    #[inline]
-    pub fn get_files(&self) -> Vec<Path> {
-        self.state.file_paths_iter().collect()
-    }
-
-    /// Returns file names present in the loaded state in HashSet
-    #[deprecated(since = "0.17.0", note = "use get_files_iter() instead")]
-    pub fn get_file_set(&self) -> HashSet<Path> {
-        self.state.file_paths_iter().collect()
+    pub fn get_files_iter(&self) -> DeltaResult<impl Iterator<Item = Path> + '_> {
+        Ok(self
+            .state
+            .as_ref()
+            .ok_or(DeltaTableError::NoMetadata)?
+            .file_paths_iter()?)
     }
 
     /// Returns a URIs for all active files present in the current table version.
-    pub fn get_file_uris(&self) -> impl Iterator<Item = String> + '_ {
-        self.state
-            .file_paths_iter()
-            .map(|path| self.log_store.to_uri(&path))
+    pub fn get_file_uris(&self) -> DeltaResult<impl Iterator<Item = String> + '_> {
+        Ok(self
+            .state
+            .as_ref()
+            .ok_or(DeltaTableError::NoMetadata)?
+            .file_paths_iter()?
+            .map(|path| self.log_store.to_uri(&path)))
+    }
+
+    /// Get the number of files in the table - retrn 0 if no metadata is loaded
+    pub fn get_files_count(&self) -> usize {
+        self.state.as_ref().map(|s| s.files_count()).unwrap_or(0)
     }
 
     /// Returns statistics for files, in order
-    pub fn get_stats(&self) -> impl Iterator<Item = Result<Option<Stats>, DeltaTableError>> + '_ {
-        self.state.files().iter().map(|add| {
-            add.get_stats()
-                .map_err(|e| DeltaTableError::InvalidStatsJson { json_err: e })
-        })
+    pub fn get_stats(
+        &self,
+    ) -> DeltaResult<impl Iterator<Item = Result<Option<Stats>, DeltaTableError>> + '_> {
+        Ok(self
+            .state
+            .as_ref()
+            .ok_or(DeltaTableError::NoMetadata)?
+            .files()?
+            .into_iter()
+            .map(|add| {
+                add.get_stats()
+                    .map_err(|e| DeltaTableError::InvalidStatsJson { json_err: e })
+            }))
     }
 
     /// Returns partition values for files, in order
     pub fn get_partition_values(
         &self,
-    ) -> impl Iterator<Item = &HashMap<String, Option<String>>> + '_ {
-        self.state.files().iter().map(|add| &add.partition_values)
+    ) -> DeltaResult<impl Iterator<Item = HashMap<String, Option<String>>> + '_> {
+        Ok(self
+            .state
+            .as_ref()
+            .ok_or(DeltaTableError::NoMetadata)?
+            .files()?
+            .into_iter()
+            .map(|add| add.partition_values))
     }
 
     /// Returns the currently loaded state snapshot.
-    pub fn get_state(&self) -> &DeltaTableState {
-        &self.state
+    pub fn snapshot(&self) -> DeltaResult<&DeltaTableState> {
+        self.state.as_ref().ok_or(DeltaTableError::NotInitialized)
+    }
+
+    /// Returns the currently loaded state snapshot.
+    pub fn get_state(&self) -> Option<&DeltaTableState> {
+        self.state.as_ref()
     }
 
     /// Returns current table protocol
-    pub fn protocol(&self) -> &Protocol {
-        self.state.protocol()
+    pub fn protocol(&self) -> DeltaResult<&Protocol> {
+        Ok(self
+            .state
+            .as_ref()
+            .ok_or(DeltaTableError::NoMetadata)?
+            .protocol())
     }
 
     /// Returns the metadata associated with the loaded state.
     pub fn metadata(&self) -> Result<&Metadata, DeltaTableError> {
-        Ok(self.state.metadata()?)
+        Ok(self.snapshot()?.metadata())
     }
 
     /// Returns the current version of the DeltaTable based on the loaded metadata.
-    pub fn get_app_transaction_version(&self) -> &HashMap<String, i64> {
-        self.state.app_transaction_version()
-    }
-
-    /// Returns the minimum reader version supported by the DeltaTable based on the loaded
-    /// metadata.
-    #[deprecated(since = "0.17.0", note = "use protocol().min_reader_version instead")]
-    pub fn get_min_reader_version(&self) -> i32 {
-        self.state.protocol().min_reader_version
-    }
-
-    /// Returns the minimum writer version supported by the DeltaTable based on the loaded
-    /// metadata.
-    #[deprecated(since = "0.17.0", note = "use protocol().min_writer_version instead")]
-    pub fn get_min_writer_version(&self) -> i32 {
-        self.state.protocol().min_writer_version
-    }
-
-    /// Returns current supported reader features by this table
-    #[deprecated(since = "0.17.0", note = "use protocol().reader_features instead")]
-    pub fn get_reader_features(&self) -> Option<&HashSet<ReaderFeatures>> {
-        self.state.protocol().reader_features.as_ref()
-    }
-
-    /// Returns current supported writer features by this table
-    #[deprecated(since = "0.17.0", note = "use protocol().writer_features instead")]
-    pub fn get_writer_features(&self) -> Option<&HashSet<WriterFeatures>> {
-        self.state.protocol().writer_features.as_ref()
+    pub fn get_app_transaction_version(&self) -> HashMap<String, i64> {
+        self.state
+            .as_ref()
+            .map(|s| s.app_transaction_version().clone())
+            .unwrap_or_default()
     }
 
     /// Return table schema parsed from transaction log. Return None if table hasn't been loaded or
     /// no metadata was found in the log.
     pub fn schema(&self) -> Option<&StructType> {
-        self.state.schema()
+        Some(self.snapshot().ok()?.schema())
     }
 
     /// Return table schema parsed from transaction log. Return `DeltaTableError` if table hasn't
     /// been loaded or no metadata was found in the log.
     pub fn get_schema(&self) -> Result<&StructType, DeltaTableError> {
-        self.schema().ok_or(DeltaTableError::NoSchema)
+        Ok(self.snapshot()?.schema())
     }
 
     /// Time travel Delta table to the latest version that's created at or before provided
@@ -736,22 +620,7 @@ impl DeltaTable {
 impl fmt::Display for DeltaTable {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         writeln!(f, "DeltaTable({})", self.table_uri())?;
-        writeln!(f, "\tversion: {}", self.version())?;
-        match self.state.metadata() {
-            Ok(metadata) => {
-                writeln!(f, "\tmetadata: {metadata:?}")?;
-            }
-            _ => {
-                writeln!(f, "\tmetadata: None")?;
-            }
-        }
-        writeln!(
-            f,
-            "\tmin_version: read={}, write={}",
-            self.state.protocol().min_reader_version,
-            self.state.protocol().min_writer_version
-        )?;
-        writeln!(f, "\tfiles count: {}", self.state.files().len())
+        writeln!(f, "\tversion: {}", self.version())
     }
 }
 

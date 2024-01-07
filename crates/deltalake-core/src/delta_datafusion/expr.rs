@@ -575,7 +575,8 @@ mod test {
                     .cast_to::<DFSchema>(
                         &arrow_schema::DataType::Utf8,
                         &table
-                            .state
+                            .snapshot()
+                            .unwrap()
                             .input_schema()
                             .unwrap()
                             .as_ref()
@@ -612,7 +613,8 @@ mod test {
             assert_eq!(test.expected, actual);
 
             let actual_expr = table
-                .state
+                .snapshot()
+                .unwrap()
                 .parse_predicate_expression(actual, &session.state())
                 .unwrap();
 

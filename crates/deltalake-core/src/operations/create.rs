@@ -292,6 +292,7 @@ impl std::future::IntoFuture for CreateBuilder {
             let app_metadata = this.metadata.clone();
             let (mut table, actions, operation) = this.into_table_and_actions()?;
             let log_store = table.log_store();
+
             let table_state = if log_store.is_delta_table_location().await? {
                 match mode {
                     SaveMode::ErrorIfExists => return Err(CreateError::TableAlreadyExists.into()),
@@ -302,11 +303,11 @@ impl std::future::IntoFuture for CreateBuilder {
                     }
                     SaveMode::Overwrite => {
                         table.load().await?;
-                        &table.state
+                        Some(table.snapshot()?)
                     }
                 }
             } else {
-                &table.state
+                None
             };
 
             let version = commit(
@@ -317,6 +318,7 @@ impl std::future::IntoFuture for CreateBuilder {
                 app_metadata,
             )
             .await?;
+
             table.load_version(version).await?;
 
             Ok(table)
@@ -392,11 +394,11 @@ mod tests {
             .unwrap();
         assert_eq!(table.version(), 0);
         assert_eq!(
-            table.protocol().min_reader_version,
+            table.protocol().unwrap().min_reader_version,
             PROTOCOL.default_reader_version()
         );
         assert_eq!(
-            table.protocol().min_writer_version,
+            table.protocol().unwrap().min_writer_version,
             PROTOCOL.default_writer_version()
         );
         assert_eq!(table.get_schema().unwrap(), &schema);
@@ -414,8 +416,8 @@ mod tests {
             .with_actions(vec![Action::Protocol(protocol)])
             .await
             .unwrap();
-        assert_eq!(table.protocol().min_reader_version, 0);
-        assert_eq!(table.protocol().min_writer_version, 0);
+        assert_eq!(table.protocol().unwrap().min_reader_version, 0);
+        assert_eq!(table.protocol().unwrap().min_writer_version, 0);
 
         let table = CreateBuilder::new()
             .with_location("memory://")

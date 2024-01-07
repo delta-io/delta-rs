@@ -24,7 +24,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use arrow::datatypes::{Schema as ArrowSchema, SchemaRef as ArrowSchemaRef};
+use arrow::datatypes::SchemaRef as ArrowSchemaRef;
 use arrow_array::RecordBatch;
 use futures::future::BoxFuture;
 use futures::stream::BoxStream;
@@ -717,7 +717,7 @@ impl MergePlan {
                     app_metadata.insert("operationMetrics".to_owned(), map);
                 }
 
-                table.update_incremental(None).await?;
+                table.update().await?;
                 debug!("committing {} actions", actions.len());
                 //// TODO: Check for remove actions on optimized partitions. If a
                 //// optimized partition was updated then abort the commit. Requires (#593).
@@ -725,7 +725,7 @@ impl MergePlan {
                     table.log_store.as_ref(),
                     &actions,
                     self.task_parameters.input_parameters.clone().into(),
-                    table.get_state(),
+                    Some(table.snapshot()?),
                     Some(app_metadata.clone()),
                 )
                 .await?;
@@ -779,7 +779,7 @@ pub fn create_merge_plan(
 ) -> Result<MergePlan, DeltaTableError> {
     let target_size = target_size.unwrap_or_else(|| snapshot.table_config().target_file_size());
 
-    let partitions_keys = &snapshot.metadata()?.partition_columns;
+    let partitions_keys = &snapshot.metadata().partition_columns;
 
     let (operations, metrics) = match optimize_type {
         OptimizeType::Compact => {
@@ -791,14 +791,8 @@ pub fn create_merge_plan(
     };
 
     let input_parameters = OptimizeInput { target_size };
-    let file_schema = arrow_schema_without_partitions(
-        &Arc::new(
-            <ArrowSchema as TryFrom<&crate::kernel::StructType>>::try_from(
-                &snapshot.metadata()?.schema()?,
-            )?,
-        ),
-        partitions_keys,
-    );
+    let file_schema =
+        arrow_schema_without_partitions(&Arc::new(snapshot.schema().try_into()?), partitions_keys);
 
     Ok(MergePlan {
         operations,
@@ -868,7 +862,7 @@ fn build_compaction_plan(
     let mut partition_files: HashMap<PartitionTuples, Vec<ObjectMeta>> = HashMap::new();
     for add in snapshot.get_active_add_actions_by_partitions(filters)? {
         metrics.total_considered_files += 1;
-        let object_meta = ObjectMeta::try_from(add)?;
+        let object_meta = ObjectMeta::try_from(&add)?;
         if (object_meta.size as i64) > target_size {
             metrics.total_files_skipped += 1;
             continue;
@@ -944,8 +938,7 @@ fn build_zorder_plan(
         )));
     }
     let field_names = snapshot
-        .metadata()?
-        .schema()?
+        .schema()
         .fields()
         .iter()
         .map(|field| field.name().to_string())
@@ -966,7 +959,7 @@ fn build_zorder_plan(
     let mut partition_files: HashMap<PartitionTuples, MergeBin> = HashMap::new();
     for add in snapshot.get_active_add_actions_by_partitions(filters)? {
         metrics.total_considered_files += 1;
-        let object_meta = ObjectMeta::try_from(add)?;
+        let object_meta = ObjectMeta::try_from(&add)?;
         let part = PartitionTuples::from_hashmap(partition_keys, &add.partition_values);
 
         partition_files
@@ -1076,6 +1069,7 @@ pub(super) mod zorder {
     use arrow_buffer::bit_util::{get_bit_raw, set_bit_raw, unset_bit_raw};
     use arrow_row::{Row, RowConverter, SortField};
     use arrow_schema::ArrowError;
+    // use arrow_schema::Schema as ArrowSchema;
 
     /// Execution context for Z-order scan
     #[cfg(not(feature = "datafusion"))]
@@ -1307,6 +1301,7 @@ pub(super) mod zorder {
 
             #[tokio::test]
             async fn test_zorder_mixed_case() {
+                use arrow_schema::Schema as ArrowSchema;
                 let schema = Arc::new(ArrowSchema::new(vec![
                     Field::new("moDified", DataType::Utf8, true),
                     Field::new("ID", DataType::Utf8, true),

@@ -42,7 +42,7 @@ async fn test_action_reconciliation() {
     let a = fs_common::add(3 * 60 * 1000);
     assert_eq!(1, fs_common::commit_add(&mut table, &a).await);
     assert_eq!(
-        table.get_files_iter().collect::<Vec<_>>(),
+        table.get_files_iter().unwrap().collect::<Vec<_>>(),
         vec![Path::from(a.path.clone())]
     );
 
@@ -61,10 +61,11 @@ async fn test_action_reconciliation() {
     };
 
     assert_eq!(2, fs_common::commit_removes(&mut table, vec![&r]).await);
-    assert_eq!(table.get_files_iter().count(), 0);
+    assert_eq!(table.get_files_iter().unwrap().count(), 0);
     assert_eq!(
         table
-            .get_state()
+            .snapshot()
+            .unwrap()
             .all_tombstones(table.object_store().clone())
             .await
             .unwrap()
@@ -76,13 +77,14 @@ async fn test_action_reconciliation() {
     // Add removed file back.
     assert_eq!(3, fs_common::commit_add(&mut table, &a).await);
     assert_eq!(
-        table.get_files_iter().collect::<Vec<_>>(),
+        table.get_files_iter().unwrap().collect::<Vec<_>>(),
         vec![Path::from(a.path)]
     );
     // tombstone is removed.
     assert_eq!(
         table
-            .get_state()
+            .snapshot()
+            .unwrap()
             .all_tombstones(table.object_store().clone())
             .await
             .unwrap()

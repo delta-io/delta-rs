@@ -1,14 +1,47 @@
 use arrow::array::StructArray;
-use arrow_array::{Array, BooleanArray, Int32Array, Int64Array, MapArray, StringArray};
+use arrow_array::{Array, BooleanArray, Int32Array, Int64Array, ListArray, MapArray, StringArray};
+use percent_encoding::percent_decode_str;
 
 use super::extract::{
     extract_and_cast, extract_and_cast_opt, read_bool, read_bool_opt, read_primitive,
     read_primitive_opt, read_str, read_str_opt, ProvidesColumnByName,
 };
 use crate::{
-    kernel::{Add, DeletionVectorDescriptor, Remove},
-    DeltaResult,
+    kernel::{Add, DeletionVectorDescriptor, Metadata, Remove},
+    DeltaResult, DeltaTableError,
 };
+
+pub(super) fn read_metadata(batch: &dyn ProvidesColumnByName) -> DeltaResult<Option<Metadata>> {
+    if let Some(arr) = extract_and_cast_opt::<StructArray>(batch, "metaData") {
+        let id = extract_and_cast::<StringArray>(arr, "id")?;
+        let name = extract_and_cast::<StringArray>(arr, "name")?;
+        let description = extract_and_cast::<StringArray>(arr, "description")?;
+        // let format = extract_and_cast::<StringArray>(arr, "format")?;
+        let schema_string = extract_and_cast::<StringArray>(arr, "schemaString")?;
+        let partition_columns = extract_and_cast_opt::<ListArray>(arr, "partitionColumns");
+        let configuration = extract_and_cast_opt::<MapArray>(arr, "configuration");
+        let created_time = extract_and_cast::<Int64Array>(arr, "createdTime")?;
+
+        for idx in 0..arr.len() {
+            if arr.is_valid(idx) {
+                return Ok(Some(Metadata {
+                    id: read_str(id, idx)?.to_string(),
+                    name: read_str_opt(name, idx).map(|s| s.to_string()),
+                    description: read_str_opt(description, idx).map(|s| s.to_string()),
+                    format: Default::default(),
+                    schema_string: read_str(schema_string, idx)?.to_string(),
+                    partition_columns: collect_string_list(&partition_columns, idx)
+                        .unwrap_or_default(),
+                    configuration: configuration
+                        .and_then(|pv| collect_map(&pv.value(idx)).map(|m| m.collect()))
+                        .unwrap_or_default(),
+                    created_time: read_primitive_opt(created_time, idx),
+                }));
+            }
+        }
+    }
+    Ok(None)
+}
 
 pub(super) fn extract_adds(array: &dyn ProvidesColumnByName) -> DeltaResult<Vec<Add>> {
     let mut result = Vec::new();
@@ -52,8 +85,13 @@ pub(super) fn extract_adds(array: &dyn ProvidesColumnByName) -> DeltaResult<Vec<
 
         for i in 0..arr.len() {
             if arr.is_valid(i) {
+                let path_ = read_str(path, i)?;
+                let path_ = percent_decode_str(path_)
+                    .decode_utf8()
+                    .map_err(|_| DeltaTableError::Generic("illegal path encoding".into()))?
+                    .to_string();
                 result.push(Add {
-                    path: read_str(path, i)?.to_string(),
+                    path: path_,
                     size: read_primitive(size, i)?,
                     modification_time: read_primitive(modification_time, i)?,
                     data_change: read_bool(data_change, i)?,
@@ -120,8 +158,13 @@ pub(super) fn extract_removes(array: &dyn ProvidesColumnByName) -> DeltaResult<V
 
         for i in 0..arr.len() {
             if arr.is_valid(i) {
+                let path_ = read_str(path, i)?;
+                let path_ = percent_decode_str(path_)
+                    .decode_utf8()
+                    .map_err(|_| DeltaTableError::Generic("illegal path encoding".into()))?
+                    .to_string();
                 result.push(Remove {
-                    path: read_str(path, i)?.to_string(),
+                    path: path_,
                     data_change: read_bool(data_change, i)?,
                     deletion_timestamp: read_primitive_opt(deletion_timestamp, i),
                     extended_file_metadata: extended_file_metadata
@@ -157,4 +200,17 @@ fn collect_map(val: &StructArray) -> Option<impl Iterator<Item = (String, Option
             .zip(values.iter())
             .filter_map(|(k, v)| k.map(|kv| (kv.to_string(), v.map(|vv| vv.to_string())))),
     )
+}
+
+fn collect_string_list(arr: &Option<&ListArray>, idx: usize) -> Option<Vec<String>> {
+    arr.and_then(|val| {
+        let values = val.value(idx);
+        let values = values.as_ref().as_any().downcast_ref::<StringArray>()?;
+        Some(
+            values
+                .iter()
+                .filter_map(|v| v.map(|vv| vv.to_string()))
+                .collect(),
+        )
+    })
 }

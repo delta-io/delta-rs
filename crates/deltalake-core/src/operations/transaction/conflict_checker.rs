@@ -173,7 +173,7 @@ impl<'a> TransactionInfo<'a> {
 
     #[cfg(feature = "datafusion")]
     /// Files read by the transaction
-    pub fn read_files(&self) -> Result<impl Iterator<Item = &Add>, CommitConflictError> {
+    pub fn read_files(&self) -> Result<impl Iterator<Item = Add>, CommitConflictError> {
         if let Some(predicate) = &self.read_predicates {
             Ok(Either::Left(
                 self.read_snapshot
@@ -463,7 +463,6 @@ impl<'a> ConflictChecker<'a> {
                         .txn_info
                         .read_snapshot
                         .metadata()
-                        .map_err(|_|CommitConflictError::NoMetadata)?
                         .partition_columns;
                     AddContainer::new(&added_files_to_check, partition_columns, arrow_schema)
                         .predicate_matches(predicate.clone())
@@ -679,7 +678,7 @@ mod tests {
         read_whole_table: bool,
     ) -> Result<(), CommitConflictError> {
         let setup_actions = setup.unwrap_or_else(|| init_table_actions(None));
-        let state = DeltaTableState::from_actions(setup_actions, 0).unwrap();
+        let state = DeltaTableState::from_actions(setup_actions).unwrap();
         let transaction_info = TransactionInfo::new(&state, reads, &actions, read_whole_table);
         let summary = WinningCommitSummary {
             actions: concurrent,

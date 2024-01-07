@@ -882,7 +882,7 @@ mod tests {
             // test table with partitions
             let path = "../deltalake-test/tests/data/delta-0.8.0-null-partition";
             let table = crate::open_table(path).await.unwrap();
-            let actions = table.get_state().add_actions_table(true).unwrap();
+            let actions = table.get_state().unwrap().add_actions_table(true).unwrap();
             let actions = sort_batch_by(&actions, "path").unwrap();
 
             let mut expected_columns: Vec<(&str, ArrayRef)> = vec![
@@ -901,7 +901,7 @@ mod tests {
 
             assert_eq!(expected, actions);
 
-            let actions = table.get_state().add_actions_table(false).unwrap();
+            let actions = table.get_state().unwrap().add_actions_table(false).unwrap();
             let actions = sort_batch_by(&actions, "path").unwrap();
 
             expected_columns[4] = (
@@ -921,7 +921,7 @@ mod tests {
             // test table with partitions
             let path = "../deltalake-test/tests/data/table_with_deletion_logs";
             let table = crate::open_table(path).await.unwrap();
-            let actions = table.get_state().add_actions_table(true).unwrap();
+            let actions = table.get_state().unwrap().add_actions_table(true).unwrap();
             let actions = sort_batch_by(&actions, "path").unwrap();
             let actions = actions
                 .project(&[
@@ -979,7 +979,7 @@ mod tests {
 
             assert_eq!(expected, actions);
 
-            let actions = table.get_state().add_actions_table(false).unwrap();
+            let actions = table.get_state().unwrap().add_actions_table(false).unwrap();
             let actions = sort_batch_by(&actions, "path").unwrap();
             let actions = actions
                 .project(&[
@@ -1028,7 +1028,7 @@ mod tests {
             let path = "../deltalake-test/tests/data/simple_table";
             let table = crate::open_table(path).await.unwrap();
 
-            let actions = table.get_state().add_actions_table(true).unwrap();
+            let actions = table.get_state().unwrap().add_actions_table(true).unwrap();
             let actions = sort_batch_by(&actions, "path").unwrap();
 
             let expected_columns: Vec<(&str, ArrayRef)> = vec![
@@ -1067,7 +1067,7 @@ mod tests {
 
             assert_eq!(expected, actions);
 
-            let actions = table.get_state().add_actions_table(false).unwrap();
+            let actions = table.get_state().unwrap().add_actions_table(false).unwrap();
             let actions = sort_batch_by(&actions, "path").unwrap();
 
             // For now, this column is ignored.
@@ -1085,7 +1085,7 @@ mod tests {
             // test table with column mapping and partitions
             let path = "../deltalake-test/tests/data/table_with_column_mapping";
             let table = crate::open_table(path).await.unwrap();
-            let actions = table.get_state().add_actions_table(true).unwrap();
+            let actions = table.get_state().unwrap().add_actions_table(true).unwrap();
             let expected_columns: Vec<(&str, ArrayRef)> = vec![
                 (
                     "path",
@@ -1159,7 +1159,7 @@ mod tests {
             // test table with stats
             let path = "../deltalake-test/tests/data/delta-0.8.0";
             let table = crate::open_table(path).await.unwrap();
-            let actions = table.get_state().add_actions_table(true).unwrap();
+            let actions = table.get_state().unwrap().add_actions_table(true).unwrap();
             let actions = sort_batch_by(&actions, "path").unwrap();
 
             let expected_columns: Vec<(&str, ArrayRef)> = vec![
@@ -1205,7 +1205,7 @@ mod tests {
             let mut table = crate::open_table(path).await.unwrap();
             table.load_version(1).await.unwrap();
 
-            let actions = table.get_state().add_actions_table(true).unwrap();
+            let actions = table.get_state().unwrap().add_actions_table(true).unwrap();
 
             let expected_columns: Vec<(&str, ArrayRef)> = vec![
                 (
@@ -1386,7 +1386,7 @@ mod tests {
             );
             assert_eq!(expected, actions);
 
-            let actions = table.get_state().add_actions_table(false).unwrap();
+            let actions = table.get_state().unwrap().add_actions_table(false).unwrap();
             // For brevity, just checking a few nested columns in stats
 
             assert_eq!(

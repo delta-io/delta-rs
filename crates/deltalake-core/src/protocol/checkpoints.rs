@@ -82,7 +82,12 @@ pub const CHECKPOINT_RECORD_BATCH_SIZE: usize = 5000;
 
 /// Creates checkpoint at current table version
 pub async fn create_checkpoint(table: &DeltaTable) -> Result<(), ProtocolError> {
-    create_checkpoint_for(table.version(), table.get_state(), table.log_store.as_ref()).await?;
+    create_checkpoint_for(
+        table.version(),
+        table.snapshot().map_err(|_| ProtocolError::NoMetaData)?,
+        table.log_store.as_ref(),
+    )
+    .await?;
     Ok(())
 }
 
@@ -91,7 +96,8 @@ pub async fn create_checkpoint(table: &DeltaTable) -> Result<(), ProtocolError> 
 pub async fn cleanup_metadata(table: &DeltaTable) -> Result<usize, ProtocolError> {
     let log_retention_timestamp = Utc::now().timestamp_millis()
         - table
-            .get_state()
+            .snapshot()
+            .map_err(|_| ProtocolError::NoMetaData)?
             .table_config()
             .log_retention_duration()
             .as_millis() as i64;
@@ -114,14 +120,11 @@ pub async fn create_checkpoint_from_table_uri_and_cleanup(
     let table = open_table_with_version(table_uri, version)
         .await
         .map_err(|err| ProtocolError::Generic(err.to_string()))?;
-    create_checkpoint_for(version, table.get_state(), table.log_store.as_ref()).await?;
+    let snapshot = table.snapshot().map_err(|_| ProtocolError::NoMetaData)?;
+    create_checkpoint_for(version, snapshot, table.log_store.as_ref()).await?;
 
-    let enable_expired_log_cleanup = cleanup.unwrap_or_else(|| {
-        table
-            .get_state()
-            .table_config()
-            .enable_expired_log_cleanup()
-    });
+    let enable_expired_log_cleanup =
+        cleanup.unwrap_or_else(|| snapshot.table_config().enable_expired_log_cleanup());
 
     if table.version() >= 0 && enable_expired_log_cleanup {
         let deleted_log_num = cleanup_metadata(&table).await?;
@@ -246,7 +249,7 @@ fn parquet_bytes_from_state(
     state: &DeltaTableState,
     mut tombstones: Vec<Remove>,
 ) -> Result<(CheckPoint, bytes::Bytes), ProtocolError> {
-    let current_metadata = state.metadata()?;
+    let current_metadata = state.metadata();
     let schema = current_metadata.schema()?;
 
     let partition_col_data_types = get_partition_col_data_types(&schema, &current_metadata);
@@ -273,7 +276,7 @@ fn parquet_bytes_from_state(
             remove.extended_file_metadata = Some(false);
         }
     }
-
+    let files = state.files().unwrap();
     // protocol
     let jsons = std::iter::once(Action::Protocol(Protocol {
         min_reader_version: state.protocol().min_reader_version,
@@ -310,7 +313,7 @@ fn parquet_bytes_from_state(
     }))
     .map(|a| serde_json::to_value(a).map_err(ProtocolError::from))
     // adds
-    .chain(state.files().iter().map(|f| {
+    .chain(files.iter().map(|f| {
         checkpoint_add_from_state(f, partition_col_data_types.as_slice(), &stats_conversions)
     }));
 
@@ -544,7 +547,8 @@ mod tests {
             .unwrap();
         assert_eq!(table.version(), 0);
         assert_eq!(table.get_schema().unwrap(), &table_schema);
-        let res = create_checkpoint_for(0, table.get_state(), table.log_store.as_ref()).await;
+        let res =
+            create_checkpoint_for(0, table.snapshot().unwrap(), table.log_store.as_ref()).await;
         assert!(res.is_ok());
 
         // Look at the "files" and verify that the _last_checkpoint has the right version
@@ -573,7 +577,7 @@ mod tests {
             .unwrap();
         assert_eq!(table.version(), 0);
         assert_eq!(table.get_schema().unwrap(), &table_schema);
-        match create_checkpoint_for(1, table.get_state(), table.log_store.as_ref()).await {
+        match create_checkpoint_for(1, table.snapshot().unwrap(), table.log_store.as_ref()).await {
             Ok(_) => {
                 /*
                  * If a checkpoint is allowed to be created here, it will use the passed in

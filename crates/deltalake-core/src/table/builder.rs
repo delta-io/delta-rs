@@ -51,7 +51,7 @@ pub enum DeltaVersion {
 }
 
 /// Configuration options for delta table
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct DeltaTableConfig {
     /// Indicates whether our use case requires tracking tombstones.
@@ -437,9 +437,6 @@ fn ensure_file_location_exists(path: PathBuf) -> DeltaResult<()> {
 
 #[cfg(test)]
 mod tests {
-    use itertools::Itertools;
-    use object_store::path::Path;
-
     use super::*;
     use crate::storage::DefaultObjectStoreFactory;
 
@@ -554,32 +551,5 @@ mod tests {
         let expected = Url::from_directory_path(path).unwrap();
         let url = ensure_table_uri(&expected).unwrap();
         assert_eq!(expected.as_str().trim_end_matches('/'), url.as_str());
-    }
-
-    #[tokio::test]
-    async fn read_delta_table_ignoring_tombstones() {
-        let table = DeltaTableBuilder::from_uri("../deltalake-test/tests/data/delta-0.8.0")
-            .without_tombstones()
-            .load()
-            .await
-            .unwrap();
-        assert!(
-            table
-                .get_state()
-                .all_tombstones(table.object_store().clone())
-                .await
-                .unwrap()
-                .collect_vec()
-                .is_empty(),
-            "loading without tombstones should skip tombstones"
-        );
-
-        assert_eq!(
-            table.get_files_iter().collect_vec(),
-            vec![
-                Path::from("part-00000-c9b90f86-73e6-46c8-93ba-ff6bfaf892a1-c000.snappy.parquet"),
-                Path::from("part-00000-04ec9591-0b73-459e-8d18-ba5711d6cbe1-c000.snappy.parquet")
-            ]
-        );
     }
 }

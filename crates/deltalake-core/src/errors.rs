@@ -210,6 +210,9 @@ pub enum DeltaTableError {
 
     #[error("Table metadata is invalid: {0}")]
     MetadataError(String),
+
+    #[error("Table has not yet been initialized")]
+    NotInitialized,
 }
 
 impl From<object_store::path::Error> for DeltaTableError {

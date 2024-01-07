@@ -138,7 +138,7 @@ pub async fn create_initialized_table(
             true,
         ),
     ]);
-    let state = DeltaTableState::from_actions(init_table_actions(None), 0).unwrap();
+    let state = DeltaTableState::from_actions(init_table_actions(None)).unwrap();
     let operation = DeltaOperation::Create {
         mode: SaveMode::ErrorIfExists,
         location: "location".into(),

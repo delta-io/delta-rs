@@ -103,7 +103,7 @@ impl std::future::IntoFuture for ConstraintBuilder {
                 .expr
                 .ok_or_else(|| DeltaTableError::Generic("No Expresion provided".to_string()))?;
 
-            let mut metadata = this.snapshot.metadata()?.clone();
+            let mut metadata = this.snapshot.metadata().clone();
             let configuration_key = format!("delta.constraints.{}", name);
 
             if metadata.configuration.contains_key(&configuration_key) {
@@ -217,13 +217,12 @@ impl std::future::IntoFuture for ConstraintBuilder {
                 this.log_store.as_ref(),
                 &actions,
                 operations.clone(),
-                &this.snapshot,
+                Some(&this.snapshot),
                 None,
             )
             .await?;
 
-            this.snapshot
-                .merge(actions, &operations, version, true, true)?;
+            this.snapshot.merge(actions, &operations, version)?;
             Ok(DeltaTable::new_with_state(this.log_store, this.snapshot))
         })
     }
@@ -254,7 +253,7 @@ mod tests {
 
     async fn get_constraint_op_params(table: &mut DeltaTable) -> String {
         let commit_info = table.history(None).await.unwrap();
-        let last_commit = &commit_info[commit_info.len() - 1];
+        let last_commit = &commit_info[0];
         last_commit
             .operation_parameters
             .as_ref()

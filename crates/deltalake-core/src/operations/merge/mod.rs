@@ -822,13 +822,6 @@ async fn try_construct_early_filter(
     target_name: &TableReference<'_>,
 ) -> DeltaResult<Option<Expr>> {
     let table_metadata = table_snapshot.metadata();
-
-    if table_metadata.is_err() {
-        return Ok(None);
-    }
-
-    let table_metadata = table_metadata.unwrap();
-
     let partition_columns = &table_metadata.partition_columns;
 
     if partition_columns.is_empty() {
@@ -917,7 +910,7 @@ async fn execute(
     let mut metrics = MergeMetrics::default();
     let exec_start = Instant::now();
 
-    let current_metadata = snapshot.metadata()?;
+    let current_metadata = snapshot.metadata();
 
     // TODO: Given the join predicate, remove any expression that involve the
     // source table and keep expressions that only involve the target table.
@@ -1149,7 +1142,7 @@ async fn execute(
     let mut new_columns = projection;
     let mut write_projection = Vec::new();
 
-    for delta_field in snapshot.schema().unwrap().fields() {
+    for delta_field in snapshot.schema().fields() {
         let mut when_expr = Vec::with_capacity(operations_size);
         let mut then_expr = Vec::with_capacity(operations_size);
 
@@ -1310,7 +1303,7 @@ async fn execute(
 
     let rewrite_start = Instant::now();
     let add_actions = write_execution_plan(
-        snapshot,
+        Some(snapshot),
         state.clone(),
         write,
         table_partition_cols.clone(),
@@ -1341,7 +1334,7 @@ async fn execute(
 
     {
         let lock = survivors.lock().unwrap();
-        for action in snapshot.files() {
+        for action in snapshot.files()? {
             if lock.contains(&action.path) {
                 metrics.num_target_files_removed += 1;
                 actions.push(Action::Remove(Remove {
@@ -1402,7 +1395,7 @@ async fn execute(
             log_store.as_ref(),
             &actions,
             operation.clone(),
-            snapshot,
+            Some(snapshot),
             Some(app_metadata),
         )
         .await?;
@@ -1470,7 +1463,7 @@ impl std::future::IntoFuture for MergeBuilder {
             .await?;
 
             if let Some(op) = &operation {
-                this.snapshot.merge(actions, op, version, true, true)?;
+                this.snapshot.merge(actions, op, version)?;
             }
             let table = DeltaTable::new_with_state(this.log_store, this.snapshot);
 
@@ -1595,14 +1588,14 @@ mod tests {
 
         let table = write_data(table, &schema).await;
         assert_eq!(table.version(), 1);
-        assert_eq!(table.get_file_uris().count(), 1);
+        assert_eq!(table.get_files_count(), 1);
 
         (table, merge_source(schema))
     }
 
     async fn assert_merge(table: DeltaTable, metrics: MergeMetrics) {
         assert_eq!(table.version(), 2);
-        assert!(table.get_file_uris().count() >= 1);
+        assert!(table.get_files_count() >= 1);
         assert!(metrics.num_target_files_added >= 1);
         assert_eq!(metrics.num_target_files_removed, 1);
         assert_eq!(metrics.num_target_rows_copied, 1);
@@ -1631,7 +1624,7 @@ mod tests {
     async fn test_merge() {
         let (table, source) = setup().await;
 
-        let (mut table, metrics) = DeltaOps(table)
+        let (table, metrics) = DeltaOps(table)
             .merge(source, col("target.id").eq(col("source.id")))
             .with_source_alias("source")
             .with_target_alias("target")
@@ -1658,7 +1651,7 @@ mod tests {
             .unwrap();
 
         let commit_info = table.history(None).await.unwrap();
-        let last_commit = &commit_info[commit_info.len() - 1];
+        let last_commit = &commit_info[0];
         let parameters = last_commit.operation_parameters.clone().unwrap();
         assert_eq!(parameters["predicate"], json!("target.id = source.id"));
         assert_eq!(
@@ -1683,7 +1676,7 @@ mod tests {
         // Also validates that update and set operations can contain the target alias
         let (table, source) = setup().await;
 
-        let (mut table, metrics) = DeltaOps(table)
+        let (table, metrics) = DeltaOps(table)
             .merge(source, "target.id = source.id")
             .with_source_alias("source")
             .with_target_alias("target")
@@ -1710,7 +1703,7 @@ mod tests {
             .unwrap();
 
         let commit_info = table.history(None).await.unwrap();
-        let last_commit = &commit_info[commit_info.len() - 1];
+        let last_commit = &commit_info[0];
         let parameters = last_commit.operation_parameters.clone().unwrap();
         assert_eq!(parameters["predicate"], json!("target.id = source.id"));
         assert_eq!(
@@ -1850,7 +1843,7 @@ mod tests {
 
         let table = write_data(table, &schema).await;
         assert_eq!(table.version(), 1);
-        assert_eq!(table.get_file_uris().count(), 2);
+        assert_eq!(table.get_files_count(), 2);
 
         let ctx = SessionContext::new();
         let batch = RecordBatch::try_new(
@@ -1906,7 +1899,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(table.version(), 2);
-        assert!(table.get_file_uris().count() >= 3);
+        assert!(table.get_files_count() >= 3);
         assert!(metrics.num_target_files_added >= 3);
         assert_eq!(metrics.num_target_files_removed, 2);
         assert_eq!(metrics.num_target_rows_copied, 1);
@@ -1940,7 +1933,7 @@ mod tests {
 
         let table = write_data(table, &schema).await;
         assert_eq!(table.version(), 1);
-        assert_eq!(table.get_file_uris().count(), 4);
+        assert_eq!(table.get_files_count(), 4);
 
         let ctx = SessionContext::new();
         let batch = RecordBatch::try_new(
@@ -1979,7 +1972,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(table.version(), 2);
-        assert!(table.get_file_uris().count() >= 3);
+        assert!(table.get_files_count() >= 3);
         assert_eq!(metrics.num_target_files_added, 3);
         assert_eq!(metrics.num_target_files_removed, 2);
         assert_eq!(metrics.num_target_rows_copied, 0);
@@ -2013,7 +2006,7 @@ mod tests {
 
         let table = write_data(table, &schema).await;
         assert_eq!(table.version(), 1);
-        assert_eq!(table.get_file_uris().count(), 2);
+        assert_eq!(table.get_files_count(), 2);
 
         let ctx = SessionContext::new();
         let batch = RecordBatch::try_new(
@@ -2031,7 +2024,7 @@ mod tests {
         .unwrap();
         let source = ctx.read_batch(batch).unwrap();
 
-        let (mut table, metrics) = DeltaOps(table)
+        let (table, metrics) = DeltaOps(table)
             .merge(source, col("target.id").eq(col("source.id")))
             .with_source_alias("source")
             .with_target_alias("target")
@@ -2041,7 +2034,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(table.version(), 2);
-        assert!(table.get_file_uris().count() >= 2);
+        assert!(table.get_files_count() >= 2);
         assert_eq!(metrics.num_target_files_added, 2);
         assert_eq!(metrics.num_target_files_removed, 2);
         assert_eq!(metrics.num_target_rows_copied, 2);
@@ -2052,7 +2045,7 @@ mod tests {
         assert_eq!(metrics.num_source_rows, 3);
 
         let commit_info = table.history(None).await.unwrap();
-        let last_commit = &commit_info[commit_info.len() - 1];
+        let last_commit = &commit_info[0];
         let parameters = last_commit.operation_parameters.clone().unwrap();
         let extra_info = last_commit.info.clone();
         assert_eq!(
@@ -2082,7 +2075,7 @@ mod tests {
 
         let table = write_data(table, &schema).await;
         assert_eq!(table.version(), 1);
-        assert_eq!(table.get_file_uris().count(), 2);
+        assert_eq!(table.get_files_count(), 2);
 
         let ctx = SessionContext::new();
         let batch = RecordBatch::try_new(
@@ -2100,7 +2093,7 @@ mod tests {
         .unwrap();
         let source = ctx.read_batch(batch).unwrap();
 
-        let (mut table, metrics) = DeltaOps(table)
+        let (table, metrics) = DeltaOps(table)
             .merge(source, col("target.id").eq(col("source.id")))
             .with_source_alias("source")
             .with_target_alias("target")
@@ -2110,7 +2103,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(table.version(), 2);
-        assert!(table.get_file_uris().count() >= 2);
+        assert!(table.get_files_count() >= 2);
         assert_eq!(metrics.num_target_files_added, 1);
         assert_eq!(metrics.num_target_files_removed, 1);
         assert_eq!(metrics.num_target_rows_copied, 1);
@@ -2121,7 +2114,7 @@ mod tests {
         assert_eq!(metrics.num_source_rows, 3);
 
         let commit_info = table.history(None).await.unwrap();
-        let last_commit = &commit_info[commit_info.len() - 1];
+        let last_commit = &commit_info[0];
         let parameters = last_commit.operation_parameters.clone().unwrap();
         assert_eq!(parameters["predicate"], json!("target.id = source.id"));
         assert_eq!(
@@ -2151,7 +2144,7 @@ mod tests {
 
         let table = write_data(table, &schema).await;
         assert_eq!(table.version(), 1);
-        assert_eq!(table.get_file_uris().count(), 2);
+        assert_eq!(table.get_files_count(), 2);
 
         let ctx = SessionContext::new();
         let batch = RecordBatch::try_new(
@@ -2169,7 +2162,7 @@ mod tests {
         .unwrap();
         let source = ctx.read_batch(batch).unwrap();
 
-        let (mut table, metrics) = DeltaOps(table)
+        let (table, metrics) = DeltaOps(table)
             .merge(source, col("target.id").eq(col("source.id")))
             .with_source_alias("source")
             .with_target_alias("target")
@@ -2179,7 +2172,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(table.version(), 2);
-        assert_eq!(table.get_file_uris().count(), 2);
+        assert_eq!(table.get_files_count(), 2);
         assert_eq!(metrics.num_target_files_added, 2);
         assert_eq!(metrics.num_target_files_removed, 2);
         assert_eq!(metrics.num_target_rows_copied, 2);
@@ -2190,7 +2183,7 @@ mod tests {
         assert_eq!(metrics.num_source_rows, 3);
 
         let commit_info = table.history(None).await.unwrap();
-        let last_commit = &commit_info[commit_info.len() - 1];
+        let last_commit = &commit_info[0];
         let parameters = last_commit.operation_parameters.clone().unwrap();
         assert_eq!(parameters["predicate"], json!("target.id = source.id"));
         assert_eq!(
@@ -2214,7 +2207,7 @@ mod tests {
 
         let table = write_data(table, &schema).await;
         assert_eq!(table.version(), 1);
-        assert_eq!(table.get_file_uris().count(), 2);
+        assert_eq!(table.get_files_count(), 2);
 
         let ctx = SessionContext::new();
         let batch = RecordBatch::try_new(
@@ -2232,7 +2225,7 @@ mod tests {
         .unwrap();
         let source = ctx.read_batch(batch).unwrap();
 
-        let (mut table, metrics) = DeltaOps(table)
+        let (table, metrics) = DeltaOps(table)
             .merge(source, col("target.id").eq(col("source.id")))
             .with_source_alias("source")
             .with_target_alias("target")
@@ -2254,7 +2247,7 @@ mod tests {
         assert_eq!(metrics.num_source_rows, 3);
 
         let commit_info = table.history(None).await.unwrap();
-        let last_commit = &commit_info[commit_info.len() - 1];
+        let last_commit = &commit_info[0];
         let parameters = last_commit.operation_parameters.clone().unwrap();
         assert_eq!(parameters["predicate"], json!("target.id = source.id"));
         assert_eq!(
@@ -2281,7 +2274,7 @@ mod tests {
         let table = setup_table(Some(vec!["modified"])).await;
 
         assert_eq!(table.version(), 0);
-        assert_eq!(table.get_file_uris().count(), 0);
+        assert_eq!(table.get_files_count(), 0);
 
         let ctx = SessionContext::new();
         let batch = RecordBatch::try_new(
@@ -2325,7 +2318,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(table.version(), 1);
-        assert!(table.get_file_uris().count() >= 2);
+        assert!(table.get_files_count() >= 2);
         assert!(metrics.num_target_files_added >= 2);
         assert_eq!(metrics.num_target_files_removed, 0);
         assert_eq!(metrics.num_target_rows_copied, 0);
@@ -2398,7 +2391,7 @@ mod tests {
 
         let table = write_data(table, &arrow_schema).await;
         assert_eq!(table.version(), 1);
-        assert_eq!(table.get_file_uris().count(), 1);
+        assert_eq!(table.get_files_count(), 1);
 
         let (table, _metrics) = DeltaOps(table)
             .merge(source, "target.Id = source.Id")
@@ -2561,7 +2554,7 @@ mod tests {
         let table = setup_table(Some(vec!["id"])).await;
 
         assert_eq!(table.version(), 0);
-        assert_eq!(table.get_file_uris().count(), 0);
+        assert_eq!(table.get_files_count(), 0);
 
         let ctx = SessionContext::new();
         let batch = RecordBatch::try_new(
@@ -2602,7 +2595,7 @@ mod tests {
 
         let pred = try_construct_early_filter(
             join_predicate,
-            &table.state,
+            table.snapshot().unwrap(),
             &ctx.state(),
             &source,
             &source_name,

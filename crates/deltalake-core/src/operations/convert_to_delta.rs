@@ -498,7 +498,7 @@ mod tests {
             "Testing location: {test_data_from:?}"
         );
 
-        let mut files = table.get_files_iter().collect_vec();
+        let mut files = table.get_files_iter().unwrap().collect_vec();
         files.sort();
         assert_eq!(
             files, expected_paths,
@@ -518,6 +518,7 @@ mod tests {
 
         let mut partition_values = table
             .get_partition_values()
+            .unwrap()
             .flat_map(|map| map.clone())
             .collect::<Vec<_>>();
         partition_values.sort();
