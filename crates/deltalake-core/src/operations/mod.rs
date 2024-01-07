@@ -30,7 +30,8 @@ pub mod vacuum;
 #[cfg(feature = "datafusion")]
 use self::{
     constraints::ConstraintBuilder, datafusion_utils::Expression, delete::DeleteBuilder,
-    load::LoadBuilder, merge::MergeBuilder, update::UpdateBuilder, write::WriteBuilder, load_cdf::CdfLoadBuilder
+    load::LoadBuilder, load_cdf::CdfLoadBuilder, merge::MergeBuilder, update::UpdateBuilder,
+    write::WriteBuilder,
 };
 #[cfg(feature = "datafusion")]
 pub use ::datafusion::physical_plan::common::collect as collect_sendable_stream;
@@ -39,7 +40,6 @@ use arrow::record_batch::RecordBatch;
 #[cfg(all(feature = "arrow", feature = "parquet"))]
 use optimize::OptimizeBuilder;
 use restore::RestoreBuilder;
-
 
 #[cfg(feature = "datafusion")]
 pub mod constraints;

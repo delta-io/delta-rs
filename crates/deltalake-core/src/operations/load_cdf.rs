@@ -1,18 +1,11 @@
-use std::sync::Arc;
-
-use datafusion::datasource::TableProvider;
-use datafusion::execution::context::{SessionContext, TaskContext};
-use datafusion::physical_plan::{ExecutionPlan, SendableRecordBatchStream};
-use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
+use datafusion::physical_plan::SendableRecordBatchStream;
 use futures::future::BoxFuture;
-use crate::delta_datafusion::DeltaScanBuilder;
 
-use crate::DeltaTable;
-use crate::errors::{DeltaResult, DeltaTableError};
+use crate::delta_datafusion::cdf::scan::DeltaCdfScan;
+use crate::DeltaTableError;
+use crate::errors::DeltaResult;
 use crate::logstore::LogStoreRef;
 use crate::table::state::DeltaTableState;
-
-use super::transaction::PROTOCOL;
 
 #[derive(Debug, Clone)]
 pub struct CdfLoadBuilder {
@@ -38,7 +31,7 @@ impl CdfLoadBuilder {
     }
 
     /// Specify column selection to load
-    pub fn with_columns(mut self, columns: impl IntoIterator<Item=impl Into<String>>) -> Self {
+    pub fn with_columns(mut self, columns: impl IntoIterator<Item = impl Into<String>>) -> Self {
         self.columns = Some(columns.into_iter().map(|s| s.into()).collect());
         self
     }
@@ -50,66 +43,47 @@ impl CdfLoadBuilder {
 }
 
 impl std::future::IntoFuture for CdfLoadBuilder {
-    type Output = DeltaResult<(DeltaTable, SendableRecordBatchStream)>;
+    type Output = DeltaResult<SendableRecordBatchStream>;
     type IntoFuture = BoxFuture<'static, Self::Output>;
 
     fn into_future(self) -> Self::IntoFuture {
         let this = self;
 
         Box::pin(async move {
-            PROTOCOL.can_read_from(&this.snapshot)?;
-
-            let table = DeltaTable::new_with_state(this.log_store, this.snapshot);
-            let schema = this.snapshot.arrow_schema()?;
-            let projection = this
-                .columns
-                .map(|cols| {
-                    cols.iter()
-                        .map(|col| {
-                            schema.column_with_name(col).map(|(idx, _)| idx).ok_or(
-                                DeltaTableError::SchemaMismatch {
-                                    msg: format!("Column '{col}' does not exist in table schema."),
-                                },
-                            )
-                        })
-                        .collect::<Result<_, _>>()
-                })
-                .transpose()?;
-
-            // let commits = this.snapshot.commit_infos();
-
-
-            let ctx = SessionContext::new();
-            let scan = DeltaScanBuilder::new(&this.snapshot, this.log_store, session)
-                .with_projection(projection)
-                .with_files()
-                .build()
-                .await?;
-            let plan = CoalescePartitionsExec::new(scan_plan);
-            let task_ctx = Arc::new(TaskContext::from(&ctx.state()));
-            let stream = plan.execute(0, task_ctx)?;
-
-            Ok((table, stream))
+            let partition_cols = this.snapshot.metadata()
+                .ok_or(DeltaTableError::NoMetadata)?
+                .clone()
+                .partition_columns
+                .clone();
+            let scan = DeltaCdfScan::new(
+                this.log_store.clone(),
+                this.starting_version,
+                this.snapshot.arrow_schema()?,
+                partition_cols,
+            );
+            scan.scan().await
         })
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::DeltaTableBuilder;
+    use arrow_array::RecordBatch;
+    use arrow_cast::pretty::print_batches;
+
+    use crate::operations::collect_sendable_stream;
     use crate::writer::test_utils::TestResult;
+    use crate::DeltaOps;
 
     #[tokio::test]
     async fn test_load_local() -> TestResult {
-        let mut table = DeltaTableBuilder::from_uri("C:\\Users\\shcar\\IdeaProjects\\lido\\cdf-table")
-            .load()
-            .await
-            .unwrap();
-        table.load().await?;
+        let _table = DeltaOps::try_from_uri("./tests/data/cdf-table/")
+            .await?
+            .load_cdf()
+            .await?;
 
-        for cdc_file in table.state.cdc_files() {
-            println!("{:?}", cdc_file);
-        }
+        let data: Vec<RecordBatch> = collect_sendable_stream(_table).await?;
+        print_batches(&data)?;
         Ok(())
     }
 }

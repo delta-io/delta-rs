@@ -12,7 +12,9 @@ use serde::{Deserialize, Serialize};
 
 use super::config::TableConfig;
 use crate::errors::DeltaTableError;
-use crate::kernel::{Action, Add, AddCDCFile, CommitInfo, DataType, DomainMetadata, Remove, StructType};
+use crate::kernel::{
+    Action, Add, AddCDCFile, CommitInfo, DataType, DomainMetadata, Remove, StructType,
+};
 use crate::kernel::{Metadata, Protocol};
 use crate::partitions::{DeltaTablePartition, PartitionFilter};
 use crate::protocol::ProtocolError;
@@ -191,7 +193,9 @@ impl DeltaTableState {
     }
 
     /// Full list of all of the CDC files added as part of the changeDataFeed feature
-    pub fn cdc_files(&self) -> &Vec<AddCDCFile> { self.cdc_files.as_ref() }
+    pub fn cdc_files(&self) -> &Vec<AddCDCFile> {
+        self.cdc_files.as_ref()
+    }
 
     /// Returns an iterator of file names present in the loaded state
     #[inline]
@@ -316,7 +320,6 @@ impl DeltaTableState {
         require_tombstones: bool,
         require_files: bool,
     ) -> Result<(), ProtocolError> {
-
         match action {
             Action::Cdc(v) => {
                 self.cdc_files.push(v);
