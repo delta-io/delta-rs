@@ -185,7 +185,7 @@ pub async fn cleanup_expired_logs_for(
 
     let object_store = log_store.object_store();
     let maybe_last_checkpoint = object_store
-        .get(&log_store.log_path().child("_last_checkpoint.json"))
+        .get(&log_store.log_path().child("_last_checkpoint"))
         .await;
 
     if let Err(Error::NotFound { path: _, source: _ }) = maybe_last_checkpoint {
@@ -777,7 +777,7 @@ mod tests {
         create_checkpoint(&table).await.unwrap();
 
         let log_retention_timestamp = (Utc::now().timestamp_millis()
-            + Duration::days(31).num_milliseconds())
+            + Duration::days(32).num_milliseconds())
             - table
                 .get_state()
                 .table_config()
