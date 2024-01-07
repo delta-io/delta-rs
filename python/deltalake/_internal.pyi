@@ -57,6 +57,7 @@ class RawDeltaTable:
         dry_run: bool,
         retention_hours: Optional[int],
         enforce_retention_duration: bool,
+        custom_metadata: Optional[Dict[str, str]],
     ) -> List[str]: ...
     def compact_optimize(
         self,
@@ -65,6 +66,7 @@ class RawDeltaTable:
         max_concurrent_tasks: Optional[int],
         min_commit_interval: Optional[int],
         writer_properties: Optional[Dict[str, Optional[str]]],
+        custom_metadata: Optional[Dict[str, str]],
     ) -> str: ...
     def z_order_optimize(
         self,
@@ -75,16 +77,19 @@ class RawDeltaTable:
         max_spill_size: Optional[int],
         min_commit_interval: Optional[int],
         writer_properties: Optional[Dict[str, Optional[str]]],
+        custom_metadata: Optional[Dict[str, str]],
     ) -> str: ...
     def add_constraints(
         self,
         constraints: Dict[str, str],
+        custom_metadata: Optional[Dict[str, str]],
     ) -> None: ...
     def restore(
         self,
         target: Optional[Any],
         ignore_missing_files: bool,
         protocol_downgrade_allowed: bool,
+        custom_metadata: Optional[Dict[str, str]],
     ) -> str: ...
     def history(self, limit: Optional[int]) -> List[str]: ...
     def update_incremental(self) -> None: ...
@@ -97,14 +102,18 @@ class RawDeltaTable:
         self,
         predicate: Optional[str],
         writer_properties: Optional[Dict[str, Optional[str]]],
+        custom_metadata: Optional[Dict[str, str]],
     ) -> str: ...
-    def repair(self, dry_run: bool) -> str: ...
+    def repair(
+        self, dry_run: bool, custom_metadata: Optional[Dict[str, str]]
+    ) -> str: ...
     def update(
         self,
         updates: Dict[str, str],
         predicate: Optional[str],
         writer_properties: Optional[Dict[str, Optional[str]]],
-        safe_cast: bool = False,
+        safe_cast: bool,
+        custom_metadata: Optional[Dict[str, str]],
     ) -> str: ...
     def merge_execute(
         self,
@@ -113,6 +122,7 @@ class RawDeltaTable:
         source_alias: Optional[str],
         target_alias: Optional[str],
         writer_properties: Optional[Dict[str, Optional[str]]],
+        custom_metadata: Optional[Dict[str, str]],
         safe_cast: bool,
         matched_update_updates: Optional[List[Dict[str, str]]],
         matched_update_predicate: Optional[List[Optional[str]]],
@@ -186,6 +196,7 @@ def create_deltalake(
     description: Optional[str],
     configuration: Optional[Mapping[str, Optional[str]]],
     storage_options: Optional[Dict[str, str]],
+    custom_metadata: Optional[Dict[str, str]],
 ) -> None: ...
 def batch_distinct(batch: pyarrow.RecordBatch) -> pyarrow.RecordBatch: ...
 
