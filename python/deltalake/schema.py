@@ -46,7 +46,7 @@ def _convert_pa_schema_to_delta(
 
     def dtype_to_delta_dtype(dtype: pa.DataType) -> pa.DataType:
         # Handle nested types
-        if isinstance(dtype, (pa.LargeListType, pa.ListType)):
+        if isinstance(dtype, (pa.LargeListType, pa.ListType, pa.FixedSizeListType)):
             return list_to_delta_dtype(dtype)
         elif isinstance(dtype, pa.StructType):
             return struct_to_delta_dtype(dtype)
@@ -54,6 +54,8 @@ def _convert_pa_schema_to_delta(
             return pa.timestamp(
                 "us"
             )  # TODO(ion): propagate also timezone information during writeonce we can properly read TZ in delta schema
+        elif type(dtype) is pa.FixedSizeBinaryType:
+            return pa.binary()
         try:
             return dtype_map[dtype]
         except KeyError:
