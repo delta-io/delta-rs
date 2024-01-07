@@ -72,7 +72,12 @@ def test_vacuum_transaction_log(tmp_path: pathlib.Path, sample_data: pa.Table):
 
     dt = DeltaTable(tmp_path)
 
-    dt.vacuum(retention_hours=0, dry_run=False, enforce_retention_duration=False)
+    dt.vacuum(
+        retention_hours=0,
+        dry_run=False,
+        enforce_retention_duration=False,
+        custom_metadata={"userName": "John Doe"},
+    )
 
     dt = DeltaTable(tmp_path)
 
@@ -86,6 +91,9 @@ def test_vacuum_transaction_log(tmp_path: pathlib.Path, sample_data: pa.Table):
 
     assert history[0]["operation"] == "VACUUM END"
     assert history[1]["operation"] == "VACUUM START"
+
+    assert history[0]["userName"] == "John Doe"
+    assert history[1]["userName"] == "John Doe"
 
     assert history[0]["operationParameters"]["status"] == "COMPLETED"
     assert history[1]["operationParameters"] == expected_start_parameters

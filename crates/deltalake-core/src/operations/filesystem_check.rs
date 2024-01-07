@@ -42,6 +42,8 @@ pub struct FileSystemCheckBuilder {
     log_store: LogStoreRef,
     /// Don't remove actions to the table log. Just determine which files can be removed
     dry_run: bool,
+    /// Additional metadata to be added to commit
+    app_metadata: Option<HashMap<String, serde_json::Value>>,
 }
 
 /// Details of the FSCK operation including which files were removed from the log
@@ -78,12 +80,22 @@ impl FileSystemCheckBuilder {
             snapshot: state,
             log_store,
             dry_run: false,
+            app_metadata: None,
         }
     }
 
     /// Only determine which add actions should be removed. A dry run will not commit actions to the Delta log
     pub fn with_dry_run(mut self, dry_run: bool) -> Self {
         self.dry_run = dry_run;
+        self
+    }
+
+    /// Additional metadata to be added to commit info
+    pub fn with_metadata(
+        mut self,
+        metadata: impl IntoIterator<Item = (String, serde_json::Value)>,
+    ) -> Self {
+        self.app_metadata = Some(HashMap::from_iter(metadata));
         self
     }
 
@@ -126,7 +138,11 @@ impl FileSystemCheckBuilder {
 }
 
 impl FileSystemCheckPlan {
-    pub async fn execute(self, snapshot: &DeltaTableState) -> DeltaResult<FileSystemCheckMetrics> {
+    pub async fn execute(
+        self,
+        snapshot: &DeltaTableState,
+        app_metadata: Option<HashMap<String, serde_json::Value>>,
+    ) -> DeltaResult<FileSystemCheckMetrics> {
         if self.files_to_remove.is_empty() {
             return Ok(FileSystemCheckMetrics {
                 dry_run: false,
@@ -159,7 +175,10 @@ impl FileSystemCheckPlan {
             files_removed: removed_file_paths,
         };
 
-        let mut app_metadata = HashMap::new();
+        let mut app_metadata = match app_metadata {
+            Some(meta) => meta,
+            None => HashMap::new(),
+        };
 
         app_metadata.insert("readVersion".to_owned(), snapshot.version().into());
         if let Ok(map) = serde_json::to_value(&metrics) {
@@ -199,7 +218,7 @@ impl std::future::IntoFuture for FileSystemCheckBuilder {
                 ));
             }
 
-            let metrics = plan.execute(&this.snapshot).await?;
+            let metrics = plan.execute(&this.snapshot, this.app_metadata).await?;
             let mut table = DeltaTable::new_with_state(this.log_store, this.snapshot);
             table.update().await?;
             Ok((table, metrics))

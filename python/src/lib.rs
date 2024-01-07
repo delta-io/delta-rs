@@ -265,6 +265,8 @@ impl RawDeltaTable {
         if let Some(metadata) = custom_metadata {
             let json_metadata: Map<String, Value> =
                 metadata.into_iter().map(|(k, v)| (k, v.into())).collect();
+
+            dbg!(json_metadata.clone());
             cmd = cmd.with_metadata(json_metadata);
         };
 
@@ -948,10 +950,21 @@ impl RawDeltaTable {
 
     /// Execute the File System Check command (FSCK) on the delta table: removes old reference to files that
     /// have been deleted or are malformed
-    #[pyo3(signature = (dry_run = true))]
-    pub fn repair(&mut self, dry_run: bool) -> PyResult<String> {
-        let cmd = FileSystemCheckBuilder::new(self._table.log_store(), self._table.state.clone())
-            .with_dry_run(dry_run);
+    #[pyo3(signature = (dry_run = true, custom_metadata = None))]
+    pub fn repair(
+        &mut self,
+        dry_run: bool,
+        custom_metadata: Option<HashMap<String, String>>,
+    ) -> PyResult<String> {
+        let mut cmd =
+            FileSystemCheckBuilder::new(self._table.log_store(), self._table.state.clone())
+                .with_dry_run(dry_run);
+
+        if let Some(metadata) = custom_metadata {
+            let json_metadata: Map<String, Value> =
+                metadata.into_iter().map(|(k, v)| (k, v.into())).collect();
+            cmd = cmd.with_metadata(json_metadata);
+        };
 
         let (table, metrics) = rt()?
             .block_on(cmd.into_future())
