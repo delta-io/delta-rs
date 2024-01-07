@@ -191,6 +191,11 @@ impl std::future::IntoFuture for ConstraintBuilder {
                 expr: expr_str.clone(),
             };
 
+            let app_metadata = match this.app_metadata {
+                Some(metadata) => metadata,
+                None => HashMap::default(),
+            };
+
             let commit_info = CommitInfo {
                 timestamp: Some(Utc::now().timestamp_millis()),
                 operation: Some(operations.name().to_string()),
@@ -198,6 +203,7 @@ impl std::future::IntoFuture for ConstraintBuilder {
                 read_version: Some(this.snapshot.version()),
                 isolation_level: Some(IsolationLevel::Serializable),
                 is_blind_append: Some(false),
+                info: app_metadata,
                 ..Default::default()
             };
 
@@ -212,7 +218,7 @@ impl std::future::IntoFuture for ConstraintBuilder {
                 &actions,
                 operations,
                 &this.snapshot,
-                this.app_metadata,
+                None,
             )
             .await?;
 
