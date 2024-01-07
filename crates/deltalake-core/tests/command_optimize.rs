@@ -1,5 +1,3 @@
-#![cfg(all(feature = "arrow", feature = "parquet"))]
-
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use std::{collections::HashMap, error::Error, sync::Arc};
 

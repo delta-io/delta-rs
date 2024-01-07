@@ -1,4 +1,3 @@
-#![cfg(all(feature = "arrow", feature = "parquet"))]
 //! Abstractions and implementations for writing data to delta tables
 
 use arrow::{datatypes::SchemaRef, error::ArrowError};

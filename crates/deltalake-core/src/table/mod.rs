@@ -27,7 +27,6 @@ use crate::DeltaResult;
 pub mod builder;
 pub mod config;
 pub mod state;
-#[cfg(feature = "arrow")]
 pub mod state_arrow;
 
 /// Metadata for a checkpoint file
@@ -343,7 +342,6 @@ impl DeltaTable {
 
     /// Updates the DeltaTable to the most recent state committed to the transaction log by
     /// loading the last checkpoint and incrementally applying each version since.
-    #[cfg(feature = "parquet")]
     pub async fn update(&mut self) -> Result<(), DeltaTableError> {
         self.update_incremental(None).await
     }

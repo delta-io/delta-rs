@@ -530,7 +530,6 @@ mod tests {
     use lazy_static::lazy_static;
     use serde_json::json;
 
-    use crate::logstore;
     use crate::operations::DeltaOps;
     use crate::writer::test_utils::get_delta_schema;
     use object_store::path::Path;
@@ -757,6 +756,7 @@ mod tests {
             + Duration::days(31).num_milliseconds())
             - table
                 .get_state()
+                .unwrap()
                 .table_config()
                 .log_retention_duration()
                 .as_millis() as i64;
@@ -784,6 +784,7 @@ mod tests {
             + Duration::days(32).num_milliseconds())
             - table
                 .get_state()
+                .unwrap()
                 .table_config()
                 .log_retention_duration()
                 .as_millis() as i64;

@@ -18,7 +18,6 @@ use crate::partitions::{DeltaTablePartition, PartitionFilter};
 use crate::protocol::DeltaOperation;
 use crate::DeltaResult;
 
-#[cfg(feature = "parquet")]
 use super::DeltaTableConfig;
 
 /// State snapshot currently held by the Delta Table instance.

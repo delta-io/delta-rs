@@ -1,11 +1,9 @@
-#[cfg(all(feature = "arrow", feature = "parquet"))]
 mod fs_common;
 use deltalake_core::protocol::DeltaOperation;
 
 // NOTE: The below is a useful external command for inspecting the written checkpoint schema visually:
 // parquet-tools inspect tests/data/checkpoints/_delta_log/00000000000000000005.checkpoint.parquet
 
-#[cfg(all(feature = "arrow", feature = "parquet"))]
 mod simple_checkpoint {
     use deltalake_core::*;
     use pretty_assertions::assert_eq;
@@ -84,7 +82,6 @@ mod simple_checkpoint {
     }
 }
 
-#[cfg(all(feature = "arrow", feature = "parquet"))]
 mod delete_expired_delta_log_in_checkpoint {
     use super::*;
 
@@ -206,7 +203,6 @@ mod delete_expired_delta_log_in_checkpoint {
     }
 }
 
-#[cfg(all(feature = "arrow", feature = "parquet"))]
 mod checkpoints_with_tombstones {
     use super::*;
     use ::object_store::path::Path as ObjectStorePath;

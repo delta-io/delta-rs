@@ -81,7 +81,6 @@ pub mod table;
 
 #[cfg(feature = "datafusion")]
 pub mod delta_datafusion;
-#[cfg(all(feature = "arrow", feature = "parquet"))]
 pub mod writer;
 
 use std::collections::HashMap;
@@ -99,13 +98,10 @@ pub use object_store::{path::Path, Error as ObjectStoreError, ObjectMeta, Object
 pub use operations::DeltaOps;
 
 // convenience exports for consumers to avoid aligning crate versions
-#[cfg(feature = "arrow")]
 pub use arrow;
 #[cfg(feature = "datafusion")]
 pub use datafusion;
-#[cfg(feature = "parquet")]
 pub use parquet;
-#[cfg(all(feature = "arrow", feature = "parquet"))]
 pub use protocol::checkpoints;
 
 /// Creates and loads a DeltaTable from the given path with current metadata.
@@ -524,7 +520,6 @@ mod tests {
         );
     }
 
-    #[cfg(feature = "parquet")]
     #[tokio::test]
     async fn read_delta_1_2_1_struct_stats_table() {
         let table_uri = "../deltalake-test/tests/data/delta-1.2.1-only-struct-stats";

@@ -2,13 +2,10 @@
 
 #![allow(non_camel_case_types)]
 
-#[cfg(all(feature = "arrow", feature = "parquet"))]
 pub mod checkpoints;
-#[cfg(feature = "parquet")]
 mod parquet_read;
 mod time_utils;
 
-#[cfg(feature = "arrow")]
 use arrow_schema::ArrowError;
 use futures::StreamExt;
 use lazy_static::lazy_static;
@@ -57,12 +54,10 @@ pub enum ProtocolError {
     #[error("Generic action error: {0}")]
     Generic(String),
 
-    #[cfg(feature = "parquet")]
     /// Error returned when parsing checkpoint parquet using the parquet crate.
     #[error("Failed to parse parquet checkpoint: {source}")]
     ParquetParseError {
         /// Parquet error details returned when parsing the checkpoint parquet
-        #[cfg(feature = "parquet")]
         #[from]
         source: parquet::errors::ParquetError,
     },
@@ -76,7 +71,6 @@ pub enum ProtocolError {
     },
 
     /// Error returned when converting the schema to Arrow format failed.
-    #[cfg(feature = "arrow")]
     #[error("Failed to convert into Arrow schema: {}", .source)]
     Arrow {
         /// Arrow error details returned when converting the schema in Arrow format failed
@@ -226,10 +220,8 @@ pub struct StatsParsed {
 
     // start of per column stats
     /// Contains a value smaller than all values present in the file for all columns.
-    #[cfg(feature = "parquet")]
     pub min_values: HashMap<String, parquet::record::Field>,
     /// Contains a value larger than all values present in the file for all columns.
-    #[cfg(feature = "parquet")]
     /// Contains a value larger than all values present in the file for all columns.
     pub max_values: HashMap<String, parquet::record::Field>,
     /// The number of null values for all columns.
@@ -259,7 +251,6 @@ impl Eq for Add {}
 
 impl Add {
     /// Get whatever stats are available. Uses (parquet struct) parsed_stats if present falling back to json stats.
-    #[cfg(feature = "parquet")]
     pub fn get_stats(&self) -> Result<Option<Stats>, serde_json::error::Error> {
         match self.get_stats_parsed() {
             Ok(Some(stats)) => Ok(Some(stats)),
@@ -272,12 +263,6 @@ impl Add {
                 self.get_json_stats()
             }
         }
-    }
-
-    /// Get whatever stats are available.
-    #[cfg(not(any(feature = "parquet")))]
-    pub fn get_stats(&self) -> Result<Option<Stats>, serde_json::error::Error> {
-        self.get_json_stats()
     }
 
     /// Returns the serde_json representation of stats contained in the action if present.
@@ -852,7 +837,6 @@ mod tests {
             serde_json::from_str(buf).expect("Expected to be able to deserialize");
     }
 
-    #[cfg(feature = "arrow")]
     mod arrow_tests {
         use arrow::array::{self, ArrayRef, StructArray};
         use arrow::compute::kernels::cast_utils::Parser;

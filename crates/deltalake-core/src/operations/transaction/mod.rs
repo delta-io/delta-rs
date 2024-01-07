@@ -257,7 +257,7 @@ pub async fn commit_with_retries(
     Err(TransactionError::MaxCommitAttempts(max_retries as i32).into())
 }
 
-#[cfg(all(test, feature = "parquet"))]
+#[cfg(test)]
 mod tests {
     use std::{collections::HashMap, sync::Arc};
 

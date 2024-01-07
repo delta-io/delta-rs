@@ -1,5 +1,3 @@
-#![cfg(all(feature = "arrow", feature = "parquet", feature = "datafusion"))]
-
 use arrow::datatypes::Schema as ArrowSchema;
 use arrow_array::{Int32Array, RecordBatch};
 use arrow_schema::{DataType as ArrowDataType, Field};

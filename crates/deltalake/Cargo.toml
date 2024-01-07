@@ -22,8 +22,7 @@ deltalake-catalog-glue = { path = "../deltalake-catalog-glue", optional = true }
 # All of these features are just reflected into the core crate until that
 # functionality is broken apart
 azure = ["deltalake-azure"]
-arrow = ["deltalake-core/arrow"]
-default = ["arrow"]
+default = []
 datafusion = ["deltalake-core/datafusion"]
 datafusion-ext = ["datafusion"]
 gcs = ["deltalake-core/gcs"]

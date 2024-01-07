@@ -6,7 +6,6 @@ pub type DeltaResult<T, E = Error> = std::result::Result<T, E>;
 #[derive(thiserror::Error, Debug)]
 #[allow(missing_docs)]
 pub enum Error {
-    #[cfg(feature = "arrow")]
     #[error("Arrow error: {0}")]
     Arrow(#[from] arrow_schema::ArrowError),
 
@@ -19,7 +18,6 @@ pub enum Error {
         source: Box<dyn std::error::Error + Send + Sync + 'static>,
     },
 
-    #[cfg(feature = "parquet")]
     #[error("Arrow error: {0}")]
     Parquet(#[from] parquet::errors::ParquetError),
 

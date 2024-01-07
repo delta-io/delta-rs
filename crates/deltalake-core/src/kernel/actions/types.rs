@@ -185,7 +185,6 @@ pub enum ReaderFeatures {
     Other(String),
 }
 
-#[cfg(feature = "parquet")]
 impl From<&parquet::record::Field> for ReaderFeatures {
     fn from(value: &parquet::record::Field) -> Self {
         match value {
@@ -328,7 +327,6 @@ impl fmt::Display for WriterFeatures {
     }
 }
 
-#[cfg(feature = "parquet")]
 impl From<&parquet::record::Field> for WriterFeatures {
     fn from(value: &parquet::record::Field) -> Self {
         match value {
@@ -594,7 +592,6 @@ pub struct Add {
     /// column can be omitted.
     ///
     /// This field is only available in add action records read from checkpoints
-    #[cfg(feature = "parquet")]
     #[serde(skip_serializing, skip_deserializing)]
     pub partition_values_parsed: Option<parquet::record::Row>,
 
@@ -603,7 +600,6 @@ pub struct Add {
     /// table property: delta.checkpoint.writeStatsAsStruct is set to true.
     ///
     /// This field is only available in add action records read from checkpoints
-    #[cfg(feature = "parquet")]
     #[serde(skip_serializing, skip_deserializing)]
     pub stats_parsed: Option<parquet::record::Row>,
 }
