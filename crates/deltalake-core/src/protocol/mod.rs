@@ -4,8 +4,6 @@
 
 #[cfg(all(feature = "arrow", feature = "parquet"))]
 pub mod checkpoints;
-#[cfg(feature = "parquet2")]
-pub mod parquet2_read;
 #[cfg(feature = "parquet")]
 mod parquet_read;
 mod time_utils;
@@ -14,7 +12,6 @@ mod time_utils;
 use arrow_schema::ArrowError;
 use futures::StreamExt;
 use lazy_static::lazy_static;
-use log::debug;
 use object_store::{path::Path, Error as ObjectStoreError, ObjectStore};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -24,6 +21,7 @@ use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::mem::take;
 use std::str::FromStr;
+use tracing::{debug, error};
 
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::{Add, CommitInfo, Metadata, Protocol, Remove};
@@ -60,14 +58,10 @@ pub enum ProtocolError {
     #[error("Generic action error: {0}")]
     Generic(String),
 
-    #[cfg(any(feature = "parquet", feature = "parquet2"))]
+    #[cfg(feature = "parquet")]
     /// Error returned when parsing checkpoint parquet using the parquet crate.
     #[error("Failed to parse parquet checkpoint: {source}")]
     ParquetParseError {
-        /// Parquet error details returned when parsing the checkpoint parquet
-        #[cfg(feature = "parquet2")]
-        #[from]
-        source: parquet2::error::Error,
         /// Parquet error details returned when parsing the checkpoint parquet
         #[cfg(feature = "parquet")]
         #[from]
@@ -235,16 +229,10 @@ pub struct StatsParsed {
     /// Contains a value smaller than all values present in the file for all columns.
     #[cfg(feature = "parquet")]
     pub min_values: HashMap<String, parquet::record::Field>,
-    /// Contains a value smaller than all values present in the file for all columns.
-    #[cfg(feature = "parquet2")]
-    pub min_values: HashMap<String, String>,
     /// Contains a value larger than all values present in the file for all columns.
     #[cfg(feature = "parquet")]
     /// Contains a value larger than all values present in the file for all columns.
     pub max_values: HashMap<String, parquet::record::Field>,
-    #[cfg(feature = "parquet2")]
-    /// Contains a value larger than all values present in the file for all columns.
-    pub max_values: HashMap<String, String>,
     /// The number of null values for all columns.
     pub null_count: HashMap<String, i64>,
 }
@@ -272,13 +260,13 @@ impl Eq for Add {}
 
 impl Add {
     /// Get whatever stats are available. Uses (parquet struct) parsed_stats if present falling back to json stats.
-    #[cfg(any(feature = "parquet", feature = "parquet2"))]
+    #[cfg(feature = "parquet")]
     pub fn get_stats(&self) -> Result<Option<Stats>, serde_json::error::Error> {
         match self.get_stats_parsed() {
             Ok(Some(stats)) => Ok(Some(stats)),
             Ok(None) => self.get_json_stats(),
             Err(e) => {
-                log::error!(
+                error!(
                     "Error when reading parquet stats {:?} {e}. Attempting to read json stats",
                     self.stats_parsed
                 );
@@ -288,7 +276,7 @@ impl Add {
     }
 
     /// Get whatever stats are available.
-    #[cfg(not(any(feature = "parquet", feature = "parquet2")))]
+    #[cfg(not(any(feature = "parquet")))]
     pub fn get_stats(&self) -> Result<Option<Stats>, serde_json::error::Error> {
         self.get_json_stats()
     }
@@ -659,7 +647,7 @@ pub(crate) async fn find_latest_check_point_for_version(
 
     let mut cp: Option<CheckPoint> = None;
     let object_store = log_store.object_store();
-    let mut stream = object_store.list(Some(log_store.log_path())).await?;
+    let mut stream = object_store.list(Some(log_store.log_path()));
 
     while let Some(obj_meta) = stream.next().await {
         // Exit early if any objects can't be listed.
@@ -912,7 +900,7 @@ mod tests {
         #[tokio::test]
         async fn test_with_partitions() {
             // test table with partitions
-            let path = "./tests/data/delta-0.8.0-null-partition";
+            let path = "../deltalake-test/tests/data/delta-0.8.0-null-partition";
             let table = crate::open_table(path).await.unwrap();
             let actions = table.get_state().add_actions_table(true).unwrap();
             let actions = sort_batch_by(&actions, "path").unwrap();
@@ -951,7 +939,7 @@ mod tests {
         #[tokio::test]
         async fn test_with_deletion_vector() {
             // test table with partitions
-            let path = "./tests/data/table_with_deletion_logs";
+            let path = "../deltalake-test/tests/data/table_with_deletion_logs";
             let table = crate::open_table(path).await.unwrap();
             let actions = table.get_state().add_actions_table(true).unwrap();
             let actions = sort_batch_by(&actions, "path").unwrap();
@@ -1057,7 +1045,7 @@ mod tests {
         #[tokio::test]
         async fn test_without_partitions() {
             // test table without partitions
-            let path = "./tests/data/simple_table";
+            let path = "../deltalake-test/tests/data/simple_table";
             let table = crate::open_table(path).await.unwrap();
 
             let actions = table.get_state().add_actions_table(true).unwrap();
@@ -1115,7 +1103,7 @@ mod tests {
         #[tokio::test]
         async fn test_with_column_mapping() {
             // test table with column mapping and partitions
-            let path = "./tests/data/table_with_column_mapping";
+            let path = "../deltalake-test/tests/data/table_with_column_mapping";
             let table = crate::open_table(path).await.unwrap();
             let actions = table.get_state().add_actions_table(true).unwrap();
             let expected_columns: Vec<(&str, ArrayRef)> = vec![
@@ -1189,7 +1177,7 @@ mod tests {
         #[tokio::test]
         async fn test_with_stats() {
             // test table with stats
-            let path = "./tests/data/delta-0.8.0";
+            let path = "../deltalake-test/tests/data/delta-0.8.0";
             let table = crate::open_table(path).await.unwrap();
             let actions = table.get_state().add_actions_table(true).unwrap();
             let actions = sort_batch_by(&actions, "path").unwrap();
@@ -1233,7 +1221,7 @@ mod tests {
         #[tokio::test]
         async fn test_only_struct_stats() {
             // test table with no json stats
-            let path = "./tests/data/delta-1.2.1-only-struct-stats";
+            let path = "../deltalake-test/tests/data/delta-1.2.1-only-struct-stats";
             let mut table = crate::open_table(path).await.unwrap();
             table.load_version(1).await.unwrap();
 

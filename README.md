@@ -163,7 +163,7 @@ of features outlined in the Delta [protocol][protocol] is also [tracked](#protoc
 | Version 2      | Column Invariants                             |       ![done]        |
 | Version 3      | Enforce `delta.checkpoint.writeStatsAsJson`   | [![open]][writer-rs] |
 | Version 3      | Enforce `delta.checkpoint.writeStatsAsStruct` | [![open]][writer-rs] |
-| Version 3      | CHECK constraints                             | [![open]][writer-rs] |
+| Version 3      | CHECK constraints                             | [![semi-done]][check-constraints] |
 | Version 4      | Change Data Feed                              |                      |
 | Version 4      | Generated Columns                             |                      |
 | Version 5      | Column Mapping                                |                      |
@@ -185,5 +185,6 @@ of features outlined in the Delta [protocol][protocol] is also [tracked](#protoc
 [merge-py]: https://github.com/delta-io/delta-rs/issues/1357
 [merge-rs]: https://github.com/delta-io/delta-rs/issues/850
 [writer-rs]: https://github.com/delta-io/delta-rs/issues/851
+[check-constraints]: https://github.com/delta-io/delta-rs/issues/1881
 [onelake-rs]: https://github.com/delta-io/delta-rs/issues/1418
 [protocol]: https://github.com/delta-io/delta/blob/master/PROTOCOL.md

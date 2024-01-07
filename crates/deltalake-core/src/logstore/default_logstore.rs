@@ -29,6 +29,10 @@ impl DefaultLogStore {
 
 #[async_trait::async_trait]
 impl LogStore for DefaultLogStore {
+    fn name(&self) -> String {
+        "DefaultLogStore".into()
+    }
+
     async fn read_commit_entry(&self, version: i64) -> DeltaResult<Option<Bytes>> {
         super::read_commit_entry(self.storage.as_ref(), version).await
     }
@@ -52,15 +56,6 @@ impl LogStore for DefaultLogStore {
 
     fn object_store(&self) -> Arc<dyn ObjectStore> {
         self.storage.clone()
-    }
-
-    fn to_uri(&self, location: &Path) -> String {
-        super::to_uri(&self.config.location, location)
-    }
-
-    #[cfg(feature = "datafusion")]
-    fn object_store_url(&self) -> datafusion::execution::object_store::ObjectStoreUrl {
-        super::object_store_url(&self.config.location)
     }
 
     fn config(&self) -> &LogStoreConfig {

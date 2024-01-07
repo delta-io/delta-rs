@@ -6,11 +6,10 @@ use deltalake_core::operations::transaction::commit;
 use deltalake_core::protocol::{DeltaOperation, SaveMode};
 use serde_json::json;
 use std::error::Error;
-use tempdir::TempDir;
 
 #[tokio::test]
 async fn test_operational_parameters() -> Result<(), Box<dyn Error>> {
-    let path = TempDir::new("operational_parameters").unwrap();
+    let path = tempfile::tempdir().unwrap();
     let mut table = fs_common::create_table(path.path().to_str().unwrap(), None).await;
 
     let add = fs_common::add(0);

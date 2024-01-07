@@ -1,9 +1,7 @@
 //! Scalar values for use in expressions.
 
-use std::{
-    cmp::Ordering,
-    fmt::{Display, Formatter},
-};
+use std::cmp::Ordering;
+use std::fmt::{Display, Formatter};
 
 use crate::kernel::schema::{DataType, PrimitiveType};
 

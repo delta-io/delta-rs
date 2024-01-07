@@ -10,12 +10,12 @@ use arrow_schema::{ArrowError, Schema as ArrowSchema};
 use chrono::{Datelike, Utc};
 use futures::{StreamExt, TryStreamExt};
 use lazy_static::lazy_static;
-use log::*;
 use object_store::ObjectStore;
 use parquet::arrow::ArrowWriter;
 use parquet::errors::ParquetError;
 use regex::Regex;
 use serde_json::Value;
+use tracing::{debug, error};
 
 use super::{time_utils, ProtocolError};
 use crate::kernel::arrow::delta_log_schema_for_table;
@@ -191,7 +191,6 @@ pub async fn cleanup_expired_logs_for(
         .delete_stream(
             object_store
                 .list(Some(log_store.log_path()))
-                .await?
                 // This predicate function will filter out any locations that don't
                 // match the given timestamp range
                 .filter_map(|meta: Result<crate::ObjectMeta, _>| async move {
@@ -228,7 +227,7 @@ pub async fn cleanup_expired_logs_for(
 fn parquet_bytes_from_state(
     state: &DeltaTableState,
 ) -> Result<(CheckPoint, bytes::Bytes), ProtocolError> {
-    let current_metadata = state.metadata().ok_or(ProtocolError::NoMetaData)?;
+    let current_metadata = state.delta_metadata().ok_or(ProtocolError::NoMetaData)?;
 
     let partition_col_data_types = current_metadata.get_partition_col_data_types();
 

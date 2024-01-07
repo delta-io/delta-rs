@@ -590,4 +590,33 @@ mod tests {
             assert_eq!(ref_batch, result.record_batch);
         }
     }
+
+    /// Validates <https://github.com/delta-io/delta-rs/issues/1806>
+    #[tokio::test]
+    async fn test_write_tilde() {
+        use crate::operations::create::CreateBuilder;
+        let table_schema = crate::writer::test_utils::get_delta_schema();
+        let partition_cols = vec!["modified".to_string(), "id".to_string()];
+        let table_dir = tempfile::Builder::new()
+            .prefix("example~with~tilde")
+            .tempdir()
+            .unwrap();
+        let table_path = table_dir.path();
+
+        let table = CreateBuilder::new()
+            .with_location(table_path.to_str().unwrap())
+            .with_table_name("test-table")
+            .with_comment("A table for running tests")
+            .with_columns(table_schema.fields().clone())
+            .with_partition_columns(partition_cols)
+            .await
+            .unwrap();
+
+        let batch = get_record_batch(None, false);
+        let mut writer = RecordBatchWriter::for_table(&table).unwrap();
+
+        writer.write(batch).await.unwrap();
+        let adds = writer.flush().await.unwrap();
+        assert_eq!(adds.len(), 4);
+    }
 }

@@ -86,7 +86,7 @@ impl DeltaTableState {
             (Cow::Borrowed("data_change"), Arc::new(data_change)),
         ];
 
-        let metadata = self.metadata().ok_or(DeltaTableError::NoMetadata)?;
+        let metadata = self.metadata()?;
 
         if !metadata.partition_columns.is_empty() {
             let partition_cols_batch = self.partition_columns_as_batch(flatten)?;
@@ -145,7 +145,7 @@ impl DeltaTableState {
         &self,
         flatten: bool,
     ) -> Result<arrow::record_batch::RecordBatch, DeltaTableError> {
-        let metadata = self.metadata().ok_or(DeltaTableError::NoMetadata)?;
+        let metadata = self.delta_metadata().ok_or(DeltaTableError::NoMetadata)?;
         let column_mapping_mode = self.table_config().column_mapping_mode();
         let partition_column_types: Vec<arrow::datatypes::DataType> = metadata
             .partition_columns
@@ -413,8 +413,8 @@ impl DeltaTableState {
                 .map(|maybe_stat| maybe_stat.as_ref().map(|stat| stat.num_records))
                 .collect::<Vec<Option<i64>>>(),
         );
-        let metadata = self.metadata().ok_or(DeltaTableError::NoMetadata)?;
-        let schema = &metadata.schema;
+        let metadata = self.metadata()?;
+        let schema = &metadata.schema()?;
 
         #[derive(Debug)]
         struct ColStats<'a> {
