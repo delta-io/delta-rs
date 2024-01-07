@@ -41,6 +41,7 @@ def test_cleanup_metadata(tmp_path: pathlib.Path, sample_data: pa.Table):
     write_deltalake(str(tmp_table_path), sample_data, mode="overwrite")
     delta_table = DeltaTable(str(tmp_table_path))
     delta_table.delete()
+    delta_table.create_checkpoint()
 
     # Move first log entry timestamp back in time for more than 30 days
     old_ts = (dt.datetime.now() - dt.timedelta(days=31)).timestamp()
