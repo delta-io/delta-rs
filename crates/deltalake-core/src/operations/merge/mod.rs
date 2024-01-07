@@ -7,10 +7,6 @@
 //! and specify additional predicates for finer control. The order of operations
 //! specified matter.  See [`MergeBuilder`] for more information
 //!
-//! *WARNING* The current implementation rewrites the entire delta table so only
-//! use on small to medium sized tables.
-//! Enhancements tracked at #850
-//!
 //! # Example
 //! ```rust ignore
 //! let table = open_table("../path/to/table")?;
