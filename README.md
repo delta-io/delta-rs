@@ -152,7 +152,7 @@ of features outlined in the Delta [protocol][protocol] is also [tracked](#protoc
 | Delete - predicates   |         ![done]          |         ![done]          | Delete data based on a predicate            |
 | Optimize - compaction |         ![done]          |         ![done]          | Harmonize the size of data file             |
 | Optimize - Z-order    |         ![done]          |         ![done]          | Place similar data into the same file       |
-| Merge                 | [![semi-done]][merge-rs] | [![semi-done]][merge-py] | Merge two tables (limited to full re-write) |
+| Merge                 |         ![done]          |         ![done]          | Merge a target Delta table with source data |
 | FS check              |         ![done]          |         ![done]          | Remove corrupted files from table           |
 
 ### Protocol Support Level
@@ -182,8 +182,6 @@ of features outlined in the Delta [protocol][protocol] is also [tracked](#protoc
 [semi-done]: https://cdn.jsdelivr.net/gh/Readme-Workflows/Readme-Icons@main/icons/octicons/ApprovedChangesGrey.svg
 [done]: https://cdn.jsdelivr.net/gh/Readme-Workflows/Readme-Icons@main/icons/octicons/ApprovedChanges.svg
 [roadmap]: https://github.com/delta-io/delta-rs/issues/1128
-[merge-py]: https://github.com/delta-io/delta-rs/issues/1357
-[merge-rs]: https://github.com/delta-io/delta-rs/issues/850
 [writer-rs]: https://github.com/delta-io/delta-rs/issues/851
 [check-constraints]: https://github.com/delta-io/delta-rs/issues/1881
 [onelake-rs]: https://github.com/delta-io/delta-rs/issues/1418
