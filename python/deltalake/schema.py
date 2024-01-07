@@ -54,7 +54,7 @@ def _convert_pa_schema_to_delta(
             return pa.timestamp(
                 "us"
             )  # TODO(ion): propagate also timezone information during writeonce we can properly read TZ in delta schema
-        elif isinstance(dtype, pa.FixedSizeBinaryType):
+        elif type(dtype) is pa.FixedSizeBinaryType:
             return pa.binary()
         try:
             return dtype_map[dtype]

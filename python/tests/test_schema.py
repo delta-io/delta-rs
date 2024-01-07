@@ -236,6 +236,7 @@ def test_delta_schema():
                     pa.field("some_int", pa.uint32(), nullable=True),
                     pa.field("some_string", pa.string(), nullable=False),
                     pa.field("some_fixed_binary", pa.binary(5), nullable=False),
+                    pa.field("some_decimal", pa.decimal128(10, 2), nullable=False),
                 ]
             ),
             pa.schema(
@@ -243,6 +244,7 @@ def test_delta_schema():
                     pa.field("some_int", pa.int32(), nullable=True),
                     pa.field("some_string", pa.string(), nullable=False),
                     pa.field("some_fixed_binary", pa.binary(), nullable=False),
+                    pa.field("some_decimal", pa.decimal128(10, 2), nullable=False),
                 ]
             ),
             False,
