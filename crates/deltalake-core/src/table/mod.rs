@@ -9,12 +9,12 @@ use std::{cmp::max, cmp::Ordering, collections::HashSet};
 use chrono::{DateTime, Utc};
 use futures::StreamExt;
 use lazy_static::lazy_static;
-use log::debug;
 use object_store::{path::Path, Error as ObjectStoreError, ObjectStore};
 use regex::Regex;
 use serde::de::{Error, SeqAccess, Visitor};
 use serde::ser::SerializeSeq;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use tracing::debug;
 use uuid::Uuid;
 
 use self::builder::DeltaTableConfig;
@@ -30,7 +30,6 @@ use crate::partitions::PartitionFilter;
 use crate::protocol::{
     find_latest_check_point_for_version, get_last_checkpoint, ProtocolError, Stats,
 };
-use crate::storage::config::configure_log_store;
 use crate::storage::{commit_uri_from_version, ObjectStoreRef};
 
 pub mod builder;
@@ -347,12 +346,9 @@ impl<'de> Deserialize<'de> for DeltaTable {
                 let storage_config: LogStoreConfig = seq
                     .next_element()?
                     .ok_or_else(|| A::Error::invalid_length(0, &self))?;
-                let log_store = configure_log_store(
-                    storage_config.location.as_ref(),
-                    storage_config.options,
-                    None,
-                )
-                .map_err(|_| A::Error::custom("Failed deserializing LogStore"))?;
+                let log_store =
+                    crate::logstore::logstore_for(storage_config.location, storage_config.options)
+                        .map_err(|_| A::Error::custom("Failed deserializing LogStore"))?;
                 let last_check_point = seq
                     .next_element()?
                     .ok_or_else(|| A::Error::invalid_length(0, &self))?;
@@ -459,7 +455,7 @@ impl DeltaTable {
 
         // Get file objects from table.
         let storage = self.object_store();
-        let mut stream = storage.list(Some(self.log_store.log_path())).await?;
+        let mut stream = storage.list(Some(self.log_store.log_path()));
         while let Some(obj_meta) = stream.next().await {
             let obj_meta = obj_meta?;
 
@@ -474,7 +470,7 @@ impl DeltaTable {
         Ok(current_delta_log_ver)
     }
 
-    #[cfg(any(feature = "parquet", feature = "parquet2"))]
+    #[cfg(feature = "parquet")]
     async fn restore_checkpoint(&mut self, check_point: CheckPoint) -> Result<(), DeltaTableError> {
         self.state = DeltaTableState::from_checkpoint(self, &check_point).await?;
 
@@ -516,7 +512,7 @@ impl DeltaTable {
 
     /// Updates the DeltaTable to the most recent state committed to the transaction log by
     /// loading the last checkpoint and incrementally applying each version since.
-    #[cfg(any(feature = "parquet", feature = "parquet2"))]
+    #[cfg(feature = "parquet")]
     pub async fn update(&mut self) -> Result<(), DeltaTableError> {
         match get_last_checkpoint(self.log_store.as_ref()).await {
             Ok(last_check_point) => {
@@ -538,7 +534,7 @@ impl DeltaTable {
     }
 
     /// Updates the DeltaTable to the most recent state committed to the transaction log.
-    #[cfg(not(any(feature = "parquet", feature = "parquet2")))]
+    #[cfg(not(feature = "parquet"))]
     pub async fn update(&mut self) -> Result<(), DeltaTableError> {
         self.update_incremental(None).await
     }
@@ -614,7 +610,7 @@ impl DeltaTable {
         }
 
         // 1. find latest checkpoint below version
-        #[cfg(any(feature = "parquet", feature = "parquet2"))]
+        #[cfg(feature = "parquet")]
         match find_latest_check_point_for_version(self.log_store.as_ref(), version).await? {
             Some(check_point) => {
                 self.restore_checkpoint(check_point).await?;
@@ -793,13 +789,15 @@ impl DeltaTable {
 
     /// Returns the metadata associated with the loaded state.
     pub fn metadata(&self) -> Result<&Metadata, DeltaTableError> {
-        Ok(self.state.metadata_action()?)
+        Ok(self.state.metadata()?)
     }
 
     /// Returns the metadata associated with the loaded state.
     #[deprecated(since = "0.17.0", note = "use metadata() instead")]
     pub fn get_metadata(&self) -> Result<&DeltaTableMetaData, DeltaTableError> {
-        self.state.metadata().ok_or(DeltaTableError::NoMetadata)
+        self.state
+            .delta_metadata()
+            .ok_or(DeltaTableError::NoMetadata)
     }
 
     /// Returns a vector of active tombstones (i.e. `Remove` actions present in the current delta log).
@@ -858,7 +856,7 @@ impl DeltaTable {
     pub fn get_configurations(&self) -> Result<&HashMap<String, Option<String>>, DeltaTableError> {
         Ok(self
             .state
-            .metadata()
+            .delta_metadata()
             .ok_or(DeltaTableError::NoMetadata)?
             .get_configuration())
     }
@@ -908,10 +906,10 @@ impl fmt::Display for DeltaTable {
         writeln!(f, "DeltaTable({})", self.table_uri())?;
         writeln!(f, "\tversion: {}", self.version())?;
         match self.state.metadata() {
-            Some(metadata) => {
-                writeln!(f, "\tmetadata: {metadata}")?;
+            Ok(metadata) => {
+                writeln!(f, "\tmetadata: {metadata:?}")?;
             }
-            None => {
+            _ => {
                 writeln!(f, "\tmetadata: None")?;
             }
         }
@@ -934,13 +932,11 @@ impl std::fmt::Debug for DeltaTable {
 #[cfg(test)]
 mod tests {
     use pretty_assertions::assert_eq;
-    use tempdir::TempDir;
+    use tempfile::TempDir;
 
     use super::*;
     use crate::kernel::{DataType, PrimitiveType, StructField};
     use crate::operations::create::CreateBuilder;
-    #[cfg(any(feature = "s3", feature = "s3-native-tls"))]
-    use crate::table::builder::DeltaTableBuilder;
 
     #[tokio::test]
     async fn table_round_trip() {
@@ -980,22 +976,6 @@ mod tests {
         drop(tmp_dir);
     }
 
-    #[cfg(any(feature = "s3", feature = "s3-native-tls"))]
-    #[test]
-    fn normalize_table_uri_s3() {
-        std::env::set_var("AWS_DEFAULT_REGION", "us-east-1");
-        for table_uri in [
-            "s3://tests/data/delta-0.8.0/",
-            "s3://tests/data/delta-0.8.0//",
-            "s3://tests/data/delta-0.8.0",
-        ]
-        .iter()
-        {
-            let table = DeltaTableBuilder::from_uri(table_uri).build().unwrap();
-            assert_eq!(table.table_uri(), "s3://tests/data/delta-0.8.0");
-        }
-    }
-
     #[test]
     fn get_table_constraints() {
         let state = DeltaTableMetaData::new(
@@ -1018,7 +998,7 @@ mod tests {
     }
 
     async fn create_test_table() -> (DeltaTable, TempDir) {
-        let tmp_dir = TempDir::new("create_table_test").unwrap();
+        let tmp_dir = tempfile::tempdir().unwrap();
         let table_dir = tmp_dir.path().join("test_create");
         std::fs::create_dir(&table_dir).unwrap();
 

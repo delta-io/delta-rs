@@ -43,7 +43,7 @@ use super::writer::{DeltaWriter, WriterConfig};
 use super::{transaction::commit, CreateBuilder};
 use crate::delta_datafusion::DeltaDataChecker;
 use crate::errors::{DeltaResult, DeltaTableError};
-use crate::kernel::{Action, Add, Metadata, Remove, StructType};
+use crate::kernel::{Action, Add, Remove, StructType};
 use crate::logstore::LogStoreRef;
 use crate::protocol::{DeltaOperation, SaveMode};
 use crate::storage::ObjectStoreRef;
@@ -376,7 +376,7 @@ impl std::future::IntoFuture for WriteBuilder {
 
             let active_partitions = this
                 .snapshot
-                .metadata()
+                .delta_metadata()
                 .map(|meta| meta.partition_columns.clone());
 
             // validate partition columns
@@ -492,14 +492,10 @@ impl std::future::IntoFuture for WriteBuilder {
                     .unwrap_or(schema.clone());
 
                 if schema != table_schema {
-                    let mut metadata = this
-                        .snapshot
-                        .metadata()
-                        .ok_or(DeltaTableError::NoMetadata)?
-                        .clone();
-                    metadata.schema = schema.clone().try_into()?;
-                    let metadata_action = Metadata::try_from(metadata)?;
-                    actions.push(Action::Metadata(metadata_action));
+                    let mut metadata = this.snapshot.metadata()?.clone();
+                    let delta_schema: StructType = schema.as_ref().try_into()?;
+                    metadata.schema_string = serde_json::to_string(&delta_schema)?;
+                    actions.push(Action::Metadata(metadata));
                 }
                 // This should never error, since now() will always be larger than UNIX_EPOCH
                 let deletion_timestamp = SystemTime::now()
@@ -920,7 +916,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_special_characters_write_read() {
-        let tmp_dir = tempdir::TempDir::new("test").unwrap();
+        let tmp_dir = tempfile::tempdir().unwrap();
         let tmp_path = std::fs::canonicalize(tmp_dir.path()).unwrap();
 
         let schema = Arc::new(ArrowSchema::new(vec![

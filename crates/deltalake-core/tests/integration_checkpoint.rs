@@ -3,9 +3,9 @@
 use chrono::Utc;
 use deltalake_core::checkpoints::{cleanup_expired_logs_for, create_checkpoint};
 use deltalake_core::kernel::{DataType, PrimitiveType};
-use deltalake_core::test_utils::{IntegrationContext, StorageIntegration, TestResult};
 use deltalake_core::writer::{DeltaWriter, JsonWriter};
 use deltalake_core::{errors::DeltaResult, DeltaOps, DeltaTableBuilder, ObjectStore};
+use deltalake_test::utils::*;
 use object_store::path::Path;
 use serde_json::json;
 use serial_test::serial;
@@ -15,43 +15,8 @@ use tokio::time::sleep;
 #[tokio::test]
 #[serial]
 async fn cleanup_metadata_fs_test() -> TestResult {
-    let context = IntegrationContext::new(StorageIntegration::Local)?;
-    cleanup_metadata_test(&context).await?;
-    Ok(())
-}
-
-#[cfg(any(feature = "s3", feature = "s3-native-tls"))]
-#[tokio::test]
-#[serial]
-async fn cleanup_metadata_aws_test() -> TestResult {
-    let context = IntegrationContext::new(StorageIntegration::Amazon)?;
-    cleanup_metadata_test(&context).await?;
-    Ok(())
-}
-
-#[cfg(feature = "azure")]
-#[tokio::test]
-#[serial]
-async fn cleanup_metadata_azure_test() -> TestResult {
-    let context = IntegrationContext::new(StorageIntegration::Microsoft)?;
-    cleanup_metadata_test(&context).await?;
-    Ok(())
-}
-
-#[cfg(feature = "gcs")]
-#[tokio::test]
-#[serial]
-async fn cleanup_metadata_gcp_test() -> TestResult {
-    let context = IntegrationContext::new(StorageIntegration::Google)?;
-    cleanup_metadata_test(&context).await?;
-    Ok(())
-}
-
-#[cfg(feature = "hdfs")]
-#[tokio::test]
-#[serial]
-async fn cleanup_metadata_hdfs_test() -> TestResult {
-    let context = IntegrationContext::new(StorageIntegration::Hdfs)?;
+    let storage = Box::new(LocalStorageIntegration::default());
+    let context = IntegrationContext::new(storage)?;
     cleanup_metadata_test(&context).await?;
     Ok(())
 }

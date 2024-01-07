@@ -24,7 +24,7 @@ use parquet::arrow::ParquetRecordBatchStreamBuilder;
 use parquet::file::properties::WriterProperties;
 use rand::prelude::*;
 use serde_json::json;
-use tempdir::TempDir;
+use tempfile::TempDir;
 
 struct Context {
     pub tmp_dir: TempDir,
@@ -56,7 +56,7 @@ async fn setup_test(partitioned: bool) -> Result<Context, Box<dyn Error>> {
         vec![]
     };
 
-    let tmp_dir = tempdir::TempDir::new("opt_table").unwrap();
+    let tmp_dir = tempfile::tempdir().unwrap();
     let table_uri = tmp_dir.path().to_str().to_owned().unwrap();
     let dt = DeltaOps::try_from_uri(table_uri)
         .await?

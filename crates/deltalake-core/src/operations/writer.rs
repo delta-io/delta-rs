@@ -10,6 +10,7 @@ use object_store::{path::Path, ObjectStore};
 use parquet::arrow::ArrowWriter;
 use parquet::basic::Compression;
 use parquet::file::properties::WriterProperties;
+use tracing::debug;
 
 use crate::crate_version;
 use crate::errors::{DeltaResult, DeltaTableError};
@@ -380,7 +381,7 @@ impl PartitionWriter {
             self.write_batch(&batch.slice(offset, length))?;
             // flush currently buffered data to disk once we meet or exceed the target file size.
             if self.buffer.len() >= self.config.target_file_size {
-                log::debug!("Writing file with size {:?} to disk.", self.buffer.len());
+                debug!("Writing file with size {:?} to disk.", self.buffer.len());
                 self.flush_arrow_writer().await?;
             }
         }

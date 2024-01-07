@@ -88,7 +88,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_load_local() -> TestResult {
-        let table = DeltaTableBuilder::from_uri("./tests/data/delta-0.8.0")
+        let table = DeltaTableBuilder::from_uri("../deltalake-test/tests/data/delta-0.8.0")
             .load()
             .await
             .unwrap();

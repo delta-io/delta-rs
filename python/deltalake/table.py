@@ -3,6 +3,7 @@ import operator
 import warnings
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from enum import Enum
 from functools import reduce
 from pathlib import Path
 from typing import (
@@ -51,6 +52,59 @@ MAX_SUPPORTED_READER_VERSION = 1
 MAX_SUPPORTED_WRITER_VERSION = 2
 
 
+class Compression(Enum):
+    UNCOMPRESSED = "UNCOMPRESSED"
+    SNAPPY = "SNAPPY"
+    GZIP = "GZIP"
+    BROTLI = "BROTLI"
+    LZ4 = "LZ4"
+    ZSTD = "ZSTD"
+    LZ4_RAW = "LZ4_RAW"
+
+    @classmethod
+    def from_str(cls, value: str) -> "Compression":
+        try:
+            return cls(value.upper())
+        except ValueError:
+            raise ValueError(
+                f"{value} is not a valid Compression. Valid values are: {[item.value for item in Compression]}"
+            )
+
+    def get_level_range(self) -> Tuple[int, int]:
+        if self == Compression.GZIP:
+            MIN_LEVEL = 0
+            MAX_LEVEL = 10
+        elif self == Compression.BROTLI:
+            MIN_LEVEL = 0
+            MAX_LEVEL = 11
+        elif self == Compression.ZSTD:
+            MIN_LEVEL = 1
+            MAX_LEVEL = 22
+        else:
+            raise KeyError(f"{self.value} does not have a compression level.")
+        return MIN_LEVEL, MAX_LEVEL
+
+    def get_default_level(self) -> int:
+        if self == Compression.GZIP:
+            DEFAULT = 6
+        elif self == Compression.BROTLI:
+            DEFAULT = 1
+        elif self == Compression.ZSTD:
+            DEFAULT = 1
+        else:
+            raise KeyError(f"{self.value} does not have a compression level.")
+        return DEFAULT
+
+    def check_valid_level(self, level: int) -> bool:
+        MIN_LEVEL, MAX_LEVEL = self.get_level_range()
+        if level < MIN_LEVEL or level > MAX_LEVEL:
+            raise ValueError(
+                f"Compression level for {self.value} should fall between {MIN_LEVEL}-{MAX_LEVEL}"
+            )
+        else:
+            return True
+
+
 @dataclass(init=True)
 class WriterProperties:
     """A Writer Properties instance for the Rust parquet writer."""
@@ -62,11 +116,20 @@ class WriterProperties:
         data_page_row_count_limit: Optional[int] = None,
         write_batch_size: Optional[int] = None,
         max_row_group_size: Optional[int] = None,
-        compression: Optional[str] = None,
+        compression: Optional[
+            Literal[
+                "UNCOMPRESSED",
+                "SNAPPY",
+                "GZIP",
+                "BROTLI",
+                "LZ4",
+                "ZSTD",
+                "LZ4_RAW",
+            ]
+        ] = None,
         compression_level: Optional[int] = None,
     ):
-        """Create a Writer Properties instance for the Rust parquet writer,
-        see options https://arrow.apache.org/rust/parquet/file/properties/struct.WriterProperties.html:
+        """Create a Writer Properties instance for the Rust parquet writer:
 
         Args:
             data_page_size_limit: Limit DataPage size to this in bytes.
@@ -74,27 +137,41 @@ class WriterProperties:
             data_page_row_count_limit: Limit the number of rows in each DataPage.
             write_batch_size: Splits internally to smaller batch size.
             max_row_group_size: Max number of rows in row group.
-            compression: compression type
-            compression_level: level of compression, only relevant for subset of compression types
+            compression: compression type.
+            compression_level: If none and compression has a level, the default level will be used, only relevant for
+                GZIP: levels (1-9),
+                BROTLI: levels (1-11),
+                ZSTD: levels (1-22),
         """
         self.data_page_size_limit = data_page_size_limit
         self.dictionary_page_size_limit = dictionary_page_size_limit
         self.data_page_row_count_limit = data_page_row_count_limit
         self.write_batch_size = write_batch_size
         self.max_row_group_size = max_row_group_size
+        self.compression = None
 
         if compression_level is not None and compression is None:
             raise ValueError(
                 """Providing a compression level without the compression type is not possible, 
                              please provide the compression as well."""
             )
-
-        if compression in ["gzip", "brotli", "zstd"]:
-            if compression_level is not None:
-                compression = compression = f"{compression}({compression_level})"
+        if isinstance(compression, str):
+            compression_enum = Compression.from_str(compression)
+            if compression_enum in [
+                Compression.GZIP,
+                Compression.BROTLI,
+                Compression.ZSTD,
+            ]:
+                if compression_level is not None:
+                    if compression_enum.check_valid_level(compression_level):
+                        parquet_compression = (
+                            f"{compression_enum.value}({compression_level})"
+                        )
+                else:
+                    parquet_compression = f"{compression_enum.value}({compression_enum.get_default_level()})"
             else:
-                raise ValueError("""Gzip, brotli, ztsd require a compression level""")
-        self.compression = compression
+                parquet_compression = compression_enum.value
+            self.compression = parquet_compression
 
     def __str__(self) -> str:
         return (
@@ -785,13 +862,22 @@ class DeltaTable:
     def optimize(
         self,
     ) -> "TableOptimizer":
+        """Namespace for all table optimize related methods.
+
+        Returns:
+            TableOptimizer: TableOptimizer Object
+        """
         return TableOptimizer(self)
 
     @property
     def alter(
         self,
     ) -> "TableAlterer":
-        """Namespace for all table alter related methods"""
+        """Namespace for all table alter related methods.
+
+        Returns:
+            TableAlterer: TableAlterer Object
+        """
         return TableAlterer(self)
 
     def merge(
@@ -808,6 +894,7 @@ class DeltaTable:
         target_alias: Optional[str] = None,
         error_on_type_mismatch: bool = True,
         writer_properties: Optional[WriterProperties] = None,
+        large_dtypes: bool = True,
     ) -> "TableMerger":
         """Pass the source data which you want to merge on the target delta table, providing a
         predicate in SQL query like format. You can also specify on what to do when the underlying data types do not
@@ -820,6 +907,7 @@ class DeltaTable:
             target_alias: Alias for the target table
             error_on_type_mismatch: specify if merge will return error if data types are mismatching :default = True
             writer_properties: Pass writer properties to the Rust parquet writer
+            large_dtypes: If True, the data schema is kept in large_dtypes.
 
         Returns:
             TableMerger: TableMerger Object
@@ -835,16 +923,16 @@ class DeltaTable:
         )
 
         if isinstance(source, pyarrow.RecordBatchReader):
-            source = convert_pyarrow_recordbatchreader(source, large_dtypes=True)
+            source = convert_pyarrow_recordbatchreader(source, large_dtypes)
         elif isinstance(source, pyarrow.RecordBatch):
-            source = convert_pyarrow_recordbatch(source, large_dtypes=True)
+            source = convert_pyarrow_recordbatch(source, large_dtypes)
         elif isinstance(source, pyarrow.Table):
-            source = convert_pyarrow_table(source, large_dtypes=True)
+            source = convert_pyarrow_table(source, large_dtypes)
         elif isinstance(source, ds.Dataset):
-            source = convert_pyarrow_dataset(source, large_dtypes=True)
+            source = convert_pyarrow_dataset(source, large_dtypes)
         elif isinstance(source, pandas.DataFrame):
             source = convert_pyarrow_table(
-                pyarrow.Table.from_pandas(source), large_dtypes=True
+                pyarrow.Table.from_pandas(source), large_dtypes
             )
         else:
             raise TypeError(
@@ -1176,7 +1264,10 @@ class TableMerger:
         write_batch_size: Optional[int] = None,
         max_row_group_size: Optional[int] = None,
     ) -> "TableMerger":
-        """Pass writer properties to the Rust parquet writer, see options https://arrow.apache.org/rust/parquet/file/properties/struct.WriterProperties.html:
+        """
+        !!! warning "Deprecated"
+            Use `.merge(writer_properties = WriterProperties())` instead
+        Pass writer properties to the Rust parquet writer, see options https://arrow.apache.org/rust/parquet/file/properties/struct.WriterProperties.html:
 
         Args:
             data_page_size_limit: Limit DataPage size to this in bytes.
