@@ -39,11 +39,12 @@ def test_optimize_run_table(
     old_data = dt.to_pyarrow_table()
     old_version = dt.version()
 
-    dt.optimize.compact()
+    dt.optimize.compact(custom_metadata={"userName": "John Doe"})
 
     new_data = dt.to_pyarrow_table()
     last_action = dt.history(1)[0]
     assert last_action["operation"] == "OPTIMIZE"
+    assert last_action["userName"] == "John Doe"
     assert dt.version() == old_version + 1
     assert old_data == new_data
 
@@ -69,9 +70,12 @@ def test_z_order_optimize(
     dt = DeltaTable(tmp_path)
     old_version = dt.version()
 
-    dt.optimize.z_order(["date32", "timestamp"])
+    dt.optimize.z_order(
+        ["date32", "timestamp"], custom_metadata={"userName": "John Doe"}
+    )
     last_action = dt.history(1)[0]
     assert last_action["operation"] == "OPTIMIZE"
+    assert last_action["userName"] == "John Doe"
     assert dt.version() == old_version + 1
     assert len(dt.file_uris()) == 1
 

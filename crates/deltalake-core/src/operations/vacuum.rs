@@ -94,6 +94,8 @@ pub struct VacuumBuilder {
     dry_run: bool,
     /// Override the source of time
     clock: Option<Arc<dyn Clock>>,
+    /// Additional metadata to be added to commit
+    app_metadata: Option<HashMap<String, serde_json::Value>>,
 }
 
 /// Details for the Vacuum operation including which files were
@@ -136,6 +138,7 @@ impl VacuumBuilder {
             enforce_retention_duration: true,
             dry_run: false,
             clock: None,
+            app_metadata: None,
         }
     }
 
@@ -161,6 +164,15 @@ impl VacuumBuilder {
     #[doc(hidden)]
     pub fn with_clock(mut self, clock: Arc<dyn Clock>) -> Self {
         self.clock = Some(clock);
+        self
+    }
+
+    /// Additional metadata to be added to commit info
+    pub fn with_metadata(
+        mut self,
+        metadata: impl IntoIterator<Item = (String, serde_json::Value)>,
+    ) -> Self {
+        self.app_metadata = Some(HashMap::from_iter(metadata));
         self
     }
 
@@ -240,7 +252,7 @@ impl std::future::IntoFuture for VacuumBuilder {
             }
 
             let metrics = plan
-                .execute(this.log_store.as_ref(), &this.snapshot)
+                .execute(this.log_store.as_ref(), &this.snapshot, this.app_metadata)
                 .await?;
             Ok((
                 DeltaTable::new_with_state(this.log_store, this.snapshot),
@@ -270,6 +282,7 @@ impl VacuumPlan {
         self,
         store: &dyn LogStore,
         snapshot: &DeltaTableState,
+        app_metadata: Option<HashMap<String, serde_json::Value>>,
     ) -> Result<VacuumMetrics, DeltaTableError> {
         if self.files_to_delete.is_empty() {
             return Ok(VacuumMetrics {
@@ -295,8 +308,10 @@ impl VacuumPlan {
 
         // Begin VACUUM START COMMIT
         let mut commit_info = start_operation.get_commit_info();
-        let mut extra_info = HashMap::<String, Value>::new();
-
+        let mut extra_info = match app_metadata.clone() {
+            Some(meta) => meta,
+            None => HashMap::new(),
+        };
         commit_info.timestamp = Some(Utc::now().timestamp_millis());
         extra_info.insert(
             "clientVersion".to_string(),
@@ -335,7 +350,11 @@ impl VacuumPlan {
 
         // Begin VACUUM END COMMIT
         let mut commit_info = end_operation.get_commit_info();
-        let mut extra_info = HashMap::<String, Value>::new();
+
+        let mut extra_info = match app_metadata.clone() {
+            Some(meta) => meta,
+            None => HashMap::new(),
+        };
 
         commit_info.timestamp = Some(Utc::now().timestamp_millis());
         extra_info.insert(
