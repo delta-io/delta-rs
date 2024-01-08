@@ -105,7 +105,7 @@ maplit = "1"
 pretty_assertions = "1.2.1"
 pretty_env_logger = "*"
 rand = "0.8"
-serial_test = "2"
+serial_test = "3"
 tempfile = "3"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 utime = "0.3"

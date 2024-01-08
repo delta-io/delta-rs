@@ -306,7 +306,9 @@ async fn test_conflict_for_remove_actions() -> Result<(), Box<dyn Error>> {
     )
     .await?;
 
-    let maybe_metrics = plan.execute(dt.log_store(), &dt.state, 1, 20, None).await;
+    let maybe_metrics = plan
+        .execute(dt.log_store(), &dt.state, 1, 20, None, None)
+        .await;
 
     assert!(maybe_metrics.is_err());
     assert_eq!(dt.version(), version + 1);
@@ -355,7 +357,9 @@ async fn test_no_conflict_for_append_actions() -> Result<(), Box<dyn Error>> {
     )
     .await?;
 
-    let metrics = plan.execute(dt.log_store(), &dt.state, 1, 20, None).await?;
+    let metrics = plan
+        .execute(dt.log_store(), &dt.state, 1, 20, None, None)
+        .await?;
     assert_eq!(metrics.num_files_added, 1);
     assert_eq!(metrics.num_files_removed, 2);
 
@@ -400,6 +404,7 @@ async fn test_commit_interval() -> Result<(), Box<dyn Error>> {
             1,
             20,
             Some(Duration::from_secs(0)), // this will cause as many commits as num_files_added
+            None,
         )
         .await?;
     assert_eq!(metrics.num_files_added, 2);

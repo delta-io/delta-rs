@@ -24,6 +24,7 @@ def test_merge_when_matched_delete_wo_predicate(
         predicate="t.id = s.id",
         source_alias="s",
         target_alias="t",
+        custom_metadata={"userName": "John Doe"},
     ).when_matched_delete().execute()
 
     nrows = 4
@@ -39,6 +40,7 @@ def test_merge_when_matched_delete_wo_predicate(
     last_action = dt.history(1)[0]
 
     assert last_action["operation"] == "MERGE"
+    assert last_action["userName"] == "John Doe"
     assert result == expected
 
 

@@ -14,6 +14,7 @@ def test_create_roundtrip_metadata(tmp_path: pathlib.Path, sample_data: pa.Table
         name="test_name",
         description="test_desc",
         configuration={"delta.appendOnly": "false", "foo": "bar"},
+        custom_metadata={"userName": "John Doe"},
     )
 
     metadata = dt.metadata()
@@ -21,6 +22,7 @@ def test_create_roundtrip_metadata(tmp_path: pathlib.Path, sample_data: pa.Table
     assert metadata.name == "test_name"
     assert metadata.description == "test_desc"
     assert metadata.configuration == {"delta.appendOnly": "false", "foo": "bar"}
+    assert dt.history()[0]["userName"] == "John Doe"
 
 
 def test_create_modes(tmp_path: pathlib.Path, sample_data: pa.Table):
