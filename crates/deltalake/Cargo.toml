@@ -16,6 +16,7 @@ edition = "2021"
 deltalake-core = { path = "../deltalake-core" }
 deltalake-aws = { path = "../deltalake-aws", default-features = false, optional = true }
 deltalake-azure = { path = "../deltalake-azure", optional = true }
+deltalake-gcp = { path = "../deltalake-gcp", optional = true }
 deltalake-catalog-glue = { path = "../deltalake-catalog-glue", optional = true }
 
 [features]
@@ -26,7 +27,7 @@ arrow = ["deltalake-core/arrow"]
 default = ["arrow"]
 datafusion = ["deltalake-core/datafusion"]
 datafusion-ext = ["datafusion"]
-gcs = ["deltalake-core/gcs"]
+gcs = ["deltalake-gcp"]
 glue = ["deltalake-catalog-glue"]
 hdfs = []
 json = ["deltalake-core/json"]
