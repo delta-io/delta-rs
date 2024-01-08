@@ -447,6 +447,7 @@ class DeltaTable:
         description: Optional[str] = None,
         configuration: Optional[Mapping[str, Optional[str]]] = None,
         storage_options: Optional[Dict[str, str]] = None,
+        custom_metadata: Optional[Dict[str, str]] = None,
     ) -> "DeltaTable":
         """`CREATE` or `CREATE_OR_REPLACE` a delta table given a table_uri.
 
@@ -462,6 +463,7 @@ class DeltaTable:
             description: User-provided description for this table.
             configuration:  A map containing configuration options for the metadata action.
             storage_options: options passed to the object store crate.
+            custom_metadata: custom metadata that will be added to the transaction commit.
 
         Returns:
             DeltaTable: created delta table
@@ -499,6 +501,7 @@ class DeltaTable:
             description,
             configuration,
             storage_options,
+            custom_metadata,
         )
 
         return cls(table_uri=table_uri, storage_options=storage_options)
@@ -735,6 +738,7 @@ class DeltaTable:
         retention_hours: Optional[int] = None,
         dry_run: bool = True,
         enforce_retention_duration: bool = True,
+        custom_metadata: Optional[Dict[str, str]] = None,
     ) -> List[str]:
         """
         Run the Vacuum command on the Delta Table: list and delete files no longer referenced by the Delta table and are older than the retention threshold.
@@ -743,7 +747,7 @@ class DeltaTable:
             retention_hours: the retention threshold in hours, if none then the value from `configuration.deletedFileRetentionDuration` is used or default of 1 week otherwise.
             dry_run: when activated, list only the files, delete otherwise
             enforce_retention_duration: when disabled, accepts retention hours smaller than the value from `configuration.deletedFileRetentionDuration`.
-
+            custom_metadata: custom metadata that will be added to the transaction commit.
         Returns:
             the list of files no longer referenced by the Delta Table and are older than the retention threshold.
         """
@@ -755,6 +759,7 @@ class DeltaTable:
             dry_run,
             retention_hours,
             enforce_retention_duration,
+            custom_metadata,
         )
 
     def update(
@@ -766,6 +771,7 @@ class DeltaTable:
         predicate: Optional[str] = None,
         writer_properties: Optional[WriterProperties] = None,
         error_on_type_mismatch: bool = True,
+        custom_metadata: Optional[Dict[str, str]] = None,
     ) -> Dict[str, Any]:
         """`UPDATE` records in the Delta Table that matches an optional predicate. Either updates or new_values needs
         to be passed for it to execute.
@@ -776,7 +782,7 @@ class DeltaTable:
             predicate: a logical expression.
             writer_properties: Pass writer properties to the Rust parquet writer.
             error_on_type_mismatch: specify if update will return error if data types are mismatching :default = True
-
+            custom_metadata: custom metadata that will be added to the transaction commit.
         Returns:
             the metrics from update
 
@@ -855,6 +861,7 @@ class DeltaTable:
             predicate,
             writer_properties._to_dict() if writer_properties else None,
             safe_cast=not error_on_type_mismatch,
+            custom_metadata=custom_metadata,
         )
         return json.loads(metrics)
 
@@ -895,6 +902,7 @@ class DeltaTable:
         error_on_type_mismatch: bool = True,
         writer_properties: Optional[WriterProperties] = None,
         large_dtypes: bool = True,
+        custom_metadata: Optional[Dict[str, str]] = None,
     ) -> "TableMerger":
         """Pass the source data which you want to merge on the target delta table, providing a
         predicate in SQL query like format. You can also specify on what to do when the underlying data types do not
@@ -908,6 +916,7 @@ class DeltaTable:
             error_on_type_mismatch: specify if merge will return error if data types are mismatching :default = True
             writer_properties: Pass writer properties to the Rust parquet writer
             large_dtypes: If True, the data schema is kept in large_dtypes.
+            custom_metadata: custom metadata that will be added to the transaction commit.
 
         Returns:
             TableMerger: TableMerger Object
@@ -955,6 +964,7 @@ class DeltaTable:
             target_alias=target_alias,
             safe_cast=not error_on_type_mismatch,
             writer_properties=writer_properties,
+            custom_metadata=custom_metadata,
         )
 
     def restore(
@@ -963,6 +973,7 @@ class DeltaTable:
         *,
         ignore_missing_files: bool = False,
         protocol_downgrade_allowed: bool = False,
+        custom_metadata: Optional[Dict[str, str]] = None,
     ) -> Dict[str, Any]:
         """
         Run the Restore command on the Delta Table: restore table to a given version or datetime.
@@ -971,6 +982,7 @@ class DeltaTable:
             target: the expected version will restore, which represented by int, date str or datetime.
             ignore_missing_files: whether the operation carry on when some data files missing.
             protocol_downgrade_allowed: whether the operation when protocol version upgraded.
+            custom_metadata: custom metadata that will be added to the transaction commit.
 
         Returns:
             the metrics from restore.
@@ -980,12 +992,14 @@ class DeltaTable:
                 target.isoformat(),
                 ignore_missing_files=ignore_missing_files,
                 protocol_downgrade_allowed=protocol_downgrade_allowed,
+                custom_metadata=custom_metadata,
             )
         else:
             metrics = self._table.restore(
                 target,
                 ignore_missing_files=ignore_missing_files,
                 protocol_downgrade_allowed=protocol_downgrade_allowed,
+                custom_metadata=custom_metadata,
             )
         return json.loads(metrics)
 
@@ -1176,6 +1190,7 @@ class DeltaTable:
         self,
         predicate: Optional[str] = None,
         writer_properties: Optional[WriterProperties] = None,
+        custom_metadata: Optional[Dict[str, str]] = None,
     ) -> Dict[str, Any]:
         """Delete records from a Delta Table that statisfy a predicate.
 
@@ -1186,16 +1201,22 @@ class DeltaTable:
 
         Args:
             predicate: a SQL where clause. If not passed, will delete all rows.
+            writer_properties: Pass writer properties to the Rust parquet writer.
+            custom_metadata: custom metadata that will be added to the transaction commit.
 
         Returns:
             the metrics from delete.
         """
         metrics = self._table.delete(
-            predicate, writer_properties._to_dict() if writer_properties else None
+            predicate,
+            writer_properties._to_dict() if writer_properties else None,
+            custom_metadata,
         )
         return json.loads(metrics)
 
-    def repair(self, dry_run: bool = False) -> Dict[str, Any]:
+    def repair(
+        self, dry_run: bool = False, custom_metadata: Optional[Dict[str, str]] = None
+    ) -> Dict[str, Any]:
         """Repair the Delta Table by auditing active files that do not exist in the underlying
         filesystem and removes them. This can be useful when there are accidental deletions or corrupted files.
 
@@ -1205,6 +1226,7 @@ class DeltaTable:
 
         Args:
             dry_run: when activated, list only the files, otherwise add remove actions to transaction log. Defaults to False.
+            custom_metadata: custom metadata that will be added to the transaction commit.
         Returns:
             The metrics from repair (FSCK) action.
 
@@ -1219,7 +1241,7 @@ class DeltaTable:
             {'dry_run': False, 'files_removed': ['6-0d084325-6885-4847-b008-82c1cf30674c-0.parquet', 5-4fba1d3e-3e20-4de1-933d-a8e13ac59f53-0.parquet']}
             ```
         """
-        metrics = self._table.repair(dry_run)
+        metrics = self._table.repair(dry_run, custom_metadata)
         return json.loads(metrics)
 
 
@@ -1235,6 +1257,7 @@ class TableMerger:
         target_alias: Optional[str] = None,
         safe_cast: bool = True,
         writer_properties: Optional[WriterProperties] = None,
+        custom_metadata: Optional[Dict[str, str]] = None,
     ):
         self.table = table
         self.source = source
@@ -1243,6 +1266,7 @@ class TableMerger:
         self.target_alias = target_alias
         self.safe_cast = safe_cast
         self.writer_properties = writer_properties
+        self.custom_metadata = custom_metadata
         self.matched_update_updates: Optional[List[Dict[str, str]]] = None
         self.matched_update_predicate: Optional[List[Optional[str]]] = None
         self.matched_delete_predicate: Optional[List[str]] = None
@@ -1692,6 +1716,7 @@ class TableMerger:
             writer_properties=self.writer_properties._to_dict()
             if self.writer_properties
             else None,
+            custom_metadata=self.custom_metadata,
             matched_update_updates=self.matched_update_updates,
             matched_update_predicate=self.matched_update_predicate,
             matched_delete_predicate=self.matched_delete_predicate,
@@ -1713,13 +1738,17 @@ class TableAlterer:
     def __init__(self, table: DeltaTable) -> None:
         self.table = table
 
-    def add_constraint(self, constraints: Dict[str, str]) -> None:
+    def add_constraint(
+        self,
+        constraints: Dict[str, str],
+        custom_metadata: Optional[Dict[str, str]] = None,
+    ) -> None:
         """
         Add constraints to the table. Limited to `single constraint` at once.
 
         Args:
             constraints: mapping of constraint name to SQL-expression to evaluate on write
-
+            custom_metadata: custom metadata that will be added to the transaction commit.
         Example:
             ```python
             from deltalake import DeltaTable
@@ -1741,7 +1770,7 @@ class TableAlterer:
                 Please execute add_constraints multiple times with each time a different constraint."""
             )
 
-        self.table._table.add_constraints(constraints)
+        self.table._table.add_constraints(constraints, custom_metadata)
 
 
 class TableOptimizer:
@@ -1776,6 +1805,7 @@ class TableOptimizer:
         max_concurrent_tasks: Optional[int] = None,
         min_commit_interval: Optional[Union[int, timedelta]] = None,
         writer_properties: Optional[WriterProperties] = None,
+        custom_metadata: Optional[Dict[str, str]] = None,
     ) -> Dict[str, Any]:
         """
         Compacts small files to reduce the total number of files in the table.
@@ -1798,6 +1828,7 @@ class TableOptimizer:
                                     created. Interval is useful for long running executions. Set to 0 or timedelta(0), if you
                                     want a commit per partition.
             writer_properties: Pass writer properties to the Rust parquet writer.
+            custom_metadata: custom metadata that will be added to the transaction commit.
 
         Returns:
             the metrics from optimize
@@ -1827,6 +1858,7 @@ class TableOptimizer:
             max_concurrent_tasks,
             min_commit_interval,
             writer_properties._to_dict() if writer_properties else None,
+            custom_metadata,
         )
         self.table.update_incremental()
         return json.loads(metrics)
@@ -1840,6 +1872,7 @@ class TableOptimizer:
         max_spill_size: int = 20 * 1024 * 1024 * 1024,
         min_commit_interval: Optional[Union[int, timedelta]] = None,
         writer_properties: Optional[WriterProperties] = None,
+        custom_metadata: Optional[Dict[str, str]] = None,
     ) -> Dict[str, Any]:
         """
         Reorders the data using a Z-order curve to improve data skipping.
@@ -1860,6 +1893,7 @@ class TableOptimizer:
                                     created. Interval is useful for long running executions. Set to 0 or timedelta(0), if you
                                     want a commit per partition.
             writer_properties: Pass writer properties to the Rust parquet writer.
+            custom_metadata: custom metadata that will be added to the transaction commit.
 
         Returns:
             the metrics from optimize
@@ -1891,6 +1925,7 @@ class TableOptimizer:
             max_spill_size,
             min_commit_interval,
             writer_properties._to_dict() if writer_properties else None,
+            custom_metadata,
         )
         self.table.update_incremental()
         return json.loads(metrics)

@@ -10,11 +10,12 @@ from deltalake.writer import write_deltalake
 def test_delete_no_predicates(existing_table: DeltaTable):
     old_version = existing_table.version()
 
-    existing_table.delete()
+    existing_table.delete(custom_metadata={"userName": "John Doe"})
 
     last_action = existing_table.history(1)[0]
     assert last_action["operation"] == "DELETE"
     assert existing_table.version() == old_version + 1
+    assert last_action["userName"] == "John Doe"
 
     dataset = existing_table.to_pyarrow_dataset()
     assert dataset.count_rows() == 0

@@ -282,6 +282,7 @@ impl<'a> std::future::IntoFuture for OptimizeBuilder<'a> {
                     this.max_concurrent_tasks,
                     this.max_spill_size,
                     this.min_commit_interval,
+                    this.app_metadata,
                 )
                 .await?;
             let mut table = DeltaTable::new_with_state(this.log_store, this.snapshot);
@@ -589,6 +590,7 @@ impl MergePlan {
         #[allow(unused_variables)] // used behind a feature flag
         max_spill_size: usize,
         min_commit_interval: Option<Duration>,
+        app_metadata: Option<HashMap<String, serde_json::Value>>,
     ) -> Result<Metrics, DeltaTableError> {
         let operations = std::mem::take(&mut self.operations);
 
@@ -702,14 +704,17 @@ impl MergePlan {
                 last_commit = now;
 
                 buffered_metrics.preserve_insertion_order = true;
-                let mut metadata = HashMap::new();
-                metadata.insert("readVersion".to_owned(), self.read_table_version.into());
+                let mut app_metadata = match app_metadata.clone() {
+                    Some(meta) => meta,
+                    None => HashMap::new(),
+                };
+                app_metadata.insert("readVersion".to_owned(), self.read_table_version.into());
                 let maybe_map_metrics = serde_json::to_value(std::mem::replace(
                     &mut buffered_metrics,
                     orig_metrics.clone(),
                 ));
                 if let Ok(map) = maybe_map_metrics {
-                    metadata.insert("operationMetrics".to_owned(), map);
+                    app_metadata.insert("operationMetrics".to_owned(), map);
                 }
 
                 table.update_incremental(None).await?;
@@ -721,7 +726,7 @@ impl MergePlan {
                     &actions,
                     self.task_parameters.input_parameters.clone().into(),
                     table.get_state(),
-                    Some(metadata),
+                    Some(app_metadata.clone()),
                 )
                 .await?;
             }
