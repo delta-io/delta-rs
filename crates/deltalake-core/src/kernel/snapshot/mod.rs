@@ -49,7 +49,7 @@ impl Snapshot {
     ) -> DeltaResult<Self> {
         let log_segment = LogSegment::try_new(table_root, version, store.as_ref()).await?;
         let (protocol, metadata) = log_segment.read_metadata(store.clone(), &config).await?;
-        if !metadata.is_some() && protocol.is_some() {
+        if metadata.is_none() || protocol.is_none() {
             return Err(DeltaTableError::Generic(
                 "Cannot read metadata from log segment".into(),
             ));

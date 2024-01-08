@@ -298,33 +298,6 @@ impl DeltaTable {
         self.log_store.clone()
     }
 
-    /// Return the list of paths of given checkpoint.
-    pub fn get_checkpoint_data_paths(&self, check_point: &CheckPoint) -> Vec<Path> {
-        let checkpoint_prefix = format!("{:020}", check_point.version);
-        let log_path = self.log_store.log_path();
-        let mut checkpoint_data_paths = Vec::new();
-
-        match check_point.parts {
-            None => {
-                let path = log_path.child(&*format!("{checkpoint_prefix}.checkpoint.parquet"));
-                checkpoint_data_paths.push(path);
-            }
-            Some(parts) => {
-                for i in 0..parts {
-                    let path = log_path.child(&*format!(
-                        "{}.checkpoint.{:010}.{:010}.parquet",
-                        checkpoint_prefix,
-                        i + 1,
-                        parts
-                    ));
-                    checkpoint_data_paths.push(path);
-                }
-            }
-        }
-
-        checkpoint_data_paths
-    }
-
     /// returns the latest available version of the table
     pub async fn get_latest_version(&self) -> Result<i64, DeltaTableError> {
         self.log_store.get_latest_version(self.version()).await
@@ -643,35 +616,6 @@ mod tests {
         let bytes = serde_json::to_vec(&dt).unwrap();
         let actual: DeltaTable = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(actual.version(), dt.version());
-        drop(tmp_dir);
-    }
-
-    #[tokio::test]
-    async fn checkpoint_without_added_files_and_no_parts() {
-        let (dt, tmp_dir) = create_test_table().await;
-        let check_point = CheckPointBuilder::new(0, 0).build();
-        let checkpoint_data_paths = dt.get_checkpoint_data_paths(&check_point);
-        assert_eq!(checkpoint_data_paths.len(), 1);
-        assert_eq!(
-            serde_json::to_string(&check_point).unwrap(),
-            "{\"version\":0,\"size\":0}"
-        );
-        drop(tmp_dir);
-    }
-
-    #[tokio::test]
-    async fn checkpoint_with_added_files() {
-        let num_of_file_added: i64 = 4;
-        let (dt, tmp_dir) = create_test_table().await;
-        let check_point = CheckPointBuilder::new(0, 0)
-            .with_num_of_add_files(num_of_file_added)
-            .build();
-        let checkpoint_data_paths = dt.get_checkpoint_data_paths(&check_point);
-        assert_eq!(checkpoint_data_paths.len(), 1);
-        assert_eq!(
-            serde_json::to_string(&check_point).unwrap(),
-            "{\"version\":0,\"size\":0,\"num_of_add_files\":4}"
-        );
         drop(tmp_dir);
     }
 

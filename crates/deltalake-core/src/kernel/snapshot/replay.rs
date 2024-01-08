@@ -20,7 +20,7 @@ pin_project! {
         scanner: LogReplayScanner,
 
         #[pin]
-        stream: S,
+        commits: S,
 
         #[pin]
         checkpoint: S,
@@ -28,11 +28,11 @@ pin_project! {
 }
 
 impl<S> ReplayStream<S> {
-    pub(super) fn new(stream: S, checkpoint: S) -> Self {
+    pub(super) fn new(commits: S, checkpoint: S) -> Self {
         Self {
-            stream,
-            scanner: LogReplayScanner::new(),
+            commits,
             checkpoint,
+            scanner: LogReplayScanner::new(),
         }
     }
 }
@@ -45,7 +45,7 @@ where
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let this = self.project();
-        let res = this.stream.poll_next(cx).map(|b| match b {
+        let res = this.commits.poll_next(cx).map(|b| match b {
             Some(Ok(batch)) => match this.scanner.process_files_batch(&batch, true) {
                 Ok(filtered) => Some(Ok(filtered)),
                 Err(e) => Some(Err(e)),
@@ -68,7 +68,12 @@ where
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
-        self.stream.size_hint()
+        let (l_com, u_com) = self.commits.size_hint();
+        let (l_cp, u_cp) = self.checkpoint.size_hint();
+        (
+            l_com + l_cp,
+            u_com.and_then(|u_com| u_cp.map(|u_cp| u_com + u_cp)),
+        )
     }
 }
 
@@ -89,7 +94,7 @@ pub(super) struct DVInfo<'a> {
 
 fn seen_key(info: &FileInfo<'_>) -> String {
     if let Some(dv) = &info.dv {
-        if let Some(offset) = dv.offset {
+        if let Some(offset) = &dv.offset {
             format!(
                 "{}::{}{}@{offset}",
                 info.path, dv.storage_type, dv.path_or_inline_dv
@@ -193,57 +198,43 @@ impl LogReplayScanner {
     }
 }
 
-fn read_file_info(arr: &dyn ProvidesColumnByName) -> DeltaResult<Vec<Option<FileInfo<'_>>>> {
+fn read_file_info<'a>(arr: &'a dyn ProvidesColumnByName) -> DeltaResult<Vec<Option<FileInfo<'a>>>> {
     let path = extract_and_cast::<StringArray>(arr, "path")?;
-    let mut adds = Vec::with_capacity(path.len());
+    let dv = extract_and_cast_opt::<StructArray>(arr, "deletionVector");
 
-    let base = extract_and_cast_opt::<StructArray>(arr, "deletionVector");
+    let get_dv: Box<dyn Fn(usize) -> DeltaResult<Option<DVInfo<'a>>>> = if let Some(d) = dv {
+        let storage_type = extract_and_cast::<StringArray>(d, "storageType")?;
+        let path_or_inline_dv = extract_and_cast::<StringArray>(d, "pathOrInlineDv")?;
+        let offset = extract_and_cast::<Int32Array>(d, "offset")?;
 
-    if let Some(base) = base {
-        let storage_type = extract_and_cast::<StringArray>(base, "storageType")?;
-        let path_or_inline_dv = extract_and_cast::<StringArray>(base, "pathOrInlineDv")?;
-        let offset = extract_and_cast::<Int32Array>(base, "offset")?;
-        // let size_in_bytes = extract_and_cast::<Int32Array>(base, "sizeInBytes")?;
-        // let cardinality = extract_and_cast::<Int64Array>(base, "cardinality")?;
-
-        for idx in 0..path.len() {
-            let value = path
-                .is_valid(idx)
-                .then(|| {
-                    let dv = if read_str(storage_type, idx).is_ok() {
-                        Some(DVInfo {
-                            storage_type: read_str(storage_type, idx)?,
-                            path_or_inline_dv: read_str(path_or_inline_dv, idx)?,
-                            offset: read_primitive_opt(offset, idx),
-                            // size_in_bytes: read_primitive(size_in_bytes, idx)?,
-                            // cardinality: read_primitive(cardinality, idx)?,
-                        })
-                    } else {
-                        None
-                    };
-                    Ok::<_, DeltaTableError>(FileInfo {
-                        path: read_str(path, idx)?,
-                        dv,
-                    })
-                })
-                .transpose()?;
-            adds.push(value);
-        }
+        Box::new(|idx: usize| {
+            if read_str(storage_type, idx).is_ok() {
+                Ok(Some(DVInfo {
+                    storage_type: read_str(storage_type, idx)?,
+                    path_or_inline_dv: read_str(path_or_inline_dv, idx)?,
+                    offset: read_primitive_opt(offset, idx),
+                }))
+            } else {
+                Ok(None)
+            }
+        })
     } else {
-        for idx in 0..path.len() {
-            let value = path
-                .is_valid(idx)
-                .then(|| {
-                    Ok::<_, DeltaTableError>(FileInfo {
-                        path: read_str(path, idx)?,
-                        dv: None,
-                    })
-                })
-                .transpose()?;
-            adds.push(value);
-        }
-    }
+        Box::new(|_| Ok(None))
+    };
 
+    let mut adds = Vec::with_capacity(path.len());
+    for idx in 0..path.len() {
+        let value = path
+            .is_valid(idx)
+            .then(|| {
+                Ok::<_, DeltaTableError>(FileInfo {
+                    path: read_str(path, idx)?,
+                    dv: get_dv(idx)?,
+                })
+            })
+            .transpose()?;
+        adds.push(value);
+    }
     Ok(adds)
 }
 
