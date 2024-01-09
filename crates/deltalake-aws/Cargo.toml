@@ -27,7 +27,7 @@ backoff = { version = "0.4", features = [ "tokio" ] }
 
 [dev-dependencies]
 chrono = { workspace = true }
-serial_test = "2"
+serial_test = "3"
 deltalake-test = { path = "../deltalake-test" }
 pretty_env_logger = "*"
 rand = "0.8"
