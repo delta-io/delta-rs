@@ -1,23 +1,37 @@
 use std::pin::Pin;
+use std::sync::Arc;
 use std::task::Context;
 use std::task::Poll;
 
 use arrow_arith::boolean::{is_not_null, or};
-use arrow_array::{Array, BooleanArray, Int32Array, RecordBatch, StringArray, StructArray};
+use arrow_array::{
+    Array, ArrayRef, BooleanArray, Int32Array, RecordBatch, StringArray, StructArray,
+};
+use arrow_schema::{
+    DataType as ArrowDataType, Field as ArrowField, Schema as ArrowSchema,
+    SchemaRef as ArrowSchemaRef,
+};
 use arrow_select::filter::filter_record_batch;
 use futures::Stream;
 use hashbrown::HashSet;
+use itertools::Itertools;
 use pin_project_lite::pin_project;
 use tracing::debug;
 
 use super::extract::{
     extract_and_cast, extract_and_cast_opt, read_primitive_opt, read_str, ProvidesColumnByName,
 };
-use crate::{DeltaResult, DeltaTableError};
+use super::parse::parse_json;
+use crate::kernel::{DataType, Schema, StructField, StructType};
+use crate::{DeltaResult, DeltaTableConfig, DeltaTableError};
 
 pin_project! {
     pub struct ReplayStream<S> {
         scanner: LogReplayScanner,
+
+        stats_schema: ArrowSchemaRef,
+
+        config: DeltaTableConfig,
 
         #[pin]
         commits: S,
@@ -28,13 +42,102 @@ pin_project! {
 }
 
 impl<S> ReplayStream<S> {
-    pub(super) fn new(commits: S, checkpoint: S) -> Self {
-        Self {
+    pub(super) fn try_new(
+        commits: S,
+        checkpoint: S,
+        table_schema: &Schema,
+        config: DeltaTableConfig,
+    ) -> DeltaResult<Self> {
+        let data_fields: Vec<_> = table_schema
+            .fields
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, f)| {
+                if idx < 32 && f.data_type() != &DataType::BINARY {
+                    Some(f.clone())
+                } else {
+                    None
+                }
+            })
+            .collect();
+        let stats_schema = StructType::new(vec![
+            StructField::new("numRecords", DataType::LONG, true),
+            StructField::new("minValues", StructType::new(data_fields.clone()), true),
+            StructField::new("maxValues", StructType::new(data_fields.clone()), true),
+            StructField::new(
+                "nullCounts",
+                StructType::new(
+                    data_fields
+                        .into_iter()
+                        .map(|f| StructField::new(f.name(), DataType::LONG, true))
+                        .collect(),
+                ),
+                true,
+            ),
+        ]);
+        let stats_schema = std::sync::Arc::new((&stats_schema).try_into()?);
+        Ok(Self {
             commits,
             checkpoint,
+            stats_schema,
+            config,
             scanner: LogReplayScanner::new(),
-        }
+        })
     }
+}
+
+fn map_batch(
+    batch: RecordBatch,
+    stats_schema: ArrowSchemaRef,
+    config: &DeltaTableConfig,
+) -> DeltaResult<RecordBatch> {
+    let stats_col = extract_and_cast_opt::<StringArray>(&batch, "add.stats");
+    let stats_parsed_col = extract_and_cast_opt::<StringArray>(&batch, "add.stats_parsed");
+    if stats_parsed_col.is_some() {
+        return Ok(batch);
+    }
+    if let Some(stats) = stats_col {
+        let stats: Arc<StructArray> =
+            Arc::new(parse_json(stats, stats_schema.clone(), config)?.into());
+        let schema = batch.schema();
+        let add_col = extract_and_cast::<StructArray>(&batch, "add")?;
+        let add_idx = schema.column_with_name("add").unwrap();
+        let add_type = add_col
+            .fields()
+            .iter()
+            .cloned()
+            .chain(std::iter::once(Arc::new(ArrowField::new(
+                "stats_parsed",
+                ArrowDataType::Struct(stats_schema.fields().clone()),
+                true,
+            ))))
+            .collect_vec();
+        let new_add = Arc::new(StructArray::try_new(
+            add_type.clone().into(),
+            add_col
+                .columns()
+                .iter()
+                .cloned()
+                .chain(std::iter::once(stats as ArrayRef))
+                .collect(),
+            add_col.nulls().cloned(),
+        )?);
+        let new_add_field = Arc::new(ArrowField::new(
+            "add",
+            ArrowDataType::Struct(add_type.into()),
+            true,
+        ));
+        let mut fields = schema.fields().to_vec();
+        let _ = std::mem::replace(&mut fields[add_idx.0], new_add_field);
+        let mut columns = batch.columns().to_vec();
+        let _ = std::mem::replace(&mut columns[add_idx.0], new_add);
+        return Ok(RecordBatch::try_new(
+            Arc::new(ArrowSchema::new(fields)),
+            columns,
+        )?);
+    }
+
+    Ok(batch)
 }
 
 impl<S> Stream for ReplayStream<S>
@@ -47,7 +150,7 @@ where
         let this = self.project();
         let res = this.commits.poll_next(cx).map(|b| match b {
             Some(Ok(batch)) => match this.scanner.process_files_batch(&batch, true) {
-                Ok(filtered) => Some(Ok(filtered)),
+                Ok(filtered) => Some(map_batch(filtered, this.stats_schema.clone(), this.config)),
                 Err(e) => Some(Err(e)),
             },
             Some(Err(e)) => Some(Err(e)),
@@ -56,7 +159,9 @@ where
         if matches!(res, Poll::Ready(None)) {
             this.checkpoint.poll_next(cx).map(|b| match b {
                 Some(Ok(batch)) => match this.scanner.process_files_batch(&batch, false) {
-                    Ok(filtered) => Some(Ok(filtered)),
+                    Ok(filtered) => {
+                        Some(map_batch(filtered, this.stats_schema.clone(), this.config))
+                    }
                     Err(e) => Some(Err(e)),
                 },
                 Some(Err(e)) => Some(Err(e)),

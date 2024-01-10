@@ -1,21 +1,16 @@
 use std::cmp::Ordering;
 use std::collections::{HashMap, VecDeque};
-use std::io::{BufRead, BufReader, Cursor};
 use std::sync::Arc;
-use std::task::{ready, Poll};
 
 use arrow_array::{Array, Int32Array, ListArray, RecordBatch, StringArray, StructArray};
 use arrow_json::{reader::Decoder, ReaderBuilder};
 use arrow_schema::SchemaRef as ArrowSchemaRef;
-use bytes::{Buf, Bytes};
 use chrono::Utc;
-use futures::{stream::BoxStream, Stream, StreamExt, TryStreamExt};
+use futures::{stream::BoxStream, StreamExt, TryStreamExt};
 use itertools::Itertools;
 use lazy_static::lazy_static;
 use object_store::path::Path;
-use object_store::{
-    Error as ObjectStoreError, ObjectMeta, ObjectStore, Result as ObjectStoreResult,
-};
+use object_store::{Error as ObjectStoreError, ObjectMeta, ObjectStore};
 use parquet::arrow::arrow_reader::ArrowReaderOptions;
 use parquet::arrow::async_reader::{ParquetObjectReader, ParquetRecordBatchStreamBuilder};
 use regex::Regex;
@@ -30,7 +25,7 @@ use crate::protocol::DeltaOperation;
 use crate::{DeltaResult, DeltaTableConfig, DeltaTableError};
 
 use super::extract::{extract_and_cast, extract_and_cast_opt, read_primitive};
-use super::parse::read_metadata;
+use super::parse::{decode_stream, get_reader, read_from_json, read_metadata};
 
 const LAST_CHECKPOINT_FILE_NAME: &str = "_last_checkpoint";
 const BATCH_SIZE: usize = 1024;
@@ -93,11 +88,6 @@ fn get_decoder(schema: ArrowSchemaRef, config: &DeltaTableConfig) -> DeltaResult
     Ok(ReaderBuilder::new(schema)
         .with_batch_size(config.log_batch_size)
         .build_decoder()?)
-}
-
-#[inline]
-fn get_reader(data: &[u8]) -> BufReader<Cursor<&[u8]>> {
-    BufReader::new(Cursor::new(data))
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -429,58 +419,6 @@ pub(super) fn read_protocol(batch: &RecordBatch) -> DeltaResult<Option<Protocol>
         }
     }
     Ok(None)
-}
-
-fn decode_stream<S: Stream<Item = ObjectStoreResult<Bytes>> + Unpin>(
-    mut decoder: Decoder,
-    mut input: S,
-) -> impl Stream<Item = Result<RecordBatch, DeltaTableError>> {
-    let mut buffered = Bytes::new();
-    futures::stream::poll_fn(move |cx| {
-        loop {
-            if buffered.is_empty() {
-                buffered = match ready!(input.poll_next_unpin(cx)) {
-                    Some(Ok(b)) => b,
-                    Some(Err(e)) => return Poll::Ready(Some(Err(e.into()))),
-                    None => break,
-                };
-            }
-            let decoded = match decoder.decode(buffered.as_ref()) {
-                Ok(decoded) => decoded,
-                Err(e) => return Poll::Ready(Some(Err(e.into()))),
-            };
-            let read = buffered.len();
-            buffered.advance(decoded);
-            if decoded != read {
-                break;
-            }
-        }
-
-        Poll::Ready(decoder.flush().map_err(DeltaTableError::from).transpose())
-    })
-}
-
-fn read_from_json<'a, R: BufRead + 'a>(
-    mut reader: R,
-    decoder: &'a mut Decoder,
-) -> impl Iterator<Item = Result<RecordBatch, DeltaTableError>> + '_ {
-    let mut next = move || {
-        loop {
-            let buf = reader.fill_buf()?;
-            if buf.is_empty() {
-                break; // Input exhausted
-            }
-            let read = buf.len();
-            let decoded = decoder.decode(buf)?;
-
-            reader.consume(decoded);
-            if decoded != read {
-                break; // Read batch size
-            }
-        }
-        decoder.flush()
-    };
-    std::iter::from_fn(move || next().map_err(DeltaTableError::from).transpose())
 }
 
 #[derive(Debug, Deserialize, Serialize)]

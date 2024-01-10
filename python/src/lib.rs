@@ -13,7 +13,6 @@ use std::time;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use arrow::pyarrow::PyArrowType;
-use arrow_schema::DataType;
 use chrono::{DateTime, Duration, FixedOffset, Utc};
 use deltalake::arrow::compute::concat_batches;
 use deltalake::arrow::ffi_stream::ArrowArrayStreamReader;
@@ -41,7 +40,7 @@ use deltalake::parquet::basic::Compression;
 use deltalake::parquet::errors::ParquetError;
 use deltalake::parquet::file::properties::WriterProperties;
 use deltalake::partitions::PartitionFilter;
-use deltalake::protocol::{ColumnCountStat, ColumnValueStat, DeltaOperation, SaveMode, Stats};
+use deltalake::protocol::{DeltaOperation, SaveMode};
 use deltalake::DeltaTableBuilder;
 use deltalake::{DeltaOps, DeltaResult};
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
@@ -718,40 +717,40 @@ impl RawDeltaTable {
             .map_err(PythonError::from)?)
     }
 
-    pub fn dataset_partitions<'py>(
-        &mut self,
-        py: Python<'py>,
-        schema: PyArrowType<ArrowSchema>,
-        partition_filters: Option<Vec<(&str, &str, PartitionFilterValue)>>,
-    ) -> PyResult<Vec<(String, Option<&'py PyAny>)>> {
-        let path_set = match partition_filters {
-            Some(filters) => Some(HashSet::<_>::from_iter(
-                self.files_by_partitions(filters)?.iter().cloned(),
-            )),
-            None => None,
-        };
-
-        self._table
-            .get_files_iter()
-            .map_err(PythonError::from)?
-            .map(|p| p.to_string())
-            .zip(
-                self._table
-                    .get_partition_values()
-                    .map_err(PythonError::from)?,
-            )
-            .zip(self._table.get_stats().map_err(PythonError::from)?)
-            .filter(|((path, _), _)| match &path_set {
-                Some(path_set) => path_set.contains(path),
-                None => true,
-            })
-            .map(|((path, partition_values), stats)| {
-                let stats = stats.map_err(PythonError::from)?;
-                let expression = filestats_to_expression(py, &schema, &partition_values, stats)?;
-                Ok((path, expression))
-            })
-            .collect()
-    }
+    // pub fn dataset_partitions<'py>(
+    //     &mut self,
+    //     py: Python<'py>,
+    //     schema: PyArrowType<ArrowSchema>,
+    //     partition_filters: Option<Vec<(&str, &str, PartitionFilterValue)>>,
+    // ) -> PyResult<Vec<(String, Option<&'py PyAny>)>> {
+    //     let path_set = match partition_filters {
+    //         Some(filters) => Some(HashSet::<_>::from_iter(
+    //             self.files_by_partitions(filters)?.iter().cloned(),
+    //         )),
+    //         None => None,
+    //     };
+    //
+    //     self._table
+    //         .get_files_iter()
+    //         .map_err(PythonError::from)?
+    //         .map(|p| p.to_string())
+    //         .zip(
+    //             self._table
+    //                 .get_partition_values()
+    //                 .map_err(PythonError::from)?,
+    //         )
+    //         .zip(self._table.get_stats().map_err(PythonError::from)?)
+    //         .filter(|((path, _), _)| match &path_set {
+    //             Some(path_set) => path_set.contains(path),
+    //             None => true,
+    //         })
+    //         .map(|((path, partition_values), stats)| {
+    //             let stats = stats.map_err(PythonError::from)?;
+    //             let expression = filestats_to_expression(py, &schema, &partition_values, stats)?;
+    //             Ok((path, expression))
+    //         })
+    //         .collect()
+    // }
 
     fn get_active_partitions<'py>(
         &self,
@@ -1070,23 +1069,23 @@ fn convert_partition_filters<'a>(
         .collect()
 }
 
-fn json_value_to_py(value: &serde_json::Value, py: Python) -> PyObject {
-    match value {
-        serde_json::Value::Null => py.None(),
-        serde_json::Value::Bool(val) => val.to_object(py),
-        serde_json::Value::Number(val) => {
-            if val.is_f64() {
-                val.as_f64().expect("not an f64").to_object(py)
-            } else if val.is_i64() {
-                val.as_i64().expect("not an i64").to_object(py)
-            } else {
-                val.as_u64().expect("not an u64").to_object(py)
-            }
-        }
-        serde_json::Value::String(val) => val.to_object(py),
-        _ => py.None(),
-    }
-}
+// fn json_value_to_py(value: &serde_json::Value, py: Python) -> PyObject {
+//     match value {
+//         serde_json::Value::Null => py.None(),
+//         serde_json::Value::Bool(val) => val.to_object(py),
+//         serde_json::Value::Number(val) => {
+//             if val.is_f64() {
+//                 val.as_f64().expect("not an f64").to_object(py)
+//             } else if val.is_i64() {
+//                 val.as_i64().expect("not an i64").to_object(py)
+//             } else {
+//                 val.as_u64().expect("not an u64").to_object(py)
+//             }
+//         }
+//         serde_json::Value::String(val) => val.to_object(py),
+//         _ => py.None(),
+//     }
+// }
 
 /// Create expression that file statistics guarantee to be true.
 ///
@@ -1100,129 +1099,129 @@ fn json_value_to_py(value: &serde_json::Value, py: Python) -> PyObject {
 ///
 /// Statistics are translated into inequalities. If there are null values, then
 /// they must be OR'd with is_null.
-fn filestats_to_expression<'py>(
-    py: Python<'py>,
-    schema: &PyArrowType<ArrowSchema>,
-    partitions_values: &HashMap<String, Option<String>>,
-    stats: Option<Stats>,
-) -> PyResult<Option<&'py PyAny>> {
-    let ds = PyModule::import(py, "pyarrow.dataset")?;
-    let field = ds.getattr("field")?;
-    let pa = PyModule::import(py, "pyarrow")?;
-    let mut expressions: Vec<PyResult<&PyAny>> = Vec::new();
-
-    let cast_to_type = |column_name: &String, value: PyObject, schema: &ArrowSchema| {
-        let column_type = schema
-            .field_with_name(column_name)
-            .map_err(|_| {
-                PyValueError::new_err(format!("Column not found in schema: {column_name}"))
-            })?
-            .data_type()
-            .clone();
-
-        let value = match column_type {
-            // Since PyArrow 13.0.0, casting string -> timestamp fails if it ends with "Z"
-            // and the target type is timezone naive.
-            DataType::Timestamp(_, _) if value.extract::<String>(py).is_ok() => {
-                value.call_method1(py, "rstrip", ("Z",))?
-            }
-            // PyArrow 13.0.0 lost the ability to cast from string to date32, so
-            // we have to implement that manually.
-            DataType::Date32 if value.extract::<String>(py).is_ok() => {
-                let date = Python::import(py, "datetime")?.getattr("date")?;
-                let date = date.call_method1("fromisoformat", (value,))?;
-                date.to_object(py)
-            }
-            _ => value,
-        };
-
-        let column_type = PyArrowType(column_type).into_py(py);
-        pa.call_method1("scalar", (value,))?
-            .call_method1("cast", (column_type,))
-    };
-
-    for (column, value) in partitions_values.iter() {
-        if let Some(value) = value {
-            // value is a string, but needs to be parsed into appropriate type
-            let converted_value = cast_to_type(column, value.into_py(py), &schema.0)?;
-            expressions.push(
-                field
-                    .call1((column,))?
-                    .call_method1("__eq__", (converted_value,)),
-            );
-        } else {
-            expressions.push(field.call1((column,))?.call_method0("is_null"));
-        }
-    }
-
-    if let Some(stats) = stats {
-        let mut has_nulls_set: HashSet<String> = HashSet::new();
-
-        for (col_name, null_count) in stats.null_count.iter().filter_map(|(k, v)| match v {
-            ColumnCountStat::Value(val) => Some((k, val)),
-            _ => None,
-        }) {
-            if *null_count == 0 {
-                expressions.push(field.call1((col_name,))?.call_method0("is_valid"));
-            } else if *null_count == stats.num_records {
-                expressions.push(field.call1((col_name,))?.call_method0("is_null"));
-            } else {
-                has_nulls_set.insert(col_name.clone());
-            }
-        }
-
-        for (col_name, minimum) in stats.min_values.iter().filter_map(|(k, v)| match v {
-            ColumnValueStat::Value(val) => Some((k.clone(), json_value_to_py(val, py))),
-            // TODO(wjones127): Handle nested field statistics.
-            // Blocked on https://issues.apache.org/jira/browse/ARROW-11259
-            _ => None,
-        }) {
-            let maybe_minimum = cast_to_type(&col_name, minimum, &schema.0);
-            if let Ok(minimum) = maybe_minimum {
-                let field_expr = field.call1((&col_name,))?;
-                let expr = field_expr.call_method1("__ge__", (minimum,));
-                let expr = if has_nulls_set.contains(&col_name) {
-                    // col >= min_value OR col is null
-                    let is_null_expr = field_expr.call_method0("is_null");
-                    expr?.call_method1("__or__", (is_null_expr?,))
-                } else {
-                    // col >= min_value
-                    expr
-                };
-                expressions.push(expr);
-            }
-        }
-
-        for (col_name, maximum) in stats.max_values.iter().filter_map(|(k, v)| match v {
-            ColumnValueStat::Value(val) => Some((k.clone(), json_value_to_py(val, py))),
-            _ => None,
-        }) {
-            let maybe_maximum = cast_to_type(&col_name, maximum, &schema.0);
-            if let Ok(maximum) = maybe_maximum {
-                let field_expr = field.call1((&col_name,))?;
-                let expr = field_expr.call_method1("__le__", (maximum,));
-                let expr = if has_nulls_set.contains(&col_name) {
-                    // col <= max_value OR col is null
-                    let is_null_expr = field_expr.call_method0("is_null");
-                    expr?.call_method1("__or__", (is_null_expr?,))
-                } else {
-                    // col <= max_value
-                    expr
-                };
-                expressions.push(expr);
-            }
-        }
-    }
-
-    if expressions.is_empty() {
-        Ok(None)
-    } else {
-        expressions
-            .into_iter()
-            .reduce(|accum, item| accum?.call_method1("__and__", (item?,)))
-            .transpose()
-    }
-}
+// fn filestats_to_expression<'py>(
+//     py: Python<'py>,
+//     schema: &PyArrowType<ArrowSchema>,
+//     partitions_values: &HashMap<String, Option<String>>,
+//     stats: Option<Stats>,
+// ) -> PyResult<Option<&'py PyAny>> {
+//     let ds = PyModule::import(py, "pyarrow.dataset")?;
+//     let field = ds.getattr("field")?;
+//     let pa = PyModule::import(py, "pyarrow")?;
+//     let mut expressions: Vec<PyResult<&PyAny>> = Vec::new();
+//
+//     let cast_to_type = |column_name: &String, value: PyObject, schema: &ArrowSchema| {
+//         let column_type = schema
+//             .field_with_name(column_name)
+//             .map_err(|_| {
+//                 PyValueError::new_err(format!("Column not found in schema: {column_name}"))
+//             })?
+//             .data_type()
+//             .clone();
+//
+//         let value = match column_type {
+//             // Since PyArrow 13.0.0, casting string -> timestamp fails if it ends with "Z"
+//             // and the target type is timezone naive.
+//             DataType::Timestamp(_, _) if value.extract::<String>(py).is_ok() => {
+//                 value.call_method1(py, "rstrip", ("Z",))?
+//             }
+//             // PyArrow 13.0.0 lost the ability to cast from string to date32, so
+//             // we have to implement that manually.
+//             DataType::Date32 if value.extract::<String>(py).is_ok() => {
+//                 let date = Python::import(py, "datetime")?.getattr("date")?;
+//                 let date = date.call_method1("fromisoformat", (value,))?;
+//                 date.to_object(py)
+//             }
+//             _ => value,
+//         };
+//
+//         let column_type = PyArrowType(column_type).into_py(py);
+//         pa.call_method1("scalar", (value,))?
+//             .call_method1("cast", (column_type,))
+//     };
+//
+//     for (column, value) in partitions_values.iter() {
+//         if let Some(value) = value {
+//             // value is a string, but needs to be parsed into appropriate type
+//             let converted_value = cast_to_type(column, value.into_py(py), &schema.0)?;
+//             expressions.push(
+//                 field
+//                     .call1((column,))?
+//                     .call_method1("__eq__", (converted_value,)),
+//             );
+//         } else {
+//             expressions.push(field.call1((column,))?.call_method0("is_null"));
+//         }
+//     }
+//
+//     if let Some(stats) = stats {
+//         let mut has_nulls_set: HashSet<String> = HashSet::new();
+//
+//         for (col_name, null_count) in stats.null_count.iter().filter_map(|(k, v)| match v {
+//             ColumnCountStat::Value(val) => Some((k, val)),
+//             _ => None,
+//         }) {
+//             if *null_count == 0 {
+//                 expressions.push(field.call1((col_name,))?.call_method0("is_valid"));
+//             } else if *null_count == stats.num_records {
+//                 expressions.push(field.call1((col_name,))?.call_method0("is_null"));
+//             } else {
+//                 has_nulls_set.insert(col_name.clone());
+//             }
+//         }
+//
+//         for (col_name, minimum) in stats.min_values.iter().filter_map(|(k, v)| match v {
+//             ColumnValueStat::Value(val) => Some((k.clone(), json_value_to_py(val, py))),
+//             // TODO(wjones127): Handle nested field statistics.
+//             // Blocked on https://issues.apache.org/jira/browse/ARROW-11259
+//             _ => None,
+//         }) {
+//             let maybe_minimum = cast_to_type(&col_name, minimum, &schema.0);
+//             if let Ok(minimum) = maybe_minimum {
+//                 let field_expr = field.call1((&col_name,))?;
+//                 let expr = field_expr.call_method1("__ge__", (minimum,));
+//                 let expr = if has_nulls_set.contains(&col_name) {
+//                     // col >= min_value OR col is null
+//                     let is_null_expr = field_expr.call_method0("is_null");
+//                     expr?.call_method1("__or__", (is_null_expr?,))
+//                 } else {
+//                     // col >= min_value
+//                     expr
+//                 };
+//                 expressions.push(expr);
+//             }
+//         }
+//
+//         for (col_name, maximum) in stats.max_values.iter().filter_map(|(k, v)| match v {
+//             ColumnValueStat::Value(val) => Some((k.clone(), json_value_to_py(val, py))),
+//             _ => None,
+//         }) {
+//             let maybe_maximum = cast_to_type(&col_name, maximum, &schema.0);
+//             if let Ok(maximum) = maybe_maximum {
+//                 let field_expr = field.call1((&col_name,))?;
+//                 let expr = field_expr.call_method1("__le__", (maximum,));
+//                 let expr = if has_nulls_set.contains(&col_name) {
+//                     // col <= max_value OR col is null
+//                     let is_null_expr = field_expr.call_method0("is_null");
+//                     expr?.call_method1("__or__", (is_null_expr?,))
+//                 } else {
+//                     // col <= max_value
+//                     expr
+//                 };
+//                 expressions.push(expr);
+//             }
+//         }
+//     }
+//
+//     if expressions.is_empty() {
+//         Ok(None)
+//     } else {
+//         expressions
+//             .into_iter()
+//             .reduce(|accum, item| accum?.call_method1("__and__", (item?,)))
+//             .transpose()
+//     }
+// }
 
 #[pyfunction]
 fn rust_core_version() -> &'static str {
