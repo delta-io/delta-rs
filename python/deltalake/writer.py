@@ -185,7 +185,7 @@ def write_deltalake(
 
     Additionally, you must create a DynamoDB table with the name 'delta_rs_lock_table'
     so that it can be automatically discovered by delta-rs. Alternatively, you can
-    use a table name of your choice, but you must set the `DYNAMO_LOCK_TABLE_NAME`
+    use a table name of your choice, but you must set the `DELTA_DYNAMO_TABLE_NAME`
     variable to match your chosen table name. The required schema for the DynamoDB
     table is as follows:
 
