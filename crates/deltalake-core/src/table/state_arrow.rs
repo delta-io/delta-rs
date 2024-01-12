@@ -171,15 +171,14 @@ impl DeltaTableState {
                 .partition_columns
                 .iter()
                 .map(|name| -> Result<_, DeltaTableError> {
-                    let physical_name = metadata
-                        .schema()?
+                    let physical_name = self
+                        .schema()
                         .field_with_name(name)
                         .or(Err(DeltaTableError::MetadataError(format!(
                             "Invalid partition column {0}",
                             name
                         ))))?
-                        .physical_name()
-                        .map_err(|e| DeltaTableError::Kernel { source: e })?
+                        .physical_name()?
                         .to_string();
                     Ok((physical_name, name.as_str()))
                 })

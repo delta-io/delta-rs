@@ -153,7 +153,7 @@ pub fn get_delta_schema() -> StructType {
 
 pub fn get_delta_metadata(partition_cols: &[String]) -> Metadata {
     let table_schema = get_delta_schema();
-    Metadata::new(table_schema, partition_cols.to_vec(), HashMap::new())
+    Metadata::try_new(table_schema, partition_cols.to_vec(), HashMap::new()).unwrap()
 }
 
 pub fn get_record_batch_with_nested_struct() -> RecordBatch {

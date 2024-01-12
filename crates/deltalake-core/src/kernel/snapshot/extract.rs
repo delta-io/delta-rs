@@ -1,3 +1,5 @@
+//! Utilties to extract columns from a record batch or nested / complex arrays.
+
 use std::sync::Arc;
 
 use arrow_array::{
@@ -8,6 +10,7 @@ use arrow_schema::{ArrowError, DataType};
 
 use crate::{DeltaResult, DeltaTableError};
 
+/// Trait to extract a column by name from a record batch or nested / complex array.
 pub(crate) trait ProvidesColumnByName {
     fn column_by_name(&self, name: &str) -> Option<&Arc<dyn Array>>;
 }
@@ -24,6 +27,9 @@ impl ProvidesColumnByName for StructArray {
     }
 }
 
+/// Extracts a column by name and casts it to the given type array type `T`.
+///
+/// Returns an error if the column does not exist or if the column is not of type `T`.
 pub(super) fn extract_and_cast<'a, T: Array + 'static>(
     arr: &'a dyn ProvidesColumnByName,
     name: &'a str,
@@ -34,6 +40,9 @@ pub(super) fn extract_and_cast<'a, T: Array + 'static>(
     )))
 }
 
+/// Extracts a column by name and casts it to the given type array type `T`.
+///
+/// Returns `None` if the column does not exist or if the column is not of type `T`.
 pub(super) fn extract_and_cast_opt<'a, T: Array + 'static>(
     array: &'a dyn ProvidesColumnByName,
     name: &'a str,
@@ -63,7 +72,7 @@ pub(super) fn extract_column<'a>(
             DataType::Map(_, _) => {
                 // NOTE a map has exatly one child, but we wnat to be agnostic of its name.
                 // so we case the current array as map, and use the entries accessor.
-                let maparr = column_as_map(path_step, &Some(child))?;
+                let maparr = cast_column_as::<MapArray>(path_step, &Some(child))?;
                 if let Some(next_path) = remaining_path_steps.next() {
                     extract_column(maparr.entries(), next_path, remaining_path_steps)
                 } else {
@@ -83,10 +92,10 @@ pub(super) fn extract_column<'a>(
                 }
             }
             DataType::List(_) => {
-                let listarr = column_as_list(path_step, &Some(child))?;
+                let listarr = cast_column_as::<ListArray>(path_step, &Some(child))?;
                 if let Some(next_path) = remaining_path_steps.next() {
                     extract_column(
-                        column_as_struct(next_path_step, &Some(listarr.values()))?,
+                        cast_column_as::<StructArray>(next_path_step, &Some(listarr.values()))?,
                         next_path,
                         remaining_path_steps,
                     )
@@ -95,7 +104,7 @@ pub(super) fn extract_column<'a>(
                 }
             }
             _ => extract_column(
-                column_as_struct(path_step, &Some(child))?,
+                cast_column_as::<StructArray>(path_step, &Some(child))?,
                 next_path_step,
                 remaining_path_steps,
             ),
@@ -105,37 +114,18 @@ pub(super) fn extract_column<'a>(
     }
 }
 
-fn column_as_struct<'a>(
+fn cast_column_as<'a, T: Array + 'static>(
     name: &str,
     column: &Option<&'a Arc<dyn Array>>,
-) -> Result<&'a StructArray, ArrowError> {
+) -> Result<&'a T, ArrowError> {
     column
         .ok_or(ArrowError::SchemaError(format!("No such column: {}", name)))?
         .as_any()
-        .downcast_ref::<StructArray>()
-        .ok_or(ArrowError::SchemaError(format!("{} is not a struct", name)))
-}
-
-fn column_as_map<'a>(
-    name: &str,
-    column: &Option<&'a Arc<dyn Array>>,
-) -> Result<&'a MapArray, ArrowError> {
-    column
-        .ok_or(ArrowError::SchemaError(format!("No such column: {}", name)))?
-        .as_any()
-        .downcast_ref::<MapArray>()
-        .ok_or(ArrowError::SchemaError(format!("{} is not a map", name)))
-}
-
-fn column_as_list<'a>(
-    name: &str,
-    column: &Option<&'a Arc<dyn Array>>,
-) -> Result<&'a ListArray, ArrowError> {
-    column
-        .ok_or(ArrowError::SchemaError(format!("No such column: {}", name)))?
-        .as_any()
-        .downcast_ref::<ListArray>()
-        .ok_or(ArrowError::SchemaError(format!("{} is not a map", name)))
+        .downcast_ref::<T>()
+        .ok_or(ArrowError::SchemaError(format!(
+            "{} is not of esxpected type.",
+            name
+        )))
 }
 
 #[inline]

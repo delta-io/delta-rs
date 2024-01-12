@@ -515,7 +515,7 @@ mod tests {
 
     fn dummy_metadata() -> Metadata {
         let schema = StructType::new(Vec::new());
-        Metadata::new(schema, Vec::<String>::new(), HashMap::new())
+        Metadata::try_new(schema, Vec::<String>::new(), HashMap::new()).unwrap()
     }
 
     #[test]

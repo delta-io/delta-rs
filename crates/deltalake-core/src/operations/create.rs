@@ -250,11 +250,11 @@ impl CreateBuilder {
                 reader_features: None,
             });
 
-        let mut metadata = Metadata::new(
+        let mut metadata = Metadata::try_new(
             StructType::new(self.columns),
             self.partition_columns.unwrap_or_default(),
             self.configuration,
-        )
+        )?
         .with_created_time(chrono::Utc::now().timestamp_millis());
         if let Some(name) = self.name {
             metadata = metadata.with_name(name);

@@ -25,7 +25,6 @@ use std::collections::{HashMap, HashSet};
 use std::fmt::{self, Debug};
 use std::sync::Arc;
 
-use arrow::array::ArrayRef;
 use arrow::compute::{cast_with_options, CastOptions};
 use arrow::datatypes::DataType;
 use arrow::datatypes::{DataType as ArrowDataType, Schema as ArrowSchema, SchemaRef, TimeUnit};
@@ -48,7 +47,7 @@ use datafusion::execution::context::{SessionConfig, SessionContext, SessionState
 use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::execution::FunctionRegistry;
 use datafusion::physical_expr::PhysicalSortExpr;
-use datafusion::physical_optimizer::pruning::{PruningPredicate, PruningStatistics};
+use datafusion::physical_optimizer::pruning::PruningPredicate;
 use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::limit::LocalLimitExec;
 use datafusion::physical_plan::{
@@ -77,7 +76,7 @@ use tracing::error;
 use url::Url;
 
 use crate::errors::{DeltaResult, DeltaTableError};
-use crate::kernel::{Add, DataCheck, DataType as DeltaDataType, Invariant, PrimitiveType};
+use crate::kernel::{Add, DataCheck, Invariant};
 use crate::logstore::LogStoreRef;
 use crate::protocol::{ColumnCountStat, ColumnValueStat};
 use crate::table::builder::ensure_table_uri;
@@ -252,115 +251,6 @@ impl DeltaTableState {
         }
 
         Ok(table_stats)
-    }
-}
-
-// TODO: Collapse with operations/transaction/state.rs method of same name
-fn get_prune_stats(table: &DeltaTable, column: &Column, get_max: bool) -> Option<ArrayRef> {
-    let field = table
-        .get_schema()
-        .ok()
-        .map(|s| s.field_with_name(&column.name).ok())??;
-
-    // See issue 1214. Binary type does not support natural order which is required for Datafusion to prune
-    if let DeltaDataType::Primitive(PrimitiveType::Binary) = &field.data_type() {
-        return None;
-    }
-
-    let data_type = field.data_type().try_into().ok()?;
-    let partition_columns = &table.metadata().ok()?.partition_columns;
-    let files = table.snapshot().ok()?.files().ok()?;
-    let values = files.iter().map(|add| {
-        if partition_columns.contains(&column.name) {
-            let value = add.partition_values.get(&column.name).unwrap();
-            let value = match value {
-                Some(v) => serde_json::Value::String(v.to_string()),
-                None => serde_json::Value::Null,
-            };
-            to_correct_scalar_value(&value, &data_type)
-                .ok()
-                .flatten()
-                .unwrap_or(
-                    get_null_of_arrow_type(&data_type).expect("Could not determine null type"),
-                )
-        } else if let Ok(Some(statistics)) = add.get_stats() {
-            let values = if get_max {
-                statistics.max_values
-            } else {
-                statistics.min_values
-            };
-
-            values
-                .get(&column.name)
-                .and_then(|f| {
-                    to_correct_scalar_value(f.as_value()?, &data_type)
-                        .ok()
-                        .flatten()
-                })
-                .unwrap_or(
-                    get_null_of_arrow_type(&data_type).expect("Could not determine null type"),
-                )
-        } else {
-            // No statistics available
-            get_null_of_arrow_type(&data_type).expect("Could not determine null type")
-        }
-    });
-    ScalarValue::iter_to_array(values).ok()
-}
-
-// TODO only implement this for Snapshot, not for DeltaTable
-impl PruningStatistics for DeltaTable {
-    /// return the minimum values for the named column, if known.
-    /// Note: the returned array must contain `num_containers()` rows
-    fn min_values(&self, column: &Column) -> Option<ArrayRef> {
-        get_prune_stats(self, column, false)
-    }
-
-    /// return the maximum values for the named column, if known.
-    /// Note: the returned array must contain `num_containers()` rows.
-    fn max_values(&self, column: &Column) -> Option<ArrayRef> {
-        get_prune_stats(self, column, true)
-    }
-
-    /// return the number of containers (e.g. row groups) being
-    /// pruned with these statistics
-    fn num_containers(&self) -> usize {
-        self.get_state().unwrap().files().unwrap().len()
-    }
-
-    /// return the number of null values for the named column as an
-    /// `Option<UInt64Array>`.
-    ///
-    /// Note: the returned array must contain `num_containers()` rows.
-    fn null_counts(&self, column: &Column) -> Option<ArrayRef> {
-        let partition_columns = &self.metadata().ok()?.partition_columns;
-        let files = self.snapshot().ok()?.files().ok()?;
-        let values = files.iter().map(|add| {
-            if let Ok(Some(statistics)) = add.get_stats() {
-                if partition_columns.contains(&column.name) {
-                    let value = add.partition_values.get(&column.name).unwrap();
-                    match value {
-                        Some(_) => ScalarValue::UInt64(Some(0)),
-                        None => ScalarValue::UInt64(Some(statistics.num_records as u64)),
-                    }
-                } else {
-                    statistics
-                        .null_count
-                        .get(&column.name)
-                        .map(|f| ScalarValue::UInt64(f.as_value().map(|val| val as u64)))
-                        .unwrap_or(ScalarValue::UInt64(None))
-                }
-            } else if partition_columns.contains(&column.name) {
-                let value = add.partition_values.get(&column.name).unwrap();
-                match value {
-                    Some(_) => ScalarValue::UInt64(Some(0)),
-                    None => ScalarValue::UInt64(None),
-                }
-            } else {
-                ScalarValue::UInt64(None)
-            }
-        });
-        ScalarValue::iter_to_array(values).ok()
     }
 }
 

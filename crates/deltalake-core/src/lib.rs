@@ -287,25 +287,25 @@ mod tests {
                 Path::from("part-00000-c9b90f86-73e6-46c8-93ba-ff6bfaf892a1-c000.snappy.parquet"),
             ]
         );
-        assert_eq!(table.get_stats().unwrap().count(), 2);
+        assert_eq!(table.get_files_count(), 2);
 
-        assert_eq!(
-            table
-                .get_stats()
-                .unwrap()
-                .map(|x| x.unwrap().unwrap().num_records)
-                .sum::<i64>(),
-            4
-        );
+        let stats = table.snapshot().unwrap().add_actions_table(true).unwrap();
 
-        assert_eq!(
-            table
-                .get_stats()
-                .unwrap()
-                .map(|x| x.unwrap().unwrap().null_count["value"].as_value().unwrap())
-                .collect::<Vec<i64>>(),
-            vec![0, 0]
-        );
+        let num_records = stats.column_by_name("num_records").unwrap();
+        let num_records = num_records
+            .as_any()
+            .downcast_ref::<arrow::array::Int64Array>()
+            .unwrap();
+        let total_records = num_records.values().iter().sum::<i64>();
+        assert_eq!(total_records, 4);
+
+        let null_counts = stats.column_by_name("null_count.value").unwrap();
+        let null_counts = null_counts
+            .as_any()
+            .downcast_ref::<arrow::array::Int64Array>()
+            .unwrap();
+        null_counts.values().iter().for_each(|x| assert_eq!(*x, 0));
+
         let tombstones = table
             .get_state()
             .unwrap()
@@ -534,14 +534,13 @@ mod tests {
                 .get_file_uris()
                 .unwrap()
                 .zip(table.get_stats().unwrap())
-                .filter_map(|(file_uri, file_stats)| {
+                .find_map(|(file_uri, file_stats)| {
                     if file_uri.ends_with(file_name) {
                         file_stats.unwrap()
                     } else {
                         None
                     }
                 })
-                .next()
                 .unwrap()
         }
 

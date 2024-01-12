@@ -21,7 +21,7 @@ use tracing::debug;
 use super::extract::{
     extract_and_cast, extract_and_cast_opt, read_primitive_opt, read_str, ProvidesColumnByName,
 };
-use super::parse::parse_json;
+use super::json;
 use crate::kernel::{DataType, Schema, StructField, StructType};
 use crate::{DeltaResult, DeltaTableConfig, DeltaTableError};
 
@@ -98,7 +98,7 @@ fn map_batch(
     }
     if let Some(stats) = stats_col {
         let stats: Arc<StructArray> =
-            Arc::new(parse_json(stats, stats_schema.clone(), config)?.into());
+            Arc::new(json::parse_json(stats, stats_schema.clone(), config)?.into());
         let schema = batch.schema();
         let add_col = extract_and_cast::<StructArray>(&batch, "add")?;
         let add_idx = schema.column_with_name("add").unwrap();

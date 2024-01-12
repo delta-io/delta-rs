@@ -75,21 +75,21 @@ pub struct Metadata {
 
 impl Metadata {
     /// Create a new metadata action
-    pub fn new(
+    pub fn try_new(
         schema: StructType,
         partition_columns: impl IntoIterator<Item = impl Into<String>>,
         configuration: HashMap<String, Option<String>>,
-    ) -> Self {
-        Self {
+    ) -> DeltaResult<Self> {
+        Ok(Self {
             id: uuid::Uuid::new_v4().to_string(),
             format: Default::default(),
-            schema_string: serde_json::to_string(&schema).unwrap(),
+            schema_string: serde_json::to_string(&schema)?,
             partition_columns: partition_columns.into_iter().map(|c| c.into()).collect(),
             configuration,
             name: None,
             description: None,
             created_time: None,
-        }
+        })
     }
 
     /// set the table name in the metadata action

@@ -2,7 +2,7 @@ use std::cmp::Ordering;
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 
-use arrow_array::{Array, Int32Array, ListArray, RecordBatch, StringArray, StructArray};
+use arrow_array::RecordBatch;
 use arrow_json::{reader::Decoder, ReaderBuilder};
 use arrow_schema::SchemaRef as ArrowSchemaRef;
 use chrono::Utc;
@@ -18,14 +18,11 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tracing::debug;
 
-use crate::kernel::schema::Schema;
-use crate::kernel::{Action, ActionType, Metadata, Protocol, StructType};
+use super::{json, parse};
+use crate::kernel::{Action, ActionType, Metadata, Protocol, Schema, StructType};
 use crate::operations::transaction::get_commit_bytes;
 use crate::protocol::DeltaOperation;
 use crate::{DeltaResult, DeltaTableConfig, DeltaTableError};
-
-use super::extract::{extract_and_cast, extract_and_cast_opt, read_primitive};
-use super::parse::{decode_stream, get_reader, read_from_json, read_metadata};
 
 const LAST_CHECKPOINT_FILE_NAME: &str = "_last_checkpoint";
 const BATCH_SIZE: usize = 1024;
@@ -46,6 +43,11 @@ lazy_static! {
         StructType::new(vec![ActionType::Remove.schema_field().clone(),]);
 }
 
+/// Trait to extend a file path representation with delta specific functionality
+///
+/// specifically, this trait adds the ability to recognize valid log files and
+/// parse the version number from a log file path
+// TODO handle compaction files
 pub(super) trait PathExt {
     fn child(&self, path: impl AsRef<str>) -> DeltaResult<Path>;
     /// Returns the last path segment if not terminated with a "/"
@@ -108,6 +110,8 @@ pub(super) struct LogSegment {
 
 impl LogSegment {
     /// Try to create a new [`LogSegment`]
+    ///
+    /// This will list the entire log directory and find all relevant files for the given table version.
     pub async fn try_new(
         table_root: &Path,
         version: Option<i64>,
@@ -155,6 +159,10 @@ impl LogSegment {
         Ok(segment)
     }
 
+    /// Try to create a new [`LogSegment`] from a slice of the log.
+    ///
+    /// Ths will create a new [`LogSegment`] from the log with all relevant log files
+    /// starting at `start_version` and ending at `end_version`.
     pub async fn try_new_slice(
         table_root: &Path,
         start_version: i64,
@@ -201,6 +209,7 @@ impl LogSegment {
         Ok(())
     }
 
+    /// Returns the highes commit version number in the log segment
     pub fn file_version(&self) -> Option<i64> {
         self.commit_files
             .iter()
@@ -236,6 +245,7 @@ impl LogSegment {
         self.version
     }
 
+    /// Returns the last modified timestamp for a commit file with the given version
     pub fn version_timestamp(&self, version: i64) -> Option<chrono::DateTime<Utc>> {
         self.commit_files
             .iter()
@@ -256,7 +266,7 @@ impl LogSegment {
                 async move { store.get(&meta.location).await?.bytes().await }
             })
             .buffered(config.log_buffer_size);
-        Ok(decode_stream(decoder, stream).boxed())
+        Ok(json::decode_stream(decoder, stream).boxed())
     }
 
     pub(super) fn checkpoint_stream(
@@ -282,7 +292,7 @@ impl LogSegment {
             .boxed()
     }
 
-    /// Read Protocol and Metadata actions
+    /// Read [`Protocol`] and [`Metadata`] actions
     pub(super) async fn read_metadata(
         &self,
         store: Arc<dyn ObjectStore>,
@@ -302,12 +312,12 @@ impl LogSegment {
         while let Some(batch) = commit_stream.next().await {
             let batch = batch?;
             if maybe_protocol.is_none() {
-                if let Some(p) = read_protocol(&batch)? {
+                if let Some(p) = parse::read_protocol(&batch)? {
                     maybe_protocol.replace(p);
                 };
             }
             if maybe_metadata.is_none() {
-                if let Some(m) = read_metadata(&batch)? {
+                if let Some(m) = parse::read_metadata(&batch)? {
                     maybe_metadata.replace(m);
                 };
             }
@@ -320,12 +330,12 @@ impl LogSegment {
         while let Some(batch) = checkpoint_stream.next().await {
             let batch = batch?;
             if maybe_protocol.is_none() {
-                if let Some(p) = read_protocol(&batch)? {
+                if let Some(p) = parse::read_protocol(&batch)? {
                     maybe_protocol.replace(p);
                 };
             }
             if maybe_metadata.is_none() {
-                if let Some(m) = read_metadata(&batch)? {
+                if let Some(m) = parse::read_metadata(&batch)? {
                     maybe_metadata.replace(m);
                 };
             }
@@ -365,8 +375,9 @@ impl LogSegment {
             };
             // NOTE: We always assume the commit files are sorted in reverse order
             self.commit_files.push_front(meta);
-            let reader = get_reader(&bytes);
-            let batches = read_from_json(reader, &mut decoder).collect::<Result<Vec<_>, _>>()?;
+            let reader = json::get_reader(&bytes);
+            let batches =
+                json::read_from_json(&mut decoder, reader).collect::<Result<Vec<_>, _>>()?;
             commit_data.push(batches);
         }
 
@@ -374,51 +385,6 @@ impl LogSegment {
         commit_data.reverse();
         Ok(commit_data.into_iter().flatten().map(Ok))
     }
-}
-
-pub(super) fn read_protocol(batch: &RecordBatch) -> DeltaResult<Option<Protocol>> {
-    if let Some(arr) = extract_and_cast_opt::<StructArray>(batch, "protocol") {
-        let min_reader_version = extract_and_cast::<Int32Array>(arr, "minReaderVersion")?;
-        let min_writer_version = extract_and_cast::<Int32Array>(arr, "minWriterVersion")?;
-        let maybe_reader_features = extract_and_cast_opt::<ListArray>(arr, "readerFeatures");
-        let maybe_writer_features = extract_and_cast_opt::<ListArray>(arr, "writerFeatures");
-
-        for idx in 0..arr.len() {
-            if arr.is_valid(idx) {
-                let reader_features = maybe_reader_features.map(|arr| {
-                    let value = arr.value(idx);
-                    let val = value.as_any().downcast_ref::<StringArray>();
-                    match val {
-                        Some(val) => val
-                            .iter()
-                            .filter_map(|s| s.map(|i| i.into()))
-                            .collect::<std::collections::HashSet<_>>(),
-                        None => std::collections::HashSet::new(),
-                    }
-                });
-
-                let writer_features = maybe_writer_features.map(|arr| {
-                    let value = arr.value(idx);
-                    let val = value.as_any().downcast_ref::<StringArray>();
-                    match val {
-                        Some(val) => val
-                            .iter()
-                            .filter_map(|s| s.map(|i| i.into()))
-                            .collect::<std::collections::HashSet<_>>(),
-                        None => std::collections::HashSet::new(),
-                    }
-                });
-
-                return Ok(Some(Protocol {
-                    min_reader_version: read_primitive(min_reader_version, idx)?,
-                    min_writer_version: read_primitive(min_writer_version, idx)?,
-                    reader_features,
-                    writer_features,
-                }));
-            }
-        }
-    }
-    Ok(None)
 }
 
 #[derive(Debug, Deserialize, Serialize)]

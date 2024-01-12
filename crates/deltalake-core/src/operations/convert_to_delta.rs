@@ -517,8 +517,12 @@ mod tests {
         );
 
         let mut partition_values = table
-            .get_partition_values()
+            .snapshot()
             .unwrap()
+            .files()
+            .unwrap()
+            .into_iter()
+            .map(|add| add.partition_values)
             .flat_map(|map| map.clone())
             .collect::<Vec<_>>();
         partition_values.sort();

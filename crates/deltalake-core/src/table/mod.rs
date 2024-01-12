@@ -491,19 +491,6 @@ impl DeltaTable {
             }))
     }
 
-    /// Returns partition values for files, in order
-    pub fn get_partition_values(
-        &self,
-    ) -> DeltaResult<impl Iterator<Item = HashMap<String, Option<String>>> + '_> {
-        Ok(self
-            .state
-            .as_ref()
-            .ok_or(DeltaTableError::NoMetadata)?
-            .files()?
-            .into_iter()
-            .map(|add| add.partition_values))
-    }
-
     /// Returns the currently loaded state snapshot.
     pub fn snapshot(&self) -> DeltaResult<&DeltaTableState> {
         self.state.as_ref().ok_or(DeltaTableError::NotInitialized)

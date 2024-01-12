@@ -21,6 +21,7 @@ use crate::table::config::TableConfig;
 use crate::{DeltaResult, DeltaTableConfig, DeltaTableError};
 
 mod extract;
+mod json;
 mod log_segment;
 mod parse;
 mod replay;
@@ -75,7 +76,7 @@ impl Snapshot {
         let (log_segment, batches) = LogSegment::new_test(commits)?;
         let batch = batches.into_iter().collect::<Result<Vec<_>, _>>()?;
         let batch = concat_batches(&batch[0].schema(), &batch)?;
-        let protocol = log_segment::read_protocol(&batch)?.unwrap();
+        let protocol = parse::read_protocol(&batch)?.unwrap();
         let metadata = parse::read_metadata(&batch)?.unwrap();
         let schema = serde_json::from_str(&metadata.schema_string)?;
         Ok((

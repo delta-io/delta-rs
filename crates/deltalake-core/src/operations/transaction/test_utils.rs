@@ -79,11 +79,14 @@ pub fn create_metadata_action(
             true,
         ),
     ]);
-    Action::Metadata(Metadata::new(
-        table_schema,
-        parttiton_columns.unwrap_or_default(),
-        configuration.unwrap_or_default(),
-    ))
+    Action::Metadata(
+        Metadata::try_new(
+            table_schema,
+            parttiton_columns.unwrap_or_default(),
+            configuration.unwrap_or_default(),
+        )
+        .unwrap(),
+    )
 }
 
 pub fn init_table_actions(configuration: Option<HashMap<String, Option<String>>>) -> Vec<Action> {
