@@ -382,10 +382,13 @@ impl PartitionWriter {
         for offset in (0..max_offset).step_by(self.config.write_batch_size) {
             let length = usize::min(self.config.write_batch_size, max_offset - offset);
             self.write_batch(&batch.slice(offset, length))?;
+
             // flush currently buffered data to disk once we meet or exceed the target file size.
-            let buffer_size = self.arrow_writer.in_progress_size() + self.buffer.len();
-            if buffer_size >= self.config.target_file_size {
-                log::debug!("Writing file with size {:?} to disk.", buffer_size);
+            let unflushed_estimate = self.arrow_writer.in_progress_size();
+            let flushed_size = self.buffer.len();
+            let estimate = unflushed_estimate + flushed_size + 0x2000;
+            if estimate >= self.config.target_file_size {
+                log::debug!("Writing file with estimated size {:?} to disk.", estimate);
                 self.flush_arrow_writer().await?;
             }
         }
