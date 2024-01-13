@@ -1,4 +1,4 @@
-//! Add a check constraint to a table
+//! Drop a onstraint from a table
 
 use std::collections::HashMap;
 
