@@ -1,11 +1,10 @@
 //! Implementation for writing delta checkpoints.
 
 use std::collections::HashMap;
-use std::convert::TryFrom;
 use std::iter::Iterator;
 
-use arrow::json::ReaderBuilder;
-use arrow_schema::{ArrowError, Schema as ArrowSchema};
+use arrow_json::ReaderBuilder;
+use arrow_schema::ArrowError;
 
 use chrono::{Datelike, Utc};
 use futures::{StreamExt, TryStreamExt};
@@ -20,8 +19,7 @@ use tracing::{debug, error};
 use super::{time_utils, ProtocolError};
 use crate::kernel::arrow::delta_log_schema_for_table;
 use crate::kernel::{
-    Action, Add as AddAction, DataType, PrimitiveType, Protocol, Remove, StructField, StructType,
-    Txn,
+    Action, Add as AddAction, DataType, PrimitiveType, Protocol, Remove, StructField, Txn,
 };
 use crate::logstore::LogStore;
 use crate::table::state::DeltaTableState;
@@ -252,7 +250,7 @@ fn parquet_bytes_from_state(
     let current_metadata = state.metadata();
     let schema = current_metadata.schema()?;
 
-    let partition_col_data_types = get_partition_col_data_types(&schema, &current_metadata);
+    let partition_col_data_types = get_partition_col_data_types(&schema, current_metadata);
 
     // Collect a map of paths that require special stats conversion.
     let mut stats_conversions: Vec<(SchemaPath, DataType)> = Vec::new();
@@ -319,7 +317,7 @@ fn parquet_bytes_from_state(
 
     // Create the arrow schema that represents the Checkpoint parquet file.
     let arrow_schema = delta_log_schema_for_table(
-        <ArrowSchema as TryFrom<&StructType>>::try_from(&schema)?,
+        (&schema).try_into()?,
         current_metadata.partition_columns.as_slice(),
         use_extended_remove_schema,
     );
@@ -524,15 +522,17 @@ fn apply_stats_conversion(
 mod tests {
     use std::sync::Arc;
 
-    use super::*;
     use arrow_array::{ArrayRef, RecordBatch};
+    use arrow_schema::Schema as ArrowSchema;
     use chrono::Duration;
     use lazy_static::lazy_static;
+    use object_store::path::Path;
     use serde_json::json;
 
+    use super::*;
+    use crate::kernel::StructType;
     use crate::operations::DeltaOps;
     use crate::writer::test_utils::get_delta_schema;
-    use object_store::path::Path;
 
     #[tokio::test]
     async fn test_create_checkpoint_for() {

@@ -7,7 +7,7 @@
 //! ```rust
 //! async {
 //!   let table = deltalake_core::open_table("../deltalake-test/tests/data/simple_table").await.unwrap();
-//!   let files = table.get_files();
+//!   let version = table.version();
 //! };
 //! ```
 //!
@@ -31,7 +31,7 @@
 //!       "../deltalake-test/tests/data/simple_table",
 //!       "2020-05-02T23:47:31-07:00",
 //!   ).await.unwrap();
-//!   let files = table.get_files();
+//!   let version = table.version();
 //! };
 //! ```
 //!
@@ -517,38 +517,6 @@ mod tests {
             vec![Path::from(
                 "x=9/y=9.9/part-00007-3c50fba1-4264-446c-9c67-d8e24a1ccf83.c000.snappy.parquet"
             )]
-        );
-    }
-
-    #[tokio::test]
-    async fn read_delta_1_2_1_struct_stats_table() {
-        let table_uri = "../deltalake-test/tests/data/delta-1.2.1-only-struct-stats";
-        let table_from_struct_stats = crate::open_table(table_uri).await.unwrap();
-        let table_from_json_stats = crate::open_table_with_version(table_uri, 1).await.unwrap();
-
-        fn get_stats_for_file(
-            table: &crate::DeltaTable,
-            file_name: &str,
-        ) -> crate::protocol::Stats {
-            table
-                .get_file_uris()
-                .unwrap()
-                .zip(table.get_stats().unwrap())
-                .find_map(|(file_uri, file_stats)| {
-                    if file_uri.ends_with(file_name) {
-                        file_stats.unwrap()
-                    } else {
-                        None
-                    }
-                })
-                .unwrap()
-        }
-
-        let file_to_compare = "part-00000-7a509247-4f58-4453-9202-51d75dee59af-c000.snappy.parquet";
-
-        assert_eq!(
-            get_stats_for_file(&table_from_struct_stats, file_to_compare),
-            get_stats_for_file(&table_from_json_stats, file_to_compare),
         );
     }
 

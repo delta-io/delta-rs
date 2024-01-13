@@ -559,7 +559,7 @@ pub(super) mod tests {
 
     async fn read_log_files(context: &IntegrationContext) -> TestResult {
         let store = context
-            .table_builder(TestTables::Checkpoints)
+            .table_builder(TestTables::SimpleWithCheckpoint)
             .build_storage()?
             .object_store();
 
@@ -570,26 +570,26 @@ pub(super) mod tests {
         assert_eq!(cp.version, 10);
 
         let (log, check) = list_log_files_with_checkpoint(&cp, store.as_ref(), &log_path).await?;
-        assert_eq!(log.len(), 2);
+        assert_eq!(log.len(), 0);
         assert_eq!(check.len(), 1);
 
         let (log, check) = list_log_files(store.as_ref(), &log_path, None, None).await?;
-        assert_eq!(log.len(), 2);
+        assert_eq!(log.len(), 0);
         assert_eq!(check.len(), 1);
 
         let (log, check) = list_log_files(store.as_ref(), &log_path, Some(8), None).await?;
-        assert_eq!(log.len(), 3);
-        assert_eq!(check.len(), 1);
+        assert_eq!(log.len(), 9);
+        assert_eq!(check.len(), 0);
 
         let segment = LogSegment::try_new(&Path::default(), None, store.as_ref()).await?;
-        assert_eq!(segment.version, 12);
-        assert_eq!(segment.commit_files.len(), 2);
+        assert_eq!(segment.version, 10);
+        assert_eq!(segment.commit_files.len(), 0);
         assert_eq!(segment.checkpoint_files.len(), 1);
 
         let segment = LogSegment::try_new(&Path::default(), Some(8), store.as_ref()).await?;
         assert_eq!(segment.version, 8);
-        assert_eq!(segment.commit_files.len(), 3);
-        assert_eq!(segment.checkpoint_files.len(), 1);
+        assert_eq!(segment.commit_files.len(), 9);
+        assert_eq!(segment.checkpoint_files.len(), 0);
 
         let store = context
             .table_builder(TestTables::Simple)

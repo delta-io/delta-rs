@@ -1267,7 +1267,6 @@ impl From<&PyAddAction> for Add {
             path: action.path.clone(),
             size: action.size,
             partition_values: action.partition_values.clone(),
-            partition_values_parsed: None,
             modification_time: action.modification_time,
             data_change: action.data_change,
             stats: action.stats.clone(),

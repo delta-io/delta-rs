@@ -46,11 +46,11 @@ async fn read_simple_table(integration: &IntegrationContext) -> TestResult {
     assert_eq!(
         table.get_files_iter()?.collect::<Vec<_>>(),
         vec![
+            Path::from("part-00000-2befed33-c358-4768-a43c-3eda0d2a499d-c000.snappy.parquet"),
             Path::from("part-00000-c1777d7d-89d9-4790-b38a-6ee7e24456b1-c000.snappy.parquet"),
             Path::from("part-00001-7891c33d-cedc-47c3-88a6-abcfb049d3b4-c000.snappy.parquet"),
             Path::from("part-00004-315835fe-fb44-4562-98f6-5e6cfa3ae45d-c000.snappy.parquet"),
             Path::from("part-00007-3a0e4727-de0d-41b6-81ef-5223cf40f025-c000.snappy.parquet"),
-            Path::from("part-00000-2befed33-c358-4768-a43c-3eda0d2a499d-c000.snappy.parquet"),
         ]
     );
     let tombstones = table
@@ -68,8 +68,8 @@ async fn read_simple_table(integration: &IntegrationContext) -> TestResult {
         base_row_id: None,
         default_row_commit_version: None,
         size: None,
-        partition_values: None,
-        tags: None,
+        partition_values: Some(Default::default()),
+        tags: Some(Default::default()),
     }));
 
     Ok(())
@@ -90,12 +90,12 @@ async fn read_simple_table_with_version(integration: &IntegrationContext) -> Tes
     assert_eq!(
         table.get_files_iter()?.collect::<Vec<_>>(),
         vec![
+            Path::from("part-00000-f17fcbf5-e0dc-40ba-adae-ce66d1fcaef6-c000.snappy.parquet"),
+            Path::from("part-00001-bb70d2ba-c196-4df2-9c85-f34969ad3aa9-c000.snappy.parquet"),
             Path::from("part-00000-c1777d7d-89d9-4790-b38a-6ee7e24456b1-c000.snappy.parquet"),
             Path::from("part-00001-7891c33d-cedc-47c3-88a6-abcfb049d3b4-c000.snappy.parquet"),
             Path::from("part-00004-315835fe-fb44-4562-98f6-5e6cfa3ae45d-c000.snappy.parquet"),
             Path::from("part-00007-3a0e4727-de0d-41b6-81ef-5223cf40f025-c000.snappy.parquet"),
-            Path::from("part-00000-f17fcbf5-e0dc-40ba-adae-ce66d1fcaef6-c000.snappy.parquet"),
-            Path::from("part-00001-bb70d2ba-c196-4df2-9c85-f34969ad3aa9-c000.snappy.parquet"),
         ]
     );
     let tombstones = table
@@ -108,8 +108,8 @@ async fn read_simple_table_with_version(integration: &IntegrationContext) -> Tes
         path: "part-00006-63ce9deb-bc0f-482d-b9a1-7e717b67f294-c000.snappy.parquet".to_string(),
         deletion_timestamp: Some(1587968596250),
         data_change: true,
-        tags: None,
-        partition_values: None,
+        tags: Some(Default::default()),
+        partition_values: Some(Default::default()),
         base_row_id: None,
         default_row_commit_version: None,
         size: None,
@@ -120,7 +120,7 @@ async fn read_simple_table_with_version(integration: &IntegrationContext) -> Tes
     Ok(())
 }
 
-async fn read_golden(integration: &IntegrationContext) -> TestResult {
+pub async fn read_golden(integration: &IntegrationContext) -> TestResult {
     let table_uri = integration.uri_for_table(TestTables::Golden);
 
     let table = DeltaTableBuilder::from_uri(table_uri)

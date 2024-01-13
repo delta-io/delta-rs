@@ -55,7 +55,7 @@ pub(super) fn extract_and_cast_opt<'a, T: Array + 'static>(
         .downcast_ref::<T>()
 }
 
-pub(super) fn extract_column<'a>(
+pub(crate) fn extract_column<'a>(
     array: &'a dyn ProvidesColumnByName,
     path_step: &str,
     remaining_path_steps: &mut impl Iterator<Item = &'a str>,

@@ -584,17 +584,6 @@ pub struct Add {
     /// The name of the clustering implementation
     pub clustering_provider: Option<String>,
 
-    // TODO remove migration filds added to not do too many business logic changes in one PR
-    /// Partition values stored in raw parquet struct format. In this struct, the column names
-    /// correspond to the partition columns and the values are stored in their corresponding data
-    /// type. This is a required field when the table is partitioned and the table property
-    /// delta.checkpoint.writeStatsAsStruct is set to true. If the table is not partitioned, this
-    /// column can be omitted.
-    ///
-    /// This field is only available in add action records read from checkpoints
-    #[serde(skip_serializing, skip_deserializing)]
-    pub partition_values_parsed: Option<parquet::record::Row>,
-
     /// Contains statistics (e.g., count, min/max values for columns) about the data in this file in
     /// raw parquet format. This field needs to be written when statistics are available and the
     /// table property: delta.checkpoint.writeStatsAsStruct is set to true.

@@ -148,6 +148,7 @@ impl IntegrationContext {
 /// Reference tables from the test data folder
 pub enum TestTables {
     Simple,
+    SimpleWithCheckpoint,
     SimpleCommit,
     Golden,
     Delta0_8_0Partitioned,
@@ -166,6 +167,11 @@ impl TestTables {
         let data_path = std::path::Path::new(dir).join("tests/data");
         match self {
             Self::Simple => data_path.join("simple_table").to_str().unwrap().to_owned(),
+            Self::SimpleWithCheckpoint => data_path
+                .join("simple_table_with_checkpoint")
+                .to_str()
+                .unwrap()
+                .to_owned(),
             Self::SimpleCommit => data_path.join("simple_commit").to_str().unwrap().to_owned(),
             Self::Golden => data_path
                 .join("golden/data-reader-array-primitives")
@@ -196,6 +202,7 @@ impl TestTables {
     pub fn as_name(&self) -> String {
         match self {
             Self::Simple => "simple".into(),
+            Self::SimpleWithCheckpoint => "simple_table_with_checkpoint".into(),
             Self::SimpleCommit => "simple_commit".into(),
             Self::Golden => "golden".into(),
             Self::Delta0_8_0Partitioned => "delta-0.8.0-partitioned".into(),

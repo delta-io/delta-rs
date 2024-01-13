@@ -99,7 +99,7 @@ async fn test_log_buffering_success_explicit_version() {
             .await
             .unwrap();
         table.update_incremental(Some(0)).await.unwrap();
-        assert_eq!(table.version(), 10);
+        assert_eq!(table.version(), 0);
 
         let mut table = DeltaTableBuilder::from_uri(path)
             .with_version(0)

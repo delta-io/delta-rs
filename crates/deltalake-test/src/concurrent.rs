@@ -127,7 +127,6 @@ impl Worker {
             path: format!("{}.parquet", name),
             size: 396,
             partition_values: HashMap::new(),
-            partition_values_parsed: None,
             modification_time: 1564524294000,
             data_change: true,
             stats: None,

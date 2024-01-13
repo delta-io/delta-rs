@@ -20,7 +20,6 @@ use crate::kernel::{Action, Add, CommitInfo, DataCheck, DataType, Metadata, Prot
 use crate::logstore::LogStoreRef;
 use crate::logstore::{self, LogStoreConfig};
 use crate::partitions::PartitionFilter;
-use crate::protocol::Stats;
 use crate::storage::{commit_uri_from_version, ObjectStoreRef};
 use crate::DeltaResult;
 
@@ -406,7 +405,7 @@ impl DeltaTable {
             .await?
             .try_collect::<Vec<_>>()
             .await?;
-        Ok(infos.into_iter().filter_map(|b| b).collect())
+        Ok(infos.into_iter().flatten().collect())
     }
 
     /// Obtain Add actions for files that match the filter
@@ -453,11 +452,10 @@ impl DeltaTable {
     /// Returns an iterator of file names present in the loaded state
     #[inline]
     pub fn get_files_iter(&self) -> DeltaResult<impl Iterator<Item = Path> + '_> {
-        Ok(self
-            .state
+        self.state
             .as_ref()
             .ok_or(DeltaTableError::NoMetadata)?
-            .file_paths_iter()?)
+            .file_paths_iter()
     }
 
     /// Returns a URIs for all active files present in the current table version.
@@ -473,22 +471,6 @@ impl DeltaTable {
     /// Get the number of files in the table - retrn 0 if no metadata is loaded
     pub fn get_files_count(&self) -> usize {
         self.state.as_ref().map(|s| s.files_count()).unwrap_or(0)
-    }
-
-    /// Returns statistics for files, in order
-    pub fn get_stats(
-        &self,
-    ) -> DeltaResult<impl Iterator<Item = Result<Option<Stats>, DeltaTableError>> + '_> {
-        Ok(self
-            .state
-            .as_ref()
-            .ok_or(DeltaTableError::NoMetadata)?
-            .files()?
-            .into_iter()
-            .map(|add| {
-                add.get_stats()
-                    .map_err(|e| DeltaTableError::InvalidStatsJson { json_err: e })
-            }))
     }
 
     /// Returns the currently loaded state snapshot.

@@ -106,7 +106,6 @@ impl Add {
             size: -1,
             modification_time: -1,
             data_change: true,
-            partition_values_parsed: None,
             partition_values: HashMap::new(),
             stats: None,
             stats_parsed: None,
@@ -157,16 +156,16 @@ impl Add {
                         ))
                     })?;
                 }
-                "partitionValues_parsed" => {
-                    re.partition_values_parsed = Some(
-                        record
-                            .get_group(i)
-                            .map_err(|_| {
-                                gen_action_type_error("add", "partitionValues_parsed", "struct")
-                            })?
-                            .clone(),
-                    );
-                }
+                // "partitionValues_parsed" => {
+                //     re.partition_values_parsed = Some(
+                //         record
+                //             .get_group(i)
+                //             .map_err(|_| {
+                //                 gen_action_type_error("add", "partitionValues_parsed", "struct")
+                //             })?
+                //             .clone(),
+                //     );
+                // }
                 "tags" => match record.get_map(i) {
                     Ok(tags_map) => {
                         let mut tags = HashMap::new();

@@ -41,6 +41,23 @@ pin_project! {
     }
 }
 
+fn to_count_field(field: &StructField) -> Option<StructField> {
+    match field.data_type() {
+        DataType::Map(_) | DataType::Array(_) | &DataType::BINARY => None,
+        DataType::Struct(s) => Some(StructField::new(
+            field.name(),
+            StructType::new(
+                s.fields()
+                    .iter()
+                    .filter_map(to_count_field)
+                    .collect::<Vec<_>>(),
+            ),
+            true,
+        )),
+        _ => Some(StructField::new(field.name(), DataType::LONG, true)),
+    }
+}
+
 impl<S> ReplayStream<S> {
     pub(super) fn try_new(
         commits: S,
@@ -52,12 +69,12 @@ impl<S> ReplayStream<S> {
             .fields
             .iter()
             .enumerate()
-            .filter_map(|(idx, f)| {
-                if idx < 32 && f.data_type() != &DataType::BINARY {
-                    Some(f.clone())
-                } else {
-                    None
-                }
+            .filter_map(|(idx, f)| match f.data_type() {
+                DataType::Map(_) | DataType::Array(_) | &DataType::BINARY => None,
+                // TODO: the number of stats fields shopuld be configurable?
+                // or rather we should likely read all of we parse JSON?
+                _ if idx < 32 => Some(StructField::new(f.name(), f.data_type().clone(), true)),
+                _ => None,
             })
             .collect();
         let stats_schema = StructType::new(vec![
@@ -65,13 +82,8 @@ impl<S> ReplayStream<S> {
             StructField::new("minValues", StructType::new(data_fields.clone()), true),
             StructField::new("maxValues", StructType::new(data_fields.clone()), true),
             StructField::new(
-                "nullCounts",
-                StructType::new(
-                    data_fields
-                        .into_iter()
-                        .map(|f| StructField::new(f.name(), DataType::LONG, true))
-                        .collect(),
-                ),
+                "nullCount",
+                StructType::new(data_fields.iter().filter_map(to_count_field).collect()),
                 true,
             ),
         ]);
@@ -361,12 +373,9 @@ pub(super) mod tests {
             ActionType::Add.schema_field().clone(),
             ActionType::Remove.schema_field().clone(),
         ]));
-        let commit_schema = Arc::new(StructType::new(vec![ActionType::Add
-            .schema_field()
-            .clone()]));
 
         let store = context
-            .table_builder(TestTables::Checkpoints)
+            .table_builder(TestTables::SimpleWithCheckpoint)
             .build_storage()?
             .object_store();
 
@@ -382,11 +391,6 @@ pub(super) mod tests {
         let filtered = scanner.process_files_batch(&batch, true)?;
         assert_eq!(filtered.schema().fields().len(), 1);
 
-        let batches = segment
-            .checkpoint_stream(store, &commit_schema, &Default::default())
-            .try_collect::<Vec<_>>()
-            .await?;
-        let batch = concat_batches(&batches[0].schema(), &batches)?;
         // TODO enable once we do selection pushdown in parquet read
         // assert_eq!(batch.schema().fields().len(), 1);
         let filtered = scanner.process_files_batch(&batch, true)?;

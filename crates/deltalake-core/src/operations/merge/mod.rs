@@ -1400,7 +1400,7 @@ async fn execute(
         )
         .await?;
     }
-    let op = (!actions.is_empty()).then(|| operation);
+    let op = (!actions.is_empty()).then_some(operation);
     Ok(((actions, version, op), metrics))
 }
 

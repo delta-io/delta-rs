@@ -123,14 +123,10 @@ impl Serialize for EagerSnapshot {
         for batch in self.files.iter() {
             let mut buffer = vec![];
             let mut writer = FileWriter::try_new(&mut buffer, batch.schema().as_ref())
-                .map_err(|e| serde::ser::Error::custom(e))?;
-            writer
-                .write(&batch)
-                .map_err(|e| serde::ser::Error::custom(e))?;
-            writer.finish().map_err(|e| serde::ser::Error::custom(e))?;
-            let data = writer
-                .into_inner()
-                .map_err(|e| serde::ser::Error::custom(e))?;
+                .map_err(serde::ser::Error::custom)?;
+            writer.write(batch).map_err(serde::ser::Error::custom)?;
+            writer.finish().map_err(serde::ser::Error::custom)?;
+            let data = writer.into_inner().map_err(serde::ser::Error::custom)?;
             seq.serialize_element(&data)?;
         }
         seq.end()

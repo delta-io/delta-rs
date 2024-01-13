@@ -294,15 +294,14 @@ mod local {
         let table = open_table("../deltalake-test/tests/data/delta-0.8.0")
             .await
             .unwrap();
-        let statistics = table.snapshot()?.datafusion_table_statistics()?;
+        let statistics = table.snapshot()?.datafusion_table_statistics().unwrap();
 
-        assert_eq!(statistics.num_rows, Precision::Exact(4_usize),);
+        assert_eq!(statistics.num_rows, Precision::Exact(4));
 
         assert_eq!(
             statistics.total_byte_size,
-            Precision::Exact((440 + 440) as usize)
+            Precision::Inexact((440 + 440) as usize)
         );
-
         let column_stats = statistics.column_statistics.first().unwrap();
         assert_eq!(column_stats.null_count, Precision::Exact(0));
         assert_eq!(
@@ -335,13 +334,13 @@ mod local {
         let table = open_table("../deltalake-test/tests/data/delta-0.2.0")
             .await
             .unwrap();
-        let statistics = table.snapshot()?.datafusion_table_statistics()?;
+        let statistics = table.snapshot()?.datafusion_table_statistics().unwrap();
 
         assert_eq!(statistics.num_rows, Precision::Absent);
 
         assert_eq!(
             statistics.total_byte_size,
-            Precision::Exact((400 + 404 + 396) as usize)
+            Precision::Inexact((400 + 404 + 396) as usize)
         );
         let column_stats = statistics.column_statistics.first().unwrap();
         assert_eq!(column_stats.null_count, Precision::Absent);
@@ -374,7 +373,7 @@ mod local {
             .await
             .unwrap();
         let schema = table.get_schema().unwrap();
-        let statistics = table.snapshot()?.datafusion_table_statistics()?;
+        let statistics = table.snapshot()?.datafusion_table_statistics().unwrap();
         assert_eq!(statistics.num_rows, Precision::Exact(12));
 
         // `new_column` statistics

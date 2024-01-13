@@ -23,7 +23,6 @@ pub fn create_add_action(
         stats,
         modification_time: -1,
         partition_values: Default::default(),
-        partition_values_parsed: None,
         stats_parsed: None,
         base_row_id: None,
         default_row_commit_version: None,

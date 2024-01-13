@@ -125,7 +125,6 @@ pub(super) fn extract_adds(array: &dyn ProvidesColumnByName) -> DeltaResult<Vec<
                     base_row_id: None,
                     default_row_commit_version: None,
                     clustering_provider: None,
-                    partition_values_parsed: None,
                     stats_parsed: None,
                 });
             }

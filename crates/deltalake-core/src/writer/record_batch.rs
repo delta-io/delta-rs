@@ -461,8 +461,7 @@ mod tests {
                 "metadata" : {"some-key" : "some-value"}}"#
             .as_bytes();
 
-        let schema: ArrowSchema =
-            <ArrowSchema as TryFrom<&StructType>>::try_from(&delta_schema).unwrap();
+        let schema: ArrowSchema = (&delta_schema).try_into().unwrap();
 
         // Using a batch size of two since the buf above only has two records
         let mut decoder = ReaderBuilder::new(Arc::new(schema))

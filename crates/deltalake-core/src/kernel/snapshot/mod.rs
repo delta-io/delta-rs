@@ -12,6 +12,7 @@ use futures::{StreamExt, TryStreamExt};
 use object_store::path::Path;
 use object_store::ObjectStore;
 
+use self::log_data::{FileStats, FileStatsHandler};
 use self::log_segment::{CommitData, LogSegment, PathExt};
 use self::parse::{extract_adds, extract_removes};
 use self::replay::{LogReplayScanner, ReplayStream};
@@ -20,10 +21,11 @@ use crate::kernel::StructType;
 use crate::table::config::TableConfig;
 use crate::{DeltaResult, DeltaTableConfig, DeltaTableError};
 
-mod extract;
+pub(crate) mod extract;
 mod json;
+mod log_data;
 mod log_segment;
-mod parse;
+pub(crate) mod parse;
 mod replay;
 mod serde;
 
@@ -353,6 +355,7 @@ impl EagerSnapshot {
         Ok(())
     }
 
+    /// Get the underlying snapshot
     pub(crate) fn snapshot(&self) -> &Snapshot {
         &self.snapshot
     }
@@ -397,12 +400,22 @@ impl EagerSnapshot {
 
     /// Get the number of files in the snapshot
     pub fn files_count(&self) -> usize {
-        self.files.iter().map(|f| f.num_rows() as usize).sum()
+        self.files.iter().map(|f| f.num_rows()).sum()
     }
 
     /// Get the files in the snapshot
     pub fn file_actions(&self) -> DeltaResult<impl Iterator<Item = Add> + '_> {
         Ok(self.files.iter().flat_map(|b| extract_adds(b)).flatten())
+    }
+
+    /// Get a file action iterator for the given version
+    pub fn file_stats(&self) -> FileStatsHandler<'_> {
+        FileStatsHandler::new(&self.files, self.metadata(), self.schema())
+    }
+
+    /// Get a file action iterator for the given version
+    pub fn file_stats_iter(&self) -> impl Iterator<Item = DeltaResult<FileStats<'_>>> {
+        self.file_stats().into_iter()
     }
 
     /// Advance the snapshot based on the given commit actions
@@ -463,6 +476,20 @@ impl EagerSnapshot {
     }
 }
 
+#[cfg(feature = "datafusion")]
+mod datafusion {
+    use datafusion_common::stats::Statistics;
+
+    use super::*;
+
+    impl EagerSnapshot {
+        /// Provide table level statistics to Datafusion
+        pub fn datafusion_table_statistics(&self) -> Option<Statistics> {
+            self.file_stats().statistics()
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use chrono::Utc;
@@ -481,6 +508,7 @@ mod tests {
         let context = IntegrationContext::new(Box::<LocalStorageIntegration>::default())?;
         context.load_table(TestTables::Checkpoints).await?;
         context.load_table(TestTables::Simple).await?;
+        context.load_table(TestTables::SimpleWithCheckpoint).await?;
         context.load_table(TestTables::WithDvSmall).await?;
 
         test_log_segment(&context).await?;
@@ -528,15 +556,15 @@ mod tests {
             .try_collect::<Vec<_>>()
             .await?;
         let expected = [
-            "+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+",
-            "| add                                                                                                                                                                                                                                                                                                                                   |",
-            "+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+",
-            "| {path: part-00000-2befed33-c358-4768-a43c-3eda0d2a499d-c000.snappy.parquet, partitionValues: {}, size: 262, modificationTime: 1587968626000, dataChange: true, stats: , tags: , deletionVector: , baseRowId: , defaultRowCommitVersion: , clusteringProvider: , stats_parsed: {numRecords: , minValues: , maxValues: , nullCounts: }} |",
-            "| {path: part-00000-c1777d7d-89d9-4790-b38a-6ee7e24456b1-c000.snappy.parquet, partitionValues: {}, size: 262, modificationTime: 1587968602000, dataChange: true, stats: , tags: , deletionVector: , baseRowId: , defaultRowCommitVersion: , clusteringProvider: , stats_parsed: {numRecords: , minValues: , maxValues: , nullCounts: }} |",
-            "| {path: part-00001-7891c33d-cedc-47c3-88a6-abcfb049d3b4-c000.snappy.parquet, partitionValues: {}, size: 429, modificationTime: 1587968602000, dataChange: true, stats: , tags: , deletionVector: , baseRowId: , defaultRowCommitVersion: , clusteringProvider: , stats_parsed: {numRecords: , minValues: , maxValues: , nullCounts: }} |",
-            "| {path: part-00004-315835fe-fb44-4562-98f6-5e6cfa3ae45d-c000.snappy.parquet, partitionValues: {}, size: 429, modificationTime: 1587968602000, dataChange: true, stats: , tags: , deletionVector: , baseRowId: , defaultRowCommitVersion: , clusteringProvider: , stats_parsed: {numRecords: , minValues: , maxValues: , nullCounts: }} |",
-            "| {path: part-00007-3a0e4727-de0d-41b6-81ef-5223cf40f025-c000.snappy.parquet, partitionValues: {}, size: 429, modificationTime: 1587968602000, dataChange: true, stats: , tags: , deletionVector: , baseRowId: , defaultRowCommitVersion: , clusteringProvider: , stats_parsed: {numRecords: , minValues: , maxValues: , nullCounts: }} |",
-            "+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+",
+            "+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+",
+            "| add                                                                                                                                                                                                                                                                                                                                  |",
+            "+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+",
+            "| {path: part-00000-2befed33-c358-4768-a43c-3eda0d2a499d-c000.snappy.parquet, partitionValues: {}, size: 262, modificationTime: 1587968626000, dataChange: true, stats: , tags: , deletionVector: , baseRowId: , defaultRowCommitVersion: , clusteringProvider: , stats_parsed: {numRecords: , minValues: , maxValues: , nullCount: }} |",
+            "| {path: part-00000-c1777d7d-89d9-4790-b38a-6ee7e24456b1-c000.snappy.parquet, partitionValues: {}, size: 262, modificationTime: 1587968602000, dataChange: true, stats: , tags: , deletionVector: , baseRowId: , defaultRowCommitVersion: , clusteringProvider: , stats_parsed: {numRecords: , minValues: , maxValues: , nullCount: }} |",
+            "| {path: part-00001-7891c33d-cedc-47c3-88a6-abcfb049d3b4-c000.snappy.parquet, partitionValues: {}, size: 429, modificationTime: 1587968602000, dataChange: true, stats: , tags: , deletionVector: , baseRowId: , defaultRowCommitVersion: , clusteringProvider: , stats_parsed: {numRecords: , minValues: , maxValues: , nullCount: }} |",
+            "| {path: part-00004-315835fe-fb44-4562-98f6-5e6cfa3ae45d-c000.snappy.parquet, partitionValues: {}, size: 429, modificationTime: 1587968602000, dataChange: true, stats: , tags: , deletionVector: , baseRowId: , defaultRowCommitVersion: , clusteringProvider: , stats_parsed: {numRecords: , minValues: , maxValues: , nullCount: }} |",
+            "| {path: part-00007-3a0e4727-de0d-41b6-81ef-5223cf40f025-c000.snappy.parquet, partitionValues: {}, size: 429, modificationTime: 1587968602000, dataChange: true, stats: , tags: , deletionVector: , baseRowId: , defaultRowCommitVersion: , clusteringProvider: , stats_parsed: {numRecords: , minValues: , maxValues: , nullCount: }} |",
+            "+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+",
         ];
         assert_batches_sorted_eq!(expected, &batches);
 

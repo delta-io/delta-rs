@@ -272,7 +272,6 @@ fn add_action(name: &str) -> Action {
         path: format!("{}.parquet", name),
         size: 396,
         partition_values: HashMap::new(),
-        partition_values_parsed: None,
         modification_time: ts as i64,
         data_change: true,
         stats: None,

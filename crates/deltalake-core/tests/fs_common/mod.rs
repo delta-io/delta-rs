@@ -84,7 +84,6 @@ pub fn add(offset_millis: i64) -> Add {
         path: Uuid::new_v4().to_string(),
         size: 100,
         partition_values: Default::default(),
-        partition_values_parsed: None,
         modification_time: Utc::now().timestamp_millis() - offset_millis,
         data_change: true,
         stats: None,

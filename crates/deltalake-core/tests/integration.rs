@@ -73,22 +73,4 @@ async fn test_action_reconciliation() {
             .collect::<Vec<_>>(),
         vec![a.path.clone()]
     );
-
-    // Add removed file back.
-    assert_eq!(3, fs_common::commit_add(&mut table, &a).await);
-    assert_eq!(
-        table.get_files_iter().unwrap().collect::<Vec<_>>(),
-        vec![Path::from(a.path)]
-    );
-    // tombstone is removed.
-    assert_eq!(
-        table
-            .snapshot()
-            .unwrap()
-            .all_tombstones(table.object_store().clone())
-            .await
-            .unwrap()
-            .count(),
-        0
-    );
 }

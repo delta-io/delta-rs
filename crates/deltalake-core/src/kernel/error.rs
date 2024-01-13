@@ -1,5 +1,7 @@
 //! Error types for Delta Lake operations.
 
+use super::DataType;
+
 /// A specialized [`Result`] type for Delta Lake operations.
 pub type DeltaResult<T, E = Error> = std::result::Result<T, E>;
 
@@ -65,6 +67,9 @@ pub enum Error {
 
     #[error("Table metadata is invalid: {0}")]
     MetadataError(String),
+
+    #[error("Failed to parse value '{0}' as '{1}'")]
+    Parse(String, DataType),
 }
 
 #[cfg(feature = "object_store")]
