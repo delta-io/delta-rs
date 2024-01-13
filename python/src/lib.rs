@@ -29,6 +29,7 @@ use deltalake::kernel::{Action, Add, Invariant, LogicalFile, Remove, Scalar, Str
 use deltalake::operations::constraints::ConstraintBuilder;
 use deltalake::operations::convert_to_delta::{ConvertToDeltaBuilder, PartitionStrategy};
 use deltalake::operations::delete::DeleteBuilder;
+use deltalake::operations::drop_constraints::DropConstraintBuilder;
 use deltalake::operations::filesystem_check::FileSystemCheckBuilder;
 use deltalake::operations::merge::MergeBuilder;
 use deltalake::operations::optimize::{OptimizeBuilder, OptimizeType};
@@ -456,6 +457,31 @@ impl RawDeltaTable {
         for (col_name, expression) in constraints {
             cmd = cmd.with_constraint(col_name.clone(), expression.clone());
         }
+
+        if let Some(metadata) = custom_metadata {
+            let json_metadata: Map<String, Value> =
+                metadata.into_iter().map(|(k, v)| (k, v.into())).collect();
+            cmd = cmd.with_metadata(json_metadata);
+        };
+
+        let table = rt()?
+            .block_on(cmd.into_future())
+            .map_err(PythonError::from)?;
+        self._table.state = table.state;
+        Ok(())
+    }
+
+    #[pyo3(signature = (name, raise_if_not_exists, custom_metadata=None))]
+    pub fn drop_constraints(
+        &mut self,
+        name: String,
+        raise_if_not_exists: bool,
+        custom_metadata: Option<HashMap<String, String>>,
+    ) -> PyResult<()> {
+        let mut cmd =
+            DropConstraintBuilder::new(self._table.log_store(), self._table.get_state().clone())
+                .with_constraint(name)
+                .with_raise_if_not_exists(raise_if_not_exists);
 
         if let Some(metadata) = custom_metadata {
             let json_metadata: Map<String, Value> =
