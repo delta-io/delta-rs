@@ -144,18 +144,9 @@ impl std::future::IntoFuture for DropConstraintBuilder {
                 None
             };
 
-            let actions = match protocol {
-                Some(protocol) => {
-                    vec![
-                        Action::CommitInfo(commit_info),
-                        Action::Metadata(metadata),
-                        Action::Protocol(protocol),
-                    ]
-                }
-                None => {
-                    vec![Action::CommitInfo(commit_info), Action::Metadata(metadata)]
-                }
-            };
+            let mut actions = vec![Action::CommitInfo(commit_info), Action::Metadata(metadata)];
+
+            protocol.map(|protocol| actions.push(Action::Protocol(protocol)));
 
             let version = commit(
                 this.log_store.as_ref(),
