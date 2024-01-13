@@ -1,4 +1,4 @@
-//! Drop a onstraint from a table
+//! Drop a constraint from a table
 
 use std::collections::HashMap;
 
