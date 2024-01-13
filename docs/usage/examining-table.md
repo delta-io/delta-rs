@@ -75,9 +75,13 @@ default, unless otherwise specified by the table configuration
 To view the available history, use `DeltaTable.history`:
 
 ``` python
->>> from deltalake import DeltaTable
->>> dt = DeltaTable("../rust/tests/data/simple_table")
->>> dt.history()
+from deltalake import DeltaTable
+
+dt = DeltaTable("../rust/tests/data/simple_table")
+dt.history()
+```
+
+```
 [{'timestamp': 1587968626537, 'operation': 'DELETE', 'operationParameters': {'predicate': '["((`id` % CAST(2 AS BIGINT)) = CAST(0 AS BIGINT))"]'}, 'readVersion': 3, 'isBlindAppend': False},
  {'timestamp': 1587968614187, 'operation': 'UPDATE', 'operationParameters': {'predicate': '((id#697L % cast(2 as bigint)) = cast(0 as bigint))'}, 'readVersion': 2, 'isBlindAppend': False},
  {'timestamp': 1587968604143, 'operation': 'WRITE', 'operationParameters': {'mode': 'Overwrite', 'partitionBy': '[]'}, 'readVersion': 1, 'isBlindAppend': False},

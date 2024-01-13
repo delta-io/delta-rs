@@ -1,8 +1,7 @@
 # Usage
 
-A [DeltaTable][deltalake.table.DeltaTable] represents the state of a
-delta table at a particular version. This includes which files are
-currently part of the table, the schema of the table, and other metadata
-such as creation time.
+This guide teaches you how to use Delta Lake.  You will learn how to create Delta tables, run queries, perform DML operations, and optimize your tables.
 
-{{ code_example('delta_table', 'get_table_info', ['DeltaTable'])}}
+It's easy to use Delta Lake with pandas, Polars, Rust, or any other PyArrow-like DataFrame library.
+
+See the [Spark Delta Lake documentation](https://docs.delta.io/latest/index.html) if you're using Delta Lake with Spark.
