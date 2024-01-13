@@ -29,6 +29,9 @@ use self::{
     constraints::ConstraintBuilder, datafusion_utils::Expression, delete::DeleteBuilder,
     load::LoadBuilder, merge::MergeBuilder, update::UpdateBuilder, write::WriteBuilder,
 };
+
+use self::unset_tbl_properties::UnsetTablePropertiesBuilder;
+
 #[cfg(feature = "datafusion")]
 pub use ::datafusion::physical_plan::common::collect as collect_sendable_stream;
 #[cfg(feature = "datafusion")]
@@ -44,6 +47,7 @@ pub mod delete;
 mod load;
 #[cfg(feature = "datafusion")]
 pub mod merge;
+pub mod unset_tbl_properties;
 #[cfg(feature = "datafusion")]
 pub mod update;
 #[cfg(feature = "datafusion")]
@@ -198,6 +202,11 @@ impl DeltaOps {
     #[must_use]
     pub fn add_constraint(self) -> ConstraintBuilder {
         ConstraintBuilder::new(self.0.log_store, self.0.state.unwrap())
+    }
+
+    /// Unset table properties
+    pub fn unset_tbl_properties(self) -> UnsetTablePropertiesBuilder {
+        UnsetTablePropertiesBuilder::new(self.0.log_store, self.0.state)
     }
 }
 

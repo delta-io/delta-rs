@@ -1775,6 +1775,27 @@ class TableAlterer:
 
         self.table._table.add_constraints(constraints, custom_metadata)
 
+    def unset_table_properties(
+        self,
+        properties: Union[str, List[str]],
+        raise_if_not_exists: bool = True,
+        custom_metadata: Optional[Dict[str, str]] = None,
+    ) -> None:
+        """
+        Unset properties from the table.
+        Args:
+            properties: properties which to unset
+            raise_if_not_exists: set if should raise if not exists.
+            custom_metadata: custom metadata that will be added to the transaction commit.
+        Example:
+        """
+        if isinstance(properties, str):
+            properties = [properties]
+
+        self.table._table.unset_table_properties(
+            properties, raise_if_not_exists, custom_metadata
+        )
+
 
 class TableOptimizer:
     """API for various table optimization commands."""

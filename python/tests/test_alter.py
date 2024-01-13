@@ -60,3 +60,31 @@ def test_add_constraint_roundtrip_metadata(
     )
 
     assert dt.history(1)[0]["userName"] == "John Doe"
+
+
+def test_unset_table_properties(tmp_path: pathlib.Path, sample_table: pa.Table):
+    write_deltalake(
+        tmp_path,
+        sample_table,
+        mode="append",
+        configuration={"delta.checkpointInterval": "10", "delta.appendOnly": "true"},
+    )
+
+    dt = DeltaTable(tmp_path)
+
+    dt.alter.unset_table_properties("delta.checkpointInterval")
+
+    last_action = dt.history(1)[0]
+    assert last_action["operation"] == "UNSET TBLPROPERTIES"
+    assert dt.version() == 1
+    assert dt.metadata().configuration == {"delta.appendOnly": "true"}
+
+    with pytest.raises(DeltaError):
+        # Invalid properties
+        dt.alter.unset_table_properties("invalid_property")
+
+    with pytest.raises(DeltaError):
+        # Invalid properties
+        dt.alter.unset_table_properties(
+            ["delta.checkpointInterval", "invalid_property"]
+        )

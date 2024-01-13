@@ -178,7 +178,10 @@ impl FromStr for DeltaConfigKey {
             "delta.setTransactionRetentionDuration" => Ok(Self::SetTransactionRetentionDuration),
             "delta.targetFileSize" => Ok(Self::TargetFileSize),
             "delta.tuneFileSizesForRewrites" => Ok(Self::TuneFileSizesForRewrites),
-            _ => Err(DeltaTableError::Generic("unknown config key".into())),
+            _ => Err(DeltaTableError::Generic(format!(
+                "'{}' is an unknown config",
+                s
+            ))),
         }
     }
 }

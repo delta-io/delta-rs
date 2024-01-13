@@ -34,6 +34,7 @@ use deltalake::operations::merge::MergeBuilder;
 use deltalake::operations::optimize::{OptimizeBuilder, OptimizeType};
 use deltalake::operations::restore::RestoreBuilder;
 use deltalake::operations::transaction::commit;
+use deltalake::operations::unset_tbl_properties::UnsetTablePropertiesBuilder;
 use deltalake::operations::update::UpdateBuilder;
 use deltalake::operations::vacuum::VacuumBuilder;
 use deltalake::parquet::basic::Compression;
@@ -1045,6 +1046,33 @@ impl RawDeltaTable {
             .map_err(PythonError::from)?;
         self._table.state = table.state;
         Ok(serde_json::to_string(&metrics).unwrap())
+    }
+
+    #[pyo3(signature = (properties, raise_if_not_exists, custom_metadata=None))]
+    pub fn unset_table_properties(
+        &mut self,
+        properties: Vec<String>,
+        raise_if_not_exists: bool,
+        custom_metadata: Option<HashMap<String, String>>,
+    ) -> PyResult<()> {
+        let mut cmd = UnsetTablePropertiesBuilder::new(
+            self._table.log_store(),
+            self._table.get_state().clone(),
+        )
+        .with_properties(properties)
+        .with_raise_if_not_exists(raise_if_not_exists);
+
+        if let Some(metadata) = custom_metadata {
+            let json_metadata: Map<String, Value> =
+                metadata.into_iter().map(|(k, v)| (k, v.into())).collect();
+            cmd = cmd.with_metadata(json_metadata);
+        };
+
+        let table = rt()?
+            .block_on(cmd.into_future())
+            .map_err(PythonError::from)?;
+        self._table.state = table.state;
+        Ok(())
     }
 }
 
