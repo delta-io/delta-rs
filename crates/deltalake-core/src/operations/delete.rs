@@ -38,7 +38,7 @@ use super::datafusion_utils::Expression;
 use super::transaction::PROTOCOL;
 use crate::delta_datafusion::expr::fmt_expr_to_sql;
 use crate::delta_datafusion::{find_files, register_store, DeltaScanBuilder, DeltaSessionContext};
-use crate::errors::{DeltaResult, DeltaTableError};
+use crate::errors::DeltaResult;
 use crate::kernel::{Action, Add, Remove};
 use crate::operations::transaction::commit;
 use crate::operations::write::write_execution_plan;
@@ -138,11 +138,7 @@ async fn excute_non_empty_expr(
     let input_schema = snapshot.input_schema()?;
     let input_dfschema: DFSchema = input_schema.clone().as_ref().clone().try_into()?;
 
-    let table_partition_cols = snapshot
-        .metadata()
-        .ok_or(DeltaTableError::NoMetadata)?
-        .partition_columns
-        .clone();
+    let table_partition_cols = snapshot.metadata()?.partition_columns.clone();
 
     let scan = DeltaScanBuilder::new(snapshot, log_store.clone(), state)
         .with_files(rewrite)
@@ -249,6 +245,17 @@ async fn execute(
 
     metrics.execution_time_ms = Instant::now().duration_since(exec_start).as_micros();
 
+    let mut app_metadata = match app_metadata {
+        Some(meta) => meta,
+        None => HashMap::new(),
+    };
+
+    app_metadata.insert("readVersion".to_owned(), snapshot.version().into());
+
+    if let Ok(map) = serde_json::to_value(&metrics) {
+        app_metadata.insert("operationMetrics".to_owned(), map);
+    }
+
     // Do not make a commit when there are zero updates to the state
     if !actions.is_empty() {
         let operation = DeltaOperation::Delete {
@@ -259,7 +266,7 @@ async fn execute(
             &actions,
             operation,
             snapshot,
-            app_metadata,
+            Some(app_metadata),
         )
         .await?;
     }
@@ -331,6 +338,10 @@ mod tests {
     use arrow::array::Int32Array;
     use arrow::datatypes::{Field, Schema};
     use arrow::record_batch::RecordBatch;
+    use arrow_array::ArrayRef;
+    use arrow_array::StructArray;
+    use arrow_buffer::NullBuffer;
+    use arrow_schema::Fields;
     use datafusion::assert_batches_sorted_eq;
     use datafusion::prelude::*;
     use serde_json::json;
@@ -390,7 +401,7 @@ mod tests {
         assert_eq!(table.version(), 1);
         assert_eq!(table.get_file_uris().count(), 1);
 
-        let (table, metrics) = DeltaOps(table).delete().await.unwrap();
+        let (mut table, metrics) = DeltaOps(table).delete().await.unwrap();
 
         assert_eq!(table.version(), 2);
         assert_eq!(table.get_file_uris().count(), 0);
@@ -398,6 +409,14 @@ mod tests {
         assert_eq!(metrics.num_removed_files, 1);
         assert_eq!(metrics.num_deleted_rows, None);
         assert_eq!(metrics.num_copied_rows, None);
+
+        let commit_info = table.history(None).await.unwrap();
+        let last_commit = &commit_info[commit_info.len() - 1];
+        let extra_info = last_commit.info.clone();
+        assert_eq!(
+            extra_info["operationMetrics"],
+            serde_json::to_value(&metrics).unwrap()
+        );
 
         // rewrite is not required
         assert_eq!(metrics.rewrite_time_ms, 0);
@@ -708,6 +727,58 @@ mod tests {
             "| A  | 10    | 2021-02-02 |",
             "| B  | 20    | 2021-02-03 |",
             "+----+-------+------------+",
+        ];
+        let actual = get_data(&table).await;
+        assert_batches_sorted_eq!(&expected, &actual);
+    }
+
+    #[tokio::test]
+    async fn test_delete_nested() {
+        use arrow_schema::{DataType, Field, Schema as ArrowSchema};
+        // Test Delete with a predicate that references struct fields
+        // See #2019
+        let schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("id", DataType::Utf8, true),
+            Field::new(
+                "props",
+                DataType::Struct(Fields::from(vec![Field::new("a", DataType::Utf8, true)])),
+                true,
+            ),
+        ]));
+
+        let struct_array = StructArray::new(
+            Fields::from(vec![Field::new("a", DataType::Utf8, true)]),
+            vec![Arc::new(arrow::array::StringArray::from(vec![
+                Some("2021-02-01"),
+                Some("2021-02-02"),
+                None,
+                None,
+            ])) as ArrayRef],
+            Some(NullBuffer::from_iter(vec![true, true, true, false])),
+        );
+
+        let data = vec![
+            Arc::new(arrow::array::StringArray::from(vec!["A", "B", "C", "D"])) as ArrayRef,
+            Arc::new(struct_array) as ArrayRef,
+        ];
+        let batches = vec![RecordBatch::try_new(schema.clone(), data).unwrap()];
+
+        let table = DeltaOps::new_in_memory().write(batches).await.unwrap();
+
+        let (table, _metrics) = DeltaOps(table)
+            .delete()
+            .with_predicate("props['a'] = '2021-02-02'")
+            .await
+            .unwrap();
+
+        let expected = [
+            "+----+-----------------+",
+            "| id | props           |",
+            "+----+-----------------+",
+            "| A  | {a: 2021-02-01} |",
+            "| C  | {a: }           |",
+            "| D  |                 |",
+            "+----+-----------------+",
         ];
         let actual = get_data(&table).await;
         assert_batches_sorted_eq!(&expected, &actual);

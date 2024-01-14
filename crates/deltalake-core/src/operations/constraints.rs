@@ -17,7 +17,7 @@ use crate::delta_datafusion::expr::fmt_expr_to_sql;
 use crate::delta_datafusion::{
     register_store, DeltaDataChecker, DeltaScanBuilder, DeltaSessionContext,
 };
-use crate::kernel::{Action, CommitInfo, IsolationLevel, Metadata, Protocol};
+use crate::kernel::{Action, CommitInfo, IsolationLevel, Protocol};
 use crate::logstore::LogStoreRef;
 use crate::operations::datafusion_utils::Expression;
 use crate::operations::transaction::commit;
@@ -31,11 +31,18 @@ use super::datafusion_utils::into_expr;
 
 /// Build a constraint to add to a table
 pub struct ConstraintBuilder {
+    /// A snapshot of the table's state
     snapshot: DeltaTableState,
+    /// Name of the constraint
     name: Option<String>,
+    /// Constraint expression
     expr: Option<Expression>,
+    /// Delta object store for handling data files
     log_store: LogStoreRef,
+    /// Datafusion session state relevant for executing the input plan
     state: Option<SessionState>,
+    /// Additional metadata to be added to commit
+    app_metadata: Option<HashMap<String, serde_json::Value>>,
 }
 
 impl ConstraintBuilder {
@@ -47,6 +54,7 @@ impl ConstraintBuilder {
             snapshot,
             log_store,
             state: None,
+            app_metadata: None,
         }
     }
 
@@ -64,6 +72,15 @@ impl ConstraintBuilder {
     /// Specify the datafusion session context
     pub fn with_session_state(mut self, state: SessionState) -> Self {
         self.state = Some(state);
+        self
+    }
+
+    /// Additional metadata to be added to commit info
+    pub fn with_metadata(
+        mut self,
+        metadata: impl IntoIterator<Item = (String, serde_json::Value)>,
+    ) -> Self {
+        self.app_metadata = Some(HashMap::from_iter(metadata));
         self
     }
 }
@@ -86,11 +103,7 @@ impl std::future::IntoFuture for ConstraintBuilder {
                 .expr
                 .ok_or_else(|| DeltaTableError::Generic("No Expresion provided".to_string()))?;
 
-            let mut metadata = this
-                .snapshot
-                .metadata()
-                .ok_or(DeltaTableError::NoMetadata)?
-                .clone();
+            let mut metadata = this.snapshot.metadata()?.clone();
             let configuration_key = format!("delta.constraints.{}", name);
 
             if metadata.configuration.contains_key(&configuration_key) {
@@ -178,6 +191,11 @@ impl std::future::IntoFuture for ConstraintBuilder {
                 expr: expr_str.clone(),
             };
 
+            let app_metadata = match this.app_metadata {
+                Some(metadata) => metadata,
+                None => HashMap::default(),
+            };
+
             let commit_info = CommitInfo {
                 timestamp: Some(Utc::now().timestamp_millis()),
                 operation: Some(operations.name().to_string()),
@@ -185,12 +203,13 @@ impl std::future::IntoFuture for ConstraintBuilder {
                 read_version: Some(this.snapshot.version()),
                 isolation_level: Some(IsolationLevel::Serializable),
                 is_blind_append: Some(false),
+                info: app_metadata,
                 ..Default::default()
             };
 
             let actions = vec![
                 Action::CommitInfo(commit_info),
-                Action::Metadata(Metadata::try_from(metadata)?),
+                Action::Metadata(metadata),
                 Action::Protocol(protocol),
             ];
 

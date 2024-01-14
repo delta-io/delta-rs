@@ -30,13 +30,13 @@ use futures::future::BoxFuture;
 use futures::stream::BoxStream;
 use futures::{Future, StreamExt, TryStreamExt};
 use itertools::Itertools;
-use log::debug;
 use num_cpus;
 use parquet::arrow::async_reader::{ParquetObjectReader, ParquetRecordBatchStreamBuilder};
 use parquet::basic::{Compression, ZstdLevel};
 use parquet::errors::ParquetError;
 use parquet::file::properties::WriterProperties;
 use serde::{Deserialize, Serialize};
+use tracing::debug;
 
 use super::transaction::{commit, PROTOCOL};
 use super::writer::{PartitionWriter, PartitionWriterConfig};
@@ -282,6 +282,7 @@ impl<'a> std::future::IntoFuture for OptimizeBuilder<'a> {
                     this.max_concurrent_tasks,
                     this.max_spill_size,
                     this.min_commit_interval,
+                    this.app_metadata,
                 )
                 .await?;
             let mut table = DeltaTable::new_with_state(this.log_store, this.snapshot);
@@ -534,7 +535,7 @@ impl MergePlan {
     ) -> Result<BoxStream<'static, Result<RecordBatch, ParquetError>>, DeltaTableError> {
         use datafusion::prelude::{col, ParquetReadOptions};
         use datafusion_common::Column;
-        use datafusion_expr::expr::ScalarUDF;
+        use datafusion_expr::expr::ScalarFunction;
         use datafusion_expr::Expr;
 
         let locations = files
@@ -560,7 +561,7 @@ impl MergePlan {
             .iter()
             .map(|col| Expr::Column(Column::from_qualified_name_ignore_case(col)))
             .collect_vec();
-        let expr = Expr::ScalarUDF(ScalarUDF::new(
+        let expr = Expr::ScalarFunction(ScalarFunction::new_udf(
             Arc::new(zorder::datafusion::zorder_key_udf()),
             cols,
         ));
@@ -589,6 +590,7 @@ impl MergePlan {
         #[allow(unused_variables)] // used behind a feature flag
         max_spill_size: usize,
         min_commit_interval: Option<Duration>,
+        app_metadata: Option<HashMap<String, serde_json::Value>>,
     ) -> Result<Metrics, DeltaTableError> {
         let operations = std::mem::take(&mut self.operations);
 
@@ -702,14 +704,17 @@ impl MergePlan {
                 last_commit = now;
 
                 buffered_metrics.preserve_insertion_order = true;
-                let mut metadata = HashMap::new();
-                metadata.insert("readVersion".to_owned(), self.read_table_version.into());
+                let mut app_metadata = match app_metadata.clone() {
+                    Some(meta) => meta,
+                    None => HashMap::new(),
+                };
+                app_metadata.insert("readVersion".to_owned(), self.read_table_version.into());
                 let maybe_map_metrics = serde_json::to_value(std::mem::replace(
                     &mut buffered_metrics,
                     orig_metrics.clone(),
                 ));
                 if let Ok(map) = maybe_map_metrics {
-                    metadata.insert("operationMetrics".to_owned(), map);
+                    app_metadata.insert("operationMetrics".to_owned(), map);
                 }
 
                 table.update_incremental(None).await?;
@@ -721,7 +726,7 @@ impl MergePlan {
                     &actions,
                     self.task_parameters.input_parameters.clone().into(),
                     table.get_state(),
-                    Some(metadata),
+                    Some(app_metadata.clone()),
                 )
                 .await?;
             }
@@ -774,10 +779,7 @@ pub fn create_merge_plan(
 ) -> Result<MergePlan, DeltaTableError> {
     let target_size = target_size.unwrap_or_else(|| snapshot.table_config().target_file_size());
 
-    let partitions_keys = &snapshot
-        .metadata()
-        .ok_or(DeltaTableError::NoMetadata)?
-        .partition_columns;
+    let partitions_keys = &snapshot.metadata()?.partition_columns;
 
     let (operations, metrics) = match optimize_type {
         OptimizeType::Compact => {
@@ -792,10 +794,7 @@ pub fn create_merge_plan(
     let file_schema = arrow_schema_without_partitions(
         &Arc::new(
             <ArrowSchema as TryFrom<&crate::kernel::StructType>>::try_from(
-                &snapshot
-                    .metadata()
-                    .ok_or(DeltaTableError::NoMetadata)?
-                    .schema,
+                &snapshot.metadata()?.schema()?,
             )?,
         ),
         partitions_keys,
@@ -945,9 +944,8 @@ fn build_zorder_plan(
         )));
     }
     let field_names = snapshot
-        .metadata()
-        .unwrap()
-        .schema
+        .metadata()?
+        .schema()?
         .fields()
         .iter()
         .map(|field| field.name().to_string())
@@ -1141,7 +1139,10 @@ pub(super) mod zorder {
         };
         use arrow_schema::DataType;
         use datafusion_common::DataFusionError;
-        use datafusion_expr::{ColumnarValue, ScalarUDF, Signature, TypeSignature, Volatility};
+        use datafusion_expr::{
+            ColumnarValue, ReturnTypeFunction, ScalarFunctionImplementation, ScalarUDF, Signature,
+            TypeSignature, Volatility,
+        };
         use itertools::Itertools;
 
         pub const ZORDER_UDF_NAME: &str = "zorder_key";
@@ -1177,12 +1178,9 @@ pub(super) mod zorder {
                 type_signature: TypeSignature::VariadicAny,
                 volatility: Volatility::Immutable,
             };
-            ScalarUDF {
-                name: ZORDER_UDF_NAME.to_string(),
-                signature,
-                return_type: Arc::new(|_| Ok(Arc::new(DataType::Binary))),
-                fun: Arc::new(zorder_key_datafusion),
-            }
+            let return_type: ReturnTypeFunction = Arc::new(|_| Ok(Arc::new(DataType::Binary)));
+            let fun: ScalarFunctionImplementation = Arc::new(zorder_key_datafusion);
+            ScalarUDF::new(ZORDER_UDF_NAME, &signature, &return_type, &fun)
         }
 
         /// Datafusion zorder UDF body

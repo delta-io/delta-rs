@@ -6,7 +6,7 @@ use bytes::Bytes;
 use futures::stream::BoxStream;
 use object_store::{
     local::LocalFileSystem, path::Path as ObjectStorePath, Error as ObjectStoreError, GetOptions,
-    GetResult, ListResult, MultipartId, ObjectMeta as ObjStoreObjectMeta, ObjectStore,
+    GetResult, ListResult, MultipartId, ObjectMeta, ObjectStore, PutOptions, PutResult,
     Result as ObjectStoreResult,
 };
 use std::ops::Range;
@@ -166,8 +166,17 @@ impl std::fmt::Display for FileStorageBackend {
 
 #[async_trait::async_trait]
 impl ObjectStore for FileStorageBackend {
-    async fn put(&self, location: &ObjectStorePath, bytes: Bytes) -> ObjectStoreResult<()> {
+    async fn put(&self, location: &ObjectStorePath, bytes: Bytes) -> ObjectStoreResult<PutResult> {
         self.inner.put(location, bytes).await
+    }
+
+    async fn put_opts(
+        &self,
+        location: &ObjectStorePath,
+        bytes: Bytes,
+        options: PutOptions,
+    ) -> ObjectStoreResult<PutResult> {
+        self.inner.put_opts(location, bytes, options).await
     }
 
     async fn get(&self, location: &ObjectStorePath) -> ObjectStoreResult<GetResult> {
@@ -190,7 +199,7 @@ impl ObjectStore for FileStorageBackend {
         self.inner.get_range(location, range).await
     }
 
-    async fn head(&self, location: &ObjectStorePath) -> ObjectStoreResult<ObjStoreObjectMeta> {
+    async fn head(&self, location: &ObjectStorePath) -> ObjectStoreResult<ObjectMeta> {
         self.inner.head(location).await
     }
 
@@ -198,11 +207,19 @@ impl ObjectStore for FileStorageBackend {
         self.inner.delete(location).await
     }
 
-    async fn list(
+    fn list(
         &self,
         prefix: Option<&ObjectStorePath>,
-    ) -> ObjectStoreResult<BoxStream<'_, ObjectStoreResult<ObjStoreObjectMeta>>> {
-        self.inner.list(prefix).await
+    ) -> BoxStream<'_, ObjectStoreResult<ObjectMeta>> {
+        self.inner.list(prefix)
+    }
+
+    fn list_with_offset(
+        &self,
+        prefix: Option<&ObjectStorePath>,
+        offset: &ObjectStorePath,
+    ) -> BoxStream<'_, ObjectStoreResult<ObjectMeta>> {
+        self.inner.list_with_offset(prefix, offset)
     }
 
     async fn list_with_delimiter(
@@ -379,9 +396,9 @@ mod tests {
     use std::io::Write;
     use std::path::{Path, PathBuf};
 
-    #[tokio::test()]
+    #[tokio::test]
     async fn test_rename_noreplace() {
-        let tmp_dir = tempdir::TempDir::new_in(".", "test_rename_noreplace").unwrap();
+        let tmp_dir = tempfile::tempdir().unwrap();
         let a = create_file(tmp_dir.path(), "a");
         let b = create_file(tmp_dir.path(), "b");
         let c = &tmp_dir.path().join("c");

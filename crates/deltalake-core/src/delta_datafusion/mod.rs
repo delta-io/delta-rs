@@ -32,7 +32,7 @@ use arrow::datatypes::{DataType as ArrowDataType, Schema as ArrowSchema, SchemaR
 use arrow::error::ArrowError;
 use arrow::record_batch::RecordBatch;
 use arrow_array::types::UInt16Type;
-use arrow_array::{Array, DictionaryArray, StringArray};
+use arrow_array::{Array, DictionaryArray, StringArray, TypedDictionaryArray};
 use arrow_cast::display::array_value_to_string;
 
 use arrow_schema::Field;
@@ -47,7 +47,6 @@ use datafusion::datasource::{listing::PartitionedFile, MemTable, TableProvider, 
 use datafusion::execution::context::{SessionConfig, SessionContext, SessionState, TaskContext};
 use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::execution::FunctionRegistry;
-use datafusion::optimizer::utils::conjunction;
 use datafusion::physical_expr::PhysicalSortExpr;
 use datafusion::physical_optimizer::pruning::{PruningPredicate, PruningStatistics};
 use datafusion::physical_plan::filter::FilterExec;
@@ -60,8 +59,9 @@ use datafusion_common::scalar::ScalarValue;
 use datafusion_common::stats::Precision;
 use datafusion_common::tree_node::{TreeNode, TreeNodeVisitor, VisitRecursion};
 use datafusion_common::{Column, DataFusionError, Result as DataFusionResult, ToDFSchema};
-use datafusion_expr::expr::{ScalarFunction, ScalarUDF};
+use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::logical_plan::CreateExternalTable;
+use datafusion_expr::utils::conjunction;
 use datafusion_expr::{col, Expr, Extension, LogicalPlan, TableProviderFilterPushDown, Volatility};
 use datafusion_physical_expr::execution_props::ExecutionProps;
 use datafusion_physical_expr::{create_physical_expr, PhysicalExpr};
@@ -71,9 +71,9 @@ use datafusion_sql::planner::ParserOptions;
 use futures::TryStreamExt;
 
 use itertools::Itertools;
-use log::error;
 use object_store::ObjectMeta;
 use serde::{Deserialize, Serialize};
+use tracing::error;
 use url::Url;
 
 use crate::errors::{DeltaResult, DeltaTableError};
@@ -132,6 +132,21 @@ fn get_scalar_value(value: Option<&ColumnValueStat>, field: &Arc<Field>) -> Prec
     }
 }
 
+pub(crate) fn get_path_column<'a>(
+    batch: &'a RecordBatch,
+    path_column: &str,
+) -> DeltaResult<TypedDictionaryArray<'a, UInt16Type, StringArray>> {
+    let err = || DeltaTableError::Generic("Unable to obtain Delta-rs path column".to_string());
+    batch
+        .column_by_name(path_column)
+        .unwrap()
+        .as_any()
+        .downcast_ref::<DictionaryArray<UInt16Type>>()
+        .ok_or_else(err)?
+        .downcast_dict::<StringArray>()
+        .ok_or_else(err)
+}
+
 impl DeltaTableState {
     /// Provide table level statistics to Datafusion
     pub fn datafusion_table_statistics(&self) -> DataFusionResult<Statistics> {
@@ -146,7 +161,7 @@ impl DeltaTableState {
         let files = self.files();
 
         // Initalize statistics
-        let mut table_stats = match files.get(0) {
+        let mut table_stats = match files.first() {
             Some(file) => match file.get_stats() {
                 Ok(Some(stats)) => {
                     let mut column_statistics = Vec::with_capacity(schema.fields().size());
@@ -573,11 +588,7 @@ impl<'a> DeltaScanBuilder<'a> {
         // However we may want to do some additional balancing in case we are far off from the above.
         let mut file_groups: HashMap<Vec<ScalarValue>, Vec<PartitionedFile>> = HashMap::new();
 
-        let table_partition_cols = &self
-            .snapshot
-            .metadata()
-            .ok_or(DeltaTableError::NoMetadata)?
-            .partition_columns;
+        let table_partition_cols = &self.snapshot.metadata()?.partition_columns;
 
         for action in files.iter() {
             let mut part = partitioned_file_from_action(action, table_partition_cols, &schema);
@@ -1080,7 +1091,7 @@ impl DeltaDataChecker {
 
     /// Create a new DeltaDataChecker
     pub fn new(snapshot: &DeltaTableState) -> Self {
-        let metadata = snapshot.metadata();
+        let metadata = snapshot.delta_metadata();
 
         let invariants = metadata
             .and_then(|meta| meta.schema.get_invariants().ok())
@@ -1113,7 +1124,10 @@ impl DeltaDataChecker {
             return Ok(());
         }
         let table = MemTable::try_new(record_batch.schema(), vec![vec![record_batch.clone()]])?;
-        self.ctx.register_table("data", Arc::new(table))?;
+
+        // Use a random table name to avoid clashes when running multiple parallel tasks, e.g. when using a partitioned table
+        let table_name: String = uuid::Uuid::new_v4().to_string();
+        self.ctx.register_table(&table_name, Arc::new(table))?;
 
         let mut violations: Vec<String> = Vec::new();
 
@@ -1125,8 +1139,9 @@ impl DeltaDataChecker {
             }
 
             let sql = format!(
-                "SELECT {} FROM data WHERE NOT ({}) LIMIT 1",
+                "SELECT {} FROM `{}` WHERE NOT ({}) LIMIT 1",
                 check.get_name(),
+                table_name,
                 check.get_expression()
             );
 
@@ -1147,7 +1162,7 @@ impl DeltaDataChecker {
             }
         }
 
-        self.ctx.deregister_table("data")?;
+        self.ctx.deregister_table(&table_name)?;
         if !violations.is_empty() {
             Err(DeltaTableError::InvalidData { violations })
         } else {
@@ -1310,22 +1325,21 @@ impl TreeNodeVisitor for FindFilesExprProperties {
             | Expr::Case(_)
             | Expr::Cast(_)
             | Expr::TryCast(_) => (),
-            Expr::ScalarFunction(ScalarFunction { fun, .. }) => {
-                let v = fun.volatility();
+            Expr::ScalarFunction(ScalarFunction { func_def, .. }) => {
+                let v = match func_def {
+                    datafusion_expr::ScalarFunctionDefinition::BuiltIn(f) => f.volatility(),
+                    datafusion_expr::ScalarFunctionDefinition::UDF(u) => u.signature().volatility,
+                    datafusion_expr::ScalarFunctionDefinition::Name(n) => {
+                        self.result = Err(DeltaTableError::Generic(format!(
+                            "Cannot determine volatility of find files predicate function {n}",
+                        )));
+                        return Ok(VisitRecursion::Stop);
+                    }
+                };
                 if v > Volatility::Immutable {
                     self.result = Err(DeltaTableError::Generic(format!(
                         "Find files predicate contains nondeterministic function {}",
-                        fun
-                    )));
-                    return Ok(VisitRecursion::Stop);
-                }
-            }
-            Expr::ScalarUDF(ScalarUDF { fun, .. }) => {
-                let v = fun.signature.volatility;
-                if v > Volatility::Immutable {
-                    self.result = Err(DeltaTableError::Generic(format!(
-                        "Find files predicate contains nondeterministic function {}",
-                        fun.name
+                        func_def.name()
                     )));
                     return Ok(VisitRecursion::Stop);
                 }
@@ -1362,31 +1376,20 @@ fn join_batches_with_add_actions(
 
     let mut files = Vec::with_capacity(batches.iter().map(|batch| batch.num_rows()).sum());
     for batch in batches {
-        let array = batch.column_by_name(path_column).ok_or_else(|| {
-            DeltaTableError::Generic(format!("Unable to find column {}", path_column))
-        })?;
+        let err = || DeltaTableError::Generic("Unable to obtain Delta-rs path column".to_string());
 
-        let iter: Box<dyn Iterator<Item = Option<&str>>> =
-            if dict_array {
-                let array = array
-                    .as_any()
-                    .downcast_ref::<DictionaryArray<UInt16Type>>()
-                    .ok_or(DeltaTableError::Generic(format!(
-                        "Unable to downcast column {}",
-                        path_column
-                    )))?
-                    .downcast_dict::<StringArray>()
-                    .ok_or(DeltaTableError::Generic(format!(
-                        "Unable to downcast column {}",
-                        path_column
-                    )))?;
-                Box::new(array.into_iter())
-            } else {
-                let array = array.as_any().downcast_ref::<StringArray>().ok_or(
-                    DeltaTableError::Generic(format!("Unable to downcast column {}", path_column)),
-                )?;
-                Box::new(array.into_iter())
-            };
+        let iter: Box<dyn Iterator<Item = Option<&str>>> = if dict_array {
+            let array = get_path_column(&batch, path_column)?;
+            Box::new(array.into_iter())
+        } else {
+            let array = batch
+                .column_by_name(path_column)
+                .ok_or_else(err)?
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .ok_or_else(err)?;
+            Box::new(array.into_iter())
+        };
 
         for path in iter {
             let path = path.ok_or(DeltaTableError::Generic(format!(
@@ -1532,7 +1535,7 @@ pub async fn find_files<'a>(
     state: &SessionState,
     predicate: Option<Expr>,
 ) -> DeltaResult<FindFiles> {
-    let current_metadata = snapshot.metadata().ok_or(DeltaTableError::NoMetadata)?;
+    let current_metadata = snapshot.metadata()?;
 
     match &predicate {
         Some(predicate) => {
@@ -1796,7 +1799,8 @@ mod tests {
                 location: Path::from("year=2015/month=1/part-00000-4dcb50d3-d017-450c-9df7-a7257dbd3c5d-c000.snappy.parquet".to_string()), 
                 last_modified: Utc.timestamp_millis_opt(1660497727833).unwrap(),
                 size: 10644,
-                e_tag: None
+                e_tag: None,
+                version: None,
             },
             partition_values: [ScalarValue::Int64(Some(2015)), ScalarValue::Int64(Some(1))].to_vec(),
             range: None,
@@ -1886,7 +1890,7 @@ mod tests {
         ]));
         let exec_plan = Arc::from(DeltaScan {
             table_uri: "s3://my_bucket/this/is/some/path".to_string(),
-            parquet_scan: Arc::from(EmptyExec::new(false, schema.clone())),
+            parquet_scan: Arc::from(EmptyExec::new(schema.clone())),
             config: DeltaScanConfig::default(),
             logical_schema: schema.clone(),
         });
@@ -1903,7 +1907,7 @@ mod tests {
 
     #[tokio::test]
     async fn delta_table_provider_with_config() {
-        let table = crate::open_table("tests/data/delta-2.2.0-partitioned-types")
+        let table = crate::open_table("../deltalake-test/tests/data/delta-2.2.0-partitioned-types")
             .await
             .unwrap();
         let config = DeltaScanConfigBuilder::new()

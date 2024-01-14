@@ -27,7 +27,7 @@ def test_checkpoint(tmp_path: pathlib.Path, sample_data: pa.Table):
     assert checkpoint_path.exists()
 
 
-def test_cleanup_metadata(tmp_path: pathlib.Path, sample_data: pa.Table):
+def setup_cleanup_metadata(tmp_path: pathlib.Path, sample_data: pa.Table):
     tmp_table_path = tmp_path / "path" / "to" / "table"
     first_log_path = tmp_table_path / "_delta_log" / "00000000000000000000.json"
     second_log_path = tmp_table_path / "_delta_log" / "00000000000000000001.json"
@@ -53,9 +53,33 @@ def test_cleanup_metadata(tmp_path: pathlib.Path, sample_data: pa.Table):
     assert first_log_path.exists()
     assert second_log_path.exists()
     assert third_log_path.exists()
+    return delta_table
 
+
+def test_cleanup_metadata(tmp_path: pathlib.Path, sample_data: pa.Table):
+    delta_table = setup_cleanup_metadata(tmp_path, sample_data)
+    delta_table.create_checkpoint()
     delta_table.cleanup_metadata()
 
+    tmp_table_path = tmp_path / "path" / "to" / "table"
+    first_log_path = tmp_table_path / "_delta_log" / "00000000000000000000.json"
+    second_log_path = tmp_table_path / "_delta_log" / "00000000000000000001.json"
+    third_log_path = tmp_table_path / "_delta_log" / "00000000000000000002.json"
+
     assert not first_log_path.exists()
+    assert second_log_path.exists()
+    assert third_log_path.exists()
+
+
+def test_cleanup_metadata_no_checkpoint(tmp_path: pathlib.Path, sample_data: pa.Table):
+    delta_table = setup_cleanup_metadata(tmp_path, sample_data)
+    delta_table.cleanup_metadata()
+
+    tmp_table_path = tmp_path / "path" / "to" / "table"
+    first_log_path = tmp_table_path / "_delta_log" / "00000000000000000000.json"
+    second_log_path = tmp_table_path / "_delta_log" / "00000000000000000001.json"
+    third_log_path = tmp_table_path / "_delta_log" / "00000000000000000002.json"
+
+    assert first_log_path.exists()
     assert second_log_path.exists()
     assert third_log_path.exists()

@@ -68,6 +68,7 @@ nav:
       - api/delta_table/metadata.md
       - api/delta_table/delta_table_merger.md
       - api/delta_table/delta_table_optimizer.md
+      - api/delta_table/delta_table_alterer.md
     - api/schema.md
     - api/storage.md
     - api/catalog.md

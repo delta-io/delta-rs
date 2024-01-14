@@ -38,12 +38,17 @@ def test_update_with_predicate(tmp_path: pathlib.Path, sample_table: pa.Table):
         }
     )
 
-    dt.update(updates={"deleted": "True"}, predicate="price > 3")
+    dt.update(
+        updates={"deleted": "True"},
+        predicate="price > 3",
+        custom_metadata={"userName": "John Doe"},
+    )
 
     result = dt.to_pyarrow_table()
     last_action = dt.history(1)[0]
 
     assert last_action["operation"] == "UPDATE"
+    assert last_action["userName"] == "John Doe"
     assert result == expected
 
 

@@ -137,26 +137,20 @@ impl TryFrom<&DataType> for ArrowDataType {
             DataType::Struct(s) => Ok(ArrowDataType::Struct(
                 s.fields()
                     .iter()
-                    .map(<ArrowField as TryFrom<&StructField>>::try_from)
+                    .map(TryInto::try_into)
                     .collect::<Result<Vec<ArrowField>, ArrowError>>()?
                     .into(),
             )),
-            DataType::Array(a) => Ok(ArrowDataType::List(Arc::new(<ArrowField as TryFrom<
-                &ArrayType,
-            >>::try_from(a)?))),
+            DataType::Array(a) => Ok(ArrowDataType::List(Arc::new(a.as_ref().try_into()?))),
             DataType::Map(m) => Ok(ArrowDataType::Map(
                 Arc::new(ArrowField::new(
                     "entries",
                     ArrowDataType::Struct(
                         vec![
-                            ArrowField::new(
-                                MAP_KEYS_NAME,
-                                <ArrowDataType as TryFrom<&DataType>>::try_from(m.key_type())?,
-                                false,
-                            ),
+                            ArrowField::new(MAP_KEYS_NAME, m.key_type().try_into()?, false),
                             ArrowField::new(
                                 MAP_VALUES_NAME,
-                                <ArrowDataType as TryFrom<&DataType>>::try_from(m.value_type())?,
+                                m.value_type().try_into()?,
                                 m.value_contains_null(),
                             ),
                         ]
@@ -686,7 +680,7 @@ mod tests {
         let partition_values_parsed = add_field_map.get("partitionValues_parsed").unwrap();
         if let ArrowDataType::Struct(fields) = partition_values_parsed.data_type() {
             assert_eq!(1, fields.len());
-            let field = fields.get(0).unwrap().to_owned();
+            let field = fields.first().unwrap().to_owned();
             assert_eq!(
                 Arc::new(ArrowField::new("pcol", ArrowDataType::Int32, true)),
                 field
@@ -708,7 +702,7 @@ mod tests {
                     "minValues" | "maxValues" | "nullCount" => match v.data_type() {
                         ArrowDataType::Struct(fields) => {
                             assert_eq!(1, fields.len());
-                            let field = fields.get(0).unwrap().to_owned();
+                            let field = fields.first().unwrap().to_owned();
                             let data_type = if k == "nullCount" {
                                 ArrowDataType::Int64
                             } else {

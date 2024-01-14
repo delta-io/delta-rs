@@ -24,7 +24,7 @@ use parquet::arrow::ParquetRecordBatchStreamBuilder;
 use parquet::file::properties::WriterProperties;
 use rand::prelude::*;
 use serde_json::json;
-use tempdir::TempDir;
+use tempfile::TempDir;
 
 struct Context {
     pub tmp_dir: TempDir,
@@ -56,7 +56,7 @@ async fn setup_test(partitioned: bool) -> Result<Context, Box<dyn Error>> {
         vec![]
     };
 
-    let tmp_dir = tempdir::TempDir::new("opt_table").unwrap();
+    let tmp_dir = tempfile::tempdir().unwrap();
     let table_uri = tmp_dir.path().to_str().to_owned().unwrap();
     let dt = DeltaOps::try_from_uri(table_uri)
         .await?
@@ -306,7 +306,9 @@ async fn test_conflict_for_remove_actions() -> Result<(), Box<dyn Error>> {
     )
     .await?;
 
-    let maybe_metrics = plan.execute(dt.log_store(), &dt.state, 1, 20, None).await;
+    let maybe_metrics = plan
+        .execute(dt.log_store(), &dt.state, 1, 20, None, None)
+        .await;
 
     assert!(maybe_metrics.is_err());
     assert_eq!(dt.version(), version + 1);
@@ -355,7 +357,9 @@ async fn test_no_conflict_for_append_actions() -> Result<(), Box<dyn Error>> {
     )
     .await?;
 
-    let metrics = plan.execute(dt.log_store(), &dt.state, 1, 20, None).await?;
+    let metrics = plan
+        .execute(dt.log_store(), &dt.state, 1, 20, None, None)
+        .await?;
     assert_eq!(metrics.num_files_added, 1);
     assert_eq!(metrics.num_files_removed, 2);
 
@@ -400,6 +404,7 @@ async fn test_commit_interval() -> Result<(), Box<dyn Error>> {
             1,
             20,
             Some(Duration::from_secs(0)), // this will cause as many commits as num_files_added
+            None,
         )
         .await?;
     assert_eq!(metrics.num_files_added, 2);
@@ -714,7 +719,7 @@ async fn test_zorder_unpartitioned() -> Result<(), Box<dyn Error>> {
     assert_eq!(metrics.total_considered_files, 2);
 
     // Check data
-    let files = dt.get_files();
+    let files = dt.get_files_iter().collect::<Vec<_>>();
     assert_eq!(files.len(), 1);
 
     let actual = read_parquet_file(&files[0], dt.object_store()).await?;

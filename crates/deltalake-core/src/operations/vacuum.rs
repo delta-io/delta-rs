@@ -59,6 +59,9 @@ enum VacuumError {
     /// Error returned
     #[error(transparent)]
     DeltaTable(#[from] DeltaTableError),
+
+    #[error(transparent)]
+    Protocol(#[from] crate::protocol::ProtocolError),
 }
 
 impl From<VacuumError> for DeltaTableError {
@@ -91,6 +94,8 @@ pub struct VacuumBuilder {
     dry_run: bool,
     /// Override the source of time
     clock: Option<Arc<dyn Clock>>,
+    /// Additional metadata to be added to commit
+    app_metadata: Option<HashMap<String, serde_json::Value>>,
 }
 
 /// Details for the Vacuum operation including which files were
@@ -133,6 +138,7 @@ impl VacuumBuilder {
             enforce_retention_duration: true,
             dry_run: false,
             clock: None,
+            app_metadata: None,
         }
     }
 
@@ -158,6 +164,15 @@ impl VacuumBuilder {
     #[doc(hidden)]
     pub fn with_clock(mut self, clock: Arc<dyn Clock>) -> Self {
         self.clock = Some(clock);
+        self
+    }
+
+    /// Additional metadata to be added to commit info
+    pub fn with_metadata(
+        mut self,
+        metadata: impl IntoIterator<Item = (String, serde_json::Value)>,
+    ) -> Self {
+        self.app_metadata = Some(HashMap::from_iter(metadata));
         self
     }
 
@@ -190,15 +205,8 @@ impl VacuumBuilder {
         let mut files_to_delete = vec![];
         let mut file_sizes = vec![];
         let object_store = self.log_store.object_store();
-        let mut all_files = object_store
-            .list(None)
-            .await
-            .map_err(DeltaTableError::from)?;
-        let partition_columns = &self
-            .snapshot
-            .metadata()
-            .ok_or(DeltaTableError::NoMetadata)?
-            .partition_columns;
+        let mut all_files = object_store.list(None);
+        let partition_columns = &self.snapshot.metadata()?.partition_columns;
 
         while let Some(obj_meta) = all_files.next().await {
             // TODO should we allow NotFound here in case we have a temporary commit file in the list
@@ -244,7 +252,7 @@ impl std::future::IntoFuture for VacuumBuilder {
             }
 
             let metrics = plan
-                .execute(this.log_store.as_ref(), &this.snapshot)
+                .execute(this.log_store.as_ref(), &this.snapshot, this.app_metadata)
                 .await?;
             Ok((
                 DeltaTable::new_with_state(this.log_store, this.snapshot),
@@ -274,6 +282,7 @@ impl VacuumPlan {
         self,
         store: &dyn LogStore,
         snapshot: &DeltaTableState,
+        app_metadata: Option<HashMap<String, serde_json::Value>>,
     ) -> Result<VacuumMetrics, DeltaTableError> {
         if self.files_to_delete.is_empty() {
             return Ok(VacuumMetrics {
@@ -299,8 +308,10 @@ impl VacuumPlan {
 
         // Begin VACUUM START COMMIT
         let mut commit_info = start_operation.get_commit_info();
-        let mut extra_info = HashMap::<String, Value>::new();
-
+        let mut extra_info = match app_metadata.clone() {
+            Some(meta) => meta,
+            None => HashMap::new(),
+        };
         commit_info.timestamp = Some(Utc::now().timestamp_millis());
         extra_info.insert(
             "clientVersion".to_string(),
@@ -339,7 +350,11 @@ impl VacuumPlan {
 
         // Begin VACUUM END COMMIT
         let mut commit_info = end_operation.get_commit_info();
-        let mut extra_info = HashMap::<String, Value>::new();
+
+        let mut extra_info = match app_metadata.clone() {
+            Some(meta) => meta,
+            None => HashMap::new(),
+        };
 
         commit_info.timestamp = Some(Utc::now().timestamp_millis());
         extra_info.insert(
@@ -404,7 +419,9 @@ mod tests {
 
     #[tokio::test]
     async fn vacuum_delta_8_0_table() {
-        let table = open_table("./tests/data/delta-0.8.0").await.unwrap();
+        let table = open_table("../deltalake-test/tests/data/delta-0.8.0")
+            .await
+            .unwrap();
 
         let result = VacuumBuilder::new(table.log_store, table.state.clone())
             .with_retention_period(Duration::hours(1))
@@ -413,7 +430,9 @@ mod tests {
 
         assert!(result.is_err());
 
-        let table = open_table("./tests/data/delta-0.8.0").await.unwrap();
+        let table = open_table("../deltalake-test/tests/data/delta-0.8.0")
+            .await
+            .unwrap();
         let (table, result) = VacuumBuilder::new(table.log_store, table.state)
             .with_retention_period(Duration::hours(0))
             .with_dry_run(true)

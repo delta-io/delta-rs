@@ -15,7 +15,7 @@ from deltalake.schema import (
 
 
 def test_table_schema():
-    table_path = "../crates/deltalake-core/tests/data/simple_table"
+    table_path = "../crates/deltalake-test/tests/data/simple_table"
     dt = DeltaTable(table_path)
     schema = dt.schema()
     assert json.loads(schema.to_json()) == {
@@ -37,7 +37,7 @@ def test_table_schema():
 
 
 def test_table_schema_pyarrow_simple():
-    table_path = "../crates/deltalake-core/tests/data/simple_table"
+    table_path = "../crates/deltalake-test/tests/data/simple_table"
     dt = DeltaTable(table_path)
     schema = dt.schema().to_pyarrow()
     field = schema.field(0)
@@ -49,7 +49,7 @@ def test_table_schema_pyarrow_simple():
 
 
 def test_table_schema_pyarrow_020():
-    table_path = "../crates/deltalake-core/tests/data/delta-0.2.0"
+    table_path = "../crates/deltalake-test/tests/data/delta-0.2.0"
     dt = DeltaTable(table_path)
     schema = dt.schema().to_pyarrow()
     field = schema.field(0)
@@ -235,12 +235,16 @@ def test_delta_schema():
                 [
                     pa.field("some_int", pa.uint32(), nullable=True),
                     pa.field("some_string", pa.string(), nullable=False),
+                    pa.field("some_fixed_binary", pa.binary(5), nullable=False),
+                    pa.field("some_decimal", pa.decimal128(10, 2), nullable=False),
                 ]
             ),
             pa.schema(
                 [
                     pa.field("some_int", pa.int32(), nullable=True),
                     pa.field("some_string", pa.string(), nullable=False),
+                    pa.field("some_fixed_binary", pa.binary(), nullable=False),
+                    pa.field("some_decimal", pa.decimal128(10, 2), nullable=False),
                 ]
             ),
             False,
@@ -293,6 +297,7 @@ def test_delta_schema():
             pa.schema(
                 [
                     ("some_list", pa.list_(pa.string())),
+                    ("some_fixed_list_int", pa.list_(pa.uint32(), 5)),
                     ("some_list_binary", pa.list_(pa.binary())),
                     ("some_string", pa.large_string()),
                 ]
@@ -300,6 +305,7 @@ def test_delta_schema():
             pa.schema(
                 [
                     ("some_list", pa.large_list(pa.large_string())),
+                    ("some_fixed_list_int", pa.large_list(pa.int32())),
                     ("some_list_binary", pa.large_list(pa.large_binary())),
                     ("some_string", pa.large_string()),
                 ]

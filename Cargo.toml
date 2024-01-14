@@ -19,33 +19,35 @@ debug = "line-tables-only"
 
 [workspace.dependencies]
 # arrow
-arrow = { version = "48.0.1" }
-arrow-arith = { version = "48.0.1" }
-arrow-array = { version = "48.0.1" }
-arrow-buffer = { version = "48.0.1" }
-arrow-cast = { version = "48.0.1" }
-arrow-ord = { version = "48.0.1" }
-arrow-row = { version = "48.0.1" }
-arrow-schema = { version = "48.0.1" }
-arrow-select = { version = "48.0.1" }
-parquet = { version = "48.0.1" }
+arrow = { version = "49" }
+arrow-arith = { version = "49" }
+arrow-array = { version = "49" }
+arrow-buffer = { version = "49" }
+arrow-cast = { version = "49" }
+arrow-ord = { version = "49" }
+arrow-row = { version = "49" }
+arrow-schema = { version = "49" }
+arrow-select = { version = "49" }
+object_store = { version = "0.8" }
+parquet = { version = "49" }
 
 # datafusion
-datafusion = { version = "33.0.0" }
-datafusion-expr = { version = "33.0.0" }
-datafusion-common = { version = "33.0.0" }
-datafusion-proto = { version = "33.0.0" }
-datafusion-sql = { version = "33.0.0" }
-datafusion-physical-expr = { version = "33.0.0" }
+datafusion = { version = "34" }
+datafusion-expr = { version = "34" }
+datafusion-common = { version = "34" }
+datafusion-proto = { version = "34" }
+datafusion-sql = { version = "34" }
+datafusion-physical-expr = { version = "34" }
 
 
 # serde
-serde = { version = "1", features = ["derive"] }
+serde = { version = "1.0.194", features = ["derive"] }
 serde_json = "1"
 
 # "stdlib"
 bytes = { version = "1" }
 chrono = { version = "0.4.31", default-features = false, features = ["clock"] }
+tracing = { version = "0.1", features = ["log"] }
 regex = { version = "1" }
 thiserror = { version = "1" }
 url = { version = "2" }

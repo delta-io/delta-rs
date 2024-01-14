@@ -3,33 +3,46 @@ name = "deltalake-aws"
 version = "0.1.0"
 edition = "2021"
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-
 [dependencies]
+deltalake-core = { path = "../deltalake-core" }
 rusoto_core = { version = "0.47", default-features = false, optional = true }
-rusoto_credential = { version = "0.47", optional = true }
+rusoto_credential = { version = "0.47" }
 rusoto_sts = { version = "0.47", default-features = false, optional = true }
 rusoto_dynamodb = { version = "0.47", default-features = false, optional = true }
-object_store = "0.7"
 lazy_static = "1"
 maplit = "1"
+
+# workspace dependencies
+async-trait = { workspace = true }
+bytes = { workspace = true }
+futures = { workspace = true }
+tracing = { workspace = true }
+object_store = { workspace = true, features = ["aws"]}
 thiserror = { workspace = true }
+tokio = { workspace = true }
 regex = { workspace = true }
+uuid = { workspace = true, features = ["serde", "v4"] }
+url = { workspace = true }
+backoff = { version = "0.4", features = [ "tokio" ] }
 
 [dev-dependencies]
+chrono = { workspace = true }
+serial_test = "3"
+deltalake-test = { path = "../deltalake-test" }
+pretty_env_logger = "*"
+rand = "0.8"
+serde_json = { workspace = true }
 
 [features]
+default = ["rustls"]
+integration_test = []
 native-tls = [
     "rusoto_core/native-tls",
-    "rusoto_credential",
     "rusoto_sts/native-tls",
     "rusoto_dynamodb/native-tls",
-    "object_store/aws",
 ]
 rustls = [
     "rusoto_core/rustls",
-    "rusoto_credential",
     "rusoto_sts/rustls",
     "rusoto_dynamodb/rustls",
-    "object_store/aws",
 ]
