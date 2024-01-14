@@ -52,6 +52,7 @@ nav:
     - Creating a table: usage/create-delta-lake-table.md
     - Loading a table: usage/loading-table.md
     - Append/overwrite tables: usage/appending-overwriting-delta-lake-table.md
+    - Adding a constraint: usage/constraints.md
     - Examining a table: usage/examining-table.md
     - Querying a table: usage/querying-delta-tables.md
     - Managing a table: usage/managing-tables.md
