@@ -92,7 +92,7 @@ async fn main() -> Result<(), DeltaTableError> {
 
     // show all active files in the table
     let files = table.get_files();
-    println!("{files}");
+    println!("{:?}", files);
 
     Ok(())
 }
