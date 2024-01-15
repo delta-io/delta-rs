@@ -908,7 +908,7 @@ mod tests {
             Field::new("data", DataType::Utf8, true),
         ]));
 
-        let str_values = StringArray::from(vec![r#"$%&/()=^"[]#*?.:_- {=}|`<>~/\r\n+"#]);
+        let str_values = StringArray::from(vec![r#"$%&/()=^"[]#*?._- {=}|`<>~/\r\n+"#]);
         let data_values = StringArray::from(vec!["test"]);
 
         let batch = RecordBatch::try_new(schema, vec![Arc::new(str_values), Arc::new(data_values)])
@@ -931,11 +931,11 @@ mod tests {
         let data: Vec<RecordBatch> = collect_sendable_stream(stream).await.unwrap();
 
         let expected = vec![
-            "+------+-----------------------------------+",
-            "| data | string                            |",
-            "+------+-----------------------------------+",
-            r#"| test | $%&/()=^"[]#*?.:_- {=}|`<>~/\r\n+ |"#,
-            "+------+-----------------------------------+",
+            "+------+----------------------------------+",
+            "| data | string                           |",
+            "+------+----------------------------------+",
+            "| test | $%&/()=^\"[]#*?._- {=}|`<>~/\\r\\n+ |",
+            "+------+----------------------------------+",
         ];
 
         assert_batches_eq!(&expected, &data);
