@@ -6,7 +6,7 @@ Delta Lake provides developer-friendly features, reliable transactions, and fast
 
 ## Fast performance
 
-Delta tables store data in many Parquet files and persist file-level metadata in the transaction log.
+Delta tables store data in Parquet files and persist file-level metadata in the transaction log.
 
 This offers two main performance advantages:
 
@@ -19,7 +19,7 @@ Delta Lake also makes it easy to rearrange data in the table, so more file skipp
 
 For data lakes, you need to run file listing operations to get the file paths before you can actually read the data.  Listing all the files in a data lake can take a long time, especially if there are a lot of files and they are stored in Hive-style partitions.
 
-Delta Lake store all the file paths in the transaction log.  So you can quickly get all the paths directly from the log and then run your query.  Delta Lake also stores the file-level metadata in the transaction log which is quicker than opening all the files in the data lake and grabbing the metadata from the file footer.
+Delta Lake stores all the file paths in the transaction log.  So you can quickly get the file paths directly from the log and then run your query.  Delta Lake also stores the file-level metadata in the transaction log which is quicker than opening all the files in the data lake and grabbing the metadata from the file footer.
 
 ## Developer friendly features
 
@@ -46,12 +46,12 @@ Delta Lake supports transactions which means that write operations have the foll
 * They are executed in a serial manner and don’t conflict with other transactions
 * They don’t corrupt a table or violate table constraints
 
-Data lakes don’t support transactions, so the write operations are dangerous:
+Data lakes don’t support transactions, so the write operations can cause the following errors:
 
-* You can append data to a data lake with a mismatching schema
-* Your data lake often in an incorrect state while write transactions are performed
-* Data lakes can be corrupted for a variety of reasons
-* Concurrent transactions can cause data loss
+* There is no schema enforcement, so you can append data to a data lake with a mismatching schema
+* Reading the data lake often yields incorrect results while write transactions are performed
+* Data lakes can be corrupted for invalid write operations or computations that error-out
+* Concurrent transactions that conflict can cause data loss
 
 Production data systems should rely on storage systems like Delta Lake that support transactions.
 
@@ -73,9 +73,7 @@ Delta Lake is flexible to allow these types of operations from multiple readers 
 
 ## Support for many languages
 
-Delta tables can be queried with a variety of different languages.  This project provides APIs for Rust and Python users and does not depend on Java or Scala.  This project is a great alternative for users like that Rust, pandas, Polars, DuckDB, or DataFusion.
-
-The Delta Spark connector has APIs in Java, Scala, Python, and R.
+Delta tables can be queried with a variety of different languages.  This project provides APIs for Rust and Python users and does not depend on Java or Scala.  This project is a great alternative for pandas, Polars, DuckDB, or DataFusion.
 
 Delta Lake supports many languages and even more language support is coming soon!
 
@@ -93,4 +91,4 @@ Delta Lake is a mature table format that offers users tons of advantages over a 
 
 Once you start using Delta Lake, you will never want to go back to data lakes that expose you to a variety of dangerous bugs, poor performance, and reliability issues.
 
-The Delta Lake community is also welcome and opening.  We gladly accept new contributors and help users with their questions.
+The Delta Lake community is also welcome and open.  We gladly accept new contributors and help users with their questions.
