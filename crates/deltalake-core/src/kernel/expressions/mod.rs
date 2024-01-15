@@ -5,7 +5,7 @@ use std::fmt::{Display, Formatter};
 
 use itertools::Itertools;
 
-use self::scalars::Scalar;
+pub use self::scalars::*;
 
 pub mod scalars;
 

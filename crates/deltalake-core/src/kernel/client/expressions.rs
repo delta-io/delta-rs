@@ -12,7 +12,7 @@ use arrow_array::{
     StructArray, TimestampMicrosecondArray,
 };
 use arrow_ord::cmp::{eq, gt, gt_eq, lt, lt_eq, neq};
-use arrow_schema::{ArrowError, Schema as ArrowSchema};
+use arrow_schema::{ArrowError, Field as ArrowField, Schema as ArrowSchema};
 use arrow_select::nullif::nullif;
 
 use crate::kernel::error::{DeltaResult, Error};
@@ -78,6 +78,21 @@ impl Scalar {
                 DataType::Map { .. } => unimplemented!(),
                 DataType::Struct { .. } => unimplemented!(),
             },
+            Struct(values, fields) => {
+                let mut columns = Vec::with_capacity(values.len());
+                for val in values {
+                    columns.push(val.to_array(num_rows)?);
+                }
+                Arc::new(StructArray::try_new(
+                    fields
+                        .iter()
+                        .map(TryInto::<ArrowField>::try_into)
+                        .collect::<Result<Vec<_>, _>>()?
+                        .into(),
+                    columns,
+                    None,
+                )?)
+            }
         };
         Ok(arr)
     }

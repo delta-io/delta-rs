@@ -81,7 +81,7 @@ impl DeltaTableState {
             let expr = logical_expr_to_physical_expr(&predicate, self.arrow_schema()?.as_ref());
             let pruning_predicate = PruningPredicate::try_new(expr, self.arrow_schema()?)?;
             Ok(Either::Left(
-                self.files()?
+                self.file_actions()?
                     .into_iter()
                     .zip(pruning_predicate.prune(self)?)
                     .filter_map(
@@ -95,7 +95,7 @@ impl DeltaTableState {
                     ),
             ))
         } else {
-            Ok(Either::Right(self.files()?.into_iter()))
+            Ok(Either::Right(self.file_actions()?.into_iter()))
         }
     }
 
@@ -117,7 +117,11 @@ impl DeltaTableState {
         &self,
         object_store: Arc<dyn ObjectStore>,
     ) -> DeltaResult<ArrowSchemaRef> {
-        if let Some(add) = self.files()?.iter().max_by_key(|obj| obj.modification_time) {
+        if let Some(add) = self
+            .file_actions()?
+            .iter()
+            .max_by_key(|obj| obj.modification_time)
+        {
             let file_meta = add.try_into()?;
             let file_reader = ParquetObjectReader::new(object_store, file_meta);
             let file_schema = ParquetRecordBatchStreamBuilder::new(file_reader)
@@ -298,7 +302,7 @@ impl PruningStatistics for DeltaTableState {
     /// return the minimum values for the named column, if known.
     /// Note: the returned array must contain `num_containers()` rows
     fn min_values(&self, column: &Column) -> Option<ArrayRef> {
-        let files = self.files().ok()?;
+        let files = self.file_actions().ok()?;
         let partition_columns = &self.metadata().partition_columns;
         let container = AddContainer::new(&files, partition_columns, self.arrow_schema().ok()?);
         container.min_values(column)
@@ -307,7 +311,7 @@ impl PruningStatistics for DeltaTableState {
     /// return the maximum values for the named column, if known.
     /// Note: the returned array must contain `num_containers()` rows.
     fn max_values(&self, column: &Column) -> Option<ArrayRef> {
-        let files = self.files().ok()?;
+        let files = self.file_actions().ok()?;
         let partition_columns = &self.metadata().partition_columns;
         let container = AddContainer::new(&files, partition_columns, self.arrow_schema().ok()?);
         container.max_values(column)
@@ -316,7 +320,7 @@ impl PruningStatistics for DeltaTableState {
     /// return the number of containers (e.g. row groups) being
     /// pruned with these statistics
     fn num_containers(&self) -> usize {
-        self.files().unwrap().len()
+        self.file_actions().unwrap().len()
     }
 
     /// return the number of null values for the named column as an
@@ -324,7 +328,7 @@ impl PruningStatistics for DeltaTableState {
     ///
     /// Note: the returned array must contain `num_containers()` rows.
     fn null_counts(&self, column: &Column) -> Option<ArrayRef> {
-        let files = self.files().ok()?;
+        let files = self.file_actions().ok()?;
         let partition_columns = &self.metadata().partition_columns;
         let container = AddContainer::new(&files, partition_columns, self.arrow_schema().ok()?);
         container.null_counts(column)

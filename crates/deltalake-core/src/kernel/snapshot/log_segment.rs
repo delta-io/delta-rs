@@ -92,15 +92,6 @@ fn get_decoder(schema: ArrowSchemaRef, config: &DeltaTableConfig) -> DeltaResult
         .build_decoder()?)
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct FileInfo {
-    location: String,
-    size: usize,
-    last_modified: chrono::DateTime<Utc>,
-    e_tag: Option<String>,
-    version: Option<i64>,
-}
-
 #[derive(Debug, Clone, PartialEq)]
 pub(super) struct LogSegment {
     pub(super) version: i64,
@@ -377,7 +368,7 @@ impl LogSegment {
             self.commit_files.push_front(meta);
             let reader = json::get_reader(&bytes);
             let batches =
-                json::read_from_json(&mut decoder, reader).collect::<Result<Vec<_>, _>>()?;
+                json::decode_reader(&mut decoder, reader).collect::<Result<Vec<_>, _>>()?;
             commit_data.push(batches);
         }
 

@@ -203,7 +203,7 @@ impl TryFrom<&ArrowDataType> for DataType {
             ArrowDataType::UInt64 => Ok(DataType::Primitive(PrimitiveType::Long)), // undocumented type
             ArrowDataType::UInt32 => Ok(DataType::Primitive(PrimitiveType::Integer)),
             ArrowDataType::UInt16 => Ok(DataType::Primitive(PrimitiveType::Short)),
-            ArrowDataType::UInt8 => Ok(DataType::Primitive(PrimitiveType::Boolean)),
+            ArrowDataType::UInt8 => Ok(DataType::Primitive(PrimitiveType::Byte)),
             ArrowDataType::Float32 => Ok(DataType::Primitive(PrimitiveType::Float)),
             ArrowDataType::Float64 => Ok(DataType::Primitive(PrimitiveType::Double)),
             ArrowDataType::Boolean => Ok(DataType::Primitive(PrimitiveType::Boolean)),

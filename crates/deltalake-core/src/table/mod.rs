@@ -15,13 +15,13 @@ use tracing::debug;
 
 use self::builder::DeltaTableConfig;
 use self::state::DeltaTableState;
-use crate::errors::DeltaTableError;
-use crate::kernel::{Action, Add, CommitInfo, DataCheck, DataType, Metadata, Protocol, StructType};
-use crate::logstore::LogStoreRef;
-use crate::logstore::{self, LogStoreConfig};
+use crate::kernel::{
+    Action, CommitInfo, DataCheck, DataType, FileStats, Metadata, Protocol, StructType,
+};
+use crate::logstore::{self, LogStoreConfig, LogStoreRef};
 use crate::partitions::PartitionFilter;
 use crate::storage::{commit_uri_from_version, ObjectStoreRef};
-use crate::DeltaResult;
+use crate::{DeltaResult, DeltaTableError};
 
 pub mod builder;
 pub mod config;
@@ -412,7 +412,7 @@ impl DeltaTable {
     pub fn get_active_add_actions_by_partitions<'a>(
         &'a self,
         filters: &'a [PartitionFilter],
-    ) -> Result<impl Iterator<Item = Add> + '_, DeltaTableError> {
+    ) -> Result<impl Iterator<Item = DeltaResult<FileStats<'_>>> + '_, DeltaTableError> {
         self.state
             .as_ref()
             .ok_or(DeltaTableError::NoMetadata)?
@@ -425,15 +425,12 @@ impl DeltaTable {
         &self,
         filters: &[PartitionFilter],
     ) -> Result<Vec<Path>, DeltaTableError> {
+        println!("get_files_by_partitions ----------->");
         Ok(self
             .get_active_add_actions_by_partitions(filters)?
-            .map(|add| {
-                // Try to preserve percent encoding if possible
-                match Path::parse(&add.path) {
-                    Ok(path) => path,
-                    Err(_) => Path::from(add.path.as_ref()),
-                }
-            })
+            .collect::<Result<Vec<_>, _>>()?
+            .into_iter()
+            .map(|add| add.object_store_path())
             .collect())
     }
 
@@ -452,10 +449,11 @@ impl DeltaTable {
     /// Returns an iterator of file names present in the loaded state
     #[inline]
     pub fn get_files_iter(&self) -> DeltaResult<impl Iterator<Item = Path> + '_> {
-        self.state
+        Ok(self
+            .state
             .as_ref()
             .ok_or(DeltaTableError::NoMetadata)?
-            .file_paths_iter()
+            .file_paths_iter())
     }
 
     /// Returns a URIs for all active files present in the current table version.
@@ -464,7 +462,7 @@ impl DeltaTable {
             .state
             .as_ref()
             .ok_or(DeltaTableError::NoMetadata)?
-            .file_paths_iter()?
+            .file_paths_iter()
             .map(|path| self.log_store.to_uri(&path)))
     }
 

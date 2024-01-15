@@ -1,5 +1,5 @@
 //! Main writer API to write json messages to delta table
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::convert::TryFrom;
 use std::sync::Arc;
 
@@ -19,11 +19,11 @@ use uuid::Uuid;
 use super::stats::create_add;
 use super::utils::{
     arrow_schema_without_partitions, next_data_path, record_batch_from_message,
-    record_batch_without_partitions, stringified_partition_value,
+    record_batch_without_partitions,
 };
-use super::{utils::PartitionPath, DeltaWriter, DeltaWriterError};
+use super::{DeltaWriter, DeltaWriterError};
 use crate::errors::DeltaTableError;
-use crate::kernel::{Add, StructType};
+use crate::kernel::{Add, PartitionsExt, Scalar, StructType};
 use crate::table::builder::DeltaTableBuilder;
 use crate::writer::utils::ShareableBuffer;
 use crate::DeltaTable;
@@ -45,7 +45,7 @@ pub(crate) struct DataArrowWriter {
     writer_properties: WriterProperties,
     buffer: ShareableBuffer,
     arrow_writer: ArrowWriter<ShareableBuffer>,
-    partition_values: HashMap<String, Option<String>>,
+    partition_values: BTreeMap<String, Scalar>,
     buffered_record_batch_count: usize,
 }
 
@@ -153,7 +153,7 @@ impl DataArrowWriter {
             writer_properties.clone(),
         )?;
 
-        let partition_values = HashMap::new();
+        let partition_values = BTreeMap::new();
         let buffered_record_batch_count = 0;
 
         Ok(Self {
@@ -340,8 +340,7 @@ impl DeltaWriter<Vec<Value>> for JsonWriter {
 
         for (_, writer) in writers {
             let metadata = writer.arrow_writer.close()?;
-            let prefix =
-                PartitionPath::from_hashmap(&self.partition_columns, &writer.partition_values)?;
+            let prefix = writer.partition_values.hive_partition_path();
             let prefix = Path::parse(prefix)?;
             let uuid = Uuid::new_v4();
 
@@ -398,18 +397,17 @@ fn quarantine_failed_parquet_rows(
 fn extract_partition_values(
     partition_cols: &[String],
     record_batch: &RecordBatch,
-) -> Result<HashMap<String, Option<String>>, DeltaWriterError> {
-    let mut partition_values = HashMap::new();
+) -> Result<BTreeMap<String, Scalar>, DeltaWriterError> {
+    let mut partition_values = BTreeMap::new();
 
     for col_name in partition_cols.iter() {
         let arrow_schema = record_batch.schema();
-
         let i = arrow_schema.index_of(col_name)?;
         let col = record_batch.column(i);
+        let value = Scalar::from_array(col.as_ref(), 0)
+            .ok_or(DeltaWriterError::MissingPartitionColumn(col_name.clone()))?;
 
-        let partition_string = stringified_partition_value(col)?;
-
-        partition_values.insert(col_name.clone(), partition_string);
+        partition_values.insert(col_name.clone(), value);
     }
 
     Ok(partition_values)
@@ -427,6 +425,7 @@ mod tests {
     use crate::arrow::datatypes::{
         DataType as ArrowDataType, Field as ArrowField, Schema as ArrowSchema,
     };
+    use crate::kernel::DataType;
     use crate::writer::test_utils::get_delta_schema;
     use crate::writer::DeltaWriter;
     use crate::writer::JsonWriter;
@@ -499,15 +498,15 @@ mod tests {
                 &record_batch
             )
             .unwrap(),
-            HashMap::from([
-                (String::from("col1"), Some(String::from("1"))),
-                (String::from("col2"), Some(String::from("2"))),
-                (String::from("col3"), None),
+            BTreeMap::from([
+                (String::from("col1"), Scalar::Integer(1)),
+                (String::from("col2"), Scalar::Integer(2)),
+                (String::from("col3"), Scalar::Null(DataType::INTEGER)),
             ])
         );
         assert_eq!(
             extract_partition_values(&[String::from("col1")], &record_batch).unwrap(),
-            HashMap::from([(String::from("col1"), Some(String::from("1"))),])
+            BTreeMap::from([(String::from("col1"), Scalar::Integer(1)),])
         );
         assert!(extract_partition_values(&[String::from("col4")], &record_batch).is_err())
     }

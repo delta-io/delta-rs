@@ -601,6 +601,10 @@ impl DataType {
     pub fn decimal(precision: u8, scale: i8) -> Self {
         DataType::Primitive(PrimitiveType::Decimal(precision, scale))
     }
+
+    pub fn struct_type(fields: Vec<StructField>) -> Self {
+        DataType::Struct(Box::new(StructType::new(fields)))
+    }
 }
 
 impl Display for DataType {

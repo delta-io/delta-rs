@@ -25,7 +25,7 @@ use deltalake::datafusion::datasource::provider::TableProvider;
 use deltalake::datafusion::prelude::SessionContext;
 use deltalake::delta_datafusion::DeltaDataChecker;
 use deltalake::errors::DeltaTableError;
-use deltalake::kernel::{Action, Add, Invariant, Remove, StructType};
+use deltalake::kernel::{Action, Add, FileStats, Invariant, Remove, Scalar, StructType};
 use deltalake::operations::constraints::ConstraintBuilder;
 use deltalake::operations::convert_to_delta::{ConvertToDeltaBuilder, PartitionStrategy};
 use deltalake::operations::delete::DeleteBuilder;
@@ -45,7 +45,7 @@ use deltalake::DeltaTableBuilder;
 use deltalake::{DeltaOps, DeltaResult};
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::PyFrozenSet;
+use pyo3::types::{PyDict, PyFrozenSet};
 use serde_json::{Map, Value};
 
 use crate::error::DeltaProtocolError;
@@ -717,40 +717,37 @@ impl RawDeltaTable {
             .map_err(PythonError::from)?)
     }
 
-    // pub fn dataset_partitions<'py>(
-    //     &mut self,
-    //     py: Python<'py>,
-    //     schema: PyArrowType<ArrowSchema>,
-    //     partition_filters: Option<Vec<(&str, &str, PartitionFilterValue)>>,
-    // ) -> PyResult<Vec<(String, Option<&'py PyAny>)>> {
-    //     let path_set = match partition_filters {
-    //         Some(filters) => Some(HashSet::<_>::from_iter(
-    //             self.files_by_partitions(filters)?.iter().cloned(),
-    //         )),
-    //         None => None,
-    //     };
-    //
-    //     self._table
-    //         .get_files_iter()
-    //         .map_err(PythonError::from)?
-    //         .map(|p| p.to_string())
-    //         .zip(
-    //             self._table
-    //                 .get_partition_values()
-    //                 .map_err(PythonError::from)?,
-    //         )
-    //         .zip(self._table.get_stats().map_err(PythonError::from)?)
-    //         .filter(|((path, _), _)| match &path_set {
-    //             Some(path_set) => path_set.contains(path),
-    //             None => true,
-    //         })
-    //         .map(|((path, partition_values), stats)| {
-    //             let stats = stats.map_err(PythonError::from)?;
-    //             let expression = filestats_to_expression(py, &schema, &partition_values, stats)?;
-    //             Ok((path, expression))
-    //         })
-    //         .collect()
-    // }
+    pub fn dataset_partitions<'py>(
+        &mut self,
+        py: Python<'py>,
+        schema: PyArrowType<ArrowSchema>,
+        partition_filters: Option<Vec<(&str, &str, PartitionFilterValue)>>,
+    ) -> PyResult<Vec<(String, Option<&'py PyAny>)>> {
+        let path_set = match partition_filters {
+            Some(filters) => Some(HashSet::<_>::from_iter(
+                self.files_by_partitions(filters)?.iter().cloned(),
+            )),
+            None => None,
+        };
+        self._table
+            .snapshot()
+            .map_err(PythonError::from)?
+            .log_data()
+            .into_iter()
+            .filter_map(|f| {
+                let path = f.path().to_string();
+                match &path_set {
+                    Some(path_set) => path_set.contains(&path).then_some((path, f)),
+                    None => Some((path, f)),
+                }
+            })
+            .map(|(path, f)| {
+                let expression = filestats_to_expression_next(py, &schema, f)?;
+                println!("path: {:?}", path);
+                Ok((path, expression))
+            })
+            .collect()
+    }
 
     fn get_active_partitions<'py>(
         &self,
@@ -810,14 +807,25 @@ impl RawDeltaTable {
             .map_err(PythonError::from)?
             .get_active_add_actions_by_partitions(&converted_filters)
             .map_err(PythonError::from)?
-            .collect::<Vec<_>>();
-        let active_partitions: HashSet<Vec<(&str, Option<&str>)>> = adds
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(PythonError::from)?;
+        let active_partitions: HashSet<Vec<(&str, Option<String>)>> = adds
             .iter()
-            .map(|add| {
-                partition_columns
-                    .iter()
-                    .map(|col| (*col, add.partition_values.get(*col).unwrap().as_deref()))
-                    .collect()
+            .flat_map(|add| {
+                Ok::<_, PythonError>(
+                    partition_columns
+                        .iter()
+                        .flat_map(|col| {
+                            Ok::<_, PythonError>((
+                                *col,
+                                add.partition_values()
+                                    .map_err(PythonError::from)?
+                                    .get(*col)
+                                    .map(|v| v.serialize()),
+                            ))
+                        })
+                        .collect(),
+                )
             })
             .collect();
 
@@ -862,17 +870,34 @@ impl RawDeltaTable {
                     .map_err(PythonError::from)?;
 
                 for old_add in add_actions {
+                    let old_add = old_add.map_err(PythonError::from)?;
                     let remove_action = Action::Remove(Remove {
-                        path: old_add.path.clone(),
+                        path: old_add.path().to_string(),
                         deletion_timestamp: Some(current_timestamp()),
                         data_change: true,
-                        extended_file_metadata: Some(old_add.tags.is_some()),
-                        partition_values: Some(old_add.partition_values.clone()),
-                        size: Some(old_add.size),
-                        deletion_vector: old_add.deletion_vector.clone(),
-                        tags: old_add.tags.clone(),
-                        base_row_id: old_add.base_row_id,
-                        default_row_commit_version: old_add.default_row_commit_version,
+                        extended_file_metadata: Some(true),
+                        partition_values: Some(
+                            old_add
+                                .partition_values()
+                                .map_err(PythonError::from)?
+                                .iter()
+                                .map(|(k, v)| {
+                                    (
+                                        k.to_string(),
+                                        if v.is_null() {
+                                            None
+                                        } else {
+                                            Some(v.serialize())
+                                        },
+                                    )
+                                })
+                                .collect(),
+                        ),
+                        size: Some(old_add.size()),
+                        deletion_vector: None,
+                        tags: None,
+                        base_row_id: None,
+                        default_row_commit_version: None,
                     });
                     actions.push(remove_action);
                 }
@@ -1069,23 +1094,46 @@ fn convert_partition_filters<'a>(
         .collect()
 }
 
-// fn json_value_to_py(value: &serde_json::Value, py: Python) -> PyObject {
-//     match value {
-//         serde_json::Value::Null => py.None(),
-//         serde_json::Value::Bool(val) => val.to_object(py),
-//         serde_json::Value::Number(val) => {
-//             if val.is_f64() {
-//                 val.as_f64().expect("not an f64").to_object(py)
-//             } else if val.is_i64() {
-//                 val.as_i64().expect("not an i64").to_object(py)
-//             } else {
-//                 val.as_u64().expect("not an u64").to_object(py)
-//             }
-//         }
-//         serde_json::Value::String(val) => val.to_object(py),
-//         _ => py.None(),
-//     }
-// }
+fn scalar_to_py(value: &Scalar, py_date: &PyAny, py: Python) -> PyResult<PyObject> {
+    use Scalar::*;
+
+    let val = match value {
+        Null(_) => py.None(),
+        Boolean(val) => val.to_object(py),
+        Binary(val) => val.to_object(py),
+        String(val) => val.to_object(py),
+        Byte(val) => val.to_object(py),
+        Short(val) => val.to_object(py),
+        Integer(val) => val.to_object(py),
+        Long(val) => val.to_object(py),
+        Float(val) => val.to_object(py),
+        Double(val) => val.to_object(py),
+        // TODO: Since PyArrow 13.0.0, casting string -> timestamp fails if it ends with "Z"
+        // and the target type is timezone naive. The serialization does not produce "Z",
+        // but we need to consider timezones when doing timezone ntz.
+        Timestamp(_) => {
+            let value = value.serialize();
+            println!("timestamp: {}", value);
+            value.to_object(py)
+        }
+        // NOTE: PyArrow 13.0.0 lost the ability to cast from string to date32, so
+        // we have to implement that manually.
+        Date(_) => {
+            let date = py_date.call_method1("fromisoformat", (value.serialize(),))?;
+            date.to_object(py)
+        }
+        Decimal(_, _, _) => value.serialize().to_object(py),
+        Struct(values, fields) => {
+            let py_struct = PyDict::new(py);
+            for (field, value) in fields.iter().zip(values.iter()) {
+                py_struct.set_item(field.name(), scalar_to_py(value, py_date, py)?)?;
+            }
+            py_struct.to_object(py)
+        }
+    };
+
+    Ok(val)
+}
 
 /// Create expression that file statistics guarantee to be true.
 ///
@@ -1099,129 +1147,129 @@ fn convert_partition_filters<'a>(
 ///
 /// Statistics are translated into inequalities. If there are null values, then
 /// they must be OR'd with is_null.
-// fn filestats_to_expression<'py>(
-//     py: Python<'py>,
-//     schema: &PyArrowType<ArrowSchema>,
-//     partitions_values: &HashMap<String, Option<String>>,
-//     stats: Option<Stats>,
-// ) -> PyResult<Option<&'py PyAny>> {
-//     let ds = PyModule::import(py, "pyarrow.dataset")?;
-//     let field = ds.getattr("field")?;
-//     let pa = PyModule::import(py, "pyarrow")?;
-//     let mut expressions: Vec<PyResult<&PyAny>> = Vec::new();
-//
-//     let cast_to_type = |column_name: &String, value: PyObject, schema: &ArrowSchema| {
-//         let column_type = schema
-//             .field_with_name(column_name)
-//             .map_err(|_| {
-//                 PyValueError::new_err(format!("Column not found in schema: {column_name}"))
-//             })?
-//             .data_type()
-//             .clone();
-//
-//         let value = match column_type {
-//             // Since PyArrow 13.0.0, casting string -> timestamp fails if it ends with "Z"
-//             // and the target type is timezone naive.
-//             DataType::Timestamp(_, _) if value.extract::<String>(py).is_ok() => {
-//                 value.call_method1(py, "rstrip", ("Z",))?
-//             }
-//             // PyArrow 13.0.0 lost the ability to cast from string to date32, so
-//             // we have to implement that manually.
-//             DataType::Date32 if value.extract::<String>(py).is_ok() => {
-//                 let date = Python::import(py, "datetime")?.getattr("date")?;
-//                 let date = date.call_method1("fromisoformat", (value,))?;
-//                 date.to_object(py)
-//             }
-//             _ => value,
-//         };
-//
-//         let column_type = PyArrowType(column_type).into_py(py);
-//         pa.call_method1("scalar", (value,))?
-//             .call_method1("cast", (column_type,))
-//     };
-//
-//     for (column, value) in partitions_values.iter() {
-//         if let Some(value) = value {
-//             // value is a string, but needs to be parsed into appropriate type
-//             let converted_value = cast_to_type(column, value.into_py(py), &schema.0)?;
-//             expressions.push(
-//                 field
-//                     .call1((column,))?
-//                     .call_method1("__eq__", (converted_value,)),
-//             );
-//         } else {
-//             expressions.push(field.call1((column,))?.call_method0("is_null"));
-//         }
-//     }
-//
-//     if let Some(stats) = stats {
-//         let mut has_nulls_set: HashSet<String> = HashSet::new();
-//
-//         for (col_name, null_count) in stats.null_count.iter().filter_map(|(k, v)| match v {
-//             ColumnCountStat::Value(val) => Some((k, val)),
-//             _ => None,
-//         }) {
-//             if *null_count == 0 {
-//                 expressions.push(field.call1((col_name,))?.call_method0("is_valid"));
-//             } else if *null_count == stats.num_records {
-//                 expressions.push(field.call1((col_name,))?.call_method0("is_null"));
-//             } else {
-//                 has_nulls_set.insert(col_name.clone());
-//             }
-//         }
-//
-//         for (col_name, minimum) in stats.min_values.iter().filter_map(|(k, v)| match v {
-//             ColumnValueStat::Value(val) => Some((k.clone(), json_value_to_py(val, py))),
-//             // TODO(wjones127): Handle nested field statistics.
-//             // Blocked on https://issues.apache.org/jira/browse/ARROW-11259
-//             _ => None,
-//         }) {
-//             let maybe_minimum = cast_to_type(&col_name, minimum, &schema.0);
-//             if let Ok(minimum) = maybe_minimum {
-//                 let field_expr = field.call1((&col_name,))?;
-//                 let expr = field_expr.call_method1("__ge__", (minimum,));
-//                 let expr = if has_nulls_set.contains(&col_name) {
-//                     // col >= min_value OR col is null
-//                     let is_null_expr = field_expr.call_method0("is_null");
-//                     expr?.call_method1("__or__", (is_null_expr?,))
-//                 } else {
-//                     // col >= min_value
-//                     expr
-//                 };
-//                 expressions.push(expr);
-//             }
-//         }
-//
-//         for (col_name, maximum) in stats.max_values.iter().filter_map(|(k, v)| match v {
-//             ColumnValueStat::Value(val) => Some((k.clone(), json_value_to_py(val, py))),
-//             _ => None,
-//         }) {
-//             let maybe_maximum = cast_to_type(&col_name, maximum, &schema.0);
-//             if let Ok(maximum) = maybe_maximum {
-//                 let field_expr = field.call1((&col_name,))?;
-//                 let expr = field_expr.call_method1("__le__", (maximum,));
-//                 let expr = if has_nulls_set.contains(&col_name) {
-//                     // col <= max_value OR col is null
-//                     let is_null_expr = field_expr.call_method0("is_null");
-//                     expr?.call_method1("__or__", (is_null_expr?,))
-//                 } else {
-//                     // col <= max_value
-//                     expr
-//                 };
-//                 expressions.push(expr);
-//             }
-//         }
-//     }
-//
-//     if expressions.is_empty() {
-//         Ok(None)
-//     } else {
-//         expressions
-//             .into_iter()
-//             .reduce(|accum, item| accum?.call_method1("__and__", (item?,)))
-//             .transpose()
-//     }
-// }
+fn filestats_to_expression_next<'py>(
+    py: Python<'py>,
+    schema: &PyArrowType<ArrowSchema>,
+    file_info: FileStats<'_>,
+) -> PyResult<Option<&'py PyAny>> {
+    let ds = PyModule::import(py, "pyarrow.dataset")?;
+    let py_field = ds.getattr("field")?;
+    let pa = PyModule::import(py, "pyarrow")?;
+    let py_date = Python::import(py, "datetime")?.getattr("date")?;
+    let mut expressions: Vec<PyResult<&PyAny>> = Vec::new();
+
+    let cast_to_type = |column_name: &String, value: PyObject, schema: &ArrowSchema| {
+        let column_type = schema
+            .field_with_name(column_name)
+            .map_err(|_| {
+                PyValueError::new_err(format!("Column not found in schema: {column_name}"))
+            })?
+            .data_type()
+            .clone();
+        let column_type = PyArrowType(column_type).into_py(py);
+        pa.call_method1("scalar", (value,))?
+            .call_method1("cast", (column_type,))
+    };
+
+    if let Ok(partitions_values) = file_info.partition_values() {
+        println!("partition_values: {:?}", partitions_values);
+        for (column, value) in partitions_values.iter() {
+            let column = column.to_string();
+            if !value.is_null() {
+                // value is a string, but needs to be parsed into appropriate type
+                let converted_value =
+                    cast_to_type(&column, scalar_to_py(value, py_date, py)?, &schema.0)?;
+                expressions.push(
+                    py_field
+                        .call1((&column,))?
+                        .call_method1("__eq__", (converted_value,)),
+                );
+            } else {
+                expressions.push(py_field.call1((column,))?.call_method0("is_null"));
+            }
+        }
+    }
+
+    let mut has_nulls_set: HashSet<String> = HashSet::new();
+
+    // NOTE: null_counts should always return a struct scalar.
+    if let Some(Scalar::Struct(values, fields)) = file_info.null_counts() {
+        for (field, value) in fields.iter().zip(values.iter()) {
+            if let Scalar::Long(val) = value {
+                if *val == 0 {
+                    expressions.push(py_field.call1((field.name(),))?.call_method0("is_valid"));
+                } else if Some(*val as usize) == file_info.num_records() {
+                    expressions.push(py_field.call1((field.name(),))?.call_method0("is_null"));
+                } else {
+                    has_nulls_set.insert(field.name().to_string());
+                }
+            }
+        }
+    }
+
+    // NOTE: min_values should always return a struct scalar.
+    if let Some(Scalar::Struct(values, fields)) = file_info.min_values() {
+        for (field, value) in fields.iter().zip(values.iter()) {
+            match value {
+                // TODO: Handle nested field statistics.
+                Scalar::Struct(_, _) => {}
+                _ => {
+                    let maybe_minimum =
+                        cast_to_type(field.name(), scalar_to_py(value, py_date, py)?, &schema.0);
+                    if let Ok(minimum) = maybe_minimum {
+                        let field_expr = py_field.call1((field.name(),))?;
+                        let expr = field_expr.call_method1("__ge__", (minimum,));
+                        let expr = if has_nulls_set.contains(field.name()) {
+                            // col >= min_value OR col is null
+                            let is_null_expr = field_expr.call_method0("is_null");
+                            expr?.call_method1("__or__", (is_null_expr?,))
+                        } else {
+                            // col >= min_value
+                            expr
+                        };
+                        expressions.push(expr);
+                    }
+                }
+            }
+        }
+    }
+
+    // NOTE: max_values should always return a struct scalar.
+    if let Some(Scalar::Struct(values, fields)) = file_info.max_values() {
+        for (field, value) in fields.iter().zip(values.iter()) {
+            match value {
+                // TODO: Handle nested field statistics.
+                Scalar::Struct(_, _) => {}
+                _ => {
+                    let maybe_maximum =
+                        cast_to_type(field.name(), scalar_to_py(value, py_date, py)?, &schema.0);
+                    if let Ok(maximum) = maybe_maximum {
+                        let field_expr = py_field.call1((field.name(),))?;
+                        let expr = field_expr.call_method1("__le__", (maximum,));
+                        let expr = if has_nulls_set.contains(field.name()) {
+                            // col <= max_value OR col is null
+                            let is_null_expr = field_expr.call_method0("is_null");
+                            expr?.call_method1("__or__", (is_null_expr?,))
+                        } else {
+                            // col <= max_value
+                            expr
+                        };
+                        expressions.push(expr);
+                    }
+                }
+            }
+        }
+    }
+
+    if expressions.is_empty() {
+        Ok(None)
+    } else {
+        expressions
+            .into_iter()
+            .reduce(|accum, item| accum?.call_method1("__and__", (item?,)))
+            .transpose()
+    }
+}
 
 #[pyfunction]
 fn rust_core_version() -> &'static str {

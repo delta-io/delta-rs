@@ -64,7 +64,7 @@ pub(super) fn read_protocol(batch: &dyn ProvidesColumnByName) -> DeltaResult<Opt
     Ok(None)
 }
 
-pub(super) fn extract_adds(array: &dyn ProvidesColumnByName) -> DeltaResult<Vec<Add>> {
+pub(super) fn read_adds(array: &dyn ProvidesColumnByName) -> DeltaResult<Vec<Add>> {
     let mut result = Vec::new();
 
     if let Some(arr) = ex::extract_and_cast_opt::<StructArray>(array, "add") {
@@ -134,7 +134,7 @@ pub(super) fn extract_adds(array: &dyn ProvidesColumnByName) -> DeltaResult<Vec<
     Ok(result)
 }
 
-pub(super) fn extract_removes(array: &dyn ProvidesColumnByName) -> DeltaResult<Vec<Remove>> {
+pub(super) fn read_removes(array: &dyn ProvidesColumnByName) -> DeltaResult<Vec<Remove>> {
     let mut result = Vec::new();
 
     if let Some(arr) = ex::extract_and_cast_opt::<StructArray>(array, "remove") {

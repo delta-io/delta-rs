@@ -334,7 +334,7 @@ impl<'a> DeltaScanBuilder<'a> {
                         PruningPredicate::try_new(predicate.clone(), logical_schema.clone())?;
                     let files_to_prune = pruning_predicate.prune(self.snapshot)?;
                     self.snapshot
-                        .files()?
+                        .file_actions()?
                         .iter()
                         .zip(files_to_prune.into_iter())
                         .filter_map(
@@ -348,7 +348,7 @@ impl<'a> DeltaScanBuilder<'a> {
                         )
                         .collect()
                 } else {
-                    self.snapshot.files()?
+                    self.snapshot.file_actions()?
                 }
             }
         };
@@ -1186,7 +1186,7 @@ pub(crate) async fn find_files_scan<'a>(
     expression: Expr,
 ) -> DeltaResult<Vec<Add>> {
     let candidate_map: HashMap<String, Add> = snapshot
-        .files()?
+        .file_actions()?
         .iter()
         .map(|add| (add.path.clone(), add.to_owned()))
         .collect();
@@ -1246,7 +1246,7 @@ pub(crate) async fn scan_memory_table(
     snapshot: &DeltaTableState,
     predicate: &Expr,
 ) -> DeltaResult<Vec<Add>> {
-    let actions = snapshot.files()?;
+    let actions = snapshot.file_actions()?;
 
     let batch = snapshot.add_actions_table(true)?;
     let mut arrays = Vec::new();
@@ -1334,7 +1334,7 @@ pub async fn find_files<'a>(
             }
         }
         None => Ok(FindFiles {
-            candidates: snapshot.files()?,
+            candidates: snapshot.file_actions()?,
             partition_scan: true,
         }),
     }

@@ -1,6 +1,15 @@
 //! Delta table snapshots
 //!
 //! A snapshot represents the state of a Delta Table at a given version.
+//!
+//! There are two types of snapshots:
+//!
+//! - [`Snapshot`] is a snapshot where most data is loaded on demand and only the
+//!   bare minimum - [`Protocol`] and [`Metadata`] - is cached in memory.
+//! - [`EagerSnapshot`] is a snapshot where much more log data is eagerly loaded into memory.
+//!
+//! The sub modules provide structures and methods that aid in generating
+//! and consuming snapshots.
 
 use std::io::{BufRead, BufReader, Cursor};
 use std::sync::Arc;
@@ -12,9 +21,8 @@ use futures::{StreamExt, TryStreamExt};
 use object_store::path::Path;
 use object_store::ObjectStore;
 
-use self::log_data::{FileStats, FileStatsHandler};
 use self::log_segment::{CommitData, LogSegment, PathExt};
-use self::parse::{extract_adds, extract_removes};
+use self::parse::{read_adds, read_removes};
 use self::replay::{LogReplayScanner, ReplayStream};
 use super::{Action, Add, CommitInfo, Metadata, Protocol, Remove};
 use crate::kernel::StructType;
@@ -28,6 +36,8 @@ mod log_segment;
 pub(crate) mod parse;
 mod replay;
 mod serde;
+
+pub use log_data::*;
 
 /// A snapshot of a Delta table
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
@@ -244,12 +254,9 @@ impl Snapshot {
                     let reader = BufReader::new(Cursor::new(commit_log_bytes));
                     for line in reader.lines() {
                         let action: Action = serde_json::from_str(line?.as_str())?;
-                        match action {
-                            Action::CommitInfo(commit_info) => {
-                                return Ok::<_, DeltaTableError>(Some(commit_info))
-                            }
-                            _ => (),
-                        };
+                        if let Action::CommitInfo(commit_info) = action {
+                            return Ok::<_, DeltaTableError>(Some(commit_info));
+                        }
                     }
                     Ok(None)
                 }
@@ -274,7 +281,7 @@ impl Snapshot {
         Ok(log_stream
             .chain(checkpoint_stream)
             .map(|batch| match batch {
-                Ok(batch) => extract_removes(&batch),
+                Ok(batch) => read_removes(&batch),
                 Err(e) => Err(e),
             })
             .boxed())
@@ -285,6 +292,8 @@ impl Snapshot {
 #[derive(Debug, Clone, PartialEq)]
 pub struct EagerSnapshot {
     snapshot: Snapshot,
+    // NOTE: this is a Vec of RecordBatch instead of a single RecordBatch because
+    //       we do not yet enforce a consistent schema across all batches we read from the log.
     files: Vec<RecordBatch>,
 }
 
@@ -398,6 +407,11 @@ impl EagerSnapshot {
         self.snapshot.table_config()
     }
 
+    /// Get a [`LogDataHandler`] for the snapshot to inspect the currently loaded state of the log.
+    pub fn log_data(&self) -> LogDataHandler<'_> {
+        LogDataHandler::new(&self.files, self.metadata(), self.schema())
+    }
+
     /// Get the number of files in the snapshot
     pub fn files_count(&self) -> usize {
         self.files.iter().map(|f| f.num_rows()).sum()
@@ -405,17 +419,12 @@ impl EagerSnapshot {
 
     /// Get the files in the snapshot
     pub fn file_actions(&self) -> DeltaResult<impl Iterator<Item = Add> + '_> {
-        Ok(self.files.iter().flat_map(|b| extract_adds(b)).flatten())
+        Ok(self.files.iter().flat_map(|b| read_adds(b)).flatten())
     }
 
     /// Get a file action iterator for the given version
-    pub fn file_stats(&self) -> FileStatsHandler<'_> {
-        FileStatsHandler::new(&self.files, self.metadata(), self.schema())
-    }
-
-    /// Get a file action iterator for the given version
-    pub fn file_stats_iter(&self) -> impl Iterator<Item = DeltaResult<FileStats<'_>>> {
-        self.file_stats().into_iter()
+    pub fn file_stats(&self) -> impl Iterator<Item = FileStats<'_>> {
+        self.log_data().into_iter()
     }
 
     /// Advance the snapshot based on the given commit actions
@@ -485,7 +494,7 @@ mod datafusion {
     impl EagerSnapshot {
         /// Provide table level statistics to Datafusion
         pub fn datafusion_table_statistics(&self) -> Option<Statistics> {
-            self.file_stats().statistics()
+            self.log_data().statistics()
         }
     }
 }

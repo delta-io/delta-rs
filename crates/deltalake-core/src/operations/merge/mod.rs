@@ -1334,7 +1334,7 @@ async fn execute(
 
     {
         let lock = survivors.lock().unwrap();
-        for action in snapshot.files()? {
+        for action in snapshot.file_actions()? {
             if lock.contains(&action.path) {
                 metrics.num_target_files_removed += 1;
                 actions.push(Action::Remove(Remove {

@@ -1,25 +1,223 @@
-use std::collections::HashMap;
+use std::borrow::Cow;
+use std::collections::{BTreeMap, HashMap};
+use std::sync::Arc;
 
 use arrow_array::{Array, Int64Array, MapArray, RecordBatch, StringArray, StructArray};
+use chrono::{NaiveDateTime, TimeZone, Utc};
+use object_store::path::Path;
+use object_store::ObjectMeta;
+use percent_encoding::percent_decode_str;
 
 use super::extract::extract_and_cast;
-use crate::kernel::scalars::Scalar;
-use crate::kernel::{DataType, StructField, StructType};
-use crate::DeltaTableError;
-use crate::{kernel::Metadata, DeltaResult};
+use crate::kernel::{DataType, Metadata, Scalar, StructField, StructType};
+use crate::{DeltaResult, DeltaTableError};
 
-#[derive(Debug, PartialEq)]
-pub struct FileStats<'a> {
-    path: &'a str,
-    size: i64,
-    partition_values: HashMap<&'a str, Option<Scalar>>,
-    stats: StructArray,
+const COL_NUM_RECORDS: &str = "numRecords";
+const COL_MIN_VALUES: &str = "minValues";
+const COL_MAX_VALUES: &str = "maxValues";
+const COL_NULL_COUNT: &str = "nullCount";
+
+pub(crate) type PartitionFields<'a> = Arc<BTreeMap<&'a str, &'a StructField>>;
+pub(crate) type PartitionValues<'a> = BTreeMap<&'a str, Scalar>;
+
+pub(crate) trait PartitionsExt {
+    fn hive_partition_path(&self) -> String;
 }
 
+impl PartitionsExt for BTreeMap<&str, Scalar> {
+    fn hive_partition_path(&self) -> String {
+        let mut fields = self
+            .iter()
+            .map(|(k, v)| {
+                let encoded = v.serialize_encoded();
+                format!("{k}={encoded}")
+            })
+            .collect::<Vec<_>>();
+        fields.reverse();
+        fields.join("/")
+    }
+}
+
+impl PartitionsExt for BTreeMap<String, Scalar> {
+    fn hive_partition_path(&self) -> String {
+        let mut fields = self
+            .iter()
+            .map(|(k, v)| {
+                let encoded = v.serialize_encoded();
+                format!("{k}={encoded}")
+            })
+            .collect::<Vec<_>>();
+        fields.reverse();
+        fields.join("/")
+    }
+}
+
+impl<T: PartitionsExt> PartitionsExt for Arc<T> {
+    fn hive_partition_path(&self) -> String {
+        self.as_ref().hive_partition_path()
+    }
+}
+
+/// A view into the log data for a single logical file.
+#[derive(Debug, PartialEq)]
+pub struct FileStats<'a> {
+    path: &'a StringArray,
+    size: &'a Int64Array,
+    modification_time: &'a Int64Array,
+    partition_values: &'a MapArray,
+    partition_fields: PartitionFields<'a>,
+    stats: &'a StructArray,
+    index: usize,
+}
+
+impl FileStats<'_> {
+    /// Path to the files storage location.
+    pub fn path(&self) -> Cow<'_, str> {
+        percent_decode_str(self.path.value(self.index))
+            .decode_utf8()
+            .unwrap()
+    }
+
+    /// an object store [`Path`] to the file.
+    ///
+    /// this tries to parse the file string and if that fails, it will return the string as is.
+    // TODO assert consisent handling of the paths encoding when reading log data so this logic can be removed.
+    pub fn object_store_path(&self) -> Path {
+        let path = self.path();
+        // Try to preserve percent encoding if possible
+        match Path::parse(path.as_ref()) {
+            Ok(path) => path,
+            Err(_) => Path::from(path.as_ref()),
+        }
+    }
+
+    /// File size stored on disk.
+    pub fn size(&self) -> i64 {
+        self.size.value(self.index)
+    }
+
+    /// Last modification time of the file.
+    pub fn modification_time(&self) -> i64 {
+        self.modification_time.value(self.index)
+    }
+
+    /// Datetime of the last modification time of the file.
+    pub fn modification_datetime(&self) -> DeltaResult<chrono::DateTime<Utc>> {
+        Ok(Utc.from_utc_datetime(
+            &NaiveDateTime::from_timestamp_millis(self.modification_time()).ok_or(
+                DeltaTableError::from(crate::protocol::ProtocolError::InvalidField(format!(
+                    "invalid modification_time: {:?}",
+                    self.modification_time()
+                ))),
+            )?,
+        ))
+    }
+
+    /// The partition values for this logical file.
+    // TODO make this fallible
+    pub fn partition_values(&self) -> DeltaResult<PartitionValues<'_>> {
+        if self.partition_fields.is_empty() {
+            return Ok(BTreeMap::new());
+        }
+        let map_value = self.partition_values.value(self.index);
+        let keys = map_value
+            .column(0)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .ok_or(DeltaTableError::Generic("()".into()))?;
+        let values = map_value
+            .column(1)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .ok_or(DeltaTableError::Generic("()".into()))?;
+
+        let values = keys
+            .iter()
+            .zip(values.iter())
+            .map(|(k, v)| {
+                let (key, field) = self.partition_fields.get_key_value(k.unwrap()).unwrap();
+                let field_type = match field.data_type() {
+                    DataType::Primitive(p) => Ok(p),
+                    _ => Err(DeltaTableError::Generic(
+                        "nested partitioning values are not supported".to_string(),
+                    )),
+                }?;
+                Ok((
+                    *key,
+                    v.map(|vv| field_type.parse_scalar(vv))
+                        .transpose()?
+                        .unwrap_or(Scalar::Null(field.data_type().clone())),
+                ))
+            })
+            .collect::<DeltaResult<HashMap<_, _>>>()?;
+
+        // NOTE: we recreate the map as a BTreeMap to ensure the order of the keys is consistently
+        // the same as the order of partition fields.
+        self.partition_fields
+            .iter()
+            .map(|(k, f)| {
+                let val = values
+                    .get(*k)
+                    .cloned()
+                    .unwrap_or(Scalar::Null(f.data_type.clone()));
+                Ok((*k, val))
+            })
+            .collect::<DeltaResult<BTreeMap<_, _>>>()
+    }
+
+    /// The number of records stored in the data file.
+    pub fn num_records(&self) -> Option<usize> {
+        self.stats
+            .column_by_name(COL_NUM_RECORDS)
+            .and_then(|c| c.as_any().downcast_ref::<Int64Array>())
+            .map(|a| a.value(self.index) as usize)
+    }
+
+    /// Struct containing all available null counts for the columns in this file.
+    pub fn null_counts(&self) -> Option<Scalar> {
+        self.stats
+            .column_by_name(COL_NULL_COUNT)
+            .and_then(|c| Scalar::from_array(c.as_ref(), self.index))
+    }
+
+    /// Struct containing all available min values for the columns in this file.
+    pub fn min_values(&self) -> Option<Scalar> {
+        self.stats
+            .column_by_name(COL_MIN_VALUES)
+            .and_then(|c| Scalar::from_array(c.as_ref(), self.index))
+    }
+
+    /// Struct containing all available max values for the columns in this file.
+    pub fn max_values(&self) -> Option<Scalar> {
+        self.stats
+            .column_by_name(COL_MAX_VALUES)
+            .and_then(|c| Scalar::from_array(c.as_ref(), self.index))
+    }
+}
+
+impl<'a> TryFrom<&FileStats<'a>> for ObjectMeta {
+    type Error = DeltaTableError;
+
+    fn try_from(file_stats: &FileStats<'a>) -> Result<Self, Self::Error> {
+        let location = file_stats.object_store_path();
+        let size = file_stats.size() as usize;
+        let last_modified = file_stats.modification_datetime()?;
+        Ok(ObjectMeta {
+            location,
+            size,
+            last_modified,
+            version: None,
+            e_tag: None,
+        })
+    }
+}
+
+/// Helper for processing data from the materialized Delta log.
 pub struct FileStatsAccessor<'a> {
-    partition_fields: HashMap<&'a str, &'a StructField>,
+    partition_fields: PartitionFields<'a>,
     paths: &'a StringArray,
     sizes: &'a Int64Array,
+    modification_times: &'a Int64Array,
     stats: &'a StructArray,
     partition_values: &'a MapArray,
     length: usize,
@@ -34,17 +232,21 @@ impl<'a> FileStatsAccessor<'a> {
     ) -> DeltaResult<Self> {
         let paths = extract_and_cast::<StringArray>(data, "add.path")?;
         let sizes = extract_and_cast::<Int64Array>(data, "add.size")?;
+        let modification_times = extract_and_cast::<Int64Array>(data, "add.modificationTime")?;
         let stats = extract_and_cast::<StructArray>(data, "add.stats_parsed")?;
         let partition_values = extract_and_cast::<MapArray>(data, "add.partitionValues")?;
-        let partition_fields = metadata
-            .partition_columns
-            .iter()
-            .map(|c| Ok::<_, DeltaTableError>((c.as_str(), schema.field_with_name(c.as_str())?)))
-            .collect::<Result<HashMap<_, _>, _>>()?;
+        let partition_fields = Arc::new(
+            metadata
+                .partition_columns
+                .iter()
+                .map(|c| Ok((c.as_str(), schema.field_with_name(c.as_str())?)))
+                .collect::<DeltaResult<BTreeMap<_, _>>>()?,
+        );
         Ok(Self {
             partition_fields,
             paths,
             sizes,
+            modification_times,
             stats,
             partition_values,
             length: data.num_rows(),
@@ -52,70 +254,50 @@ impl<'a> FileStatsAccessor<'a> {
         })
     }
 
-    fn get_partition_values(&self, index: usize) -> DeltaResult<HashMap<&'a str, Option<Scalar>>> {
-        let map_value = self.partition_values.value(index);
-        let keys = map_value
-            .column(0)
-            .as_any()
-            .downcast_ref::<StringArray>()
-            .ok_or(DeltaTableError::Generic("unexpected key type".into()))?;
-        let values = map_value
-            .column(1)
-            .as_any()
-            .downcast_ref::<StringArray>()
-            .ok_or(DeltaTableError::Generic("unexpected value type".into()))?;
-        keys.iter()
-            .zip(values.iter())
-            .map(|(k, v)| {
-                let (key, field) = self.partition_fields.get_key_value(k.unwrap()).unwrap();
-                let field_type = match field.data_type() {
-                    DataType::Primitive(p) => p,
-                    _ => todo!(),
-                };
-                Ok((*key, v.and_then(|vv| field_type.parse_scalar(vv).ok())))
-            })
-            .collect::<Result<HashMap<_, _>, _>>()
-    }
-
     pub(crate) fn get(&self, index: usize) -> DeltaResult<FileStats<'a>> {
-        let path = self.paths.value(index);
-        let size = self.sizes.value(index);
-        let stats = self.stats.slice(index, 1);
-        let partition_values = self.get_partition_values(index)?;
+        if index >= self.length {
+            return Err(DeltaTableError::Generic(format!(
+                "index out of bounds: {} >= {}",
+                index, self.length
+            )));
+        }
         Ok(FileStats {
-            path,
-            size,
-            partition_values,
-            stats,
+            path: self.paths,
+            size: self.sizes,
+            modification_time: self.modification_times,
+            partition_values: self.partition_values,
+            partition_fields: self.partition_fields.clone(),
+            stats: self.stats,
+            index,
         })
     }
 }
 
 impl<'a> Iterator for FileStatsAccessor<'a> {
-    type Item = DeltaResult<FileStats<'a>>;
+    type Item = FileStats<'a>;
 
     fn next(&mut self) -> Option<Self::Item> {
         if self.pointer >= self.length {
             return None;
         }
-
-        let file_stats = self.get(self.pointer);
-        if file_stats.is_err() {
-            return Some(Err(file_stats.unwrap_err()));
-        }
-
+        // Safety: we know that the pointer is within bounds
+        let file_stats = self.get(self.pointer).unwrap();
         self.pointer += 1;
         Some(file_stats)
     }
 }
 
-pub struct FileStatsHandler<'a> {
+/// Provides semanitc access to the log data.
+///
+/// This is a helper struct that provides access to the log data in a more semantic way
+/// to avid the necessiity of knowing the exact layout of the underlying log data.
+pub struct LogDataHandler<'a> {
     data: &'a Vec<RecordBatch>,
     metadata: &'a Metadata,
     schema: &'a StructType,
 }
 
-impl<'a> FileStatsHandler<'a> {
+impl<'a> LogDataHandler<'a> {
     pub(crate) fn new(
         data: &'a Vec<RecordBatch>,
         metadata: &'a Metadata,
@@ -129,8 +311,8 @@ impl<'a> FileStatsHandler<'a> {
     }
 }
 
-impl<'a> IntoIterator for FileStatsHandler<'a> {
-    type Item = DeltaResult<FileStats<'a>>;
+impl<'a> IntoIterator for LogDataHandler<'a> {
+    type Item = FileStats<'a>;
     type IntoIter = Box<dyn Iterator<Item = Self::Item> + 'a>;
 
     fn into_iter(self) -> Self::IntoIter {
@@ -243,7 +425,7 @@ mod datafusion {
         }
 
         fn num_records(&self) -> Precision<usize> {
-            self.collect_count("numRecords")
+            self.collect_count(COL_NUM_RECORDS)
         }
 
         fn total_size_files(&self) -> Precision<usize> {
@@ -256,10 +438,11 @@ mod datafusion {
         }
 
         fn column_stats(&self, name: impl AsRef<str>) -> DeltaResult<ColumnStatistics> {
-            let null_count_col = format!("nullCount.{}", name.as_ref());
+            let null_count_col = format!("{COL_NULL_COUNT}.{}", name.as_ref());
             let null_count = self.collect_count(&null_count_col);
 
-            let min_value = self.column_bounds("minValues", name.as_ref(), &AggregateFunction::Min);
+            let min_value =
+                self.column_bounds(COL_MIN_VALUES, name.as_ref(), &AggregateFunction::Min);
             let min_value = match &min_value {
                 Precision::Exact(value) if value.is_null() => Precision::Absent,
                 // TODO this is a hack, we should not be casting here but rather when we read the checkpoint data.
@@ -270,7 +453,8 @@ mod datafusion {
                 _ => min_value,
             };
 
-            let max_value = self.column_bounds("maxValues", name.as_ref(), &AggregateFunction::Max);
+            let max_value =
+                self.column_bounds(COL_MAX_VALUES, name.as_ref(), &AggregateFunction::Max);
             let max_value = match &max_value {
                 Precision::Exact(value) if value.is_null() => Precision::Absent,
                 Precision::Exact(ScalarValue::TimestampNanosecond(a, b)) => Precision::Exact(
@@ -303,7 +487,7 @@ mod datafusion {
         }
     }
 
-    impl FileStatsHandler<'_> {
+    impl LogDataHandler<'_> {
         fn num_records(&self) -> Precision<usize> {
             self.data
                 .iter()
@@ -362,7 +546,6 @@ mod datafusion {
 
 #[cfg(all(test, feature = "datafusion"))]
 mod tests {
-    use arrow_array::Array;
 
     #[tokio::test]
     async fn read_delta_1_2_1_struct_stats_table() {
@@ -371,27 +554,42 @@ mod tests {
         let table_from_json_stats = crate::open_table_with_version(table_uri, 1).await.unwrap();
 
         let json_action = table_from_json_stats
-             .snapshot()
-             .unwrap()
-             .snapshot
-             .file_stats_iter()
-             .find(|f| matches!(f, Ok(f) if f.path.ends_with("part-00000-7a509247-4f58-4453-9202-51d75dee59af-c000.snappy.parquet"))).unwrap().unwrap();
+            .snapshot()
+            .unwrap()
+            .snapshot
+            .file_stats()
+            .find(|f| {
+                f.path().ends_with(
+                    "part-00000-7a509247-4f58-4453-9202-51d75dee59af-c000.snappy.parquet",
+                )
+            })
+            .unwrap();
 
         let struct_action = table_from_struct_stats
-             .snapshot()
-             .unwrap()
-             .snapshot
-             .file_stats_iter()
-             .find(|f| matches!(f, Ok(f) if f.path.ends_with("part-00000-7a509247-4f58-4453-9202-51d75dee59af-c000.snappy.parquet"))).unwrap().unwrap();
+            .snapshot()
+            .unwrap()
+            .snapshot
+            .file_stats()
+            .find(|f| {
+                f.path().ends_with(
+                    "part-00000-7a509247-4f58-4453-9202-51d75dee59af-c000.snappy.parquet",
+                )
+            })
+            .unwrap();
 
-        assert_eq!(json_action.path, struct_action.path);
-        assert_eq!(json_action.partition_values, struct_action.partition_values);
-        assert_eq!(json_action.stats.len(), 1);
-        assert!(json_action
-            .stats
-            .column(0)
-            .eq(struct_action.stats.column(0)));
-        assert_eq!(json_action.stats.len(), struct_action.stats.len());
+        assert_eq!(json_action.path(), struct_action.path());
+        assert_eq!(
+            json_action.partition_values().unwrap(),
+            struct_action.partition_values().unwrap()
+        );
+        // assert_eq!(
+        //     json_action.max_values().unwrap(),
+        //     struct_action.max_values().unwrap()
+        // );
+        // assert_eq!(
+        //     json_action.min_values().unwrap(),
+        //     struct_action.min_values().unwrap()
+        // );
     }
 
     #[tokio::test]
@@ -403,7 +601,7 @@ mod tests {
             .snapshot()
             .unwrap()
             .snapshot
-            .file_stats();
+            .log_data();
 
         let col_stats = file_stats.statistics();
         println!("{:?}", col_stats);

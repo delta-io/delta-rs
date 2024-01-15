@@ -103,7 +103,10 @@ async fn test_restore_by_version() -> Result<(), Box<dyn Error>> {
     let table_uri = context.tmp_dir.path().to_str().to_owned().unwrap();
     let mut table = DeltaOps::try_from_uri(table_uri).await?;
     table.0.load_version(1).await?;
-    assert_eq!(table.0.snapshot()?.files()?, result.0.snapshot()?.files()?);
+    assert_eq!(
+        table.0.snapshot()?.file_actions()?,
+        result.0.snapshot()?.file_actions()?
+    );
 
     let result = DeltaOps(result.0)
         .restore()
@@ -167,7 +170,7 @@ async fn test_restore_with_error_params() -> Result<(), Box<dyn Error>> {
 async fn test_restore_file_missing() -> Result<(), Box<dyn Error>> {
     let context = setup_test().await?;
 
-    for file in context.table.snapshot()?.files()?.iter() {
+    for file in context.table.snapshot()?.file_actions()?.iter() {
         let p = context.tmp_dir.path().join(file.clone().path);
         fs::remove_file(p).unwrap();
     }
@@ -194,7 +197,7 @@ async fn test_restore_file_missing() -> Result<(), Box<dyn Error>> {
 async fn test_restore_allow_file_missing() -> Result<(), Box<dyn Error>> {
     let context = setup_test().await?;
 
-    for file in context.table.snapshot()?.files()?.iter() {
+    for file in context.table.snapshot()?.file_actions()?.iter() {
         let p = context.tmp_dir.path().join(file.clone().path);
         fs::remove_file(p).unwrap();
     }

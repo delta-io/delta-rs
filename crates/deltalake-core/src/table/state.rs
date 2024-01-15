@@ -9,16 +9,14 @@ use object_store::{path::Path, ObjectStore};
 use serde::{Deserialize, Serialize};
 
 use super::config::TableConfig;
-use super::get_partition_col_data_types;
-use crate::errors::DeltaTableError;
-use crate::kernel::EagerSnapshot;
-use crate::kernel::{Action, Add, DataType, Remove, StructType};
-use crate::kernel::{Metadata, Protocol};
+use super::{get_partition_col_data_types, DeltaTableConfig};
+use crate::kernel::{
+    Action, Add, DataType, EagerSnapshot, FileStats, LogDataHandler, Metadata, Protocol, Remove,
+    StructType,
+};
 use crate::partitions::{DeltaTablePartition, PartitionFilter};
 use crate::protocol::DeltaOperation;
-use crate::DeltaResult;
-
-use super::DeltaTableConfig;
+use crate::{DeltaResult, DeltaTableError};
 
 /// State snapshot currently held by the Delta Table instance.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -91,6 +89,11 @@ impl DeltaTableState {
         })
     }
 
+    /// Returns a semantic accessor to the currently loaded log data.
+    pub fn log_data(&self) -> LogDataHandler<'_> {
+        self.snapshot.log_data()
+    }
+
     /// Full list of tombstones (remove actions) representing files removed from table state).
     pub async fn all_tombstones(
         &self,
@@ -125,7 +128,7 @@ impl DeltaTableState {
 
     /// Full list of add actions representing all parquet files that are part of the current
     /// delta table state.
-    pub fn files(&self) -> DeltaResult<Vec<Add>> {
+    pub fn file_actions(&self) -> DeltaResult<Vec<Add>> {
         Ok(self.snapshot.file_actions()?.collect())
     }
 
@@ -136,14 +139,10 @@ impl DeltaTableState {
 
     /// Returns an iterator of file names present in the loaded state
     #[inline]
-    pub fn file_paths_iter(&self) -> DeltaResult<impl Iterator<Item = Path> + '_> {
-        Ok(self
-            .snapshot
-            .file_actions()?
-            .map(|add| match Path::parse(&add.path) {
-                Ok(path) => path,
-                Err(_) => Path::from(add.path.as_ref()),
-            }))
+    pub fn file_paths_iter(&self) -> impl Iterator<Item = Path> + '_ {
+        self.log_data()
+            .into_iter()
+            .map(|add| add.object_store_path())
     }
 
     /// HashMap containing the last txn version stored for every app id writing txn
@@ -180,7 +179,7 @@ impl DeltaTableState {
     /// function will update the tracked version if the version on `new_state` is larger then the
     /// currently set version however it is up to the caller to update the `version` field according
     /// to the version the merged state represents.
-    pub fn merge(
+    pub(crate) fn merge(
         &mut self,
         actions: Vec<Action>,
         operation: &DeltaOperation,
@@ -208,7 +207,7 @@ impl DeltaTableState {
     pub fn get_active_add_actions_by_partitions<'a>(
         &'a self,
         filters: &'a [PartitionFilter],
-    ) -> Result<impl Iterator<Item = Add> + '_, DeltaTableError> {
+    ) -> Result<impl Iterator<Item = DeltaResult<FileStats<'_>>> + '_, DeltaTableError> {
         let current_metadata = self.metadata();
 
         let nonpartitioned_columns: Vec<String> = filters
@@ -228,16 +227,27 @@ impl DeltaTableState {
                 .into_iter()
                 .collect();
 
-        let actions = self.files()?.into_iter().filter(move |add| {
-            let partitions = add
-                .partition_values
+        Ok(self.log_data().into_iter().filter_map(move |add| {
+            let partitions = add.partition_values();
+            if partitions.is_err() {
+                return Some(Err(DeltaTableError::Generic(
+                    "Failed to parse partition values".to_string(),
+                )));
+            }
+            let partitions = partitions
+                .unwrap()
                 .iter()
-                .map(|p| DeltaTablePartition::from_partition_value((p.0, p.1), ""))
-                .collect::<Vec<DeltaTablePartition>>();
-            filters
+                .map(|(k, v)| DeltaTablePartition::from_partition_value((*k, v)))
+                .collect::<Vec<_>>();
+            let is_valid = filters
                 .iter()
-                .all(|filter| filter.match_partitions(&partitions, &partition_col_data_types))
-        });
-        Ok(actions)
+                .all(|filter| filter.match_partitions(&partitions, &partition_col_data_types));
+
+            if is_valid {
+                Some(Ok(add))
+            } else {
+                None
+            }
+        }))
     }
 }

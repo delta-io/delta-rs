@@ -289,15 +289,13 @@ impl LogReplayScanner {
                 }
             }
         } else {
-            for a in add_actions.into_iter() {
-                if let Some(a) = a {
-                    let file_id = seen_key(&a);
-                    if !self.seen.contains(&file_id) {
-                        is_log_batch.then(|| self.seen.insert(file_id));
-                        keep.push(true);
-                    } else {
-                        keep.push(false);
-                    }
+            for a in add_actions.into_iter().flatten() {
+                let file_id = seen_key(&a);
+                if !self.seen.contains(&file_id) {
+                    is_log_batch.then(|| self.seen.insert(file_id));
+                    keep.push(true);
+                } else {
+                    keep.push(false);
                 }
             }
         };

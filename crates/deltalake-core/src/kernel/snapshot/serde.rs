@@ -1,6 +1,6 @@
 use arrow_ipc::reader::FileReader;
 use arrow_ipc::writer::FileWriter;
-use chrono::{DateTime, Utc};
+use chrono::{TimeZone, Utc};
 use object_store::ObjectMeta;
 use serde::de::{self, Deserializer, SeqAccess, Visitor};
 use serde::{ser::SerializeSeq, Deserialize, Serialize};
@@ -13,7 +13,7 @@ use super::EagerSnapshot;
 struct FileInfo {
     path: String,
     size: usize,
-    last_modified: DateTime<Utc>,
+    last_modified: i64,
     e_tag: Option<String>,
     version: Option<String>,
 }
@@ -29,7 +29,7 @@ impl Serialize for LogSegment {
             .map(|f| FileInfo {
                 path: f.location.to_string(),
                 size: f.size,
-                last_modified: f.last_modified,
+                last_modified: f.last_modified.timestamp_nanos_opt().unwrap(),
                 e_tag: f.e_tag.clone(),
                 version: f.version.clone(),
             })
@@ -40,7 +40,7 @@ impl Serialize for LogSegment {
             .map(|f| FileInfo {
                 path: f.location.to_string(),
                 size: f.size,
-                last_modified: f.last_modified,
+                last_modified: f.last_modified.timestamp_nanos_opt().unwrap(),
                 e_tag: f.e_tag.clone(),
                 version: f.version.clone(),
             })
@@ -82,12 +82,16 @@ impl<'de> Visitor<'de> for LogSegmentVisitor {
             version,
             commit_files: commit_files
                 .into_iter()
-                .map(|f| ObjectMeta {
-                    location: f.path.into(),
-                    size: f.size,
-                    last_modified: f.last_modified,
-                    version: f.version,
-                    e_tag: f.e_tag,
+                .map(|f| {
+                    let seconds = f.last_modified / 1_000_000_000;
+                    let nano_seconds = (f.last_modified % 1_000_000_000) as u32;
+                    ObjectMeta {
+                        location: f.path.into(),
+                        size: f.size,
+                        last_modified: Utc.timestamp_opt(seconds, nano_seconds).single().unwrap(),
+                        version: f.version,
+                        e_tag: f.e_tag,
+                    }
                 })
                 .collect(),
             checkpoint_files: checkpoint_files
@@ -95,7 +99,9 @@ impl<'de> Visitor<'de> for LogSegmentVisitor {
                 .map(|f| ObjectMeta {
                     location: f.path.into(),
                     size: f.size,
-                    last_modified: f.last_modified,
+                    last_modified: Utc.from_utc_datetime(
+                        &chrono::NaiveDateTime::from_timestamp_millis(f.last_modified).unwrap(),
+                    ),
                     version: None,
                     e_tag: None,
                 })

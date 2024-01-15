@@ -171,8 +171,8 @@ async fn execute(
             snapshot.version(),
         )));
     }
-    let state_to_restore_files = table.snapshot()?.files()?;
-    let latest_state_files = snapshot.files()?;
+    let state_to_restore_files = table.snapshot()?.file_actions()?;
+    let latest_state_files = snapshot.file_actions()?;
     let state_to_restore_files_set =
         HashSet::<Add>::from_iter(state_to_restore_files.iter().cloned());
     let latest_state_files_set = HashSet::<Add>::from_iter(latest_state_files.iter().cloned());

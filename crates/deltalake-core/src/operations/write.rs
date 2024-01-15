@@ -43,13 +43,12 @@ use super::writer::{DeltaWriter, WriterConfig};
 use super::{transaction::commit, CreateBuilder};
 use crate::delta_datafusion::DeltaDataChecker;
 use crate::errors::{DeltaResult, DeltaTableError};
-use crate::kernel::{Action, Add, Remove, StructType};
+use crate::kernel::{Action, Add, PartitionsExt, Remove, StructType};
 use crate::logstore::LogStoreRef;
 use crate::protocol::{DeltaOperation, SaveMode};
 use crate::storage::ObjectStoreRef;
 use crate::table::state::DeltaTableState;
 use crate::writer::record_batch::divide_by_partition_values;
-use crate::writer::utils::PartitionPath;
 use crate::DeltaTable;
 
 #[derive(thiserror::Error, Debug)]
@@ -440,12 +439,7 @@ impl std::future::IntoFuture for WriteBuilder {
                                 &batch,
                             )?;
                             for part in divided {
-                                let key = PartitionPath::from_hashmap(
-                                    &partition_columns,
-                                    &part.partition_values,
-                                )
-                                .map_err(DeltaTableError::from)?
-                                .into();
+                                let key = part.partition_values.hive_partition_path();
                                 match partitions.get_mut(&key) {
                                     Some(part_batches) => {
                                         part_batches.push(part.record_batch);
@@ -538,7 +532,7 @@ impl std::future::IntoFuture for WriteBuilder {
                         }
                         _ => {
                             let remove_actions = snapshot
-                                .files()?
+                                .file_actions()?
                                 .iter()
                                 .map(to_remove_action)
                                 .collect::<Vec<_>>();

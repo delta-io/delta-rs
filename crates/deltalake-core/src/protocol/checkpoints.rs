@@ -274,7 +274,7 @@ fn parquet_bytes_from_state(
             remove.extended_file_metadata = Some(false);
         }
     }
-    let files = state.files().unwrap();
+    let files = state.file_actions().unwrap();
     // protocol
     let jsons = std::iter::once(Action::Protocol(Protocol {
         min_reader_version: state.protocol().min_reader_version,

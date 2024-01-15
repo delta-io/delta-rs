@@ -54,7 +54,7 @@ impl DeltaTableState {
         &self,
         flatten: bool,
     ) -> Result<arrow::record_batch::RecordBatch, DeltaTableError> {
-        let files = self.files()?;
+        let files = self.file_actions()?;
         let mut paths = arrow::array::StringBuilder::with_capacity(
             files.len(),
             files.iter().map(|add| add.path.len()).sum(),
@@ -397,7 +397,7 @@ impl DeltaTableState {
         flatten: bool,
     ) -> Result<arrow::record_batch::RecordBatch, DeltaTableError> {
         let stats: Vec<Option<Stats>> = self
-            .files()?
+            .file_actions()?
             .iter()
             .map(|f| {
                 f.get_stats()

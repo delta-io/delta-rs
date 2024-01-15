@@ -32,6 +32,9 @@ fn insert_nulls(
     Ok(())
 }
 
+/// Parse an array of JSON strings into a record batch.
+///
+/// Null values in the input array are preseverd in the output record batch.
 pub(super) fn parse_json(
     json_strings: &StringArray,
     output_schema: ArrowSchemaRef,
@@ -50,7 +53,7 @@ pub(super) fn parse_json(
         if json_strings.is_null(it) {
             if value_count > 0 {
                 let slice = json_strings.slice(value_start, value_count);
-                let batch = read_from_json(&mut decoder, get_reader(slice.value_data()))
+                let batch = decode_reader(&mut decoder, get_reader(slice.value_data()))
                     .collect::<Result<Vec<_>, _>>()?;
                 batches.extend(batch);
                 value_count = 0;
@@ -74,7 +77,7 @@ pub(super) fn parse_json(
 
     if value_count > 0 {
         let slice = json_strings.slice(value_start, value_count);
-        let batch = read_from_json(&mut decoder, get_reader(slice.value_data()))
+        let batch = decode_reader(&mut decoder, get_reader(slice.value_data()))
             .collect::<Result<Vec<_>, _>>()?;
         batches.extend(batch);
     }
@@ -82,6 +85,7 @@ pub(super) fn parse_json(
     Ok(concat_batches(&output_schema, &batches)?)
 }
 
+/// Decode a stream of bytes into a stream of record batches.
 pub(super) fn decode_stream<S: Stream<Item = ObjectStoreResult<Bytes>> + Unpin>(
     mut decoder: Decoder,
     mut input: S,
@@ -111,7 +115,8 @@ pub(super) fn decode_stream<S: Stream<Item = ObjectStoreResult<Bytes>> + Unpin>(
     })
 }
 
-pub(super) fn read_from_json<'a, R: BufRead + 'a>(
+/// Decode data prvided by a reader into an iterator of record batches.
+pub(super) fn decode_reader<'a, R: BufRead + 'a>(
     decoder: &'a mut Decoder,
     mut reader: R,
 ) -> impl Iterator<Item = Result<RecordBatch, DeltaTableError>> + '_ {
