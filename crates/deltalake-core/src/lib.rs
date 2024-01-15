@@ -189,7 +189,7 @@ mod tests {
             ]
         );
         let tombstones = table
-            .get_state()
+            .snapshot()
             .unwrap()
             .all_tombstones(table.object_store().clone())
             .await
@@ -307,7 +307,7 @@ mod tests {
         null_counts.values().iter().for_each(|x| assert_eq!(*x, 0));
 
         let tombstones = table
-            .get_state()
+            .snapshot()
             .unwrap()
             .all_tombstones(table.object_store().clone())
             .await

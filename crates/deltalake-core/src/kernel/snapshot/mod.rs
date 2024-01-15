@@ -10,6 +10,10 @@
 //!
 //! The sub modules provide structures and methods that aid in generating
 //! and consuming snapshots.
+//!
+//! ## Reading the log
+//!
+//!
 
 use std::io::{BufRead, BufReader, Cursor};
 use std::sync::Arc;
@@ -23,7 +27,7 @@ use object_store::ObjectStore;
 
 use self::log_segment::{CommitData, LogSegment, PathExt};
 use self::parse::{read_adds, read_removes};
-use self::replay::{LogReplayScanner, ReplayStream};
+use self::replay::{LogMapper, LogReplayScanner, ReplayStream};
 use super::{Action, Add, CommitInfo, Metadata, Protocol, Remove};
 use crate::kernel::StructType;
 use crate::table::config::TableConfig;
@@ -316,6 +320,11 @@ impl EagerSnapshot {
         let mut files = Vec::new();
         let mut scanner = LogReplayScanner::new();
         files.push(scanner.process_files_batch(&batch, true)?);
+        let mapper = LogMapper::try_new(snapshot.schema(), snapshot.config.clone())?;
+        files = files
+            .into_iter()
+            .map(|b| mapper.map_batch(b))
+            .collect::<DeltaResult<Vec<_>>>()?;
         Ok(Self { snapshot, files })
     }
 
@@ -350,12 +359,14 @@ impl EagerSnapshot {
                     )
                     .boxed()
             };
+            let mapper = LogMapper::try_new(self.snapshot.schema(), self.snapshot.config.clone())?;
             let files = ReplayStream::try_new(
                 log_stream,
                 checkpoint_stream,
                 self.schema(),
                 self.snapshot.config.clone(),
             )?
+            .map(|batch| batch.and_then(|b| mapper.map_batch(b)))
             .try_collect()
             .await?;
 
@@ -423,7 +434,7 @@ impl EagerSnapshot {
     }
 
     /// Get a file action iterator for the given version
-    pub fn file_stats(&self) -> impl Iterator<Item = FileStats<'_>> {
+    pub fn files(&self) -> impl Iterator<Item = LogicalFile<'_>> {
         self.log_data().into_iter()
     }
 
@@ -464,6 +475,7 @@ impl EagerSnapshot {
             files.push(scanner.process_files_batch(&batch?, true)?);
         }
 
+        let mapper = LogMapper::try_new(self.snapshot.schema(), self.snapshot.config.clone())?;
         self.files = files
             .into_iter()
             .chain(
@@ -471,7 +483,8 @@ impl EagerSnapshot {
                     .iter()
                     .flat_map(|batch| scanner.process_files_batch(batch, false)),
             )
-            .collect();
+            .map(|b| mapper.map_batch(b))
+            .collect::<DeltaResult<Vec<_>>>()?;
 
         if let Some(metadata) = metadata {
             self.snapshot.metadata = metadata;

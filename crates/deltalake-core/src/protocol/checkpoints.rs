@@ -755,7 +755,7 @@ mod tests {
         let log_retention_timestamp = (Utc::now().timestamp_millis()
             + Duration::days(31).num_milliseconds())
             - table
-                .get_state()
+                .snapshot()
                 .unwrap()
                 .table_config()
                 .log_retention_duration()
@@ -783,7 +783,7 @@ mod tests {
         let log_retention_timestamp = (Utc::now().timestamp_millis()
             + Duration::days(32).num_milliseconds())
             - table
-                .get_state()
+                .snapshot()
                 .unwrap()
                 .table_config()
                 .log_retention_duration()

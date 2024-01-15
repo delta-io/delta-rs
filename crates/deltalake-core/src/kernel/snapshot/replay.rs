@@ -15,6 +15,7 @@ use arrow_select::filter::filter_record_batch;
 use futures::Stream;
 use hashbrown::HashSet;
 use itertools::Itertools;
+use percent_encoding::percent_decode_str;
 use pin_project_lite::pin_project;
 use tracing::debug;
 
@@ -29,9 +30,7 @@ pin_project! {
     pub struct ReplayStream<S> {
         scanner: LogReplayScanner,
 
-        stats_schema: ArrowSchemaRef,
-
-        config: DeltaTableConfig,
+        mapper: Arc<LogMapper>,
 
         #[pin]
         commits: S,
@@ -58,6 +57,32 @@ fn to_count_field(field: &StructField) -> Option<StructField> {
     }
 }
 
+pub(super) fn get_stats_schema(table_schema: &StructType) -> DeltaResult<ArrowSchemaRef> {
+    let data_fields: Vec<_> = table_schema
+        .fields
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, f)| match f.data_type() {
+            DataType::Map(_) | DataType::Array(_) | &DataType::BINARY => None,
+            // TODO: the number of stats fields shopuld be configurable?
+            // or rather we should likely read all of we parse JSON?
+            _ if idx < 32 => Some(StructField::new(f.name(), f.data_type().clone(), true)),
+            _ => None,
+        })
+        .collect();
+    let stats_schema = StructType::new(vec![
+        StructField::new("numRecords", DataType::LONG, true),
+        StructField::new("minValues", StructType::new(data_fields.clone()), true),
+        StructField::new("maxValues", StructType::new(data_fields.clone()), true),
+        StructField::new(
+            "nullCount",
+            StructType::new(data_fields.iter().filter_map(to_count_field).collect()),
+            true,
+        ),
+    ]);
+    Ok(std::sync::Arc::new((&stats_schema).try_into()?))
+}
+
 impl<S> ReplayStream<S> {
     pub(super) fn try_new(
         commits: S,
@@ -65,40 +90,39 @@ impl<S> ReplayStream<S> {
         table_schema: &Schema,
         config: DeltaTableConfig,
     ) -> DeltaResult<Self> {
-        let data_fields: Vec<_> = table_schema
-            .fields
-            .iter()
-            .enumerate()
-            .filter_map(|(idx, f)| match f.data_type() {
-                DataType::Map(_) | DataType::Array(_) | &DataType::BINARY => None,
-                // TODO: the number of stats fields shopuld be configurable?
-                // or rather we should likely read all of we parse JSON?
-                _ if idx < 32 => Some(StructField::new(f.name(), f.data_type().clone(), true)),
-                _ => None,
-            })
-            .collect();
-        let stats_schema = StructType::new(vec![
-            StructField::new("numRecords", DataType::LONG, true),
-            StructField::new("minValues", StructType::new(data_fields.clone()), true),
-            StructField::new("maxValues", StructType::new(data_fields.clone()), true),
-            StructField::new(
-                "nullCount",
-                StructType::new(data_fields.iter().filter_map(to_count_field).collect()),
-                true,
-            ),
-        ]);
-        let stats_schema = std::sync::Arc::new((&stats_schema).try_into()?);
+        let stats_schema = get_stats_schema(table_schema)?;
+        let mapper = Arc::new(LogMapper {
+            stats_schema,
+            config,
+        });
         Ok(Self {
             commits,
             checkpoint,
-            stats_schema,
-            config,
+            mapper,
             scanner: LogReplayScanner::new(),
         })
     }
 }
 
-fn map_batch(
+pub(super) struct LogMapper {
+    stats_schema: ArrowSchemaRef,
+    config: DeltaTableConfig,
+}
+
+impl LogMapper {
+    pub(super) fn try_new(table_schema: &Schema, config: DeltaTableConfig) -> DeltaResult<Self> {
+        Ok(Self {
+            stats_schema: get_stats_schema(table_schema)?,
+            config,
+        })
+    }
+
+    pub fn map_batch(&self, batch: RecordBatch) -> DeltaResult<RecordBatch> {
+        map_batch(batch, self.stats_schema.clone(), &self.config)
+    }
+}
+
+pub(super) fn map_batch(
     batch: RecordBatch,
     stats_schema: ArrowSchemaRef,
     config: &DeltaTableConfig,
@@ -162,7 +186,7 @@ where
         let this = self.project();
         let res = this.commits.poll_next(cx).map(|b| match b {
             Some(Ok(batch)) => match this.scanner.process_files_batch(&batch, true) {
-                Ok(filtered) => Some(map_batch(filtered, this.stats_schema.clone(), this.config)),
+                Ok(filtered) => Some(this.mapper.map_batch(filtered)),
                 Err(e) => Some(Err(e)),
             },
             Some(Err(e)) => Some(Err(e)),
@@ -171,9 +195,7 @@ where
         if matches!(res, Poll::Ready(None)) {
             this.checkpoint.poll_next(cx).map(|b| match b {
                 Some(Ok(batch)) => match this.scanner.process_files_batch(&batch, false) {
-                    Ok(filtered) => {
-                        Some(map_batch(filtered, this.stats_schema.clone(), this.config))
-                    }
+                    Ok(filtered) => Some(this.mapper.map_batch(filtered)),
                     Err(e) => Some(Err(e)),
                 },
                 Some(Err(e)) => Some(Err(e)),
@@ -210,17 +232,18 @@ pub(super) struct DVInfo<'a> {
 }
 
 fn seen_key(info: &FileInfo<'_>) -> String {
+    let path = percent_decode_str(info.path).decode_utf8_lossy();
     if let Some(dv) = &info.dv {
         if let Some(offset) = &dv.offset {
             format!(
                 "{}::{}{}@{offset}",
-                info.path, dv.storage_type, dv.path_or_inline_dv
+                path, dv.storage_type, dv.path_or_inline_dv
             )
         } else {
-            format!("{}::{}{}", info.path, dv.storage_type, dv.path_or_inline_dv)
+            format!("{}::{}{}", path, dv.storage_type, dv.path_or_inline_dv)
         }
     } else {
-        info.path.to_string()
+        path.to_string()
     }
 }
 

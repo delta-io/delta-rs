@@ -1,11 +1,11 @@
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use std::{collections::HashMap, error::Error, sync::Arc};
+use std::time::Duration;
+use std::{error::Error, sync::Arc};
 
 use arrow_array::{Int32Array, RecordBatch, StringArray};
 use arrow_schema::{DataType as ArrowDataType, Field, Schema as ArrowSchema};
 use arrow_select::concat::concat_batches;
 use deltalake_core::errors::DeltaTableError;
-use deltalake_core::kernel::{Action, DataType, PrimitiveType, Remove, StructField};
+use deltalake_core::kernel::{Action, DataType, PrimitiveType, StructField};
 use deltalake_core::operations::optimize::{
     create_merge_plan, MetricDetails, Metrics, OptimizeType,
 };
@@ -275,24 +275,8 @@ async fn test_conflict_for_remove_actions() -> Result<(), Box<dyn Error>> {
 
     let uri = context.tmp_dir.path().to_str().to_owned().unwrap();
     let other_dt = deltalake_core::open_table(uri).await?;
-    let add = &other_dt.snapshot()?.file_actions()?[0];
-    let remove = Remove {
-        path: add.path.clone(),
-        deletion_timestamp: Some(
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_millis() as i64,
-        ),
-        data_change: true,
-        extended_file_metadata: None,
-        size: Some(add.size),
-        partition_values: Some(add.partition_values.clone()),
-        tags: Some(HashMap::new()),
-        deletion_vector: add.deletion_vector.clone(),
-        base_row_id: add.base_row_id,
-        default_row_commit_version: add.default_row_commit_version,
-    };
+    let add = &other_dt.snapshot()?.log_data().into_iter().next().unwrap();
+    let remove = add.remove_action(true);
 
     let operation = DeltaOperation::Delete { predicate: None };
     commit(

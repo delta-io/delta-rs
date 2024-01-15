@@ -170,8 +170,8 @@ async fn test_restore_with_error_params() -> Result<(), Box<dyn Error>> {
 async fn test_restore_file_missing() -> Result<(), Box<dyn Error>> {
     let context = setup_test().await?;
 
-    for file in context.table.snapshot()?.file_actions()?.iter() {
-        let p = context.tmp_dir.path().join(file.clone().path);
+    for file in context.table.snapshot()?.log_data() {
+        let p = context.tmp_dir.path().join(file.path().as_ref());
         fs::remove_file(p).unwrap();
     }
 
@@ -197,8 +197,8 @@ async fn test_restore_file_missing() -> Result<(), Box<dyn Error>> {
 async fn test_restore_allow_file_missing() -> Result<(), Box<dyn Error>> {
     let context = setup_test().await?;
 
-    for file in context.table.snapshot()?.file_actions()?.iter() {
-        let p = context.tmp_dir.path().join(file.clone().path);
+    for file in context.table.snapshot()?.log_data() {
+        let p = context.tmp_dir.path().join(file.path().as_ref());
         fs::remove_file(p).unwrap();
     }
 

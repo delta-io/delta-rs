@@ -16,7 +16,7 @@ use tracing::debug;
 use self::builder::DeltaTableConfig;
 use self::state::DeltaTableState;
 use crate::kernel::{
-    Action, CommitInfo, DataCheck, DataType, FileStats, Metadata, Protocol, StructType,
+    Action, CommitInfo, DataCheck, DataType, LogicalFile, Metadata, Protocol, StructType,
 };
 use crate::logstore::{self, LogStoreConfig, LogStoreRef};
 use crate::partitions::PartitionFilter;
@@ -412,7 +412,7 @@ impl DeltaTable {
     pub fn get_active_add_actions_by_partitions<'a>(
         &'a self,
         filters: &'a [PartitionFilter],
-    ) -> Result<impl Iterator<Item = DeltaResult<FileStats<'_>>> + '_, DeltaTableError> {
+    ) -> Result<impl Iterator<Item = DeltaResult<LogicalFile<'_>>> + '_, DeltaTableError> {
         self.state
             .as_ref()
             .ok_or(DeltaTableError::NoMetadata)?
@@ -474,11 +474,6 @@ impl DeltaTable {
     /// Returns the currently loaded state snapshot.
     pub fn snapshot(&self) -> DeltaResult<&DeltaTableState> {
         self.state.as_ref().ok_or(DeltaTableError::NotInitialized)
-    }
-
-    /// Returns the currently loaded state snapshot.
-    pub fn get_state(&self) -> Option<&DeltaTableState> {
-        self.state.as_ref()
     }
 
     /// Returns current table protocol

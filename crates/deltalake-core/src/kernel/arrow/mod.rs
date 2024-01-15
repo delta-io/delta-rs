@@ -18,7 +18,7 @@ pub mod schemas;
 const MAP_ROOT_DEFAULT: &str = "entries";
 const MAP_KEY_DEFAULT: &str = "keys";
 const MAP_VALUE_DEFAULT: &str = "values";
-const LIST_ROOT_DEFAULT: &str = "element";
+const LIST_ROOT_DEFAULT: &str = "item";
 
 impl TryFrom<ActionType> for ArrowField {
     type Error = ArrowError;
@@ -71,7 +71,7 @@ impl TryFrom<&ArrayType> for ArrowField {
             LIST_ROOT_DEFAULT,
             ArrowDataType::try_from(a.element_type())?,
             // TODO check how to handle nullability
-            true, // a.contains_null(),
+            a.contains_null(),
         ))
     }
 }

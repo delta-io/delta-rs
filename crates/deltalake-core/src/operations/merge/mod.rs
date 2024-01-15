@@ -30,7 +30,7 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use std::time::Instant;
 
 use arrow_schema::Schema as ArrowSchema;
 use async_trait::async_trait;
@@ -72,7 +72,7 @@ use crate::delta_datafusion::{
     execute_plan_to_batch, register_store, DeltaColumn, DeltaScanConfigBuilder, DeltaSessionConfig,
     DeltaTableProvider,
 };
-use crate::kernel::{Action, Remove};
+use crate::kernel::Action;
 use crate::logstore::LogStoreRef;
 use crate::operations::merge::barrier::find_barrier_node;
 use crate::operations::write::write_execution_plan;
@@ -1318,11 +1318,6 @@ async fn execute(
 
     metrics.rewrite_time_ms = Instant::now().duration_since(rewrite_start).as_millis() as u64;
 
-    let deletion_timestamp = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_millis() as i64;
-
     let mut actions: Vec<Action> = add_actions.into_iter().map(Action::Add).collect();
     metrics.num_target_files_added = actions.len();
 
@@ -1334,21 +1329,10 @@ async fn execute(
 
     {
         let lock = survivors.lock().unwrap();
-        for action in snapshot.file_actions()? {
-            if lock.contains(&action.path) {
+        for action in snapshot.log_data() {
+            if lock.contains(action.path().as_ref()) {
                 metrics.num_target_files_removed += 1;
-                actions.push(Action::Remove(Remove {
-                    path: action.path.clone(),
-                    deletion_timestamp: Some(deletion_timestamp),
-                    data_change: true,
-                    extended_file_metadata: Some(true),
-                    partition_values: Some(action.partition_values.clone()),
-                    deletion_vector: action.deletion_vector.clone(),
-                    size: Some(action.size),
-                    tags: None,
-                    base_row_id: action.base_row_id,
-                    default_row_commit_version: action.default_row_commit_version,
-                }))
+                actions.push(action.remove_action(true).into_action())
             }
         }
     }

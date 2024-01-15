@@ -27,7 +27,6 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use arrow_array::RecordBatch;
 use arrow_cast::can_cast_types;
@@ -43,7 +42,7 @@ use super::writer::{DeltaWriter, WriterConfig};
 use super::{transaction::commit, CreateBuilder};
 use crate::delta_datafusion::DeltaDataChecker;
 use crate::errors::{DeltaResult, DeltaTableError};
-use crate::kernel::{Action, Add, PartitionsExt, Remove, StructType};
+use crate::kernel::{Action, Add, PartitionsExt, StructType};
 use crate::logstore::LogStoreRef;
 use crate::protocol::{DeltaOperation, SaveMode};
 use crate::storage::ObjectStoreRef;
@@ -501,27 +500,6 @@ impl std::future::IntoFuture for WriteBuilder {
                         metadata.schema_string = serde_json::to_string(&delta_schema)?;
                         actions.push(Action::Metadata(metadata));
                     }
-                    // This should never error, since now() will always be larger than UNIX_EPOCH
-                    let deletion_timestamp = SystemTime::now()
-                        .duration_since(UNIX_EPOCH)
-                        .unwrap()
-                        .as_millis() as i64;
-
-                    let to_remove_action = |add: &Add| {
-                        Action::Remove(Remove {
-                            path: add.path.clone(),
-                            deletion_timestamp: Some(deletion_timestamp),
-                            data_change: true,
-                            extended_file_metadata: Some(false),
-                            partition_values: Some(add.partition_values.clone()),
-                            size: Some(add.size),
-                            // TODO add file metadata to remove action (tags missing)
-                            tags: None,
-                            deletion_vector: add.deletion_vector.clone(),
-                            base_row_id: add.base_row_id,
-                            default_row_commit_version: add.default_row_commit_version,
-                        })
-                    };
 
                     match this.predicate {
                         Some(_pred) => {
@@ -532,10 +510,9 @@ impl std::future::IntoFuture for WriteBuilder {
                         }
                         _ => {
                             let remove_actions = snapshot
-                                .file_actions()?
-                                .iter()
-                                .map(to_remove_action)
-                                .collect::<Vec<_>>();
+                                .log_data()
+                                .into_iter()
+                                .map(|p| p.remove_action(true).into_action());
                             actions.extend(remove_actions);
                         }
                     }

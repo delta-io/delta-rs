@@ -661,6 +661,11 @@ impl Remove {
     pub fn dv_unique_id(&self) -> Option<String> {
         self.deletion_vector.clone().map(|dv| dv.unique_id())
     }
+
+    /// Convert into Action::Remove
+    pub fn into_action(self) -> super::Action {
+        super::Action::Remove(self)
+    }
 }
 
 /// Delta AddCDCFile action that describes a parquet CDC data file.

@@ -320,7 +320,7 @@ impl PruningStatistics for DeltaTableState {
     /// return the number of containers (e.g. row groups) being
     /// pruned with these statistics
     fn num_containers(&self) -> usize {
-        self.file_actions().unwrap().len()
+        self.files_count()
     }
 
     /// return the number of null values for the named column as an

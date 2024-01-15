@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use super::config::TableConfig;
 use super::{get_partition_col_data_types, DeltaTableConfig};
 use crate::kernel::{
-    Action, Add, DataType, EagerSnapshot, FileStats, LogDataHandler, Metadata, Protocol, Remove,
+    Action, Add, DataType, EagerSnapshot, LogDataHandler, LogicalFile, Metadata, Protocol, Remove,
     StructType,
 };
 use crate::partitions::{DeltaTablePartition, PartitionFilter};
@@ -207,7 +207,7 @@ impl DeltaTableState {
     pub fn get_active_add_actions_by_partitions<'a>(
         &'a self,
         filters: &'a [PartitionFilter],
-    ) -> Result<impl Iterator<Item = DeltaResult<FileStats<'_>>> + '_, DeltaTableError> {
+    ) -> Result<impl Iterator<Item = DeltaResult<LogicalFile<'_>>> + '_, DeltaTableError> {
         let current_metadata = self.metadata();
 
         let nonpartitioned_columns: Vec<String> = filters

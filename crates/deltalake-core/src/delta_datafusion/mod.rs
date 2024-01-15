@@ -481,7 +481,7 @@ impl TableProvider for DeltaTable {
     }
 
     fn statistics(&self) -> Option<Statistics> {
-        self.get_state()?.datafusion_table_statistics()
+        self.snapshot().ok()?.datafusion_table_statistics()
     }
 }
 

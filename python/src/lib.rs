@@ -25,7 +25,7 @@ use deltalake::datafusion::datasource::provider::TableProvider;
 use deltalake::datafusion::prelude::SessionContext;
 use deltalake::delta_datafusion::DeltaDataChecker;
 use deltalake::errors::DeltaTableError;
-use deltalake::kernel::{Action, Add, FileStats, Invariant, Remove, Scalar, StructType};
+use deltalake::kernel::{Action, Add, Invariant, LogicalFile, Remove, Scalar, StructType};
 use deltalake::operations::constraints::ConstraintBuilder;
 use deltalake::operations::convert_to_delta::{ConvertToDeltaBuilder, PartitionStrategy};
 use deltalake::operations::delete::DeleteBuilder;
@@ -1150,7 +1150,7 @@ fn scalar_to_py(value: &Scalar, py_date: &PyAny, py: Python) -> PyResult<PyObjec
 fn filestats_to_expression_next<'py>(
     py: Python<'py>,
     schema: &PyArrowType<ArrowSchema>,
-    file_info: FileStats<'_>,
+    file_info: LogicalFile<'_>,
 ) -> PyResult<Option<&'py PyAny>> {
     let ds = PyModule::import(py, "pyarrow.dataset")?;
     let py_field = ds.getattr("field")?;
