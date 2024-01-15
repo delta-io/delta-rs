@@ -23,7 +23,7 @@ arrow = { version = "49" }
 arrow-arith = { version = "49" }
 arrow-array = { version = "49" }
 arrow-buffer = { version = "49" }
-arrow-cast = { version = "49" }
+arrow-cast = { version = "50" }
 arrow-ord = { version = "49" }
 arrow-row = { version = "49" }
 arrow-schema = { version = "49" }
