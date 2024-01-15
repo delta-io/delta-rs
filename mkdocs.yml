@@ -48,7 +48,7 @@ nav:
   - Home: index.md
   - Usage:
     - Installation: usage/installation.md
-    - Overview: usage/index.md
+    - Overview: usage/overview.md
     - Creating a table: usage/create-delta-lake-table.md
     - Loading a table: usage/loading-table.md
     - Append/overwrite tables: usage/appending-overwriting-delta-lake-table.md
