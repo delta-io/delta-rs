@@ -14,8 +14,18 @@ use object_store::Result as ObjectStoreResult;
 use crate::{DeltaResult, DeltaTableConfig, DeltaTableError};
 
 #[inline]
-pub(super) fn get_reader(data: &[u8]) -> BufReader<Cursor<&[u8]>> {
+pub(crate) fn get_reader(data: &[u8]) -> BufReader<Cursor<&[u8]>> {
     BufReader::new(Cursor::new(data))
+}
+
+#[inline]
+pub(crate) fn get_decoder(
+    schema: ArrowSchemaRef,
+    config: &DeltaTableConfig,
+) -> DeltaResult<Decoder> {
+    Ok(ReaderBuilder::new(schema)
+        .with_batch_size(config.log_batch_size)
+        .build_decoder()?)
 }
 
 fn insert_nulls(
@@ -35,7 +45,7 @@ fn insert_nulls(
 /// Parse an array of JSON strings into a record batch.
 ///
 /// Null values in the input array are preseverd in the output record batch.
-pub(super) fn parse_json(
+pub(crate) fn parse_json(
     json_strings: &StringArray,
     output_schema: ArrowSchemaRef,
     config: &DeltaTableConfig,
@@ -86,7 +96,7 @@ pub(super) fn parse_json(
 }
 
 /// Decode a stream of bytes into a stream of record batches.
-pub(super) fn decode_stream<S: Stream<Item = ObjectStoreResult<Bytes>> + Unpin>(
+pub(crate) fn decode_stream<S: Stream<Item = ObjectStoreResult<Bytes>> + Unpin>(
     mut decoder: Decoder,
     mut input: S,
 ) -> impl Stream<Item = Result<RecordBatch, DeltaTableError>> {
@@ -116,7 +126,7 @@ pub(super) fn decode_stream<S: Stream<Item = ObjectStoreResult<Bytes>> + Unpin>(
 }
 
 /// Decode data prvided by a reader into an iterator of record batches.
-pub(super) fn decode_reader<'a, R: BufRead + 'a>(
+pub(crate) fn decode_reader<'a, R: BufRead + 'a>(
     decoder: &'a mut Decoder,
     mut reader: R,
 ) -> impl Iterator<Item = Result<RecordBatch, DeltaTableError>> + '_ {

@@ -30,7 +30,7 @@ impl ProvidesColumnByName for StructArray {
 /// Extracts a column by name and casts it to the given type array type `T`.
 ///
 /// Returns an error if the column does not exist or if the column is not of type `T`.
-pub(super) fn extract_and_cast<'a, T: Array + 'static>(
+pub(crate) fn extract_and_cast<'a, T: Array + 'static>(
     arr: &'a dyn ProvidesColumnByName,
     name: &'a str,
 ) -> DeltaResult<&'a T> {
@@ -43,7 +43,7 @@ pub(super) fn extract_and_cast<'a, T: Array + 'static>(
 /// Extracts a column by name and casts it to the given type array type `T`.
 ///
 /// Returns `None` if the column does not exist or if the column is not of type `T`.
-pub(super) fn extract_and_cast_opt<'a, T: Array + 'static>(
+pub(crate) fn extract_and_cast_opt<'a, T: Array + 'static>(
     array: &'a dyn ProvidesColumnByName,
     name: &'a str,
 ) -> Option<&'a T> {
@@ -129,17 +129,17 @@ fn cast_column_as<'a, T: Array + 'static>(
 }
 
 #[inline]
-pub(super) fn read_str(arr: &StringArray, idx: usize) -> DeltaResult<&str> {
+pub(crate) fn read_str(arr: &StringArray, idx: usize) -> DeltaResult<&str> {
     read_str_opt(arr, idx).ok_or(DeltaTableError::Generic("missing value".into()))
 }
 
 #[inline]
-pub(super) fn read_str_opt(arr: &StringArray, idx: usize) -> Option<&str> {
+pub(crate) fn read_str_opt(arr: &StringArray, idx: usize) -> Option<&str> {
     arr.is_valid(idx).then(|| arr.value(idx))
 }
 
 #[inline]
-pub(super) fn read_primitive<T>(arr: &PrimitiveArray<T>, idx: usize) -> DeltaResult<T::Native>
+pub(crate) fn read_primitive<T>(arr: &PrimitiveArray<T>, idx: usize) -> DeltaResult<T::Native>
 where
     T: ArrowNumericType,
     T::Native: ArrowNativeTypeOp,
@@ -148,7 +148,7 @@ where
 }
 
 #[inline]
-pub(super) fn read_primitive_opt<T>(arr: &PrimitiveArray<T>, idx: usize) -> Option<T::Native>
+pub(crate) fn read_primitive_opt<T>(arr: &PrimitiveArray<T>, idx: usize) -> Option<T::Native>
 where
     T: ArrowNumericType,
     T::Native: ArrowNativeTypeOp,
@@ -157,11 +157,11 @@ where
 }
 
 #[inline]
-pub(super) fn read_bool(arr: &BooleanArray, idx: usize) -> DeltaResult<bool> {
+pub(crate) fn read_bool(arr: &BooleanArray, idx: usize) -> DeltaResult<bool> {
     read_bool_opt(arr, idx).ok_or(DeltaTableError::Generic("missing value".into()))
 }
 
 #[inline]
-pub(super) fn read_bool_opt(arr: &BooleanArray, idx: usize) -> Option<bool> {
+pub(crate) fn read_bool_opt(arr: &BooleanArray, idx: usize) -> Option<bool> {
     arr.is_valid(idx).then(|| arr.value(idx))
 }

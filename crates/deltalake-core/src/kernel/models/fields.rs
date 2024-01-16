@@ -2,8 +2,26 @@
 
 use lazy_static::lazy_static;
 
+use super::schema::{ArrayType, DataType, MapType, StructField, StructType};
 use super::ActionType;
-use crate::kernel::schema::{ArrayType, DataType, MapType, StructField, StructType};
+
+impl ActionType {
+    /// Returns the type of the corresponding field in the delta log schema
+    pub(crate) fn schema_field(&self) -> &StructField {
+        match self {
+            Self::Metadata => &METADATA_FIELD,
+            Self::Protocol => &PROTOCOL_FIELD,
+            Self::CommitInfo => &COMMIT_INFO_FIELD,
+            Self::Add => &ADD_FIELD,
+            Self::Remove => &REMOVE_FIELD,
+            Self::Cdc => &CDC_FIELD,
+            Self::Txn => &TXN_FIELD,
+            Self::DomainMetadata => &DOMAIN_METADATA_FIELD,
+            Self::CheckpointMetadata => &CHECKPOINT_METADATA_FIELD,
+            Self::Sidecar => &SIDECAR_FIELD,
+        }
+    }
+}
 
 lazy_static! {
     // https://github.com/delta-io/delta/blob/master/PROTOCOL.md#change-metadata
@@ -247,24 +265,6 @@ fn deletion_vector_field() -> StructField {
         ]))),
         true,
     )
-}
-
-impl ActionType {
-    /// Returns the type of the corresponding field in the delta log schema
-    pub fn schema_field(&self) -> &StructField {
-        match self {
-            Self::Metadata => &METADATA_FIELD,
-            Self::Protocol => &PROTOCOL_FIELD,
-            Self::CommitInfo => &COMMIT_INFO_FIELD,
-            Self::Add => &ADD_FIELD,
-            Self::Remove => &REMOVE_FIELD,
-            Self::Cdc => &CDC_FIELD,
-            Self::Txn => &TXN_FIELD,
-            Self::DomainMetadata => &DOMAIN_METADATA_FIELD,
-            Self::CheckpointMetadata => &CHECKPOINT_METADATA_FIELD,
-            Self::Sidecar => &SIDECAR_FIELD,
-        }
-    }
 }
 
 #[cfg(test)]

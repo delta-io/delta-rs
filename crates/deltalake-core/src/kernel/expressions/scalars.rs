@@ -8,8 +8,7 @@ use arrow_schema::TimeUnit;
 use chrono::{DateTime, NaiveDate, NaiveDateTime, TimeZone, Utc};
 use object_store::path::Path;
 
-use crate::kernel::schema::{DataType, PrimitiveType};
-use crate::kernel::{Error, StructField};
+use crate::kernel::{DataType, Error, PrimitiveType, StructField};
 use crate::NULL_PARTITION_VALUE_DATA_PATH;
 
 /// A single value, which can be null. Used for representing literal values

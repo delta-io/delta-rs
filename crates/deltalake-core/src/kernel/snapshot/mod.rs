@@ -33,8 +33,6 @@ use crate::kernel::StructType;
 use crate::table::config::TableConfig;
 use crate::{DeltaResult, DeltaTableConfig, DeltaTableError};
 
-pub(crate) mod extract;
-mod json;
 mod log_data;
 mod log_segment;
 pub(crate) mod parse;
@@ -678,7 +676,7 @@ mod tests {
         let removes = first
             .iter()
             .map(|(_, add)| {
-                Action::Remove(Remove {
+                Remove {
                     path: add.path.clone(),
                     size: Some(add.size),
                     data_change: add.data_change,
@@ -689,7 +687,8 @@ mod tests {
                     deletion_vector: add.deletion_vector.clone(),
                     base_row_id: add.base_row_id,
                     default_row_commit_version: add.default_row_commit_version,
-                })
+                }
+                .into()
             })
             .collect_vec();
 

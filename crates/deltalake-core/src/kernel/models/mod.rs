@@ -7,11 +7,12 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
-pub(crate) mod schemas;
-pub(crate) mod serde_path;
-pub(crate) mod types;
+pub(crate) mod actions;
+pub(crate) mod fields;
+mod schema;
 
-pub use types::*;
+pub use actions::*;
+pub use schema::*;
 
 #[derive(Debug)]
 /// The type of action that was performed on the table
@@ -60,5 +61,69 @@ impl Action {
             info,
             ..Default::default()
         })
+    }
+}
+
+impl From<Add> for Action {
+    fn from(a: Add) -> Self {
+        Self::Add(a)
+    }
+}
+
+impl From<Remove> for Action {
+    fn from(a: Remove) -> Self {
+        Self::Remove(a)
+    }
+}
+
+impl From<AddCDCFile> for Action {
+    fn from(a: AddCDCFile) -> Self {
+        Self::Cdc(a)
+    }
+}
+
+impl From<Metadata> for Action {
+    fn from(a: Metadata) -> Self {
+        Self::Metadata(a)
+    }
+}
+
+impl From<Protocol> for Action {
+    fn from(a: Protocol) -> Self {
+        Self::Protocol(a)
+    }
+}
+
+impl From<Txn> for Action {
+    fn from(a: Txn) -> Self {
+        Self::Txn(a)
+    }
+}
+
+impl From<CommitInfo> for Action {
+    fn from(a: CommitInfo) -> Self {
+        Self::CommitInfo(a)
+    }
+}
+
+impl From<DomainMetadata> for Action {
+    fn from(a: DomainMetadata) -> Self {
+        Self::DomainMetadata(a)
+    }
+}
+
+impl Action {
+    /// Get the action type
+    pub fn action_type(&self) -> ActionType {
+        match self {
+            Self::Add(_) => ActionType::Add,
+            Self::Remove(_) => ActionType::Remove,
+            Self::Cdc(_) => ActionType::Cdc,
+            Self::Metadata(_) => ActionType::Metadata,
+            Self::Protocol(_) => ActionType::Protocol,
+            Self::Txn(_) => ActionType::Txn,
+            Self::CommitInfo(_) => ActionType::CommitInfo,
+            Self::DomainMetadata(_) => ActionType::DomainMetadata,
+        }
     }
 }

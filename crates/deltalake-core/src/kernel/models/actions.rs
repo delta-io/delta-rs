@@ -9,9 +9,8 @@ use serde::{Deserialize, Serialize};
 use tracing::warn;
 use url::Url;
 
-use super::super::schema::StructType;
-use super::super::{error::Error, DeltaResult};
-use super::serde_path;
+use super::schema::StructType;
+use crate::kernel::{error::Error, DeltaResult};
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 /// Defines a file format used in table
@@ -438,19 +437,6 @@ pub struct DeletionVectorDescriptor {
 }
 
 impl DeletionVectorDescriptor {
-    /// get a unique idenitfier for the deletion vector
-    pub fn unique_id(&self) -> String {
-        if let Some(offset) = self.offset {
-            format!(
-                "{}{}@{offset}",
-                self.storage_type.as_ref(),
-                self.path_or_inline_dv
-            )
-        } else {
-            format!("{}{}", self.storage_type.as_ref(), self.path_or_inline_dv)
-        }
-    }
-
     /// get the absolute path of the deletion vector
     pub fn absolute_path(&self, parent: &Url) -> DeltaResult<Option<Url>> {
         match &self.storage_type {
@@ -593,19 +579,6 @@ pub struct Add {
     pub stats_parsed: Option<parquet::record::Row>,
 }
 
-impl Add {
-    /// get the unique id of the deletion vector, if any
-    pub fn dv_unique_id(&self) -> Option<String> {
-        self.deletion_vector.clone().map(|dv| dv.unique_id())
-    }
-
-    /// set the base row id of the add action
-    pub fn with_base_row_id(mut self, base_row_id: i64) -> Self {
-        self.base_row_id = Some(base_row_id);
-        self
-    }
-}
-
 /// Represents a tombstone (deleted file) in the Delta log.
 #[derive(Serialize, Deserialize, Debug, Clone, Eq, Default)]
 #[serde(rename_all = "camelCase")]
@@ -654,18 +627,6 @@ pub struct Remove {
     /// First commit version in which an add action with the same path was committed to the table.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub default_row_commit_version: Option<i64>,
-}
-
-impl Remove {
-    /// get the unique id of the deletion vector, if any
-    pub fn dv_unique_id(&self) -> Option<String> {
-        self.deletion_vector.clone().map(|dv| dv.unique_id())
-    }
-
-    /// Convert into Action::Remove
-    pub fn into_action(self) -> super::Action {
-        super::Action::Remove(self)
-    }
 }
 
 /// Delta AddCDCFile action that describes a parquet CDC data file.
@@ -855,6 +816,68 @@ impl FromStr for IsolationLevel {
             "snapshotisolation" | "snapshot_isolation" => Ok(Self::SnapshotIsolation),
             _ => Err(Error::Generic("Invalid string for IsolationLevel".into())),
         }
+    }
+}
+
+pub(crate) mod serde_path {
+    use std::str::Utf8Error;
+
+    use percent_encoding::{percent_decode_str, percent_encode, AsciiSet, CONTROLS};
+    use serde::{self, Deserialize, Deserializer, Serialize, Serializer};
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<String, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        decode_path(&s).map_err(serde::de::Error::custom)
+    }
+
+    pub fn serialize<S>(value: &str, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let encoded = encode_path(value);
+        String::serialize(&encoded, serializer)
+    }
+
+    pub const _DELIMITER: &str = "/";
+    /// The path delimiter as a single byte
+    pub const _DELIMITER_BYTE: u8 = _DELIMITER.as_bytes()[0];
+
+    /// Characters we want to encode.
+    const INVALID: &AsciiSet = &CONTROLS
+        // The delimiter we are reserving for internal hierarchy
+        // .add(DELIMITER_BYTE)
+        // Characters AWS recommends avoiding for object keys
+        // https://docs.aws.amazon.com/AmazonS3/latest/dev/UsingMetadata.html
+        .add(b'\\')
+        .add(b'{')
+        .add(b'^')
+        .add(b'}')
+        .add(b'%')
+        .add(b'`')
+        .add(b']')
+        .add(b'"')
+        .add(b'>')
+        .add(b'[')
+        // .add(b'~')
+        .add(b'<')
+        .add(b'#')
+        .add(b'|')
+        // Characters Google Cloud Storage recommends avoiding for object names
+        // https://cloud.google.com/storage/docs/naming-objects
+        .add(b'\r')
+        .add(b'\n')
+        .add(b'*')
+        .add(b'?');
+
+    fn encode_path(path: &str) -> String {
+        percent_encode(path.as_bytes(), INVALID).to_string()
+    }
+
+    pub fn decode_path(path: &str) -> Result<String, Utf8Error> {
+        Ok(percent_decode_str(path).decode_utf8()?.to_string())
     }
 }
 

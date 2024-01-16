@@ -8,7 +8,7 @@ use object_store::path::Path;
 use object_store::ObjectMeta;
 use percent_encoding::percent_decode_str;
 
-use super::extract::{extract_and_cast, extract_and_cast_opt};
+use crate::kernel::arrow::extract::{extract_and_cast, extract_and_cast_opt};
 use crate::kernel::{
     DataType, DeletionVectorDescriptor, Metadata, Remove, Scalar, StructField, StructType,
 };
@@ -474,7 +474,7 @@ mod datafusion {
     use datafusion_physical_expr::expressions::{Column, Max, Min};
 
     use super::*;
-    use crate::kernel::extract::{extract_and_cast_opt, extract_column};
+    use crate::kernel::arrow::extract::{extract_and_cast_opt, extract_column};
 
     // TODO validate this works with "wide and narrow" boulds / stats
 

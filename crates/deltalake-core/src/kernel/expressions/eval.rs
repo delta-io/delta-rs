@@ -15,10 +15,10 @@ use arrow_ord::cmp::{eq, gt, gt_eq, lt, lt_eq, neq};
 use arrow_schema::{ArrowError, Field as ArrowField, Schema as ArrowSchema};
 use arrow_select::nullif::nullif;
 
+use crate::kernel::arrow::extract::extract_column;
 use crate::kernel::error::{DeltaResult, Error};
 use crate::kernel::expressions::{scalars::Scalar, Expression};
 use crate::kernel::expressions::{BinaryOperator, UnaryOperator};
-use crate::kernel::snapshot::extract::extract_column;
 use crate::kernel::{DataType, PrimitiveType, VariadicOperator};
 
 fn downcast_to_bool(arr: &dyn Array) -> DeltaResult<&BooleanArray> {

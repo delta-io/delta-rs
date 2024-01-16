@@ -5,7 +5,7 @@ use arrow_array::{
 };
 use percent_encoding::percent_decode_str;
 
-use super::extract::{self as ex, ProvidesColumnByName};
+use crate::kernel::arrow::extract::{self as ex, ProvidesColumnByName};
 use crate::kernel::{Add, DeletionVectorDescriptor, Metadata, Protocol, Remove};
 use crate::{DeltaResult, DeltaTableError};
 

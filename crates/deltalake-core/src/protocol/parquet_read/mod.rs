@@ -7,7 +7,7 @@ use parquet::record::{Field, ListAccessor, MapAccessor, RowAccessor};
 use serde_json::json;
 use tracing::{debug, error, warn};
 
-use crate::kernel::serde_path::decode_path;
+use crate::kernel::models::actions::serde_path::decode_path;
 use crate::kernel::{
     Action, Add, AddCDCFile, DeletionVectorDescriptor, Metadata, Protocol, Remove, StorageType, Txn,
 };

@@ -3,8 +3,6 @@ use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 
 use arrow_array::RecordBatch;
-use arrow_json::{reader::Decoder, ReaderBuilder};
-use arrow_schema::SchemaRef as ArrowSchemaRef;
 use chrono::Utc;
 use futures::{stream::BoxStream, StreamExt, TryStreamExt};
 use itertools::Itertools;
@@ -18,14 +16,13 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tracing::debug;
 
-use super::{json, parse};
-use crate::kernel::{Action, ActionType, Metadata, Protocol, Schema, StructType};
+use super::parse;
+use crate::kernel::{arrow::json, Action, ActionType, Metadata, Protocol, Schema, StructType};
 use crate::operations::transaction::get_commit_bytes;
 use crate::protocol::DeltaOperation;
 use crate::{DeltaResult, DeltaTableConfig, DeltaTableError};
 
 const LAST_CHECKPOINT_FILE_NAME: &str = "_last_checkpoint";
-const BATCH_SIZE: usize = 1024;
 
 pub type CommitData = (Vec<Action>, DeltaOperation, Option<HashMap<String, Value>>);
 
@@ -83,13 +80,6 @@ impl PathExt for Path {
     fn filename(&self) -> Option<&str> {
         self.filename()
     }
-}
-
-#[inline]
-fn get_decoder(schema: ArrowSchemaRef, config: &DeltaTableConfig) -> DeltaResult<Decoder> {
-    Ok(ReaderBuilder::new(schema)
-        .with_batch_size(config.log_batch_size)
-        .build_decoder()?)
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -225,7 +215,7 @@ impl LogSegment {
             .advance(
                 commits,
                 &Path::default(),
-                crate::kernel::actions::schemas::log_schema(),
+                crate::kernel::models::fields::log_schema(),
                 &Default::default(),
             )?
             .collect_vec();
@@ -250,7 +240,7 @@ impl LogSegment {
         read_schema: &Schema,
         config: &DeltaTableConfig,
     ) -> DeltaResult<BoxStream<'_, DeltaResult<RecordBatch>>> {
-        let decoder = get_decoder(Arc::new(read_schema.try_into()?), config)?;
+        let decoder = json::get_decoder(Arc::new(read_schema.try_into()?), config)?;
         let stream = futures::stream::iter(self.commit_files.iter())
             .map(move |meta| {
                 let store = store.clone();
@@ -266,6 +256,7 @@ impl LogSegment {
         _read_schema: &Schema,
         config: &DeltaTableConfig,
     ) -> BoxStream<'_, DeltaResult<RecordBatch>> {
+        let batch_size = config.log_batch_size;
         futures::stream::iter(self.checkpoint_files.clone())
             .map(move |meta| {
                 let store = store.clone();
@@ -274,7 +265,7 @@ impl LogSegment {
                     let options = ArrowReaderOptions::new(); //.with_page_index(enable_page_index);
                     let builder =
                         ParquetRecordBatchStreamBuilder::new_with_options(reader, options).await?;
-                    builder.with_batch_size(BATCH_SIZE).build()
+                    builder.with_batch_size(batch_size).build()
                 }
             })
             .buffered(config.log_buffer_size)
@@ -350,7 +341,7 @@ impl LogSegment {
         config: &DeltaTableConfig,
     ) -> DeltaResult<impl Iterator<Item = Result<RecordBatch, DeltaTableError>> + '_> {
         let log_path = table_root.child("_delta_log");
-        let mut decoder = get_decoder(Arc::new(read_schema.try_into()?), config)?;
+        let mut decoder = json::get_decoder(Arc::new(read_schema.try_into()?), config)?;
 
         let mut commit_data = Vec::new();
         for (actions, operation, app_metadata) in commits {

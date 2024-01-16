@@ -17,15 +17,14 @@ use crate::delta_datafusion::expr::fmt_expr_to_sql;
 use crate::delta_datafusion::{
     register_store, DeltaDataChecker, DeltaScanBuilder, DeltaSessionContext,
 };
-use crate::kernel::{Action, CommitInfo, IsolationLevel, Protocol};
+use crate::kernel::{CommitInfo, IsolationLevel, Protocol};
 use crate::logstore::LogStoreRef;
 use crate::operations::datafusion_utils::Expression;
 use crate::operations::transaction::commit;
 use crate::protocol::DeltaOperation;
 use crate::table::state::DeltaTableState;
 use crate::table::Constraint;
-use crate::DeltaTable;
-use crate::{DeltaResult, DeltaTableError};
+use crate::{DeltaResult, DeltaTable, DeltaTableError};
 
 use super::datafusion_utils::into_expr;
 
@@ -207,11 +206,7 @@ impl std::future::IntoFuture for ConstraintBuilder {
                 ..Default::default()
             };
 
-            let actions = vec![
-                Action::CommitInfo(commit_info),
-                Action::Metadata(metadata),
-                Action::Protocol(protocol),
-            ];
+            let actions = vec![commit_info.into(), metadata.into(), protocol.into()];
 
             let version = commit(
                 this.log_store.as_ref(),

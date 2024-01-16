@@ -19,10 +19,8 @@ use percent_encoding::percent_decode_str;
 use pin_project_lite::pin_project;
 use tracing::debug;
 
-use super::extract::{
-    extract_and_cast, extract_and_cast_opt, read_primitive_opt, read_str, ProvidesColumnByName,
-};
-use super::json;
+use crate::kernel::arrow::extract::{self as ex, ProvidesColumnByName};
+use crate::kernel::arrow::json;
 use crate::kernel::{DataType, Schema, StructField, StructType};
 use crate::{DeltaResult, DeltaTableConfig, DeltaTableError};
 
@@ -127,8 +125,8 @@ pub(super) fn map_batch(
     stats_schema: ArrowSchemaRef,
     config: &DeltaTableConfig,
 ) -> DeltaResult<RecordBatch> {
-    let stats_col = extract_and_cast_opt::<StringArray>(&batch, "add.stats");
-    let stats_parsed_col = extract_and_cast_opt::<StringArray>(&batch, "add.stats_parsed");
+    let stats_col = ex::extract_and_cast_opt::<StringArray>(&batch, "add.stats");
+    let stats_parsed_col = ex::extract_and_cast_opt::<StringArray>(&batch, "add.stats_parsed");
     if stats_parsed_col.is_some() {
         return Ok(batch);
     }
@@ -136,7 +134,7 @@ pub(super) fn map_batch(
         let stats: Arc<StructArray> =
             Arc::new(json::parse_json(stats, stats_schema.clone(), config)?.into());
         let schema = batch.schema();
-        let add_col = extract_and_cast::<StructArray>(&batch, "add")?;
+        let add_col = ex::extract_and_cast::<StructArray>(&batch, "add")?;
         let add_idx = schema.column_with_name("add").unwrap();
         let add_type = add_col
             .fields()
@@ -270,8 +268,8 @@ impl LogReplayScanner {
         batch: &RecordBatch,
         is_log_batch: bool,
     ) -> DeltaResult<RecordBatch> {
-        let add_col = extract_and_cast::<StructArray>(batch, "add")?;
-        let maybe_remove_col = extract_and_cast_opt::<StructArray>(batch, "remove");
+        let add_col = ex::extract_and_cast::<StructArray>(batch, "add")?;
+        let maybe_remove_col = ex::extract_and_cast_opt::<StructArray>(batch, "remove");
         let filter = if let Some(remove_col) = maybe_remove_col {
             or(&is_not_null(add_col)?, &is_not_null(remove_col)?)?
         } else {
@@ -279,8 +277,8 @@ impl LogReplayScanner {
         };
 
         let filtered = filter_record_batch(batch, &filter)?;
-        let add_col = extract_and_cast::<StructArray>(&filtered, "add")?;
-        let maybe_remove_col = extract_and_cast_opt::<StructArray>(&filtered, "remove");
+        let add_col = ex::extract_and_cast::<StructArray>(&filtered, "add")?;
+        let maybe_remove_col = ex::extract_and_cast_opt::<StructArray>(&filtered, "remove");
         let add_actions = read_file_info(add_col)?;
 
         let mut keep = Vec::with_capacity(filtered.num_rows());
@@ -337,20 +335,20 @@ impl LogReplayScanner {
 }
 
 fn read_file_info<'a>(arr: &'a dyn ProvidesColumnByName) -> DeltaResult<Vec<Option<FileInfo<'a>>>> {
-    let path = extract_and_cast::<StringArray>(arr, "path")?;
-    let dv = extract_and_cast_opt::<StructArray>(arr, "deletionVector");
+    let path = ex::extract_and_cast::<StringArray>(arr, "path")?;
+    let dv = ex::extract_and_cast_opt::<StructArray>(arr, "deletionVector");
 
     let get_dv: Box<dyn Fn(usize) -> DeltaResult<Option<DVInfo<'a>>>> = if let Some(d) = dv {
-        let storage_type = extract_and_cast::<StringArray>(d, "storageType")?;
-        let path_or_inline_dv = extract_and_cast::<StringArray>(d, "pathOrInlineDv")?;
-        let offset = extract_and_cast::<Int32Array>(d, "offset")?;
+        let storage_type = ex::extract_and_cast::<StringArray>(d, "storageType")?;
+        let path_or_inline_dv = ex::extract_and_cast::<StringArray>(d, "pathOrInlineDv")?;
+        let offset = ex::extract_and_cast::<Int32Array>(d, "offset")?;
 
         Box::new(|idx: usize| {
-            if read_str(storage_type, idx).is_ok() {
+            if ex::read_str(storage_type, idx).is_ok() {
                 Ok(Some(DVInfo {
-                    storage_type: read_str(storage_type, idx)?,
-                    path_or_inline_dv: read_str(path_or_inline_dv, idx)?,
-                    offset: read_primitive_opt(offset, idx),
+                    storage_type: ex::read_str(storage_type, idx)?,
+                    path_or_inline_dv: ex::read_str(path_or_inline_dv, idx)?,
+                    offset: ex::read_primitive_opt(offset, idx),
                 }))
             } else {
                 Ok(None)
@@ -366,7 +364,7 @@ fn read_file_info<'a>(arr: &'a dyn ProvidesColumnByName) -> DeltaResult<Vec<Opti
             .is_valid(idx)
             .then(|| {
                 Ok::<_, DeltaTableError>(FileInfo {
-                    path: read_str(path, idx)?,
+                    path: ex::read_str(path, idx)?,
                     dv: get_dv(idx)?,
                 })
             })
@@ -387,7 +385,7 @@ pub(super) mod tests {
 
     use super::super::log_segment::LogSegment;
     use super::*;
-    use crate::kernel::{actions::ActionType, StructType};
+    use crate::kernel::{models::ActionType, StructType};
 
     pub(crate) async fn test_log_replay(context: &IntegrationContext) -> TestResult {
         let log_schema = Arc::new(StructType::new(vec![

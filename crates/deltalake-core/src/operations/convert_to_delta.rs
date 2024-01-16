@@ -2,7 +2,7 @@
 // https://github.com/delta-io/delta/blob/1d5dd774111395b0c4dc1a69c94abc169b1c83b6/spark/src/main/scala/org/apache/spark/sql/delta/commands/ConvertToDeltaCommand.scala
 
 use crate::{
-    kernel::{Action, Add, DataType, Schema, StructField},
+    kernel::{Add, DataType, Schema, StructField},
     logstore::{LogStore, LogStoreRef},
     operations::create::CreateBuilder,
     protocol::SaveMode,
@@ -319,28 +319,31 @@ impl ConvertToDeltaBuilder {
                 subpath = iter.next();
             }
 
-            actions.push(Action::Add(Add {
-                path: percent_decode_str(file.location.as_ref())
-                    .decode_utf8()?
-                    .to_string(),
-                size: i64::try_from(file.size)?,
-                partition_values: partition_values
-                    .into_iter()
-                    .map(|(k, v)| {
-                        (
-                            k,
-                            if v.is_null() {
-                                None
-                            } else {
-                                Some(v.serialize())
-                            },
-                        )
-                    })
-                    .collect(),
-                modification_time: file.last_modified.timestamp_millis(),
-                data_change: true,
-                ..Default::default()
-            }));
+            actions.push(
+                Add {
+                    path: percent_decode_str(file.location.as_ref())
+                        .decode_utf8()?
+                        .to_string(),
+                    size: i64::try_from(file.size)?,
+                    partition_values: partition_values
+                        .into_iter()
+                        .map(|(k, v)| {
+                            (
+                                k,
+                                if v.is_null() {
+                                    None
+                                } else {
+                                    Some(v.serialize())
+                                },
+                            )
+                        })
+                        .collect(),
+                    modification_time: file.last_modified.timestamp_millis(),
+                    data_change: true,
+                    ..Default::default()
+                }
+                .into(),
+            );
 
             let mut arrow_schema = ParquetRecordBatchStreamBuilder::new(ParquetObjectReader::new(
                 object_store.clone(),
@@ -418,10 +421,7 @@ impl std::future::IntoFuture for ConvertToDeltaBuilder {
 mod tests {
     use super::*;
     use crate::{
-        kernel::{
-            schema::{DataType, PrimitiveType},
-            Scalar,
-        },
+        kernel::{DataType, PrimitiveType, Scalar},
         open_table,
         storage::StorageOptions,
         Path,

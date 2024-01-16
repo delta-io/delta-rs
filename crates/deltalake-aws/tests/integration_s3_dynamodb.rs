@@ -268,7 +268,7 @@ fn add_action(name: &str) -> Action {
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_millis();
-    Action::Add(Add {
+    Add {
         path: format!("{}.parquet", name),
         size: 396,
         partition_values: HashMap::new(),
@@ -281,7 +281,8 @@ fn add_action(name: &str) -> Action {
         base_row_id: None,
         default_row_commit_version: None,
         clustering_provider: None,
-    })
+    }
+    .into()
 }
 
 async fn prepare_table(context: &IntegrationContext, table_name: &str) -> TestResult<DeltaTable> {

@@ -8,12 +8,10 @@ use arrow_schema::{
 };
 use lazy_static::lazy_static;
 
-use super::{
-    schema::{ArrayType, DataType, MapType, PrimitiveType, StructField, StructType},
-    ActionType,
-};
+use super::{ActionType, ArrayType, DataType, MapType, PrimitiveType, StructField, StructType};
 
-pub mod schemas;
+pub(crate) mod extract;
+pub(crate) mod json;
 
 const MAP_ROOT_DEFAULT: &str = "entries";
 const MAP_KEY_DEFAULT: &str = "keys";
