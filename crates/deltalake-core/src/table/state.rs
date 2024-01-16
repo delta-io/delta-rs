@@ -363,9 +363,11 @@ impl DeltaTableState {
 
 #[cfg(test)]
 mod tests {
+
     use super::*;
     use crate::kernel::Txn;
     use pretty_assertions::assert_eq;
+    use serde_json::json;
 
     #[test]
     fn state_round_trip() {
@@ -413,5 +415,35 @@ mod tests {
 
         assert_eq!(2, *state.app_transaction_version().get("abc").unwrap());
         assert_eq!(1, *state.app_transaction_version().get("xyz").unwrap());
+    }
+
+    #[test]
+    fn test_merging_deserialized_special_tombstones_and_files_paths() {
+        let add = serde_json::from_value(json!({
+            "path": "x=A%252FA/part-00016-94175338-2acc-40c2-a68a-d08ba677975f.c000.snappy.parquet",
+            "partitionValues": {"x": "A/A"},
+            "size": 460,
+            "modificationTime": 1631873480,
+            "dataChange": true
+        }))
+        .unwrap();
+
+        let remove = serde_json::from_value(json!({
+            "path": "x=A%252FA/part-00016-94175338-2acc-40c2-a68a-d08ba677975f.c000.snappy.parquet",
+            "deletionTimestamp": 1631873481,
+            "partitionValues": {"x": "A/A"},
+            "size": 460,
+            "modificationTime": 1631873481,
+            "dataChange": true
+        }))
+        .unwrap();
+
+        let state = DeltaTableState::from_actions(vec![Action::Add(add)], 0).unwrap();
+        let state_next = DeltaTableState::from_actions(vec![Action::Remove(remove)], 1).unwrap();
+
+        let mut merged_state = state.clone();
+        merged_state.merge(state_next, true, true);
+
+        assert_eq!(merged_state.files().len(), 0);
     }
 }
