@@ -23,10 +23,6 @@ impl Default for S3Integration {
 impl StorageIntegration for S3Integration {
     /// Create a new bucket
     fn create_bucket(&self) -> std::io::Result<ExitStatus> {
-        set_env_if_not_set(
-            "DYNAMO_LOCK_PARTITION_KEY_VALUE",
-            format!("s3://{}", self.bucket_name()),
-        );
         Self::create_lock_table()?;
         let mut child = Command::new("aws")
             .args(["s3", "mb", &self.root_uri()])
