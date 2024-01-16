@@ -398,7 +398,7 @@
         
       
         
-          
+      
         
       
         
@@ -436,24 +436,16 @@
         <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_2" >
         
           
-          
-          <div class="md-nav__link md-nav__container">
-            <a href="../../usage/" class="md-nav__link ">
-              
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="">
+            
   
   <span class="md-ellipsis">
     Usage
   </span>
   
 
-            </a>
-            
-              
-              <label class="md-nav__link " for="__nav_2" id="__nav_2_label" tabindex="">
-                <span class="md-nav__icon md-icon"></span>
-              </label>
-            
-          </div>
+            <span class="md-nav__icon md-icon"></span>
+          </label>
         
         <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
           <label class="md-nav__title" for="__nav_2">
@@ -482,6 +474,24 @@
 
               
             
+              
+                
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../usage/overview/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Overview
+  </span>
+  
+
+      </a>
+    </li>
+  
+
               
             
               
@@ -535,6 +545,26 @@
   
   <span class="md-ellipsis">
     Append/overwrite tables
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../usage/constraints/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Adding a constraint
   </span>
   
 
@@ -667,10 +697,10 @@
         
           
         
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_2_11" >
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_2_12" >
         
           
-          <label class="md-nav__link" for="__nav_2_11" id="__nav_2_11_label" tabindex="0">
+          <label class="md-nav__link" for="__nav_2_12" id="__nav_2_12_label" tabindex="0">
             
   
   <span class="md-ellipsis">
@@ -681,8 +711,8 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_2_11_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_2_11">
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_2_12_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2_12">
             <span class="md-nav__icon md-icon"></span>
             Optimize
           </label>
@@ -859,7 +889,7 @@
         
           <li class="md-nav__item">
   <a href="#deltalake.write_deltalake" class="md-nav__link">
-    write_deltalake()
+    write_deltalake
   </a>
   
 </li>
@@ -886,7 +916,7 @@
         
           <li class="md-nav__item">
   <a href="#deltalake.convert_to_deltalake" class="md-nav__link">
-    convert_to_deltalake()
+    convert_to_deltalake
   </a>
   
 </li>
@@ -1366,7 +1396,7 @@
         
           <li class="md-nav__item">
   <a href="#deltalake.write_deltalake" class="md-nav__link">
-    write_deltalake()
+    write_deltalake
   </a>
   
 </li>
@@ -1393,7 +1423,7 @@
         
           <li class="md-nav__item">
   <a href="#deltalake.convert_to_deltalake" class="md-nav__link">
-    convert_to_deltalake()
+    convert_to_deltalake
   </a>
   
 </li>
@@ -1430,7 +1460,6 @@
 
 
 
-
 <h3 id="deltalake.write_deltalake" class="doc doc-heading">
           <span class="doc doc-object-name doc-function-name">deltalake.write_deltalake</span>
 
@@ -1454,7 +1483,7 @@ locking provider, you need to set the <code>AWS_S3_LOCKING_PROVIDER</code> to 'd
 as a storage_option or as an environment variable.</p>
 <p>Additionally, you must create a DynamoDB table with the name 'delta_rs_lock_table'
 so that it can be automatically discovered by delta-rs. Alternatively, you can
-use a table name of your choice, but you must set the <code>DYNAMO_LOCK_TABLE_NAME</code>
+use a table name of your choice, but you must set the <code>DELTA_DYNAMO_TABLE_NAME</code>
 variable to match your chosen table name. The required schema for the DynamoDB
 table is as follows:</p>
 <ul>
@@ -1818,7 +1847,6 @@ see up to 4x performance improvements over pyarrow.</p>
 
 
 
-
 <h3 id="deltalake.WriterProperties" class="doc doc-heading">
           <span class="doc doc-object-name doc-class-name">deltalake.WriterProperties</span>
 
@@ -1974,12 +2002,12 @@ ZSTD: levels (1-22),</p>
 
   </div>
 
+
 </div><h2 id="convert-to-delta-tables">Convert to Delta Tables</h2>
 
 
 
 <div class="doc doc-object doc-function">
-
 
 
 
