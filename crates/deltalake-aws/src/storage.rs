@@ -57,6 +57,10 @@ impl ObjectStoreFactory for S3ObjectStoreFactory {
         )?;
 
         let options = S3StorageOptions::from_map(&options.0);
+        if options.copy_if_not_exists.is_some() {
+            // If the copy-if-not-exists env var is set, we don't need to instantiate a locking client or check for allow-unsafe-rename.
+            return Ok((Arc::new(*store), prefix));
+        }
         let store = S3StorageBackend::try_new(
             store.into(),
             Some("dynamodb") == options.locking_provider.as_deref() || options.allow_unsafe_rename,
@@ -87,6 +91,7 @@ pub struct S3StorageOptions {
     pub sts_pool_idle_timeout: Duration,
     pub s3_get_internal_server_error_retries: usize,
     pub allow_unsafe_rename: bool,
+    pub copy_if_not_exists: Option<String>,
     pub extra_opts: HashMap<String, String>,
 }
 
@@ -141,6 +146,8 @@ impl S3StorageOptions {
             .map(|val| str_is_truthy(&val))
             .unwrap_or(false);
 
+        let copy_if_not_exists = str_option(options, s3_constants::AWS_COPY_IF_NOT_EXISTS);
+
         Self {
             endpoint_url,
             region,
@@ -158,6 +165,7 @@ impl S3StorageOptions {
             s3_get_internal_server_error_retries,
             allow_unsafe_rename,
             extra_opts,
+            copy_if_not_exists,
         }
     }
 
@@ -366,6 +374,10 @@ pub mod s3_constants {
     /// Only safe if there is one writer to a given table.
     pub const AWS_S3_ALLOW_UNSAFE_RENAME: &str = "AWS_S3_ALLOW_UNSAFE_RENAME";
 
+    /// If set, specifies how to enable copy-if-not-exists on the S3 endpoint. Allows
+    /// bypassing the use of a lock client like DynamoDB.
+    pub const AWS_COPY_IF_NOT_EXISTS: &str = "AWS_COPY_IF_NOT_EXISTS";
+
     /// The list of option keys owned by the S3 module.
     /// Option keys not contained in this list will be added to the `extra_opts`
     /// field of [crate::storage::s3::S3StorageOptions].
@@ -442,6 +454,7 @@ mod tests {
                 s3_get_internal_server_error_retries: 10,
                 extra_opts: HashMap::new(),
                 allow_unsafe_rename: false,
+                copy_if_not_exists: None
             },
             options
         );
@@ -511,6 +524,7 @@ mod tests {
                     s3_constants::AWS_S3_ADDRESSING_STYLE.to_string() => "virtual".to_string()
                 },
                 allow_unsafe_rename: false,
+                copy_if_not_exists: None
             },
             options
         );
@@ -563,6 +577,7 @@ mod tests {
                 s3_get_internal_server_error_retries: 3,
                 extra_opts: hashmap! {},
                 allow_unsafe_rename: false,
+                copy_if_not_exists: None
             },
             options
         );

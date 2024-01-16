@@ -43,6 +43,13 @@ impl LogStoreFactory for S3LogStoreFactory {
         let store = url_prefix_handler(store, Path::parse(location.path())?)?;
         let s3_options = S3StorageOptions::from_map(&options.0);
 
+        if s3_options.copy_if_not_exists.is_some() {
+            debug!("S3LogStoreFactory has been asked to create a LogStore where the underlying store has copy-if-not-exists enabled - no locking provider required");
+            return Ok(deltalake_core::logstore::default_logstore(
+                store, location, options,
+            ));
+        }
+
         if s3_options.locking_provider.as_deref() != Some("dynamodb") {
             debug!("S3LogStoreFactory has been asked to create a LogStore without the dynamodb locking provider");
             return Ok(deltalake_core::logstore::default_logstore(
