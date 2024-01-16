@@ -539,7 +539,6 @@ mod tests {
             s3_constants::AWS_ACCESS_KEY_ID.to_string() => "test_id_mixed".to_string(),
             s3_constants::AWS_SECRET_ACCESS_KEY.to_string() => "test_secret_mixed".to_string(),
             s3_constants::AWS_REGION.to_string() => "us-west-2".to_string(),
-            "DYNAMO_LOCK_PARTITION_KEY_VALUE".to_string() => "my_lock".to_string(),
             "AWS_S3_GET_INTERNAL_SERVER_ERROR_RETRIES".to_string() => "3".to_string(),
         });
 
@@ -562,9 +561,7 @@ mod tests {
                 s3_pool_idle_timeout: Duration::from_secs(1),
                 sts_pool_idle_timeout: Duration::from_secs(2),
                 s3_get_internal_server_error_retries: 3,
-                extra_opts: hashmap! {
-                    "DYNAMO_LOCK_PARTITION_KEY_VALUE".to_string() => "my_lock".to_string(),
-                },
+                extra_opts: hashmap! {},
                 allow_unsafe_rename: false,
             },
             options
