@@ -56,7 +56,16 @@ impl ObjectStoreFactory for S3ObjectStoreFactory {
             }),
         )?;
 
+        if options
+            .0
+            .contains_key(AmazonS3ConfigKey::CopyIfNotExists.as_ref())
+        {
+            // If the copy-if-not-exists env var is set, we don't need to instantiate a locking client or check for allow-unsafe-rename.
+            return Ok((Arc::from(store), prefix));
+        }
+
         let options = S3StorageOptions::from_map(&options.0);
+
         let store = S3StorageBackend::try_new(
             store.into(),
             Some("dynamodb") == options.locking_provider.as_deref() || options.allow_unsafe_rename,
