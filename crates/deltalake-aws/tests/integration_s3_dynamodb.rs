@@ -267,7 +267,7 @@ fn add_action(name: &str) -> Action {
     let ts = (SystemTime::now() - Duration::from_secs(1800))
         .duration_since(UNIX_EPOCH)
         .unwrap()
-        .as_secs();
+        .as_millis();
     Action::Add(Add {
         path: format!("{}.parquet", name),
         size: 396,
