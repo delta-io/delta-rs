@@ -375,10 +375,6 @@ pub mod s3_constants {
     /// Only safe if there is one writer to a given table.
     pub const AWS_S3_ALLOW_UNSAFE_RENAME: &str = "AWS_S3_ALLOW_UNSAFE_RENAME";
 
-    /// If set, specifies how to enable copy-if-not-exists on the S3 endpoint. Allows
-    /// bypassing the use of a lock client like DynamoDB.
-    pub const AWS_COPY_IF_NOT_EXISTS: &str = "AWS_COPY_IF_NOT_EXISTS";
-
     /// The list of option keys owned by the S3 module.
     /// Option keys not contained in this list will be added to the `extra_opts`
     /// field of [crate::storage::s3::S3StorageOptions].
