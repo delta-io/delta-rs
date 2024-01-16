@@ -59,7 +59,7 @@ impl ObjectStoreFactory for S3ObjectStoreFactory {
         let options = S3StorageOptions::from_map(&options.0);
         if options.copy_if_not_exists.is_some() {
             // If the copy-if-not-exists env var is set, we don't need to instantiate a locking client or check for allow-unsafe-rename.
-            return Ok((Arc::new(*store), prefix));
+            return Ok((Arc::from(store), prefix));
         }
         let store = S3StorageBackend::try_new(
             store.into(),
