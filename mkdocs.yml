@@ -79,6 +79,7 @@ nav:
     - Polars: integrations/delta-lake-polars.md
   - How Delta Lake works:
     - Architecture: how-delta-lake-works/architecture-of-delta-table.md
+    - Transactions: how-delta-lake-works/delta-lake-acid-transactions.md
 not_in_nav: |
   /_build/
 
