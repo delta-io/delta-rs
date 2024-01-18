@@ -223,16 +223,19 @@
   
   
   
-    <li class="md-tabs__item">
-      <a href="../.." class="md-tabs__link">
-        
+    
+    
+      <li class="md-tabs__item">
+        <a href="../.." class="md-tabs__link">
+          
   
     
   
   Home
 
-      </a>
-    </li>
+        </a>
+      </li>
+    
   
 
       
@@ -373,16 +376,83 @@
   
   
   
-    <li class="md-nav__item">
-      <a href="../.." class="md-nav__link">
+    
+    
+      
         
+          
+        
+      
+        
+      
+    
+    
+    
+    
+      
+      
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_1" >
+        
+          
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../.." class="md-nav__link ">
+              
   
   <span class="md-ellipsis">
     Home
   </span>
   
 
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_1" id="__nav_1_label" tabindex="">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_1_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_1">
+            <span class="md-nav__icon md-icon"></span>
+            Home
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../why-use-delta-lake/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Why Use Delta Lake
+  </span>
+  
+
       </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
     </li>
   
 
@@ -1167,6 +1237,8 @@
       
         
       
+        
+      
     
     
     
@@ -1213,6 +1285,26 @@
   
   <span class="md-ellipsis">
     Arrow
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../integrations/delta-lake-datafusion/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    DataFusion
   </span>
   
 
@@ -1469,33 +1561,35 @@ use different schemas to encode the actions. For Spark\'s format, see:
 <a href="https://docs.delta.io/latest/delta-utility.html#history-schema">https://docs.delta.io/latest/delta-utility.html#history-schema</a></p>
 </div>
 <p>To view the available history, use <code>DeltaTable.history</code>:</p>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="o">&gt;&gt;&gt;</span> <span class="kn">from</span> <span class="nn">deltalake</span> <span class="kn">import</span> <span class="n">DeltaTable</span>
-</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="o">&gt;&gt;&gt;</span> <span class="n">dt</span> <span class="o">=</span> <span class="n">DeltaTable</span><span class="p">(</span><span class="s2">&quot;../rust/tests/data/simple_table&quot;</span><span class="p">)</span>
-</span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="o">&gt;&gt;&gt;</span> <span class="n">dt</span><span class="o">.</span><span class="n">history</span><span class="p">()</span>
-</span><span id="__span-4-4"><a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="p">[{</span><span class="s1">&#39;timestamp&#39;</span><span class="p">:</span> <span class="mi">1587968626537</span><span class="p">,</span> <span class="s1">&#39;operation&#39;</span><span class="p">:</span> <span class="s1">&#39;DELETE&#39;</span><span class="p">,</span> <span class="s1">&#39;operationParameters&#39;</span><span class="p">:</span> <span class="p">{</span><span class="s1">&#39;predicate&#39;</span><span class="p">:</span> <span class="s1">&#39;[&quot;((`id` % CAST(2 AS BIGINT)) = CAST(0 AS BIGINT))&quot;]&#39;</span><span class="p">},</span> <span class="s1">&#39;readVersion&#39;</span><span class="p">:</span> <span class="mi">3</span><span class="p">,</span> <span class="s1">&#39;isBlindAppend&#39;</span><span class="p">:</span> <span class="kc">False</span><span class="p">},</span>
-</span><span id="__span-4-5"><a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a> <span class="p">{</span><span class="s1">&#39;timestamp&#39;</span><span class="p">:</span> <span class="mi">1587968614187</span><span class="p">,</span> <span class="s1">&#39;operation&#39;</span><span class="p">:</span> <span class="s1">&#39;UPDATE&#39;</span><span class="p">,</span> <span class="s1">&#39;operationParameters&#39;</span><span class="p">:</span> <span class="p">{</span><span class="s1">&#39;predicate&#39;</span><span class="p">:</span> <span class="s1">&#39;((id#697L </span><span class="si">% c</span><span class="s1">ast(2 as bigint)) = cast(0 as bigint))&#39;</span><span class="p">},</span> <span class="s1">&#39;readVersion&#39;</span><span class="p">:</span> <span class="mi">2</span><span class="p">,</span> <span class="s1">&#39;isBlindAppend&#39;</span><span class="p">:</span> <span class="kc">False</span><span class="p">},</span>
-</span><span id="__span-4-6"><a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a> <span class="p">{</span><span class="s1">&#39;timestamp&#39;</span><span class="p">:</span> <span class="mi">1587968604143</span><span class="p">,</span> <span class="s1">&#39;operation&#39;</span><span class="p">:</span> <span class="s1">&#39;WRITE&#39;</span><span class="p">,</span> <span class="s1">&#39;operationParameters&#39;</span><span class="p">:</span> <span class="p">{</span><span class="s1">&#39;mode&#39;</span><span class="p">:</span> <span class="s1">&#39;Overwrite&#39;</span><span class="p">,</span> <span class="s1">&#39;partitionBy&#39;</span><span class="p">:</span> <span class="s1">&#39;[]&#39;</span><span class="p">},</span> <span class="s1">&#39;readVersion&#39;</span><span class="p">:</span> <span class="mi">1</span><span class="p">,</span> <span class="s1">&#39;isBlindAppend&#39;</span><span class="p">:</span> <span class="kc">False</span><span class="p">},</span>
-</span><span id="__span-4-7"><a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a> <span class="p">{</span><span class="s1">&#39;timestamp&#39;</span><span class="p">:</span> <span class="mi">1587968596254</span><span class="p">,</span> <span class="s1">&#39;operation&#39;</span><span class="p">:</span> <span class="s1">&#39;MERGE&#39;</span><span class="p">,</span> <span class="s1">&#39;operationParameters&#39;</span><span class="p">:</span> <span class="p">{</span><span class="s1">&#39;predicate&#39;</span><span class="p">:</span> <span class="s1">&#39;(oldData.`id` = newData.`id`)&#39;</span><span class="p">},</span> <span class="s1">&#39;readVersion&#39;</span><span class="p">:</span> <span class="mi">0</span><span class="p">,</span> <span class="s1">&#39;isBlindAppend&#39;</span><span class="p">:</span> <span class="kc">False</span><span class="p">},</span>
-</span><span id="__span-4-8"><a id="__codelineno-4-8" name="__codelineno-4-8" href="#__codelineno-4-8"></a> <span class="p">{</span><span class="s1">&#39;timestamp&#39;</span><span class="p">:</span> <span class="mi">1587968586154</span><span class="p">,</span> <span class="s1">&#39;operation&#39;</span><span class="p">:</span> <span class="s1">&#39;WRITE&#39;</span><span class="p">,</span> <span class="s1">&#39;operationParameters&#39;</span><span class="p">:</span> <span class="p">{</span><span class="s1">&#39;mode&#39;</span><span class="p">:</span> <span class="s1">&#39;ErrorIfExists&#39;</span><span class="p">,</span> <span class="s1">&#39;partitionBy&#39;</span><span class="p">:</span> <span class="s1">&#39;[]&#39;</span><span class="p">},</span> <span class="s1">&#39;isBlindAppend&#39;</span><span class="p">:</span> <span class="kc">True</span><span class="p">}]</span>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="kn">from</span> <span class="nn">deltalake</span> <span class="kn">import</span> <span class="n">DeltaTable</span>
+</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>
+</span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="n">dt</span> <span class="o">=</span> <span class="n">DeltaTable</span><span class="p">(</span><span class="s2">&quot;../rust/tests/data/simple_table&quot;</span><span class="p">)</span>
+</span><span id="__span-4-4"><a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="n">dt</span><span class="o">.</span><span class="n">history</span><span class="p">()</span>
+</span></code></pre></div>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>[{&#39;timestamp&#39;: 1587968626537, &#39;operation&#39;: &#39;DELETE&#39;, &#39;operationParameters&#39;: {&#39;predicate&#39;: &#39;[&quot;((`id` % CAST(2 AS BIGINT)) = CAST(0 AS BIGINT))&quot;]&#39;}, &#39;readVersion&#39;: 3, &#39;isBlindAppend&#39;: False},
+</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a> {&#39;timestamp&#39;: 1587968614187, &#39;operation&#39;: &#39;UPDATE&#39;, &#39;operationParameters&#39;: {&#39;predicate&#39;: &#39;((id#697L % cast(2 as bigint)) = cast(0 as bigint))&#39;}, &#39;readVersion&#39;: 2, &#39;isBlindAppend&#39;: False},
+</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a> {&#39;timestamp&#39;: 1587968604143, &#39;operation&#39;: &#39;WRITE&#39;, &#39;operationParameters&#39;: {&#39;mode&#39;: &#39;Overwrite&#39;, &#39;partitionBy&#39;: &#39;[]&#39;}, &#39;readVersion&#39;: 1, &#39;isBlindAppend&#39;: False},
+</span><span id="__span-5-4"><a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a> {&#39;timestamp&#39;: 1587968596254, &#39;operation&#39;: &#39;MERGE&#39;, &#39;operationParameters&#39;: {&#39;predicate&#39;: &#39;(oldData.`id` = newData.`id`)&#39;}, &#39;readVersion&#39;: 0, &#39;isBlindAppend&#39;: False},
+</span><span id="__span-5-5"><a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a> {&#39;timestamp&#39;: 1587968586154, &#39;operation&#39;: &#39;WRITE&#39;, &#39;operationParameters&#39;: {&#39;mode&#39;: &#39;ErrorIfExists&#39;, &#39;partitionBy&#39;: &#39;[]&#39;}, &#39;isBlindAppend&#39;: True}]
 </span></code></pre></div>
 <h2 id="current-add-actions">Current Add Actions</h2>
 <p>The active state for a delta table is determined by the Add actions,
 which provide the list of files that are part of the table and metadata
 about them, such as creation time, size, and statistics. You can get a
 data frame of the add actions data using <code>DeltaTable.get_add_actions</code>:</p>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="o">&gt;&gt;&gt;</span> <span class="kn">from</span> <span class="nn">deltalake</span> <span class="kn">import</span> <span class="n">DeltaTable</span>
-</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="o">&gt;&gt;&gt;</span> <span class="n">dt</span> <span class="o">=</span> <span class="n">DeltaTable</span><span class="p">(</span><span class="s2">&quot;../rust/tests/data/delta-0.8.0&quot;</span><span class="p">)</span>
-</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="o">&gt;&gt;&gt;</span> <span class="n">dt</span><span class="o">.</span><span class="n">get_add_actions</span><span class="p">(</span><span class="n">flatten</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span>
-</span><span id="__span-5-4"><a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a>                                                    <span class="n">path</span>  <span class="n">size_bytes</span>   <span class="n">modification_time</span>  <span class="n">data_change</span>  <span class="n">num_records</span>  <span class="n">null_count</span><span class="o">.</span><span class="n">value</span>  <span class="nb">min</span><span class="o">.</span><span class="n">value</span>  <span class="nb">max</span><span class="o">.</span><span class="n">value</span>
-</span><span id="__span-5-5"><a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a><span class="mi">0</span>  <span class="n">part</span><span class="o">-</span><span class="mi">00000</span><span class="o">-</span><span class="n">c9b90f86</span><span class="o">-</span><span class="mf">73e6</span><span class="o">-</span><span class="mi">46</span><span class="n">c8</span><span class="o">-</span><span class="mi">93</span><span class="n">ba</span><span class="o">-</span><span class="n">ff6bfaf892a</span><span class="o">...</span>         <span class="mi">440</span> <span class="mi">2021</span><span class="o">-</span><span class="mi">03</span><span class="o">-</span><span class="mi">06</span> <span class="mi">15</span><span class="p">:</span><span class="mi">16</span><span class="p">:</span><span class="mi">07</span>         <span class="kc">True</span>            <span class="mi">2</span>                 <span class="mi">0</span>          <span class="mi">0</span>          <span class="mi">2</span>
-</span><span id="__span-5-6"><a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a><span class="mi">1</span>  <span class="n">part</span><span class="o">-</span><span class="mi">00000</span><span class="o">-</span><span class="mi">04</span><span class="n">ec9591</span><span class="o">-</span><span class="mi">0</span><span class="n">b73</span><span class="o">-</span><span class="mf">459e-8</span><span class="n">d18</span><span class="o">-</span><span class="n">ba5711d6cbe</span><span class="o">...</span>         <span class="mi">440</span> <span class="mi">2021</span><span class="o">-</span><span class="mi">03</span><span class="o">-</span><span class="mi">06</span> <span class="mi">15</span><span class="p">:</span><span class="mi">16</span><span class="p">:</span><span class="mi">16</span>         <span class="kc">True</span>            <span class="mi">2</span>                 <span class="mi">0</span>          <span class="mi">2</span>          <span class="mi">4</span>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="o">&gt;&gt;&gt;</span> <span class="kn">from</span> <span class="nn">deltalake</span> <span class="kn">import</span> <span class="n">DeltaTable</span>
+</span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="o">&gt;&gt;&gt;</span> <span class="n">dt</span> <span class="o">=</span> <span class="n">DeltaTable</span><span class="p">(</span><span class="s2">&quot;../rust/tests/data/delta-0.8.0&quot;</span><span class="p">)</span>
+</span><span id="__span-6-3"><a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="o">&gt;&gt;&gt;</span> <span class="n">dt</span><span class="o">.</span><span class="n">get_add_actions</span><span class="p">(</span><span class="n">flatten</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span>
+</span><span id="__span-6-4"><a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a>                                                    <span class="n">path</span>  <span class="n">size_bytes</span>   <span class="n">modification_time</span>  <span class="n">data_change</span>  <span class="n">num_records</span>  <span class="n">null_count</span><span class="o">.</span><span class="n">value</span>  <span class="nb">min</span><span class="o">.</span><span class="n">value</span>  <span class="nb">max</span><span class="o">.</span><span class="n">value</span>
+</span><span id="__span-6-5"><a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a><span class="mi">0</span>  <span class="n">part</span><span class="o">-</span><span class="mi">00000</span><span class="o">-</span><span class="n">c9b90f86</span><span class="o">-</span><span class="mf">73e6</span><span class="o">-</span><span class="mi">46</span><span class="n">c8</span><span class="o">-</span><span class="mi">93</span><span class="n">ba</span><span class="o">-</span><span class="n">ff6bfaf892a</span><span class="o">...</span>         <span class="mi">440</span> <span class="mi">2021</span><span class="o">-</span><span class="mi">03</span><span class="o">-</span><span class="mi">06</span> <span class="mi">15</span><span class="p">:</span><span class="mi">16</span><span class="p">:</span><span class="mi">07</span>         <span class="kc">True</span>            <span class="mi">2</span>                 <span class="mi">0</span>          <span class="mi">0</span>          <span class="mi">2</span>
+</span><span id="__span-6-6"><a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a><span class="mi">1</span>  <span class="n">part</span><span class="o">-</span><span class="mi">00000</span><span class="o">-</span><span class="mi">04</span><span class="n">ec9591</span><span class="o">-</span><span class="mi">0</span><span class="n">b73</span><span class="o">-</span><span class="mf">459e-8</span><span class="n">d18</span><span class="o">-</span><span class="n">ba5711d6cbe</span><span class="o">...</span>         <span class="mi">440</span> <span class="mi">2021</span><span class="o">-</span><span class="mi">03</span><span class="o">-</span><span class="mi">06</span> <span class="mi">15</span><span class="p">:</span><span class="mi">16</span><span class="p">:</span><span class="mi">16</span>         <span class="kc">True</span>            <span class="mi">2</span>                 <span class="mi">0</span>          <span class="mi">2</span>          <span class="mi">4</span>
 </span></code></pre></div>
 <p>This works even with past versions of the table:</p>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="o">&gt;&gt;&gt;</span> <span class="n">dt</span> <span class="o">=</span> <span class="n">DeltaTable</span><span class="p">(</span><span class="s2">&quot;../rust/tests/data/delta-0.8.0&quot;</span><span class="p">,</span> <span class="n">version</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
-</span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="o">&gt;&gt;&gt;</span> <span class="n">dt</span><span class="o">.</span><span class="n">get_add_actions</span><span class="p">(</span><span class="n">flatten</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span>
-</span><span id="__span-6-3"><a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a>                                                <span class="n">path</span>  <span class="n">size_bytes</span>   <span class="n">modification_time</span>  <span class="n">data_change</span>  <span class="n">num_records</span>  <span class="n">null_count</span><span class="o">.</span><span class="n">value</span>  <span class="nb">min</span><span class="o">.</span><span class="n">value</span>  <span class="nb">max</span><span class="o">.</span><span class="n">value</span>
-</span><span id="__span-6-4"><a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="mi">0</span>  <span class="n">part</span><span class="o">-</span><span class="mi">00000</span><span class="o">-</span><span class="n">c9b90f86</span><span class="o">-</span><span class="mf">73e6</span><span class="o">-</span><span class="mi">46</span><span class="n">c8</span><span class="o">-</span><span class="mi">93</span><span class="n">ba</span><span class="o">-</span><span class="n">ff6bfaf892a</span><span class="o">...</span>         <span class="mi">440</span> <span class="mi">2021</span><span class="o">-</span><span class="mi">03</span><span class="o">-</span><span class="mi">06</span> <span class="mi">15</span><span class="p">:</span><span class="mi">16</span><span class="p">:</span><span class="mi">07</span>         <span class="kc">True</span>            <span class="mi">2</span>                 <span class="mi">0</span>          <span class="mi">0</span>          <span class="mi">2</span>
-</span><span id="__span-6-5"><a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a><span class="mi">1</span>  <span class="n">part</span><span class="o">-</span><span class="mi">00001</span><span class="o">-</span><span class="mi">911</span><span class="n">a94a2</span><span class="o">-</span><span class="mi">43</span><span class="n">f6</span><span class="o">-</span><span class="mi">4</span><span class="n">acb</span><span class="o">-</span><span class="mi">8620</span><span class="o">-</span><span class="mf">5e68</span><span class="n">c265498</span><span class="o">...</span>         <span class="mi">445</span> <span class="mi">2021</span><span class="o">-</span><span class="mi">03</span><span class="o">-</span><span class="mi">06</span> <span class="mi">15</span><span class="p">:</span><span class="mi">16</span><span class="p">:</span><span class="mi">07</span>         <span class="kc">True</span>            <span class="mi">3</span>                 <span class="mi">0</span>          <span class="mi">2</span>          <span class="mi">4</span>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="o">&gt;&gt;&gt;</span> <span class="n">dt</span> <span class="o">=</span> <span class="n">DeltaTable</span><span class="p">(</span><span class="s2">&quot;../rust/tests/data/delta-0.8.0&quot;</span><span class="p">,</span> <span class="n">version</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+</span><span id="__span-7-2"><a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="o">&gt;&gt;&gt;</span> <span class="n">dt</span><span class="o">.</span><span class="n">get_add_actions</span><span class="p">(</span><span class="n">flatten</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span>
+</span><span id="__span-7-3"><a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a>                                                <span class="n">path</span>  <span class="n">size_bytes</span>   <span class="n">modification_time</span>  <span class="n">data_change</span>  <span class="n">num_records</span>  <span class="n">null_count</span><span class="o">.</span><span class="n">value</span>  <span class="nb">min</span><span class="o">.</span><span class="n">value</span>  <span class="nb">max</span><span class="o">.</span><span class="n">value</span>
+</span><span id="__span-7-4"><a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a><span class="mi">0</span>  <span class="n">part</span><span class="o">-</span><span class="mi">00000</span><span class="o">-</span><span class="n">c9b90f86</span><span class="o">-</span><span class="mf">73e6</span><span class="o">-</span><span class="mi">46</span><span class="n">c8</span><span class="o">-</span><span class="mi">93</span><span class="n">ba</span><span class="o">-</span><span class="n">ff6bfaf892a</span><span class="o">...</span>         <span class="mi">440</span> <span class="mi">2021</span><span class="o">-</span><span class="mi">03</span><span class="o">-</span><span class="mi">06</span> <span class="mi">15</span><span class="p">:</span><span class="mi">16</span><span class="p">:</span><span class="mi">07</span>         <span class="kc">True</span>            <span class="mi">2</span>                 <span class="mi">0</span>          <span class="mi">0</span>          <span class="mi">2</span>
+</span><span id="__span-7-5"><a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a><span class="mi">1</span>  <span class="n">part</span><span class="o">-</span><span class="mi">00001</span><span class="o">-</span><span class="mi">911</span><span class="n">a94a2</span><span class="o">-</span><span class="mi">43</span><span class="n">f6</span><span class="o">-</span><span class="mi">4</span><span class="n">acb</span><span class="o">-</span><span class="mi">8620</span><span class="o">-</span><span class="mf">5e68</span><span class="n">c265498</span><span class="o">...</span>         <span class="mi">445</span> <span class="mi">2021</span><span class="o">-</span><span class="mi">03</span><span class="o">-</span><span class="mi">06</span> <span class="mi">15</span><span class="p">:</span><span class="mi">16</span><span class="p">:</span><span class="mi">07</span>         <span class="kc">True</span>            <span class="mi">3</span>                 <span class="mi">0</span>          <span class="mi">2</span>          <span class="mi">4</span>
 </span></code></pre></div>
 
 
