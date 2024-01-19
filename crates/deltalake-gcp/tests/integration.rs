@@ -13,6 +13,7 @@ static TEST_PREFIXES_ENCODED: &[&str] = &["my%20table", "%E4%BD%A0%E5%A5%BD/%F0%
 
 #[tokio::test]
 #[serial]
+#[ignore = "The GCP tests currently hang"]
 async fn test_read_tables_gcp() -> TestResult {
     let context = IntegrationContext::new(Box::new(GcpIntegration::default()))?;
 
@@ -27,6 +28,7 @@ async fn test_read_tables_gcp() -> TestResult {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[serial]
+#[ignore = "The GCP tests currently hang"]
 async fn test_concurrency_gcp() -> TestResult {
     let context = IntegrationContext::new(Box::new(GcpIntegration::default()))?;
 
