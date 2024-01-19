@@ -248,7 +248,7 @@ Delta tables are generally persisted in cloud object stores which provide durabi
 
 Durability means that all transactions that are successfully completed will always remain persisted, even if there are service outages or program crashes.
 
-Suppose you have a Delta table that’s persisted in Azure blog storage.  The Delta table transactions that are committed will always remain available, even in these circumstances:
+Suppose you have a Delta table that’s persisted in Azure blob storage.  The Delta table transactions that are committed will always remain available, even in these circumstances:
 
 * When there are Azure service outages
 * If a computation cluster that’s writing the Delta table crashes for some reason
@@ -260,7 +260,7 @@ Successful transactions are always registered in the Delta table and persisted n
 
 Delta Lake supports transactions which provide necessary reliability guarantees for production data systems.
 
-Data lakes don’t provide transactions and this can cause nasty bugs and a bad user experience.  Let’s look at a couple of scenarios when the lack of transactions cause a poor user experience:
+Vanilla data lakes don’t provide transactions and this can cause nasty bugs and a bad user experience.  Let’s look at a couple of scenarios when the lack of transactions cause a poor user experience:
 
 * While running a compaction operation on a data lake, newly compacted “right sized” files are added before the small files are deleted.  If you read the data lake while this operation is running, you will see duplicate data.
 * While writing to a data lake, a job might fail, which leaves behind partially written files.  These files are corrupt, which means that the data lake cannot be read until the corrupt files are manually removed.
