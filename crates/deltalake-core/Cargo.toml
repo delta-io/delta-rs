@@ -135,7 +135,6 @@ datafusion = [
     "parquet",
 ]
 datafusion-ext = ["datafusion"]
-gcs = ["object_store/gcp"]
 json = ["parquet/json"]
 python = ["arrow/pyarrow"]
 unity-experimental = ["reqwest", "hyper"]
