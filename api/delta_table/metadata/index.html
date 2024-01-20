@@ -8,28 +8,28 @@
       
       
       
-        <link rel="canonical" href="https://github.com/delta-io/delta-rs/api/storage/">
+        <link rel="canonical" href="https://github.com/delta-io/delta-rs/api/delta_table/metadata/">
       
       
-        <link rel="prev" href="../schema/">
+        <link rel="prev" href="../">
       
       
-        <link rel="next" href="../catalog/">
+        <link rel="next" href="../delta_table_merger/">
       
       
-      <link rel="icon" href="../../delta-rust-no-whitespace.svg">
+      <link rel="icon" href="../../../delta-rust-no-whitespace.svg">
       <meta name="generator" content="mkdocs-1.5.3, mkdocs-material-9.4.5">
     
     
       
-        <title>Storage - Delta Lake Documentation</title>
+        <title>Metadata - Delta Lake Documentation</title>
       
     
     
-      <link rel="stylesheet" href="../../assets/stylesheets/main.6a10b989.min.css">
+      <link rel="stylesheet" href="../../../assets/stylesheets/main.6a10b989.min.css">
       
         
-        <link rel="stylesheet" href="../../assets/stylesheets/palette.356b1318.min.css">
+        <link rel="stylesheet" href="../../../assets/stylesheets/palette.356b1318.min.css">
       
       
 
@@ -48,11 +48,11 @@
       
     
     
-      <link rel="stylesheet" href="../../assets/_markdown_exec_ansi.css">
+      <link rel="stylesheet" href="../../../assets/_markdown_exec_ansi.css">
     
-      <link rel="stylesheet" href="../../assets/_mkdocstrings.css">
+      <link rel="stylesheet" href="../../../assets/_mkdocstrings.css">
     
-    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce((e,_)=>(e<<5)-e+_.charCodeAt(0),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    <script>__md_scope=new URL("../../..",location),__md_hash=e=>[...e].reduce((e,_)=>(e<<5)-e+_.charCodeAt(0),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
     
       
 
@@ -81,7 +81,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#storage" class="md-skip">
+        <a href="#metadata" class="md-skip">
           Skip to content
         </a>
       
@@ -97,9 +97,9 @@
 
 <header class="md-header md-header--shadow md-header--lifted" data-md-component="header">
   <nav class="md-header__inner md-grid" aria-label="Header">
-    <a href="../.." title="Delta Lake Documentation" class="md-header__button md-logo" aria-label="Delta Lake Documentation" data-md-component="logo">
+    <a href="../../.." title="Delta Lake Documentation" class="md-header__button md-logo" aria-label="Delta Lake Documentation" data-md-component="logo">
       
-  <img src="../../delta-rust-no-whitespace.svg" alt="logo">
+  <img src="../../../delta-rust-no-whitespace.svg" alt="logo">
 
     </a>
     <label class="md-header__button md-icon" for="__drawer">
@@ -116,7 +116,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              Storage
+              Metadata
             
           </span>
         </div>
@@ -226,7 +226,7 @@
     
     
       <li class="md-tabs__item">
-        <a href="../.." class="md-tabs__link">
+        <a href="../../.." class="md-tabs__link">
           
   
     
@@ -246,7 +246,7 @@
     
     
       <li class="md-tabs__item">
-        <a href="../../usage/installation/" class="md-tabs__link">
+        <a href="../../../usage/installation/" class="md-tabs__link">
           
   
     
@@ -268,7 +268,7 @@
     
     
       <li class="md-tabs__item md-tabs__item--active">
-        <a href="../delta_writer/" class="md-tabs__link">
+        <a href="../../delta_writer/" class="md-tabs__link">
           
   
     
@@ -288,7 +288,7 @@
     
     
       <li class="md-tabs__item">
-        <a href="../../integrations/delta-lake-arrow/" class="md-tabs__link">
+        <a href="../../../integrations/delta-lake-arrow/" class="md-tabs__link">
           
   
     
@@ -308,7 +308,7 @@
     
     
       <li class="md-tabs__item">
-        <a href="../../how-delta-lake-works/architecture-of-delta-table/" class="md-tabs__link">
+        <a href="../../../how-delta-lake-works/architecture-of-delta-table/" class="md-tabs__link">
           
   
     
@@ -349,9 +349,9 @@
 
 <nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
   <label class="md-nav__title" for="__drawer">
-    <a href="../.." title="Delta Lake Documentation" class="md-nav__button md-logo" aria-label="Delta Lake Documentation" data-md-component="logo">
+    <a href="../../.." title="Delta Lake Documentation" class="md-nav__button md-logo" aria-label="Delta Lake Documentation" data-md-component="logo">
       
-  <img src="../../delta-rust-no-whitespace.svg" alt="logo">
+  <img src="../../../delta-rust-no-whitespace.svg" alt="logo">
 
     </a>
     Delta Lake Documentation
@@ -404,7 +404,7 @@
           
           
           <div class="md-nav__link md-nav__container">
-            <a href="../.." class="md-nav__link ">
+            <a href="../../.." class="md-nav__link ">
               
   
   <span class="md-ellipsis">
@@ -436,7 +436,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../why-use-delta-lake/" class="md-nav__link">
+      <a href="../../../why-use-delta-lake/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -530,7 +530,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../usage/installation/" class="md-nav__link">
+      <a href="../../../usage/installation/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -550,7 +550,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../usage/overview/" class="md-nav__link">
+      <a href="../../../usage/overview/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -570,7 +570,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../usage/create-delta-lake-table/" class="md-nav__link">
+      <a href="../../../usage/create-delta-lake-table/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -590,7 +590,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../usage/loading-table/" class="md-nav__link">
+      <a href="../../../usage/loading-table/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -610,7 +610,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../usage/appending-overwriting-delta-lake-table/" class="md-nav__link">
+      <a href="../../../usage/appending-overwriting-delta-lake-table/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -630,7 +630,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../usage/constraints/" class="md-nav__link">
+      <a href="../../../usage/constraints/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -650,7 +650,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../usage/examining-table/" class="md-nav__link">
+      <a href="../../../usage/examining-table/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -670,7 +670,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../usage/querying-delta-tables/" class="md-nav__link">
+      <a href="../../../usage/querying-delta-tables/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -690,7 +690,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../usage/managing-tables/" class="md-nav__link">
+      <a href="../../../usage/managing-tables/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -710,7 +710,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../usage/writing-delta-tables/" class="md-nav__link">
+      <a href="../../../usage/writing-delta-tables/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -730,7 +730,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../usage/deleting-rows-from-delta-lake-table/" class="md-nav__link">
+      <a href="../../../usage/deleting-rows-from-delta-lake-table/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -794,7 +794,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../usage/optimize/small-file-compaction-with-optimize/" class="md-nav__link">
+      <a href="../../../usage/optimize/small-file-compaction-with-optimize/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -814,7 +814,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../usage/optimize/delta-lake-z-order/" class="md-nav__link">
+      <a href="../../../usage/optimize/delta-lake-z-order/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -904,7 +904,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../delta_writer/" class="md-nav__link">
+      <a href="../../delta_writer/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -922,6 +922,8 @@
                 
   
   
+    
+  
   
     
     
@@ -942,19 +944,17 @@
     
     
     
-    <li class="md-nav__item md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--active md-nav__item--nested">
       
         
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_2" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_2" checked>
         
           
           
           <div class="md-nav__link md-nav__container">
-            <a href="../delta_table/" class="md-nav__link ">
+            <a href="../" class="md-nav__link ">
               
   
   <span class="md-ellipsis">
@@ -971,7 +971,7 @@
             
           </div>
         
-        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_3_2_label" aria-expanded="false">
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_3_2_label" aria-expanded="true">
           <label class="md-nav__title" for="__nav_3_2">
             <span class="md-nav__icon md-icon"></span>
             Table
@@ -984,9 +984,29 @@
                 
   
   
+    
   
-    <li class="md-nav__item">
-      <a href="../delta_table/metadata/" class="md-nav__link">
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  <span class="md-ellipsis">
+    Metadata
+  </span>
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
         
   
   <span class="md-ellipsis">
@@ -995,6 +1015,81 @@
   
 
       </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#deltalake.Metadata" class="md-nav__link">
+    Metadata
+  </a>
+  
+    <nav class="md-nav" aria-label="Metadata">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#deltalake.Metadata.configuration" class="md-nav__link">
+    configuration
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#deltalake.Metadata.created_time" class="md-nav__link">
+    created_time
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#deltalake.Metadata.description" class="md-nav__link">
+    description
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#deltalake.Metadata.id" class="md-nav__link">
+    id
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#deltalake.Metadata.name" class="md-nav__link">
+    name
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#deltalake.Metadata.partition_columns" class="md-nav__link">
+    partition_columns
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
     </li>
   
 
@@ -1006,7 +1101,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../delta_table/delta_table_merger/" class="md-nav__link">
+      <a href="../delta_table_merger/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1026,7 +1121,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../delta_table/delta_table_optimizer/" class="md-nav__link">
+      <a href="../delta_table_optimizer/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1046,7 +1141,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../delta_table/delta_table_alterer/" class="md-nav__link">
+      <a href="../delta_table_alterer/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1074,7 +1169,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../schema/" class="md-nav__link">
+      <a href="../../schema/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1092,29 +1187,9 @@
                 
   
   
-    
   
-  
-    <li class="md-nav__item md-nav__item--active">
-      
-      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
-      
-      
-        
-      
-      
-        <label class="md-nav__link md-nav__link--active" for="__toc">
-          
-  
-  <span class="md-ellipsis">
-    Storage
-  </span>
-  
-
-          <span class="md-nav__icon md-icon"></span>
-        </label>
-      
-      <a href="./" class="md-nav__link md-nav__link--active">
+    <li class="md-nav__item">
+      <a href="../../storage/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1123,67 +1198,6 @@
   
 
       </a>
-      
-        
-
-<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
-  
-  
-  
-    
-  
-  
-    <label class="md-nav__title" for="__toc">
-      <span class="md-nav__icon md-icon"></span>
-      Table of contents
-    </label>
-    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
-      
-        <li class="md-nav__item">
-  <a href="#deltalake.fs.DeltaStorageHandler" class="md-nav__link">
-    DeltaStorageHandler
-  </a>
-  
-    <nav class="md-nav" aria-label="DeltaStorageHandler">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#deltalake.fs.DeltaStorageHandler.get_file_info_selector" class="md-nav__link">
-    get_file_info_selector
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#deltalake.fs.DeltaStorageHandler.open_input_file" class="md-nav__link">
-    open_input_file
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#deltalake.fs.DeltaStorageHandler.open_input_stream" class="md-nav__link">
-    open_input_stream
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#deltalake.fs.DeltaStorageHandler.open_output_stream" class="md-nav__link">
-    open_output_stream
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-    </ul>
-  
-</nav>
-      
     </li>
   
 
@@ -1195,7 +1209,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../catalog/" class="md-nav__link">
+      <a href="../../catalog/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1215,7 +1229,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../exceptions/" class="md-nav__link">
+      <a href="../../exceptions/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1293,7 +1307,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../integrations/delta-lake-arrow/" class="md-nav__link">
+      <a href="../../../integrations/delta-lake-arrow/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1313,7 +1327,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../integrations/delta-lake-datafusion/" class="md-nav__link">
+      <a href="../../../integrations/delta-lake-datafusion/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1333,7 +1347,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../integrations/delta-lake-pandas/" class="md-nav__link">
+      <a href="../../../integrations/delta-lake-pandas/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1353,7 +1367,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../integrations/delta-lake-polars/" class="md-nav__link">
+      <a href="../../../integrations/delta-lake-polars/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1427,7 +1441,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../how-delta-lake-works/architecture-of-delta-table/" class="md-nav__link">
+      <a href="../../../how-delta-lake-works/architecture-of-delta-table/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1447,7 +1461,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../how-delta-lake-works/delta-lake-acid-transactions/" class="md-nav__link">
+      <a href="../../../how-delta-lake-works/delta-lake-acid-transactions/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1495,37 +1509,51 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#deltalake.fs.DeltaStorageHandler" class="md-nav__link">
-    DeltaStorageHandler
+  <a href="#deltalake.Metadata" class="md-nav__link">
+    Metadata
   </a>
   
-    <nav class="md-nav" aria-label="DeltaStorageHandler">
+    <nav class="md-nav" aria-label="Metadata">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#deltalake.fs.DeltaStorageHandler.get_file_info_selector" class="md-nav__link">
-    get_file_info_selector
+  <a href="#deltalake.Metadata.configuration" class="md-nav__link">
+    configuration
   </a>
   
 </li>
         
           <li class="md-nav__item">
-  <a href="#deltalake.fs.DeltaStorageHandler.open_input_file" class="md-nav__link">
-    open_input_file
+  <a href="#deltalake.Metadata.created_time" class="md-nav__link">
+    created_time
   </a>
   
 </li>
         
           <li class="md-nav__item">
-  <a href="#deltalake.fs.DeltaStorageHandler.open_input_stream" class="md-nav__link">
-    open_input_stream
+  <a href="#deltalake.Metadata.description" class="md-nav__link">
+    description
   </a>
   
 </li>
         
           <li class="md-nav__item">
-  <a href="#deltalake.fs.DeltaStorageHandler.open_output_stream" class="md-nav__link">
-    open_output_stream
+  <a href="#deltalake.Metadata.id" class="md-nav__link">
+    id
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#deltalake.Metadata.name" class="md-nav__link">
+    name
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#deltalake.Metadata.partition_columns" class="md-nav__link">
+    partition_columns
   </a>
   
 </li>
@@ -1553,28 +1581,29 @@
   
 
 
-<h1 id="storage">Storage</h1>
-<p>The delta filesystem handler for the pyarrow engine writer.</p>
+<h1 id="metadata">Metadata</h1>
 
 
 <div class="doc doc-object doc-class">
 
 
 
-<h3 id="deltalake.fs.DeltaStorageHandler" class="doc doc-heading">
-          <span class="doc doc-object-name doc-class-name">deltalake.fs.DeltaStorageHandler</span>
+<h3 id="deltalake.Metadata" class="doc doc-heading">
+          <span class="doc doc-object-name doc-class-name">deltalake.Metadata</span>
 
+  
+  <span class="doc doc-labels">
+      <small class="doc doc-label doc-label-dataclass"><code>dataclass</code></small>
+  </span>
 
 </h3>
-<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">DeltaStorageHandler</span><span class="p">(</span><span class="n">root</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">options</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">known_sizes</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">int</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span>
+<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">Metadata</span><span class="p">(</span><span class="n">table</span><span class="p">:</span> <span class="n">RawDeltaTable</span><span class="p">)</span>
 </span></code></pre></div>
 
   <div class="doc doc-contents first">
-          <p class="doc doc-class-bases">
-            Bases: <code><span title="deltalake._internal.DeltaFileSystemHandler">DeltaFileSystemHandler</span></code>, <code><a class="autorefs autorefs-external" title="pyarrow.fs.FileSystemHandler" href="https://arrow.apache.org/docs/python/generated/pyarrow.fs.FileSystemHandler.html#pyarrow.fs.FileSystemHandler">FileSystemHandler</a></code></p>
 
   
-      <p>DeltaStorageHandler is a concrete implementations of a PyArrow FileSystemHandler.</p>
+      <p>Create a Metadata instance.</p>
 
 
   
@@ -1587,322 +1616,145 @@
 
 
 
+<div class="doc doc-object doc-attribute">
 
 
 
-<div class="doc doc-object doc-function">
+<h4 id="deltalake.Metadata.configuration" class="doc doc-heading">
+          <span class="doc doc-object-name doc-attribute-name">configuration</span>
 
-
-
-<h4 id="deltalake.fs.DeltaStorageHandler.get_file_info_selector" class="doc doc-heading">
-          <span class="doc doc-object-name doc-function-name">get_file_info_selector</span>
-
+  
+  <span class="doc doc-labels">
+      <small class="doc doc-label doc-label-property"><code>property</code></small>
+  </span>
 
 </h4>
-<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">get_file_info_selector</span><span class="p">(</span><span class="n">selector</span><span class="p">:</span> <span class="n">FileSelector</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">List</span><span class="p">[</span><span class="n">FileInfo</span><span class="p">]</span>
+<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">configuration</span><span class="p">:</span> <span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">]</span>
 </span></code></pre></div>
 
   <div class="doc doc-contents ">
   
-      <p>Get info for the files defined by FileSelector.</p>
+      <p>Return the DeltaTable properties.</p>
+  </div>
+
+</div>
+
+<div class="doc doc-object doc-attribute">
 
 
 
-  <p><strong>Parameters:</strong></p>
-  <table>
-    <thead>
-      <tr>
-        <th>Name</th>
-        <th>Type</th>
-        <th>Description</th>
-        <th>Default</th>
-      </tr>
-    </thead>
-    <tbody>
-        <tr>
-          <td><code>selector</code></td>
-          <td>
-                <code><a class="autorefs autorefs-external" title="pyarrow.fs.FileSelector" href="https://arrow.apache.org/docs/python/generated/pyarrow.fs.FileSelector.html#pyarrow.fs.FileSelector">FileSelector</a></code>
-          </td>
-          <td>
-            <div class="doc-md-description">
-              <p>FileSelector object</p>
-            </div>
-          </td>
-          <td>
-              <em>required</em>
-          </td>
-        </tr>
-    </tbody>
-  </table>
+<h4 id="deltalake.Metadata.created_time" class="doc doc-heading">
+          <span class="doc doc-object-name doc-attribute-name">created_time</span>
+
+  
+  <span class="doc doc-labels">
+      <small class="doc doc-label doc-label-property"><code>property</code></small>
+  </span>
+
+</h4>
+<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">created_time</span><span class="p">:</span> <span class="nb">int</span>
+</span></code></pre></div>
+
+  <div class="doc doc-contents ">
+  
+      <p>Return The time when this metadata action is created, in milliseconds since the Unix epoch of the DeltaTable.</p>
+  </div>
+
+</div>
+
+<div class="doc doc-object doc-attribute">
 
 
 
-  <p><strong>Returns:</strong></p>
-  <table>
-    <thead>
-      <tr>
-        <th>Type</th>
-        <th>Description</th>
-      </tr>
-    </thead>
-    <tbody>
-        <tr>
-          <td>
-                <code><span title="typing.List">List</span>[<a class="autorefs autorefs-external" title="pyarrow.fs.FileInfo" href="https://arrow.apache.org/docs/python/generated/pyarrow.fs.FileInfo.html#pyarrow.fs.FileInfo">FileInfo</a>]</code>
-          </td>
-          <td>
-            <div class="doc-md-description">
-              <p>list of file info objects</p>
-            </div>
-          </td>
-        </tr>
-    </tbody>
-  </table>
+<h4 id="deltalake.Metadata.description" class="doc doc-heading">
+          <span class="doc doc-object-name doc-attribute-name">description</span>
 
+  
+  <span class="doc doc-labels">
+      <small class="doc doc-label doc-label-property"><code>property</code></small>
+  </span>
+
+</h4>
+<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">description</span><span class="p">:</span> <span class="nb">str</span>
+</span></code></pre></div>
+
+  <div class="doc doc-contents ">
+  
+      <p>Return the user-provided description of the DeltaTable.</p>
+  </div>
+
+</div>
+
+<div class="doc doc-object doc-attribute">
+
+
+
+<h4 id="deltalake.Metadata.id" class="doc doc-heading">
+          <span class="doc doc-object-name doc-attribute-name">id</span>
+
+  
+  <span class="doc doc-labels">
+      <small class="doc doc-label doc-label-property"><code>property</code></small>
+  </span>
+
+</h4>
+<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nb">id</span><span class="p">:</span> <span class="nb">int</span>
+</span></code></pre></div>
+
+  <div class="doc doc-contents ">
+  
+      <p>Return the unique identifier of the DeltaTable.</p>
+  </div>
+
+</div>
+
+<div class="doc doc-object doc-attribute">
+
+
+
+<h4 id="deltalake.Metadata.name" class="doc doc-heading">
+          <span class="doc doc-object-name doc-attribute-name">name</span>
+
+  
+  <span class="doc doc-labels">
+      <small class="doc doc-label doc-label-property"><code>property</code></small>
+  </span>
+
+</h4>
+<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">name</span><span class="p">:</span> <span class="nb">str</span>
+</span></code></pre></div>
+
+  <div class="doc doc-contents ">
+  
+      <p>Return the user-provided identifier of the DeltaTable.</p>
+  </div>
+
+</div>
+
+<div class="doc doc-object doc-attribute">
+
+
+
+<h4 id="deltalake.Metadata.partition_columns" class="doc doc-heading">
+          <span class="doc doc-object-name doc-attribute-name">partition_columns</span>
+
+  
+  <span class="doc doc-labels">
+      <small class="doc doc-label doc-label-property"><code>property</code></small>
+  </span>
+
+</h4>
+<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">partition_columns</span><span class="p">:</span> <span class="n">List</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span>
+</span></code></pre></div>
+
+  <div class="doc doc-contents ">
+  
+      <p>Return an array containing the names of the partitioned columns of the DeltaTable.</p>
   </div>
 
 </div>
 
 
-<div class="doc doc-object doc-function">
-
-
-
-<h4 id="deltalake.fs.DeltaStorageHandler.open_input_file" class="doc doc-heading">
-          <span class="doc doc-object-name doc-function-name">open_input_file</span>
-
-
-</h4>
-<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">open_input_file</span><span class="p">(</span><span class="n">path</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">pa</span><span class="o">.</span><span class="n">PythonFile</span>
-</span></code></pre></div>
-
-  <div class="doc doc-contents ">
-  
-      <p>Open an input file for random access reading.</p>
-
-
-
-  <p><strong>Parameters:</strong></p>
-  <table>
-    <thead>
-      <tr>
-        <th>Name</th>
-        <th>Type</th>
-        <th>Description</th>
-        <th>Default</th>
-      </tr>
-    </thead>
-    <tbody>
-        <tr>
-          <td><code>path</code></td>
-          <td>
-                <code>str</code>
-          </td>
-          <td>
-            <div class="doc-md-description">
-              <p>The source to open for reading.</p>
-            </div>
-          </td>
-          <td>
-              <em>required</em>
-          </td>
-        </tr>
-    </tbody>
-  </table>
-
-
-
-  <p><strong>Returns:</strong></p>
-  <table>
-    <thead>
-      <tr>
-        <th>Type</th>
-        <th>Description</th>
-      </tr>
-    </thead>
-    <tbody>
-        <tr>
-          <td>
-                <code><a class="autorefs autorefs-external" title="pyarrow.PythonFile" href="https://arrow.apache.org/docs/python/generated/pyarrow.PythonFile.html#pyarrow.PythonFile">PythonFile</a></code>
-          </td>
-          <td>
-            <div class="doc-md-description">
-              <p>NativeFile</p>
-            </div>
-          </td>
-        </tr>
-    </tbody>
-  </table>
-
-  </div>
-
-</div>
-
-
-<div class="doc doc-object doc-function">
-
-
-
-<h4 id="deltalake.fs.DeltaStorageHandler.open_input_stream" class="doc doc-heading">
-          <span class="doc doc-object-name doc-function-name">open_input_stream</span>
-
-
-</h4>
-<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">open_input_stream</span><span class="p">(</span><span class="n">path</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">pa</span><span class="o">.</span><span class="n">PythonFile</span>
-</span></code></pre></div>
-
-  <div class="doc doc-contents ">
-  
-      <p>Open an input stream for sequential reading.</p>
-
-
-
-  <p><strong>Parameters:</strong></p>
-  <table>
-    <thead>
-      <tr>
-        <th>Name</th>
-        <th>Type</th>
-        <th>Description</th>
-        <th>Default</th>
-      </tr>
-    </thead>
-    <tbody>
-        <tr>
-          <td><code>path</code></td>
-          <td>
-                <code>str</code>
-          </td>
-          <td>
-            <div class="doc-md-description">
-              <p>The source to open for reading.</p>
-            </div>
-          </td>
-          <td>
-              <em>required</em>
-          </td>
-        </tr>
-    </tbody>
-  </table>
-
-
-
-  <p><strong>Returns:</strong></p>
-  <table>
-    <thead>
-      <tr>
-        <th>Type</th>
-        <th>Description</th>
-      </tr>
-    </thead>
-    <tbody>
-        <tr>
-          <td>
-                <code><a class="autorefs autorefs-external" title="pyarrow.PythonFile" href="https://arrow.apache.org/docs/python/generated/pyarrow.PythonFile.html#pyarrow.PythonFile">PythonFile</a></code>
-          </td>
-          <td>
-            <div class="doc-md-description">
-              <p>NativeFile</p>
-            </div>
-          </td>
-        </tr>
-    </tbody>
-  </table>
-
-  </div>
-
-</div>
-
-
-<div class="doc doc-object doc-function">
-
-
-
-<h4 id="deltalake.fs.DeltaStorageHandler.open_output_stream" class="doc doc-heading">
-          <span class="doc doc-object-name doc-function-name">open_output_stream</span>
-
-
-</h4>
-<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">open_output_stream</span><span class="p">(</span><span class="n">path</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">metadata</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">pa</span><span class="o">.</span><span class="n">PythonFile</span>
-</span></code></pre></div>
-
-  <div class="doc doc-contents ">
-  
-      <p>Open an output stream for sequential writing.</p>
-<p>If the target already exists, existing data is truncated.</p>
-
-
-
-  <p><strong>Parameters:</strong></p>
-  <table>
-    <thead>
-      <tr>
-        <th>Name</th>
-        <th>Type</th>
-        <th>Description</th>
-        <th>Default</th>
-      </tr>
-    </thead>
-    <tbody>
-        <tr>
-          <td><code>path</code></td>
-          <td>
-                <code>str</code>
-          </td>
-          <td>
-            <div class="doc-md-description">
-              <p>The source to open for writing.</p>
-            </div>
-          </td>
-          <td>
-              <em>required</em>
-          </td>
-        </tr>
-        <tr>
-          <td><code>metadata</code></td>
-          <td>
-                <code><span title="typing.Optional">Optional</span>[<span title="typing.Dict">Dict</span>[str, str]]</code>
-          </td>
-          <td>
-            <div class="doc-md-description">
-              <p>If not None, a mapping of string keys to string values.</p>
-            </div>
-          </td>
-          <td>
-                <code>None</code>
-          </td>
-        </tr>
-    </tbody>
-  </table>
-
-
-
-  <p><strong>Returns:</strong></p>
-  <table>
-    <thead>
-      <tr>
-        <th>Type</th>
-        <th>Description</th>
-      </tr>
-    </thead>
-    <tbody>
-        <tr>
-          <td>
-                <code><a class="autorefs autorefs-external" title="pyarrow.PythonFile" href="https://arrow.apache.org/docs/python/generated/pyarrow.PythonFile.html#pyarrow.PythonFile">PythonFile</a></code>
-          </td>
-          <td>
-            <div class="doc-md-description">
-              <p>NativeFile</p>
-            </div>
-          </td>
-        </tr>
-    </tbody>
-  </table>
-
-  </div>
-
-</div>
 
 
 
@@ -1935,7 +1787,7 @@
       <nav class="md-footer__inner md-grid" aria-label="Footer" >
         
           
-          <a href="../schema/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Schema">
+          <a href="../" class="md-footer__link md-footer__link--prev" aria-label="Previous: DeltaTable">
             <div class="md-footer__button md-icon">
               
               <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11h12Z"/></svg>
@@ -1945,20 +1797,20 @@
                 Previous
               </span>
               <div class="md-ellipsis">
-                Schema
+                DeltaTable
               </div>
             </div>
           </a>
         
         
           
-          <a href="../catalog/" class="md-footer__link md-footer__link--next" aria-label="Next: Catalog">
+          <a href="../delta_table_merger/" class="md-footer__link md-footer__link--next" aria-label="Next: TableMerger">
             <div class="md-footer__title">
               <span class="md-footer__direction">
                 Next
               </span>
               <div class="md-ellipsis">
-                Catalog
+                TableMerger
               </div>
             </div>
             <div class="md-footer__button md-icon">
@@ -1999,10 +1851,10 @@
     </div>
     
     
-    <script id="__config" type="application/json">{"base": "../..", "features": ["navigation.tracking", "navigation.instant", "navigation.expand", "navigation.tabs", "navigation.indexes", "navigation.tabs.sticky", "navigation.footer", "content.tabs.link", "content.code.annotation", "content.code.copy"], "search": "../../assets/javascripts/workers/search.f886a092.min.js", "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}}</script>
+    <script id="__config" type="application/json">{"base": "../../..", "features": ["navigation.tracking", "navigation.instant", "navigation.expand", "navigation.tabs", "navigation.indexes", "navigation.tabs.sticky", "navigation.footer", "content.tabs.link", "content.code.annotation", "content.code.copy"], "search": "../../../assets/javascripts/workers/search.f886a092.min.js", "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}}</script>
     
     
-      <script src="../../assets/javascripts/bundle.aecac24b.min.js"></script>
+      <script src="../../../assets/javascripts/bundle.aecac24b.min.js"></script>
       
     
   </body>

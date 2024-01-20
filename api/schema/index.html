@@ -11,13 +11,13 @@
         <link rel="canonical" href="https://github.com/delta-io/delta-rs/api/schema/">
       
       
-        <link rel="prev" href="../delta_table/">
+        <link rel="prev" href="../delta_table/delta_table_alterer/">
       
       
         <link rel="next" href="../storage/">
       
       
-      <link rel="icon" href="../../assets/images/favicon.png">
+      <link rel="icon" href="../../delta-rust-no-whitespace.svg">
       <meta name="generator" content="mkdocs-1.5.3, mkdocs-material-9.4.5">
     
     
@@ -27,6 +27,9 @@
     
     
       <link rel="stylesheet" href="../../assets/stylesheets/main.6a10b989.min.css">
+      
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.356b1318.min.css">
       
       
 
@@ -59,7 +62,14 @@
   </head>
   
   
-    <body dir="ltr">
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
   
     
     
@@ -71,7 +81,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#delta-lake-schemas" class="md-skip">
+        <a href="#schema-and-field" class="md-skip">
           Skip to content
         </a>
       
@@ -89,8 +99,7 @@
   <nav class="md-header__inner md-grid" aria-label="Header">
     <a href="../.." title="Delta Lake Documentation" class="md-header__button md-logo" aria-label="Delta Lake Documentation" data-md-component="logo">
       
-  
-  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54Z"/></svg>
+  <img src="../../delta-rust-no-whitespace.svg" alt="logo">
 
     </a>
     <label class="md-header__button md-icon" for="__drawer">
@@ -113,6 +122,42 @@
         </div>
       </div>
     </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme)" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_3" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m14.3 16-.7-2h-3.2l-.7 2H7.8L11 7h2l3.2 9h-1.9M20 8.69V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12 20 8.69m-9.15 3.96h2.3L12 9l-1.15 3.65Z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_2">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12 20 8.69Z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to system preference"  type="radio" name="__palette" id="__palette_3">
+    
+      <label class="md-header__button md-icon" title="Switch to system preference" for="__palette_2" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12c0-2.42-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12 20 8.69Z"/></svg>
+      </label>
+    
+  
+</form>
+      
     
     
     
@@ -178,33 +223,19 @@
   
   
   
-    <li class="md-tabs__item">
-      <a href="../.." class="md-tabs__link">
-        
+    
+    
+      <li class="md-tabs__item">
+        <a href="../.." class="md-tabs__link">
+          
   
     
   
   Home
 
-      </a>
-    </li>
-  
-
-      
-        
-  
-  
-  
-    <li class="md-tabs__item">
-      <a href="../../installation/" class="md-tabs__link">
-        
-  
+        </a>
+      </li>
     
-  
-  Installation
-
-      </a>
-    </li>
   
 
       
@@ -215,8 +246,10 @@
     
     
       <li class="md-tabs__item">
-        <a href="../../usage/" class="md-tabs__link">
+        <a href="../../usage/installation/" class="md-tabs__link">
           
+  
+    
   
   Usage
 
@@ -235,10 +268,52 @@
     
     
       <li class="md-tabs__item md-tabs__item--active">
-        <a href="../delta_table/" class="md-tabs__link">
+        <a href="../delta_writer/" class="md-tabs__link">
           
   
+    
+  
   API Reference
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../integrations/delta-lake-arrow/" class="md-tabs__link">
+          
+  
+    
+  
+  Integrations
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../how-delta-lake-works/architecture-of-delta-table/" class="md-tabs__link">
+          
+  
+    
+  
+  How Delta Lake works
 
         </a>
       </li>
@@ -276,8 +351,7 @@
   <label class="md-nav__title" for="__drawer">
     <a href="../.." title="Delta Lake Documentation" class="md-nav__button md-logo" aria-label="Delta Lake Documentation" data-md-component="logo">
       
-  
-  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54Z"/></svg>
+  <img src="../../delta-rust-no-whitespace.svg" alt="logo">
 
     </a>
     Delta Lake Documentation
@@ -302,45 +376,15 @@
   
   
   
-    <li class="md-nav__item">
-      <a href="../.." class="md-nav__link">
+    
+    
+      
         
-  
-  <span class="md-ellipsis">
-    Home
-  </span>
-  
-
-      </a>
-    </li>
-  
-
-    
-      
-      
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../../installation/" class="md-nav__link">
+          
         
-  
-  <span class="md-ellipsis">
-    Installation
-  </span>
-  
-
-      </a>
-    </li>
-  
-
-    
       
+        
       
-  
-  
-  
-    
     
     
     
@@ -353,10 +397,116 @@
         
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" >
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_1" >
         
           
-          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="">
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../.." class="md-nav__link ">
+              
+  
+  <span class="md-ellipsis">
+    Home
+  </span>
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_1" id="__nav_1_label" tabindex="">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_1_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_1">
+            <span class="md-nav__icon md-icon"></span>
+            Home
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../why-use-delta-lake/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Why Use Delta Lake
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+    
+      
+      
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="">
             
   
   <span class="md-ellipsis">
@@ -367,8 +517,8 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_3">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
             <span class="md-nav__icon md-icon"></span>
             Usage
           </label>
@@ -380,7 +530,27 @@
   
   
     <li class="md-nav__item">
-      <a href="../../usage/" class="md-nav__link">
+      <a href="../../usage/installation/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Installation
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../usage/overview/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -400,11 +570,71 @@
   
   
     <li class="md-nav__item">
+      <a href="../../usage/create-delta-lake-table/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Creating a table
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../usage/loading-table/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
-    Loading a Delta Table
+    Loading a table
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../usage/appending-overwriting-delta-lake-table/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Append/overwrite tables
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../usage/constraints/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Adding a constraint
   </span>
   
 
@@ -424,7 +654,7 @@
         
   
   <span class="md-ellipsis">
-    Examining a Delta Table
+    Examining a table
   </span>
   
 
@@ -444,7 +674,7 @@
         
   
   <span class="md-ellipsis">
-    Querying a Delta Table
+    Querying a table
   </span>
   
 
@@ -464,7 +694,7 @@
         
   
   <span class="md-ellipsis">
-    Managing a Delta Table
+    Managing a table
   </span>
   
 
@@ -484,11 +714,123 @@
         
   
   <span class="md-ellipsis">
-    Writing Delta Tables
+    Writing a table
   </span>
   
 
       </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../usage/deleting-rows-from-delta-lake-table/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Deleting rows from a table
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+    
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_2_12" >
+        
+          
+          <label class="md-nav__link" for="__nav_2_12" id="__nav_2_12_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    Optimize
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_2_12_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2_12">
+            <span class="md-nav__icon md-icon"></span>
+            Optimize
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../usage/optimize/small-file-compaction-with-optimize/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Small file compaction
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../usage/optimize/delta-lake-z-order/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Z Order
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
     </li>
   
 
@@ -510,6 +852,20 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
     
@@ -521,10 +877,10 @@
         
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" checked>
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" checked>
         
           
-          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="">
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="">
             
   
   <span class="md-ellipsis">
@@ -535,8 +891,8 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="true">
-          <label class="md-nav__title" for="__nav_4">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_3">
             <span class="md-nav__icon md-icon"></span>
             API Reference
           </label>
@@ -548,15 +904,165 @@
   
   
     <li class="md-nav__item">
-      <a href="../delta_table/" class="md-nav__link">
+      <a href="../delta_writer/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
-    DeltaTable
+    Writer
   </span>
   
 
       </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_2" >
+        
+          
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../delta_table/" class="md-nav__link ">
+              
+  
+  <span class="md-ellipsis">
+    Table
+  </span>
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_3_2" id="__nav_3_2_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_3_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3_2">
+            <span class="md-nav__icon md-icon"></span>
+            Table
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../delta_table/metadata/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Metadata
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../delta_table/delta_table_merger/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    TableMerger
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../delta_table/delta_table_optimizer/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    TableOptimizer
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../delta_table/delta_table_alterer/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    TableAlterer
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
     </li>
   
 
@@ -610,15 +1116,15 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#delta-lake-schemas" class="md-nav__link">
-    Delta Lake Schemas
+  <a href="#schema-and-field" class="md-nav__link">
+    Schema and field
   </a>
   
-    <nav class="md-nav" aria-label="Delta Lake Schemas">
+    <nav class="md-nav" aria-label="Schema and field">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#deltalake.schema.Schema" class="md-nav__link">
+  <a href="#deltalake.Schema" class="md-nav__link">
     Schema
   </a>
   
@@ -626,36 +1132,36 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#deltalake.schema.Schema.invariants" class="md-nav__link">
+  <a href="#deltalake.Schema.invariants" class="md-nav__link">
     invariants
   </a>
   
 </li>
         
           <li class="md-nav__item">
-  <a href="#deltalake.schema.Schema.from_json" class="md-nav__link">
-    from_json()
+  <a href="#deltalake.Schema.from_json" class="md-nav__link">
+    from_json
   </a>
   
 </li>
         
           <li class="md-nav__item">
-  <a href="#deltalake.schema.Schema.from_pyarrow" class="md-nav__link">
-    from_pyarrow()
+  <a href="#deltalake.Schema.from_pyarrow" class="md-nav__link">
+    from_pyarrow
   </a>
   
 </li>
         
           <li class="md-nav__item">
-  <a href="#deltalake.schema.Schema.to_json" class="md-nav__link">
-    to_json()
+  <a href="#deltalake.Schema.to_json" class="md-nav__link">
+    to_json
   </a>
   
 </li>
         
           <li class="md-nav__item">
-  <a href="#deltalake.schema.Schema.to_pyarrow" class="md-nav__link">
-    to_pyarrow()
+  <a href="#deltalake.Schema.to_pyarrow" class="md-nav__link">
+    to_pyarrow
   </a>
   
 </li>
@@ -664,6 +1170,88 @@
     </nav>
   
 </li>
+        
+          <li class="md-nav__item">
+  <a href="#deltalake.Field" class="md-nav__link">
+    Field
+  </a>
+  
+    <nav class="md-nav" aria-label="Field">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#deltalake.Field.metadata" class="md-nav__link">
+    metadata
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#deltalake.Field.name" class="md-nav__link">
+    name
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#deltalake.Field.nullable" class="md-nav__link">
+    nullable
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#deltalake.Field.type" class="md-nav__link">
+    type
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#deltalake.Field.from_json" class="md-nav__link">
+    from_json
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#deltalake.Field.from_pyarrow" class="md-nav__link">
+    from_pyarrow
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#deltalake.Field.to_json" class="md-nav__link">
+    to_json
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#deltalake.Field.to_pyarrow" class="md-nav__link">
+    to_pyarrow
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#data-types" class="md-nav__link">
+    Data types
+  </a>
+  
+    <nav class="md-nav" aria-label="Data types">
+      <ul class="md-nav__list">
         
           <li class="md-nav__item">
   <a href="#deltalake.schema.PrimitiveType" class="md-nav__link">
@@ -682,21 +1270,21 @@
         
           <li class="md-nav__item">
   <a href="#deltalake.schema.PrimitiveType.from_json" class="md-nav__link">
-    from_json()
+    from_json
   </a>
   
 </li>
         
           <li class="md-nav__item">
   <a href="#deltalake.schema.PrimitiveType.from_pyarrow" class="md-nav__link">
-    from_pyarrow()
+    from_pyarrow
   </a>
   
 </li>
         
           <li class="md-nav__item">
   <a href="#deltalake.schema.PrimitiveType.to_pyarrow" class="md-nav__link">
-    to_pyarrow()
+    to_pyarrow
   </a>
   
 </li>
@@ -737,28 +1325,28 @@
         
           <li class="md-nav__item">
   <a href="#deltalake.schema.ArrayType.from_json" class="md-nav__link">
-    from_json()
+    from_json
   </a>
   
 </li>
         
           <li class="md-nav__item">
   <a href="#deltalake.schema.ArrayType.from_pyarrow" class="md-nav__link">
-    from_pyarrow()
+    from_pyarrow
   </a>
   
 </li>
         
           <li class="md-nav__item">
   <a href="#deltalake.schema.ArrayType.to_json" class="md-nav__link">
-    to_json()
+    to_json
   </a>
   
 </li>
         
           <li class="md-nav__item">
   <a href="#deltalake.schema.ArrayType.to_pyarrow" class="md-nav__link">
-    to_pyarrow()
+    to_pyarrow
   </a>
   
 </li>
@@ -806,97 +1394,28 @@
         
           <li class="md-nav__item">
   <a href="#deltalake.schema.MapType.from_json" class="md-nav__link">
-    from_json()
+    from_json
   </a>
   
 </li>
         
           <li class="md-nav__item">
   <a href="#deltalake.schema.MapType.from_pyarrow" class="md-nav__link">
-    from_pyarrow()
+    from_pyarrow
   </a>
   
 </li>
         
           <li class="md-nav__item">
   <a href="#deltalake.schema.MapType.to_json" class="md-nav__link">
-    to_json()
+    to_json
   </a>
   
 </li>
         
           <li class="md-nav__item">
   <a href="#deltalake.schema.MapType.to_pyarrow" class="md-nav__link">
-    to_pyarrow()
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#deltalake.schema.Field" class="md-nav__link">
-    Field
-  </a>
-  
-    <nav class="md-nav" aria-label="Field">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#deltalake.schema.Field.metadata" class="md-nav__link">
-    metadata
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#deltalake.schema.Field.name" class="md-nav__link">
-    name
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#deltalake.schema.Field.nullable" class="md-nav__link">
-    nullable
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#deltalake.schema.Field.type" class="md-nav__link">
-    type
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#deltalake.schema.Field.from_json" class="md-nav__link">
-    from_json()
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#deltalake.schema.Field.from_pyarrow" class="md-nav__link">
-    from_pyarrow()
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#deltalake.schema.Field.to_json" class="md-nav__link">
-    to_json()
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#deltalake.schema.Field.to_pyarrow" class="md-nav__link">
-    to_pyarrow()
+    to_pyarrow
   </a>
   
 </li>
@@ -930,109 +1449,28 @@
         
           <li class="md-nav__item">
   <a href="#deltalake.schema.StructType.from_json" class="md-nav__link">
-    from_json()
+    from_json
   </a>
   
 </li>
         
           <li class="md-nav__item">
   <a href="#deltalake.schema.StructType.from_pyarrow" class="md-nav__link">
-    from_pyarrow()
+    from_pyarrow
   </a>
   
 </li>
         
           <li class="md-nav__item">
   <a href="#deltalake.schema.StructType.to_json" class="md-nav__link">
-    to_json()
+    to_json
   </a>
   
 </li>
         
           <li class="md-nav__item">
   <a href="#deltalake.schema.StructType.to_pyarrow" class="md-nav__link">
-    to_pyarrow()
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#deltalake.data_catalog.DataCatalog" class="md-nav__link">
-    DataCatalog
-  </a>
-  
-    <nav class="md-nav" aria-label="DataCatalog">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#deltalake.data_catalog.DataCatalog.AWS" class="md-nav__link">
-    AWS
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#deltalake.data_catalog.DataCatalog.UNITY" class="md-nav__link">
-    UNITY
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#delta-storage-handler" class="md-nav__link">
-    Delta Storage Handler
-  </a>
-  
-    <nav class="md-nav" aria-label="Delta Storage Handler">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#deltalake.fs.DeltaStorageHandler" class="md-nav__link">
-    DeltaStorageHandler
-  </a>
-  
-    <nav class="md-nav" aria-label="DeltaStorageHandler">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#deltalake.fs.DeltaStorageHandler.get_file_info_selector" class="md-nav__link">
-    get_file_info_selector()
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#deltalake.fs.DeltaStorageHandler.open_input_file" class="md-nav__link">
-    open_input_file()
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#deltalake.fs.DeltaStorageHandler.open_input_stream" class="md-nav__link">
-    open_input_stream()
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#deltalake.fs.DeltaStorageHandler.open_output_stream" class="md-nav__link">
-    open_output_stream()
+    to_pyarrow
   </a>
   
 </li>
@@ -1076,6 +1514,278 @@
 
               
             
+              
+                
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../catalog/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Catalog
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../exceptions/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Exceptions
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+    
+      
+      
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="">
+            
+  
+  <span class="md-ellipsis">
+    Integrations
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            Integrations
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../integrations/delta-lake-arrow/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Arrow
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../integrations/delta-lake-datafusion/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    DataFusion
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../integrations/delta-lake-pandas/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    pandas
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../integrations/delta-lake-polars/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Polars
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+    
+    
+    
+    
+      
+      
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="">
+            
+  
+  <span class="md-ellipsis">
+    How Delta Lake works
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            How Delta Lake works
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../how-delta-lake-works/architecture-of-delta-table/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Architecture
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../how-delta-lake-works/delta-lake-acid-transactions/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Transactions
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
           </ul>
         </nav>
       
@@ -1108,15 +1818,15 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#delta-lake-schemas" class="md-nav__link">
-    Delta Lake Schemas
+  <a href="#schema-and-field" class="md-nav__link">
+    Schema and field
   </a>
   
-    <nav class="md-nav" aria-label="Delta Lake Schemas">
+    <nav class="md-nav" aria-label="Schema and field">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#deltalake.schema.Schema" class="md-nav__link">
+  <a href="#deltalake.Schema" class="md-nav__link">
     Schema
   </a>
   
@@ -1124,36 +1834,36 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#deltalake.schema.Schema.invariants" class="md-nav__link">
+  <a href="#deltalake.Schema.invariants" class="md-nav__link">
     invariants
   </a>
   
 </li>
         
           <li class="md-nav__item">
-  <a href="#deltalake.schema.Schema.from_json" class="md-nav__link">
-    from_json()
+  <a href="#deltalake.Schema.from_json" class="md-nav__link">
+    from_json
   </a>
   
 </li>
         
           <li class="md-nav__item">
-  <a href="#deltalake.schema.Schema.from_pyarrow" class="md-nav__link">
-    from_pyarrow()
+  <a href="#deltalake.Schema.from_pyarrow" class="md-nav__link">
+    from_pyarrow
   </a>
   
 </li>
         
           <li class="md-nav__item">
-  <a href="#deltalake.schema.Schema.to_json" class="md-nav__link">
-    to_json()
+  <a href="#deltalake.Schema.to_json" class="md-nav__link">
+    to_json
   </a>
   
 </li>
         
           <li class="md-nav__item">
-  <a href="#deltalake.schema.Schema.to_pyarrow" class="md-nav__link">
-    to_pyarrow()
+  <a href="#deltalake.Schema.to_pyarrow" class="md-nav__link">
+    to_pyarrow
   </a>
   
 </li>
@@ -1162,6 +1872,88 @@
     </nav>
   
 </li>
+        
+          <li class="md-nav__item">
+  <a href="#deltalake.Field" class="md-nav__link">
+    Field
+  </a>
+  
+    <nav class="md-nav" aria-label="Field">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#deltalake.Field.metadata" class="md-nav__link">
+    metadata
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#deltalake.Field.name" class="md-nav__link">
+    name
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#deltalake.Field.nullable" class="md-nav__link">
+    nullable
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#deltalake.Field.type" class="md-nav__link">
+    type
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#deltalake.Field.from_json" class="md-nav__link">
+    from_json
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#deltalake.Field.from_pyarrow" class="md-nav__link">
+    from_pyarrow
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#deltalake.Field.to_json" class="md-nav__link">
+    to_json
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#deltalake.Field.to_pyarrow" class="md-nav__link">
+    to_pyarrow
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#data-types" class="md-nav__link">
+    Data types
+  </a>
+  
+    <nav class="md-nav" aria-label="Data types">
+      <ul class="md-nav__list">
         
           <li class="md-nav__item">
   <a href="#deltalake.schema.PrimitiveType" class="md-nav__link">
@@ -1180,21 +1972,21 @@
         
           <li class="md-nav__item">
   <a href="#deltalake.schema.PrimitiveType.from_json" class="md-nav__link">
-    from_json()
+    from_json
   </a>
   
 </li>
         
           <li class="md-nav__item">
   <a href="#deltalake.schema.PrimitiveType.from_pyarrow" class="md-nav__link">
-    from_pyarrow()
+    from_pyarrow
   </a>
   
 </li>
         
           <li class="md-nav__item">
   <a href="#deltalake.schema.PrimitiveType.to_pyarrow" class="md-nav__link">
-    to_pyarrow()
+    to_pyarrow
   </a>
   
 </li>
@@ -1235,28 +2027,28 @@
         
           <li class="md-nav__item">
   <a href="#deltalake.schema.ArrayType.from_json" class="md-nav__link">
-    from_json()
+    from_json
   </a>
   
 </li>
         
           <li class="md-nav__item">
   <a href="#deltalake.schema.ArrayType.from_pyarrow" class="md-nav__link">
-    from_pyarrow()
+    from_pyarrow
   </a>
   
 </li>
         
           <li class="md-nav__item">
   <a href="#deltalake.schema.ArrayType.to_json" class="md-nav__link">
-    to_json()
+    to_json
   </a>
   
 </li>
         
           <li class="md-nav__item">
   <a href="#deltalake.schema.ArrayType.to_pyarrow" class="md-nav__link">
-    to_pyarrow()
+    to_pyarrow
   </a>
   
 </li>
@@ -1304,97 +2096,28 @@
         
           <li class="md-nav__item">
   <a href="#deltalake.schema.MapType.from_json" class="md-nav__link">
-    from_json()
+    from_json
   </a>
   
 </li>
         
           <li class="md-nav__item">
   <a href="#deltalake.schema.MapType.from_pyarrow" class="md-nav__link">
-    from_pyarrow()
+    from_pyarrow
   </a>
   
 </li>
         
           <li class="md-nav__item">
   <a href="#deltalake.schema.MapType.to_json" class="md-nav__link">
-    to_json()
+    to_json
   </a>
   
 </li>
         
           <li class="md-nav__item">
   <a href="#deltalake.schema.MapType.to_pyarrow" class="md-nav__link">
-    to_pyarrow()
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#deltalake.schema.Field" class="md-nav__link">
-    Field
-  </a>
-  
-    <nav class="md-nav" aria-label="Field">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#deltalake.schema.Field.metadata" class="md-nav__link">
-    metadata
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#deltalake.schema.Field.name" class="md-nav__link">
-    name
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#deltalake.schema.Field.nullable" class="md-nav__link">
-    nullable
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#deltalake.schema.Field.type" class="md-nav__link">
-    type
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#deltalake.schema.Field.from_json" class="md-nav__link">
-    from_json()
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#deltalake.schema.Field.from_pyarrow" class="md-nav__link">
-    from_pyarrow()
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#deltalake.schema.Field.to_json" class="md-nav__link">
-    to_json()
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#deltalake.schema.Field.to_pyarrow" class="md-nav__link">
-    to_pyarrow()
+    to_pyarrow
   </a>
   
 </li>
@@ -1428,109 +2151,28 @@
         
           <li class="md-nav__item">
   <a href="#deltalake.schema.StructType.from_json" class="md-nav__link">
-    from_json()
+    from_json
   </a>
   
 </li>
         
           <li class="md-nav__item">
   <a href="#deltalake.schema.StructType.from_pyarrow" class="md-nav__link">
-    from_pyarrow()
+    from_pyarrow
   </a>
   
 </li>
         
           <li class="md-nav__item">
   <a href="#deltalake.schema.StructType.to_json" class="md-nav__link">
-    to_json()
+    to_json
   </a>
   
 </li>
         
           <li class="md-nav__item">
   <a href="#deltalake.schema.StructType.to_pyarrow" class="md-nav__link">
-    to_pyarrow()
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#deltalake.data_catalog.DataCatalog" class="md-nav__link">
-    DataCatalog
-  </a>
-  
-    <nav class="md-nav" aria-label="DataCatalog">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#deltalake.data_catalog.DataCatalog.AWS" class="md-nav__link">
-    AWS
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#deltalake.data_catalog.DataCatalog.UNITY" class="md-nav__link">
-    UNITY
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#delta-storage-handler" class="md-nav__link">
-    Delta Storage Handler
-  </a>
-  
-    <nav class="md-nav" aria-label="Delta Storage Handler">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#deltalake.fs.DeltaStorageHandler" class="md-nav__link">
-    DeltaStorageHandler
-  </a>
-  
-    <nav class="md-nav" aria-label="DeltaStorageHandler">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#deltalake.fs.DeltaStorageHandler.get_file_info_selector" class="md-nav__link">
-    get_file_info_selector()
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#deltalake.fs.DeltaStorageHandler.open_input_file" class="md-nav__link">
-    open_input_file()
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#deltalake.fs.DeltaStorageHandler.open_input_stream" class="md-nav__link">
-    open_input_stream()
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#deltalake.fs.DeltaStorageHandler.open_output_stream" class="md-nav__link">
-    open_output_stream()
+    to_pyarrow
   </a>
   
 </li>
@@ -1565,7 +2207,7 @@
 
   <h1>Schema</h1>
 
-<h2 id="delta-lake-schemas">Delta Lake Schemas</h2>
+<h2 id="schema-and-field">Schema and field</h2>
 <p>Schemas, fields, and data types are provided in the <code>deltalake.schema</code> submodule.</p>
 
 
@@ -1573,14 +2215,13 @@
 
 
 
-
-<h3 id="deltalake.schema.Schema" class="doc doc-heading">
-          <span class="doc doc-object-name doc-class-name">deltalake.schema.Schema</span>
+<h3 id="deltalake.Schema" class="doc doc-heading">
+          <span class="doc doc-object-name doc-class-name">deltalake.Schema</span>
 
 
 </h3>
-<div class="doc-signature highlight"><pre><span></span><code><span class="n">Schema</span><span class="p">(</span><span class="n">fields</span><span class="p">:</span> <span class="n">List</span><span class="p">[</span><span class="n">Field</span><span class="p">])</span>
-</code></pre></div>
+<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">Schema</span><span class="p">(</span><span class="n">fields</span><span class="p">:</span> <span class="n">List</span><span class="p">[</span><span class="n">Field</span><span class="p">])</span>
+</span></code></pre></div>
 
   <div class="doc doc-contents first">
           <p class="doc doc-class-bases">
@@ -1623,14 +2264,13 @@ Schema([Field(x, PrimitiveType("integer"), nullable=True), Field(y, PrimitiveTyp
 
 
 
-
-<h4 id="deltalake.schema.Schema.invariants" class="doc doc-heading">
+<h4 id="deltalake.Schema.invariants" class="doc doc-heading">
           <span class="doc doc-object-name doc-attribute-name">invariants</span>
 
 
 </h4>
-<div class="doc-signature highlight"><pre><span></span><code><span class="n">invariants</span><span class="p">:</span> <span class="n">List</span><span class="p">[</span><span class="n">Tuple</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">]]</span> <span class="o">=</span> <span class="o">&lt;</span><span class="n">attribute</span> <span class="s1">&#39;invariants&#39;</span> <span class="n">of</span> <span class="s1">&#39;deltalake._internal.Schema&#39;</span> <span class="n">objects</span><span class="o">&gt;</span>
-</code></pre></div>
+<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">invariants</span><span class="p">:</span> <span class="n">List</span><span class="p">[</span><span class="n">Tuple</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">]]</span> <span class="o">=</span> <span class="o">&lt;</span><span class="n">attribute</span> <span class="s1">&#39;invariants&#39;</span> <span class="n">of</span> <span class="s1">&#39;deltalake._internal.Schema&#39;</span> <span class="n">objects</span><span class="o">&gt;</span>
+</span></code></pre></div>
 
   <div class="doc doc-contents ">
   
@@ -1646,8 +2286,7 @@ Schema([Field(x, PrimitiveType("integer"), nullable=True), Field(y, PrimitiveTyp
 
 
 
-
-<h4 id="deltalake.schema.Schema.from_json" class="doc doc-heading">
+<h4 id="deltalake.Schema.from_json" class="doc doc-heading">
           <span class="doc doc-object-name doc-function-name">from_json</span>
 
   
@@ -1656,20 +2295,12 @@ Schema([Field(x, PrimitiveType("integer"), nullable=True), Field(y, PrimitiveTyp
   </span>
 
 </h4>
-<div class="doc-signature highlight"><pre><span></span><code><span class="n">from_json</span><span class="p">(</span><span class="n">schema_json</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Schema</span>
-</code></pre></div>
+<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">from_json</span><span class="p">(</span><span class="n">schema_json</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Schema</span>
+</span></code></pre></div>
 
   <div class="doc doc-contents ">
   
       <p>Create a new Schema from a JSON string.</p>
-<p>A schema has the same JSON format as a StructType.
-<div class="highlight"><pre><span></span><code>Schema.from_json(&#39;&#39;&#39;{
-    &quot;type&quot;: &quot;struct&quot;,
-    &quot;fields&quot;: [{&quot;name&quot;: &quot;x&quot;, &quot;type&quot;: &quot;integer&quot;, &quot;nullable&quot;: true, &quot;metadata&quot;: {}}]
-    }
-)&#39;&#39;&#39;
-# Returns Schema([Field(x, PrimitiveType(&quot;integer&quot;), nullable=True)])
-</code></pre></div></p>
 
 
 
@@ -1701,6 +2332,17 @@ Schema([Field(x, PrimitiveType("integer"), nullable=True), Field(y, PrimitiveTyp
     </tbody>
   </table>
 
+<details class="example" open>
+  <summary>Example</summary>
+  <p>A schema has the same JSON format as a StructType.
+<div class="language-python highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">Schema</span><span class="o">.</span><span class="n">from_json</span><span class="p">(</span><span class="s1">&#39;&#39;&#39;{</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="s1">    &quot;type&quot;: &quot;struct&quot;,</span>
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="s1">    &quot;fields&quot;: [{&quot;name&quot;: &quot;x&quot;, &quot;type&quot;: &quot;integer&quot;, &quot;nullable&quot;: true, &quot;metadata&quot;: </span><span class="si">{}</span><span class="s1">}]</span>
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="s1">    }</span>
+</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="s1">)&#39;&#39;&#39;</span>
+</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="c1"># Returns Schema([Field(x, PrimitiveType(&quot;integer&quot;), nullable=True)])</span>
+</span></code></pre></div></p>
+</details>
   </div>
 
 </div>
@@ -1710,8 +2352,7 @@ Schema([Field(x, PrimitiveType("integer"), nullable=True), Field(y, PrimitiveTyp
 
 
 
-
-<h4 id="deltalake.schema.Schema.from_pyarrow" class="doc doc-heading">
+<h4 id="deltalake.Schema.from_pyarrow" class="doc doc-heading">
           <span class="doc doc-object-name doc-function-name">from_pyarrow</span>
 
   
@@ -1720,12 +2361,12 @@ Schema([Field(x, PrimitiveType("integer"), nullable=True), Field(y, PrimitiveTyp
   </span>
 
 </h4>
-<div class="doc-signature highlight"><pre><span></span><code><span class="n">from_pyarrow</span><span class="p">(</span><span class="n">data_type</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Schema</span>
-</code></pre></div>
+<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">from_pyarrow</span><span class="p">(</span><span class="n">data_type</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Schema</span>
+</span></code></pre></div>
 
   <div class="doc doc-contents ">
   
-      <p>Create a <a class="autorefs autorefs-internal" href="#deltalake.schema.Schema">Schema</a> from a PyArrow Schema type</p>
+      <p>Create a <a class="autorefs autorefs-internal" href="#deltalake.Schema">Schema</a> from a PyArrow Schema type</p>
 <p>Will raise <code>TypeError</code> if the PyArrow type is not a primitive type.</p>
 
 
@@ -1748,7 +2389,7 @@ Schema([Field(x, PrimitiveType("integer"), nullable=True), Field(y, PrimitiveTyp
           </td>
           <td>
             <div class="doc-md-description">
-              <p>A PyArrow <a class="autorefs autorefs-external" href="https://arrow.apache.org/docs/python/generated/pyarrow.Schema.html#pyarrow.Schema">Schema</a> type</p>
+              <p>A PyArrow Schema</p>
             </div>
           </td>
           <td>
@@ -1757,7 +2398,30 @@ Schema([Field(x, PrimitiveType("integer"), nullable=True), Field(y, PrimitiveTyp
         </tr>
     </tbody>
   </table>
-      <p>Returns: a <a class="autorefs autorefs-internal" href="#deltalake.schema.Schema">Schema</a> type</p>
+
+
+
+  <p><strong>Returns:</strong></p>
+  <table>
+    <thead>
+      <tr>
+        <th>Type</th>
+        <th>Description</th>
+      </tr>
+    </thead>
+    <tbody>
+        <tr>
+          <td>
+                <code><a class="autorefs autorefs-internal" title="deltalake._internal.Schema" href="#deltalake.Schema">Schema</a></code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>a Schema</p>
+            </div>
+          </td>
+        </tr>
+    </tbody>
+  </table>
 
   </div>
 
@@ -1768,8 +2432,7 @@ Schema([Field(x, PrimitiveType("integer"), nullable=True), Field(y, PrimitiveTyp
 
 
 
-
-<h4 id="deltalake.schema.Schema.to_json" class="doc doc-heading">
+<h4 id="deltalake.Schema.to_json" class="doc doc-heading">
           <span class="doc doc-object-name doc-function-name">to_json</span>
 
   
@@ -1778,18 +2441,44 @@ Schema([Field(x, PrimitiveType("integer"), nullable=True), Field(y, PrimitiveTyp
   </span>
 
 </h4>
-<div class="doc-signature highlight"><pre><span></span><code><span class="n">to_json</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="nb">str</span>
-</code></pre></div>
+<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">to_json</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="nb">str</span>
+</span></code></pre></div>
 
   <div class="doc doc-contents ">
   
-      <p>Get the JSON string representation of the Schema.
-A schema has the same JSON format as a StructType.
-<div class="highlight"><pre><span></span><code>Schema([Field(&quot;x&quot;, &quot;integer&quot;)]).to_json()
-# Returns &#39;{&quot;type&quot;:&quot;struct&quot;,&quot;fields&quot;:[{&quot;name&quot;:&quot;x&quot;,&quot;type&quot;:&quot;integer&quot;,&quot;nullable&quot;:true,&quot;metadata&quot;:{}}]}&#39;
-</code></pre></div>
-Returns: a JSON string</p>
+      <p>Get the JSON string representation of the Schema.</p>
 
+
+
+  <p><strong>Returns:</strong></p>
+  <table>
+    <thead>
+      <tr>
+        <th>Type</th>
+        <th>Description</th>
+      </tr>
+    </thead>
+    <tbody>
+        <tr>
+          <td>
+                <code>str</code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>a JSON string</p>
+            </div>
+          </td>
+        </tr>
+    </tbody>
+  </table>
+
+<details class="example" open>
+  <summary>Example</summary>
+  <p>A schema has the same JSON format as a StructType.
+<div class="language-python highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">Schema</span><span class="p">([</span><span class="n">Field</span><span class="p">(</span><span class="s2">&quot;x&quot;</span><span class="p">,</span> <span class="s2">&quot;integer&quot;</span><span class="p">)])</span><span class="o">.</span><span class="n">to_json</span><span class="p">()</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="c1"># Returns &#39;{&quot;type&quot;:&quot;struct&quot;,&quot;fields&quot;:[{&quot;name&quot;:&quot;x&quot;,&quot;type&quot;:&quot;integer&quot;,&quot;nullable&quot;:true,&quot;metadata&quot;:{}}]}&#39;</span>
+</span></code></pre></div></p>
+</details>
   </div>
 
 </div>
@@ -1799,8 +2488,7 @@ Returns: a JSON string</p>
 
 
 
-
-<h4 id="deltalake.schema.Schema.to_pyarrow" class="doc doc-heading">
+<h4 id="deltalake.Schema.to_pyarrow" class="doc doc-heading">
           <span class="doc doc-object-name doc-function-name">to_pyarrow</span>
 
   
@@ -1809,8 +2497,8 @@ Returns: a JSON string</p>
   </span>
 
 </h4>
-<div class="doc-signature highlight"><pre><span></span><code><span class="n">to_pyarrow</span><span class="p">(</span><span class="n">as_large_types</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">pyarrow</span><span class="o">.</span><span class="n">Schema</span>
-</code></pre></div>
+<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">to_pyarrow</span><span class="p">(</span><span class="n">as_large_types</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">pyarrow</span><span class="o">.</span><span class="n">Schema</span>
+</span></code></pre></div>
 
   <div class="doc doc-contents ">
   
@@ -1836,7 +2524,8 @@ Returns: a JSON string</p>
           </td>
           <td>
             <div class="doc-md-description">
-              <p>get schema with all variable size types (list, binary, string) as large variants (with int64 indices). This is for compatibility with systems like Polars that only support the large versions of Arrow types.</p>
+              <p>get schema with all variable size types (list, binary, string) as large variants (with int64 indices).
+This is for compatibility with systems like Polars that only support the large versions of Arrow types.</p>
             </div>
           </td>
           <td>
@@ -1863,7 +2552,7 @@ Returns: a JSON string</p>
           </td>
           <td>
             <div class="doc-md-description">
-              <p>a PyArrow <a class="autorefs autorefs-external" href="https://arrow.apache.org/docs/python/generated/pyarrow.Schema.html#pyarrow.Schema">Schema</a> type</p>
+              <p>a PyArrow Schema</p>
             </div>
           </td>
         </tr>
@@ -1880,20 +2569,20 @@ Returns: a JSON string</p>
 
   </div>
 
+
 </div>
 
 <div class="doc doc-object doc-class">
 
 
 
-
-<h3 id="deltalake.schema.PrimitiveType" class="doc doc-heading">
-          <span class="doc doc-object-name doc-class-name">deltalake.schema.PrimitiveType</span>
+<h3 id="deltalake.Field" class="doc doc-heading">
+          <span class="doc doc-object-name doc-class-name">deltalake.Field</span>
 
 
 </h3>
-<div class="doc-signature highlight"><pre><span></span><code><span class="n">PrimitiveType</span><span class="p">(</span><span class="n">data_type</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span>
-</code></pre></div>
+<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">Field</span><span class="p">(</span><span class="n">name</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="nb">type</span><span class="p">:</span> <span class="n">DataType</span><span class="p">,</span> <span class="o">*</span><span class="p">,</span> <span class="n">nullable</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span> <span class="n">metadata</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span>
+</span></code></pre></div>
 
   <div class="doc doc-contents first">
 
@@ -1915,14 +2604,70 @@ Returns: a JSON string</p>
 
 
 
+<h4 id="deltalake.Field.metadata" class="doc doc-heading">
+          <span class="doc doc-object-name doc-attribute-name">metadata</span>
 
-<h4 id="deltalake.schema.PrimitiveType.type" class="doc doc-heading">
+
+</h4>
+<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">metadata</span><span class="p">:</span> <span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]</span> <span class="o">=</span> <span class="o">&lt;</span><span class="n">attribute</span> <span class="s1">&#39;metadata&#39;</span> <span class="n">of</span> <span class="s1">&#39;deltalake._internal.Field&#39;</span> <span class="n">objects</span><span class="o">&gt;</span>
+</span></code></pre></div>
+
+  <div class="doc doc-contents ">
+  
+      
+  </div>
+
+</div>
+
+<div class="doc doc-object doc-attribute">
+
+
+
+<h4 id="deltalake.Field.name" class="doc doc-heading">
+          <span class="doc doc-object-name doc-attribute-name">name</span>
+
+
+</h4>
+<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">name</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="o">&lt;</span><span class="n">attribute</span> <span class="s1">&#39;name&#39;</span> <span class="n">of</span> <span class="s1">&#39;deltalake._internal.Field&#39;</span> <span class="n">objects</span><span class="o">&gt;</span>
+</span></code></pre></div>
+
+  <div class="doc doc-contents ">
+  
+      
+  </div>
+
+</div>
+
+<div class="doc doc-object doc-attribute">
+
+
+
+<h4 id="deltalake.Field.nullable" class="doc doc-heading">
+          <span class="doc doc-object-name doc-attribute-name">nullable</span>
+
+
+</h4>
+<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">nullable</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="o">&lt;</span><span class="n">attribute</span> <span class="s1">&#39;nullable&#39;</span> <span class="n">of</span> <span class="s1">&#39;deltalake._internal.Field&#39;</span> <span class="n">objects</span><span class="o">&gt;</span>
+</span></code></pre></div>
+
+  <div class="doc doc-contents ">
+  
+      
+  </div>
+
+</div>
+
+<div class="doc doc-object doc-attribute">
+
+
+
+<h4 id="deltalake.Field.type" class="doc doc-heading">
           <span class="doc doc-object-name doc-attribute-name">type</span>
 
 
 </h4>
-<div class="doc-signature highlight"><pre><span></span><code><span class="nb">type</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="o">&lt;</span><span class="n">attribute</span> <span class="s1">&#39;type&#39;</span> <span class="n">of</span> <span class="s1">&#39;deltalake._internal.PrimitiveType&#39;</span> <span class="n">objects</span><span class="o">&gt;</span>
-</code></pre></div>
+<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nb">type</span><span class="p">:</span> <span class="n">DataType</span> <span class="o">=</span> <span class="o">&lt;</span><span class="n">attribute</span> <span class="s1">&#39;type&#39;</span> <span class="n">of</span> <span class="s1">&#39;deltalake._internal.Field&#39;</span> <span class="n">objects</span><span class="o">&gt;</span>
+</span></code></pre></div>
 
   <div class="doc doc-contents ">
   
@@ -1938,6 +2683,340 @@ Returns: a JSON string</p>
 
 
 
+<h4 id="deltalake.Field.from_json" class="doc doc-heading">
+          <span class="doc doc-object-name doc-function-name">from_json</span>
+
+  
+  <span class="doc doc-labels">
+      <small class="doc doc-label doc-label-staticmethod"><code>staticmethod</code></small>
+  </span>
+
+</h4>
+<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">from_json</span><span class="p">(</span><span class="n">field_json</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Field</span>
+</span></code></pre></div>
+
+  <div class="doc doc-contents ">
+  
+      <p>Create a Field from a JSON string.</p>
+
+
+
+  <p><strong>Parameters:</strong></p>
+  <table>
+    <thead>
+      <tr>
+        <th>Name</th>
+        <th>Type</th>
+        <th>Description</th>
+        <th>Default</th>
+      </tr>
+    </thead>
+    <tbody>
+        <tr>
+          <td><code>json</code></td>
+          <td>
+                <code>str</code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>the JSON string.</p>
+            </div>
+          </td>
+          <td>
+              <em>required</em>
+          </td>
+        </tr>
+    </tbody>
+  </table>
+
+
+
+  <p><strong>Returns:</strong></p>
+  <table>
+    <thead>
+      <tr>
+        <th>Type</th>
+        <th>Description</th>
+      </tr>
+    </thead>
+    <tbody>
+        <tr>
+          <td>
+                <code><a class="autorefs autorefs-internal" title="deltalake._internal.Field" href="#deltalake.Field">Field</a></code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>Field</p>
+            </div>
+          </td>
+        </tr>
+    </tbody>
+  </table>
+
+<details class="example" open>
+  <summary>Example</summary>
+  <div class="language-text highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>Field.from_json(&#39;&#39;&#39;{
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>        &quot;name&quot;: &quot;col&quot;,
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>        &quot;type&quot;: &quot;integer&quot;,
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>        &quot;nullable&quot;: true,
+</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>        &quot;metadata&quot;: {}
+</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>    }&#39;&#39;&#39;
+</span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>)
+</span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a># Returns Field(col, PrimitiveType(&quot;integer&quot;), nullable=True)
+</span></code></pre></div>
+</details>
+  </div>
+
+</div>
+
+
+<div class="doc doc-object doc-function">
+
+
+
+<h4 id="deltalake.Field.from_pyarrow" class="doc doc-heading">
+          <span class="doc doc-object-name doc-function-name">from_pyarrow</span>
+
+  
+  <span class="doc doc-labels">
+      <small class="doc doc-label doc-label-staticmethod"><code>staticmethod</code></small>
+  </span>
+
+</h4>
+<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">from_pyarrow</span><span class="p">(</span><span class="n">field</span><span class="p">:</span> <span class="n">pyarrow</span><span class="o">.</span><span class="n">Field</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Field</span>
+</span></code></pre></div>
+
+  <div class="doc doc-contents ">
+  
+      <p>Create a Field from a PyArrow field
+Note: This currently doesn't preserve field metadata.</p>
+
+
+
+  <p><strong>Parameters:</strong></p>
+  <table>
+    <thead>
+      <tr>
+        <th>Name</th>
+        <th>Type</th>
+        <th>Description</th>
+        <th>Default</th>
+      </tr>
+    </thead>
+    <tbody>
+        <tr>
+          <td><code>field</code></td>
+          <td>
+                <code><a class="autorefs autorefs-external" title="pyarrow.Field" href="https://arrow.apache.org/docs/python/generated/pyarrow.Field.html#pyarrow.Field">Field</a></code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>a PyArrow Field</p>
+            </div>
+          </td>
+          <td>
+              <em>required</em>
+          </td>
+        </tr>
+    </tbody>
+  </table>
+
+
+
+  <p><strong>Returns:</strong></p>
+  <table>
+    <thead>
+      <tr>
+        <th>Type</th>
+        <th>Description</th>
+      </tr>
+    </thead>
+    <tbody>
+        <tr>
+          <td>
+                <code><a class="autorefs autorefs-internal" title="deltalake._internal.Field" href="#deltalake.Field">Field</a></code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>a Field</p>
+            </div>
+          </td>
+        </tr>
+    </tbody>
+  </table>
+
+  </div>
+
+</div>
+
+
+<div class="doc doc-object doc-function">
+
+
+
+<h4 id="deltalake.Field.to_json" class="doc doc-heading">
+          <span class="doc doc-object-name doc-function-name">to_json</span>
+
+  
+  <span class="doc doc-labels">
+      <small class="doc doc-label doc-label-method descriptor"><code>method descriptor</code></small>
+  </span>
+
+</h4>
+<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">to_json</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="nb">str</span>
+</span></code></pre></div>
+
+  <div class="doc doc-contents ">
+  
+      <p>Get the field as JSON string.</p>
+
+
+
+  <p><strong>Returns:</strong></p>
+  <table>
+    <thead>
+      <tr>
+        <th>Type</th>
+        <th>Description</th>
+      </tr>
+    </thead>
+    <tbody>
+        <tr>
+          <td>
+                <code>str</code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>a JSON string</p>
+            </div>
+          </td>
+        </tr>
+    </tbody>
+  </table>
+
+<details class="example" open>
+  <summary>Example</summary>
+  <div class="language-python highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">Field</span><span class="p">(</span><span class="s2">&quot;col&quot;</span><span class="p">,</span> <span class="s2">&quot;integer&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">to_json</span><span class="p">()</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="c1"># Returns &#39;{&quot;name&quot;:&quot;col&quot;,&quot;type&quot;:&quot;integer&quot;,&quot;nullable&quot;:true,&quot;metadata&quot;:{}}&#39;</span>
+</span></code></pre></div>
+</details>
+  </div>
+
+</div>
+
+
+<div class="doc doc-object doc-function">
+
+
+
+<h4 id="deltalake.Field.to_pyarrow" class="doc doc-heading">
+          <span class="doc doc-object-name doc-function-name">to_pyarrow</span>
+
+  
+  <span class="doc doc-labels">
+      <small class="doc doc-label doc-label-method descriptor"><code>method descriptor</code></small>
+  </span>
+
+</h4>
+<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">to_pyarrow</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="n">pyarrow</span><span class="o">.</span><span class="n">Field</span>
+</span></code></pre></div>
+
+  <div class="doc doc-contents ">
+  
+      <p>Convert to an equivalent PyArrow field
+Note: This currently doesn't preserve field metadata.</p>
+
+
+
+  <p><strong>Returns:</strong></p>
+  <table>
+    <thead>
+      <tr>
+        <th>Type</th>
+        <th>Description</th>
+      </tr>
+    </thead>
+    <tbody>
+        <tr>
+          <td>
+                <code><a class="autorefs autorefs-external" title="pyarrow.Field" href="https://arrow.apache.org/docs/python/generated/pyarrow.Field.html#pyarrow.Field">Field</a></code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>a pyarrow Field</p>
+            </div>
+          </td>
+        </tr>
+    </tbody>
+  </table>
+
+  </div>
+
+</div>
+
+
+
+  </div>
+
+  </div>
+
+
+</div><h2 id="data-types">Data types</h2>
+
+
+<div class="doc doc-object doc-class">
+
+
+
+<h3 id="deltalake.schema.PrimitiveType" class="doc doc-heading">
+          <span class="doc doc-object-name doc-class-name">deltalake.schema.PrimitiveType</span>
+
+
+</h3>
+<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">PrimitiveType</span><span class="p">(</span><span class="n">data_type</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span>
+</span></code></pre></div>
+
+  <div class="doc doc-contents first">
+
+  
+      
+
+
+  
+
+  <div class="doc doc-children">
+
+
+
+
+
+
+
+<div class="doc doc-object doc-attribute">
+
+
+
+<h4 id="deltalake.schema.PrimitiveType.type" class="doc doc-heading">
+          <span class="doc doc-object-name doc-attribute-name">type</span>
+
+
+</h4>
+<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nb">type</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="o">&lt;</span><span class="n">attribute</span> <span class="s1">&#39;type&#39;</span> <span class="n">of</span> <span class="s1">&#39;deltalake._internal.PrimitiveType&#39;</span> <span class="n">objects</span><span class="o">&gt;</span>
+</span></code></pre></div>
+
+  <div class="doc doc-contents ">
+  
+      
+  </div>
+
+</div>
+
+
+
+
+<div class="doc doc-object doc-function">
+
+
 
 <h4 id="deltalake.schema.PrimitiveType.from_json" class="doc doc-heading">
           <span class="doc doc-object-name doc-function-name">from_json</span>
@@ -1948,8 +3027,8 @@ Returns: a JSON string</p>
   </span>
 
 </h4>
-<div class="doc-signature highlight"><pre><span></span><code><span class="n">from_json</span><span class="p">(</span><span class="n">type_json</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">PrimitiveType</span>
-</code></pre></div>
+<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">from_json</span><span class="p">(</span><span class="n">type_json</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">PrimitiveType</span>
+</span></code></pre></div>
 
   <div class="doc doc-contents ">
   
@@ -1976,7 +3055,7 @@ Returns: a JSON string</p>
           </td>
           <td>
             <div class="doc-md-description">
-              <p>A JSON string</p>
+              <p>a JSON string</p>
             </div>
           </td>
           <td>
@@ -1985,7 +3064,30 @@ Returns: a JSON string</p>
         </tr>
     </tbody>
   </table>
-      <p>Returns a <a class="autorefs autorefs-internal" href="#deltalake.schema.PrimitiveType">PrimitiveType</a> type</p>
+
+
+
+  <p><strong>Returns:</strong></p>
+  <table>
+    <thead>
+      <tr>
+        <th>Type</th>
+        <th>Description</th>
+      </tr>
+    </thead>
+    <tbody>
+        <tr>
+          <td>
+                <code><a class="autorefs autorefs-internal" title="deltalake._internal.PrimitiveType" href="#deltalake.schema.PrimitiveType">PrimitiveType</a></code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>a PrimitiveType type</p>
+            </div>
+          </td>
+        </tr>
+    </tbody>
+  </table>
 
   </div>
 
@@ -1993,7 +3095,6 @@ Returns: a JSON string</p>
 
 
 <div class="doc doc-object doc-function">
-
 
 
 
@@ -2006,12 +3107,12 @@ Returns: a JSON string</p>
   </span>
 
 </h4>
-<div class="doc-signature highlight"><pre><span></span><code><span class="n">from_pyarrow</span><span class="p">(</span><span class="n">data_type</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">PrimitiveType</span>
-</code></pre></div>
+<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">from_pyarrow</span><span class="p">(</span><span class="n">data_type</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">PrimitiveType</span>
+</span></code></pre></div>
 
   <div class="doc doc-contents ">
   
-      <p>Create a <a class="autorefs autorefs-internal" href="#deltalake.schema.PrimitiveType">PrimitiveType</a> from a PyArrow type</p>
+      <p>Create a PrimitiveType from a PyArrow datatype</p>
 <p>Will raise <code>TypeError</code> if the PyArrow type is not a primitive type.</p>
 
 
@@ -2034,7 +3135,7 @@ Returns: a JSON string</p>
           </td>
           <td>
             <div class="doc-md-description">
-              <p>A PyArrow <a class="autorefs autorefs-external" href="https://arrow.apache.org/docs/python/generated/pyarrow.DataType.html#pyarrow.DataType">DataType</a> type</p>
+              <p>A PyArrow DataType</p>
             </div>
           </td>
           <td>
@@ -2043,7 +3144,30 @@ Returns: a JSON string</p>
         </tr>
     </tbody>
   </table>
-      <p>Returns: a <a class="autorefs autorefs-internal" href="#deltalake.schema.PrimitiveType">PrimitiveType</a> type</p>
+
+
+
+  <p><strong>Returns:</strong></p>
+  <table>
+    <thead>
+      <tr>
+        <th>Type</th>
+        <th>Description</th>
+      </tr>
+    </thead>
+    <tbody>
+        <tr>
+          <td>
+                <code><a class="autorefs autorefs-internal" title="deltalake._internal.PrimitiveType" href="#deltalake.schema.PrimitiveType">PrimitiveType</a></code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>a PrimitiveType</p>
+            </div>
+          </td>
+        </tr>
+    </tbody>
+  </table>
 
   </div>
 
@@ -2051,7 +3175,6 @@ Returns: a JSON string</p>
 
 
 <div class="doc doc-object doc-function">
-
 
 
 
@@ -2064,8 +3187,8 @@ Returns: a JSON string</p>
   </span>
 
 </h4>
-<div class="doc-signature highlight"><pre><span></span><code><span class="n">to_pyarrow</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="n">pyarrow</span><span class="o">.</span><span class="n">DataType</span>
-</code></pre></div>
+<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">to_pyarrow</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="n">pyarrow</span><span class="o">.</span><span class="n">DataType</span>
+</span></code></pre></div>
 
   <div class="doc doc-contents ">
   
@@ -2081,10 +3204,10 @@ Returns: a JSON string</p>
 
   </div>
 
+
 </div>
 
 <div class="doc doc-object doc-class">
-
 
 
 
@@ -2093,8 +3216,8 @@ Returns: a JSON string</p>
 
 
 </h3>
-<div class="doc-signature highlight"><pre><span></span><code><span class="n">ArrayType</span><span class="p">(</span><span class="n">element_type</span><span class="p">:</span> <span class="n">DataType</span><span class="p">,</span> <span class="o">*</span><span class="p">,</span> <span class="n">contains_null</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">)</span>
-</code></pre></div>
+<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">ArrayType</span><span class="p">(</span><span class="n">element_type</span><span class="p">:</span> <span class="n">DataType</span><span class="p">,</span> <span class="o">*</span><span class="p">,</span> <span class="n">contains_null</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">)</span>
+</span></code></pre></div>
 
   <div class="doc doc-contents first">
 
@@ -2116,14 +3239,13 @@ Returns: a JSON string</p>
 
 
 
-
 <h4 id="deltalake.schema.ArrayType.contains_null" class="doc doc-heading">
           <span class="doc doc-object-name doc-attribute-name">contains_null</span>
 
 
 </h4>
-<div class="doc-signature highlight"><pre><span></span><code><span class="n">contains_null</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="o">&lt;</span><span class="n">attribute</span> <span class="s1">&#39;contains_null&#39;</span> <span class="n">of</span> <span class="s1">&#39;deltalake._internal.ArrayType&#39;</span> <span class="n">objects</span><span class="o">&gt;</span>
-</code></pre></div>
+<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">contains_null</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="o">&lt;</span><span class="n">attribute</span> <span class="s1">&#39;contains_null&#39;</span> <span class="n">of</span> <span class="s1">&#39;deltalake._internal.ArrayType&#39;</span> <span class="n">objects</span><span class="o">&gt;</span>
+</span></code></pre></div>
 
   <div class="doc doc-contents ">
   
@@ -2133,7 +3255,6 @@ Returns: a JSON string</p>
 </div>
 
 <div class="doc doc-object doc-attribute">
-
 
 
 
@@ -2142,8 +3263,8 @@ Returns: a JSON string</p>
 
 
 </h4>
-<div class="doc-signature highlight"><pre><span></span><code><span class="n">element_type</span><span class="p">:</span> <span class="n">DataType</span> <span class="o">=</span> <span class="o">&lt;</span><span class="n">attribute</span> <span class="s1">&#39;element_type&#39;</span> <span class="n">of</span> <span class="s1">&#39;deltalake._internal.ArrayType&#39;</span> <span class="n">objects</span><span class="o">&gt;</span>
-</code></pre></div>
+<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">element_type</span><span class="p">:</span> <span class="n">DataType</span> <span class="o">=</span> <span class="o">&lt;</span><span class="n">attribute</span> <span class="s1">&#39;element_type&#39;</span> <span class="n">of</span> <span class="s1">&#39;deltalake._internal.ArrayType&#39;</span> <span class="n">objects</span><span class="o">&gt;</span>
+</span></code></pre></div>
 
   <div class="doc doc-contents ">
   
@@ -2156,14 +3277,13 @@ Returns: a JSON string</p>
 
 
 
-
 <h4 id="deltalake.schema.ArrayType.type" class="doc doc-heading">
           <span class="doc doc-object-name doc-attribute-name">type</span>
 
 
 </h4>
-<div class="doc-signature highlight"><pre><span></span><code><span class="nb">type</span><span class="p">:</span> <span class="n">Literal</span><span class="p">[</span><span class="s1">&#39;array&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="o">&lt;</span><span class="n">attribute</span> <span class="s1">&#39;type&#39;</span> <span class="n">of</span> <span class="s1">&#39;deltalake._internal.ArrayType&#39;</span> <span class="n">objects</span><span class="o">&gt;</span>
-</code></pre></div>
+<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nb">type</span><span class="p">:</span> <span class="n">Literal</span><span class="p">[</span><span class="s1">&#39;array&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="o">&lt;</span><span class="n">attribute</span> <span class="s1">&#39;type&#39;</span> <span class="n">of</span> <span class="s1">&#39;deltalake._internal.ArrayType&#39;</span> <span class="n">objects</span><span class="o">&gt;</span>
+</span></code></pre></div>
 
   <div class="doc doc-contents ">
   
@@ -2179,7 +3299,6 @@ Returns: a JSON string</p>
 
 
 
-
 <h4 id="deltalake.schema.ArrayType.from_json" class="doc doc-heading">
           <span class="doc doc-object-name doc-function-name">from_json</span>
 
@@ -2189,23 +3308,12 @@ Returns: a JSON string</p>
   </span>
 
 </h4>
-<div class="doc-signature highlight"><pre><span></span><code><span class="n">from_json</span><span class="p">(</span><span class="n">type_json</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">ArrayType</span>
-</code></pre></div>
+<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">from_json</span><span class="p">(</span><span class="n">type_json</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">ArrayType</span>
+</span></code></pre></div>
 
   <div class="doc doc-contents ">
   
       <p>Create an ArrayType from a JSON string</p>
-<p>The JSON representation for an array type is an object with <code>type</code> (set to
-<code>"array"</code>), <code>elementType</code>, and <code>containsNull</code>:
-<div class="highlight"><pre><span></span><code>ArrayType.from_json(
-    &#39;&#39;&#39;{
-        &quot;type&quot;: &quot;array&quot;,
-        &quot;elementType&quot;: &quot;integer&quot;,
-        &quot;containsNull&quot;: false
-    }&#39;&#39;&#39;
-)
-# Returns ArrayType(PrimitiveType(&quot;integer&quot;), contains_null=False)
-</code></pre></div></p>
 
 
 
@@ -2227,7 +3335,7 @@ Returns: a JSON string</p>
           </td>
           <td>
             <div class="doc-md-description">
-              <p>A JSON string</p>
+              <p>a JSON string</p>
             </div>
           </td>
           <td>
@@ -2236,15 +3344,51 @@ Returns: a JSON string</p>
         </tr>
     </tbody>
   </table>
-      <p>Returns: an <a class="autorefs autorefs-internal" href="#deltalake.schema.ArrayType">ArrayType</a> type</p>
 
+
+
+  <p><strong>Returns:</strong></p>
+  <table>
+    <thead>
+      <tr>
+        <th>Type</th>
+        <th>Description</th>
+      </tr>
+    </thead>
+    <tbody>
+        <tr>
+          <td>
+                <code><a class="autorefs autorefs-internal" title="deltalake._internal.ArrayType" href="#deltalake.schema.ArrayType">ArrayType</a></code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>an ArrayType</p>
+            </div>
+          </td>
+        </tr>
+    </tbody>
+  </table>
+
+<details class="example" open>
+  <summary>Example</summary>
+  <p>The JSON representation for an array type is an object with <code>type</code> (set to
+<code>"array"</code>), <code>elementType</code>, and <code>containsNull</code>.
+<div class="language-python highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">ArrayType</span><span class="o">.</span><span class="n">from_json</span><span class="p">(</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="w">    </span><span class="sd">&#39;&#39;&#39;{</span>
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="sd">        &quot;type&quot;: &quot;array&quot;,</span>
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="sd">        &quot;elementType&quot;: &quot;integer&quot;,</span>
+</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="sd">        &quot;containsNull&quot;: false</span>
+</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="sd">    }&#39;&#39;&#39;</span>
+</span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="p">)</span>
+</span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a><span class="c1"># Returns ArrayType(PrimitiveType(&quot;integer&quot;), contains_null=False)</span>
+</span></code></pre></div></p>
+</details>
   </div>
 
 </div>
 
 
 <div class="doc doc-object doc-function">
-
 
 
 
@@ -2257,8 +3401,8 @@ Returns: a JSON string</p>
   </span>
 
 </h4>
-<div class="doc-signature highlight"><pre><span></span><code><span class="n">from_pyarrow</span><span class="p">(</span><span class="n">data_type</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">ArrayType</span>
-</code></pre></div>
+<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">from_pyarrow</span><span class="p">(</span><span class="n">data_type</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">ArrayType</span>
+</span></code></pre></div>
 
   <div class="doc doc-contents ">
   
@@ -2285,7 +3429,7 @@ Returns: a JSON string</p>
           </td>
           <td>
             <div class="doc-md-description">
-              <p>The PyArrow <a class="autorefs autorefs-external" href="https://arrow.apache.org/docs/python/generated/pyarrow.ListType.html#pyarrow.ListType">ListType</a></p>
+              <p>The PyArrow ListType</p>
             </div>
           </td>
           <td>
@@ -2294,7 +3438,30 @@ Returns: a JSON string</p>
         </tr>
     </tbody>
   </table>
-      <p>Returns: an <a class="autorefs autorefs-internal" href="#deltalake.schema.ArrayType">ArrayType</a> type</p>
+
+
+
+  <p><strong>Returns:</strong></p>
+  <table>
+    <thead>
+      <tr>
+        <th>Type</th>
+        <th>Description</th>
+      </tr>
+    </thead>
+    <tbody>
+        <tr>
+          <td>
+                <code><a class="autorefs autorefs-internal" title="deltalake._internal.ArrayType" href="#deltalake.schema.ArrayType">ArrayType</a></code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>an ArrayType</p>
+            </div>
+          </td>
+        </tr>
+    </tbody>
+  </table>
 
   </div>
 
@@ -2302,7 +3469,6 @@ Returns: a JSON string</p>
 
 
 <div class="doc doc-object doc-function">
-
 
 
 
@@ -2315,8 +3481,8 @@ Returns: a JSON string</p>
   </span>
 
 </h4>
-<div class="doc-signature highlight"><pre><span></span><code><span class="n">to_json</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="nb">str</span>
-</code></pre></div>
+<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">to_json</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="nb">str</span>
+</span></code></pre></div>
 
   <div class="doc doc-contents ">
   
@@ -2331,7 +3497,6 @@ Returns: a JSON string</p>
 
 
 
-
 <h4 id="deltalake.schema.ArrayType.to_pyarrow" class="doc doc-heading">
           <span class="doc doc-object-name doc-function-name">to_pyarrow</span>
 
@@ -2341,8 +3506,8 @@ Returns: a JSON string</p>
   </span>
 
 </h4>
-<div class="doc-signature highlight"><pre><span></span><code><span class="n">to_pyarrow</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="n">pyarrow</span><span class="o">.</span><span class="n">ListType</span>
-</code></pre></div>
+<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">to_pyarrow</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="n">pyarrow</span><span class="o">.</span><span class="n">ListType</span>
+</span></code></pre></div>
 
   <div class="doc doc-contents ">
   
@@ -2358,10 +3523,10 @@ Returns: a JSON string</p>
 
   </div>
 
+
 </div>
 
 <div class="doc doc-object doc-class">
-
 
 
 
@@ -2370,8 +3535,8 @@ Returns: a JSON string</p>
 
 
 </h3>
-<div class="doc-signature highlight"><pre><span></span><code><span class="n">MapType</span><span class="p">(</span><span class="n">key_type</span><span class="p">:</span> <span class="n">DataType</span><span class="p">,</span> <span class="n">value_type</span><span class="p">:</span> <span class="n">DataType</span><span class="p">,</span> <span class="o">*</span><span class="p">,</span> <span class="n">value_contains_null</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">)</span>
-</code></pre></div>
+<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">MapType</span><span class="p">(</span><span class="n">key_type</span><span class="p">:</span> <span class="n">DataType</span><span class="p">,</span> <span class="n">value_type</span><span class="p">:</span> <span class="n">DataType</span><span class="p">,</span> <span class="o">*</span><span class="p">,</span> <span class="n">value_contains_null</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">)</span>
+</span></code></pre></div>
 
   <div class="doc doc-contents first">
 
@@ -2393,14 +3558,13 @@ Returns: a JSON string</p>
 
 
 
-
 <h4 id="deltalake.schema.MapType.key_type" class="doc doc-heading">
           <span class="doc doc-object-name doc-attribute-name">key_type</span>
 
 
 </h4>
-<div class="doc-signature highlight"><pre><span></span><code><span class="n">key_type</span><span class="p">:</span> <span class="n">DataType</span> <span class="o">=</span> <span class="o">&lt;</span><span class="n">attribute</span> <span class="s1">&#39;key_type&#39;</span> <span class="n">of</span> <span class="s1">&#39;deltalake._internal.MapType&#39;</span> <span class="n">objects</span><span class="o">&gt;</span>
-</code></pre></div>
+<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">key_type</span><span class="p">:</span> <span class="n">DataType</span> <span class="o">=</span> <span class="o">&lt;</span><span class="n">attribute</span> <span class="s1">&#39;key_type&#39;</span> <span class="n">of</span> <span class="s1">&#39;deltalake._internal.MapType&#39;</span> <span class="n">objects</span><span class="o">&gt;</span>
+</span></code></pre></div>
 
   <div class="doc doc-contents ">
   
@@ -2410,7 +3574,6 @@ Returns: a JSON string</p>
 </div>
 
 <div class="doc doc-object doc-attribute">
-
 
 
 
@@ -2419,8 +3582,8 @@ Returns: a JSON string</p>
 
 
 </h4>
-<div class="doc-signature highlight"><pre><span></span><code><span class="nb">type</span><span class="p">:</span> <span class="n">Literal</span><span class="p">[</span><span class="s1">&#39;map&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="o">&lt;</span><span class="n">attribute</span> <span class="s1">&#39;type&#39;</span> <span class="n">of</span> <span class="s1">&#39;deltalake._internal.MapType&#39;</span> <span class="n">objects</span><span class="o">&gt;</span>
-</code></pre></div>
+<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nb">type</span><span class="p">:</span> <span class="n">Literal</span><span class="p">[</span><span class="s1">&#39;map&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="o">&lt;</span><span class="n">attribute</span> <span class="s1">&#39;type&#39;</span> <span class="n">of</span> <span class="s1">&#39;deltalake._internal.MapType&#39;</span> <span class="n">objects</span><span class="o">&gt;</span>
+</span></code></pre></div>
 
   <div class="doc doc-contents ">
   
@@ -2430,7 +3593,6 @@ Returns: a JSON string</p>
 </div>
 
 <div class="doc doc-object doc-attribute">
-
 
 
 
@@ -2439,8 +3601,8 @@ Returns: a JSON string</p>
 
 
 </h4>
-<div class="doc-signature highlight"><pre><span></span><code><span class="n">value_contains_null</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="o">&lt;</span><span class="n">attribute</span> <span class="s1">&#39;value_contains_null&#39;</span> <span class="n">of</span> <span class="s1">&#39;deltalake._internal.MapType&#39;</span> <span class="n">objects</span><span class="o">&gt;</span>
-</code></pre></div>
+<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">value_contains_null</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="o">&lt;</span><span class="n">attribute</span> <span class="s1">&#39;value_contains_null&#39;</span> <span class="n">of</span> <span class="s1">&#39;deltalake._internal.MapType&#39;</span> <span class="n">objects</span><span class="o">&gt;</span>
+</span></code></pre></div>
 
   <div class="doc doc-contents ">
   
@@ -2453,14 +3615,13 @@ Returns: a JSON string</p>
 
 
 
-
 <h4 id="deltalake.schema.MapType.value_type" class="doc doc-heading">
           <span class="doc doc-object-name doc-attribute-name">value_type</span>
 
 
 </h4>
-<div class="doc-signature highlight"><pre><span></span><code><span class="n">value_type</span><span class="p">:</span> <span class="n">DataType</span> <span class="o">=</span> <span class="o">&lt;</span><span class="n">attribute</span> <span class="s1">&#39;value_type&#39;</span> <span class="n">of</span> <span class="s1">&#39;deltalake._internal.MapType&#39;</span> <span class="n">objects</span><span class="o">&gt;</span>
-</code></pre></div>
+<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">value_type</span><span class="p">:</span> <span class="n">DataType</span> <span class="o">=</span> <span class="o">&lt;</span><span class="n">attribute</span> <span class="s1">&#39;value_type&#39;</span> <span class="n">of</span> <span class="s1">&#39;deltalake._internal.MapType&#39;</span> <span class="n">objects</span><span class="o">&gt;</span>
+</span></code></pre></div>
 
   <div class="doc doc-contents ">
   
@@ -2476,7 +3637,6 @@ Returns: a JSON string</p>
 
 
 
-
 <h4 id="deltalake.schema.MapType.from_json" class="doc doc-heading">
           <span class="doc doc-object-name doc-function-name">from_json</span>
 
@@ -2486,24 +3646,12 @@ Returns: a JSON string</p>
   </span>
 
 </h4>
-<div class="doc-signature highlight"><pre><span></span><code><span class="n">from_json</span><span class="p">(</span><span class="n">type_json</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">MapType</span>
-</code></pre></div>
+<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">from_json</span><span class="p">(</span><span class="n">type_json</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">MapType</span>
+</span></code></pre></div>
 
   <div class="doc doc-contents ">
   
       <p>Create a MapType from a JSON string</p>
-<p>The JSON representation for a map type is an object with <code>type</code> (set to <code>map</code>),
-<code>keyType</code>, <code>valueType</code>, and <code>valueContainsNull</code>:
-<div class="highlight"><pre><span></span><code>MapType.from_json(
-    &#39;&#39;&#39;{
-        &quot;type&quot;: &quot;map&quot;,
-        &quot;keyType&quot;: &quot;integer&quot;,
-        &quot;valueType&quot;: &quot;string&quot;,
-        &quot;valueContainsNull&quot;: true
-    }&#39;&#39;&#39;
-)
-# Returns MapType(PrimitiveType(&quot;integer&quot;), PrimitiveType(&quot;string&quot;), value_contains_null=True)
-</code></pre></div></p>
 
 
 
@@ -2525,7 +3673,7 @@ Returns: a JSON string</p>
           </td>
           <td>
             <div class="doc-md-description">
-              <p>A JSON string</p>
+              <p>a JSON string</p>
             </div>
           </td>
           <td>
@@ -2534,15 +3682,52 @@ Returns: a JSON string</p>
         </tr>
     </tbody>
   </table>
-      <p>Returns: a <a class="autorefs autorefs-internal" href="#deltalake.schema.MapType">MapType</a> type</p>
 
+
+
+  <p><strong>Returns:</strong></p>
+  <table>
+    <thead>
+      <tr>
+        <th>Type</th>
+        <th>Description</th>
+      </tr>
+    </thead>
+    <tbody>
+        <tr>
+          <td>
+                <code><a class="autorefs autorefs-internal" title="deltalake._internal.MapType" href="#deltalake.schema.MapType">MapType</a></code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>an ArrayType</p>
+            </div>
+          </td>
+        </tr>
+    </tbody>
+  </table>
+
+<details class="example" open>
+  <summary>Example</summary>
+  <p>The JSON representation for a map type is an object with <code>type</code> (set to <code>map</code>),
+<code>keyType</code>, <code>valueType</code>, and <code>valueContainsNull</code>:</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">MapType</span><span class="o">.</span><span class="n">from_json</span><span class="p">(</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="w">    </span><span class="sd">&#39;&#39;&#39;{</span>
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="sd">        &quot;type&quot;: &quot;map&quot;,</span>
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="sd">        &quot;keyType&quot;: &quot;integer&quot;,</span>
+</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="sd">        &quot;valueType&quot;: &quot;string&quot;,</span>
+</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="sd">        &quot;valueContainsNull&quot;: true</span>
+</span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="sd">    }&#39;&#39;&#39;</span>
+</span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a><span class="p">)</span>
+</span><span id="__span-0-9"><a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a><span class="c1"># Returns MapType(PrimitiveType(&quot;integer&quot;), PrimitiveType(&quot;string&quot;), value_contains_null=True)</span>
+</span></code></pre></div>
+</details>
   </div>
 
 </div>
 
 
 <div class="doc doc-object doc-function">
-
 
 
 
@@ -2555,8 +3740,8 @@ Returns: a JSON string</p>
   </span>
 
 </h4>
-<div class="doc-signature highlight"><pre><span></span><code><span class="n">from_pyarrow</span><span class="p">(</span><span class="n">data_type</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">MapType</span>
-</code></pre></div>
+<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">from_pyarrow</span><span class="p">(</span><span class="n">data_type</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">MapType</span>
+</span></code></pre></div>
 
   <div class="doc doc-contents ">
   
@@ -2592,7 +3777,30 @@ Returns: a JSON string</p>
         </tr>
     </tbody>
   </table>
-      <p>Returns: a <a class="autorefs autorefs-internal" href="#deltalake.schema.MapType">MapType</a> type</p>
+
+
+
+  <p><strong>Returns:</strong></p>
+  <table>
+    <thead>
+      <tr>
+        <th>Type</th>
+        <th>Description</th>
+      </tr>
+    </thead>
+    <tbody>
+        <tr>
+          <td>
+                <code><a class="autorefs autorefs-internal" title="deltalake._internal.MapType" href="#deltalake.schema.MapType">MapType</a></code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>a MapType</p>
+            </div>
+          </td>
+        </tr>
+    </tbody>
+  </table>
 
   </div>
 
@@ -2600,7 +3808,6 @@ Returns: a JSON string</p>
 
 
 <div class="doc doc-object doc-function">
-
 
 
 
@@ -2613,12 +3820,36 @@ Returns: a JSON string</p>
   </span>
 
 </h4>
-<div class="doc-signature highlight"><pre><span></span><code><span class="n">to_json</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="nb">str</span>
-</code></pre></div>
+<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">to_json</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="nb">str</span>
+</span></code></pre></div>
 
   <div class="doc doc-contents ">
   
       <p>Get JSON string representation of map type.</p>
+
+
+
+  <p><strong>Returns:</strong></p>
+  <table>
+    <thead>
+      <tr>
+        <th>Type</th>
+        <th>Description</th>
+      </tr>
+    </thead>
+    <tbody>
+        <tr>
+          <td>
+                <code>str</code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>a JSON string</p>
+            </div>
+          </td>
+        </tr>
+    </tbody>
+  </table>
 
   </div>
 
@@ -2626,7 +3857,6 @@ Returns: a JSON string</p>
 
 
 <div class="doc doc-object doc-function">
-
 
 
 
@@ -2639,8 +3869,8 @@ Returns: a JSON string</p>
   </span>
 
 </h4>
-<div class="doc-signature highlight"><pre><span></span><code><span class="n">to_pyarrow</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="n">pyarrow</span><span class="o">.</span><span class="n">MapType</span>
-</code></pre></div>
+<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">to_pyarrow</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="n">pyarrow</span><span class="o">.</span><span class="n">MapType</span>
+</span></code></pre></div>
 
   <div class="doc doc-contents ">
   
@@ -2656,311 +3886,10 @@ Returns: a JSON string</p>
 
   </div>
 
-</div>
-
-<div class="doc doc-object doc-class">
-
-
-
-
-<h3 id="deltalake.schema.Field" class="doc doc-heading">
-          <span class="doc doc-object-name doc-class-name">deltalake.schema.Field</span>
-
-
-</h3>
-<div class="doc-signature highlight"><pre><span></span><code><span class="n">Field</span><span class="p">(</span><span class="n">name</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="nb">type</span><span class="p">:</span> <span class="n">DataType</span><span class="p">,</span> <span class="o">*</span><span class="p">,</span> <span class="n">nullable</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span> <span class="n">metadata</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span>
-</code></pre></div>
-
-  <div class="doc doc-contents first">
-
-  
-      
-
-
-  
-
-  <div class="doc doc-children">
-
-
-
-
-
-
-
-<div class="doc doc-object doc-attribute">
-
-
-
-
-<h4 id="deltalake.schema.Field.metadata" class="doc doc-heading">
-          <span class="doc doc-object-name doc-attribute-name">metadata</span>
-
-
-</h4>
-<div class="doc-signature highlight"><pre><span></span><code><span class="n">metadata</span><span class="p">:</span> <span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]</span> <span class="o">=</span> <span class="o">&lt;</span><span class="n">attribute</span> <span class="s1">&#39;metadata&#39;</span> <span class="n">of</span> <span class="s1">&#39;deltalake._internal.Field&#39;</span> <span class="n">objects</span><span class="o">&gt;</span>
-</code></pre></div>
-
-  <div class="doc doc-contents ">
-  
-      
-  </div>
-
-</div>
-
-<div class="doc doc-object doc-attribute">
-
-
-
-
-<h4 id="deltalake.schema.Field.name" class="doc doc-heading">
-          <span class="doc doc-object-name doc-attribute-name">name</span>
-
-
-</h4>
-<div class="doc-signature highlight"><pre><span></span><code><span class="n">name</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="o">&lt;</span><span class="n">attribute</span> <span class="s1">&#39;name&#39;</span> <span class="n">of</span> <span class="s1">&#39;deltalake._internal.Field&#39;</span> <span class="n">objects</span><span class="o">&gt;</span>
-</code></pre></div>
-
-  <div class="doc doc-contents ">
-  
-      
-  </div>
-
-</div>
-
-<div class="doc doc-object doc-attribute">
-
-
-
-
-<h4 id="deltalake.schema.Field.nullable" class="doc doc-heading">
-          <span class="doc doc-object-name doc-attribute-name">nullable</span>
-
-
-</h4>
-<div class="doc-signature highlight"><pre><span></span><code><span class="n">nullable</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="o">&lt;</span><span class="n">attribute</span> <span class="s1">&#39;nullable&#39;</span> <span class="n">of</span> <span class="s1">&#39;deltalake._internal.Field&#39;</span> <span class="n">objects</span><span class="o">&gt;</span>
-</code></pre></div>
-
-  <div class="doc doc-contents ">
-  
-      
-  </div>
-
-</div>
-
-<div class="doc doc-object doc-attribute">
-
-
-
-
-<h4 id="deltalake.schema.Field.type" class="doc doc-heading">
-          <span class="doc doc-object-name doc-attribute-name">type</span>
-
-
-</h4>
-<div class="doc-signature highlight"><pre><span></span><code><span class="nb">type</span><span class="p">:</span> <span class="n">DataType</span> <span class="o">=</span> <span class="o">&lt;</span><span class="n">attribute</span> <span class="s1">&#39;type&#39;</span> <span class="n">of</span> <span class="s1">&#39;deltalake._internal.Field&#39;</span> <span class="n">objects</span><span class="o">&gt;</span>
-</code></pre></div>
-
-  <div class="doc doc-contents ">
-  
-      
-  </div>
-
-</div>
-
-
-
-
-<div class="doc doc-object doc-function">
-
-
-
-
-<h4 id="deltalake.schema.Field.from_json" class="doc doc-heading">
-          <span class="doc doc-object-name doc-function-name">from_json</span>
-
-  
-  <span class="doc doc-labels">
-      <small class="doc doc-label doc-label-staticmethod"><code>staticmethod</code></small>
-  </span>
-
-</h4>
-<div class="doc-signature highlight"><pre><span></span><code><span class="n">from_json</span><span class="p">(</span><span class="n">field_json</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Field</span>
-</code></pre></div>
-
-  <div class="doc doc-contents ">
-  
-      <p>Create a Field from a JSON string.</p>
-
-
-
-  <p><strong>Parameters:</strong></p>
-  <table>
-    <thead>
-      <tr>
-        <th>Name</th>
-        <th>Type</th>
-        <th>Description</th>
-        <th>Default</th>
-      </tr>
-    </thead>
-    <tbody>
-        <tr>
-          <td><code>json</code></td>
-          <td>
-                <code>str</code>
-          </td>
-          <td>
-            <div class="doc-md-description">
-              <p>the JSON string.</p>
-            </div>
-          </td>
-          <td>
-              <em>required</em>
-          </td>
-        </tr>
-    </tbody>
-  </table>
-      <p>Returns: Field</p>
-<p>Example:
-<div class="highlight"><pre><span></span><code>Field.from_json(&#39;&#39;&#39;{
-        &quot;name&quot;: &quot;col&quot;,
-        &quot;type&quot;: &quot;integer&quot;,
-        &quot;nullable&quot;: true,
-        &quot;metadata&quot;: {}
-    }&#39;&#39;&#39;
-)
-# Returns Field(col, PrimitiveType(&quot;integer&quot;), nullable=True)
-</code></pre></div></p>
-
-  </div>
-
-</div>
-
-
-<div class="doc doc-object doc-function">
-
-
-
-
-<h4 id="deltalake.schema.Field.from_pyarrow" class="doc doc-heading">
-          <span class="doc doc-object-name doc-function-name">from_pyarrow</span>
-
-  
-  <span class="doc doc-labels">
-      <small class="doc doc-label doc-label-staticmethod"><code>staticmethod</code></small>
-  </span>
-
-</h4>
-<div class="doc-signature highlight"><pre><span></span><code><span class="n">from_pyarrow</span><span class="p">(</span><span class="n">field</span><span class="p">:</span> <span class="n">pyarrow</span><span class="o">.</span><span class="n">Field</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Field</span>
-</code></pre></div>
-
-  <div class="doc doc-contents ">
-  
-      <p>Create a Field from a PyArrow field
-Note: This currently doesn't preserve field metadata.</p>
-
-
-
-  <p><strong>Parameters:</strong></p>
-  <table>
-    <thead>
-      <tr>
-        <th>Name</th>
-        <th>Type</th>
-        <th>Description</th>
-        <th>Default</th>
-      </tr>
-    </thead>
-    <tbody>
-        <tr>
-          <td><code>field</code></td>
-          <td>
-                <code><a class="autorefs autorefs-external" title="pyarrow.Field" href="https://arrow.apache.org/docs/python/generated/pyarrow.Field.html#pyarrow.Field">Field</a></code>
-          </td>
-          <td>
-            <div class="doc-md-description">
-              <p>a PyArrow Field type</p>
-            </div>
-          </td>
-          <td>
-              <em>required</em>
-          </td>
-        </tr>
-    </tbody>
-  </table>
-      <p>Returns: a <a class="autorefs autorefs-internal" href="#deltalake.schema.Field">Field</a> type</p>
-
-  </div>
-
-</div>
-
-
-<div class="doc doc-object doc-function">
-
-
-
-
-<h4 id="deltalake.schema.Field.to_json" class="doc doc-heading">
-          <span class="doc doc-object-name doc-function-name">to_json</span>
-
-  
-  <span class="doc doc-labels">
-      <small class="doc doc-label doc-label-method descriptor"><code>method descriptor</code></small>
-  </span>
-
-</h4>
-<div class="doc-signature highlight"><pre><span></span><code><span class="n">to_json</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="nb">str</span>
-</code></pre></div>
-
-  <div class="doc doc-contents ">
-  
-      <p>Get the field as JSON string.
-<div class="highlight"><pre><span></span><code>Field(&quot;col&quot;, &quot;integer&quot;).to_json()
-# Returns &#39;{&quot;name&quot;:&quot;col&quot;,&quot;type&quot;:&quot;integer&quot;,&quot;nullable&quot;:true,&quot;metadata&quot;:{}}&#39;
-</code></pre></div></p>
-
-  </div>
-
-</div>
-
-
-<div class="doc doc-object doc-function">
-
-
-
-
-<h4 id="deltalake.schema.Field.to_pyarrow" class="doc doc-heading">
-          <span class="doc doc-object-name doc-function-name">to_pyarrow</span>
-
-  
-  <span class="doc doc-labels">
-      <small class="doc doc-label doc-label-method descriptor"><code>method descriptor</code></small>
-  </span>
-
-</h4>
-<div class="doc-signature highlight"><pre><span></span><code><span class="n">to_pyarrow</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="n">pyarrow</span><span class="o">.</span><span class="n">Field</span>
-</code></pre></div>
-
-  <div class="doc doc-contents ">
-  
-      <p>Convert to an equivalent PyArrow field
-Note: This currently doesn't preserve field metadata.</p>
-<p>Returns: a <a class="autorefs autorefs-external" href="https://arrow.apache.org/docs/python/generated/pyarrow.Field.html#pyarrow.Field">pyarrow.Field</a> type</p>
-
-  </div>
-
-</div>
-
-
-
-  </div>
-
-  </div>
 
 </div>
 
 <div class="doc doc-object doc-class">
-
 
 
 
@@ -2969,8 +3898,8 @@ Note: This currently doesn't preserve field metadata.</p>
 
 
 </h3>
-<div class="doc-signature highlight"><pre><span></span><code><span class="n">StructType</span><span class="p">(</span><span class="n">fields</span><span class="p">:</span> <span class="n">List</span><span class="p">[</span><span class="n">Field</span><span class="p">])</span>
-</code></pre></div>
+<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">StructType</span><span class="p">(</span><span class="n">fields</span><span class="p">:</span> <span class="n">List</span><span class="p">[</span><span class="n">Field</span><span class="p">])</span>
+</span></code></pre></div>
 
   <div class="doc doc-contents first">
 
@@ -2992,14 +3921,13 @@ Note: This currently doesn't preserve field metadata.</p>
 
 
 
-
 <h4 id="deltalake.schema.StructType.fields" class="doc doc-heading">
           <span class="doc doc-object-name doc-attribute-name">fields</span>
 
 
 </h4>
-<div class="doc-signature highlight"><pre><span></span><code><span class="n">fields</span><span class="p">:</span> <span class="n">List</span><span class="p">[</span><span class="n">Field</span><span class="p">]</span> <span class="o">=</span> <span class="o">&lt;</span><span class="n">attribute</span> <span class="s1">&#39;fields&#39;</span> <span class="n">of</span> <span class="s1">&#39;deltalake._internal.StructType&#39;</span> <span class="n">objects</span><span class="o">&gt;</span>
-</code></pre></div>
+<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">fields</span><span class="p">:</span> <span class="n">List</span><span class="p">[</span><span class="n">Field</span><span class="p">]</span> <span class="o">=</span> <span class="o">&lt;</span><span class="n">attribute</span> <span class="s1">&#39;fields&#39;</span> <span class="n">of</span> <span class="s1">&#39;deltalake._internal.StructType&#39;</span> <span class="n">objects</span><span class="o">&gt;</span>
+</span></code></pre></div>
 
   <div class="doc doc-contents ">
   
@@ -3012,14 +3940,13 @@ Note: This currently doesn't preserve field metadata.</p>
 
 
 
-
 <h4 id="deltalake.schema.StructType.type" class="doc doc-heading">
           <span class="doc doc-object-name doc-attribute-name">type</span>
 
 
 </h4>
-<div class="doc-signature highlight"><pre><span></span><code><span class="nb">type</span><span class="p">:</span> <span class="n">Literal</span><span class="p">[</span><span class="s1">&#39;struct&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="o">&lt;</span><span class="n">attribute</span> <span class="s1">&#39;type&#39;</span> <span class="n">of</span> <span class="s1">&#39;deltalake._internal.StructType&#39;</span> <span class="n">objects</span><span class="o">&gt;</span>
-</code></pre></div>
+<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nb">type</span><span class="p">:</span> <span class="n">Literal</span><span class="p">[</span><span class="s1">&#39;struct&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="o">&lt;</span><span class="n">attribute</span> <span class="s1">&#39;type&#39;</span> <span class="n">of</span> <span class="s1">&#39;deltalake._internal.StructType&#39;</span> <span class="n">objects</span><span class="o">&gt;</span>
+</span></code></pre></div>
 
   <div class="doc doc-contents ">
   
@@ -3035,7 +3962,6 @@ Note: This currently doesn't preserve field metadata.</p>
 
 
 
-
 <h4 id="deltalake.schema.StructType.from_json" class="doc doc-heading">
           <span class="doc doc-object-name doc-function-name">from_json</span>
 
@@ -3045,20 +3971,12 @@ Note: This currently doesn't preserve field metadata.</p>
   </span>
 
 </h4>
-<div class="doc-signature highlight"><pre><span></span><code><span class="n">from_json</span><span class="p">(</span><span class="n">type_json</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">StructType</span>
-</code></pre></div>
+<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">from_json</span><span class="p">(</span><span class="n">type_json</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">StructType</span>
+</span></code></pre></div>
 
   <div class="doc doc-contents ">
   
-      <p>Create a new StructType from a JSON string.
-<div class="highlight"><pre><span></span><code>StructType.from_json(
-    &#39;&#39;&#39;{
-        &quot;type&quot;: &quot;struct&quot;,
-        &quot;fields&quot;: [{&quot;name&quot;: &quot;x&quot;, &quot;type&quot;: &quot;integer&quot;, &quot;nullable&quot;: true, &quot;metadata&quot;: {}}]
-    }&#39;&#39;&#39;
-)
-# Returns StructType([Field(x, PrimitiveType(&quot;integer&quot;), nullable=True)])
-</code></pre></div></p>
+      <p>Create a new StructType from a JSON string.</p>
 
 
 
@@ -3089,15 +4007,48 @@ Note: This currently doesn't preserve field metadata.</p>
         </tr>
     </tbody>
   </table>
-      <p>Returns: a <a class="autorefs autorefs-internal" href="#deltalake.schema.StructType">StructType</a> type</p>
 
+
+
+  <p><strong>Returns:</strong></p>
+  <table>
+    <thead>
+      <tr>
+        <th>Type</th>
+        <th>Description</th>
+      </tr>
+    </thead>
+    <tbody>
+        <tr>
+          <td>
+                <code><a class="autorefs autorefs-internal" title="deltalake._internal.StructType" href="#deltalake.schema.StructType">StructType</a></code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>a StructType</p>
+            </div>
+          </td>
+        </tr>
+    </tbody>
+  </table>
+
+<details class="example" open>
+  <summary>Example</summary>
+  <div class="language-python highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">StructType</span><span class="o">.</span><span class="n">from_json</span><span class="p">(</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="w">    </span><span class="sd">&#39;&#39;&#39;{</span>
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="sd">        &quot;type&quot;: &quot;struct&quot;,</span>
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="sd">        &quot;fields&quot;: [{&quot;name&quot;: &quot;x&quot;, &quot;type&quot;: &quot;integer&quot;, &quot;nullable&quot;: true, &quot;metadata&quot;: {}}]</span>
+</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="sd">    }&#39;&#39;&#39;</span>
+</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="p">)</span>
+</span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="c1"># Returns StructType([Field(x, PrimitiveType(&quot;integer&quot;), nullable=True)])</span>
+</span></code></pre></div>
+</details>
   </div>
 
 </div>
 
 
 <div class="doc doc-object doc-function">
-
 
 
 
@@ -3110,8 +4061,8 @@ Note: This currently doesn't preserve field metadata.</p>
   </span>
 
 </h4>
-<div class="doc-signature highlight"><pre><span></span><code><span class="n">from_pyarrow</span><span class="p">(</span><span class="n">data_type</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">StructType</span>
-</code></pre></div>
+<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">from_pyarrow</span><span class="p">(</span><span class="n">data_type</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">StructType</span>
+</span></code></pre></div>
 
   <div class="doc doc-contents ">
   
@@ -3147,7 +4098,30 @@ Note: This currently doesn't preserve field metadata.</p>
         </tr>
     </tbody>
   </table>
-      <p>Returns: a <a class="autorefs autorefs-internal" href="#deltalake.schema.StructType">StructType</a> type</p>
+
+
+
+  <p><strong>Returns:</strong></p>
+  <table>
+    <thead>
+      <tr>
+        <th>Type</th>
+        <th>Description</th>
+      </tr>
+    </thead>
+    <tbody>
+        <tr>
+          <td>
+                <code><a class="autorefs autorefs-internal" title="deltalake._internal.StructType" href="#deltalake.schema.StructType">StructType</a></code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>a StructType</p>
+            </div>
+          </td>
+        </tr>
+    </tbody>
+  </table>
 
   </div>
 
@@ -3155,7 +4129,6 @@ Note: This currently doesn't preserve field metadata.</p>
 
 
 <div class="doc doc-object doc-function">
-
 
 
 
@@ -3168,23 +4141,49 @@ Note: This currently doesn't preserve field metadata.</p>
   </span>
 
 </h4>
-<div class="doc-signature highlight"><pre><span></span><code><span class="n">to_json</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="nb">str</span>
-</code></pre></div>
+<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">to_json</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="nb">str</span>
+</span></code></pre></div>
 
   <div class="doc doc-contents ">
   
-      <p>Get the JSON representation of the type.
-<div class="highlight"><pre><span></span><code>StructType([Field(&quot;x&quot;, &quot;integer&quot;)]).to_json()
-# Returns &#39;{&quot;type&quot;:&quot;struct&quot;,&quot;fields&quot;:[{&quot;name&quot;:&quot;x&quot;,&quot;type&quot;:&quot;integer&quot;,&quot;nullable&quot;:true,&quot;metadata&quot;:{}}]}&#39;
-</code></pre></div></p>
+      <p>Get the JSON representation of the type.</p>
 
+
+
+  <p><strong>Returns:</strong></p>
+  <table>
+    <thead>
+      <tr>
+        <th>Type</th>
+        <th>Description</th>
+      </tr>
+    </thead>
+    <tbody>
+        <tr>
+          <td>
+                <code>str</code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>a JSON string</p>
+            </div>
+          </td>
+        </tr>
+    </tbody>
+  </table>
+
+<details class="example" open>
+  <summary>Example</summary>
+  <div class="language-python highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">StructType</span><span class="p">([</span><span class="n">Field</span><span class="p">(</span><span class="s2">&quot;x&quot;</span><span class="p">,</span> <span class="s2">&quot;integer&quot;</span><span class="p">)])</span><span class="o">.</span><span class="n">to_json</span><span class="p">()</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="c1"># Returns &#39;{&quot;type&quot;:&quot;struct&quot;,&quot;fields&quot;:[{&quot;name&quot;:&quot;x&quot;,&quot;type&quot;:&quot;integer&quot;,&quot;nullable&quot;:true,&quot;metadata&quot;:{}}]}&#39;</span>
+</span></code></pre></div>
+</details>
   </div>
 
 </div>
 
 
 <div class="doc doc-object doc-function">
-
 
 
 
@@ -3197,244 +4196,12 @@ Note: This currently doesn't preserve field metadata.</p>
   </span>
 
 </h4>
-<div class="doc-signature highlight"><pre><span></span><code><span class="n">to_pyarrow</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="n">pyarrow</span><span class="o">.</span><span class="n">StructType</span>
-</code></pre></div>
+<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">to_pyarrow</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="n">pyarrow</span><span class="o">.</span><span class="n">StructType</span>
+</span></code></pre></div>
 
   <div class="doc doc-contents ">
   
       <p>Get the equivalent PyArrow StructType</p>
-<p>Returns: a PyArrow <a class="autorefs autorefs-external" href="https://arrow.apache.org/docs/python/generated/pyarrow.StructType.html#pyarrow.StructType">StructType</a> type</p>
-
-  </div>
-
-</div>
-
-
-
-  </div>
-
-  </div>
-
-</div>
-
-<div class="doc doc-object doc-module">
-
-
-
-
-  <div class="doc doc-contents first">
-
-  
-
-  <div class="doc doc-children">
-
-
-
-
-
-
-
-
-<div class="doc doc-object doc-class">
-
-
-
-
-<h3 id="deltalake.data_catalog.DataCatalog" class="doc doc-heading">
-          <span class="doc doc-object-name doc-class-name">DataCatalog</span>
-
-
-</h3>
-
-
-  <div class="doc doc-contents ">
-          <p class="doc doc-class-bases">
-            Bases: <code><span title="enum.Enum">Enum</span></code></p>
-
-  
-      <p>List of the Data Catalogs</p>
-
-
-  
-
-  <div class="doc doc-children">
-
-
-
-
-
-
-
-<div class="doc doc-object doc-attribute">
-
-
-
-
-<h4 id="deltalake.data_catalog.DataCatalog.AWS" class="doc doc-heading">
-          <span class="doc doc-object-name doc-attribute-name">AWS</span>
-
-  
-  <span class="doc doc-labels">
-      <small class="doc doc-label doc-label-class-attribute"><code>class-attribute</code></small>
-      <small class="doc doc-label doc-label-instance-attribute"><code>instance-attribute</code></small>
-  </span>
-
-</h4>
-<div class="doc-signature highlight"><pre><span></span><code><span class="n">AWS</span> <span class="o">=</span> <span class="s1">&#39;glue&#39;</span>
-</code></pre></div>
-
-  <div class="doc doc-contents ">
-  
-      <p>Refers to the
-<code>AWS Glue Data Catalog &lt;https://docs.aws.amazon.com/glue/latest/dg/catalog-and-crawler.html&gt;</code>_</p>
-  </div>
-
-</div>
-
-<div class="doc doc-object doc-attribute">
-
-
-
-
-<h4 id="deltalake.data_catalog.DataCatalog.UNITY" class="doc doc-heading">
-          <span class="doc doc-object-name doc-attribute-name">UNITY</span>
-
-  
-  <span class="doc doc-labels">
-      <small class="doc doc-label doc-label-class-attribute"><code>class-attribute</code></small>
-      <small class="doc doc-label doc-label-instance-attribute"><code>instance-attribute</code></small>
-  </span>
-
-</h4>
-<div class="doc-signature highlight"><pre><span></span><code><span class="n">UNITY</span> <span class="o">=</span> <span class="s1">&#39;unity&#39;</span>
-</code></pre></div>
-
-  <div class="doc doc-contents ">
-  
-      <p>Refers to the
-<code>Databricks Unity Catalog &lt;https://docs.databricks.com/data-governance/unity-catalog/index.html&gt;</code>_</p>
-  </div>
-
-</div>
-
-
-
-
-
-  </div>
-
-  </div>
-
-</div>
-
-
-
-
-  </div>
-
-  </div>
-
-</div><h2 id="delta-storage-handler">Delta Storage Handler</h2>
-
-
-<div class="doc doc-object doc-module">
-
-
-
-
-  <div class="doc doc-contents first">
-
-  
-
-  <div class="doc doc-children">
-
-
-
-
-
-
-
-
-<div class="doc doc-object doc-class">
-
-
-
-
-<h3 id="deltalake.fs.DeltaStorageHandler" class="doc doc-heading">
-          <span class="doc doc-object-name doc-class-name">DeltaStorageHandler</span>
-
-
-</h3>
-<div class="doc-signature highlight"><pre><span></span><code><span class="n">DeltaStorageHandler</span><span class="p">(</span><span class="n">root</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">options</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">known_sizes</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">int</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span>
-</code></pre></div>
-
-  <div class="doc doc-contents ">
-          <p class="doc doc-class-bases">
-            Bases: <code><span title="deltalake._internal.DeltaFileSystemHandler">DeltaFileSystemHandler</span></code>, <code><a class="autorefs autorefs-external" title="pyarrow.fs.FileSystemHandler" href="https://arrow.apache.org/docs/python/generated/pyarrow.fs.FileSystemHandler.html#pyarrow.fs.FileSystemHandler">FileSystemHandler</a></code></p>
-
-  
-      <p>DeltaStorageHandler is a concrete implementations of a PyArrow FileSystemHandler.</p>
-
-
-  
-
-  <div class="doc doc-children">
-
-
-
-
-
-
-
-
-
-
-<div class="doc doc-object doc-function">
-
-
-
-
-<h4 id="deltalake.fs.DeltaStorageHandler.get_file_info_selector" class="doc doc-heading">
-          <span class="doc doc-object-name doc-function-name">get_file_info_selector</span>
-
-
-</h4>
-<div class="doc-signature highlight"><pre><span></span><code><span class="n">get_file_info_selector</span><span class="p">(</span><span class="n">selector</span><span class="p">:</span> <span class="n">FileSelector</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">List</span><span class="p">[</span><span class="n">FileInfo</span><span class="p">]</span>
-</code></pre></div>
-
-  <div class="doc doc-contents ">
-  
-      <p>Get info for the files defined by FileSelector.</p>
-
-
-
-  <p><strong>Parameters:</strong></p>
-  <table>
-    <thead>
-      <tr>
-        <th>Name</th>
-        <th>Type</th>
-        <th>Description</th>
-        <th>Default</th>
-      </tr>
-    </thead>
-    <tbody>
-        <tr>
-          <td><code>selector</code></td>
-          <td>
-                <code><a class="autorefs autorefs-external" title="pyarrow.fs.FileSelector" href="https://arrow.apache.org/docs/python/generated/pyarrow.fs.FileSelector.html#pyarrow.fs.FileSelector">FileSelector</a></code>
-          </td>
-          <td>
-            <div class="doc-md-description">
-              <p>FileSelector object</p>
-            </div>
-          </td>
-          <td>
-              <em>required</em>
-          </td>
-        </tr>
-    </tbody>
-  </table>
 
 
 
@@ -3449,254 +4216,11 @@ Note: This currently doesn't preserve field metadata.</p>
     <tbody>
         <tr>
           <td>
-                <code><span title="typing.List">List</span>[<a class="autorefs autorefs-external" title="pyarrow.fs.FileInfo" href="https://arrow.apache.org/docs/python/generated/pyarrow.fs.FileInfo.html#pyarrow.fs.FileInfo">FileInfo</a>]</code>
+                <code><a class="autorefs autorefs-external" title="pyarrow.StructType" href="https://arrow.apache.org/docs/python/generated/pyarrow.StructType.html#pyarrow.StructType">StructType</a></code>
           </td>
           <td>
             <div class="doc-md-description">
-              <p>list of file info objects</p>
-            </div>
-          </td>
-        </tr>
-    </tbody>
-  </table>
-
-  </div>
-
-</div>
-
-
-<div class="doc doc-object doc-function">
-
-
-
-
-<h4 id="deltalake.fs.DeltaStorageHandler.open_input_file" class="doc doc-heading">
-          <span class="doc doc-object-name doc-function-name">open_input_file</span>
-
-
-</h4>
-<div class="doc-signature highlight"><pre><span></span><code><span class="n">open_input_file</span><span class="p">(</span><span class="n">path</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">pa</span><span class="o">.</span><span class="n">PythonFile</span>
-</code></pre></div>
-
-  <div class="doc doc-contents ">
-  
-      <p>Open an input file for random access reading.</p>
-
-
-
-  <p><strong>Parameters:</strong></p>
-  <table>
-    <thead>
-      <tr>
-        <th>Name</th>
-        <th>Type</th>
-        <th>Description</th>
-        <th>Default</th>
-      </tr>
-    </thead>
-    <tbody>
-        <tr>
-          <td><code>path</code></td>
-          <td>
-                <code>str</code>
-          </td>
-          <td>
-            <div class="doc-md-description">
-              <p>The source to open for reading.</p>
-            </div>
-          </td>
-          <td>
-              <em>required</em>
-          </td>
-        </tr>
-    </tbody>
-  </table>
-
-
-
-  <p><strong>Returns:</strong></p>
-  <table>
-    <thead>
-      <tr>
-        <th>Type</th>
-        <th>Description</th>
-      </tr>
-    </thead>
-    <tbody>
-        <tr>
-          <td>
-                <code><a class="autorefs autorefs-external" title="pyarrow.PythonFile" href="https://arrow.apache.org/docs/python/generated/pyarrow.PythonFile.html#pyarrow.PythonFile">PythonFile</a></code>
-          </td>
-          <td>
-            <div class="doc-md-description">
-              <p>NativeFile</p>
-            </div>
-          </td>
-        </tr>
-    </tbody>
-  </table>
-
-  </div>
-
-</div>
-
-
-<div class="doc doc-object doc-function">
-
-
-
-
-<h4 id="deltalake.fs.DeltaStorageHandler.open_input_stream" class="doc doc-heading">
-          <span class="doc doc-object-name doc-function-name">open_input_stream</span>
-
-
-</h4>
-<div class="doc-signature highlight"><pre><span></span><code><span class="n">open_input_stream</span><span class="p">(</span><span class="n">path</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">pa</span><span class="o">.</span><span class="n">PythonFile</span>
-</code></pre></div>
-
-  <div class="doc doc-contents ">
-  
-      <p>Open an input stream for sequential reading.</p>
-
-
-
-  <p><strong>Parameters:</strong></p>
-  <table>
-    <thead>
-      <tr>
-        <th>Name</th>
-        <th>Type</th>
-        <th>Description</th>
-        <th>Default</th>
-      </tr>
-    </thead>
-    <tbody>
-        <tr>
-          <td><code>path</code></td>
-          <td>
-                <code>str</code>
-          </td>
-          <td>
-            <div class="doc-md-description">
-              <p>The source to open for reading.</p>
-            </div>
-          </td>
-          <td>
-              <em>required</em>
-          </td>
-        </tr>
-    </tbody>
-  </table>
-
-
-
-  <p><strong>Returns:</strong></p>
-  <table>
-    <thead>
-      <tr>
-        <th>Type</th>
-        <th>Description</th>
-      </tr>
-    </thead>
-    <tbody>
-        <tr>
-          <td>
-                <code><a class="autorefs autorefs-external" title="pyarrow.PythonFile" href="https://arrow.apache.org/docs/python/generated/pyarrow.PythonFile.html#pyarrow.PythonFile">PythonFile</a></code>
-          </td>
-          <td>
-            <div class="doc-md-description">
-              <p>NativeFile</p>
-            </div>
-          </td>
-        </tr>
-    </tbody>
-  </table>
-
-  </div>
-
-</div>
-
-
-<div class="doc doc-object doc-function">
-
-
-
-
-<h4 id="deltalake.fs.DeltaStorageHandler.open_output_stream" class="doc doc-heading">
-          <span class="doc doc-object-name doc-function-name">open_output_stream</span>
-
-
-</h4>
-<div class="doc-signature highlight"><pre><span></span><code><span class="n">open_output_stream</span><span class="p">(</span><span class="n">path</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">metadata</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">pa</span><span class="o">.</span><span class="n">PythonFile</span>
-</code></pre></div>
-
-  <div class="doc doc-contents ">
-  
-      <p>Open an output stream for sequential writing.</p>
-<p>If the target already exists, existing data is truncated.</p>
-
-
-
-  <p><strong>Parameters:</strong></p>
-  <table>
-    <thead>
-      <tr>
-        <th>Name</th>
-        <th>Type</th>
-        <th>Description</th>
-        <th>Default</th>
-      </tr>
-    </thead>
-    <tbody>
-        <tr>
-          <td><code>path</code></td>
-          <td>
-                <code>str</code>
-          </td>
-          <td>
-            <div class="doc-md-description">
-              <p>The source to open for writing.</p>
-            </div>
-          </td>
-          <td>
-              <em>required</em>
-          </td>
-        </tr>
-        <tr>
-          <td><code>metadata</code></td>
-          <td>
-                <code><span title="typing.Optional">Optional</span>[<span title="typing.Dict">Dict</span>[str, str]]</code>
-          </td>
-          <td>
-            <div class="doc-md-description">
-              <p>If not None, a mapping of string keys to string values.</p>
-            </div>
-          </td>
-          <td>
-                <code>None</code>
-          </td>
-        </tr>
-    </tbody>
-  </table>
-
-
-
-  <p><strong>Returns:</strong></p>
-  <table>
-    <thead>
-      <tr>
-        <th>Type</th>
-        <th>Description</th>
-      </tr>
-    </thead>
-    <tbody>
-        <tr>
-          <td>
-                <code><a class="autorefs autorefs-external" title="pyarrow.PythonFile" href="https://arrow.apache.org/docs/python/generated/pyarrow.PythonFile.html#pyarrow.PythonFile">PythonFile</a></code>
-          </td>
-          <td>
-            <div class="doc-md-description">
-              <p>NativeFile</p>
+              <p>a PyArrow StructType</p>
             </div>
           </td>
         </tr>
@@ -3713,14 +4237,6 @@ Note: This currently doesn't preserve field metadata.</p>
 
   </div>
 
-</div>
-
-
-
-
-  </div>
-
-  </div>
 
 </div>
 
@@ -3746,7 +4262,7 @@ Note: This currently doesn't preserve field metadata.</p>
       <nav class="md-footer__inner md-grid" aria-label="Footer" >
         
           
-          <a href="../delta_table/" class="md-footer__link md-footer__link--prev" aria-label="Previous: DeltaTable">
+          <a href="../delta_table/delta_table_alterer/" class="md-footer__link md-footer__link--prev" aria-label="Previous: TableAlterer">
             <div class="md-footer__button md-icon">
               
               <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11h12Z"/></svg>
@@ -3756,7 +4272,7 @@ Note: This currently doesn't preserve field metadata.</p>
                 Previous
               </span>
               <div class="md-ellipsis">
-                DeltaTable
+                TableAlterer
               </div>
             </div>
           </a>
@@ -3786,9 +4302,16 @@ Note: This currently doesn't preserve field metadata.</p>
       <div class="md-copyright">
   
   
-    Made with
-    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
-      Material for MkDocs
+</div>
+      
+        <div class="md-social">
+  
+    
+    
+    
+    
+    <a href="https://go.delta.io/slack" target="_blank" rel="noopener" title="Delta slack channel" class="md-social__link">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.4.2 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2023 Fonticons, Inc.--><path d="M94.12 315.1c0 25.9-21.16 47.06-47.06 47.06S0 341 0 315.1c0-25.9 21.16-47.06 47.06-47.06h47.06v47.06zm23.72 0c0-25.9 21.16-47.06 47.06-47.06s47.06 21.16 47.06 47.06v117.84c0 25.9-21.16 47.06-47.06 47.06s-47.06-21.16-47.06-47.06V315.1zm47.06-188.98c-25.9 0-47.06-21.16-47.06-47.06S139 32 164.9 32s47.06 21.16 47.06 47.06v47.06H164.9zm0 23.72c25.9 0 47.06 21.16 47.06 47.06s-21.16 47.06-47.06 47.06H47.06C21.16 243.96 0 222.8 0 196.9s21.16-47.06 47.06-47.06H164.9zm188.98 47.06c0-25.9 21.16-47.06 47.06-47.06 25.9 0 47.06 21.16 47.06 47.06s-21.16 47.06-47.06 47.06h-47.06V196.9zm-23.72 0c0 25.9-21.16 47.06-47.06 47.06-25.9 0-47.06-21.16-47.06-47.06V79.06c0-25.9 21.16-47.06 47.06-47.06 25.9 0 47.06 21.16 47.06 47.06V196.9zM283.1 385.88c25.9 0 47.06 21.16 47.06 47.06 0 25.9-21.16 47.06-47.06 47.06-25.9 0-47.06-21.16-47.06-47.06v-47.06h47.06zm0-23.72c-25.9 0-47.06-21.16-47.06-47.06 0-25.9 21.16-47.06 47.06-47.06h117.84c25.9 0 47.06 21.16 47.06 47.06 0 25.9-21.16 47.06-47.06 47.06H283.1z"/></svg>
     </a>
   
 </div>
@@ -3803,7 +4326,7 @@ Note: This currently doesn't preserve field metadata.</p>
     </div>
     
     
-    <script id="__config" type="application/json">{"base": "../..", "features": ["navigation.tracking", "navigation.instant", "navigation.tabs", "navigation.tabs.sticky", "navigation.footer", "content.tabs.link"], "search": "../../assets/javascripts/workers/search.f886a092.min.js", "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}}</script>
+    <script id="__config" type="application/json">{"base": "../..", "features": ["navigation.tracking", "navigation.instant", "navigation.expand", "navigation.tabs", "navigation.indexes", "navigation.tabs.sticky", "navigation.footer", "content.tabs.link", "content.code.annotation", "content.code.copy"], "search": "../../assets/javascripts/workers/search.f886a092.min.js", "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}}</script>
     
     
       <script src="../../assets/javascripts/bundle.aecac24b.min.js"></script>

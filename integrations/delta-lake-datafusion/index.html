@@ -8,13 +8,13 @@
       
       
       
-        <link rel="canonical" href="https://github.com/delta-io/delta-rs/api/storage/">
+        <link rel="canonical" href="https://github.com/delta-io/delta-rs/integrations/delta-lake-datafusion/">
       
       
-        <link rel="prev" href="../schema/">
+        <link rel="prev" href="../delta-lake-arrow/">
       
       
-        <link rel="next" href="../catalog/">
+        <link rel="next" href="../delta-lake-pandas/">
       
       
       <link rel="icon" href="../../delta-rust-no-whitespace.svg">
@@ -22,7 +22,7 @@
     
     
       
-        <title>Storage - Delta Lake Documentation</title>
+        <title>DataFusion - Delta Lake Documentation</title>
       
     
     
@@ -81,7 +81,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#storage" class="md-skip">
+        <a href="#using-delta-lake-with-datafusion" class="md-skip">
           Skip to content
         </a>
       
@@ -116,7 +116,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              Storage
+              DataFusion
             
           </span>
         </div>
@@ -262,13 +262,11 @@
         
   
   
-    
-  
   
     
     
-      <li class="md-tabs__item md-tabs__item--active">
-        <a href="../delta_writer/" class="md-tabs__link">
+      <li class="md-tabs__item">
+        <a href="../../api/delta_writer/" class="md-tabs__link">
           
   
     
@@ -284,11 +282,13 @@
         
   
   
+    
+  
   
     
     
-      <li class="md-tabs__item">
-        <a href="../../integrations/delta-lake-arrow/" class="md-tabs__link">
+      <li class="md-tabs__item md-tabs__item--active">
+        <a href="../delta-lake-arrow/" class="md-tabs__link">
           
   
     
@@ -847,8 +847,6 @@
       
   
   
-    
-  
   
     
     
@@ -872,12 +870,14 @@
       
       
     
-    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
       
         
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" checked>
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3" >
         
           
           <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="">
@@ -891,7 +891,7 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="true">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
           <label class="md-nav__title" for="__nav_3">
             <span class="md-nav__icon md-icon"></span>
             API Reference
@@ -904,7 +904,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../delta_writer/" class="md-nav__link">
+      <a href="../../api/delta_writer/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -954,7 +954,7 @@
           
           
           <div class="md-nav__link md-nav__container">
-            <a href="../delta_table/" class="md-nav__link ">
+            <a href="../../api/delta_table/" class="md-nav__link ">
               
   
   <span class="md-ellipsis">
@@ -986,7 +986,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../delta_table/metadata/" class="md-nav__link">
+      <a href="../../api/delta_table/metadata/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1006,7 +1006,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../delta_table/delta_table_merger/" class="md-nav__link">
+      <a href="../../api/delta_table/delta_table_merger/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1026,7 +1026,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../delta_table/delta_table_optimizer/" class="md-nav__link">
+      <a href="../../api/delta_table/delta_table_optimizer/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1046,7 +1046,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../delta_table/delta_table_alterer/" class="md-nav__link">
+      <a href="../../api/delta_table/delta_table_alterer/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1074,11 +1074,149 @@
   
   
     <li class="md-nav__item">
-      <a href="../schema/" class="md-nav__link">
+      <a href="../../api/schema/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
     Schema
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/storage/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Storage
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/catalog/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Catalog
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/exceptions/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Exceptions
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+    
+      
+      
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="">
+            
+  
+  <span class="md-ellipsis">
+    Integrations
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            Integrations
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../delta-lake-arrow/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Arrow
   </span>
   
 
@@ -1107,7 +1245,7 @@
           
   
   <span class="md-ellipsis">
-    Storage
+    DataFusion
   </span>
   
 
@@ -1118,7 +1256,7 @@
         
   
   <span class="md-ellipsis">
-    Storage
+    DataFusion
   </span>
   
 
@@ -1140,43 +1278,30 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#deltalake.fs.DeltaStorageHandler" class="md-nav__link">
-    DeltaStorageHandler
-  </a>
-  
-    <nav class="md-nav" aria-label="DeltaStorageHandler">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#deltalake.fs.DeltaStorageHandler.get_file_info_selector" class="md-nav__link">
-    get_file_info_selector
+  <a href="#delta-lake-performance-benefits-for-datafusion-users" class="md-nav__link">
+    Delta Lake performance benefits for DataFusion users
   </a>
   
 </li>
-        
-          <li class="md-nav__item">
-  <a href="#deltalake.fs.DeltaStorageHandler.open_input_file" class="md-nav__link">
-    open_input_file
+      
+        <li class="md-nav__item">
+  <a href="#delta-lake-features-for-datafusion-users" class="md-nav__link">
+    Delta Lake features for DataFusion users
   </a>
   
 </li>
-        
-          <li class="md-nav__item">
-  <a href="#deltalake.fs.DeltaStorageHandler.open_input_stream" class="md-nav__link">
-    open_input_stream
+      
+        <li class="md-nav__item">
+  <a href="#why-delta-lake-depends-on-datafusion" class="md-nav__link">
+    Why Delta Lake depends on DataFusion
   </a>
   
 </li>
-        
-          <li class="md-nav__item">
-  <a href="#deltalake.fs.DeltaStorageHandler.open_output_stream" class="md-nav__link">
-    open_output_stream
+      
+        <li class="md-nav__item">
+  <a href="#conclusion" class="md-nav__link">
+    Conclusion
   </a>
-  
-</li>
-        
-      </ul>
-    </nav>
   
 </li>
       
@@ -1195,145 +1320,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../catalog/" class="md-nav__link">
-        
-  
-  <span class="md-ellipsis">
-    Catalog
-  </span>
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../exceptions/" class="md-nav__link">
-        
-  
-  <span class="md-ellipsis">
-    Exceptions
-  </span>
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-          </ul>
-        </nav>
-      
-    </li>
-  
-
-    
-      
-      
-  
-  
-  
-    
-    
-      
-        
-      
-        
-      
-        
-      
-        
-      
-    
-    
-    
-    
-      
-      
-    
-    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
-      
-        
-        
-        
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4" >
-        
-          
-          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="">
-            
-  
-  <span class="md-ellipsis">
-    Integrations
-  </span>
-  
-
-            <span class="md-nav__icon md-icon"></span>
-          </label>
-        
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_4">
-            <span class="md-nav__icon md-icon"></span>
-            Integrations
-          </label>
-          <ul class="md-nav__list" data-md-scrollfix>
-            
-              
-                
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../../integrations/delta-lake-arrow/" class="md-nav__link">
-        
-  
-  <span class="md-ellipsis">
-    Arrow
-  </span>
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../../integrations/delta-lake-datafusion/" class="md-nav__link">
-        
-  
-  <span class="md-ellipsis">
-    DataFusion
-  </span>
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../../integrations/delta-lake-pandas/" class="md-nav__link">
+      <a href="../delta-lake-pandas/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1353,7 +1340,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../integrations/delta-lake-polars/" class="md-nav__link">
+      <a href="../delta-lake-polars/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1495,43 +1482,30 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#deltalake.fs.DeltaStorageHandler" class="md-nav__link">
-    DeltaStorageHandler
-  </a>
-  
-    <nav class="md-nav" aria-label="DeltaStorageHandler">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#deltalake.fs.DeltaStorageHandler.get_file_info_selector" class="md-nav__link">
-    get_file_info_selector
+  <a href="#delta-lake-performance-benefits-for-datafusion-users" class="md-nav__link">
+    Delta Lake performance benefits for DataFusion users
   </a>
   
 </li>
-        
-          <li class="md-nav__item">
-  <a href="#deltalake.fs.DeltaStorageHandler.open_input_file" class="md-nav__link">
-    open_input_file
+      
+        <li class="md-nav__item">
+  <a href="#delta-lake-features-for-datafusion-users" class="md-nav__link">
+    Delta Lake features for DataFusion users
   </a>
   
 </li>
-        
-          <li class="md-nav__item">
-  <a href="#deltalake.fs.DeltaStorageHandler.open_input_stream" class="md-nav__link">
-    open_input_stream
+      
+        <li class="md-nav__item">
+  <a href="#why-delta-lake-depends-on-datafusion" class="md-nav__link">
+    Why Delta Lake depends on DataFusion
   </a>
   
 </li>
-        
-          <li class="md-nav__item">
-  <a href="#deltalake.fs.DeltaStorageHandler.open_output_stream" class="md-nav__link">
-    open_output_stream
+      
+        <li class="md-nav__item">
+  <a href="#conclusion" class="md-nav__link">
+    Conclusion
   </a>
-  
-</li>
-        
-      </ul>
-    </nav>
   
 </li>
       
@@ -1553,365 +1527,58 @@
   
 
 
-<h1 id="storage">Storage</h1>
-<p>The delta filesystem handler for the pyarrow engine writer.</p>
-
-
-<div class="doc doc-object doc-class">
-
-
-
-<h3 id="deltalake.fs.DeltaStorageHandler" class="doc doc-heading">
-          <span class="doc doc-object-name doc-class-name">deltalake.fs.DeltaStorageHandler</span>
-
-
-</h3>
-<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">DeltaStorageHandler</span><span class="p">(</span><span class="n">root</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">options</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">known_sizes</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">int</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span>
+<h1 id="using-delta-lake-with-datafusion">Using Delta Lake with DataFusion</h1>
+<p>This page explains how to use Delta Lake with DataFusion.</p>
+<p>Delta Lake offers DataFusion users better performance and more features compared to other formats like CSV or Parquet.</p>
+<p>Delta Lake works well with the DataFusion Rust API and the DataFusion Python API.  It's a great option for all DataFusion users.</p>
+<p>Delta Lake also depends on DataFusion to implement SQL-related functionality under the hood.  We will also discuss this dependency at the end of this guide in case you're interested in learning more about the symbiotic relationship between the two libraries.</p>
+<h2 id="delta-lake-performance-benefits-for-datafusion-users">Delta Lake performance benefits for DataFusion users</h2>
+<p>Let's run some DataFusion queries on a Parquet file and a Delta table with the same data to learn more about the performance benefits of Delta Lake.</p>
+<p>Suppose you have the following dataset with 1 billion rows and 9 columns.  Here are the first three rows of data:</p>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>+-------+-------+--------------+-------+-------+--------+------+------+---------+
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>| id1   | id2   | id3          |   id4 |   id5 |    id6 |   v1 |   v2 |      v3 |
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>|-------+-------+--------------+-------+-------+--------+------+------+---------|
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>| id016 | id046 | id0000109363 |    88 |    13 | 146094 |    4 |    6 | 18.8377 |
+</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>| id039 | id087 | id0000466766 |    14 |    30 | 111330 |    4 |   14 | 46.7973 |
+</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>| id047 | id098 | id0000307804 |    85 |    23 | 187639 |    3 |    5 | 47.5773 |
+</span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>+-------+-------+--------------+-------+-------+--------+------+------+---------+
 </span></code></pre></div>
-
-  <div class="doc doc-contents first">
-          <p class="doc doc-class-bases">
-            Bases: <code><span title="deltalake._internal.DeltaFileSystemHandler">DeltaFileSystemHandler</span></code>, <code><a class="autorefs autorefs-external" title="pyarrow.fs.FileSystemHandler" href="https://arrow.apache.org/docs/python/generated/pyarrow.fs.FileSystemHandler.html#pyarrow.fs.FileSystemHandler">FileSystemHandler</a></code></p>
-
-  
-      <p>DeltaStorageHandler is a concrete implementations of a PyArrow FileSystemHandler.</p>
-
-
-  
-
-  <div class="doc doc-children">
-
-
-
-
-
-
-
-
-
-
-<div class="doc doc-object doc-function">
-
-
-
-<h4 id="deltalake.fs.DeltaStorageHandler.get_file_info_selector" class="doc doc-heading">
-          <span class="doc doc-object-name doc-function-name">get_file_info_selector</span>
-
-
-</h4>
-<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">get_file_info_selector</span><span class="p">(</span><span class="n">selector</span><span class="p">:</span> <span class="n">FileSelector</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">List</span><span class="p">[</span><span class="n">FileInfo</span><span class="p">]</span>
+<p>Here's how to register a Delta Lake table as a PyArrow dataset:</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="kn">from</span> <span class="nn">datafusion</span> <span class="kn">import</span> <span class="n">SessionContext</span>
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="kn">from</span> <span class="nn">deltalake</span> <span class="kn">import</span> <span class="n">DeltaTable</span>
+</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>
+</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="n">ctx</span> <span class="o">=</span> <span class="n">SessionContext</span><span class="p">()</span>
+</span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="n">table</span> <span class="o">=</span> <span class="n">DeltaTable</span><span class="p">(</span><span class="s2">&quot;G1_1e9_1e2_0_0&quot;</span><span class="p">)</span>
+</span><span id="__span-1-6"><a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a><span class="n">ctx</span><span class="o">.</span><span class="n">register_dataset</span><span class="p">(</span><span class="s2">&quot;my_delta_table&quot;</span><span class="p">,</span> <span class="n">table</span><span class="o">.</span><span class="n">to_pyarrow_dataset</span><span class="p">())</span>
 </span></code></pre></div>
-
-  <div class="doc doc-contents ">
-  
-      <p>Get info for the files defined by FileSelector.</p>
-
-
-
-  <p><strong>Parameters:</strong></p>
-  <table>
-    <thead>
-      <tr>
-        <th>Name</th>
-        <th>Type</th>
-        <th>Description</th>
-        <th>Default</th>
-      </tr>
-    </thead>
-    <tbody>
-        <tr>
-          <td><code>selector</code></td>
-          <td>
-                <code><a class="autorefs autorefs-external" title="pyarrow.fs.FileSelector" href="https://arrow.apache.org/docs/python/generated/pyarrow.fs.FileSelector.html#pyarrow.fs.FileSelector">FileSelector</a></code>
-          </td>
-          <td>
-            <div class="doc-md-description">
-              <p>FileSelector object</p>
-            </div>
-          </td>
-          <td>
-              <em>required</em>
-          </td>
-        </tr>
-    </tbody>
-  </table>
-
-
-
-  <p><strong>Returns:</strong></p>
-  <table>
-    <thead>
-      <tr>
-        <th>Type</th>
-        <th>Description</th>
-      </tr>
-    </thead>
-    <tbody>
-        <tr>
-          <td>
-                <code><span title="typing.List">List</span>[<a class="autorefs autorefs-external" title="pyarrow.fs.FileInfo" href="https://arrow.apache.org/docs/python/generated/pyarrow.fs.FileInfo.html#pyarrow.fs.FileInfo">FileInfo</a>]</code>
-          </td>
-          <td>
-            <div class="doc-md-description">
-              <p>list of file info objects</p>
-            </div>
-          </td>
-        </tr>
-    </tbody>
-  </table>
-
-  </div>
-
-</div>
-
-
-<div class="doc doc-object doc-function">
-
-
-
-<h4 id="deltalake.fs.DeltaStorageHandler.open_input_file" class="doc doc-heading">
-          <span class="doc doc-object-name doc-function-name">open_input_file</span>
-
-
-</h4>
-<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">open_input_file</span><span class="p">(</span><span class="n">path</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">pa</span><span class="o">.</span><span class="n">PythonFile</span>
+<p>Now query the table:</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="n">ctx</span><span class="o">.</span><span class="n">sql</span><span class="p">(</span><span class="s2">&quot;select id1, sum(v1) as v1 from my_delta_table where id1=&#39;id096&#39; group by id1&quot;</span><span class="p">)</span>
 </span></code></pre></div>
-
-  <div class="doc doc-contents ">
-  
-      <p>Open an input file for random access reading.</p>
-
-
-
-  <p><strong>Parameters:</strong></p>
-  <table>
-    <thead>
-      <tr>
-        <th>Name</th>
-        <th>Type</th>
-        <th>Description</th>
-        <th>Default</th>
-      </tr>
-    </thead>
-    <tbody>
-        <tr>
-          <td><code>path</code></td>
-          <td>
-                <code>str</code>
-          </td>
-          <td>
-            <div class="doc-md-description">
-              <p>The source to open for reading.</p>
-            </div>
-          </td>
-          <td>
-              <em>required</em>
-          </td>
-        </tr>
-    </tbody>
-  </table>
-
-
-
-  <p><strong>Returns:</strong></p>
-  <table>
-    <thead>
-      <tr>
-        <th>Type</th>
-        <th>Description</th>
-      </tr>
-    </thead>
-    <tbody>
-        <tr>
-          <td>
-                <code><a class="autorefs autorefs-external" title="pyarrow.PythonFile" href="https://arrow.apache.org/docs/python/generated/pyarrow.PythonFile.html#pyarrow.PythonFile">PythonFile</a></code>
-          </td>
-          <td>
-            <div class="doc-md-description">
-              <p>NativeFile</p>
-            </div>
-          </td>
-        </tr>
-    </tbody>
-  </table>
-
-  </div>
-
-</div>
-
-
-<div class="doc doc-object doc-function">
-
-
-
-<h4 id="deltalake.fs.DeltaStorageHandler.open_input_stream" class="doc doc-heading">
-          <span class="doc doc-object-name doc-function-name">open_input_stream</span>
-
-
-</h4>
-<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">open_input_stream</span><span class="p">(</span><span class="n">path</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">pa</span><span class="o">.</span><span class="n">PythonFile</span>
+<p>That query takes 2.8 seconds to execute.</p>
+<p>Let's register the same dataset as a Parquet table, run the same query, and compare the runtime difference.</p>
+<p>Register the Parquet table and run the query:</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="n">path</span> <span class="o">=</span> <span class="s2">&quot;G1_1e9_1e2_0_0.parquet&quot;</span>
+</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="n">ctx</span><span class="o">.</span><span class="n">register_parquet</span><span class="p">(</span><span class="s2">&quot;my_parquet_table&quot;</span><span class="p">,</span> <span class="n">path</span><span class="p">)</span>
+</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="n">ctx</span><span class="o">.</span><span class="n">sql</span><span class="p">(</span><span class="s2">&quot;select id1, sum(v1) as v1 from my_parquet_table where id1=&#39;id096&#39; group by id1&quot;</span><span class="p">)</span>
 </span></code></pre></div>
-
-  <div class="doc doc-contents ">
-  
-      <p>Open an input stream for sequential reading.</p>
-
-
-
-  <p><strong>Parameters:</strong></p>
-  <table>
-    <thead>
-      <tr>
-        <th>Name</th>
-        <th>Type</th>
-        <th>Description</th>
-        <th>Default</th>
-      </tr>
-    </thead>
-    <tbody>
-        <tr>
-          <td><code>path</code></td>
-          <td>
-                <code>str</code>
-          </td>
-          <td>
-            <div class="doc-md-description">
-              <p>The source to open for reading.</p>
-            </div>
-          </td>
-          <td>
-              <em>required</em>
-          </td>
-        </tr>
-    </tbody>
-  </table>
-
-
-
-  <p><strong>Returns:</strong></p>
-  <table>
-    <thead>
-      <tr>
-        <th>Type</th>
-        <th>Description</th>
-      </tr>
-    </thead>
-    <tbody>
-        <tr>
-          <td>
-                <code><a class="autorefs autorefs-external" title="pyarrow.PythonFile" href="https://arrow.apache.org/docs/python/generated/pyarrow.PythonFile.html#pyarrow.PythonFile">PythonFile</a></code>
-          </td>
-          <td>
-            <div class="doc-md-description">
-              <p>NativeFile</p>
-            </div>
-          </td>
-        </tr>
-    </tbody>
-  </table>
-
-  </div>
-
-</div>
-
-
-<div class="doc doc-object doc-function">
-
-
-
-<h4 id="deltalake.fs.DeltaStorageHandler.open_output_stream" class="doc doc-heading">
-          <span class="doc doc-object-name doc-function-name">open_output_stream</span>
-
-
-</h4>
-<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">open_output_stream</span><span class="p">(</span><span class="n">path</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">metadata</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">pa</span><span class="o">.</span><span class="n">PythonFile</span>
-</span></code></pre></div>
-
-  <div class="doc doc-contents ">
-  
-      <p>Open an output stream for sequential writing.</p>
-<p>If the target already exists, existing data is truncated.</p>
-
-
-
-  <p><strong>Parameters:</strong></p>
-  <table>
-    <thead>
-      <tr>
-        <th>Name</th>
-        <th>Type</th>
-        <th>Description</th>
-        <th>Default</th>
-      </tr>
-    </thead>
-    <tbody>
-        <tr>
-          <td><code>path</code></td>
-          <td>
-                <code>str</code>
-          </td>
-          <td>
-            <div class="doc-md-description">
-              <p>The source to open for writing.</p>
-            </div>
-          </td>
-          <td>
-              <em>required</em>
-          </td>
-        </tr>
-        <tr>
-          <td><code>metadata</code></td>
-          <td>
-                <code><span title="typing.Optional">Optional</span>[<span title="typing.Dict">Dict</span>[str, str]]</code>
-          </td>
-          <td>
-            <div class="doc-md-description">
-              <p>If not None, a mapping of string keys to string values.</p>
-            </div>
-          </td>
-          <td>
-                <code>None</code>
-          </td>
-        </tr>
-    </tbody>
-  </table>
-
-
-
-  <p><strong>Returns:</strong></p>
-  <table>
-    <thead>
-      <tr>
-        <th>Type</th>
-        <th>Description</th>
-      </tr>
-    </thead>
-    <tbody>
-        <tr>
-          <td>
-                <code><a class="autorefs autorefs-external" title="pyarrow.PythonFile" href="https://arrow.apache.org/docs/python/generated/pyarrow.PythonFile.html#pyarrow.PythonFile">PythonFile</a></code>
-          </td>
-          <td>
-            <div class="doc-md-description">
-              <p>NativeFile</p>
-            </div>
-          </td>
-        </tr>
-    </tbody>
-  </table>
-
-  </div>
-
-</div>
-
-
-
-  </div>
-
-  </div>
-
-
-</div>
+<p>This query takes 5.3 seconds to run.</p>
+<p>Parquet stores data in row groups and DataFusion can intelligently skip row groups that don't contain relevant data, so the query is faster than a file format like CSV which doesn't support row group skipping.</p>
+<p>Delta Lake stores file-level metadata information in the transaction log, so it can skip entire files when queries are executed.  Delta Lake can skip entire files and then skip row groups within the individual files.  This makes Delta Lake even faster than Parquet files, especially for larger datasets spread across many files.</p>
+<h2 id="delta-lake-features-for-datafusion-users">Delta Lake features for DataFusion users</h2>
+<p>Delta Lake also provides other features that are useful for DataFusion users like ACID transactions, concurrency protection, time travel, versioned data, and more.</p>
+<h2 id="why-delta-lake-depends-on-datafusion">Why Delta Lake depends on DataFusion</h2>
+<p>Delta Lake depends on DataFusion to provide some end-user features.</p>
+<p>DataFusion is useful in providing SQL-related Delta Lake features. Some examples:</p>
+<ul>
+<li>Update and merge are written in terms of SQL expressions.</li>
+<li>Invariants and constraints are written in terms of SQL expressions.</li>
+</ul>
+<p>Anytime we have to evaluate SQL, we need some sort of SQL engine.  We use DataFusion for that.</p>
+<h2 id="conclusion">Conclusion</h2>
+<p>Delta Lake is a great file format for DataFusion users.</p>
+<p>Delta Lake also uses DataFusion to provide some end-user features.</p>
+<p>DataFusion and Delta Lake have a wonderful symbiotic relationship and play very nicely with each other.</p>
+<p>See <a href="https://delta-io.github.io/delta-rs/integrations/delta-lake-arrow/">this guide for more information on Delta Lake and PyArrow</a> and why PyArrow Datasets are often a better option than PyArrow tables.</p>
 
 
 
@@ -1935,7 +1602,7 @@
       <nav class="md-footer__inner md-grid" aria-label="Footer" >
         
           
-          <a href="../schema/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Schema">
+          <a href="../delta-lake-arrow/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Arrow">
             <div class="md-footer__button md-icon">
               
               <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11h12Z"/></svg>
@@ -1945,20 +1612,20 @@
                 Previous
               </span>
               <div class="md-ellipsis">
-                Schema
+                Arrow
               </div>
             </div>
           </a>
         
         
           
-          <a href="../catalog/" class="md-footer__link md-footer__link--next" aria-label="Next: Catalog">
+          <a href="../delta-lake-pandas/" class="md-footer__link md-footer__link--next" aria-label="Next: pandas">
             <div class="md-footer__title">
               <span class="md-footer__direction">
                 Next
               </span>
               <div class="md-ellipsis">
-                Catalog
+                pandas
               </div>
             </div>
             <div class="md-footer__button md-icon">

@@ -8,13 +8,11 @@
       
       
       
-        <link rel="canonical" href="https://github.com/delta-io/delta-rs/api/storage/">
+        <link rel="canonical" href="https://github.com/delta-io/delta-rs/how-delta-lake-works/delta-lake-acid-transactions/">
       
       
-        <link rel="prev" href="../schema/">
+        <link rel="prev" href="../architecture-of-delta-table/">
       
-      
-        <link rel="next" href="../catalog/">
       
       
       <link rel="icon" href="../../delta-rust-no-whitespace.svg">
@@ -22,7 +20,7 @@
     
     
       
-        <title>Storage - Delta Lake Documentation</title>
+        <title>Transactions - Delta Lake Documentation</title>
       
     
     
@@ -81,7 +79,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#storage" class="md-skip">
+        <a href="#delta-lake-transactions" class="md-skip">
           Skip to content
         </a>
       
@@ -116,7 +114,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              Storage
+              Transactions
             
           </span>
         </div>
@@ -262,13 +260,11 @@
         
   
   
-    
-  
   
     
     
-      <li class="md-tabs__item md-tabs__item--active">
-        <a href="../delta_writer/" class="md-tabs__link">
+      <li class="md-tabs__item">
+        <a href="../../api/delta_writer/" class="md-tabs__link">
           
   
     
@@ -304,11 +300,13 @@
         
   
   
+    
+  
   
     
     
-      <li class="md-tabs__item">
-        <a href="../../how-delta-lake-works/architecture-of-delta-table/" class="md-tabs__link">
+      <li class="md-tabs__item md-tabs__item--active">
+        <a href="../architecture-of-delta-table/" class="md-tabs__link">
           
   
     
@@ -847,8 +845,6 @@
       
   
   
-    
-  
   
     
     
@@ -872,12 +868,14 @@
       
       
     
-    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
       
         
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" checked>
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3" >
         
           
           <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="">
@@ -891,7 +889,7 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="true">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
           <label class="md-nav__title" for="__nav_3">
             <span class="md-nav__icon md-icon"></span>
             API Reference
@@ -904,7 +902,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../delta_writer/" class="md-nav__link">
+      <a href="../../api/delta_writer/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -954,7 +952,7 @@
           
           
           <div class="md-nav__link md-nav__container">
-            <a href="../delta_table/" class="md-nav__link ">
+            <a href="../../api/delta_table/" class="md-nav__link ">
               
   
   <span class="md-ellipsis">
@@ -986,7 +984,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../delta_table/metadata/" class="md-nav__link">
+      <a href="../../api/delta_table/metadata/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1006,7 +1004,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../delta_table/delta_table_merger/" class="md-nav__link">
+      <a href="../../api/delta_table/delta_table_merger/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1026,7 +1024,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../delta_table/delta_table_optimizer/" class="md-nav__link">
+      <a href="../../api/delta_table/delta_table_optimizer/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1046,7 +1044,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../delta_table/delta_table_alterer/" class="md-nav__link">
+      <a href="../../api/delta_table/delta_table_alterer/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1074,7 +1072,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../schema/" class="md-nav__link">
+      <a href="../../api/schema/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1092,29 +1090,9 @@
                 
   
   
-    
   
-  
-    <li class="md-nav__item md-nav__item--active">
-      
-      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
-      
-      
-        
-      
-      
-        <label class="md-nav__link md-nav__link--active" for="__toc">
-          
-  
-  <span class="md-ellipsis">
-    Storage
-  </span>
-  
-
-          <span class="md-nav__icon md-icon"></span>
-        </label>
-      
-      <a href="./" class="md-nav__link md-nav__link--active">
+    <li class="md-nav__item">
+      <a href="../../api/storage/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1123,67 +1101,6 @@
   
 
       </a>
-      
-        
-
-<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
-  
-  
-  
-    
-  
-  
-    <label class="md-nav__title" for="__toc">
-      <span class="md-nav__icon md-icon"></span>
-      Table of contents
-    </label>
-    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
-      
-        <li class="md-nav__item">
-  <a href="#deltalake.fs.DeltaStorageHandler" class="md-nav__link">
-    DeltaStorageHandler
-  </a>
-  
-    <nav class="md-nav" aria-label="DeltaStorageHandler">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#deltalake.fs.DeltaStorageHandler.get_file_info_selector" class="md-nav__link">
-    get_file_info_selector
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#deltalake.fs.DeltaStorageHandler.open_input_file" class="md-nav__link">
-    open_input_file
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#deltalake.fs.DeltaStorageHandler.open_input_stream" class="md-nav__link">
-    open_input_stream
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#deltalake.fs.DeltaStorageHandler.open_output_stream" class="md-nav__link">
-    open_output_stream
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-    </ul>
-  
-</nav>
-      
     </li>
   
 
@@ -1195,7 +1112,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../catalog/" class="md-nav__link">
+      <a href="../../api/catalog/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1215,7 +1132,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../exceptions/" class="md-nav__link">
+      <a href="../../api/exceptions/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1378,6 +1295,8 @@
       
   
   
+    
+  
   
     
     
@@ -1393,14 +1312,12 @@
       
       
     
-    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
       
         
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" checked>
         
           
           <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="">
@@ -1414,7 +1331,7 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="true">
           <label class="md-nav__title" for="__nav_5">
             <span class="md-nav__icon md-icon"></span>
             How Delta Lake works
@@ -1427,7 +1344,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../how-delta-lake-works/architecture-of-delta-table/" class="md-nav__link">
+      <a href="../architecture-of-delta-table/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1445,9 +1362,29 @@
                 
   
   
+    
   
-    <li class="md-nav__item">
-      <a href="../../how-delta-lake-works/delta-lake-acid-transactions/" class="md-nav__link">
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  <span class="md-ellipsis">
+    Transactions
+  </span>
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
         
   
   <span class="md-ellipsis">
@@ -1456,6 +1393,82 @@
   
 
       </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#what-are-transactions" class="md-nav__link">
+    What are transactions?
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#how-delta-lake-implements-transactions" class="md-nav__link">
+    How Delta Lake implements transactions
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#how-delta-lake-transactions-can-conflict" class="md-nav__link">
+    How Delta Lake transactions can conflict
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#transactions-rely-on-atomic-primitives-storage-guarantees" class="md-nav__link">
+    Transactions rely on atomic primitives storage guarantees
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#delta-lake-transactions-are-only-for-a-single-table" class="md-nav__link">
+    Delta Lake transactions are only for a single table
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#data-lakes-dont-support-transactions" class="md-nav__link">
+    Data lakes don’t support transactions
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#acid-transactions" class="md-nav__link">
+    ACID Transactions
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#conclusion" class="md-nav__link">
+    Conclusion
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
     </li>
   
 
@@ -1495,43 +1508,58 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#deltalake.fs.DeltaStorageHandler" class="md-nav__link">
-    DeltaStorageHandler
-  </a>
-  
-    <nav class="md-nav" aria-label="DeltaStorageHandler">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#deltalake.fs.DeltaStorageHandler.get_file_info_selector" class="md-nav__link">
-    get_file_info_selector
+  <a href="#what-are-transactions" class="md-nav__link">
+    What are transactions?
   </a>
   
 </li>
-        
-          <li class="md-nav__item">
-  <a href="#deltalake.fs.DeltaStorageHandler.open_input_file" class="md-nav__link">
-    open_input_file
+      
+        <li class="md-nav__item">
+  <a href="#how-delta-lake-implements-transactions" class="md-nav__link">
+    How Delta Lake implements transactions
   </a>
   
 </li>
-        
-          <li class="md-nav__item">
-  <a href="#deltalake.fs.DeltaStorageHandler.open_input_stream" class="md-nav__link">
-    open_input_stream
+      
+        <li class="md-nav__item">
+  <a href="#how-delta-lake-transactions-can-conflict" class="md-nav__link">
+    How Delta Lake transactions can conflict
   </a>
   
 </li>
-        
-          <li class="md-nav__item">
-  <a href="#deltalake.fs.DeltaStorageHandler.open_output_stream" class="md-nav__link">
-    open_output_stream
+      
+        <li class="md-nav__item">
+  <a href="#transactions-rely-on-atomic-primitives-storage-guarantees" class="md-nav__link">
+    Transactions rely on atomic primitives storage guarantees
   </a>
   
 </li>
-        
-      </ul>
-    </nav>
+      
+        <li class="md-nav__item">
+  <a href="#delta-lake-transactions-are-only-for-a-single-table" class="md-nav__link">
+    Delta Lake transactions are only for a single table
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#data-lakes-dont-support-transactions" class="md-nav__link">
+    Data lakes don’t support transactions
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#acid-transactions" class="md-nav__link">
+    ACID Transactions
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#conclusion" class="md-nav__link">
+    Conclusion
+  </a>
   
 </li>
       
@@ -1553,365 +1581,201 @@
   
 
 
-<h1 id="storage">Storage</h1>
-<p>The delta filesystem handler for the pyarrow engine writer.</p>
-
-
-<div class="doc doc-object doc-class">
-
-
-
-<h3 id="deltalake.fs.DeltaStorageHandler" class="doc doc-heading">
-          <span class="doc doc-object-name doc-class-name">deltalake.fs.DeltaStorageHandler</span>
-
-
-</h3>
-<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">DeltaStorageHandler</span><span class="p">(</span><span class="n">root</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">options</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">known_sizes</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">int</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span>
+<h1 id="delta-lake-transactions">Delta Lake Transactions</h1>
+<p>This page teaches you about Delta Lake transactions and why transactions are important in production data settings.  Data lakes don’t support transactions and this is a huge downside because they offer a poor user experience, lack functionality, and can easily be corrupted.</p>
+<p>Transactions on Delta Lake tables are operations that change the state of table and record descriptive entries (metadata) of those changes to the Delta Lake transaction log.  Here are some examples of transactions:</p>
+<ul>
+<li>Deleting rows</li>
+<li>Appending to the table</li>
+<li>Compacting small files</li>
+<li>Upserting</li>
+<li>Overwriting rows</li>
+</ul>
+<p>All Delta Lake write operations are transactions in Delta tables. Reads actually aren’t technically transactions because they don’t result in new entries being appended to the transaction log.</p>
+<h2 id="what-are-transactions">What are transactions?</h2>
+<p>Transactions are any Delta operation that change the underlying files of a Delta table and result in new entries metadata entries in the transaction log.  Some Delta operations rearrange data in the existing table (like Z Ordering the table or compacting the small files) and these are also transactions.  Let’s look at a simple example.</p>
+<p>Suppose you have a Delta table with the following data:</p>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>num animal
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>1   cat
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>2   dog
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>3   snake
 </span></code></pre></div>
-
-  <div class="doc doc-contents first">
-          <p class="doc doc-class-bases">
-            Bases: <code><span title="deltalake._internal.DeltaFileSystemHandler">DeltaFileSystemHandler</span></code>, <code><a class="autorefs autorefs-external" title="pyarrow.fs.FileSystemHandler" href="https://arrow.apache.org/docs/python/generated/pyarrow.fs.FileSystemHandler.html#pyarrow.fs.FileSystemHandler">FileSystemHandler</a></code></p>
-
-  
-      <p>DeltaStorageHandler is a concrete implementations of a PyArrow FileSystemHandler.</p>
-
-
-  
-
-  <div class="doc doc-children">
-
-
-
-
-
-
-
-
-
-
-<div class="doc doc-object doc-function">
-
-
-
-<h4 id="deltalake.fs.DeltaStorageHandler.get_file_info_selector" class="doc doc-heading">
-          <span class="doc doc-object-name doc-function-name">get_file_info_selector</span>
-
-
-</h4>
-<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">get_file_info_selector</span><span class="p">(</span><span class="n">selector</span><span class="p">:</span> <span class="n">FileSelector</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">List</span><span class="p">[</span><span class="n">FileInfo</span><span class="p">]</span>
+<p>Here’s how to create this Delta table:</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="kn">import</span> <span class="nn">pandas</span> <span class="k">as</span> <span class="nn">pd</span>
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="kn">from</span> <span class="nn">deltalake</span> <span class="kn">import</span> <span class="n">write_deltalake</span><span class="p">,</span> <span class="n">DeltaTable</span>
+</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>
+</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="n">df</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">({</span><span class="s2">&quot;num&quot;</span><span class="p">:</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">],</span> <span class="s2">&quot;animal&quot;</span><span class="p">:</span> <span class="p">[</span><span class="s2">&quot;cat&quot;</span><span class="p">,</span> <span class="s2">&quot;dog&quot;</span><span class="p">,</span> <span class="s2">&quot;snake&quot;</span><span class="p">]})</span>
+</span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="n">write_deltalake</span><span class="p">(</span><span class="s2">&quot;tmp/my-delta-table&quot;</span><span class="p">,</span> <span class="n">df</span><span class="p">)</span>
 </span></code></pre></div>
-
-  <div class="doc doc-contents ">
-  
-      <p>Get info for the files defined by FileSelector.</p>
-
-
-
-  <p><strong>Parameters:</strong></p>
-  <table>
-    <thead>
-      <tr>
-        <th>Name</th>
-        <th>Type</th>
-        <th>Description</th>
-        <th>Default</th>
-      </tr>
-    </thead>
-    <tbody>
-        <tr>
-          <td><code>selector</code></td>
-          <td>
-                <code><a class="autorefs autorefs-external" title="pyarrow.fs.FileSelector" href="https://arrow.apache.org/docs/python/generated/pyarrow.fs.FileSelector.html#pyarrow.fs.FileSelector">FileSelector</a></code>
-          </td>
-          <td>
-            <div class="doc-md-description">
-              <p>FileSelector object</p>
-            </div>
-          </td>
-          <td>
-              <em>required</em>
-          </td>
-        </tr>
-    </tbody>
-  </table>
-
-
-
-  <p><strong>Returns:</strong></p>
-  <table>
-    <thead>
-      <tr>
-        <th>Type</th>
-        <th>Description</th>
-      </tr>
-    </thead>
-    <tbody>
-        <tr>
-          <td>
-                <code><span title="typing.List">List</span>[<a class="autorefs autorefs-external" title="pyarrow.fs.FileInfo" href="https://arrow.apache.org/docs/python/generated/pyarrow.fs.FileInfo.html#pyarrow.fs.FileInfo">FileInfo</a>]</code>
-          </td>
-          <td>
-            <div class="doc-md-description">
-              <p>list of file info objects</p>
-            </div>
-          </td>
-        </tr>
-    </tbody>
-  </table>
-
-  </div>
-
-</div>
-
-
-<div class="doc doc-object doc-function">
-
-
-
-<h4 id="deltalake.fs.DeltaStorageHandler.open_input_file" class="doc doc-heading">
-          <span class="doc doc-object-name doc-function-name">open_input_file</span>
-
-
-</h4>
-<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">open_input_file</span><span class="p">(</span><span class="n">path</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">pa</span><span class="o">.</span><span class="n">PythonFile</span>
+<p>Here are the files created in storage.</p>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>tmp/my-delta-table
+</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>├── 0-fea2de92-861a-423e-9708-a9e91dafb27b-0.parquet
+</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>└── _delta_log
+</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a>    └── 00000000000000000000.json
 </span></code></pre></div>
-
-  <div class="doc doc-contents ">
-  
-      <p>Open an input file for random access reading.</p>
-
-
-
-  <p><strong>Parameters:</strong></p>
-  <table>
-    <thead>
-      <tr>
-        <th>Name</th>
-        <th>Type</th>
-        <th>Description</th>
-        <th>Default</th>
-      </tr>
-    </thead>
-    <tbody>
-        <tr>
-          <td><code>path</code></td>
-          <td>
-                <code>str</code>
-          </td>
-          <td>
-            <div class="doc-md-description">
-              <p>The source to open for reading.</p>
-            </div>
-          </td>
-          <td>
-              <em>required</em>
-          </td>
-        </tr>
-    </tbody>
-  </table>
-
-
-
-  <p><strong>Returns:</strong></p>
-  <table>
-    <thead>
-      <tr>
-        <th>Type</th>
-        <th>Description</th>
-      </tr>
-    </thead>
-    <tbody>
-        <tr>
-          <td>
-                <code><a class="autorefs autorefs-external" title="pyarrow.PythonFile" href="https://arrow.apache.org/docs/python/generated/pyarrow.PythonFile.html#pyarrow.PythonFile">PythonFile</a></code>
-          </td>
-          <td>
-            <div class="doc-md-description">
-              <p>NativeFile</p>
-            </div>
-          </td>
-        </tr>
-    </tbody>
-  </table>
-
-  </div>
-
-</div>
-
-
-<div class="doc doc-object doc-function">
-
-
-
-<h4 id="deltalake.fs.DeltaStorageHandler.open_input_stream" class="doc doc-heading">
-          <span class="doc doc-object-name doc-function-name">open_input_stream</span>
-
-
-</h4>
-<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">open_input_stream</span><span class="p">(</span><span class="n">path</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">pa</span><span class="o">.</span><span class="n">PythonFile</span>
+<p>Let’s perform an operation to delete every animal from the Delta table that is a cat.</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="n">dt</span> <span class="o">=</span> <span class="n">DeltaTable</span><span class="p">(</span><span class="s2">&quot;tmp/my-delta-table&quot;</span><span class="p">)</span>
+</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="n">dt</span><span class="o">.</span><span class="n">delete</span><span class="p">(</span><span class="s2">&quot;animal = &#39;cat&#39;&quot;</span><span class="p">)</span>
 </span></code></pre></div>
-
-  <div class="doc doc-contents ">
-  
-      <p>Open an input stream for sequential reading.</p>
-
-
-
-  <p><strong>Parameters:</strong></p>
-  <table>
-    <thead>
-      <tr>
-        <th>Name</th>
-        <th>Type</th>
-        <th>Description</th>
-        <th>Default</th>
-      </tr>
-    </thead>
-    <tbody>
-        <tr>
-          <td><code>path</code></td>
-          <td>
-                <code>str</code>
-          </td>
-          <td>
-            <div class="doc-md-description">
-              <p>The source to open for reading.</p>
-            </div>
-          </td>
-          <td>
-              <em>required</em>
-          </td>
-        </tr>
-    </tbody>
-  </table>
-
-
-
-  <p><strong>Returns:</strong></p>
-  <table>
-    <thead>
-      <tr>
-        <th>Type</th>
-        <th>Description</th>
-      </tr>
-    </thead>
-    <tbody>
-        <tr>
-          <td>
-                <code><a class="autorefs autorefs-external" title="pyarrow.PythonFile" href="https://arrow.apache.org/docs/python/generated/pyarrow.PythonFile.html#pyarrow.PythonFile">PythonFile</a></code>
-          </td>
-          <td>
-            <div class="doc-md-description">
-              <p>NativeFile</p>
-            </div>
-          </td>
-        </tr>
-    </tbody>
-  </table>
-
-  </div>
-
-</div>
-
-
-<div class="doc doc-object doc-function">
-
-
-
-<h4 id="deltalake.fs.DeltaStorageHandler.open_output_stream" class="doc doc-heading">
-          <span class="doc doc-object-name doc-function-name">open_output_stream</span>
-
-
-</h4>
-<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">open_output_stream</span><span class="p">(</span><span class="n">path</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">metadata</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">pa</span><span class="o">.</span><span class="n">PythonFile</span>
+<p>Let’s take a look at the contents of the Delta table now that the transaction is complete:</p>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>tmp/my-delta-table
+</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>├── 0-fea2de92-861a-423e-9708-a9e91dafb27b-0.parquet
+</span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a>├── _delta_log
+</span><span id="__span-4-4"><a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a>│   ├── 00000000000000000000.json
+</span><span id="__span-4-5"><a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a>│   └── 00000000000000000001.json
+</span><span id="__span-4-6"><a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a>└── part-00001-90312b96-b487-4a8f-9edc-1b9b3963f136-c000.snappy.parquet
 </span></code></pre></div>
-
-  <div class="doc doc-contents ">
-  
-      <p>Open an output stream for sequential writing.</p>
-<p>If the target already exists, existing data is truncated.</p>
-
-
-
-  <p><strong>Parameters:</strong></p>
-  <table>
-    <thead>
-      <tr>
-        <th>Name</th>
-        <th>Type</th>
-        <th>Description</th>
-        <th>Default</th>
-      </tr>
-    </thead>
-    <tbody>
-        <tr>
-          <td><code>path</code></td>
-          <td>
-                <code>str</code>
-          </td>
-          <td>
-            <div class="doc-md-description">
-              <p>The source to open for writing.</p>
-            </div>
-          </td>
-          <td>
-              <em>required</em>
-          </td>
-        </tr>
-        <tr>
-          <td><code>metadata</code></td>
-          <td>
-                <code><span title="typing.Optional">Optional</span>[<span title="typing.Dict">Dict</span>[str, str]]</code>
-          </td>
-          <td>
-            <div class="doc-md-description">
-              <p>If not None, a mapping of string keys to string values.</p>
-            </div>
-          </td>
-          <td>
-                <code>None</code>
-          </td>
-        </tr>
-    </tbody>
-  </table>
-
-
-
-  <p><strong>Returns:</strong></p>
-  <table>
-    <thead>
-      <tr>
-        <th>Type</th>
-        <th>Description</th>
-      </tr>
-    </thead>
-    <tbody>
-        <tr>
-          <td>
-                <code><a class="autorefs autorefs-external" title="pyarrow.PythonFile" href="https://arrow.apache.org/docs/python/generated/pyarrow.PythonFile.html#pyarrow.PythonFile">PythonFile</a></code>
-          </td>
-          <td>
-            <div class="doc-md-description">
-              <p>NativeFile</p>
-            </div>
-          </td>
-        </tr>
-    </tbody>
-  </table>
-
-  </div>
-
-</div>
-
-
-
-  </div>
-
-  </div>
-
-
-</div>
+<p>Notice the <code>00000000000000000001.json</code> file that was added to the transaction log to record this transaction.  Let’s inspect the content of the file.</p>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>{
+</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>  &quot;add&quot;: {
+</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a>    &quot;path&quot;: &quot;part-00001-90312b96-b487-4a8f-9edc-1b9b3963f136-c000.snappy.parquet&quot;,
+</span><span id="__span-5-4"><a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a>    &quot;partitionValues&quot;: {},
+</span><span id="__span-5-5"><a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a>    &quot;size&quot;: 858,
+</span><span id="__span-5-6"><a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a>    &quot;modificationTime&quot;: 1705070631953,
+</span><span id="__span-5-7"><a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a>    &quot;dataChange&quot;: true,
+</span><span id="__span-5-8"><a id="__codelineno-5-8" name="__codelineno-5-8" href="#__codelineno-5-8"></a>    &quot;stats&quot;: &quot;{\&quot;numRecords\&quot;:2,\&quot;minValues\&quot;:{\&quot;num\&quot;:2,\&quot;animal\&quot;:\&quot;dog\&quot;},\&quot;maxValues\&quot;:{\&quot;num\&quot;:3,\&quot;animal\&quot;:\&quot;snake\&quot;},\&quot;nullCount\&quot;:{\&quot;num\&quot;:0,\&quot;animal\&quot;:0}}&quot;,
+</span><span id="__span-5-9"><a id="__codelineno-5-9" name="__codelineno-5-9" href="#__codelineno-5-9"></a>    &quot;tags&quot;: null,
+</span><span id="__span-5-10"><a id="__codelineno-5-10" name="__codelineno-5-10" href="#__codelineno-5-10"></a>    &quot;deletionVector&quot;: null,
+</span><span id="__span-5-11"><a id="__codelineno-5-11" name="__codelineno-5-11" href="#__codelineno-5-11"></a>    &quot;baseRowId&quot;: null,
+</span><span id="__span-5-12"><a id="__codelineno-5-12" name="__codelineno-5-12" href="#__codelineno-5-12"></a>    &quot;defaultRowCommitVersion&quot;: null,
+</span><span id="__span-5-13"><a id="__codelineno-5-13" name="__codelineno-5-13" href="#__codelineno-5-13"></a>    &quot;clusteringProvider&quot;: null
+</span><span id="__span-5-14"><a id="__codelineno-5-14" name="__codelineno-5-14" href="#__codelineno-5-14"></a>  }
+</span><span id="__span-5-15"><a id="__codelineno-5-15" name="__codelineno-5-15" href="#__codelineno-5-15"></a>}
+</span><span id="__span-5-16"><a id="__codelineno-5-16" name="__codelineno-5-16" href="#__codelineno-5-16"></a>{
+</span><span id="__span-5-17"><a id="__codelineno-5-17" name="__codelineno-5-17" href="#__codelineno-5-17"></a>  &quot;remove&quot;: {
+</span><span id="__span-5-18"><a id="__codelineno-5-18" name="__codelineno-5-18" href="#__codelineno-5-18"></a>    &quot;path&quot;: &quot;0-fea2de92-861a-423e-9708-a9e91dafb27b-0.parquet&quot;,
+</span><span id="__span-5-19"><a id="__codelineno-5-19" name="__codelineno-5-19" href="#__codelineno-5-19"></a>    &quot;dataChange&quot;: true,
+</span><span id="__span-5-20"><a id="__codelineno-5-20" name="__codelineno-5-20" href="#__codelineno-5-20"></a>    &quot;deletionTimestamp&quot;: 1705070631953,
+</span><span id="__span-5-21"><a id="__codelineno-5-21" name="__codelineno-5-21" href="#__codelineno-5-21"></a>    &quot;extendedFileMetadata&quot;: true,
+</span><span id="__span-5-22"><a id="__codelineno-5-22" name="__codelineno-5-22" href="#__codelineno-5-22"></a>    &quot;partitionValues&quot;: {},
+</span><span id="__span-5-23"><a id="__codelineno-5-23" name="__codelineno-5-23" href="#__codelineno-5-23"></a>    &quot;size&quot;: 895
+</span><span id="__span-5-24"><a id="__codelineno-5-24" name="__codelineno-5-24" href="#__codelineno-5-24"></a>  }
+</span><span id="__span-5-25"><a id="__codelineno-5-25" name="__codelineno-5-25" href="#__codelineno-5-25"></a>}
+</span><span id="__span-5-26"><a id="__codelineno-5-26" name="__codelineno-5-26" href="#__codelineno-5-26"></a>{
+</span><span id="__span-5-27"><a id="__codelineno-5-27" name="__codelineno-5-27" href="#__codelineno-5-27"></a>  &quot;commitInfo&quot;: {
+</span><span id="__span-5-28"><a id="__codelineno-5-28" name="__codelineno-5-28" href="#__codelineno-5-28"></a>    &quot;timestamp&quot;: 1705070631953,
+</span><span id="__span-5-29"><a id="__codelineno-5-29" name="__codelineno-5-29" href="#__codelineno-5-29"></a>    &quot;operation&quot;: &quot;DELETE&quot;,
+</span><span id="__span-5-30"><a id="__codelineno-5-30" name="__codelineno-5-30" href="#__codelineno-5-30"></a>    &quot;operationParameters&quot;: {
+</span><span id="__span-5-31"><a id="__codelineno-5-31" name="__codelineno-5-31" href="#__codelineno-5-31"></a>      &quot;predicate&quot;: &quot;animal = &#39;cat&#39;&quot;
+</span><span id="__span-5-32"><a id="__codelineno-5-32" name="__codelineno-5-32" href="#__codelineno-5-32"></a>    },
+</span><span id="__span-5-33"><a id="__codelineno-5-33" name="__codelineno-5-33" href="#__codelineno-5-33"></a>    &quot;readVersion&quot;: 0,
+</span><span id="__span-5-34"><a id="__codelineno-5-34" name="__codelineno-5-34" href="#__codelineno-5-34"></a>    &quot;operationMetrics&quot;: {
+</span><span id="__span-5-35"><a id="__codelineno-5-35" name="__codelineno-5-35" href="#__codelineno-5-35"></a>      &quot;execution_time_ms&quot;: 8013,
+</span><span id="__span-5-36"><a id="__codelineno-5-36" name="__codelineno-5-36" href="#__codelineno-5-36"></a>      &quot;num_added_files&quot;: 1,
+</span><span id="__span-5-37"><a id="__codelineno-5-37" name="__codelineno-5-37" href="#__codelineno-5-37"></a>      &quot;num_copied_rows&quot;: 2,
+</span><span id="__span-5-38"><a id="__codelineno-5-38" name="__codelineno-5-38" href="#__codelineno-5-38"></a>      &quot;num_deleted_rows&quot;: 1,
+</span><span id="__span-5-39"><a id="__codelineno-5-39" name="__codelineno-5-39" href="#__codelineno-5-39"></a>      &quot;num_removed_files&quot;: 1,
+</span><span id="__span-5-40"><a id="__codelineno-5-40" name="__codelineno-5-40" href="#__codelineno-5-40"></a>      &quot;rewrite_time_ms&quot;: 2,
+</span><span id="__span-5-41"><a id="__codelineno-5-41" name="__codelineno-5-41" href="#__codelineno-5-41"></a>      &quot;scan_time_ms&quot;: 5601
+</span><span id="__span-5-42"><a id="__codelineno-5-42" name="__codelineno-5-42" href="#__codelineno-5-42"></a>    },
+</span><span id="__span-5-43"><a id="__codelineno-5-43" name="__codelineno-5-43" href="#__codelineno-5-43"></a>    &quot;clientVersion&quot;: &quot;delta-rs.0.17.0&quot;
+</span><span id="__span-5-44"><a id="__codelineno-5-44" name="__codelineno-5-44" href="#__codelineno-5-44"></a>  }
+</span><span id="__span-5-45"><a id="__codelineno-5-45" name="__codelineno-5-45" href="#__codelineno-5-45"></a>}
+</span></code></pre></div>
+<p>We can see that this transaction includes two components:</p>
+<ul>
+<li>Remove file <code>0-fea2de92-861a-423e-9708-a9e91dafb27b-0.parquet</code></li>
+<li>Add file <code>part-00001-90312b96-b487-4a8f-9edc-1b9b3963f136-c000.snappy.parquet</code></li>
+</ul>
+<p>Transactions are recorded in the transaction log.  The transaction log is also referred to as the table metadata and is the <code>_delta_log</code> directory in storage.</p>
+<p>Let’s see how Delta Lake implements transactions.</p>
+<h2 id="how-delta-lake-implements-transactions">How Delta Lake implements transactions</h2>
+<p>Here is how Delta Lake implements transactions:</p>
+<ol>
+<li>Read the existing metadata</li>
+<li>Read the existing Parquet data files</li>
+<li>Write the Parquet files for the current transaction</li>
+<li>Record the new transaction in the transaction log (if there are no conflicts)</li>
+</ol>
+<p>Let’s recall our delete operation from the prior section and see how it fits into this transaction model:</p>
+<ol>
+<li>We read the existing metadata to find the file paths for the existing Parquet files</li>
+<li>We read the existing Parquet files and identify the files that contains data that should be removed</li>
+<li>We write new Parquet files with the deleted data filtered out</li>
+<li>Once the new Parquet files are written, we check for conflicts and then make an entry in the transaction log.  The next section will discuss transaction conflicts in more detail.</li>
+</ol>
+<p>Blind append operations can skip a few steps and are executed as follows:</p>
+<ol>
+<li>Write the Parquet files for the current transaction</li>
+<li>Record the new transaction in the metadata</li>
+</ol>
+<p>Delta implements a non locking MVCC (multi version concurrency control) so writers optimistically write new data and simply abandon the transaction if it conflicts at the end.  The alternative would be getting a lock at the start thereby guaranteeing the transaction immediately.</p>
+<p>Let’s look at the case when a Delta Lake transaction conflicts.</p>
+<h2 id="how-delta-lake-transactions-can-conflict">How Delta Lake transactions can conflict</h2>
+<p>Suppose you have a transaction that deletes a row of data that’s stored in FileA (Transaction 1).  While this job is running, there is another transaction that deletes some other rows in FileA (Transaction 2).  Transaction 1 finishes running first and is recorded in the metadata.</p>
+<p>Before Transaction 2 is recorded as a transaction, it will check the metadata, find that Transaction 2 conflicts with a transaction that was already recorded (from Transaction 1), and error without recording a new transaction.</p>
+<p>Transactions 2 will write Parquet data files, but will not be recorded as a transaction, so the data files will be ignored.  The zombie Parquet files can be easily cleaned up via subsequent vacuum operations.</p>
+<p>Transaction 2 must fail otherwise it would cause the data to be incorrect.</p>
+<p>Delta Lake transactions prevent users from making changes that would corrupt the table. Transaction conflict behavior can differ based on isolation level, which controls the degree to which a transaction must be isolated from modifications made by other concurrent transactions. More about this in the concurrency section.</p>
+<h2 id="transactions-rely-on-atomic-primitives-storage-guarantees">Transactions rely on atomic primitives storage guarantees</h2>
+<p>Suppose you have two transactions that are finishishing at the same exact time.  Both of these transactions look at the existing Delta Lake transaction log, see that the latest transaction was <code>003.json</code> and determine that the next entry should be <code>004.json</code>.</p>
+<p>If both transactions are recorded in the <code>004.json</code> file, then one of them will be clobbered, and the transaction log entry for the clobbered metadata entry will be lost.</p>
+<p>Delta tables rely on storage systems that provide atomic primitives for safe concurrency.  The storage system must allow Delta Lake to write the file, <em>only if it does not exist already</em>, and error out otherwise.  The storage system must NOT permit concurrent writers to overwrite existing metadata entries.</p>
+<p>Some clouds have filesystems that don’t explicitly support these atomic primitives, and therefore must be coupled with other services to provide the necessary guarantees.</p>
+<h2 id="delta-lake-transactions-are-only-for-a-single-table">Delta Lake transactions are only for a single table</h2>
+<p>Delta Lake transactions are only valid for a single table.</p>
+<p>Some databases offer transaction support for operations that impact multiple tables.  Delta Lake does not support multi-table transactions.</p>
+<h2 id="data-lakes-dont-support-transactions">Data lakes don’t support transactions</h2>
+<p>Data lakes consist of many files in a storage system (e.g. a cloud storage system) and don’t support transactions.</p>
+<p>Data lakes don’t have a metadata layer, conflict resolution, or any way to store information about transactions.</p>
+<p>Data lakes are prone to multiple types of errors because they don’t support transactions:</p>
+<ul>
+<li>Easy to corrupt</li>
+<li>Downtime/unstable state while jobs are running</li>
+<li>Operations can conflict</li>
+</ul>
+<p>Data lakes have many downsides and it’s almost always better to use a lakehouse storage system like Delta Lake compared to a data lake.</p>
+<h2 id="acid-transactions">ACID Transactions</h2>
+<p>We’ve already explored how Delta Lake supports transactions.  This section explains how Delta Lake transactions have the Atomic, Consistent, Isolated and Durable (ACID transaction) properties.  Reading this section is optional.</p>
+<p>ACID transactions are commonplace in databases but notably absent for data lakes.</p>
+<p>Delta Lake’s ACID transaction support is one of the major reasons it is almost always a better option than a data lake.</p>
+<p>Let’s explore how Delta Lake allows for ACID transactions.</p>
+<p><strong>Atomic transactions</strong></p>
+<p>An atomic transaction either fully completes or fully fails, with nothing in between.</p>
+<p>Delta Lake transactions are atomic, unlike data lake transactions that are not atomic.</p>
+<p>Suppose you have a job that’s writing 100 files to a table.  Further suppose that the job errors out and the cluster dies after writing 40 files:</p>
+<ul>
+<li>For a Delta table, no additional data will be added to the table.  Parquet files were written to the table, but the job errored, so no transaction log entry was added and no data was added to the table.</li>
+<li>For a data lake, the 40 files are added and the transaction “partially succeeds”.</li>
+</ul>
+<p>For data tables, it’s almost always preferable to have a transaction that “fully fails” instead of one that “partially succeeds” because partial writes are hard to unwind and debug.</p>
+<p>Delta Lake implements atomic transactions by writing data files first before making a new entry in the Delta transaction log.</p>
+<p>These guarantees are provided at the protocol level through the "transaction" abstraction.  We’ve already discussed what constitutes a transaction for Delta Lake.</p>
+<p>If there is an error with the transaction and some files don’t get written, then no metadata entry is made and the partial data write is ignored.  The zombie Parquet files can be easily cleaned up via subsequent vacuum operations.</p>
+<p>Now let’s look at how Delta Lake also provides consistent transactions.</p>
+<p><strong>Consistent transactions</strong></p>
+<p>Consistency means that transactions won’t violate integrity constraints on the Delta table.</p>
+<p>Delta Lake has two types of consistency checks:</p>
+<ul>
+<li>Schema enforcement checks</li>
+<li>Column constraints</li>
+</ul>
+<p>Schema enforcement checks verify that new data appended to a Delta table matches the schema of the existing table.  You cannot append data with a different schema, unless you enable schema evolution.</p>
+<p>Delta Lake column constraints allow users to specify the requirements of data that’s added to a Delta table.  For example, if you have an age column with a constraint that requires the value to be positive, then Delta Lake will reject appends of any data that doesn’t meet the constraint.</p>
+<p>Data lakes don’t support schema enforcement or column constraints.  That’s another reason why data lakes are not ACID-compliant.</p>
+<p><strong>Isolated transactions</strong></p>
+<p>Isolation means that transactions are applied to a Delta table sequentially.</p>
+<p>Delta Lake transactions are persisted in monotonically increasing transaction files, as we saw in the previous example.  First <code>00000000000000000000.json</code>, then <code>00000000000000000001.json</code>, then <code>00000000000000000002.json</code>, and so on.</p>
+<p>Delta Lake uses concurrency control to ensure that transactions are executed sequentially, even when user operations are performed concurrently.  The next page of this guide explains concurrency in Delta Lake in detail.</p>
+<p><strong>Durable transactions</strong></p>
+<p>Delta tables are generally persisted in cloud object stores which provide durability guarantees.</p>
+<p>Durability means that all transactions that are successfully completed will always remain persisted, even if there are service outages or program crashes.</p>
+<p>Suppose you have a Delta table that’s persisted in Azure blob storage.  The Delta table transactions that are committed will always remain available, even in these circumstances:</p>
+<ul>
+<li>When there are Azure service outages</li>
+<li>If a computation cluster that’s writing the Delta table crashes for some reason</li>
+<li>Two operations are running concurrently and one of them fails</li>
+</ul>
+<p>Successful transactions are always registered in the Delta table and persisted no matter what.</p>
+<h2 id="conclusion">Conclusion</h2>
+<p>Delta Lake supports transactions which provide necessary reliability guarantees for production data systems.</p>
+<p>Vanilla data lakes don’t provide transactions and this can cause nasty bugs and a bad user experience.  Let’s look at a couple of scenarios when the lack of transactions cause a poor user experience:</p>
+<ul>
+<li>While running a compaction operation on a data lake, newly compacted “right sized” files are added before the small files are deleted.  If you read the data lake while this operation is running, you will see duplicate data.</li>
+<li>While writing to a data lake, a job might fail, which leaves behind partially written files.  These files are corrupt, which means that the data lake cannot be read until the corrupt files are manually removed.</li>
+<li>Users want to run a simple DML operation like deleting a few rows of data which require a few files to be rewritten.  This operation renders the data lake unusable until it’s done running.</li>
+</ul>
+<p>Transactions are a key advantage of Delta Lake vs. data lakes.  There are many other advantages, but proper transactions are necessary in production data environments.</p>
 
 
 
@@ -1935,7 +1799,7 @@
       <nav class="md-footer__inner md-grid" aria-label="Footer" >
         
           
-          <a href="../schema/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Schema">
+          <a href="../architecture-of-delta-table/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Architecture">
             <div class="md-footer__button md-icon">
               
               <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11h12Z"/></svg>
@@ -1945,27 +1809,11 @@
                 Previous
               </span>
               <div class="md-ellipsis">
-                Schema
+                Architecture
               </div>
             </div>
           </a>
         
-        
-          
-          <a href="../catalog/" class="md-footer__link md-footer__link--next" aria-label="Next: Catalog">
-            <div class="md-footer__title">
-              <span class="md-footer__direction">
-                Next
-              </span>
-              <div class="md-ellipsis">
-                Catalog
-              </div>
-            </div>
-            <div class="md-footer__button md-icon">
-              
-              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M4 11v2h12l-5.5 5.5 1.42 1.42L19.84 12l-7.92-7.92L10.5 5.5 16 11H4Z"/></svg>
-            </div>
-          </a>
         
       </nav>
     
