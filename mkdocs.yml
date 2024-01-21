@@ -83,6 +83,7 @@ nav:
   - How Delta Lake works:
     - Architecture: how-delta-lake-works/architecture-of-delta-table.md
     - Transactions: how-delta-lake-works/delta-lake-acid-transactions.md
+    - File skipping: how-delta-lake-works/delta-lake-file-skipping.md
 not_in_nav: |
   /_build/
 
