@@ -26,7 +26,7 @@ arrow-buffer = { version = "49" }
 arrow-cast = { version = "49" }
 arrow-ord = { version = "49" }
 arrow-row = { version = "49" }
-arrow-schema = { version = "49" }
+arrow-schema = { version = "50" }
 arrow-select = { version = "49" }
 object_store = { version = "0.8" }
 parquet = { version = "49" }
