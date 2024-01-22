@@ -24,7 +24,7 @@ arrow-arith = { version = "49" }
 arrow-array = { version = "49" }
 arrow-buffer = { version = "49" }
 arrow-cast = { version = "49" }
-arrow-ord = { version = "49" }
+arrow-ord = { version = "50" }
 arrow-row = { version = "49" }
 arrow-schema = { version = "49" }
 arrow-select = { version = "49" }
