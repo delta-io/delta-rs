@@ -193,10 +193,10 @@ async fn benchmark_merge_tpcds(
     merge: fn(DataFrame, DeltaTable) -> Result<MergeBuilder, DeltaTableError>,
 ) -> Result<(core::time::Duration, MergeMetrics), DataFusionError> {
     let table = DeltaTableBuilder::from_uri(path).load().await?;
-    let file_count = table.state.files().len();
+    let file_count = table.snapshot()?.files_count();
 
     let provider = DeltaTableProvider::try_new(
-        table.state.clone(),
+        table.snapshot()?.clone(),
         table.log_store(),
         DeltaScanConfig {
             file_column_name: Some("file_path".to_string()),

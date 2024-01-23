@@ -722,8 +722,7 @@ class DeltaTable:
                 yield n, elem
                 n -= 1
 
-        commits = list(reversed(self._table.history(limit)))
-
+        commits = list(self._table.history(limit))
         history = []
         for version, commit_info_raw in _backwards_enumerate(
             commits, start_end=self._table.get_latest_version()

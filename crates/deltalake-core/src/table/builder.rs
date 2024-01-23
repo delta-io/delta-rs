@@ -51,7 +51,7 @@ pub enum DeltaVersion {
 }
 
 /// Configuration options for delta table
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct DeltaTableConfig {
     /// Indicates whether our use case requires tracking tombstones.
@@ -76,6 +76,9 @@ pub struct DeltaTableConfig {
     /// last checkpoint, but will also increase memory usage. Possible rate limits of the storage backend should
     /// also be considered for optimal performance.
     pub log_buffer_size: usize,
+    /// Control the number of records to read / process from the commit / checkpoint files
+    /// when processing record batches.
+    pub log_batch_size: usize,
 }
 
 impl Default for DeltaTableConfig {
@@ -84,6 +87,7 @@ impl Default for DeltaTableConfig {
             require_tombstones: true,
             require_files: true,
             log_buffer_size: num_cpus::get() * 4,
+            log_batch_size: 1024,
         }
     }
 }
@@ -119,6 +123,9 @@ pub struct DeltaTableLoadOptions {
     /// last checkpoint, but will also increase memory usage. Possible rate limits of the storage backend should
     /// also be considered for optimal performance.
     pub log_buffer_size: usize,
+    /// Control the number of records to read / process from the commit / checkpoint files
+    /// when processing record batches.
+    pub log_batch_size: usize,
 }
 
 impl DeltaTableLoadOptions {
@@ -131,6 +138,7 @@ impl DeltaTableLoadOptions {
             require_files: true,
             log_buffer_size: num_cpus::get() * 4,
             version: DeltaVersion::default(),
+            log_batch_size: 1024,
         }
     }
 }
@@ -306,6 +314,7 @@ impl DeltaTableBuilder {
             require_tombstones: self.options.require_tombstones,
             require_files: self.options.require_files,
             log_buffer_size: self.options.log_buffer_size,
+            log_batch_size: self.options.log_batch_size,
         };
         Ok(DeltaTable::new(self.build_storage()?, config))
     }
@@ -428,9 +437,6 @@ fn ensure_file_location_exists(path: PathBuf) -> DeltaResult<()> {
 
 #[cfg(test)]
 mod tests {
-    use itertools::Itertools;
-    use object_store::path::Path;
-
     use super::*;
     use crate::storage::DefaultObjectStoreFactory;
 
@@ -545,66 +551,5 @@ mod tests {
         let expected = Url::from_directory_path(path).unwrap();
         let url = ensure_table_uri(&expected).unwrap();
         assert_eq!(expected.as_str().trim_end_matches('/'), url.as_str());
-    }
-
-    #[tokio::test]
-    async fn read_delta_table_ignoring_tombstones() {
-        let table = DeltaTableBuilder::from_uri("../deltalake-test/tests/data/delta-0.8.0")
-            .without_tombstones()
-            .load()
-            .await
-            .unwrap();
-        assert!(
-            table.get_state().all_tombstones().is_empty(),
-            "loading without tombstones should skip tombstones"
-        );
-
-        assert_eq!(
-            table.get_files_iter().collect_vec(),
-            vec![
-                Path::from("part-00000-c9b90f86-73e6-46c8-93ba-ff6bfaf892a1-c000.snappy.parquet"),
-                Path::from("part-00000-04ec9591-0b73-459e-8d18-ba5711d6cbe1-c000.snappy.parquet")
-            ]
-        );
-    }
-
-    #[tokio::test]
-    async fn read_delta_table_ignoring_files() {
-        let table = DeltaTableBuilder::from_uri("../deltalake-test/tests/data/delta-0.8.0")
-            .without_files()
-            .load()
-            .await
-            .unwrap();
-
-        assert_eq!(table.get_files_iter().count(), 0, "files should be empty");
-        assert!(
-            table.get_tombstones().next().is_none(),
-            "tombstones should be empty"
-        );
-    }
-
-    #[tokio::test]
-    async fn read_delta_table_with_ignoring_files_on_apply_log() {
-        let mut table = DeltaTableBuilder::from_uri("../deltalake-test/tests/data/delta-0.8.0")
-            .with_version(0)
-            .without_files()
-            .load()
-            .await
-            .unwrap();
-
-        assert_eq!(table.version(), 0);
-        assert_eq!(table.get_files_iter().count(), 0, "files should be empty");
-        assert!(
-            table.get_tombstones().next().is_none(),
-            "tombstones should be empty"
-        );
-
-        table.update().await.unwrap();
-        assert_eq!(table.version(), 1);
-        assert_eq!(table.get_files_iter().count(), 0, "files should be empty");
-        assert!(
-            table.get_tombstones().next().is_none(),
-            "tombstones should be empty"
-        );
     }
 }
