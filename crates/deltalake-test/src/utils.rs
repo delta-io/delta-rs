@@ -221,61 +221,6 @@ pub fn set_env_if_not_set(key: impl AsRef<str>, value: impl AsRef<str>) {
     };
 }
 
-/// small wrapper around google api
-pub mod gs_cli {
-    use super::set_env_if_not_set;
-    use serde_json::json;
-    use std::process::{Command, ExitStatus};
-
-    pub fn create_bucket(container_name: impl AsRef<str>) -> std::io::Result<ExitStatus> {
-        let endpoint = std::env::var("GOOGLE_ENDPOINT_URL")
-            .expect("variable GOOGLE_ENDPOINT_URL must be set to connect to GCS Emulator");
-        let payload = json!({ "name": container_name.as_ref() });
-        let mut child = Command::new("curl")
-            .args([
-                "--insecure",
-                "-v",
-                "-X",
-                "POST",
-                "--data-binary",
-                &serde_json::to_string(&payload)?,
-                "-H",
-                "Content-Type: application/json",
-                &endpoint,
-            ])
-            .spawn()
-            .expect("curl command is installed");
-        child.wait()
-    }
-
-    pub fn delete_bucket(container_name: impl AsRef<str>) -> std::io::Result<ExitStatus> {
-        let endpoint = std::env::var("GOOGLE_ENDPOINT_URL")
-            .expect("variable GOOGLE_ENDPOINT_URL must be set to connect to GCS Emulator");
-        let payload = json!({ "name": container_name.as_ref() });
-        let mut child = Command::new("curl")
-            .args([
-                "--insecure",
-                "-v",
-                "-X",
-                "DELETE",
-                "--data-binary",
-                &serde_json::to_string(&payload)?,
-                "-H",
-                "Content-Type: application/json",
-                &endpoint,
-            ])
-            .spawn()
-            .expect("curl command is installed");
-        child.wait()
-    }
-
-    /// prepare_env
-    pub fn prepare_env() {
-        set_env_if_not_set("GOOGLE_BASE_URL", "http://localhost:4443");
-        set_env_if_not_set("GOOGLE_ENDPOINT_URL", "http://localhost:4443/storage/v1/b");
-    }
-}
-
 /// small wrapper around hdfs cli
 pub mod hdfs_cli {
     use std::env;
