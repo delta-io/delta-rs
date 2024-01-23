@@ -24,14 +24,14 @@ async fn test_operational_parameters() -> Result<(), Box<dyn Error>> {
         table.log_store().as_ref(),
         &actions,
         operation,
-        &table.state,
+        Some(table.snapshot()?),
         None,
     )
     .await?;
     table.update().await?;
 
     let commit_info = table.history(None).await?;
-    let last_commit = &commit_info[commit_info.len() - 1];
+    let last_commit = &commit_info[0];
     let parameters = last_commit.operation_parameters.clone().unwrap();
     assert_eq!(parameters["mode"], json!("Append"));
     assert_eq!(parameters["partitionBy"], json!("[\"some_partition\"]"));

@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use deltalake_core::Path;
 use deltalake_core::{errors::DeltaTableError, DeltaOps};
 use deltalake_test::utils::*;
@@ -6,7 +8,7 @@ use serial_test::serial;
 #[tokio::test]
 #[serial]
 async fn test_filesystem_check_local() -> TestResult {
-    let storage = Box::new(LocalStorageIntegration::default());
+    let storage = Box::<LocalStorageIntegration>::default();
     let context = IntegrationContext::new(storage)?;
     test_filesystem_check(&context).await
 }
@@ -20,31 +22,36 @@ async fn test_filesystem_check(context: &IntegrationContext) -> TestResult {
     context.object_store().delete(&path).await?;
 
     let table = context.table_builder(TestTables::Simple).load().await?;
-    let version = table.state.version();
-    let active = table.state.files().len();
+    let version = table.snapshot()?.version();
+    let active = table.snapshot()?.files_count();
 
     // Validate a Dry run does not mutate the table log and indentifies orphaned add actions
     let op = DeltaOps::from(table);
     let (table, metrics) = op.filesystem_check().with_dry_run(true).await?;
-    assert_eq!(version, table.state.version());
-    assert_eq!(active, table.state.files().len());
+    assert_eq!(version, table.snapshot()?.version());
+    assert_eq!(active, table.snapshot()?.files_count());
     assert_eq!(vec![file.to_string()], metrics.files_removed);
 
     // Validate a run updates the table version with proper remove actions
     let op = DeltaOps::from(table);
     let (table, metrics) = op.filesystem_check().await?;
-    assert_eq!(version + 1, table.state.version());
-    assert_eq!(active - 1, table.state.files().len());
+    assert_eq!(version + 1, table.snapshot()?.version());
+    assert_eq!(active - 1, table.snapshot()?.files_count());
     assert_eq!(vec![file.to_string()], metrics.files_removed);
 
-    let remove = table.state.all_tombstones().get(file).unwrap();
+    let remove = table
+        .snapshot()?
+        .all_tombstones(table.object_store().clone())
+        .await?
+        .collect::<HashSet<_>>();
+    let remove = remove.get(file).unwrap();
     assert!(remove.data_change);
 
     // An additional run should return an empty list of orphaned actions
     let op = DeltaOps::from(table);
     let (table, metrics) = op.filesystem_check().await?;
-    assert_eq!(version + 1, table.state.version());
-    assert_eq!(active - 1, table.state.files().len());
+    assert_eq!(version + 1, table.snapshot()?.version());
+    assert_eq!(active - 1, table.snapshot()?.files_count());
     assert!(metrics.files_removed.is_empty());
 
     Ok(())
@@ -53,7 +60,7 @@ async fn test_filesystem_check(context: &IntegrationContext) -> TestResult {
 #[tokio::test]
 #[serial]
 async fn test_filesystem_check_partitioned() -> TestResult {
-    let storage = Box::new(LocalStorageIntegration::default());
+    let storage = Box::<LocalStorageIntegration>::default();
     let context = IntegrationContext::new(storage)?;
     context
         .load_table(TestTables::Delta0_8_0Partitioned)
@@ -68,17 +75,23 @@ async fn test_filesystem_check_partitioned() -> TestResult {
         .table_builder(TestTables::Delta0_8_0Partitioned)
         .load()
         .await?;
-    let version = table.state.version();
-    let active = table.state.files().len();
+
+    let version = table.snapshot()?.version();
+    let active = table.snapshot()?.files_count();
 
     // Validate a run updates the table version with proper remove actions
     let op = DeltaOps::from(table);
     let (table, metrics) = op.filesystem_check().await?;
-    assert_eq!(version + 1, table.state.version());
-    assert_eq!(active - 1, table.state.files().len());
+    assert_eq!(version + 1, table.snapshot()?.version());
+    assert_eq!(active - 1, table.snapshot()?.files_count());
     assert_eq!(vec![file.to_string()], metrics.files_removed);
 
-    let remove = table.state.all_tombstones().get(file).unwrap();
+    let remove = table
+        .snapshot()?
+        .all_tombstones(table.object_store().clone())
+        .await?
+        .collect::<HashSet<_>>();
+    let remove = remove.get(file).unwrap();
     assert!(remove.data_change);
     Ok(())
 }
@@ -87,7 +100,7 @@ async fn test_filesystem_check_partitioned() -> TestResult {
 #[serial]
 async fn test_filesystem_check_fails_for_concurrent_delete() -> TestResult {
     // Validate failure when a non dry only executes on the latest version
-    let storage = Box::new(LocalStorageIntegration::default());
+    let storage = Box::<LocalStorageIntegration>::default();
     let context = IntegrationContext::new(storage)?;
     context.load_table(TestTables::Simple).await?;
     let file = "part-00003-53f42606-6cda-4f13-8d07-599a21197296-c000.snappy.parquet";

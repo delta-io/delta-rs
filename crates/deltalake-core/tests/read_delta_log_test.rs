@@ -99,7 +99,7 @@ async fn test_log_buffering_success_explicit_version() {
             .await
             .unwrap();
         table.update_incremental(Some(0)).await.unwrap();
-        assert_eq!(table.version(), 10);
+        assert_eq!(table.version(), 0);
 
         let mut table = DeltaTableBuilder::from_uri(path)
             .with_version(0)
@@ -154,8 +154,8 @@ async fn test_read_liquid_table() -> DeltaResult<()> {
 async fn test_read_table_features() -> DeltaResult<()> {
     let mut _table =
         deltalake_core::open_table("../deltalake-test/tests/data/simple_table_features").await?;
-    let rf = _table.protocol().reader_features.clone();
-    let wf = _table.protocol().writer_features.clone();
+    let rf = _table.protocol()?.reader_features.clone();
+    let wf = _table.protocol()?.writer_features.clone();
 
     assert!(rf.is_some());
     assert!(wf.is_some());

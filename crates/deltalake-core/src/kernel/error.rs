@@ -1,12 +1,13 @@
 //! Error types for Delta Lake operations.
 
+use super::DataType;
+
 /// A specialized [`Result`] type for Delta Lake operations.
 pub type DeltaResult<T, E = Error> = std::result::Result<T, E>;
 
 #[derive(thiserror::Error, Debug)]
 #[allow(missing_docs)]
 pub enum Error {
-    #[cfg(feature = "arrow")]
     #[error("Arrow error: {0}")]
     Arrow(#[from] arrow_schema::ArrowError),
 
@@ -19,7 +20,6 @@ pub enum Error {
         source: Box<dyn std::error::Error + Send + Sync + 'static>,
     },
 
-    #[cfg(feature = "parquet")]
     #[error("Arrow error: {0}")]
     Parquet(#[from] parquet::errors::ParquetError),
 
@@ -67,6 +67,9 @@ pub enum Error {
 
     #[error("Table metadata is invalid: {0}")]
     MetadataError(String),
+
+    #[error("Failed to parse value '{0}' as '{1}'")]
+    Parse(String, DataType),
 }
 
 #[cfg(feature = "object_store")]
