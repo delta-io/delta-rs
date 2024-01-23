@@ -1,9 +1,7 @@
 //! Utility functions for converting time formats.
 #![allow(unused)]
 
-#[cfg(feature = "arrow")]
 use arrow::temporal_conversions;
-#[cfg(feature = "parquet")]
 use parquet::basic::TimeUnit;
 
 /// Convert an ISO-8601/RFC3339 timestamp string to a numeric microsecond epoch representation.
@@ -13,7 +11,6 @@ pub fn timestamp_micros_from_stats_string(s: &str) -> Result<i64, chrono::format
 }
 
 /// Convert the timestamp to a ISO-8601 style format suitable for JSON statistics.
-#[cfg(feature = "arrow")]
 pub fn timestamp_to_delta_stats_string(n: i64, time_unit: &TimeUnit) -> Option<String> {
     let dt = match time_unit {
         TimeUnit::MILLIS(_) => temporal_conversions::timestamp_ms_to_datetime(n),
@@ -24,7 +21,7 @@ pub fn timestamp_to_delta_stats_string(n: i64, time_unit: &TimeUnit) -> Option<S
     Some(format!("{}", dt.format("%Y-%m-%dT%H:%M:%S%.3fZ")))
 }
 
-#[cfg(all(test, feature = "parquet"))]
+#[cfg(test)]
 mod tests {
     use super::*;
     use parquet::format::{MicroSeconds, MilliSeconds, NanoSeconds, TimeUnit};

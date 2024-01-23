@@ -153,6 +153,7 @@ async fn execute(
         return Err(DeltaTableError::from(RestoreError::InvalidRestoreParameter));
     }
     let mut table = DeltaTable::new(log_store.clone(), DeltaTableConfig::default());
+
     let version = match datetime_to_restore {
         Some(datetime) => {
             table.load_with_datetime(datetime).await?;
@@ -170,8 +171,8 @@ async fn execute(
             snapshot.version(),
         )));
     }
-    let state_to_restore_files = table.get_state().files().clone();
-    let latest_state_files = snapshot.files().clone();
+    let state_to_restore_files = table.snapshot()?.file_actions()?;
+    let latest_state_files = snapshot.file_actions()?;
     let state_to_restore_files_set =
         HashSet::<Add>::from_iter(state_to_restore_files.iter().cloned());
     let latest_state_files_set = HashSet::<Add>::from_iter(latest_state_files.iter().cloned());
@@ -220,27 +221,27 @@ async fn execute(
     let mut actions = vec![];
     let protocol = if protocol_downgrade_allowed {
         Protocol {
-            min_reader_version: table.protocol().min_reader_version,
-            min_writer_version: table.protocol().min_writer_version,
+            min_reader_version: table.protocol()?.min_reader_version,
+            min_writer_version: table.protocol()?.min_writer_version,
             writer_features: if snapshot.protocol().min_writer_version < 7 {
                 None
             } else {
-                table.protocol().writer_features.clone()
+                table.protocol()?.writer_features.clone()
             },
             reader_features: if snapshot.protocol().min_reader_version < 3 {
                 None
             } else {
-                table.protocol().reader_features.clone()
+                table.protocol()?.reader_features.clone()
             },
         }
     } else {
         Protocol {
             min_reader_version: max(
-                table.protocol().min_reader_version,
+                table.protocol()?.min_reader_version,
                 snapshot.protocol().min_reader_version,
             ),
             min_writer_version: max(
-                table.protocol().min_writer_version,
+                table.protocol()?.min_writer_version,
                 snapshot.protocol().min_writer_version,
             ),
             writer_features: snapshot.protocol().writer_features.clone(),
