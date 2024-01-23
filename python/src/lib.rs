@@ -520,7 +520,7 @@ impl RawDeltaTable {
 
             let mut cmd = MergeBuilder::new(
                 self._table.log_store(),
-                self._table.state.clone(),
+                self._table.snapshot().map_err(PythonError::from)?.clone(),
                 predicate,
                 source_df,
             )
