@@ -8,28 +8,28 @@
       
       
       
-        <link rel="canonical" href="https://github.com/delta-io/delta-rs/usage/querying-delta-tables/">
+        <link rel="canonical" href="https://github.com/delta-io/delta-rs/usage/writing/writing-to-s3-with-locking-provider/">
       
       
-        <link rel="prev" href="../examining-table/">
+        <link rel="prev" href="../">
       
       
-        <link rel="next" href="../managing-tables/">
+        <link rel="next" href="../../deleting-rows-from-delta-lake-table/">
       
       
-      <link rel="icon" href="../../delta-rust-no-whitespace.svg">
+      <link rel="icon" href="../../../delta-rust-no-whitespace.svg">
       <meta name="generator" content="mkdocs-1.5.3, mkdocs-material-9.4.5">
     
     
       
-        <title>Querying a table - Delta Lake Documentation</title>
+        <title>Writing to S3 with a locking provider - Delta Lake Documentation</title>
       
     
     
-      <link rel="stylesheet" href="../../assets/stylesheets/main.6a10b989.min.css">
+      <link rel="stylesheet" href="../../../assets/stylesheets/main.6a10b989.min.css">
       
         
-        <link rel="stylesheet" href="../../assets/stylesheets/palette.356b1318.min.css">
+        <link rel="stylesheet" href="../../../assets/stylesheets/palette.356b1318.min.css">
       
       
 
@@ -48,11 +48,11 @@
       
     
     
-      <link rel="stylesheet" href="../../assets/_markdown_exec_ansi.css">
+      <link rel="stylesheet" href="../../../assets/_markdown_exec_ansi.css">
     
-      <link rel="stylesheet" href="../../assets/_mkdocstrings.css">
+      <link rel="stylesheet" href="../../../assets/_mkdocstrings.css">
     
-    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce((e,_)=>(e<<5)-e+_.charCodeAt(0),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    <script>__md_scope=new URL("../../..",location),__md_hash=e=>[...e].reduce((e,_)=>(e<<5)-e+_.charCodeAt(0),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
     
       
 
@@ -81,7 +81,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#querying-delta-tables" class="md-skip">
+        <a href="#writing-to-s3-with-a-locking-provider" class="md-skip">
           Skip to content
         </a>
       
@@ -97,9 +97,9 @@
 
 <header class="md-header md-header--shadow md-header--lifted" data-md-component="header">
   <nav class="md-header__inner md-grid" aria-label="Header">
-    <a href="../.." title="Delta Lake Documentation" class="md-header__button md-logo" aria-label="Delta Lake Documentation" data-md-component="logo">
+    <a href="../../.." title="Delta Lake Documentation" class="md-header__button md-logo" aria-label="Delta Lake Documentation" data-md-component="logo">
       
-  <img src="../../delta-rust-no-whitespace.svg" alt="logo">
+  <img src="../../../delta-rust-no-whitespace.svg" alt="logo">
 
     </a>
     <label class="md-header__button md-icon" for="__drawer">
@@ -116,7 +116,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              Querying a table
+              Writing to S3 with a locking provider
             
           </span>
         </div>
@@ -226,7 +226,7 @@
     
     
       <li class="md-tabs__item">
-        <a href="../.." class="md-tabs__link">
+        <a href="../../.." class="md-tabs__link">
           
   
     
@@ -248,7 +248,7 @@
     
     
       <li class="md-tabs__item md-tabs__item--active">
-        <a href="../installation/" class="md-tabs__link">
+        <a href="../../installation/" class="md-tabs__link">
           
   
     
@@ -268,7 +268,7 @@
     
     
       <li class="md-tabs__item">
-        <a href="../../api/delta_writer/" class="md-tabs__link">
+        <a href="../../../api/delta_writer/" class="md-tabs__link">
           
   
     
@@ -288,7 +288,7 @@
     
     
       <li class="md-tabs__item">
-        <a href="../../integrations/delta-lake-arrow/" class="md-tabs__link">
+        <a href="../../../integrations/delta-lake-arrow/" class="md-tabs__link">
           
   
     
@@ -308,7 +308,7 @@
     
     
       <li class="md-tabs__item">
-        <a href="../../how-delta-lake-works/architecture-of-delta-table/" class="md-tabs__link">
+        <a href="../../../how-delta-lake-works/architecture-of-delta-table/" class="md-tabs__link">
           
   
     
@@ -349,9 +349,9 @@
 
 <nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
   <label class="md-nav__title" for="__drawer">
-    <a href="../.." title="Delta Lake Documentation" class="md-nav__button md-logo" aria-label="Delta Lake Documentation" data-md-component="logo">
+    <a href="../../.." title="Delta Lake Documentation" class="md-nav__button md-logo" aria-label="Delta Lake Documentation" data-md-component="logo">
       
-  <img src="../../delta-rust-no-whitespace.svg" alt="logo">
+  <img src="../../../delta-rust-no-whitespace.svg" alt="logo">
 
     </a>
     Delta Lake Documentation
@@ -404,7 +404,7 @@
           
           
           <div class="md-nav__link md-nav__container">
-            <a href="../.." class="md-nav__link ">
+            <a href="../../.." class="md-nav__link ">
               
   
   <span class="md-ellipsis">
@@ -436,7 +436,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../why-use-delta-lake/" class="md-nav__link">
+      <a href="../../../why-use-delta-lake/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -530,7 +530,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../installation/" class="md-nav__link">
+      <a href="../../installation/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -550,7 +550,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../overview/" class="md-nav__link">
+      <a href="../../overview/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -570,7 +570,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../create-delta-lake-table/" class="md-nav__link">
+      <a href="../../create-delta-lake-table/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -590,7 +590,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../loading-table/" class="md-nav__link">
+      <a href="../../loading-table/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -610,7 +610,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../appending-overwriting-delta-lake-table/" class="md-nav__link">
+      <a href="../../appending-overwriting-delta-lake-table/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -630,7 +630,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../constraints/" class="md-nav__link">
+      <a href="../../constraints/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -650,7 +650,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../examining-table/" class="md-nav__link">
+      <a href="../../examining-table/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -668,18 +668,9 @@
                 
   
   
-    
   
-  
-    <li class="md-nav__item md-nav__item--active">
-      
-      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
-      
-      
-        
-      
-      
-      <a href="./" class="md-nav__link md-nav__link--active">
+    <li class="md-nav__item">
+      <a href="../../querying-delta-tables/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -688,7 +679,6 @@
   
 
       </a>
-      
     </li>
   
 
@@ -700,7 +690,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../managing-tables/" class="md-nav__link">
+      <a href="../../managing-tables/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -718,6 +708,8 @@
                 
   
   
+    
+  
   
     
     
@@ -732,19 +724,17 @@
     
     
     
-    <li class="md-nav__item md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--active md-nav__item--nested">
       
         
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_2_10" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2_10" checked>
         
           
           
           <div class="md-nav__link md-nav__container">
-            <a href="../writing/" class="md-nav__link ">
+            <a href="../" class="md-nav__link ">
               
   
   <span class="md-ellipsis">
@@ -761,7 +751,7 @@
             
           </div>
         
-        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_2_10_label" aria-expanded="false">
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_2_10_label" aria-expanded="true">
           <label class="md-nav__title" for="__nav_2_10">
             <span class="md-nav__icon md-icon"></span>
             Writing a table
@@ -774,9 +764,29 @@
                 
   
   
+    
   
-    <li class="md-nav__item">
-      <a href="../writing/writing-to-s3-with-locking-provider/" class="md-nav__link">
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  <span class="md-ellipsis">
+    Writing to S3 with a locking provider
+  </span>
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
         
   
   <span class="md-ellipsis">
@@ -785,6 +795,40 @@
   
 
       </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#dynamodb" class="md-nav__link">
+    DynamoDB
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#enable-unsafe-writes-in-s3-opt-in" class="md-nav__link">
+    Enable unsafe writes in S3 (opt-in)
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
     </li>
   
 
@@ -804,7 +848,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../deleting-rows-from-delta-lake-table/" class="md-nav__link">
+      <a href="../../deleting-rows-from-delta-lake-table/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -868,7 +912,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../optimize/small-file-compaction-with-optimize/" class="md-nav__link">
+      <a href="../../optimize/small-file-compaction-with-optimize/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -888,7 +932,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../optimize/delta-lake-z-order/" class="md-nav__link">
+      <a href="../../optimize/delta-lake-z-order/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -978,7 +1022,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../api/delta_writer/" class="md-nav__link">
+      <a href="../../../api/delta_writer/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1028,7 +1072,7 @@
           
           
           <div class="md-nav__link md-nav__container">
-            <a href="../../api/delta_table/" class="md-nav__link ">
+            <a href="../../../api/delta_table/" class="md-nav__link ">
               
   
   <span class="md-ellipsis">
@@ -1060,7 +1104,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../api/delta_table/metadata/" class="md-nav__link">
+      <a href="../../../api/delta_table/metadata/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1080,7 +1124,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../api/delta_table/delta_table_merger/" class="md-nav__link">
+      <a href="../../../api/delta_table/delta_table_merger/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1100,7 +1144,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../api/delta_table/delta_table_optimizer/" class="md-nav__link">
+      <a href="../../../api/delta_table/delta_table_optimizer/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1120,7 +1164,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../api/delta_table/delta_table_alterer/" class="md-nav__link">
+      <a href="../../../api/delta_table/delta_table_alterer/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1148,7 +1192,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../api/schema/" class="md-nav__link">
+      <a href="../../../api/schema/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1168,7 +1212,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../api/storage/" class="md-nav__link">
+      <a href="../../../api/storage/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1188,7 +1232,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../api/catalog/" class="md-nav__link">
+      <a href="../../../api/catalog/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1208,7 +1252,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../api/exceptions/" class="md-nav__link">
+      <a href="../../../api/exceptions/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1286,7 +1330,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../integrations/delta-lake-arrow/" class="md-nav__link">
+      <a href="../../../integrations/delta-lake-arrow/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1306,7 +1350,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../integrations/delta-lake-datafusion/" class="md-nav__link">
+      <a href="../../../integrations/delta-lake-datafusion/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1326,7 +1370,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../integrations/delta-lake-pandas/" class="md-nav__link">
+      <a href="../../../integrations/delta-lake-pandas/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1346,7 +1390,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../integrations/delta-lake-polars/" class="md-nav__link">
+      <a href="../../../integrations/delta-lake-polars/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1422,7 +1466,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../how-delta-lake-works/architecture-of-delta-table/" class="md-nav__link">
+      <a href="../../../how-delta-lake-works/architecture-of-delta-table/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1442,7 +1486,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../how-delta-lake-works/delta-lake-acid-transactions/" class="md-nav__link">
+      <a href="../../../how-delta-lake-works/delta-lake-acid-transactions/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1462,7 +1506,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../how-delta-lake-works/delta-lake-file-skipping/" class="md-nav__link">
+      <a href="../../../how-delta-lake-works/delta-lake-file-skipping/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1503,6 +1547,28 @@
     
   
   
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#dynamodb" class="md-nav__link">
+    DynamoDB
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#enable-unsafe-writes-in-s3-opt-in" class="md-nav__link">
+    Enable unsafe writes in S3 (opt-in)
+  </a>
+  
+</li>
+      
+    </ul>
+  
 </nav>
                   </div>
                 </div>
@@ -1519,110 +1585,58 @@
   
 
 
-<h1 id="querying-delta-tables">Querying Delta Tables</h1>
-<p>Delta tables can be queried in several ways. By loading as Arrow data or
-an Arrow dataset, they can be used by compatible engines such as Pandas
-and DuckDB. By passing on the list of files, they can be loaded into
-other engines such as Dask.</p>
-<p>Delta tables are often larger than can fit into memory on a single
-computer, so this module provides ways to read only the parts of the
-data you need. Partition filters allow you to skip reading files that
-are part of irrelevant partitions. Only loading the columns required
-also saves memory. Finally, some methods allow reading tables
-batch-by-batch, allowing you to process the whole table while only
-having a portion loaded at any given time.</p>
-<p>To load into Pandas or a PyArrow table use the <code>DeltaTable.to_pandas</code> and <code>DeltaTable.to_pyarrow_table</code> methods, respectively. Both of these support filtering partitions and selecting particular columns.</p>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="o">&gt;&gt;&gt;</span> <span class="kn">from</span> <span class="nn">deltalake</span> <span class="kn">import</span> <span class="n">DeltaTable</span>
-</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="o">&gt;&gt;&gt;</span> <span class="n">dt</span> <span class="o">=</span> <span class="n">DeltaTable</span><span class="p">(</span><span class="s2">&quot;../rust/tests/data/delta-0.8.0-partitioned&quot;</span><span class="p">)</span>
-</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="o">&gt;&gt;&gt;</span> <span class="n">dt</span><span class="o">.</span><span class="n">schema</span><span class="p">()</span><span class="o">.</span><span class="n">to_pyarrow</span><span class="p">()</span>
-</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="n">value</span><span class="p">:</span> <span class="n">string</span>
-</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="n">year</span><span class="p">:</span> <span class="n">string</span>
-</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="n">month</span><span class="p">:</span> <span class="n">string</span>
-</span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="n">day</span><span class="p">:</span> <span class="n">string</span>
-</span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a><span class="o">&gt;&gt;&gt;</span> <span class="n">dt</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">(</span><span class="n">partitions</span><span class="o">=</span><span class="p">[(</span><span class="s2">&quot;year&quot;</span><span class="p">,</span> <span class="s2">&quot;=&quot;</span><span class="p">,</span> <span class="s2">&quot;2021&quot;</span><span class="p">)],</span> <span class="n">columns</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;value&quot;</span><span class="p">])</span>
-</span><span id="__span-0-9"><a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a>      <span class="n">value</span>
-</span><span id="__span-0-10"><a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a><span class="mi">0</span>     <span class="mi">6</span>
-</span><span id="__span-0-11"><a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a><span class="mi">1</span>     <span class="mi">7</span>
-</span><span id="__span-0-12"><a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a><span class="mi">2</span>     <span class="mi">5</span>
-</span><span id="__span-0-13"><a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a><span class="mi">3</span>     <span class="mi">4</span>
-</span><span id="__span-0-14"><a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a><span class="o">&gt;&gt;&gt;</span> <span class="n">dt</span><span class="o">.</span><span class="n">to_pyarrow_table</span><span class="p">(</span><span class="n">partitions</span><span class="o">=</span><span class="p">[(</span><span class="s2">&quot;year&quot;</span><span class="p">,</span> <span class="s2">&quot;=&quot;</span><span class="p">,</span> <span class="s2">&quot;2021&quot;</span><span class="p">)],</span> <span class="n">columns</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;value&quot;</span><span class="p">])</span>
-</span><span id="__span-0-15"><a id="__codelineno-0-15" name="__codelineno-0-15" href="#__codelineno-0-15"></a><span class="n">pyarrow</span><span class="o">.</span><span class="n">Table</span>
-</span><span id="__span-0-16"><a id="__codelineno-0-16" name="__codelineno-0-16" href="#__codelineno-0-16"></a><span class="n">value</span><span class="p">:</span> <span class="n">string</span>
+<h1 id="writing-to-s3-with-a-locking-provider">Writing to S3 with a locking provider</h1>
+<p>A locking mechanism is needed to prevent unsafe concurrent writes to a
+delta lake directory when writing to S3.</p>
+<h3 id="dynamodb">DynamoDB</h3>
+<p>DynamoDB is the only available locking provider at the moment in delta-rs. To enable DynamoDB as the locking provider, you need to set the <code>AWS_S3_LOCKING_PROVIDER</code> to 'dynamodb' as a <code>storage_options</code> or as an environment variable.</p>
+<p>Additionally, you must create a DynamoDB table with the name <code>delta_log</code>
+so that it can be automatically recognized by delta-rs. Alternatively, you can
+use a table name of your choice, but you must set the <code>DELTA_DYNAMO_TABLE_NAME</code>
+variable to match your chosen table name. The required schema for the DynamoDB
+table is as follows:</p>
+<div class="language-json highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nt">&quot;Table&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="w">    </span><span class="nt">&quot;AttributeDefinitions&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="w">        </span><span class="p">{</span>
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="w">            </span><span class="nt">&quot;AttributeName&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;fileName&quot;</span><span class="p">,</span>
+</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="w">            </span><span class="nt">&quot;AttributeType&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;S&quot;</span>
+</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="w">        </span><span class="p">},</span>
+</span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="w">        </span><span class="p">{</span>
+</span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a><span class="w">            </span><span class="nt">&quot;AttributeName&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;tablePath&quot;</span><span class="p">,</span>
+</span><span id="__span-0-9"><a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a><span class="w">            </span><span class="nt">&quot;AttributeType&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;S&quot;</span>
+</span><span id="__span-0-10"><a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a><span class="w">        </span><span class="p">}</span>
+</span><span id="__span-0-11"><a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a><span class="w">    </span><span class="p">],</span>
+</span><span id="__span-0-12"><a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a><span class="w">    </span><span class="nt">&quot;TableName&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;delta_log&quot;</span><span class="p">,</span>
+</span><span id="__span-0-13"><a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a><span class="w">    </span><span class="nt">&quot;KeySchema&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+</span><span id="__span-0-14"><a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a><span class="w">        </span><span class="p">{</span>
+</span><span id="__span-0-15"><a id="__codelineno-0-15" name="__codelineno-0-15" href="#__codelineno-0-15"></a><span class="w">            </span><span class="nt">&quot;AttributeName&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;tablePath&quot;</span><span class="p">,</span>
+</span><span id="__span-0-16"><a id="__codelineno-0-16" name="__codelineno-0-16" href="#__codelineno-0-16"></a><span class="w">            </span><span class="nt">&quot;KeyType&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;HASH&quot;</span>
+</span><span id="__span-0-17"><a id="__codelineno-0-17" name="__codelineno-0-17" href="#__codelineno-0-17"></a><span class="w">        </span><span class="p">},</span>
+</span><span id="__span-0-18"><a id="__codelineno-0-18" name="__codelineno-0-18" href="#__codelineno-0-18"></a><span class="w">        </span><span class="p">{</span>
+</span><span id="__span-0-19"><a id="__codelineno-0-19" name="__codelineno-0-19" href="#__codelineno-0-19"></a><span class="w">            </span><span class="nt">&quot;AttributeName&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;fileName&quot;</span><span class="p">,</span>
+</span><span id="__span-0-20"><a id="__codelineno-0-20" name="__codelineno-0-20" href="#__codelineno-0-20"></a><span class="w">            </span><span class="nt">&quot;KeyType&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;RANGE&quot;</span>
+</span><span id="__span-0-21"><a id="__codelineno-0-21" name="__codelineno-0-21" href="#__codelineno-0-21"></a><span class="w">        </span><span class="p">}</span>
+</span><span id="__span-0-22"><a id="__codelineno-0-22" name="__codelineno-0-22" href="#__codelineno-0-22"></a><span class="w">    </span><span class="p">],</span>
+</span><span id="__span-0-23"><a id="__codelineno-0-23" name="__codelineno-0-23" href="#__codelineno-0-23"></a><span class="p">}</span>
 </span></code></pre></div>
-<p>Converting to a PyArrow Dataset allows you to filter on columns other
-than partition columns and load the result as a stream of batches rather
-than a single table. Convert to a dataset using
-<code>DeltaTable.to_pyarrow_dataset</code>. Filters
-applied to datasets will use the partition values and file statistics
-from the Delta transaction log and push down any other filters to the
-scanning operation.</p>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="o">&gt;&gt;&gt;</span> <span class="kn">import</span> <span class="nn">pyarrow.dataset</span> <span class="k">as</span> <span class="nn">ds</span>
-</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="o">&gt;&gt;&gt;</span> <span class="n">dataset</span> <span class="o">=</span> <span class="n">dt</span><span class="o">.</span><span class="n">to_pyarrow_dataset</span><span class="p">()</span>
-</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="o">&gt;&gt;&gt;</span> <span class="n">condition</span> <span class="o">=</span> <span class="p">(</span><span class="n">ds</span><span class="o">.</span><span class="n">field</span><span class="p">(</span><span class="s2">&quot;year&quot;</span><span class="p">)</span> <span class="o">==</span> <span class="s2">&quot;2021&quot;</span><span class="p">)</span> <span class="o">&amp;</span> <span class="p">(</span><span class="n">ds</span><span class="o">.</span><span class="n">field</span><span class="p">(</span><span class="s2">&quot;value&quot;</span><span class="p">)</span> <span class="o">&gt;</span> <span class="s2">&quot;4&quot;</span><span class="p">)</span>
-</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="o">&gt;&gt;&gt;</span> <span class="n">dataset</span><span class="o">.</span><span class="n">to_table</span><span class="p">(</span><span class="nb">filter</span><span class="o">=</span><span class="n">condition</span><span class="p">,</span> <span class="n">columns</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;value&quot;</span><span class="p">])</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span>
-</span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a>  <span class="n">value</span>
-</span><span id="__span-1-6"><a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a><span class="mi">0</span>     <span class="mi">6</span>
-</span><span id="__span-1-7"><a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a><span class="mi">1</span>     <span class="mi">7</span>
-</span><span id="__span-1-8"><a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a><span class="mi">2</span>     <span class="mi">5</span>
-</span><span id="__span-1-9"><a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a><span class="o">&gt;&gt;&gt;</span> <span class="n">batch_iter</span> <span class="o">=</span> <span class="n">dataset</span><span class="o">.</span><span class="n">to_batches</span><span class="p">(</span><span class="nb">filter</span><span class="o">=</span><span class="n">condition</span><span class="p">,</span> <span class="n">columns</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;value&quot;</span><span class="p">],</span> <span class="n">batch_size</span><span class="o">=</span><span class="mi">2</span><span class="p">)</span>
-</span><span id="__span-1-10"><a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a><span class="o">&gt;&gt;&gt;</span> <span class="k">for</span> <span class="n">batch</span> <span class="ow">in</span> <span class="n">batch_iter</span><span class="p">:</span> <span class="nb">print</span><span class="p">(</span><span class="n">batch</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">())</span>
-</span><span id="__span-1-11"><a id="__codelineno-1-11" name="__codelineno-1-11" href="#__codelineno-1-11"></a>  <span class="n">value</span>
-</span><span id="__span-1-12"><a id="__codelineno-1-12" name="__codelineno-1-12" href="#__codelineno-1-12"></a><span class="mi">0</span>     <span class="mi">6</span>
-</span><span id="__span-1-13"><a id="__codelineno-1-13" name="__codelineno-1-13" href="#__codelineno-1-13"></a><span class="mi">1</span>     <span class="mi">7</span>
-</span><span id="__span-1-14"><a id="__codelineno-1-14" name="__codelineno-1-14" href="#__codelineno-1-14"></a>  <span class="n">value</span>
-</span><span id="__span-1-15"><a id="__codelineno-1-15" name="__codelineno-1-15" href="#__codelineno-1-15"></a><span class="mi">0</span>     <span class="mi">5</span>
+<p>Here is an example writing to s3 using this mechanism:</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="kn">from</span> <span class="nn">deltalake</span> <span class="kn">import</span> <span class="n">write_deltalake</span>
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="n">df</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">({</span><span class="s1">&#39;x&#39;</span><span class="p">:</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">]})</span>
+</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="n">storage_options</span> <span class="o">=</span> <span class="p">{</span><span class="s1">&#39;AWS_S3_LOCKING_PROVIDER&#39;</span><span class="p">:</span> <span class="s1">&#39;dynamodb&#39;</span><span class="p">,</span> <span class="s1">&#39;DELTA_DYNAMO_TABLE_NAME&#39;</span><span class="p">:</span> <span class="s1">&#39;custom_table_name&#39;</span><span class="p">}</span>
+</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="n">write_deltalake</span><span class="p">(</span><span class="s1">&#39;s3a://path/to/table&#39;</span><span class="p">,</span> <span class="n">df</span><span class="p">,</span> <span class="s1">&#39;storage_options&#39;</span><span class="o">=</span> <span class="n">storage_options</span><span class="p">)</span>
 </span></code></pre></div>
-<p>PyArrow datasets may also be passed to compatible query engines, such as
-<a href="https://duckdb.org/docs/api/python/overview.html">DuckDB</a></p>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="o">&gt;&gt;&gt;</span> <span class="kn">import</span> <span class="nn">duckdb</span>
-</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="o">&gt;&gt;&gt;</span> <span class="n">ex_data</span> <span class="o">=</span> <span class="n">duckdb</span><span class="o">.</span><span class="n">arrow</span><span class="p">(</span><span class="n">dataset</span><span class="p">)</span>
-</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="o">&gt;&gt;&gt;</span> <span class="n">ex_data</span><span class="o">.</span><span class="n">filter</span><span class="p">(</span><span class="s2">&quot;year = 2021 and value &gt; 4&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">project</span><span class="p">(</span><span class="s2">&quot;value&quot;</span><span class="p">)</span>
-</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="o">---------------------</span>
-</span><span id="__span-2-5"><a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="o">--</span> <span class="n">Expression</span> <span class="n">Tree</span> <span class="o">--</span>
-</span><span id="__span-2-6"><a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="o">---------------------</span>
-</span><span id="__span-2-7"><a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="n">Projection</span> <span class="p">[</span><span class="n">value</span><span class="p">]</span>
-</span><span id="__span-2-8"><a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a>  <span class="n">Filter</span> <span class="p">[</span><span class="n">year</span><span class="o">=</span><span class="mi">2021</span> <span class="n">AND</span> <span class="n">value</span><span class="o">&gt;</span><span class="mi">4</span><span class="p">]</span>
-</span><span id="__span-2-9"><a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a>    <span class="n">arrow_scan</span><span class="p">(</span><span class="mi">140409099470144</span><span class="p">,</span> <span class="mi">4828104688</span><span class="p">,</span> <span class="mi">1000000</span><span class="p">)</span>
-</span><span id="__span-2-10"><a id="__codelineno-2-10" name="__codelineno-2-10" href="#__codelineno-2-10"></a>
-</span><span id="__span-2-11"><a id="__codelineno-2-11" name="__codelineno-2-11" href="#__codelineno-2-11"></a><span class="o">---------------------</span>
-</span><span id="__span-2-12"><a id="__codelineno-2-12" name="__codelineno-2-12" href="#__codelineno-2-12"></a><span class="o">--</span> <span class="n">Result</span> <span class="n">Columns</span>  <span class="o">--</span>
-</span><span id="__span-2-13"><a id="__codelineno-2-13" name="__codelineno-2-13" href="#__codelineno-2-13"></a><span class="o">---------------------</span>
-</span><span id="__span-2-14"><a id="__codelineno-2-14" name="__codelineno-2-14" href="#__codelineno-2-14"></a><span class="o">-</span> <span class="n">value</span> <span class="p">(</span><span class="n">VARCHAR</span><span class="p">)</span>
-</span><span id="__span-2-15"><a id="__codelineno-2-15" name="__codelineno-2-15" href="#__codelineno-2-15"></a>
-</span><span id="__span-2-16"><a id="__codelineno-2-16" name="__codelineno-2-16" href="#__codelineno-2-16"></a><span class="o">---------------------</span>
-</span><span id="__span-2-17"><a id="__codelineno-2-17" name="__codelineno-2-17" href="#__codelineno-2-17"></a><span class="o">--</span> <span class="n">Result</span> <span class="n">Preview</span>  <span class="o">--</span>
-</span><span id="__span-2-18"><a id="__codelineno-2-18" name="__codelineno-2-18" href="#__codelineno-2-18"></a><span class="o">---------------------</span>
-</span><span id="__span-2-19"><a id="__codelineno-2-19" name="__codelineno-2-19" href="#__codelineno-2-19"></a><span class="n">value</span>
-</span><span id="__span-2-20"><a id="__codelineno-2-20" name="__codelineno-2-20" href="#__codelineno-2-20"></a><span class="n">VARCHAR</span>
-</span><span id="__span-2-21"><a id="__codelineno-2-21" name="__codelineno-2-21" href="#__codelineno-2-21"></a><span class="p">[</span> <span class="n">Rows</span><span class="p">:</span> <span class="mi">3</span><span class="p">]</span>
-</span><span id="__span-2-22"><a id="__codelineno-2-22" name="__codelineno-2-22" href="#__codelineno-2-22"></a><span class="mi">6</span>
-</span><span id="__span-2-23"><a id="__codelineno-2-23" name="__codelineno-2-23" href="#__codelineno-2-23"></a><span class="mi">7</span>
-</span><span id="__span-2-24"><a id="__codelineno-2-24" name="__codelineno-2-24" href="#__codelineno-2-24"></a><span class="mi">5</span>
+<p>This locking mechanism is compatible with the one used by Apache Spark. The <code>tablePath</code> property, denoting the root url of the delta table itself, is part of the primary key, and all writers intending to write to the same table must match this property precisely. In Spark, S3 URLs are prefixed with <code>s3a://</code>, and a table in delta-rs must be configured accordingly.</p>
+<p>The following code allows creating the necessary table from the AWS cli:</p>
+<div class="language-sh highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>aws<span class="w"> </span>dynamodb<span class="w"> </span>create-table<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>--table-name<span class="w"> </span>delta_log<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>--attribute-definitions<span class="w"> </span><span class="nv">AttributeName</span><span class="o">=</span>tablePath,AttributeType<span class="o">=</span>S<span class="w"> </span><span class="nv">AttributeName</span><span class="o">=</span>fileName,AttributeType<span class="o">=</span>S<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a>--key-schema<span class="w"> </span><span class="nv">AttributeName</span><span class="o">=</span>tablePath,KeyType<span class="o">=</span>HASH<span class="w"> </span><span class="nv">AttributeName</span><span class="o">=</span>fileName,KeyType<span class="o">=</span>RANGE<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-2-5"><a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a>--provisioned-throughput<span class="w"> </span><span class="nv">ReadCapacityUnits</span><span class="o">=</span><span class="m">5</span>,WriteCapacityUnits<span class="o">=</span><span class="m">5</span>
 </span></code></pre></div>
-<p>Finally, you can always pass the list of file paths to an engine. For
-example, you can pass them to <code>dask.dataframe.read_parquet</code>:</p>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="o">&gt;&gt;&gt;</span> <span class="kn">import</span> <span class="nn">dask.dataframe</span> <span class="k">as</span> <span class="nn">dd</span>
-</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="o">&gt;&gt;&gt;</span> <span class="n">df</span> <span class="o">=</span> <span class="n">dd</span><span class="o">.</span><span class="n">read_parquet</span><span class="p">(</span><span class="n">dt</span><span class="o">.</span><span class="n">file_uris</span><span class="p">())</span>
-</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="o">&gt;&gt;&gt;</span> <span class="n">df</span>
-</span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="n">Dask</span> <span class="n">DataFrame</span> <span class="n">Structure</span><span class="p">:</span>
-</span><span id="__span-3-5"><a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a>                <span class="n">value</span>             <span class="n">year</span>            <span class="n">month</span>              <span class="n">day</span>
-</span><span id="__span-3-6"><a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a><span class="n">npartitions</span><span class="o">=</span><span class="mi">6</span>
-</span><span id="__span-3-7"><a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a>               <span class="nb">object</span>  <span class="n">category</span><span class="p">[</span><span class="n">known</span><span class="p">]</span>  <span class="n">category</span><span class="p">[</span><span class="n">known</span><span class="p">]</span>  <span class="n">category</span><span class="p">[</span><span class="n">known</span><span class="p">]</span>
-</span><span id="__span-3-8"><a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a>                  <span class="o">...</span>              <span class="o">...</span>              <span class="o">...</span>              <span class="o">...</span>
-</span><span id="__span-3-9"><a id="__codelineno-3-9" name="__codelineno-3-9" href="#__codelineno-3-9"></a><span class="o">...</span>               <span class="o">...</span>              <span class="o">...</span>              <span class="o">...</span>              <span class="o">...</span>
-</span><span id="__span-3-10"><a id="__codelineno-3-10" name="__codelineno-3-10" href="#__codelineno-3-10"></a>                  <span class="o">...</span>              <span class="o">...</span>              <span class="o">...</span>              <span class="o">...</span>
-</span><span id="__span-3-11"><a id="__codelineno-3-11" name="__codelineno-3-11" href="#__codelineno-3-11"></a>                  <span class="o">...</span>              <span class="o">...</span>              <span class="o">...</span>              <span class="o">...</span>
-</span><span id="__span-3-12"><a id="__codelineno-3-12" name="__codelineno-3-12" href="#__codelineno-3-12"></a><span class="n">Dask</span> <span class="n">Name</span><span class="p">:</span> <span class="n">read</span><span class="o">-</span><span class="n">parquet</span><span class="p">,</span> <span class="mi">6</span> <span class="n">tasks</span>
-</span><span id="__span-3-13"><a id="__codelineno-3-13" name="__codelineno-3-13" href="#__codelineno-3-13"></a><span class="o">&gt;&gt;&gt;</span> <span class="n">df</span><span class="o">.</span><span class="n">compute</span><span class="p">()</span>
-</span><span id="__span-3-14"><a id="__codelineno-3-14" name="__codelineno-3-14" href="#__codelineno-3-14"></a>  <span class="n">value</span>  <span class="n">year</span> <span class="n">month</span> <span class="n">day</span>
-</span><span id="__span-3-15"><a id="__codelineno-3-15" name="__codelineno-3-15" href="#__codelineno-3-15"></a><span class="mi">0</span>     <span class="mi">1</span>  <span class="mi">2020</span>     <span class="mi">1</span>   <span class="mi">1</span>
-</span><span id="__span-3-16"><a id="__codelineno-3-16" name="__codelineno-3-16" href="#__codelineno-3-16"></a><span class="mi">0</span>     <span class="mi">2</span>  <span class="mi">2020</span>     <span class="mi">2</span>   <span class="mi">3</span>
-</span><span id="__span-3-17"><a id="__codelineno-3-17" name="__codelineno-3-17" href="#__codelineno-3-17"></a><span class="mi">0</span>     <span class="mi">3</span>  <span class="mi">2020</span>     <span class="mi">2</span>   <span class="mi">5</span>
-</span><span id="__span-3-18"><a id="__codelineno-3-18" name="__codelineno-3-18" href="#__codelineno-3-18"></a><span class="mi">0</span>     <span class="mi">4</span>  <span class="mi">2021</span>     <span class="mi">4</span>   <span class="mi">5</span>
-</span><span id="__span-3-19"><a id="__codelineno-3-19" name="__codelineno-3-19" href="#__codelineno-3-19"></a><span class="mi">0</span>     <span class="mi">5</span>  <span class="mi">2021</span>    <span class="mi">12</span>   <span class="mi">4</span>
-</span><span id="__span-3-20"><a id="__codelineno-3-20" name="__codelineno-3-20" href="#__codelineno-3-20"></a><span class="mi">0</span>     <span class="mi">6</span>  <span class="mi">2021</span>    <span class="mi">12</span>  <span class="mi">20</span>
-</span><span id="__span-3-21"><a id="__codelineno-3-21" name="__codelineno-3-21" href="#__codelineno-3-21"></a><span class="mi">1</span>     <span class="mi">7</span>  <span class="mi">2021</span>    <span class="mi">12</span>  <span class="mi">20</span>
-</span></code></pre></div>
+<p>You can find additional information in the <a href="https://docs.delta.io/latest/delta-storage.html#multi-cluster-setup">delta-rs-documentation</a>, which also includes recommendations on configuring a time-to-live (TTL) for the table to avoid growing the table indefinitely.</p>
+<h3 id="enable-unsafe-writes-in-s3-opt-in">Enable unsafe writes in S3 (opt-in)</h3>
+<p>If for some reason you don't want to use dynamodb as your locking mechanism you can
+choose to set the <code>AWS_S3_ALLOW_UNSAFE_RENAME</code> variable to <code>true</code> in order to enable S3 unsafe writes.</p>
 
 
 
@@ -1646,7 +1660,7 @@ example, you can pass them to <code>dask.dataframe.read_parquet</code>:</p>
       <nav class="md-footer__inner md-grid" aria-label="Footer" >
         
           
-          <a href="../examining-table/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Examining a table">
+          <a href="../" class="md-footer__link md-footer__link--prev" aria-label="Previous: Writing Delta Tables">
             <div class="md-footer__button md-icon">
               
               <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11h12Z"/></svg>
@@ -1656,20 +1670,20 @@ example, you can pass them to <code>dask.dataframe.read_parquet</code>:</p>
                 Previous
               </span>
               <div class="md-ellipsis">
-                Examining a table
+                Writing Delta Tables
               </div>
             </div>
           </a>
         
         
           
-          <a href="../managing-tables/" class="md-footer__link md-footer__link--next" aria-label="Next: Managing a table">
+          <a href="../../deleting-rows-from-delta-lake-table/" class="md-footer__link md-footer__link--next" aria-label="Next: Deleting rows from a table">
             <div class="md-footer__title">
               <span class="md-footer__direction">
                 Next
               </span>
               <div class="md-ellipsis">
-                Managing a table
+                Deleting rows from a table
               </div>
             </div>
             <div class="md-footer__button md-icon">
@@ -1710,10 +1724,10 @@ example, you can pass them to <code>dask.dataframe.read_parquet</code>:</p>
     </div>
     
     
-    <script id="__config" type="application/json">{"base": "../..", "features": ["navigation.tracking", "navigation.instant", "navigation.expand", "navigation.tabs", "navigation.indexes", "navigation.tabs.sticky", "navigation.footer", "content.tabs.link", "content.code.annotation", "content.code.copy"], "search": "../../assets/javascripts/workers/search.f886a092.min.js", "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}}</script>
+    <script id="__config" type="application/json">{"base": "../../..", "features": ["navigation.tracking", "navigation.instant", "navigation.expand", "navigation.tabs", "navigation.indexes", "navigation.tabs.sticky", "navigation.footer", "content.tabs.link", "content.code.annotation", "content.code.copy"], "search": "../../../assets/javascripts/workers/search.f886a092.min.js", "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}}</script>
     
     
-      <script src="../../assets/javascripts/bundle.aecac24b.min.js"></script>
+      <script src="../../../assets/javascripts/bundle.aecac24b.min.js"></script>
       
     
   </body>

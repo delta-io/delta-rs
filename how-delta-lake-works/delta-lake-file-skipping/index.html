@@ -8,13 +8,11 @@
       
       
       
-        <link rel="canonical" href="https://github.com/delta-io/delta-rs/usage/querying-delta-tables/">
+        <link rel="canonical" href="https://github.com/delta-io/delta-rs/how-delta-lake-works/delta-lake-file-skipping/">
       
       
-        <link rel="prev" href="../examining-table/">
+        <link rel="prev" href="../delta-lake-acid-transactions/">
       
-      
-        <link rel="next" href="../managing-tables/">
       
       
       <link rel="icon" href="../../delta-rust-no-whitespace.svg">
@@ -22,7 +20,7 @@
     
     
       
-        <title>Querying a table - Delta Lake Documentation</title>
+        <title>File skipping - Delta Lake Documentation</title>
       
     
     
@@ -81,7 +79,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#querying-delta-tables" class="md-skip">
+        <a href="#delta-lake-file-skipping" class="md-skip">
           Skip to content
         </a>
       
@@ -116,7 +114,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              Querying a table
+              File skipping
             
           </span>
         </div>
@@ -242,13 +240,11 @@
         
   
   
-    
-  
   
     
     
-      <li class="md-tabs__item md-tabs__item--active">
-        <a href="../installation/" class="md-tabs__link">
+      <li class="md-tabs__item">
+        <a href="../../usage/installation/" class="md-tabs__link">
           
   
     
@@ -304,11 +300,13 @@
         
   
   
+    
+  
   
     
     
-      <li class="md-tabs__item">
-        <a href="../../how-delta-lake-works/architecture-of-delta-table/" class="md-tabs__link">
+      <li class="md-tabs__item md-tabs__item--active">
+        <a href="../architecture-of-delta-table/" class="md-tabs__link">
           
   
     
@@ -461,8 +459,6 @@
       
   
   
-    
-  
   
     
     
@@ -498,12 +494,14 @@
       
       
     
-    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
       
         
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" checked>
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_2" >
         
           
           <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="">
@@ -517,7 +515,7 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="true">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
           <label class="md-nav__title" for="__nav_2">
             <span class="md-nav__icon md-icon"></span>
             Usage
@@ -530,7 +528,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../installation/" class="md-nav__link">
+      <a href="../../usage/installation/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -550,7 +548,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../overview/" class="md-nav__link">
+      <a href="../../usage/overview/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -570,7 +568,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../create-delta-lake-table/" class="md-nav__link">
+      <a href="../../usage/create-delta-lake-table/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -590,7 +588,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../loading-table/" class="md-nav__link">
+      <a href="../../usage/loading-table/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -610,7 +608,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../appending-overwriting-delta-lake-table/" class="md-nav__link">
+      <a href="../../usage/appending-overwriting-delta-lake-table/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -630,7 +628,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../constraints/" class="md-nav__link">
+      <a href="../../usage/constraints/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -650,7 +648,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../examining-table/" class="md-nav__link">
+      <a href="../../usage/examining-table/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -668,18 +666,9 @@
                 
   
   
-    
   
-  
-    <li class="md-nav__item md-nav__item--active">
-      
-      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
-      
-      
-        
-      
-      
-      <a href="./" class="md-nav__link md-nav__link--active">
+    <li class="md-nav__item">
+      <a href="../../usage/querying-delta-tables/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -688,7 +677,6 @@
   
 
       </a>
-      
     </li>
   
 
@@ -700,7 +688,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../managing-tables/" class="md-nav__link">
+      <a href="../../usage/managing-tables/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -744,7 +732,7 @@
           
           
           <div class="md-nav__link md-nav__container">
-            <a href="../writing/" class="md-nav__link ">
+            <a href="../../usage/writing/" class="md-nav__link ">
               
   
   <span class="md-ellipsis">
@@ -776,7 +764,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../writing/writing-to-s3-with-locking-provider/" class="md-nav__link">
+      <a href="../../usage/writing/writing-to-s3-with-locking-provider/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -804,7 +792,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../deleting-rows-from-delta-lake-table/" class="md-nav__link">
+      <a href="../../usage/deleting-rows-from-delta-lake-table/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -868,7 +856,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../optimize/small-file-compaction-with-optimize/" class="md-nav__link">
+      <a href="../../usage/optimize/small-file-compaction-with-optimize/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -888,7 +876,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../optimize/delta-lake-z-order/" class="md-nav__link">
+      <a href="../../usage/optimize/delta-lake-z-order/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1371,6 +1359,8 @@
       
   
   
+    
+  
   
     
     
@@ -1388,14 +1378,12 @@
       
       
     
-    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
       
         
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" checked>
         
           
           <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="">
@@ -1409,7 +1397,7 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="true">
           <label class="md-nav__title" for="__nav_5">
             <span class="md-nav__icon md-icon"></span>
             How Delta Lake works
@@ -1422,7 +1410,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../how-delta-lake-works/architecture-of-delta-table/" class="md-nav__link">
+      <a href="../architecture-of-delta-table/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1442,7 +1430,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../how-delta-lake-works/delta-lake-acid-transactions/" class="md-nav__link">
+      <a href="../delta-lake-acid-transactions/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1460,9 +1448,29 @@
                 
   
   
+    
   
-    <li class="md-nav__item">
-      <a href="../../how-delta-lake-works/delta-lake-file-skipping/" class="md-nav__link">
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  <span class="md-ellipsis">
+    File skipping
+  </span>
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
         
   
   <span class="md-ellipsis">
@@ -1471,6 +1479,75 @@
   
 
       </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#delta-lake-file-metadata" class="md-nav__link">
+    Delta Lake file metadata
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#how-delta-lake-implements-file-skipping" class="md-nav__link">
+    How Delta Lake implements file skipping
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#file-skipping-for-different-file-sizes" class="md-nav__link">
+    File skipping for different file sizes
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#how-to-maximize-file-skipping" class="md-nav__link">
+    How to maximize file skipping
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#how-file-skipping-works-with-strings" class="md-nav__link">
+    How file skipping works with strings
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#file-skipping-for-partitioned-tables" class="md-nav__link">
+    File skipping for partitioned tables
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#conclusion" class="md-nav__link">
+    Conclusion
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
     </li>
   
 
@@ -1503,6 +1580,63 @@
     
   
   
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#delta-lake-file-metadata" class="md-nav__link">
+    Delta Lake file metadata
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#how-delta-lake-implements-file-skipping" class="md-nav__link">
+    How Delta Lake implements file skipping
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#file-skipping-for-different-file-sizes" class="md-nav__link">
+    File skipping for different file sizes
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#how-to-maximize-file-skipping" class="md-nav__link">
+    How to maximize file skipping
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#how-file-skipping-works-with-strings" class="md-nav__link">
+    How file skipping works with strings
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#file-skipping-for-partitioned-tables" class="md-nav__link">
+    File skipping for partitioned tables
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#conclusion" class="md-nav__link">
+    Conclusion
+  </a>
+  
+</li>
+      
+    </ul>
+  
 </nav>
                   </div>
                 </div>
@@ -1519,110 +1653,119 @@
   
 
 
-<h1 id="querying-delta-tables">Querying Delta Tables</h1>
-<p>Delta tables can be queried in several ways. By loading as Arrow data or
-an Arrow dataset, they can be used by compatible engines such as Pandas
-and DuckDB. By passing on the list of files, they can be loaded into
-other engines such as Dask.</p>
-<p>Delta tables are often larger than can fit into memory on a single
-computer, so this module provides ways to read only the parts of the
-data you need. Partition filters allow you to skip reading files that
-are part of irrelevant partitions. Only loading the columns required
-also saves memory. Finally, some methods allow reading tables
-batch-by-batch, allowing you to process the whole table while only
-having a portion loaded at any given time.</p>
-<p>To load into Pandas or a PyArrow table use the <code>DeltaTable.to_pandas</code> and <code>DeltaTable.to_pyarrow_table</code> methods, respectively. Both of these support filtering partitions and selecting particular columns.</p>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="o">&gt;&gt;&gt;</span> <span class="kn">from</span> <span class="nn">deltalake</span> <span class="kn">import</span> <span class="n">DeltaTable</span>
-</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="o">&gt;&gt;&gt;</span> <span class="n">dt</span> <span class="o">=</span> <span class="n">DeltaTable</span><span class="p">(</span><span class="s2">&quot;../rust/tests/data/delta-0.8.0-partitioned&quot;</span><span class="p">)</span>
-</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="o">&gt;&gt;&gt;</span> <span class="n">dt</span><span class="o">.</span><span class="n">schema</span><span class="p">()</span><span class="o">.</span><span class="n">to_pyarrow</span><span class="p">()</span>
-</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="n">value</span><span class="p">:</span> <span class="n">string</span>
-</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="n">year</span><span class="p">:</span> <span class="n">string</span>
-</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="n">month</span><span class="p">:</span> <span class="n">string</span>
-</span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="n">day</span><span class="p">:</span> <span class="n">string</span>
-</span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a><span class="o">&gt;&gt;&gt;</span> <span class="n">dt</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">(</span><span class="n">partitions</span><span class="o">=</span><span class="p">[(</span><span class="s2">&quot;year&quot;</span><span class="p">,</span> <span class="s2">&quot;=&quot;</span><span class="p">,</span> <span class="s2">&quot;2021&quot;</span><span class="p">)],</span> <span class="n">columns</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;value&quot;</span><span class="p">])</span>
-</span><span id="__span-0-9"><a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a>      <span class="n">value</span>
-</span><span id="__span-0-10"><a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a><span class="mi">0</span>     <span class="mi">6</span>
-</span><span id="__span-0-11"><a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a><span class="mi">1</span>     <span class="mi">7</span>
-</span><span id="__span-0-12"><a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a><span class="mi">2</span>     <span class="mi">5</span>
-</span><span id="__span-0-13"><a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a><span class="mi">3</span>     <span class="mi">4</span>
-</span><span id="__span-0-14"><a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a><span class="o">&gt;&gt;&gt;</span> <span class="n">dt</span><span class="o">.</span><span class="n">to_pyarrow_table</span><span class="p">(</span><span class="n">partitions</span><span class="o">=</span><span class="p">[(</span><span class="s2">&quot;year&quot;</span><span class="p">,</span> <span class="s2">&quot;=&quot;</span><span class="p">,</span> <span class="s2">&quot;2021&quot;</span><span class="p">)],</span> <span class="n">columns</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;value&quot;</span><span class="p">])</span>
-</span><span id="__span-0-15"><a id="__codelineno-0-15" name="__codelineno-0-15" href="#__codelineno-0-15"></a><span class="n">pyarrow</span><span class="o">.</span><span class="n">Table</span>
-</span><span id="__span-0-16"><a id="__codelineno-0-16" name="__codelineno-0-16" href="#__codelineno-0-16"></a><span class="n">value</span><span class="p">:</span> <span class="n">string</span>
+<h1 id="delta-lake-file-skipping">Delta Lake File Skipping</h1>
+<p>Delta tables store file-level metadata information, which allows for a powerful optimization called file skipping.</p>
+<p>This page explains how Delta Lake implements file skipping, how to optimize your tables to maximize file skipping, and the benefits of file skipping.</p>
+<p>Let’s start by looking at the file-level metadata in Delta tables.</p>
+<h2 id="delta-lake-file-metadata">Delta Lake file metadata</h2>
+<p>Delta Lake stores metadata about each file's min/max values in the table.  Query engines can skip entire files when they don’t contain data that’s relevant to the query.</p>
+<p>Suppose you have a Delta table with data stored in two files and has the following metadata.</p>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>filename    min_name    max_name    min_age max_age
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>fileA       alice       joy         12      46  
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>fileB       allan       linda       34      78
 </span></code></pre></div>
-<p>Converting to a PyArrow Dataset allows you to filter on columns other
-than partition columns and load the result as a stream of batches rather
-than a single table. Convert to a dataset using
-<code>DeltaTable.to_pyarrow_dataset</code>. Filters
-applied to datasets will use the partition values and file statistics
-from the Delta transaction log and push down any other filters to the
-scanning operation.</p>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="o">&gt;&gt;&gt;</span> <span class="kn">import</span> <span class="nn">pyarrow.dataset</span> <span class="k">as</span> <span class="nn">ds</span>
-</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="o">&gt;&gt;&gt;</span> <span class="n">dataset</span> <span class="o">=</span> <span class="n">dt</span><span class="o">.</span><span class="n">to_pyarrow_dataset</span><span class="p">()</span>
-</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="o">&gt;&gt;&gt;</span> <span class="n">condition</span> <span class="o">=</span> <span class="p">(</span><span class="n">ds</span><span class="o">.</span><span class="n">field</span><span class="p">(</span><span class="s2">&quot;year&quot;</span><span class="p">)</span> <span class="o">==</span> <span class="s2">&quot;2021&quot;</span><span class="p">)</span> <span class="o">&amp;</span> <span class="p">(</span><span class="n">ds</span><span class="o">.</span><span class="n">field</span><span class="p">(</span><span class="s2">&quot;value&quot;</span><span class="p">)</span> <span class="o">&gt;</span> <span class="s2">&quot;4&quot;</span><span class="p">)</span>
-</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="o">&gt;&gt;&gt;</span> <span class="n">dataset</span><span class="o">.</span><span class="n">to_table</span><span class="p">(</span><span class="nb">filter</span><span class="o">=</span><span class="n">condition</span><span class="p">,</span> <span class="n">columns</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;value&quot;</span><span class="p">])</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span>
-</span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a>  <span class="n">value</span>
-</span><span id="__span-1-6"><a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a><span class="mi">0</span>     <span class="mi">6</span>
-</span><span id="__span-1-7"><a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a><span class="mi">1</span>     <span class="mi">7</span>
-</span><span id="__span-1-8"><a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a><span class="mi">2</span>     <span class="mi">5</span>
-</span><span id="__span-1-9"><a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a><span class="o">&gt;&gt;&gt;</span> <span class="n">batch_iter</span> <span class="o">=</span> <span class="n">dataset</span><span class="o">.</span><span class="n">to_batches</span><span class="p">(</span><span class="nb">filter</span><span class="o">=</span><span class="n">condition</span><span class="p">,</span> <span class="n">columns</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;value&quot;</span><span class="p">],</span> <span class="n">batch_size</span><span class="o">=</span><span class="mi">2</span><span class="p">)</span>
-</span><span id="__span-1-10"><a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a><span class="o">&gt;&gt;&gt;</span> <span class="k">for</span> <span class="n">batch</span> <span class="ow">in</span> <span class="n">batch_iter</span><span class="p">:</span> <span class="nb">print</span><span class="p">(</span><span class="n">batch</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">())</span>
-</span><span id="__span-1-11"><a id="__codelineno-1-11" name="__codelineno-1-11" href="#__codelineno-1-11"></a>  <span class="n">value</span>
-</span><span id="__span-1-12"><a id="__codelineno-1-12" name="__codelineno-1-12" href="#__codelineno-1-12"></a><span class="mi">0</span>     <span class="mi">6</span>
-</span><span id="__span-1-13"><a id="__codelineno-1-13" name="__codelineno-1-13" href="#__codelineno-1-13"></a><span class="mi">1</span>     <span class="mi">7</span>
-</span><span id="__span-1-14"><a id="__codelineno-1-14" name="__codelineno-1-14" href="#__codelineno-1-14"></a>  <span class="n">value</span>
-</span><span id="__span-1-15"><a id="__codelineno-1-15" name="__codelineno-1-15" href="#__codelineno-1-15"></a><span class="mi">0</span>     <span class="mi">5</span>
+<p>Suppose you want to run the following query: <code>select * from the_table where age &amp;lt; 20</code>.</p>
+<p>The engine only needs to read <code>fileA</code> to execute this query.  <code>fileB</code> has a <code>min_age</code> of 34, so we know there aren’t any rows of data with an <code>age</code> less than 20.</p>
+<p>The benefit of file skipping depends on the query and the data layout of the Delta table.  Some queries cannot take advantage of any file skipping.  Here’s an example query that does not benefit from file skipping: <code>select * from the_table group by age</code>.</p>
+<p>Let’s recreate this example with Polars to drive the point home.</p>
+<p>Start by writing out one file of data:</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="kn">import</span> <span class="nn">polars</span> <span class="k">as</span> <span class="nn">pl</span>
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="kn">from</span> <span class="nn">deltalake</span> <span class="kn">import</span> <span class="n">DeltaTable</span>
+</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>
+</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="n">df</span> <span class="o">=</span> <span class="n">pl</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">({</span><span class="s2">&quot;name&quot;</span><span class="p">:</span> <span class="p">[</span><span class="s2">&quot;alice&quot;</span><span class="p">,</span> <span class="s2">&quot;cat&quot;</span><span class="p">,</span> <span class="s2">&quot;joy&quot;</span><span class="p">],</span> <span class="s2">&quot;age&quot;</span><span class="p">:</span> <span class="p">[</span><span class="mi">12</span><span class="p">,</span> <span class="mi">35</span><span class="p">,</span> <span class="mi">46</span><span class="p">]})</span>
+</span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="n">df</span><span class="o">.</span><span class="n">write_delta</span><span class="p">(</span><span class="s2">&quot;tmp/a_table&quot;</span><span class="p">)</span>
 </span></code></pre></div>
-<p>PyArrow datasets may also be passed to compatible query engines, such as
-<a href="https://duckdb.org/docs/api/python/overview.html">DuckDB</a></p>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="o">&gt;&gt;&gt;</span> <span class="kn">import</span> <span class="nn">duckdb</span>
-</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="o">&gt;&gt;&gt;</span> <span class="n">ex_data</span> <span class="o">=</span> <span class="n">duckdb</span><span class="o">.</span><span class="n">arrow</span><span class="p">(</span><span class="n">dataset</span><span class="p">)</span>
-</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="o">&gt;&gt;&gt;</span> <span class="n">ex_data</span><span class="o">.</span><span class="n">filter</span><span class="p">(</span><span class="s2">&quot;year = 2021 and value &gt; 4&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">project</span><span class="p">(</span><span class="s2">&quot;value&quot;</span><span class="p">)</span>
-</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="o">---------------------</span>
-</span><span id="__span-2-5"><a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="o">--</span> <span class="n">Expression</span> <span class="n">Tree</span> <span class="o">--</span>
-</span><span id="__span-2-6"><a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="o">---------------------</span>
-</span><span id="__span-2-7"><a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="n">Projection</span> <span class="p">[</span><span class="n">value</span><span class="p">]</span>
-</span><span id="__span-2-8"><a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a>  <span class="n">Filter</span> <span class="p">[</span><span class="n">year</span><span class="o">=</span><span class="mi">2021</span> <span class="n">AND</span> <span class="n">value</span><span class="o">&gt;</span><span class="mi">4</span><span class="p">]</span>
-</span><span id="__span-2-9"><a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a>    <span class="n">arrow_scan</span><span class="p">(</span><span class="mi">140409099470144</span><span class="p">,</span> <span class="mi">4828104688</span><span class="p">,</span> <span class="mi">1000000</span><span class="p">)</span>
-</span><span id="__span-2-10"><a id="__codelineno-2-10" name="__codelineno-2-10" href="#__codelineno-2-10"></a>
-</span><span id="__span-2-11"><a id="__codelineno-2-11" name="__codelineno-2-11" href="#__codelineno-2-11"></a><span class="o">---------------------</span>
-</span><span id="__span-2-12"><a id="__codelineno-2-12" name="__codelineno-2-12" href="#__codelineno-2-12"></a><span class="o">--</span> <span class="n">Result</span> <span class="n">Columns</span>  <span class="o">--</span>
-</span><span id="__span-2-13"><a id="__codelineno-2-13" name="__codelineno-2-13" href="#__codelineno-2-13"></a><span class="o">---------------------</span>
-</span><span id="__span-2-14"><a id="__codelineno-2-14" name="__codelineno-2-14" href="#__codelineno-2-14"></a><span class="o">-</span> <span class="n">value</span> <span class="p">(</span><span class="n">VARCHAR</span><span class="p">)</span>
-</span><span id="__span-2-15"><a id="__codelineno-2-15" name="__codelineno-2-15" href="#__codelineno-2-15"></a>
-</span><span id="__span-2-16"><a id="__codelineno-2-16" name="__codelineno-2-16" href="#__codelineno-2-16"></a><span class="o">---------------------</span>
-</span><span id="__span-2-17"><a id="__codelineno-2-17" name="__codelineno-2-17" href="#__codelineno-2-17"></a><span class="o">--</span> <span class="n">Result</span> <span class="n">Preview</span>  <span class="o">--</span>
-</span><span id="__span-2-18"><a id="__codelineno-2-18" name="__codelineno-2-18" href="#__codelineno-2-18"></a><span class="o">---------------------</span>
-</span><span id="__span-2-19"><a id="__codelineno-2-19" name="__codelineno-2-19" href="#__codelineno-2-19"></a><span class="n">value</span>
-</span><span id="__span-2-20"><a id="__codelineno-2-20" name="__codelineno-2-20" href="#__codelineno-2-20"></a><span class="n">VARCHAR</span>
-</span><span id="__span-2-21"><a id="__codelineno-2-21" name="__codelineno-2-21" href="#__codelineno-2-21"></a><span class="p">[</span> <span class="n">Rows</span><span class="p">:</span> <span class="mi">3</span><span class="p">]</span>
-</span><span id="__span-2-22"><a id="__codelineno-2-22" name="__codelineno-2-22" href="#__codelineno-2-22"></a><span class="mi">6</span>
-</span><span id="__span-2-23"><a id="__codelineno-2-23" name="__codelineno-2-23" href="#__codelineno-2-23"></a><span class="mi">7</span>
-</span><span id="__span-2-24"><a id="__codelineno-2-24" name="__codelineno-2-24" href="#__codelineno-2-24"></a><span class="mi">5</span>
+<p>Now, write out another file of data:</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="n">df</span> <span class="o">=</span> <span class="n">pl</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">({</span><span class="s2">&quot;name&quot;</span><span class="p">:</span> <span class="p">[</span><span class="s2">&quot;allan&quot;</span><span class="p">,</span> <span class="s2">&quot;brian&quot;</span><span class="p">,</span> <span class="s2">&quot;linda&quot;</span><span class="p">],</span> <span class="s2">&quot;age&quot;</span><span class="p">:</span> <span class="p">[</span><span class="mi">34</span><span class="p">,</span> <span class="mi">35</span><span class="p">,</span> <span class="mi">78</span><span class="p">]})</span>
+</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="n">df</span><span class="o">.</span><span class="n">write_delta</span><span class="p">(</span><span class="s2">&quot;tmp/a_table&quot;</span><span class="p">,</span> <span class="n">mode</span><span class="o">=</span><span class="s2">&quot;append&quot;</span><span class="p">)</span>
 </span></code></pre></div>
-<p>Finally, you can always pass the list of file paths to an engine. For
-example, you can pass them to <code>dask.dataframe.read_parquet</code>:</p>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="o">&gt;&gt;&gt;</span> <span class="kn">import</span> <span class="nn">dask.dataframe</span> <span class="k">as</span> <span class="nn">dd</span>
-</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="o">&gt;&gt;&gt;</span> <span class="n">df</span> <span class="o">=</span> <span class="n">dd</span><span class="o">.</span><span class="n">read_parquet</span><span class="p">(</span><span class="n">dt</span><span class="o">.</span><span class="n">file_uris</span><span class="p">())</span>
-</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="o">&gt;&gt;&gt;</span> <span class="n">df</span>
-</span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="n">Dask</span> <span class="n">DataFrame</span> <span class="n">Structure</span><span class="p">:</span>
-</span><span id="__span-3-5"><a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a>                <span class="n">value</span>             <span class="n">year</span>            <span class="n">month</span>              <span class="n">day</span>
-</span><span id="__span-3-6"><a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a><span class="n">npartitions</span><span class="o">=</span><span class="mi">6</span>
-</span><span id="__span-3-7"><a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a>               <span class="nb">object</span>  <span class="n">category</span><span class="p">[</span><span class="n">known</span><span class="p">]</span>  <span class="n">category</span><span class="p">[</span><span class="n">known</span><span class="p">]</span>  <span class="n">category</span><span class="p">[</span><span class="n">known</span><span class="p">]</span>
-</span><span id="__span-3-8"><a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a>                  <span class="o">...</span>              <span class="o">...</span>              <span class="o">...</span>              <span class="o">...</span>
-</span><span id="__span-3-9"><a id="__codelineno-3-9" name="__codelineno-3-9" href="#__codelineno-3-9"></a><span class="o">...</span>               <span class="o">...</span>              <span class="o">...</span>              <span class="o">...</span>              <span class="o">...</span>
-</span><span id="__span-3-10"><a id="__codelineno-3-10" name="__codelineno-3-10" href="#__codelineno-3-10"></a>                  <span class="o">...</span>              <span class="o">...</span>              <span class="o">...</span>              <span class="o">...</span>
-</span><span id="__span-3-11"><a id="__codelineno-3-11" name="__codelineno-3-11" href="#__codelineno-3-11"></a>                  <span class="o">...</span>              <span class="o">...</span>              <span class="o">...</span>              <span class="o">...</span>
-</span><span id="__span-3-12"><a id="__codelineno-3-12" name="__codelineno-3-12" href="#__codelineno-3-12"></a><span class="n">Dask</span> <span class="n">Name</span><span class="p">:</span> <span class="n">read</span><span class="o">-</span><span class="n">parquet</span><span class="p">,</span> <span class="mi">6</span> <span class="n">tasks</span>
-</span><span id="__span-3-13"><a id="__codelineno-3-13" name="__codelineno-3-13" href="#__codelineno-3-13"></a><span class="o">&gt;&gt;&gt;</span> <span class="n">df</span><span class="o">.</span><span class="n">compute</span><span class="p">()</span>
-</span><span id="__span-3-14"><a id="__codelineno-3-14" name="__codelineno-3-14" href="#__codelineno-3-14"></a>  <span class="n">value</span>  <span class="n">year</span> <span class="n">month</span> <span class="n">day</span>
-</span><span id="__span-3-15"><a id="__codelineno-3-15" name="__codelineno-3-15" href="#__codelineno-3-15"></a><span class="mi">0</span>     <span class="mi">1</span>  <span class="mi">2020</span>     <span class="mi">1</span>   <span class="mi">1</span>
-</span><span id="__span-3-16"><a id="__codelineno-3-16" name="__codelineno-3-16" href="#__codelineno-3-16"></a><span class="mi">0</span>     <span class="mi">2</span>  <span class="mi">2020</span>     <span class="mi">2</span>   <span class="mi">3</span>
-</span><span id="__span-3-17"><a id="__codelineno-3-17" name="__codelineno-3-17" href="#__codelineno-3-17"></a><span class="mi">0</span>     <span class="mi">3</span>  <span class="mi">2020</span>     <span class="mi">2</span>   <span class="mi">5</span>
-</span><span id="__span-3-18"><a id="__codelineno-3-18" name="__codelineno-3-18" href="#__codelineno-3-18"></a><span class="mi">0</span>     <span class="mi">4</span>  <span class="mi">2021</span>     <span class="mi">4</span>   <span class="mi">5</span>
-</span><span id="__span-3-19"><a id="__codelineno-3-19" name="__codelineno-3-19" href="#__codelineno-3-19"></a><span class="mi">0</span>     <span class="mi">5</span>  <span class="mi">2021</span>    <span class="mi">12</span>   <span class="mi">4</span>
-</span><span id="__span-3-20"><a id="__codelineno-3-20" name="__codelineno-3-20" href="#__codelineno-3-20"></a><span class="mi">0</span>     <span class="mi">6</span>  <span class="mi">2021</span>    <span class="mi">12</span>  <span class="mi">20</span>
-</span><span id="__span-3-21"><a id="__codelineno-3-21" name="__codelineno-3-21" href="#__codelineno-3-21"></a><span class="mi">1</span>     <span class="mi">7</span>  <span class="mi">2021</span>    <span class="mi">12</span>  <span class="mi">20</span>
+<p>Here are the contents of the Delta table:</p>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>tmp/a_table
+</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>├── 0-7d414a88-a634-4c2f-9c5b-c29b6ee5f524-0.parquet
+</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>├── 1-0617ef60-b17b-46a5-9b0f-c7dda1b73eee-0.parquet
+</span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a>└── _delta_log
+</span><span id="__span-3-5"><a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a>    ├── 00000000000000000000.json
+</span><span id="__span-3-6"><a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a>    └── 00000000000000000001.json
 </span></code></pre></div>
+<p>Now run a query to fetch all the records where the age is less than 20:</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="n">pl</span><span class="o">.</span><span class="n">scan_delta</span><span class="p">(</span><span class="s2">&quot;tmp/a_table&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">filter</span><span class="p">(</span><span class="n">pl</span><span class="o">.</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;age&quot;</span><span class="p">)</span> <span class="o">&lt;</span> <span class="mi">20</span><span class="p">)</span><span class="o">.</span><span class="n">collect</span><span class="p">()</span>
+</span></code></pre></div>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>+-------+-----+
+</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>| name  | age |
+</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a>| ---   | --- |
+</span><span id="__span-5-4"><a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a>| str   | i64 |
+</span><span id="__span-5-5"><a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a>+=============+
+</span><span id="__span-5-6"><a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a>| alice | 12  |
+</span><span id="__span-5-7"><a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a>+-------+-----+
+</span></code></pre></div>
+<p>Polars can use the Delta table metadata to skip the file that does not contain data relevant to the query.</p>
+<h2 id="how-delta-lake-implements-file-skipping">How Delta Lake implements file skipping</h2>
+<p>Here’s how engines execute queries on Delta tables:</p>
+<ul>
+<li>Start by reading the transaction log to get the file paths, file sizes, and min/max value for each column</li>
+<li>Parse the query and push down the predicates to skip files</li>
+<li>Read the minimal subset of the files needed for the query</li>
+</ul>
+<p>Some file formats don’t allow for file skipping.  For example, CSV files don’t have file-level metadata, so query engines can’t read a minimal subset of the data.  The query engine has to check all the files, even if they don’t contain any relevant data.</p>
+<p>When data is in Parquet files, the query engine can open up all the files, read the footers, build the file-level metadata, and perform file skipping.  Fetching metadata in each file is slower than grabbing the pre-built file-level metadata from the transaction log.</p>
+<p>Now, let’s see how to structure your tables to allow for more file skipping.</p>
+<h2 id="file-skipping-for-different-file-sizes">File skipping for different file sizes</h2>
+<p>Delta tables store data in files.  Smaller files allow for more file skipping compared to bigger files.</p>
+<p>However, an excessive number of small files isn’t good because it creates I/O overhead and slows down queries.</p>
+<p>Your Delta tables should have files that are “right-sized”.  For a table with 150 GB of data, 5 GB files would probably be too large, and 10 KB files would be too small.  It’s generally best to store data in files that are between 100 MB and 1 GB.</p>
+<p>Delta Lake has <a href="https://delta-io.github.io/delta-rs/usage/optimize/small-file-compaction-with-optimize/">an optimize function</a> that performs small file compaction, so you don’t need to program this logic yourself.</p>
+<p>Now, let's investigate how to store data in files to maximize the file skipping opportunities.</p>
+<h2 id="how-to-maximize-file-skipping">How to maximize file skipping</h2>
+<p>You can maximize file-skipping by colocating similar data in the same files.</p>
+<p>Suppose you have a table with test scores and frequently run queries that filter based on the <code>test_score</code> column.</p>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>filename    min_test_score  max_test_score
+</span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>fileA       45              100
+</span><span id="__span-6-3"><a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a>fileB       65              98
+</span><span id="__span-6-4"><a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a>fileC       50              96
+</span></code></pre></div>
+<p>Suppose you want to run the following query: <code>select * from exams where test_score &gt; 90</code>.</p>
+<p>This query cannot skip files, given the current organization of the data.  You can rearrange the data to colocate similar test scores in the same files to allow for file skipping.  Here’s the new layout: </p>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>filename    min_test_score  max_test_score
+</span><span id="__span-7-2"><a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a>fileD       45              70
+</span><span id="__span-7-3"><a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a>fileE       55              80
+</span><span id="__span-7-4"><a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a>fileF       78              100
+</span></code></pre></div>
+<p>The query (<code>select * from exams where test_score &gt; 90</code>) can skip two of the three files with the new Delta table layout.  The query engine only has to read <code>fileF</code> for this query.</p>
+<p>Now, let’s look at how file skipping works with string values.</p>
+<h2 id="how-file-skipping-works-with-strings">How file skipping works with strings</h2>
+<p>File skipping is also effective when filtering on string values.</p>
+<p>Suppose you have a table with <code>person_name</code> and <code>country</code> columns.  There are millions of rows of data.  Here are the first three rows of data:</p>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>person_name country
+</span><span id="__span-8-2"><a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a>person1     angola
+</span><span id="__span-8-3"><a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a>person2     china
+</span><span id="__span-8-4"><a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a>person3     mexico
+</span></code></pre></div>
+<p>The Delta table contains three files with the following metadata:</p>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a>filename    min_country max_country
+</span><span id="__span-9-2"><a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a>fileA       albania     mali
+</span><span id="__span-9-3"><a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a>fileB       libia       paraguay
+</span><span id="__span-9-4"><a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a>fileC       oman        zimbabwe
+</span></code></pre></div>
+<p>Suppose you want to run the following query: <code>select * from some_people where country = 'austria'</code>.</p>
+<p>You only need to read the data in <code>fileA</code> to run this query.  The <code>min_country</code> value for <code>fileB</code> and <code>fileC</code> are greater than “austria”, so we know those files don’t contain any data relevant to the query.</p>
+<p>File skipping can also be a robust optimization for string values.  Now, let’s see how file skipping works for partitioned tables.</p>
+<h2 id="file-skipping-for-partitioned-tables">File skipping for partitioned tables</h2>
+<p>You can partition Delta tables for file skipping as well.  Suppose we have the same data as in the previous section, but the table is partitioned by <code>country</code>.</p>
+<p>Here’s the Delta table:</p>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a>filename    partition
+</span><span id="__span-10-2"><a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a>fileA       albania
+</span><span id="__span-10-3"><a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a>fileB       libia
+</span><span id="__span-10-4"><a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a>fileC       oman
+</span><span id="__span-10-5"><a id="__codelineno-10-5" name="__codelineno-10-5" href="#__codelineno-10-5"></a>fileD       jamaica
+</span><span id="__span-10-6"><a id="__codelineno-10-6" name="__codelineno-10-6" href="#__codelineno-10-6"></a>fileE       albania
+</span><span id="__span-10-7"><a id="__codelineno-10-7" name="__codelineno-10-7" href="#__codelineno-10-7"></a>fileF       oman
+</span></code></pre></div>
+<p>Suppose you want to run the following query on this partitioned table: <code>select * from some_partitioned_table where country = 'albania'</code>.</p>
+<p>You only need to read <code>fileA</code> and <code>fileE</code> to execute this query.  Delta Lake provides the file-level partition metadata in the transaction log so that this query will run quickly.</p>
+<h2 id="conclusion">Conclusion</h2>
+<p>Delta Lake allows for file skipping, which is a powerful performance optimization.</p>
+<p>Delta Lake also provides built-in utilities to colocate data in the same files like partitioning, Z Ordering, and compaction to improve file skipping.</p>
+<p>Delta Lake users need to know how to assess the tradeoffs of these techniques to optimize file skipping.  Users also need to understand the most frequent query patterns of their tables to best allow for file maximal file skipping.</p>
 
 
 
@@ -1646,7 +1789,7 @@ example, you can pass them to <code>dask.dataframe.read_parquet</code>:</p>
       <nav class="md-footer__inner md-grid" aria-label="Footer" >
         
           
-          <a href="../examining-table/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Examining a table">
+          <a href="../delta-lake-acid-transactions/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Transactions">
             <div class="md-footer__button md-icon">
               
               <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11h12Z"/></svg>
@@ -1656,27 +1799,11 @@ example, you can pass them to <code>dask.dataframe.read_parquet</code>:</p>
                 Previous
               </span>
               <div class="md-ellipsis">
-                Examining a table
+                Transactions
               </div>
             </div>
           </a>
         
-        
-          
-          <a href="../managing-tables/" class="md-footer__link md-footer__link--next" aria-label="Next: Managing a table">
-            <div class="md-footer__title">
-              <span class="md-footer__direction">
-                Next
-              </span>
-              <div class="md-ellipsis">
-                Managing a table
-              </div>
-            </div>
-            <div class="md-footer__button md-icon">
-              
-              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M4 11v2h12l-5.5 5.5 1.42 1.42L19.84 12l-7.92-7.92L10.5 5.5 16 11H4Z"/></svg>
-            </div>
-          </a>
         
       </nav>
     

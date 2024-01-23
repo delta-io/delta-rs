@@ -709,16 +709,80 @@
   
   
   
-    <li class="md-nav__item">
-      <a href="../../usage/writing-delta-tables/" class="md-nav__link">
+    
+    
+      
         
+          
+        
+      
+        
+      
+    
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_2_10" >
+        
+          
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../usage/writing/" class="md-nav__link ">
+              
   
   <span class="md-ellipsis">
     Writing a table
   </span>
   
 
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_2_10" id="__nav_2_10_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_2_10_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2_10">
+            <span class="md-nav__icon md-icon"></span>
+            Writing a table
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../usage/writing/writing-to-s3-with-locking-provider/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Writing to S3 with a locking provider
+  </span>
+  
+
       </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
     </li>
   
 
@@ -1392,6 +1456,8 @@
       
         
       
+        
+      
     
     
     
@@ -1458,6 +1524,26 @@
   
   <span class="md-ellipsis">
     Transactions
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../how-delta-lake-works/delta-lake-file-skipping/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    File skipping
   </span>
   
 
@@ -1586,26 +1672,12 @@
   
       <p>Write to a Delta Lake table</p>
 <p>If the table does not already exist, it will be created.</p>
-<p>This function only supports writer protocol version 2 currently. When
-attempting to write to an existing table with a higher min_writer_version,
-this function will throw DeltaProtocolError.</p>
-<p>Note that this function does NOT register this table in a data catalog.</p>
+<p>The pyarrow writer supports protocol version 2 currently and won't be updated.
+For higher protocol support use engine='rust', this will become the default
+eventually.</p>
 <p>A locking mechanism is needed to prevent unsafe concurrent writes to a
-delta lake directory when writing to S3. DynamoDB is the only available
-locking provider at the moment in delta-rs. To enable DynamoDB as the
-locking provider, you need to set the <code>AWS_S3_LOCKING_PROVIDER</code> to 'dynamodb'
-as a storage_option or as an environment variable.</p>
-<p>Additionally, you must create a DynamoDB table with the name 'delta_rs_lock_table'
-so that it can be automatically discovered by delta-rs. Alternatively, you can
-use a table name of your choice, but you must set the <code>DELTA_DYNAMO_TABLE_NAME</code>
-variable to match your chosen table name. The required schema for the DynamoDB
-table is as follows:</p>
-<ul>
-<li>Key Schema: AttributeName=key, KeyType=HASH</li>
-<li>Attribute Definitions: AttributeName=key, AttributeType=S</li>
-</ul>
-<p>Please note that this locking mechanism is not compatible with any other
-locking mechanisms, including the one used by Spark.</p>
+delta lake directory when writing to S3. For more information on the setup, follow
+this usage guide: https://delta-io.github.io/delta-rs/usage/writing/writing-to-s3-with-locking-provider/</p>
 
 
 
