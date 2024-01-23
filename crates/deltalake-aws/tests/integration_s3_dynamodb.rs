@@ -156,6 +156,7 @@ async fn test_repair_commit_entry() -> TestResult<()> {
 
 #[tokio::test]
 #[serial]
+#[ignore = "https://github.com/delta-io/delta-rs/issues/2109"]
 async fn test_repair_on_update() -> TestResult<()> {
     let context = IntegrationContext::new(Box::new(S3Integration::default()))?;
     let mut table = prepare_table(&context, "repair_on_update").await?;
