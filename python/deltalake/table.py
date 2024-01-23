@@ -841,7 +841,6 @@ class DeltaTable:
                 updates[key] = value
         elif updates is not None and new_values is None:
             for key, value in updates.items():
-                print(type(key), type(value))
                 if not isinstance(value, str) or not isinstance(key, str):
                     raise TypeError(
                         f"The values of the updates parameter must all be SQL strings. Got {updates}. Did you mean to use the new_values parameter?"
