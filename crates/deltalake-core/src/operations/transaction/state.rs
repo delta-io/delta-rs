@@ -29,11 +29,6 @@ impl DeltaTableState {
         self._arrow_schema(true)
     }
 
-        /// Get the table schema as an [`ArrowSchemaRef`]
-        pub fn arrow_schema_without_wrap(&self) -> DeltaResult<ArrowSchemaRef> {
-            self._arrow_schema(false)
-        }
-
     fn _arrow_schema(&self, wrap_partitions: bool) -> DeltaResult<ArrowSchemaRef> {
         let meta = self.current_metadata().ok_or(DeltaTableError::NoMetadata)?;
         let fields = meta
