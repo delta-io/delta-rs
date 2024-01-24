@@ -17,7 +17,7 @@ use regex::Regex;
 use serde::de::{Error, SeqAccess, Visitor};
 use serde::ser::SerializeSeq;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use tracing::{info_span, instrument};
+use tracing::{instrument, info_span};
 use tracing_futures::Instrument;
 use uuid::Uuid;
 
