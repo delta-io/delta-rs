@@ -16,7 +16,12 @@ fn cast_struct(
     fields
         .iter()
         .map(|field| {
-            let col = struct_array.column_by_name(field.name()).unwrap();
+            let col_opt = struct_array.column_by_name(field.name());
+            if col_opt.is_none() {
+                return Err(arrow_schema::ArrowError::SchemaError(format!("Missing column {}", field.name())));
+            }
+
+            let col = col_opt.unwrap();
             if let (DataType::Struct(_), DataType::Struct(child_fields)) =
                 (col.data_type(), field.data_type())
             {

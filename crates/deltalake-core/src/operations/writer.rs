@@ -322,6 +322,12 @@ impl PartitionWriter {
         // replace counter / buffers and close the current writer
         let (writer, buffer) = self.reset_writer()?;
         let metadata = writer.close()?;
+
+        // don't write an empty file
+        if metadata.num_rows == 0 {
+            return Ok(());
+        }
+
         let buffer = match buffer.into_inner() {
             Some(buffer) => Bytes::from(buffer),
             None => return Ok(()), // Nothing to write
@@ -366,9 +372,13 @@ impl PartitionWriter {
         for offset in (0..max_offset).step_by(self.config.write_batch_size) {
             let length = usize::min(self.config.write_batch_size, max_offset - offset);
             self.write_batch(&batch.slice(offset, length))?;
+
             // flush currently buffered data to disk once we meet or exceed the target file size.
-            if self.buffer.len() >= self.config.target_file_size {
-                debug!("Writing file with size {:?} to disk.", self.buffer.len());
+            let unflushed_estimate = self.arrow_writer.in_progress_size();
+            let flushed_size = self.buffer.len();
+            let estimate = unflushed_estimate + flushed_size + 0x2000;
+            if estimate >= self.config.target_file_size {
+                debug!("Writing file with estimated size {:?} to disk.", estimate);
                 self.flush_arrow_writer().await?;
             }
         }
