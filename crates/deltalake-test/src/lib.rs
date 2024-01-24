@@ -22,7 +22,7 @@ pub mod read;
 pub mod utils;
 
 pub use concurrent::test_concurrent_writes;
-pub use read::test_read_tables;
+pub use read::*;
 pub use utils::{IntegrationContext, TestResult};
 
 #[derive(Default)]
@@ -135,7 +135,6 @@ pub async fn add_file(
             data_change: true,
             stats: None,
             stats_parsed: None,
-            partition_values_parsed: None,
             tags: None,
             default_row_commit_version: None,
             base_row_id: None,
@@ -152,7 +151,7 @@ pub async fn add_file(
             table.log_store().as_ref(),
             &actions,
             operation,
-            &table.state,
+            table.state.as_ref(),
             None,
         )
         .await
@@ -190,7 +189,7 @@ pub async fn remove_file(
         table.log_store().as_ref(),
         &actions,
         operation,
-        &table.state,
+        table.state.as_ref(),
         None,
     )
     .await

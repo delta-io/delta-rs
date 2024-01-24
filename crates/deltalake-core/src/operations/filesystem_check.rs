@@ -100,17 +100,17 @@ impl FileSystemCheckBuilder {
     }
 
     async fn create_fsck_plan(&self) -> DeltaResult<FileSystemCheckPlan> {
-        let mut files_relative: HashMap<&str, &Add> =
-            HashMap::with_capacity(self.snapshot.files().len());
+        let mut files_relative: HashMap<String, Add> =
+            HashMap::with_capacity(self.snapshot.file_actions()?.len());
         let log_store = self.log_store.clone();
 
-        for active in self.snapshot.files() {
+        for active in self.snapshot.file_actions()? {
             if is_absolute_path(&active.path)? {
                 return Err(DeltaTableError::Generic(
                     "Filesystem check does not support absolute paths".to_string(),
                 ));
             } else {
-                files_relative.insert(&active.path, active);
+                files_relative.insert(active.path.clone(), active);
             }
         }
 
@@ -189,7 +189,7 @@ impl FileSystemCheckPlan {
             self.log_store.as_ref(),
             &actions,
             DeltaOperation::FileSystemCheck {},
-            snapshot,
+            Some(snapshot),
             // TODO pass through metadata
             Some(app_metadata),
         )

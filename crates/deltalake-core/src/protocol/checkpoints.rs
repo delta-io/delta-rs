@@ -1,11 +1,10 @@
 //! Implementation for writing delta checkpoints.
 
 use std::collections::HashMap;
-use std::convert::TryFrom;
 use std::iter::Iterator;
 
-use arrow::json::ReaderBuilder;
-use arrow_schema::{ArrowError, Schema as ArrowSchema};
+use arrow_json::ReaderBuilder;
+use arrow_schema::ArrowError;
 
 use chrono::{Datelike, Utc};
 use futures::{StreamExt, TryStreamExt};
@@ -20,12 +19,11 @@ use tracing::{debug, error};
 use super::{time_utils, ProtocolError};
 use crate::kernel::arrow::delta_log_schema_for_table;
 use crate::kernel::{
-    Action, Add as AddAction, DataType, Metadata, PrimitiveType, Protocol, StructField, StructType,
-    Txn,
+    Action, Add as AddAction, DataType, PrimitiveType, Protocol, Remove, StructField, Txn,
 };
 use crate::logstore::LogStore;
 use crate::table::state::DeltaTableState;
-use crate::table::{CheckPoint, CheckPointBuilder};
+use crate::table::{get_partition_col_data_types, CheckPoint, CheckPointBuilder};
 use crate::{open_table_with_version, DeltaTable};
 
 type SchemaPath = Vec<String>;
@@ -82,7 +80,12 @@ pub const CHECKPOINT_RECORD_BATCH_SIZE: usize = 5000;
 
 /// Creates checkpoint at current table version
 pub async fn create_checkpoint(table: &DeltaTable) -> Result<(), ProtocolError> {
-    create_checkpoint_for(table.version(), table.get_state(), table.log_store.as_ref()).await?;
+    create_checkpoint_for(
+        table.version(),
+        table.snapshot().map_err(|_| ProtocolError::NoMetaData)?,
+        table.log_store.as_ref(),
+    )
+    .await?;
     Ok(())
 }
 
@@ -91,7 +94,8 @@ pub async fn create_checkpoint(table: &DeltaTable) -> Result<(), ProtocolError> 
 pub async fn cleanup_metadata(table: &DeltaTable) -> Result<usize, ProtocolError> {
     let log_retention_timestamp = Utc::now().timestamp_millis()
         - table
-            .get_state()
+            .snapshot()
+            .map_err(|_| ProtocolError::NoMetaData)?
             .table_config()
             .log_retention_duration()
             .as_millis() as i64;
@@ -114,14 +118,11 @@ pub async fn create_checkpoint_from_table_uri_and_cleanup(
     let table = open_table_with_version(table_uri, version)
         .await
         .map_err(|err| ProtocolError::Generic(err.to_string()))?;
-    create_checkpoint_for(version, table.get_state(), table.log_store.as_ref()).await?;
+    let snapshot = table.snapshot().map_err(|_| ProtocolError::NoMetaData)?;
+    create_checkpoint_for(version, snapshot, table.log_store.as_ref()).await?;
 
-    let enable_expired_log_cleanup = cleanup.unwrap_or_else(|| {
-        table
-            .get_state()
-            .table_config()
-            .enable_expired_log_cleanup()
-    });
+    let enable_expired_log_cleanup =
+        cleanup.unwrap_or_else(|| snapshot.table_config().enable_expired_log_cleanup());
 
     if table.version() >= 0 && enable_expired_log_cleanup {
         let deleted_log_num = cleanup_metadata(&table).await?;
@@ -151,7 +152,12 @@ pub async fn create_checkpoint_for(
     let last_checkpoint_path = log_store.log_path().child("_last_checkpoint");
 
     debug!("Writing parquet bytes to checkpoint buffer.");
-    let (checkpoint, parquet_bytes) = parquet_bytes_from_state(state)?;
+    let tombstones = state
+        .unexpired_tombstones(log_store.object_store().clone())
+        .await
+        .map_err(|_| ProtocolError::Generic("filed to get tombstones".into()))?
+        .collect::<Vec<_>>();
+    let (checkpoint, parquet_bytes) = parquet_bytes_from_state(state, tombstones)?;
 
     let file_name = format!("{version:020}.checkpoint.parquet");
     let checkpoint_path = log_store.log_path().child(file_name);
@@ -239,19 +245,16 @@ pub async fn cleanup_expired_logs_for(
 
 fn parquet_bytes_from_state(
     state: &DeltaTableState,
+    mut tombstones: Vec<Remove>,
 ) -> Result<(CheckPoint, bytes::Bytes), ProtocolError> {
-    let current_metadata = state.delta_metadata().ok_or(ProtocolError::NoMetaData)?;
+    let current_metadata = state.metadata();
+    let schema = current_metadata.schema()?;
 
-    let partition_col_data_types = current_metadata.get_partition_col_data_types();
+    let partition_col_data_types = get_partition_col_data_types(&schema, current_metadata);
 
     // Collect a map of paths that require special stats conversion.
     let mut stats_conversions: Vec<(SchemaPath, DataType)> = Vec::new();
-    collect_stats_conversions(
-        &mut stats_conversions,
-        current_metadata.schema.fields().as_slice(),
-    );
-
-    let mut tombstones = state.unexpired_tombstones().cloned().collect::<Vec<_>>();
+    collect_stats_conversions(&mut stats_conversions, schema.fields().as_slice());
 
     // if any, tombstones do not include extended file metadata, we must omit the extended metadata fields from the remove schema
     // See https://github.com/delta-io/delta/blob/master/PROTOCOL.md#add-file-and-remove-file
@@ -271,7 +274,7 @@ fn parquet_bytes_from_state(
             remove.extended_file_metadata = Some(false);
         }
     }
-
+    let files = state.file_actions().unwrap();
     // protocol
     let jsons = std::iter::once(Action::Protocol(Protocol {
         min_reader_version: state.protocol().min_reader_version,
@@ -280,9 +283,7 @@ fn parquet_bytes_from_state(
         reader_features: None,
     }))
     // metaData
-    .chain(std::iter::once(Action::Metadata(Metadata::try_from(
-        current_metadata.clone(),
-    )?)))
+    .chain(std::iter::once(Action::Metadata(current_metadata.clone())))
     // txns
     .chain(
         state
@@ -310,13 +311,13 @@ fn parquet_bytes_from_state(
     }))
     .map(|a| serde_json::to_value(a).map_err(ProtocolError::from))
     // adds
-    .chain(state.files().iter().map(|f| {
+    .chain(files.iter().map(|f| {
         checkpoint_add_from_state(f, partition_col_data_types.as_slice(), &stats_conversions)
     }));
 
     // Create the arrow schema that represents the Checkpoint parquet file.
     let arrow_schema = delta_log_schema_for_table(
-        <ArrowSchema as TryFrom<&StructType>>::try_from(&current_metadata.schema)?,
+        (&schema).try_into()?,
         current_metadata.partition_columns.as_slice(),
         use_extended_remove_schema,
     );
@@ -521,16 +522,17 @@ fn apply_stats_conversion(
 mod tests {
     use std::sync::Arc;
 
-    use super::*;
     use arrow_array::{ArrayRef, RecordBatch};
+    use arrow_schema::Schema as ArrowSchema;
     use chrono::Duration;
     use lazy_static::lazy_static;
+    use object_store::path::Path;
     use serde_json::json;
 
-    use crate::logstore;
+    use super::*;
+    use crate::kernel::StructType;
     use crate::operations::DeltaOps;
     use crate::writer::test_utils::get_delta_schema;
-    use object_store::path::Path;
 
     #[tokio::test]
     async fn test_create_checkpoint_for() {
@@ -544,7 +546,8 @@ mod tests {
             .unwrap();
         assert_eq!(table.version(), 0);
         assert_eq!(table.get_schema().unwrap(), &table_schema);
-        let res = create_checkpoint_for(0, table.get_state(), table.log_store.as_ref()).await;
+        let res =
+            create_checkpoint_for(0, table.snapshot().unwrap(), table.log_store.as_ref()).await;
         assert!(res.is_ok());
 
         // Look at the "files" and verify that the _last_checkpoint has the right version
@@ -573,7 +576,7 @@ mod tests {
             .unwrap();
         assert_eq!(table.version(), 0);
         assert_eq!(table.get_schema().unwrap(), &table_schema);
-        match create_checkpoint_for(1, table.get_state(), table.log_store.as_ref()).await {
+        match create_checkpoint_for(1, table.snapshot().unwrap(), table.log_store.as_ref()).await {
             Ok(_) => {
                 /*
                  * If a checkpoint is allowed to be created here, it will use the passed in
@@ -752,7 +755,8 @@ mod tests {
         let log_retention_timestamp = (Utc::now().timestamp_millis()
             + Duration::days(31).num_milliseconds())
             - table
-                .get_state()
+                .snapshot()
+                .unwrap()
                 .table_config()
                 .log_retention_duration()
                 .as_millis() as i64;
@@ -779,7 +783,8 @@ mod tests {
         let log_retention_timestamp = (Utc::now().timestamp_millis()
             + Duration::days(32).num_milliseconds())
             - table
-                .get_state()
+                .snapshot()
+                .unwrap()
                 .table_config()
                 .log_retention_duration()
                 .as_millis() as i64;

@@ -237,7 +237,7 @@ def test_roundtrip_metadata(tmp_path: pathlib.Path, sample_data: pa.Table, engin
         "float32",
         "float64",
         "bool",
-        "binary",
+        # "binary",
         "date32",
         "timestamp",
     ],

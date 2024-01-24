@@ -722,8 +722,7 @@ class DeltaTable:
                 yield n, elem
                 n -= 1
 
-        commits = list(reversed(self._table.history(limit)))
-
+        commits = list(self._table.history(limit))
         history = []
         for version, commit_info_raw in _backwards_enumerate(
             commits, start_end=self._table.get_latest_version()
@@ -842,7 +841,6 @@ class DeltaTable:
                 updates[key] = value
         elif updates is not None and new_values is None:
             for key, value in updates.items():
-                print(type(key), type(value))
                 if not isinstance(value, str) or not isinstance(key, str):
                     raise TypeError(
                         f"The values of the updates parameter must all be SQL strings. Got {updates}. Did you mean to use the new_values parameter?"

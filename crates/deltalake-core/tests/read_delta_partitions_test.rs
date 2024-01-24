@@ -1,3 +1,4 @@
+#![cfg(feature = "deltalake")]
 use std::collections::HashMap;
 use std::convert::TryFrom;
 
@@ -116,7 +117,6 @@ fn test_match_filters() {
     assert!(!invalid_filter.match_partitions(&partitions, &partition_data_types),);
 }
 
-#[cfg(all(feature = "arrow", feature = "parquet"))]
 #[tokio::test]
 async fn read_null_partitions_from_checkpoint() {
     use deltalake_core::kernel::Add;

@@ -17,15 +17,14 @@ use crate::delta_datafusion::expr::fmt_expr_to_sql;
 use crate::delta_datafusion::{
     register_store, DeltaDataChecker, DeltaScanBuilder, DeltaSessionContext,
 };
-use crate::kernel::{Action, CommitInfo, IsolationLevel, Protocol};
+use crate::kernel::{CommitInfo, IsolationLevel, Protocol};
 use crate::logstore::LogStoreRef;
 use crate::operations::datafusion_utils::Expression;
 use crate::operations::transaction::commit;
 use crate::protocol::DeltaOperation;
 use crate::table::state::DeltaTableState;
 use crate::table::Constraint;
-use crate::DeltaTable;
-use crate::{DeltaResult, DeltaTableError};
+use crate::{DeltaResult, DeltaTable, DeltaTableError};
 
 use super::datafusion_utils::into_expr;
 
@@ -103,7 +102,7 @@ impl std::future::IntoFuture for ConstraintBuilder {
                 .expr
                 .ok_or_else(|| DeltaTableError::Generic("No Expresion provided".to_string()))?;
 
-            let mut metadata = this.snapshot.metadata()?.clone();
+            let mut metadata = this.snapshot.metadata().clone();
             let configuration_key = format!("delta.constraints.{}", name);
 
             if metadata.configuration.contains_key(&configuration_key) {
@@ -207,23 +206,18 @@ impl std::future::IntoFuture for ConstraintBuilder {
                 ..Default::default()
             };
 
-            let actions = vec![
-                Action::CommitInfo(commit_info),
-                Action::Metadata(metadata),
-                Action::Protocol(protocol),
-            ];
+            let actions = vec![commit_info.into(), metadata.into(), protocol.into()];
 
             let version = commit(
                 this.log_store.as_ref(),
                 &actions,
-                operations,
-                &this.snapshot,
+                operations.clone(),
+                Some(&this.snapshot),
                 None,
             )
             .await?;
 
-            this.snapshot
-                .merge(DeltaTableState::from_actions(actions, version)?, true, true);
+            this.snapshot.merge(actions, &operations, version)?;
             Ok(DeltaTable::new_with_state(this.log_store, this.snapshot))
         })
     }
@@ -254,7 +248,7 @@ mod tests {
 
     async fn get_constraint_op_params(table: &mut DeltaTable) -> String {
         let commit_info = table.history(None).await.unwrap();
-        let last_commit = &commit_info[commit_info.len() - 1];
+        let last_commit = &commit_info[0];
         last_commit
             .operation_parameters
             .as_ref()

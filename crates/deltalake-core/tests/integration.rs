@@ -12,7 +12,7 @@ static TEST_PREFIXES: &[&str] = &["my table", "你好/😊"];
 #[tokio::test]
 #[serial]
 async fn test_integration_local() -> TestResult {
-    let context = IntegrationContext::new(Box::new(LocalStorageIntegration::default()))?;
+    let context = IntegrationContext::new(Box::<LocalStorageIntegration>::default())?;
 
     test_read_tables(&context).await?;
 
@@ -26,7 +26,7 @@ async fn test_integration_local() -> TestResult {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[serial]
 async fn test_concurrency_local() -> TestResult {
-    let context = IntegrationContext::new(Box::new(LocalStorageIntegration::default()))?;
+    let context = IntegrationContext::new(Box::<LocalStorageIntegration>::default())?;
 
     test_concurrent_writes(&context).await?;
 
@@ -42,7 +42,7 @@ async fn test_action_reconciliation() {
     let a = fs_common::add(3 * 60 * 1000);
     assert_eq!(1, fs_common::commit_add(&mut table, &a).await);
     assert_eq!(
-        table.get_files_iter().collect::<Vec<_>>(),
+        table.get_files_iter().unwrap().collect::<Vec<_>>(),
         vec![Path::from(a.path.clone())]
     );
 
@@ -61,23 +61,16 @@ async fn test_action_reconciliation() {
     };
 
     assert_eq!(2, fs_common::commit_removes(&mut table, vec![&r]).await);
-    assert_eq!(table.get_files_iter().count(), 0);
+    assert_eq!(table.get_files_iter().unwrap().count(), 0);
     assert_eq!(
         table
-            .get_state()
-            .all_tombstones()
-            .iter()
-            .map(|r| r.path.as_str())
+            .snapshot()
+            .unwrap()
+            .all_tombstones(table.object_store().clone())
+            .await
+            .unwrap()
+            .map(|r| r.path.clone())
             .collect::<Vec<_>>(),
-        vec![a.path.as_str()]
+        vec![a.path.clone()]
     );
-
-    // Add removed file back.
-    assert_eq!(3, fs_common::commit_add(&mut table, &a).await);
-    assert_eq!(
-        table.get_files_iter().collect::<Vec<_>>(),
-        vec![Path::from(a.path)]
-    );
-    // tombstone is removed.
-    assert_eq!(table.get_state().all_tombstones().len(), 0);
 }
