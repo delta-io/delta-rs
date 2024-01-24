@@ -17,8 +17,7 @@ use regex::Regex;
 use serde::de::{Error, SeqAccess, Visitor};
 use serde::ser::SerializeSeq;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use tracing::{instrument, info_span};
-use tracing_futures::Instrument;
+use tracing::instrument;
 use uuid::Uuid;
 
 use self::builder::DeltaTableConfig;
@@ -448,8 +447,7 @@ impl DeltaTable {
             let mut max_version: i64 = version_start;
             let prefix = Some(self.storage.log_path());
             let offset_path = commit_uri_from_version(max_version);
-            let files = self.storage.list_with_offset(prefix, &offset_path).await?;
-            let mut files = files.instrument(info_span!("list_with_offset_poll_next", prefeix = ?prefix, offset_path = ?offset_path));
+            let mut files = self.storage.list_with_offset(prefix, &offset_path).await?;
 
             while let Some(obj_meta) = files.next().await {
                 let obj_meta = obj_meta?;

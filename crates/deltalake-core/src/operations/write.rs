@@ -61,10 +61,9 @@ pub enum WriteError {
 
     #[error("Failed to execute write task: {source}")]
     /// The write task failed
-    WriteTask {
+    WriteTask { 
         /// The source of the failure
-        source: tokio::task::JoinError,
-    },
+        source: tokio::task::JoinError },
 
     #[error("Delta-rs does not support writer version requirement: {0}")]
     /// Incorrect version
@@ -538,10 +537,7 @@ fn cast_record_batch_columns(
         .map(|f| {
             let col_opt = batch.column_by_name(f.name());
             if col_opt.is_none() {
-                return Err(arrow_schema::ArrowError::SchemaError(format!(
-                    "Missing column {}",
-                    f.name()
-                )));
+                return Err(arrow_schema::ArrowError::SchemaError(format!("Missing column {}", f.name())));
             }
 
             let col = col_opt.unwrap();

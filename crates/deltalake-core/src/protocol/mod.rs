@@ -20,12 +20,12 @@ use object_store::{path::Path, Error as ObjectStoreError, ObjectStore};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
+use tracing::instrument;
 use std::borrow::Borrow;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::mem::take;
 use std::str::FromStr;
-use tracing::instrument;
 
 use crate::errors::DeltaResult;
 use crate::storage::ObjectStoreRef;
