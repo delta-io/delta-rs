@@ -1,11 +1,14 @@
 //! Delta Table partition handling logic.
-
-use std::convert::TryFrom;
-
-use super::SchemaDataType;
-use crate::errors::DeltaTableError;
+//!
 use std::cmp::Ordering;
 use std::collections::HashMap;
+use std::convert::TryFrom;
+
+use crate::errors::DeltaTableError;
+use crate::kernel::{DataType, PrimitiveType, Scalar};
+
+/// A special value used in Hive to represent the null partition in partitioned tables
+pub const NULL_PARTITION_VALUE_DATA_PATH: &str = "__HIVE_DEFAULT_PARTITION__";
 
 /// A Enum used for selecting the partition value operation when filtering a DeltaTable partition.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -38,47 +41,50 @@ pub struct PartitionFilter {
 }
 
 fn compare_typed_value(
-    partition_value: &str,
+    partition_value: &Scalar,
     filter_value: &str,
-    data_type: &SchemaDataType,
+    data_type: &DataType,
 ) -> Option<Ordering> {
     match data_type {
-        SchemaDataType::primitive(primitive_type) => match primitive_type.as_str() {
-            "long" | "integer" | "short" | "byte" => match filter_value.parse::<i64>() {
-                Ok(parsed_filter_value) => {
-                    let parsed_partition_value = partition_value.parse::<i64>().unwrap();
-                    parsed_partition_value.partial_cmp(&parsed_filter_value)
-                }
-                _ => None,
-            },
-            "float" | "double" => match filter_value.parse::<f64>() {
-                Ok(parsed_filter_value) => {
-                    let parsed_partition_value = partition_value.parse::<f64>().unwrap();
-                    parsed_partition_value.partial_cmp(&parsed_filter_value)
-                }
-                _ => None,
-            },
-            _ => partition_value.partial_cmp(filter_value),
-        },
-        _ => partition_value.partial_cmp(filter_value),
+        DataType::Primitive(primitive_type) => {
+            let other = primitive_type.parse_scalar(filter_value).ok()?;
+            partition_value.partial_cmp(&other)
+        }
+        // NOTE: complex types are not supported as partition columns
+        _ => None,
     }
 }
 
 /// Partition filters methods for filtering the DeltaTable partitions.
 impl PartitionFilter {
     /// Indicates if a DeltaTable partition matches with the partition filter by key and value.
-    pub fn match_partition(
-        &self,
-        partition: &DeltaTablePartition,
-        data_type: &SchemaDataType,
-    ) -> bool {
+    pub fn match_partition(&self, partition: &DeltaTablePartition, data_type: &DataType) -> bool {
         if self.key != partition.key {
             return false;
         }
+        if self.value == PartitionValue::Equal("".to_string()) {
+            return partition.value.is_null();
+        }
 
         match &self.value {
-            PartitionValue::Equal(value) => value == &partition.value,
-            PartitionValue::NotEqual(value) => value != &partition.value,
+            PartitionValue::Equal(value) => {
+                if let DataType::Primitive(PrimitiveType::Timestamp) = data_type {
+                    compare_typed_value(&partition.value, value, data_type)
+                        .map(|x| x.is_eq())
+                        .unwrap_or(false)
+                } else {
+                    partition.value.serialize() == *value
+                }
+            }
+            PartitionValue::NotEqual(value) => {
+                if let DataType::Primitive(PrimitiveType::Timestamp) = data_type {
+                    compare_typed_value(&partition.value, value, data_type)
+                        .map(|x| !x.is_eq())
+                        .unwrap_or(false)
+                } else {
+                    !(partition.value.serialize() == *value)
+                }
+            }
             PartitionValue::GreaterThan(value) => {
                 compare_typed_value(&partition.value, value, data_type)
                     .map(|x| x.is_gt())
@@ -99,8 +105,8 @@ impl PartitionFilter {
                     .map(|x| x.is_le())
                     .unwrap_or(false)
             }
-            PartitionValue::In(value) => value.contains(&partition.value),
-            PartitionValue::NotIn(value) => !value.contains(&partition.value),
+            PartitionValue::In(value) => value.contains(&partition.value.serialize()),
+            PartitionValue::NotIn(value) => !value.contains(&partition.value.serialize()),
         }
     }
 
@@ -109,12 +115,9 @@ impl PartitionFilter {
     pub fn match_partitions(
         &self,
         partitions: &[DeltaTablePartition],
-        partition_col_data_types: &HashMap<&str, &SchemaDataType>,
+        partition_col_data_types: &HashMap<&String, &DataType>,
     ) -> bool {
-        let data_type = partition_col_data_types
-            .get(self.key.as_str())
-            .unwrap()
-            .to_owned();
+        let data_type = partition_col_data_types.get(&self.key).unwrap().to_owned();
         partitions
             .iter()
             .any(|partition| self.match_partition(partition, data_type))
@@ -184,82 +187,23 @@ impl TryFrom<(&str, &str, &[&str])> for PartitionFilter {
 }
 
 /// A Struct DeltaTablePartition used to represent a partition of a DeltaTable.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct DeltaTablePartition {
     /// The key of the DeltaTable partition.
     pub key: String,
     /// The value of the DeltaTable partition.
-    pub value: String,
+    pub value: Scalar,
 }
 
-/// Create a DeltaTable partition from a HivePartition string.
-///
-/// A HivePartition string is represented by a "key=value" format.
-///
-/// ```rust
-/// use deltalake_core::DeltaTablePartition;
-///
-/// let hive_part = "ds=2023-01-01";
-/// let partition = DeltaTablePartition::try_from(hive_part).unwrap();
-/// assert_eq!("ds", partition.key);
-/// assert_eq!("2023-01-01", partition.value);
-/// ```
-impl TryFrom<&str> for DeltaTablePartition {
-    type Error = DeltaTableError;
-
-    /// Try to create a DeltaTable partition from a HivePartition string.
-    /// Returns a DeltaTableError if the string is not in the form of a HivePartition.
-    fn try_from(partition: &str) -> Result<Self, DeltaTableError> {
-        let partition_splitted: Vec<&str> = partition.split('=').collect();
-        match partition_splitted {
-            partition_splitted if partition_splitted.len() == 2 => Ok(DeltaTablePartition {
-                key: partition_splitted[0].to_owned(),
-                value: partition_splitted[1].to_owned(),
-            }),
-            _ => Err(DeltaTableError::PartitionError {
-                partition: partition.to_string(),
-            }),
-        }
-    }
-}
+impl Eq for DeltaTablePartition {}
 
 impl DeltaTablePartition {
-    /// Try to create a DeltaTable partition from a partition value kv pair.
-    ///
-    /// ```rust
-    /// use deltalake_core::DeltaTablePartition;
-    ///
-    /// let value = ("ds", &Some("2023-01-01".to_string()));
-    /// let null_default = "1979-01-01";
-    /// let partition = DeltaTablePartition::from_partition_value(value, null_default);
-    ///
-    /// assert_eq!("ds", partition.key);
-    /// assert_eq!("2023-01-01", partition.value);
-    /// ```
-    pub fn from_partition_value(
-        partition_value: (&str, &Option<String>),
-        default_for_null: &str,
-    ) -> Self {
+    /// Create a DeltaTable partition from a Tuple of (key, value).
+    pub fn from_partition_value(partition_value: (&str, &Scalar)) -> Self {
         let (k, v) = partition_value;
-        let v = match v {
-            Some(s) => s,
-            None => default_for_null,
-        };
         DeltaTablePartition {
             key: k.to_owned(),
             value: v.to_owned(),
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn tryfrom_invalid() {
-        let buf = "this-is-not-a-partition";
-        let partition = DeltaTablePartition::try_from(buf);
-        assert!(partition.is_err());
     }
 }

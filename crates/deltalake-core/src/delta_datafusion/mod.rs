@@ -22,18 +22,18 @@
 
 use std::any::Any;
 use std::collections::{HashMap, HashSet};
-use std::convert::TryFrom;
 use std::fmt::{self, Debug};
 use std::sync::Arc;
 
-use arrow::array::ArrayRef;
 use arrow::compute::{cast_with_options, CastOptions};
 use arrow::datatypes::DataType;
 use arrow::datatypes::{DataType as ArrowDataType, Schema as ArrowSchema, SchemaRef, TimeUnit};
 use arrow::error::ArrowError;
 use arrow::record_batch::RecordBatch;
 use arrow_array::types::UInt16Type;
-use arrow_array::{DictionaryArray, StringArray};
+use arrow_array::{Array, DictionaryArray, StringArray, TypedDictionaryArray};
+use arrow_cast::display::array_value_to_string;
+
 use arrow_schema::Field;
 use async_trait::async_trait;
 use chrono::{NaiveDateTime, TimeZone, Utc};
@@ -43,42 +43,49 @@ use datafusion::datasource::physical_plan::{
 };
 use datafusion::datasource::provider::TableProviderFactory;
 use datafusion::datasource::{listing::PartitionedFile, MemTable, TableProvider, TableType};
-use datafusion::execution::context::{SessionContext, SessionState, TaskContext};
+use datafusion::execution::context::{SessionConfig, SessionContext, SessionState, TaskContext};
 use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::execution::FunctionRegistry;
-use datafusion::optimizer::utils::conjunction;
 use datafusion::physical_expr::PhysicalSortExpr;
-use datafusion::physical_optimizer::pruning::{PruningPredicate, PruningStatistics};
+use datafusion::physical_optimizer::pruning::PruningPredicate;
 use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::limit::LocalLimitExec;
 use datafusion::physical_plan::{
-    ColumnStatistics, DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning,
-    SendableRecordBatchStream, Statistics,
+    DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning, SendableRecordBatchStream,
+    Statistics,
 };
 use datafusion_common::scalar::ScalarValue;
 use datafusion_common::tree_node::{TreeNode, TreeNodeVisitor, VisitRecursion};
 use datafusion_common::{Column, DataFusionError, Result as DataFusionResult, ToDFSchema};
-use datafusion_expr::expr::{ScalarFunction, ScalarUDF};
+use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::logical_plan::CreateExternalTable;
+use datafusion_expr::utils::conjunction;
 use datafusion_expr::{col, Expr, Extension, LogicalPlan, TableProviderFilterPushDown, Volatility};
 use datafusion_physical_expr::execution_props::ExecutionProps;
 use datafusion_physical_expr::{create_physical_expr, PhysicalExpr};
 use datafusion_proto::logical_plan::LogicalExtensionCodec;
 use datafusion_proto::physical_plan::PhysicalExtensionCodec;
+use datafusion_sql::planner::ParserOptions;
+use futures::TryStreamExt;
+
+use itertools::Itertools;
 use object_store::ObjectMeta;
 use serde::{Deserialize, Serialize};
 use url::Url;
 
 use crate::errors::{DeltaResult, DeltaTableError};
-use crate::protocol::{self, Add};
-use crate::storage::ObjectStoreRef;
+use crate::kernel::{Add, DataCheck, Invariant};
+use crate::logstore::LogStoreRef;
 use crate::table::builder::ensure_table_uri;
 use crate::table::state::DeltaTableState;
-use crate::{open_table, open_table_with_storage_options, DeltaTable, Invariant, SchemaDataType};
+use crate::table::Constraint;
+use crate::{open_table, open_table_with_storage_options, DeltaTable};
 
 const PATH_COLUMN: &str = "__delta_rs_path";
 
 pub mod expr;
+pub mod logical;
+pub mod physical;
 
 impl From<DeltaTableError> for DataFusionError {
     fn from(err: DeltaTableError) -> Self {
@@ -104,271 +111,41 @@ impl From<DataFusionError> for DeltaTableError {
     }
 }
 
+pub(crate) fn get_path_column<'a>(
+    batch: &'a RecordBatch,
+    path_column: &str,
+) -> DeltaResult<TypedDictionaryArray<'a, UInt16Type, StringArray>> {
+    let err = || DeltaTableError::Generic("Unable to obtain Delta-rs path column".to_string());
+    batch
+        .column_by_name(path_column)
+        .unwrap()
+        .as_any()
+        .downcast_ref::<DictionaryArray<UInt16Type>>()
+        .ok_or_else(err)?
+        .downcast_dict::<StringArray>()
+        .ok_or_else(err)
+}
+
 impl DeltaTableState {
-    /// Return statistics for Datafusion Table
-    pub fn datafusion_table_statistics(&self) -> Statistics {
-        let stats = self
-            .files()
-            .iter()
-            .try_fold(
-                Statistics {
-                    num_rows: Some(0),
-                    total_byte_size: Some(0),
-                    column_statistics: Some(vec![
-                        ColumnStatistics {
-                            null_count: Some(0),
-                            max_value: None,
-                            min_value: None,
-                            distinct_count: None
-                        };
-                        self.schema().unwrap().get_fields().len()
-                    ]),
-                    is_exact: true,
-                },
-                |acc, action| {
-                    let new_stats = action
-                        .get_stats()
-                        .unwrap_or_else(|_| Some(protocol::Stats::default()))?;
-                    Some(Statistics {
-                        num_rows: acc
-                            .num_rows
-                            .map(|rows| rows + new_stats.num_records as usize),
-                        total_byte_size: acc
-                            .total_byte_size
-                            .map(|total_size| total_size + action.size as usize),
-                        column_statistics: acc.column_statistics.map(|col_stats| {
-                            self.schema()
-                                .unwrap()
-                                .get_fields()
-                                .iter()
-                                .zip(col_stats)
-                                .map(|(field, stats)| {
-                                    let null_count = new_stats
-                                        .null_count
-                                        .get(field.get_name())
-                                        .and_then(|x| {
-                                            let null_count_acc = stats.null_count?;
-                                            let null_count = x.as_value()? as usize;
-                                            Some(null_count_acc + null_count)
-                                        })
-                                        .or(stats.null_count);
-
-                                    let max_value = new_stats
-                                        .max_values
-                                        .get(field.get_name())
-                                        .and_then(|x| {
-                                            let old_stats = stats.clone();
-                                            let max_value = to_scalar_value(x.as_value()?);
-
-                                            match (max_value, old_stats.max_value) {
-                                                (Some(max_value), Some(old_max_value)) => {
-                                                    if left_larger_than_right(
-                                                        old_max_value.clone(),
-                                                        max_value.clone(),
-                                                    )? {
-                                                        Some(old_max_value)
-                                                    } else {
-                                                        Some(max_value)
-                                                    }
-                                                }
-                                                (Some(max_value), None) => Some(max_value),
-                                                (None, old) => old,
-                                            }
-                                        })
-                                        .or_else(|| stats.max_value.clone());
-
-                                    let min_value = new_stats
-                                        .min_values
-                                        .get(field.get_name())
-                                        .and_then(|x| {
-                                            let old_stats = stats.clone();
-                                            let min_value = to_scalar_value(x.as_value()?);
-
-                                            match (min_value, old_stats.min_value) {
-                                                (Some(min_value), Some(old_min_value)) => {
-                                                    if left_larger_than_right(
-                                                        min_value.clone(),
-                                                        old_min_value.clone(),
-                                                    )? {
-                                                        Some(old_min_value)
-                                                    } else {
-                                                        Some(min_value)
-                                                    }
-                                                }
-                                                (Some(min_value), None) => Some(min_value),
-                                                (None, old) => old,
-                                            }
-                                        })
-                                        .or_else(|| stats.min_value.clone());
-
-                                    ColumnStatistics {
-                                        null_count,
-                                        max_value,
-                                        min_value,
-                                        distinct_count: None, // TODO: distinct
-                                    }
-                                })
-                                .collect()
-                        }),
-                        is_exact: true,
-                    })
-                },
-            )
-            .unwrap_or_default();
-
-        // Convert column max/min scalar values to correct types based on arrow types.
-        Statistics {
-            is_exact: true,
-            num_rows: stats.num_rows,
-            total_byte_size: stats.total_byte_size,
-            column_statistics: stats.column_statistics.map(|col_stats| {
-                let fields = self.schema().unwrap().get_fields();
-                col_stats
-                    .iter()
-                    .zip(fields)
-                    .map(|(col_states, field)| {
-                        let dt = self
-                            .arrow_schema()
-                            .unwrap()
-                            .field_with_name(field.get_name())
-                            .unwrap()
-                            .data_type()
-                            .clone();
-                        ColumnStatistics {
-                            null_count: col_states.null_count,
-                            max_value: col_states
-                                .max_value
-                                .as_ref()
-                                .and_then(|scalar| correct_scalar_value_type(scalar.clone(), &dt)),
-                            min_value: col_states
-                                .min_value
-                                .as_ref()
-                                .and_then(|scalar| correct_scalar_value_type(scalar.clone(), &dt)),
-                            distinct_count: col_states.distinct_count,
-                        }
-                    })
-                    .collect()
-            }),
-        }
-    }
-}
-
-// TODO: Collapse with operations/transaction/state.rs method of same name
-fn get_prune_stats(table: &DeltaTable, column: &Column, get_max: bool) -> Option<ArrayRef> {
-    let field = table
-        .get_schema()
-        .ok()
-        .map(|s| s.get_field_with_name(&column.name).ok())??;
-
-    // See issue 1214. Binary type does not support natural order which is required for Datafusion to prune
-    if let SchemaDataType::primitive(t) = &field.get_type() {
-        if t == "binary" {
-            return None;
-        }
-    }
-
-    let data_type = field.get_type().try_into().ok()?;
-    let partition_columns = &table.get_metadata().ok()?.partition_columns;
-
-    let values = table.get_state().files().iter().map(|add| {
-        if partition_columns.contains(&column.name) {
-            let value = add.partition_values.get(&column.name).unwrap();
-            let value = match value {
-                Some(v) => serde_json::Value::String(v.to_string()),
-                None => serde_json::Value::Null,
-            };
-            to_correct_scalar_value(&value, &data_type).unwrap_or(
-                get_null_of_arrow_type(&data_type).expect("Could not determine null type"),
-            )
-        } else if let Ok(Some(statistics)) = add.get_stats() {
-            let values = if get_max {
-                statistics.max_values
-            } else {
-                statistics.min_values
-            };
-
-            values
-                .get(&column.name)
-                .and_then(|f| to_correct_scalar_value(f.as_value()?, &data_type))
-                .unwrap_or(
-                    get_null_of_arrow_type(&data_type).expect("Could not determine null type"),
-                )
-        } else {
-            // No statistics available
-            get_null_of_arrow_type(&data_type).expect("Could not determine null type")
-        }
-    });
-    ScalarValue::iter_to_array(values).ok()
-}
-
-impl PruningStatistics for DeltaTable {
-    /// return the minimum values for the named column, if known.
-    /// Note: the returned array must contain `num_containers()` rows
-    fn min_values(&self, column: &Column) -> Option<ArrayRef> {
-        get_prune_stats(self, column, false)
-    }
-
-    /// return the maximum values for the named column, if known.
-    /// Note: the returned array must contain `num_containers()` rows.
-    fn max_values(&self, column: &Column) -> Option<ArrayRef> {
-        get_prune_stats(self, column, true)
-    }
-
-    /// return the number of containers (e.g. row groups) being
-    /// pruned with these statistics
-    fn num_containers(&self) -> usize {
-        self.get_state().files().len()
-    }
-
-    /// return the number of null values for the named column as an
-    /// `Option<UInt64Array>`.
-    ///
-    /// Note: the returned array must contain `num_containers()` rows.
-    fn null_counts(&self, column: &Column) -> Option<ArrayRef> {
-        let partition_columns = &self.get_metadata().ok()?.partition_columns;
-
-        let values = self.get_state().files().iter().map(|add| {
-            if let Ok(Some(statistics)) = add.get_stats() {
-                if partition_columns.contains(&column.name) {
-                    let value = add.partition_values.get(&column.name).unwrap();
-                    match value {
-                        Some(_) => ScalarValue::UInt64(Some(0)),
-                        None => ScalarValue::UInt64(Some(statistics.num_records as u64)),
-                    }
-                } else {
-                    statistics
-                        .null_count
-                        .get(&column.name)
-                        .map(|f| ScalarValue::UInt64(f.as_value().map(|val| val as u64)))
-                        .unwrap_or(ScalarValue::UInt64(None))
-                }
-            } else if partition_columns.contains(&column.name) {
-                let value = add.partition_values.get(&column.name).unwrap();
-                match value {
-                    Some(_) => ScalarValue::UInt64(Some(0)),
-                    None => ScalarValue::UInt64(None),
-                }
-            } else {
-                ScalarValue::UInt64(None)
-            }
-        });
-        ScalarValue::iter_to_array(values).ok()
+    /// Provide table level statistics to Datafusion
+    pub fn datafusion_table_statistics(&self) -> Option<Statistics> {
+        self.snapshot.datafusion_table_statistics()
     }
 }
 
 // each delta table must register a specific object store, since paths are internally
 // handled relative to the table root.
-pub(crate) fn register_store(store: ObjectStoreRef, env: Arc<RuntimeEnv>) {
+pub(crate) fn register_store(store: LogStoreRef, env: Arc<RuntimeEnv>) {
     let object_store_url = store.object_store_url();
     let url: &Url = object_store_url.as_ref();
-    env.register_object_store(url, store);
+    env.register_object_store(url, store.object_store());
 }
 
 pub(crate) fn logical_schema(
     snapshot: &DeltaTableState,
     scan_config: &DeltaScanConfig,
 ) -> DeltaResult<SchemaRef> {
-    let input_schema = snapshot.input_schema()?;
+    let input_schema = snapshot.arrow_schema()?;
     let mut fields = Vec::new();
     for field in input_schema.fields.iter() {
         fields.push(field.to_owned());
@@ -386,7 +163,7 @@ pub(crate) fn logical_schema(
 }
 
 #[derive(Debug, Clone, Default)]
-/// Used to specify if additonal metadata columns are exposed to the user
+/// Used to specify if additional metadata columns are exposed to the user
 pub struct DeltaScanConfigBuilder {
     /// Include the source path for each record. The name of this column is determine by `file_column_name`
     include_file_column: bool,
@@ -459,7 +236,7 @@ impl DeltaScanConfigBuilder {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
-/// Include additonal metadata columns during a [`DeltaScan`]
+/// Include additional metadata columns during a [`DeltaScan`]
 pub struct DeltaScanConfig {
     /// Include the source path for each record
     pub file_column_name: Option<String>,
@@ -468,7 +245,7 @@ pub struct DeltaScanConfig {
 #[derive(Debug)]
 pub(crate) struct DeltaScanBuilder<'a> {
     snapshot: &'a DeltaTableState,
-    object_store: ObjectStoreRef,
+    log_store: LogStoreRef,
     filter: Option<Expr>,
     state: &'a SessionState,
     projection: Option<&'a Vec<usize>>,
@@ -481,12 +258,12 @@ pub(crate) struct DeltaScanBuilder<'a> {
 impl<'a> DeltaScanBuilder<'a> {
     pub fn new(
         snapshot: &'a DeltaTableState,
-        object_store: ObjectStoreRef,
+        log_store: LogStoreRef,
         state: &'a SessionState,
     ) -> Self {
         DeltaScanBuilder {
             snapshot,
-            object_store,
+            log_store,
             filter: None,
             state,
             files: None,
@@ -522,18 +299,13 @@ impl<'a> DeltaScanBuilder<'a> {
         self
     }
 
-    pub fn with_schema(mut self, schema: SchemaRef) -> Self {
-        self.schema = Some(schema);
-        self
-    }
-
     pub async fn build(self) -> DeltaResult<DeltaScan> {
         let config = self.config;
         let schema = match self.schema {
             Some(schema) => schema,
             None => {
                 self.snapshot
-                    .physical_arrow_schema(self.object_store.clone())
+                    .physical_arrow_schema(self.log_store.object_store())
                     .await?
             }
         };
@@ -562,7 +334,7 @@ impl<'a> DeltaScanBuilder<'a> {
                         PruningPredicate::try_new(predicate.clone(), logical_schema.clone())?;
                     let files_to_prune = pruning_predicate.prune(self.snapshot)?;
                     self.snapshot
-                        .files()
+                        .file_actions()?
                         .iter()
                         .zip(files_to_prune.into_iter())
                         .filter_map(
@@ -576,7 +348,7 @@ impl<'a> DeltaScanBuilder<'a> {
                         )
                         .collect()
                 } else {
-                    self.snapshot.files().to_owned()
+                    self.snapshot.file_actions()?
                 }
             }
         };
@@ -586,8 +358,10 @@ impl<'a> DeltaScanBuilder<'a> {
         // However we may want to do some additional balancing in case we are far off from the above.
         let mut file_groups: HashMap<Vec<ScalarValue>, Vec<PartitionedFile>> = HashMap::new();
 
+        let table_partition_cols = &self.snapshot.metadata().partition_columns;
+
         for action in files.iter() {
-            let mut part = partitioned_file_from_action(action, &schema);
+            let mut part = partitioned_file_from_action(action, table_partition_cols, &schema);
 
             if config.file_column_name.is_some() {
                 part.partition_values
@@ -602,13 +376,6 @@ impl<'a> DeltaScanBuilder<'a> {
                 .push(part);
         }
 
-        let table_partition_cols = self
-            .snapshot
-            .current_metadata()
-            .ok_or(DeltaTableError::NoMetadata)?
-            .partition_columns
-            .clone();
-
         let file_schema = Arc::new(ArrowSchema::new(
             schema
                 .fields()
@@ -620,24 +387,30 @@ impl<'a> DeltaScanBuilder<'a> {
 
         let mut table_partition_cols = table_partition_cols
             .iter()
-            .map(|c| Ok((c.to_owned(), schema.field_with_name(c)?.data_type().clone())))
+            .map(|name| schema.field_with_name(name).map(|f| f.to_owned()))
             .collect::<Result<Vec<_>, ArrowError>>()?;
 
         if let Some(file_column_name) = &config.file_column_name {
-            table_partition_cols.push((
+            table_partition_cols.push(Field::new(
                 file_column_name.clone(),
                 wrap_partition_type_in_dict(DataType::Utf8),
+                false,
             ));
         }
+
+        let stats = self
+            .snapshot
+            .datafusion_table_statistics()
+            .unwrap_or(Statistics::new_unknown(&schema));
 
         let scan = ParquetFormat::new()
             .create_physical_plan(
                 self.state,
                 FileScanConfig {
-                    object_store_url: self.object_store.object_store_url(),
+                    object_store_url: self.log_store.object_store_url(),
                     file_schema,
                     file_groups: file_groups.into_values().collect(),
-                    statistics: self.snapshot.datafusion_table_statistics(),
+                    statistics: stats,
                     projection: self.projection.cloned(),
                     limit: self.limit,
                     table_partition_cols,
@@ -649,9 +422,7 @@ impl<'a> DeltaScanBuilder<'a> {
             .await?;
 
         Ok(DeltaScan {
-            table_uri: ensure_table_uri(self.object_store.root_uri())?
-                .as_str()
-                .into(),
+            table_uri: ensure_table_uri(self.log_store.root_uri())?.as_str().into(),
             parquet_scan: scan,
             config,
             logical_schema,
@@ -659,6 +430,7 @@ impl<'a> DeltaScanBuilder<'a> {
     }
 }
 
+// TODO: implement this for Snapshot, not for DeltaTable
 #[async_trait]
 impl TableProvider for DeltaTable {
     fn as_any(&self) -> &dyn Any {
@@ -666,7 +438,7 @@ impl TableProvider for DeltaTable {
     }
 
     fn schema(&self) -> Arc<ArrowSchema> {
-        self.state.arrow_schema().unwrap()
+        self.snapshot().unwrap().arrow_schema().unwrap()
     }
 
     fn table_type(&self) -> TableType {
@@ -688,10 +460,10 @@ impl TableProvider for DeltaTable {
         filters: &[Expr],
         limit: Option<usize>,
     ) -> DataFusionResult<Arc<dyn ExecutionPlan>> {
-        register_store(self.object_store(), session.runtime_env().clone());
+        register_store(self.log_store(), session.runtime_env().clone());
         let filter_expr = conjunction(filters.iter().cloned());
 
-        let scan = DeltaScanBuilder::new(&self.state, self.object_store(), session)
+        let scan = DeltaScanBuilder::new(self.snapshot()?, self.log_store(), session)
             .with_projection(projection)
             .with_limit(limit)
             .with_filter(filter_expr)
@@ -709,14 +481,14 @@ impl TableProvider for DeltaTable {
     }
 
     fn statistics(&self) -> Option<Statistics> {
-        Some(self.state.datafusion_table_statistics())
+        self.snapshot().ok()?.datafusion_table_statistics()
     }
 }
 
-/// A Delta table provider that enables additonal metadata columns to be included during the scan
+/// A Delta table provider that enables additional metadata columns to be included during the scan
 pub struct DeltaTableProvider {
     snapshot: DeltaTableState,
-    store: ObjectStoreRef,
+    log_store: LogStoreRef,
     config: DeltaScanConfig,
     schema: Arc<ArrowSchema>,
 }
@@ -725,13 +497,13 @@ impl DeltaTableProvider {
     /// Build a DeltaTableProvider
     pub fn try_new(
         snapshot: DeltaTableState,
-        store: ObjectStoreRef,
+        log_store: LogStoreRef,
         config: DeltaScanConfig,
     ) -> DeltaResult<Self> {
         Ok(DeltaTableProvider {
             schema: logical_schema(&snapshot, &config)?,
             snapshot,
-            store,
+            log_store,
             config,
         })
     }
@@ -766,10 +538,10 @@ impl TableProvider for DeltaTableProvider {
         filters: &[Expr],
         limit: Option<usize>,
     ) -> DataFusionResult<Arc<dyn ExecutionPlan>> {
-        register_store(self.store.clone(), session.runtime_env().clone());
+        register_store(self.log_store.clone(), session.runtime_env().clone());
         let filter_expr = conjunction(filters.iter().cloned());
 
-        let scan = DeltaScanBuilder::new(&self.snapshot, self.store.clone(), session)
+        let scan = DeltaScanBuilder::new(&self.snapshot, self.log_store.clone(), session)
             .with_projection(projection)
             .with_limit(limit)
             .with_filter(filter_expr)
@@ -788,7 +560,7 @@ impl TableProvider for DeltaTableProvider {
     }
 
     fn statistics(&self) -> Option<Statistics> {
-        Some(self.snapshot.datafusion_table_statistics())
+        self.snapshot.datafusion_table_statistics()
     }
 }
 
@@ -855,7 +627,7 @@ impl ExecutionPlan for DeltaScan {
         self.parquet_scan.execute(partition, context)
     }
 
-    fn statistics(&self) -> Statistics {
+    fn statistics(&self) -> DataFusionResult<Statistics> {
         self.parquet_scan.statistics()
     }
 }
@@ -922,21 +694,32 @@ pub(crate) fn get_null_of_arrow_type(t: &ArrowDataType) -> DeltaResult<ScalarVal
 }
 
 pub(crate) fn partitioned_file_from_action(
-    action: &protocol::Add,
+    action: &Add,
+    partition_columns: &[String],
     schema: &ArrowSchema,
 ) -> PartitionedFile {
-    let partition_values = schema
-        .fields()
+    let partition_values = partition_columns
         .iter()
-        .filter_map(|f| {
-            action.partition_values.get(f.name()).map(|val| match val {
-                Some(value) => to_correct_scalar_value(
-                    &serde_json::Value::String(value.to_string()),
-                    f.data_type(),
-                )
-                .unwrap_or(ScalarValue::Null),
-                None => get_null_of_arrow_type(f.data_type()).unwrap_or(ScalarValue::Null),
-            })
+        .map(|part| {
+            action
+                .partition_values
+                .get(part)
+                .map(|val| {
+                    schema
+                        .field_with_name(part)
+                        .map(|field| match val {
+                            Some(value) => to_correct_scalar_value(
+                                &serde_json::Value::String(value.to_string()),
+                                field.data_type(),
+                            )
+                            .unwrap_or(Some(ScalarValue::Null))
+                            .unwrap_or(ScalarValue::Null),
+                            None => get_null_of_arrow_type(field.data_type())
+                                .unwrap_or(ScalarValue::Null),
+                        })
+                        .unwrap_or(ScalarValue::Null)
+                })
+                .unwrap_or(ScalarValue::Null)
         })
         .collect::<Vec<_>>();
 
@@ -955,171 +738,52 @@ pub(crate) fn partitioned_file_from_action(
     }
 }
 
-fn to_scalar_value(stat_val: &serde_json::Value) -> Option<ScalarValue> {
-    match stat_val {
-        serde_json::Value::Bool(val) => Some(ScalarValue::from(*val)),
-        serde_json::Value::Number(num) => {
-            if let Some(val) = num.as_i64() {
-                Some(ScalarValue::from(val))
-            } else if let Some(val) = num.as_u64() {
-                Some(ScalarValue::from(val))
-            } else {
-                num.as_f64().map(ScalarValue::from)
-            }
-        }
-        serde_json::Value::String(s) => Some(ScalarValue::from(s.as_str())),
-        serde_json::Value::Array(_) => None,
-        serde_json::Value::Object(_) => None,
-        serde_json::Value::Null => None,
-    }
+fn parse_timestamp(
+    stat_val: &serde_json::Value,
+    field_dt: &ArrowDataType,
+) -> DataFusionResult<ScalarValue> {
+    let string = match stat_val {
+        serde_json::Value::String(s) => s.to_owned(),
+        _ => stat_val.to_string(),
+    };
+
+    let time_micro = ScalarValue::try_from_string(
+        string,
+        &ArrowDataType::Timestamp(TimeUnit::Microsecond, None),
+    )?;
+    let cast_arr = cast_with_options(
+        &time_micro.to_array()?,
+        field_dt,
+        &CastOptions {
+            safe: false,
+            ..Default::default()
+        },
+    )?;
+    ScalarValue::try_from_array(&cast_arr, 0)
 }
 
 pub(crate) fn to_correct_scalar_value(
     stat_val: &serde_json::Value,
     field_dt: &ArrowDataType,
-) -> Option<ScalarValue> {
+) -> DataFusionResult<Option<ScalarValue>> {
     match stat_val {
-        serde_json::Value::Array(_) => None,
-        serde_json::Value::Object(_) => None,
-        serde_json::Value::Null => get_null_of_arrow_type(field_dt).ok(),
+        serde_json::Value::Array(_) => Ok(None),
+        serde_json::Value::Object(_) => Ok(None),
+        serde_json::Value::Null => Ok(Some(get_null_of_arrow_type(field_dt)?)),
         serde_json::Value::String(string_val) => match field_dt {
-            ArrowDataType::Timestamp(_, _) => {
-                let time_nanos = ScalarValue::try_from_string(
-                    string_val.to_owned(),
-                    &ArrowDataType::Timestamp(TimeUnit::Nanosecond, None),
-                )
-                .ok()?;
-                let cast_arr = cast_with_options(
-                    &time_nanos.to_array(),
-                    field_dt,
-                    &CastOptions {
-                        safe: false,
-                        ..Default::default()
-                    },
-                )
-                .ok()?;
-                Some(ScalarValue::try_from_array(&cast_arr, 0).ok()?)
-            }
-            _ => Some(ScalarValue::try_from_string(string_val.to_owned(), field_dt).ok()?),
+            ArrowDataType::Timestamp(_, _) => Ok(Some(parse_timestamp(stat_val, field_dt)?)),
+            _ => Ok(Some(ScalarValue::try_from_string(
+                string_val.to_owned(),
+                field_dt,
+            )?)),
         },
         other => match field_dt {
-            ArrowDataType::Timestamp(_, _) => {
-                let time_nanos = ScalarValue::try_from_string(
-                    other.to_string(),
-                    &ArrowDataType::Timestamp(TimeUnit::Nanosecond, None),
-                )
-                .ok()?;
-                let cast_arr = cast_with_options(
-                    &time_nanos.to_array(),
-                    field_dt,
-                    &CastOptions {
-                        safe: false,
-                        ..Default::default()
-                    },
-                )
-                .ok()?;
-                Some(ScalarValue::try_from_array(&cast_arr, 0).ok()?)
-            }
-            _ => Some(ScalarValue::try_from_string(other.to_string(), field_dt).ok()?),
+            ArrowDataType::Timestamp(_, _) => Ok(Some(parse_timestamp(stat_val, field_dt)?)),
+            _ => Ok(Some(ScalarValue::try_from_string(
+                other.to_string(),
+                field_dt,
+            )?)),
         },
-    }
-}
-
-fn correct_scalar_value_type(value: ScalarValue, field_dt: &ArrowDataType) -> Option<ScalarValue> {
-    match field_dt {
-        ArrowDataType::Int64 => {
-            let raw_value = i64::try_from(value).ok()?;
-            Some(ScalarValue::from(raw_value))
-        }
-        ArrowDataType::Int32 => {
-            let raw_value = i64::try_from(value).ok()? as i32;
-            Some(ScalarValue::from(raw_value))
-        }
-        ArrowDataType::Int16 => {
-            let raw_value = i64::try_from(value).ok()? as i16;
-            Some(ScalarValue::from(raw_value))
-        }
-        ArrowDataType::Int8 => {
-            let raw_value = i64::try_from(value).ok()? as i8;
-            Some(ScalarValue::from(raw_value))
-        }
-        ArrowDataType::Float32 => {
-            let raw_value = f64::try_from(value).ok()? as f32;
-            Some(ScalarValue::from(raw_value))
-        }
-        ArrowDataType::Float64 => {
-            let raw_value = f64::try_from(value).ok()?;
-            Some(ScalarValue::from(raw_value))
-        }
-        ArrowDataType::Utf8 => match value {
-            ScalarValue::Utf8(val) => Some(ScalarValue::Utf8(val)),
-            _ => None,
-        },
-        ArrowDataType::LargeUtf8 => match value {
-            ScalarValue::Utf8(val) => Some(ScalarValue::LargeUtf8(val)),
-            _ => None,
-        },
-        ArrowDataType::Boolean => {
-            let raw_value = bool::try_from(value).ok()?;
-            Some(ScalarValue::from(raw_value))
-        }
-        ArrowDataType::Decimal128(_, _) => {
-            let raw_value = f64::try_from(value).ok()?;
-            Some(ScalarValue::from(raw_value))
-        }
-        ArrowDataType::Decimal256(_, _) => {
-            let raw_value = f64::try_from(value).ok()?;
-            Some(ScalarValue::from(raw_value))
-        }
-        ArrowDataType::Date32 => {
-            let raw_value = i64::try_from(value).ok()? as i32;
-            Some(ScalarValue::Date32(Some(raw_value)))
-        }
-        ArrowDataType::Date64 => {
-            let raw_value = i64::try_from(value).ok()?;
-            Some(ScalarValue::Date64(Some(raw_value)))
-        }
-        ArrowDataType::Timestamp(TimeUnit::Nanosecond, None) => {
-            let raw_value = i64::try_from(value).ok()?;
-            Some(ScalarValue::TimestampNanosecond(Some(raw_value), None))
-        }
-        ArrowDataType::Timestamp(TimeUnit::Microsecond, None) => {
-            let raw_value = i64::try_from(value).ok()?;
-            Some(ScalarValue::TimestampMicrosecond(Some(raw_value), None))
-        }
-        ArrowDataType::Timestamp(TimeUnit::Millisecond, None) => {
-            let raw_value = i64::try_from(value).ok()?;
-            Some(ScalarValue::TimestampMillisecond(Some(raw_value), None))
-        }
-        _ => {
-            log::error!(
-                "Scalar value of arrow type unimplemented for {:?} and {:?}",
-                value,
-                field_dt
-            );
-            None
-        }
-    }
-}
-
-fn left_larger_than_right(left: ScalarValue, right: ScalarValue) -> Option<bool> {
-    match (&left, &right) {
-        (ScalarValue::Float64(Some(l)), ScalarValue::Float64(Some(r))) => Some(l > r),
-        (ScalarValue::Float32(Some(l)), ScalarValue::Float32(Some(r))) => Some(l > r),
-        (ScalarValue::Int8(Some(l)), ScalarValue::Int8(Some(r))) => Some(l > r),
-        (ScalarValue::Int16(Some(l)), ScalarValue::Int16(Some(r))) => Some(l > r),
-        (ScalarValue::Int32(Some(l)), ScalarValue::Int32(Some(r))) => Some(l > r),
-        (ScalarValue::Int64(Some(l)), ScalarValue::Int64(Some(r))) => Some(l > r),
-        (ScalarValue::Utf8(Some(l)), ScalarValue::Utf8(Some(r))) => Some(l > r),
-        (ScalarValue::Boolean(Some(l)), ScalarValue::Boolean(Some(r))) => Some(l & !r),
-        _ => {
-            log::error!(
-                "Scalar value comparison unimplemented for {:?} and {:?}",
-                left,
-                right
-            );
-            None
-        }
     }
 }
 
@@ -1132,19 +796,81 @@ pub(crate) fn logical_expr_to_physical_expr(
     create_physical_expr(expr, &df_schema, schema, &execution_props).unwrap()
 }
 
+pub(crate) async fn execute_plan_to_batch(
+    state: &SessionState,
+    plan: Arc<dyn ExecutionPlan>,
+) -> DeltaResult<arrow::record_batch::RecordBatch> {
+    let data =
+        futures::future::try_join_all((0..plan.output_partitioning().partition_count()).map(|p| {
+            let plan_copy = plan.clone();
+            let task_context = state.task_ctx().clone();
+            async move {
+                let batch_stream = plan_copy.execute(p, task_context)?;
+
+                let schema = batch_stream.schema();
+
+                let batches = batch_stream.try_collect::<Vec<_>>().await?;
+
+                DataFusionResult::<_>::Ok(arrow::compute::concat_batches(&schema, batches.iter())?)
+            }
+        }))
+        .await?;
+
+    let batch = arrow::compute::concat_batches(&plan.schema(), data.iter())?;
+
+    Ok(batch)
+}
+
 /// Responsible for checking batches of data conform to table's invariants.
 #[derive(Clone)]
 pub struct DeltaDataChecker {
+    constraints: Vec<Constraint>,
     invariants: Vec<Invariant>,
     ctx: SessionContext,
 }
 
 impl DeltaDataChecker {
-    /// Create a new DeltaDataChecker
-    pub fn new(invariants: Vec<Invariant>) -> Self {
+    /// Create a new DeltaDataChecker with no invariants or constraints
+    pub fn empty() -> Self {
+        Self {
+            invariants: vec![],
+            constraints: vec![],
+            ctx: DeltaSessionContext::default().into(),
+        }
+    }
+
+    /// Create a new DeltaDataChecker with a specified set of invariants
+    pub fn new_with_invariants(invariants: Vec<Invariant>) -> Self {
         Self {
             invariants,
-            ctx: SessionContext::new(),
+            constraints: vec![],
+            ctx: DeltaSessionContext::default().into(),
+        }
+    }
+
+    /// Create a new DeltaDataChecker with a specified set of constraints
+    pub fn new_with_constraints(constraints: Vec<Constraint>) -> Self {
+        Self {
+            constraints,
+            invariants: vec![],
+            ctx: DeltaSessionContext::default().into(),
+        }
+    }
+
+    /// Specify the Datafusion context
+    pub fn with_session_context(mut self, context: SessionContext) -> Self {
+        self.ctx = context;
+        self
+    }
+
+    /// Create a new DeltaDataChecker
+    pub fn new(snapshot: &DeltaTableState) -> Self {
+        let invariants = snapshot.schema().get_invariants().unwrap_or_default();
+        let constraints = snapshot.table_config().get_constraints();
+        Self {
+            invariants,
+            constraints,
+            ctx: DeltaSessionContext::default().into(),
         }
     }
 
@@ -1153,45 +879,58 @@ impl DeltaDataChecker {
     /// If it does not, it will return [DeltaTableError::InvalidData] with a list
     /// of values that violated each invariant.
     pub async fn check_batch(&self, record_batch: &RecordBatch) -> Result<(), DeltaTableError> {
-        self.enforce_invariants(record_batch).await
-        // TODO: for support for Protocol V3, check constraints
+        self.enforce_checks(record_batch, &self.invariants).await?;
+        self.enforce_checks(record_batch, &self.constraints).await
     }
 
-    async fn enforce_invariants(&self, record_batch: &RecordBatch) -> Result<(), DeltaTableError> {
-        // Invariants are deprecated, so let's not pay the overhead for any of this
-        // if we can avoid it.
-        if self.invariants.is_empty() {
+    async fn enforce_checks<C: DataCheck>(
+        &self,
+        record_batch: &RecordBatch,
+        checks: &[C],
+    ) -> Result<(), DeltaTableError> {
+        if checks.is_empty() {
             return Ok(());
         }
-
         let table = MemTable::try_new(record_batch.schema(), vec![vec![record_batch.clone()]])?;
-        self.ctx.register_table("data", Arc::new(table))?;
+
+        // Use a random table name to avoid clashes when running multiple parallel tasks, e.g. when using a partitioned table
+        let table_name: String = uuid::Uuid::new_v4().to_string();
+        self.ctx.register_table(&table_name, Arc::new(table))?;
 
         let mut violations: Vec<String> = Vec::new();
 
-        for invariant in self.invariants.iter() {
-            if invariant.field_name.contains('.') {
+        for check in checks {
+            if check.get_name().contains('.') {
                 return Err(DeltaTableError::Generic(
-                    "Support for column invariants on nested columns is not supported.".to_string(),
+                    "Support for nested columns is not supported.".to_string(),
                 ));
             }
 
             let sql = format!(
-                "SELECT {} FROM data WHERE not ({}) LIMIT 1",
-                invariant.field_name, invariant.invariant_sql
+                "SELECT {} FROM `{}` WHERE NOT ({}) LIMIT 1",
+                check.get_name(),
+                table_name,
+                check.get_expression()
             );
 
             let dfs: Vec<RecordBatch> = self.ctx.sql(&sql).await?.collect().await?;
             if !dfs.is_empty() && dfs[0].num_rows() > 0 {
-                let value = format!("{:?}", dfs[0].column(0));
+                let value: String = dfs[0]
+                    .columns()
+                    .iter()
+                    .map(|c| array_value_to_string(c, 0).unwrap_or(String::from("null")))
+                    .join(", ");
+
                 let msg = format!(
-                    "Invariant ({}) violated by value {}",
-                    invariant.invariant_sql, value
+                    "Check or Invariant ({}) violated by value in row: [{}]",
+                    check.get_expression(),
+                    value
                 );
                 violations.push(msg);
             }
         }
 
+        self.ctx.deregister_table(&table_name)?;
         if !violations.is_empty() {
             Err(DeltaTableError::InvalidData { violations })
         } else {
@@ -1354,22 +1093,21 @@ impl TreeNodeVisitor for FindFilesExprProperties {
             | Expr::Case(_)
             | Expr::Cast(_)
             | Expr::TryCast(_) => (),
-            Expr::ScalarFunction(ScalarFunction { fun, .. }) => {
-                let v = fun.volatility();
+            Expr::ScalarFunction(ScalarFunction { func_def, .. }) => {
+                let v = match func_def {
+                    datafusion_expr::ScalarFunctionDefinition::BuiltIn(f) => f.volatility(),
+                    datafusion_expr::ScalarFunctionDefinition::UDF(u) => u.signature().volatility,
+                    datafusion_expr::ScalarFunctionDefinition::Name(n) => {
+                        self.result = Err(DeltaTableError::Generic(format!(
+                            "Cannot determine volatility of find files predicate function {n}",
+                        )));
+                        return Ok(VisitRecursion::Stop);
+                    }
+                };
                 if v > Volatility::Immutable {
                     self.result = Err(DeltaTableError::Generic(format!(
                         "Find files predicate contains nondeterministic function {}",
-                        fun
-                    )));
-                    return Ok(VisitRecursion::Stop);
-                }
-            }
-            Expr::ScalarUDF(ScalarUDF { fun, .. }) => {
-                let v = fun.signature.volatility;
-                if v > Volatility::Immutable {
-                    self.result = Err(DeltaTableError::Generic(format!(
-                        "Find files predicate contains nondeterministic function {}",
-                        fun.name
+                        func_def.name()
                     )));
                     return Ok(VisitRecursion::Stop);
                 }
@@ -1406,31 +1144,20 @@ fn join_batches_with_add_actions(
 
     let mut files = Vec::with_capacity(batches.iter().map(|batch| batch.num_rows()).sum());
     for batch in batches {
-        let array = batch.column_by_name(path_column).ok_or_else(|| {
-            DeltaTableError::Generic(format!("Unable to find column {}", path_column))
-        })?;
+        let err = || DeltaTableError::Generic("Unable to obtain Delta-rs path column".to_string());
 
-        let iter: Box<dyn Iterator<Item = Option<&str>>> =
-            if dict_array {
-                let array = array
-                    .as_any()
-                    .downcast_ref::<DictionaryArray<UInt16Type>>()
-                    .ok_or(DeltaTableError::Generic(format!(
-                        "Unable to downcast column {}",
-                        path_column
-                    )))?
-                    .downcast_dict::<StringArray>()
-                    .ok_or(DeltaTableError::Generic(format!(
-                        "Unable to downcast column {}",
-                        path_column
-                    )))?;
-                Box::new(array.into_iter())
-            } else {
-                let array = array.as_any().downcast_ref::<StringArray>().ok_or(
-                    DeltaTableError::Generic(format!("Unable to downcast column {}", path_column)),
-                )?;
-                Box::new(array.into_iter())
-            };
+        let iter: Box<dyn Iterator<Item = Option<&str>>> = if dict_array {
+            let array = get_path_column(&batch, path_column)?;
+            Box::new(array.into_iter())
+        } else {
+            let array = batch
+                .column_by_name(path_column)
+                .ok_or_else(err)?
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .ok_or_else(err)?;
+            Box::new(array.into_iter())
+        };
 
         for path in iter {
             let path = path.ok_or(DeltaTableError::Generic(format!(
@@ -1454,12 +1181,12 @@ fn join_batches_with_add_actions(
 /// Determine which files contain a record that statisfies the predicate
 pub(crate) async fn find_files_scan<'a>(
     snapshot: &DeltaTableState,
-    store: ObjectStoreRef,
+    log_store: LogStoreRef,
     state: &SessionState,
     expression: Expr,
 ) -> DeltaResult<Vec<Add>> {
     let candidate_map: HashMap<String, Add> = snapshot
-        .files()
+        .file_actions()?
         .iter()
         .map(|add| (add.path.clone(), add.to_owned()))
         .collect();
@@ -1481,7 +1208,7 @@ pub(crate) async fn find_files_scan<'a>(
     // Add path column
     used_columns.push(logical_schema.index_of(scan_config.file_column_name.as_ref().unwrap())?);
 
-    let scan = DeltaScanBuilder::new(snapshot, store.clone(), state)
+    let scan = DeltaScanBuilder::new(snapshot, log_store, state)
         .with_filter(Some(expression.clone()))
         .with_projection(Some(&used_columns))
         .with_scan_config(scan_config)
@@ -1519,7 +1246,7 @@ pub(crate) async fn scan_memory_table(
     snapshot: &DeltaTableState,
     predicate: &Expr,
 ) -> DeltaResult<Vec<Add>> {
-    let actions = snapshot.files().to_owned();
+    let actions = snapshot.file_actions()?;
 
     let batch = snapshot.add_actions_table(true)?;
     let mut arrays = Vec::new();
@@ -1572,13 +1299,11 @@ pub(crate) async fn scan_memory_table(
 /// Finds files in a snapshot that match the provided predicate.
 pub async fn find_files<'a>(
     snapshot: &DeltaTableState,
-    object_store: ObjectStoreRef,
+    log_store: LogStoreRef,
     state: &SessionState,
     predicate: Option<Expr>,
 ) -> DeltaResult<FindFiles> {
-    let current_metadata = snapshot
-        .current_metadata()
-        .ok_or(DeltaTableError::NoMetadata)?;
+    let current_metadata = snapshot.metadata();
 
     match &predicate {
         Some(predicate) => {
@@ -1600,8 +1325,7 @@ pub async fn find_files<'a>(
                 })
             } else {
                 let candidates =
-                    find_files_scan(snapshot, object_store.clone(), state, predicate.to_owned())
-                        .await?;
+                    find_files_scan(snapshot, log_store, state, predicate.to_owned()).await?;
 
                 Ok(FindFiles {
                     candidates,
@@ -1610,14 +1334,120 @@ pub async fn find_files<'a>(
             }
         }
         None => Ok(FindFiles {
-            candidates: snapshot.files().to_owned(),
+            candidates: snapshot.file_actions()?,
             partition_scan: true,
         }),
     }
 }
 
+/// A wrapper for sql_parser's ParserOptions to capture sane default table defaults
+pub struct DeltaParserOptions {
+    inner: ParserOptions,
+}
+
+impl Default for DeltaParserOptions {
+    fn default() -> Self {
+        DeltaParserOptions {
+            inner: ParserOptions {
+                enable_ident_normalization: false,
+                ..ParserOptions::default()
+            },
+        }
+    }
+}
+
+impl From<DeltaParserOptions> for ParserOptions {
+    fn from(value: DeltaParserOptions) -> Self {
+        value.inner
+    }
+}
+
+/// A wrapper for Deltafusion's SessionConfig to capture sane default table defaults
+pub struct DeltaSessionConfig {
+    inner: SessionConfig,
+}
+
+impl Default for DeltaSessionConfig {
+    fn default() -> Self {
+        DeltaSessionConfig {
+            inner: SessionConfig::default()
+                .set_bool("datafusion.sql_parser.enable_ident_normalization", false),
+        }
+    }
+}
+
+impl From<DeltaSessionConfig> for SessionConfig {
+    fn from(value: DeltaSessionConfig) -> Self {
+        value.inner
+    }
+}
+
+/// A wrapper for Deltafusion's SessionContext to capture sane default table defaults
+pub struct DeltaSessionContext {
+    inner: SessionContext,
+}
+
+impl Default for DeltaSessionContext {
+    fn default() -> Self {
+        DeltaSessionContext {
+            inner: SessionContext::new_with_config(DeltaSessionConfig::default().into()),
+        }
+    }
+}
+
+impl From<DeltaSessionContext> for SessionContext {
+    fn from(value: DeltaSessionContext) -> Self {
+        value.inner
+    }
+}
+
+/// A wrapper for Deltafusion's Column to preserve case-sensitivity during string conversion
+pub struct DeltaColumn {
+    inner: Column,
+}
+
+impl From<&str> for DeltaColumn {
+    fn from(c: &str) -> Self {
+        DeltaColumn {
+            inner: Column::from_qualified_name_ignore_case(c),
+        }
+    }
+}
+
+/// Create a column, cloning the string
+impl From<&String> for DeltaColumn {
+    fn from(c: &String) -> Self {
+        DeltaColumn {
+            inner: Column::from_qualified_name_ignore_case(c),
+        }
+    }
+}
+
+/// Create a column, reusing the existing string
+impl From<String> for DeltaColumn {
+    fn from(c: String) -> Self {
+        DeltaColumn {
+            inner: Column::from_qualified_name_ignore_case(c),
+        }
+    }
+}
+
+impl From<DeltaColumn> for Column {
+    fn from(value: DeltaColumn) -> Self {
+        value.inner
+    }
+}
+
+/// Create a column, resuing the existing datafusion column
+impl From<Column> for DeltaColumn {
+    fn from(c: Column) -> Self {
+        DeltaColumn { inner: c }
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use crate::writer::test_utils::get_delta_schema;
     use arrow::array::StructArray;
     use arrow::datatypes::{DataType, Field, Schema};
     use chrono::{TimeZone, Utc};
@@ -1700,78 +1530,8 @@ mod tests {
         ];
 
         for (raw, data_type, ref_scalar) in reference_pairs {
-            let scalar = to_correct_scalar_value(raw, data_type).unwrap();
+            let scalar = to_correct_scalar_value(raw, data_type).unwrap().unwrap();
             assert_eq!(*ref_scalar, scalar)
-        }
-    }
-
-    #[test]
-    fn test_to_scalar_value() {
-        let reference_pairs = &[
-            (
-                json!("val"),
-                Some(ScalarValue::Utf8(Some(String::from("val")))),
-            ),
-            (json!("2"), Some(ScalarValue::Utf8(Some(String::from("2"))))),
-            (json!(true), Some(ScalarValue::Boolean(Some(true)))),
-            (json!(false), Some(ScalarValue::Boolean(Some(false)))),
-            (json!(2), Some(ScalarValue::Int64(Some(2)))),
-            (json!(-2), Some(ScalarValue::Int64(Some(-2)))),
-            (json!(2.0), Some(ScalarValue::Float64(Some(2.0)))),
-            (json!(["1", "2"]), None),
-            (json!({"key": "val"}), None),
-            (json!(null), None),
-        ];
-        for (stat_val, scalar_val) in reference_pairs {
-            assert_eq!(to_scalar_value(stat_val), *scalar_val)
-        }
-    }
-
-    #[test]
-    fn test_left_larger_than_right() {
-        let correct_reference_pairs = vec![
-            (
-                ScalarValue::Float64(Some(1.0)),
-                ScalarValue::Float64(Some(2.0)),
-            ),
-            (
-                ScalarValue::Float32(Some(1.0)),
-                ScalarValue::Float32(Some(2.0)),
-            ),
-            (ScalarValue::Int8(Some(1)), ScalarValue::Int8(Some(2))),
-            (ScalarValue::Int16(Some(1)), ScalarValue::Int16(Some(2))),
-            (ScalarValue::Int32(Some(1)), ScalarValue::Int32(Some(2))),
-            (ScalarValue::Int64(Some(1)), ScalarValue::Int64(Some(2))),
-            (
-                ScalarValue::Boolean(Some(false)),
-                ScalarValue::Boolean(Some(true)),
-            ),
-            (
-                ScalarValue::Utf8(Some(String::from("1"))),
-                ScalarValue::Utf8(Some(String::from("2"))),
-            ),
-        ];
-        for (smaller_val, larger_val) in correct_reference_pairs {
-            assert_eq!(
-                left_larger_than_right(smaller_val.clone(), larger_val.clone()),
-                Some(false)
-            );
-            assert_eq!(left_larger_than_right(larger_val, smaller_val), Some(true));
-        }
-
-        let incorrect_reference_pairs = vec![
-            (
-                ScalarValue::Float64(Some(1.0)),
-                ScalarValue::Float32(Some(2.0)),
-            ),
-            (ScalarValue::Int32(Some(1)), ScalarValue::Float32(Some(2.0))),
-            (
-                ScalarValue::Boolean(Some(true)),
-                ScalarValue::Float32(Some(2.0)),
-            ),
-        ];
-        for (left, right) in incorrect_reference_pairs {
-            assert_eq!(left_larger_than_right(left, right), None);
         }
     }
 
@@ -1780,30 +1540,34 @@ mod tests {
         let mut partition_values = std::collections::HashMap::new();
         partition_values.insert("month".to_string(), Some("1".to_string()));
         partition_values.insert("year".to_string(), Some("2015".to_string()));
-        let action = protocol::Add {
+        let action = Add {
             path: "year=2015/month=1/part-00000-4dcb50d3-d017-450c-9df7-a7257dbd3c5d-c000.snappy.parquet".to_string(),
             size: 10644,
             partition_values,
             modification_time: 1660497727833,
-            partition_values_parsed: None,
             data_change: true,
             stats: None,
             deletion_vector: None,
             stats_parsed: None,
             tags: None,
+            base_row_id: None,
+            default_row_commit_version: None,
+            clustering_provider: None,
         };
         let schema = ArrowSchema::new(vec![
             Field::new("year", ArrowDataType::Int64, true),
             Field::new("month", ArrowDataType::Int64, true),
         ]);
 
-        let file = partitioned_file_from_action(&action, &schema);
+        let part_columns = vec!["year".to_string(), "month".to_string()];
+        let file = partitioned_file_from_action(&action, &part_columns, &schema);
         let ref_file = PartitionedFile {
             object_meta: object_store::ObjectMeta {
                 location: Path::from("year=2015/month=1/part-00000-4dcb50d3-d017-450c-9df7-a7257dbd3c5d-c000.snappy.parquet".to_string()), 
                 last_modified: Utc.timestamp_millis_opt(1660497727833).unwrap(),
                 size: 10644,
-                e_tag: None
+                e_tag: None,
+                version: None,
             },
             partition_values: [ScalarValue::Int64(Some(2015)), ScalarValue::Int64(Some(1))].to_vec(),
             range: None,
@@ -1828,7 +1592,7 @@ mod tests {
         .unwrap();
         // Empty invariants is okay
         let invariants: Vec<Invariant> = vec![];
-        assert!(DeltaDataChecker::new(invariants)
+        assert!(DeltaDataChecker::new_with_invariants(invariants)
             .check_batch(&batch)
             .await
             .is_ok());
@@ -1838,7 +1602,7 @@ mod tests {
             Invariant::new("a", "a is not null"),
             Invariant::new("b", "b < 1000"),
         ];
-        assert!(DeltaDataChecker::new(invariants)
+        assert!(DeltaDataChecker::new_with_invariants(invariants)
             .check_batch(&batch)
             .await
             .is_ok());
@@ -1848,7 +1612,9 @@ mod tests {
             Invariant::new("a", "a is null"),
             Invariant::new("b", "b < 100"),
         ];
-        let result = DeltaDataChecker::new(invariants).check_batch(&batch).await;
+        let result = DeltaDataChecker::new_with_invariants(invariants)
+            .check_batch(&batch)
+            .await;
         assert!(result.is_err());
         assert!(matches!(result, Err(DeltaTableError::InvalidData { .. })));
         if let Err(DeltaTableError::InvalidData { violations }) = result {
@@ -1857,7 +1623,9 @@ mod tests {
 
         // Irrelevant invariants return a different error
         let invariants = vec![Invariant::new("c", "c > 2000")];
-        let result = DeltaDataChecker::new(invariants).check_batch(&batch).await;
+        let result = DeltaDataChecker::new_with_invariants(invariants)
+            .check_batch(&batch)
+            .await;
         assert!(result.is_err());
 
         // Nested invariants are unsupported
@@ -1871,7 +1639,9 @@ mod tests {
         let batch = RecordBatch::try_new(schema, vec![inner]).unwrap();
 
         let invariants = vec![Invariant::new("x.b", "x.b < 1000")];
-        let result = DeltaDataChecker::new(invariants).check_batch(&batch).await;
+        let result = DeltaDataChecker::new_with_invariants(invariants)
+            .check_batch(&batch)
+            .await;
         assert!(result.is_err());
         assert!(matches!(result, Err(DeltaTableError::Generic { .. })));
     }
@@ -1887,7 +1657,7 @@ mod tests {
         ]));
         let exec_plan = Arc::from(DeltaScan {
             table_uri: "s3://my_bucket/this/is/some/path".to_string(),
-            parquet_scan: Arc::from(EmptyExec::new(false, schema.clone())),
+            parquet_scan: Arc::from(EmptyExec::new(schema.clone())),
             config: DeltaScanConfig::default(),
             logical_schema: schema.clone(),
         });
@@ -1904,15 +1674,18 @@ mod tests {
 
     #[tokio::test]
     async fn delta_table_provider_with_config() {
-        let table = crate::open_table("tests/data/delta-2.2.0-partitioned-types")
+        let table = crate::open_table("../deltalake-test/tests/data/delta-2.2.0-partitioned-types")
             .await
             .unwrap();
         let config = DeltaScanConfigBuilder::new()
             .with_file_column_name(&"file_source")
-            .build(&table.state)
+            .build(table.snapshot().unwrap())
             .unwrap();
 
-        let provider = DeltaTableProvider::try_new(table.state, table.storage, config).unwrap();
+        let log_store = table.log_store();
+        let provider =
+            DeltaTableProvider::try_new(table.snapshot().unwrap().clone(), log_store, config)
+                .unwrap();
         let ctx = SessionContext::new();
         ctx.register_table("test", Arc::new(provider)).unwrap();
 
@@ -1928,5 +1701,139 @@ mod tests {
                 "+----+----+----+-------------------------------------------------------------------------------+",
             ];
         assert_batches_sorted_eq!(&expected, &actual);
+    }
+
+    #[tokio::test]
+    async fn delta_scan_mixed_partition_order() {
+        // Tests issue (1787) where partition columns were incorrect when they
+        // have a different order in the metadata and table schema
+        let schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("modified", DataType::Utf8, true),
+            Field::new("id", DataType::Utf8, true),
+            Field::new("value", DataType::Int32, true),
+        ]));
+
+        let table = crate::DeltaOps::new_in_memory()
+            .create()
+            .with_columns(get_delta_schema().fields().clone())
+            .with_partition_columns(["modified", "id"])
+            .await
+            .unwrap();
+        assert_eq!(table.version(), 0);
+
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(arrow::array::StringArray::from(vec![
+                    "2021-02-01",
+                    "2021-02-01",
+                    "2021-02-02",
+                    "2021-02-02",
+                ])),
+                Arc::new(arrow::array::StringArray::from(vec!["A", "B", "C", "D"])),
+                Arc::new(arrow::array::Int32Array::from(vec![1, 10, 20, 100])),
+            ],
+        )
+        .unwrap();
+        // write some data
+        let table = crate::DeltaOps(table)
+            .write(vec![batch.clone()])
+            .with_save_mode(crate::protocol::SaveMode::Append)
+            .await
+            .unwrap();
+
+        let config = DeltaScanConfigBuilder::new()
+            .build(table.snapshot().unwrap())
+            .unwrap();
+
+        let log_store = table.log_store();
+        let provider =
+            DeltaTableProvider::try_new(table.snapshot().unwrap().clone(), log_store, config)
+                .unwrap();
+        let ctx = SessionContext::new();
+        ctx.register_table("test", Arc::new(provider)).unwrap();
+
+        let df = ctx.sql("select * from test").await.unwrap();
+        let actual = df.collect().await.unwrap();
+        let expected = vec![
+            "+-------+------------+----+",
+            "| value | modified   | id |",
+            "+-------+------------+----+",
+            "| 1     | 2021-02-01 | A  |",
+            "| 10    | 2021-02-01 | B  |",
+            "| 100   | 2021-02-02 | D  |",
+            "| 20    | 2021-02-02 | C  |",
+            "+-------+------------+----+",
+        ];
+        assert_batches_sorted_eq!(&expected, &actual);
+    }
+
+    #[tokio::test]
+    async fn delta_scan_case_sensitive() {
+        let schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("moDified", DataType::Utf8, true),
+            Field::new("ID", DataType::Utf8, true),
+            Field::new("vaLue", DataType::Int32, true),
+        ]));
+
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(arrow::array::StringArray::from(vec![
+                    "2021-02-01",
+                    "2021-02-01",
+                    "2021-02-02",
+                    "2021-02-02",
+                ])),
+                Arc::new(arrow::array::StringArray::from(vec!["A", "B", "C", "D"])),
+                Arc::new(arrow::array::Int32Array::from(vec![1, 10, 20, 100])),
+            ],
+        )
+        .unwrap();
+        // write some data
+        let table = crate::DeltaOps::new_in_memory()
+            .write(vec![batch.clone()])
+            .with_save_mode(crate::protocol::SaveMode::Append)
+            .await
+            .unwrap();
+
+        let config = DeltaScanConfigBuilder::new()
+            .build(table.snapshot().unwrap())
+            .unwrap();
+        let log = table.log_store();
+
+        let provider =
+            DeltaTableProvider::try_new(table.snapshot().unwrap().clone(), log, config).unwrap();
+        let ctx: SessionContext = DeltaSessionContext::default().into();
+        ctx.register_table("test", Arc::new(provider)).unwrap();
+
+        let df = ctx
+            .sql("select ID, moDified, vaLue from test")
+            .await
+            .unwrap();
+        let actual = df.collect().await.unwrap();
+        let expected = vec![
+            "+----+------------+-------+",
+            "| ID | moDified   | vaLue |",
+            "+----+------------+-------+",
+            "| A  | 2021-02-01 | 1     |",
+            "| B  | 2021-02-01 | 10    |",
+            "| C  | 2021-02-02 | 20    |",
+            "| D  | 2021-02-02 | 100   |",
+            "+----+------------+-------+",
+        ];
+        assert_batches_sorted_eq!(&expected, &actual);
+
+        /* TODO: Datafusion doesn't have any options to prevent case-sensitivity with the col func */
+        /*
+        let df = ctx
+            .table("test")
+            .await
+            .unwrap()
+            .select(vec![col("ID"), col("moDified"), col("vaLue")])
+            .unwrap();
+        let actual = df.collect().await.unwrap();
+        assert_batches_sorted_eq!(&expected, &actual);
+        */
     }
 }

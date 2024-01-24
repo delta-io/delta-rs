@@ -1,17 +1,18 @@
-#![cfg(all(feature = "arrow", feature = "parquet", feature = "datafusion"))]
-
 use arrow::datatypes::Schema as ArrowSchema;
 use arrow_array::{Int32Array, RecordBatch};
-use arrow_schema::{DataType, Field};
+use arrow_schema::{DataType as ArrowDataType, Field};
 use chrono::{DateTime, NaiveDateTime, TimeZone, Utc};
+use deltalake_core::kernel::{DataType, PrimitiveType, StructField};
 use deltalake_core::protocol::SaveMode;
-use deltalake_core::{DeltaOps, DeltaTable, SchemaDataType, SchemaField};
+use deltalake_core::storage::commit_uri_from_version;
+use deltalake_core::{DeltaOps, DeltaTable};
 use rand::Rng;
-use std::collections::HashMap;
 use std::error::Error;
 use std::fs;
 use std::sync::Arc;
-use tempdir::TempDir;
+use std::thread;
+use std::time::Duration;
+use tempfile::TempDir;
 
 #[derive(Debug)]
 struct Context {
@@ -21,21 +22,19 @@ struct Context {
 
 async fn setup_test() -> Result<Context, Box<dyn Error>> {
     let columns = vec![
-        SchemaField::new(
+        StructField::new(
             "id".to_string(),
-            SchemaDataType::primitive("integer".to_string()),
+            DataType::Primitive(PrimitiveType::Integer),
             true,
-            HashMap::new(),
         ),
-        SchemaField::new(
+        StructField::new(
             "value".to_string(),
-            SchemaDataType::primitive("integer".to_string()),
+            DataType::Primitive(PrimitiveType::Integer),
             true,
-            HashMap::new(),
         ),
     ];
 
-    let tmp_dir = tempdir::TempDir::new("restore_table").unwrap();
+    let tmp_dir = tempfile::tempdir().unwrap();
     let table_uri = tmp_dir.path().to_str().to_owned().unwrap();
     let table = DeltaOps::try_from_uri(table_uri)
         .await?
@@ -44,19 +43,21 @@ async fn setup_test() -> Result<Context, Box<dyn Error>> {
         .await?;
 
     let batch = get_record_batch();
-
+    thread::sleep(Duration::from_secs(1));
     let table = DeltaOps(table)
         .write(vec![batch.clone()])
         .with_save_mode(SaveMode::Append)
         .await
         .unwrap();
 
+    thread::sleep(Duration::from_secs(1));
     let table = DeltaOps(table)
         .write(vec![batch.clone()])
         .with_save_mode(SaveMode::Overwrite)
         .await
         .unwrap();
 
+    thread::sleep(Duration::from_secs(1));
     let table = DeltaOps(table)
         .write(vec![batch.clone()])
         .with_save_mode(SaveMode::Append)
@@ -77,8 +78,8 @@ fn get_record_batch() -> RecordBatch {
     }
 
     let schema = ArrowSchema::new(vec![
-        Field::new("id", DataType::Int32, true),
-        Field::new("value", DataType::Int32, true),
+        Field::new("id", ArrowDataType::Int32, true),
+        Field::new("value", ArrowDataType::Int32, true),
     ]);
 
     let id_array = Int32Array::from(id_vec);
@@ -98,26 +99,35 @@ async fn test_restore_by_version() -> Result<(), Box<dyn Error>> {
     let result = DeltaOps(table).restore().with_version_to_restore(1).await?;
     assert_eq!(result.1.num_restored_file, 1);
     assert_eq!(result.1.num_removed_file, 2);
-    assert_eq!(result.0.state.version(), 4);
+    assert_eq!(result.0.snapshot()?.version(), 4);
     let table_uri = context.tmp_dir.path().to_str().to_owned().unwrap();
     let mut table = DeltaOps::try_from_uri(table_uri).await?;
     table.0.load_version(1).await?;
-    assert_eq!(table.0.state.files(), result.0.state.files());
+    assert_eq!(
+        table.0.snapshot()?.file_actions()?,
+        result.0.snapshot()?.file_actions()?
+    );
 
     let result = DeltaOps(result.0)
         .restore()
         .with_version_to_restore(0)
         .await?;
-    assert_eq!(result.0.state.files().len(), 0);
+    assert_eq!(result.0.get_files_count(), 0);
     Ok(())
 }
 
 #[tokio::test]
 async fn test_restore_by_datetime() -> Result<(), Box<dyn Error>> {
     let context = setup_test().await?;
-    let mut table = context.table;
-    let history = table.history(Some(10)).await?;
-    let timestamp = history.get(1).unwrap().timestamp.unwrap();
+    let table = context.table;
+    let version = 1;
+
+    // The way we obtain a timestamp for a version will have to change when/if we start using CommitInfo for timestamps
+    let meta = table
+        .object_store()
+        .head(&commit_uri_from_version(version))
+        .await?;
+    let timestamp = meta.last_modified.timestamp_millis();
     let naive = NaiveDateTime::from_timestamp_millis(timestamp).unwrap();
     let datetime: DateTime<Utc> = Utc.from_utc_datetime(&naive);
 
@@ -127,14 +137,14 @@ async fn test_restore_by_datetime() -> Result<(), Box<dyn Error>> {
         .await?;
     assert_eq!(result.1.num_restored_file, 1);
     assert_eq!(result.1.num_removed_file, 2);
-    assert_eq!(result.0.state.version(), 4);
+    assert_eq!(result.0.snapshot()?.version(), 4);
     Ok(())
 }
 
 #[tokio::test]
 async fn test_restore_with_error_params() -> Result<(), Box<dyn Error>> {
     let context = setup_test().await?;
-    let mut table = context.table;
+    let table = context.table;
     let history = table.history(Some(10)).await?;
     let timestamp = history.get(1).unwrap().timestamp.unwrap();
     let naive = NaiveDateTime::from_timestamp_millis(timestamp).unwrap();
@@ -160,12 +170,17 @@ async fn test_restore_with_error_params() -> Result<(), Box<dyn Error>> {
 async fn test_restore_file_missing() -> Result<(), Box<dyn Error>> {
     let context = setup_test().await?;
 
-    for file in context.table.state.files().iter() {
-        let p = context.tmp_dir.path().join(file.clone().path);
+    for file in context.table.snapshot()?.log_data() {
+        let p = context.tmp_dir.path().join(file.path().as_ref());
         fs::remove_file(p).unwrap();
     }
 
-    for file in context.table.state.all_tombstones().iter() {
+    for file in context
+        .table
+        .snapshot()?
+        .all_tombstones(context.table.object_store().clone())
+        .await?
+    {
         let p = context.tmp_dir.path().join(file.clone().path);
         fs::remove_file(p).unwrap();
     }
@@ -182,12 +197,17 @@ async fn test_restore_file_missing() -> Result<(), Box<dyn Error>> {
 async fn test_restore_allow_file_missing() -> Result<(), Box<dyn Error>> {
     let context = setup_test().await?;
 
-    for file in context.table.state.files().iter() {
-        let p = context.tmp_dir.path().join(file.clone().path);
+    for file in context.table.snapshot()?.log_data() {
+        let p = context.tmp_dir.path().join(file.path().as_ref());
         fs::remove_file(p).unwrap();
     }
 
-    for file in context.table.state.all_tombstones().iter() {
+    for file in context
+        .table
+        .snapshot()?
+        .all_tombstones(context.table.object_store().clone())
+        .await?
+    {
         let p = context.tmp_dir.path().join(file.clone().path);
         fs::remove_file(p).unwrap();
     }

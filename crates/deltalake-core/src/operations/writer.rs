@@ -1,6 +1,6 @@
 //! Abstractions and implementations for writing data to delta tables
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use arrow::datatypes::SchemaRef as ArrowSchemaRef;
 use arrow::error::ArrowError;
@@ -10,16 +10,17 @@ use object_store::{path::Path, ObjectStore};
 use parquet::arrow::ArrowWriter;
 use parquet::basic::Compression;
 use parquet::file::properties::WriterProperties;
+use tracing::debug;
 
 use crate::crate_version;
 use crate::errors::{DeltaResult, DeltaTableError};
-use crate::protocol::Add;
+use crate::kernel::{Add, PartitionsExt, Scalar};
 use crate::storage::ObjectStoreRef;
 use crate::writer::record_batch::{divide_by_partition_values, PartitionResult};
 use crate::writer::stats::create_add;
 use crate::writer::utils::{
     arrow_schema_without_partitions, next_data_path, record_batch_without_partitions,
-    PartitionPath, ShareableBuffer,
+    ShareableBuffer,
 };
 
 // TODO databricks often suggests a file size of 100mb, should we set this default?
@@ -36,11 +37,6 @@ enum WriteError {
 
     #[error("Error creating add action: {source}")]
     CreateAdd {
-        source: Box<dyn std::error::Error + Send + Sync + 'static>,
-    },
-
-    #[error("Error creating file name from partition info: {source}")]
-    FileName {
         source: Box<dyn std::error::Error + Send + Sync + 'static>,
     },
 
@@ -159,12 +155,9 @@ impl DeltaWriter {
     pub async fn write_partition(
         &mut self,
         record_batch: RecordBatch,
-        partition_values: &HashMap<String, Option<String>>,
+        partition_values: &BTreeMap<String, Scalar>,
     ) -> DeltaResult<()> {
-        let partition_key =
-            PartitionPath::from_hashmap(&self.config.partition_columns, partition_values)?
-                .as_ref()
-                .into();
+        let partition_key = Path::parse(partition_values.hive_partition_path())?;
 
         let record_batch =
             record_batch_without_partitions(&record_batch, &self.config.partition_columns)?;
@@ -177,7 +170,6 @@ impl DeltaWriter {
                 let config = PartitionWriterConfig::try_new(
                     self.config.file_schema(),
                     partition_values.clone(),
-                    self.config.partition_columns.clone(),
                     Some(self.config.writer_properties.clone()),
                     Some(self.config.target_file_size),
                     Some(self.config.write_batch_size),
@@ -225,7 +217,7 @@ pub(crate) struct PartitionWriterConfig {
     /// Prefix applied to all paths
     prefix: Path,
     /// Values for all partition columns
-    partition_values: HashMap<String, Option<String>>,
+    partition_values: BTreeMap<String, Scalar>,
     /// Properties passed to underlying parquet writer
     writer_properties: WriterProperties,
     /// Size above which we will write a buffered parquet file to disk.
@@ -238,17 +230,13 @@ pub(crate) struct PartitionWriterConfig {
 impl PartitionWriterConfig {
     pub fn try_new(
         file_schema: ArrowSchemaRef,
-        partition_values: HashMap<String, Option<String>>,
-        partition_columns: Vec<String>,
+        partition_values: BTreeMap<String, Scalar>,
         writer_properties: Option<WriterProperties>,
         target_file_size: Option<usize>,
         write_batch_size: Option<usize>,
     ) -> DeltaResult<Self> {
-        let part_path = PartitionPath::from_hashmap(&partition_columns, &partition_values)
-            .map_err(|err| WriteError::FileName {
-                source: Box::new(err),
-            })?;
-        let prefix = Path::parse(part_path.as_ref())?;
+        let part_path = partition_values.hive_partition_path();
+        let prefix = Path::parse(part_path)?;
         let writer_properties = writer_properties.unwrap_or_else(|| {
             WriterProperties::builder()
                 .set_created_by(format!("delta-rs version {}", crate_version()))
@@ -380,7 +368,7 @@ impl PartitionWriter {
             self.write_batch(&batch.slice(offset, length))?;
             // flush currently buffered data to disk once we meet or exceed the target file size.
             if self.buffer.len() >= self.config.target_file_size {
-                log::debug!("Writing file with size {:?} to disk.", self.buffer.len());
+                debug!("Writing file with size {:?} to disk.", self.buffer.len());
                 self.flush_arrow_writer().await?;
             }
         }
@@ -406,9 +394,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_write_partition() {
-        let object_store = DeltaTableBuilder::from_uri("memory://")
+        let log_store = DeltaTableBuilder::from_uri("memory://")
             .build_storage()
             .unwrap();
+        let object_store = log_store.object_store();
         let batch = get_record_batch(None, false);
 
         // write single un-partitioned batch
@@ -439,12 +428,13 @@ mod tests {
 
         let object_store = DeltaTableBuilder::from_uri("memory://")
             .build_storage()
-            .unwrap();
+            .unwrap()
+            .object_store();
         let properties = WriterProperties::builder()
             .set_max_row_group_size(1024)
             .build();
         // configure small target file size and and row group size so we can observe multiple files written
-        let mut writer = get_writer(object_store.clone(), &batch, Some(properties), Some(10_000));
+        let mut writer = get_writer(object_store, &batch, Some(properties), Some(10_000));
         writer.write(&batch).await.unwrap();
 
         // check that we have written more then once file, and no more then 1 is below target size
@@ -464,8 +454,7 @@ mod tests {
     ) -> PartitionWriter {
         let config = PartitionWriterConfig::try_new(
             batch.schema(),
-            HashMap::new(),
-            Vec::new(),
+            BTreeMap::new(),
             writer_properties,
             target_file_size,
             None,

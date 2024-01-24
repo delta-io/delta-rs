@@ -1,7 +1,8 @@
+#![cfg(feature = "deltalake")]
 use std::collections::HashMap;
 use std::convert::TryFrom;
 
-use deltalake_core::schema::SchemaDataType;
+use deltalake_core::kernel::{DataType, PrimitiveType};
 
 #[allow(dead_code)]
 mod fs_common;
@@ -50,12 +51,29 @@ fn test_match_partition() {
         key: "month".to_string(),
         value: deltalake_core::PartitionValue::Equal("12".to_string()),
     };
-    let string_type = SchemaDataType::primitive(String::from("string"));
+    let string_type = DataType::Primitive(PrimitiveType::String);
 
     assert!(!partition_year_2020_filter.match_partition(&partition_2021, &string_type));
     assert!(partition_year_2020_filter.match_partition(&partition_2020, &string_type));
     assert!(!partition_year_2020_filter.match_partition(&partition_2019, &string_type));
     assert!(!partition_month_12_filter.match_partition(&partition_2019, &string_type));
+
+    let partition_2020_12_31_23_59_59 = deltalake_core::DeltaTablePartition {
+        key: "time".to_string(),
+        value: "2020-12-31 23:59:59".to_string(),
+    };
+
+    let partition_time_2020_12_31_23_59_59_filter = deltalake_core::PartitionFilter {
+        key: "time".to_string(),
+        value: deltalake_core::PartitionValue::Equal("2020-12-31 23:59:59.000000".to_string()),
+    };
+
+    assert!(partition_time_2020_12_31_23_59_59_filter.match_partition(
+        &partition_2020_12_31_23_59_59,
+        &DataType::Primitive(PrimitiveType::Timestamp)
+    ));
+    assert!(!partition_time_2020_12_31_23_59_59_filter
+        .match_partition(&partition_2020_12_31_23_59_59, &string_type));
 }
 
 #[test]
@@ -71,11 +89,13 @@ fn test_match_filters() {
         },
     ];
 
-    let string_type = SchemaDataType::primitive(String::from("string"));
-    let partition_data_types: HashMap<&str, &SchemaDataType> =
-        vec![("year", &string_type), ("month", &string_type)]
-            .into_iter()
-            .collect();
+    let string_type = DataType::Primitive(PrimitiveType::String);
+    let partition_data_types: HashMap<&String, &DataType> = vec![
+        (&partitions[0].key, &string_type),
+        (&partitions[1].key, &string_type),
+    ]
+    .into_iter()
+    .collect();
 
     let valid_filters = deltalake_core::PartitionFilter {
         key: "year".to_string(),
@@ -97,16 +117,14 @@ fn test_match_filters() {
     assert!(!invalid_filter.match_partitions(&partitions, &partition_data_types),);
 }
 
-// FIXME: enable this for parquet2
-#[cfg(all(feature = "arrow", feature = "parquet"))]
 #[tokio::test]
 async fn read_null_partitions_from_checkpoint() {
-    use deltalake_core::protocol::Add;
+    use deltalake_core::kernel::Add;
     use maplit::hashmap;
     use serde_json::json;
 
     let mut table = fs_common::create_table_from_json(
-        "./tests/data/read_null_partitions_from_checkpoint",
+        "../deltalake-test/tests/data/read_null_partitions_from_checkpoint",
         json!({
             "type": "struct",
             "fields": [
@@ -156,9 +174,10 @@ async fn load_from_delta_8_0_table_with_special_partition() {
     use deltalake_core::{DeltaOps, DeltaTable};
     use futures::{future, StreamExt};
 
-    let table = deltalake_core::open_table("./tests/data/delta-0.8.0-special-partition")
-        .await
-        .unwrap();
+    let table =
+        deltalake_core::open_table("../deltalake-test/tests/data/delta-0.8.0-special-partition")
+            .await
+            .unwrap();
 
     let (_, stream): (DeltaTable, SendableRecordBatchStream) = DeltaOps(table)
         .load()

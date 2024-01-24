@@ -9,7 +9,7 @@ mod fs_common;
 #[tokio::test]
 async fn test_log_buffering() {
     let n_commits = 10;
-    let path = "./tests/data/simple_table_with_no_checkpoint";
+    let path = "../deltalake-test/tests/data/simple_table_with_no_checkpoint";
     let mut table = fs_common::create_table(path, None).await;
     for _ in 0..n_commits {
         let a = fs_common::add(3 * 60 * 1000);
@@ -25,7 +25,7 @@ async fn test_log_buffering() {
     let store = std::sync::Arc::new(
         fs_common::SlowStore::new(
             location.clone(),
-            deltalake_core::storage::config::StorageOptions::from(HashMap::new()),
+            deltalake_core::storage::StorageOptions::from(HashMap::new()),
         )
         .unwrap(),
     );
@@ -40,7 +40,7 @@ async fn test_log_buffering() {
             .unwrap()
             .load()
             .await
-            .unwrap();
+            .expect("Failed to load table");
         table_seq.update_incremental(None).await.unwrap();
         seq_version = table_seq.version();
     }
@@ -73,7 +73,7 @@ async fn test_log_buffering() {
 #[tokio::test]
 async fn test_log_buffering_success_explicit_version() {
     let n_commits = 10;
-    let path = "./tests/data/simple_table_with_no_checkpoint_2";
+    let path = "../deltalake-test/tests/data/simple_table_with_no_checkpoint_2";
     let mut table = fs_common::create_table(path, None).await;
     for _ in 0..n_commits {
         let a = fs_common::add(3 * 60 * 1000);
@@ -99,7 +99,7 @@ async fn test_log_buffering_success_explicit_version() {
             .await
             .unwrap();
         table.update_incremental(Some(0)).await.unwrap();
-        assert_eq!(table.version(), 10);
+        assert_eq!(table.version(), 0);
 
         let mut table = DeltaTableBuilder::from_uri(path)
             .with_version(0)
@@ -135,7 +135,7 @@ async fn test_log_buffering_success_explicit_version() {
 
 #[tokio::test]
 async fn test_log_buffering_fail() {
-    let path = "./tests/data/simple_table_with_no_checkpoint";
+    let path = "../deltalake-test/tests/data/simple_table_with_no_checkpoint";
     let table_err = DeltaTableBuilder::from_uri(path)
         .with_version(0)
         .with_log_buffer_size(0)
@@ -145,17 +145,31 @@ async fn test_log_buffering_fail() {
 
 #[tokio::test]
 async fn test_read_liquid_table() -> DeltaResult<()> {
-    let path = "./tests/data/table_with_liquid_clustering";
+    let path = "../deltalake-test/tests/data/table_with_liquid_clustering";
     let _table = deltalake_core::open_table(&path).await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_read_table_features() -> DeltaResult<()> {
+    let mut _table =
+        deltalake_core::open_table("../deltalake-test/tests/data/simple_table_features").await?;
+    let rf = _table.protocol()?.reader_features.clone();
+    let wf = _table.protocol()?.writer_features.clone();
+
+    assert!(rf.is_some());
+    assert!(wf.is_some());
+    assert_eq!(rf.unwrap().len(), 5);
+    assert_eq!(wf.unwrap().len(), 13);
     Ok(())
 }
 
 // test for: https://github.com/delta-io/delta-rs/issues/1302
 #[tokio::test]
 async fn read_delta_table_from_dlt() {
-    let table = deltalake_core::open_table("./tests/data/delta-live-table")
+    let table = deltalake_core::open_table("../deltalake-test/tests/data/delta-live-table")
         .await
         .unwrap();
     assert_eq!(table.version(), 1);
-    assert!(table.schema().is_some());
+    assert!(table.get_schema().is_ok());
 }

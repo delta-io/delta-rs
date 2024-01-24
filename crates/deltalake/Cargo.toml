@@ -9,36 +9,36 @@ keywords = ["deltalake", "delta", "datalake"]
 description = "Native Delta Lake implementation in Rust"
 documentation = "https://docs.rs/deltalake"
 repository = "https://github.com/delta-io/delta.rs"
-readme = "README.md"
+readme = "../README.md"
 edition = "2021"
 
 [dependencies]
 deltalake-core = { path = "../deltalake-core" }
+deltalake-aws = { path = "../deltalake-aws", default-features = false, optional = true }
+deltalake-azure = { path = "../deltalake-azure", optional = true }
+deltalake-gcp = { path = "../deltalake-gcp", optional = true }
+deltalake-catalog-glue = { path = "../deltalake-catalog-glue", optional = true }
 
 [features]
 # All of these features are just reflected into the core crate until that
 # functionality is broken apart
-azure = ["deltalake-core/azure"]
-arrow = ["deltalake-core/arrow"]
-default = ["arrow", "deltalake-core/parquet"]
+azure = ["deltalake-azure"]
+default = []
 datafusion = ["deltalake-core/datafusion"]
 datafusion-ext = ["datafusion"]
-gcs = ["deltalake-core/gcs"]
-glue = ["deltalake-core/glue"]
-glue-native-tls = ["deltalake-core/glue-native-tls"]
-hdfs = ["deltalake-core/hdfs"]
-# used only for integration testing
-integration_test = ["deltalake-core/integration_test"]
+gcs = ["deltalake-gcp"]
+glue = ["deltalake-catalog-glue"]
+hdfs = []
 json = ["deltalake-core/json"]
 python = ["deltalake-core/python"]
-s3-native-tls = ["deltalake-core/s3-native-tls"]
-s3 = ["deltalake-core/s3"]
+s3-native-tls = ["deltalake-aws/native-tls"]
+s3 = ["deltalake-aws/rustls"]
 unity-experimental = ["deltalake-core/unity-experimental"]
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 chrono = { workspace = true, default-features = false, features = ["clock"] }
-log = "*"
+tracing = { workspace = true }
 
 [[example]]
 name = "basic_operations"

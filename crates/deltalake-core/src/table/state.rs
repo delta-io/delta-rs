@@ -1,216 +1,148 @@
 //! The module for delta table state.
 
 use std::collections::HashMap;
-use std::collections::HashSet;
-use std::convert::TryFrom;
-use std::io::{BufRead, BufReader, Cursor};
+use std::sync::Arc;
 
 use chrono::Utc;
-use lazy_static::lazy_static;
-use object_store::{path::Path, Error as ObjectStoreError, ObjectStore};
+use futures::TryStreamExt;
+use object_store::{path::Path, ObjectStore};
 use serde::{Deserialize, Serialize};
 
 use super::config::TableConfig;
-use crate::errors::DeltaTableError;
+use super::{get_partition_col_data_types, DeltaTableConfig};
+use crate::kernel::{
+    Action, Add, DataType, EagerSnapshot, LogDataHandler, LogicalFile, Metadata, Protocol, Remove,
+    StructType,
+};
 use crate::partitions::{DeltaTablePartition, PartitionFilter};
-use crate::protocol::{self, Action, Add, ProtocolError};
-use crate::schema::SchemaDataType;
-use crate::storage::commit_uri_from_version;
-use crate::table::DeltaTableMetaData;
-use crate::DeltaTable;
-use crate::Schema;
-
-#[cfg(any(feature = "parquet", feature = "parquet2"))]
-use super::{CheckPoint, DeltaTableConfig};
+use crate::protocol::DeltaOperation;
+use crate::{DeltaResult, DeltaTableError};
 
 /// State snapshot currently held by the Delta Table instance.
-#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DeltaTableState {
-    // current table version represented by this table state
-    version: i64,
-    // A remove action should remain in the state of the table as a tombstone until it has expired.
-    // A tombstone expires when the creation timestamp of the delta file exceeds the expiration
-    tombstones: HashSet<protocol::Remove>,
-    // active files for table state
-    files: Vec<protocol::Add>,
-    // Information added to individual commits
-    commit_infos: Vec<protocol::CommitInfo>,
-    // Domain metadatas provided by the system or user
-    domain_metadatas: Vec<protocol::DomainMetaData>,
     app_transaction_version: HashMap<String, i64>,
-    min_reader_version: i32,
-    min_writer_version: i32,
-    // table metadata corresponding to current version
-    current_metadata: Option<DeltaTableMetaData>,
-    // retention period for tombstones in milli-seconds
-    tombstone_retention_millis: i64,
-    // retention period for log entries in milli-seconds
-    log_retention_millis: i64,
-    enable_expired_log_cleanup: bool,
+    pub(crate) snapshot: EagerSnapshot,
 }
 
 impl DeltaTableState {
-    /// Create Table state with specified version
-    pub fn with_version(version: i64) -> Self {
-        Self {
-            version,
-            ..Self::default()
-        }
+    /// Create a new DeltaTableState
+    pub async fn try_new(
+        table_root: &Path,
+        store: Arc<dyn ObjectStore>,
+        config: DeltaTableConfig,
+        version: Option<i64>,
+    ) -> DeltaResult<Self> {
+        let snapshot = EagerSnapshot::try_new(table_root, store.clone(), config, version).await?;
+        Ok(Self {
+            snapshot,
+            app_transaction_version: HashMap::new(),
+        })
     }
 
     /// Return table version
     pub fn version(&self) -> i64 {
-        self.version
+        self.snapshot.version()
     }
 
-    /// Construct a delta table state object from commit version.
-    pub async fn from_commit(table: &DeltaTable, version: i64) -> Result<Self, ProtocolError> {
-        let commit_uri = commit_uri_from_version(version);
-        let commit_log_bytes = match table.storage.get(&commit_uri).await {
-            Ok(get) => Ok(get.bytes().await?),
-            Err(ObjectStoreError::NotFound { .. }) => Err(ProtocolError::EndOfLog),
-            Err(source) => Err(ProtocolError::ObjectStore { source }),
-        }?;
-        let reader = BufReader::new(Cursor::new(commit_log_bytes));
-
-        let mut new_state = DeltaTableState::with_version(version);
-        for line in reader.lines() {
-            let action: protocol::Action = serde_json::from_str(line?.as_str())?;
-            new_state.process_action(
-                action,
-                table.config.require_tombstones,
-                table.config.require_files,
-            )?;
-        }
-
-        Ok(new_state)
+    /// Get the timestamp when a version commit was created.
+    /// This is the timestamp of the commit file.
+    /// If the commit file is not present, None is returned.
+    pub fn version_timestamp(&self, version: i64) -> Option<i64> {
+        self.snapshot.version_timestamp(version)
     }
 
     /// Construct a delta table state object from a list of actions
-    pub fn from_actions(actions: Vec<Action>, version: i64) -> Result<Self, ProtocolError> {
-        let mut new_state = DeltaTableState::with_version(version);
-        for action in actions {
-            new_state.process_action(action, true, true)?;
-        }
-        Ok(new_state)
+    #[cfg(test)]
+    pub fn from_actions(actions: Vec<Action>) -> DeltaResult<Self> {
+        use crate::protocol::SaveMode;
+        let metadata = actions
+            .iter()
+            .find_map(|a| match a {
+                Action::Metadata(m) => Some(m.clone()),
+                _ => None,
+            })
+            .ok_or(DeltaTableError::NotInitialized)?;
+        let protocol = actions
+            .iter()
+            .find_map(|a| match a {
+                Action::Protocol(p) => Some(p.clone()),
+                _ => None,
+            })
+            .ok_or(DeltaTableError::NotInitialized)?;
+
+        let commit_data = [(
+            actions,
+            DeltaOperation::Create {
+                mode: SaveMode::Append,
+                location: Path::default().to_string(),
+                protocol: protocol.clone(),
+                metadata: metadata.clone(),
+            },
+            None,
+        )];
+        let snapshot = EagerSnapshot::new_test(&commit_data).unwrap();
+        Ok(Self {
+            app_transaction_version: Default::default(),
+            snapshot,
+        })
     }
 
-    /// Update DeltaTableState with checkpoint data.
-    #[cfg(any(feature = "parquet", feature = "parquet2"))]
-    pub fn process_checkpoint_bytes(
-        &mut self,
-        data: bytes::Bytes,
-        table_config: &DeltaTableConfig,
-    ) -> Result<(), DeltaTableError> {
-        #[cfg(feature = "parquet")]
-        {
-            use parquet::file::reader::{FileReader, SerializedFileReader};
-
-            let preader = SerializedFileReader::new(data)?;
-            let schema = preader.metadata().file_metadata().schema();
-            if !schema.is_group() {
-                return Err(DeltaTableError::from(protocol::ProtocolError::Generic(
-                    "Action record in checkpoint should be a struct".to_string(),
-                )));
-            }
-            for record in preader.get_row_iter(None)? {
-                self.process_action(
-                    protocol::Action::from_parquet_record(schema, &record.unwrap())?,
-                    table_config.require_tombstones,
-                    table_config.require_files,
-                )?;
-            }
-        }
-
-        #[cfg(feature = "parquet2")]
-        {
-            use crate::protocol::parquet2_read::actions_from_row_group;
-            use parquet2::read::read_metadata;
-
-            let mut reader = std::io::Cursor::new(data);
-            let metadata = read_metadata(&mut reader)?;
-
-            for row_group in metadata.row_groups {
-                for action in actions_from_row_group(row_group, &mut reader)
-                    .map_err(protocol::ProtocolError::from)?
-                {
-                    self.process_action(
-                        action,
-                        table_config.require_tombstones,
-                        table_config.require_files,
-                    )?;
-                }
-            }
-        }
-
-        Ok(())
-    }
-
-    /// Construct a delta table state object from checkpoint.
-    #[cfg(any(feature = "parquet", feature = "parquet2"))]
-    pub async fn from_checkpoint(
-        table: &DeltaTable,
-        check_point: &CheckPoint,
-    ) -> Result<Self, DeltaTableError> {
-        let checkpoint_data_paths = table.get_checkpoint_data_paths(check_point);
-        let mut new_state = Self::with_version(check_point.version);
-
-        for f in &checkpoint_data_paths {
-            let obj = table.storage.get(f).await?.bytes().await?;
-            new_state.process_checkpoint_bytes(obj, &table.config)?;
-        }
-
-        Ok(new_state)
-    }
-
-    /// List of commit info maps.
-    pub fn commit_infos(&self) -> &Vec<protocol::CommitInfo> {
-        &self.commit_infos
-    }
-
-    /// Retention of tombstone in milliseconds.
-    pub fn tombstone_retention_millis(&self) -> i64 {
-        self.tombstone_retention_millis
-    }
-
-    /// Retention of logs in milliseconds.
-    pub fn log_retention_millis(&self) -> i64 {
-        self.log_retention_millis
-    }
-
-    /// Whether to clean up expired checkpoints and delta logs.
-    pub fn enable_expired_log_cleanup(&self) -> bool {
-        self.enable_expired_log_cleanup
+    /// Returns a semantic accessor to the currently loaded log data.
+    pub fn log_data(&self) -> LogDataHandler<'_> {
+        self.snapshot.log_data()
     }
 
     /// Full list of tombstones (remove actions) representing files removed from table state).
-    pub fn all_tombstones(&self) -> &HashSet<protocol::Remove> {
-        &self.tombstones
+    pub async fn all_tombstones(
+        &self,
+        store: Arc<dyn ObjectStore>,
+    ) -> DeltaResult<impl Iterator<Item = Remove>> {
+        Ok(self
+            .snapshot
+            .snapshot()
+            .tombstones(store)?
+            .try_collect::<Vec<_>>()
+            .await?
+            .into_iter()
+            .flatten())
     }
 
     /// List of unexpired tombstones (remove actions) representing files removed from table state.
     /// The retention period is set by `deletedFileRetentionDuration` with default value of 1 week.
-    pub fn unexpired_tombstones(&self) -> impl Iterator<Item = &protocol::Remove> {
-        let retention_timestamp = Utc::now().timestamp_millis() - self.tombstone_retention_millis;
-        self.tombstones
-            .iter()
-            .filter(move |t| t.deletion_timestamp.unwrap_or(0) > retention_timestamp)
+    pub async fn unexpired_tombstones(
+        &self,
+        store: Arc<dyn ObjectStore>,
+    ) -> DeltaResult<impl Iterator<Item = Remove>> {
+        let retention_timestamp = Utc::now().timestamp_millis()
+            - self
+                .table_config()
+                .deleted_file_retention_duration()
+                .as_millis() as i64;
+        let tombstones = self.all_tombstones(store).await?.collect::<Vec<_>>();
+        Ok(tombstones
+            .into_iter()
+            .filter(move |t| t.deletion_timestamp.unwrap_or(0) > retention_timestamp))
     }
 
     /// Full list of add actions representing all parquet files that are part of the current
     /// delta table state.
-    pub fn files(&self) -> &Vec<protocol::Add> {
-        self.files.as_ref()
+    pub fn file_actions(&self) -> DeltaResult<Vec<Add>> {
+        Ok(self.snapshot.file_actions()?.collect())
+    }
+
+    /// Get the number of files in the current table state
+    pub fn files_count(&self) -> usize {
+        self.snapshot.files_count()
     }
 
     /// Returns an iterator of file names present in the loaded state
     #[inline]
     pub fn file_paths_iter(&self) -> impl Iterator<Item = Path> + '_ {
-        self.files.iter().map(|add| match Path::parse(&add.path) {
-            Ok(path) => path,
-            Err(_) => Path::from(add.path.as_ref()),
-        })
+        self.log_data()
+            .into_iter()
+            .map(|add| add.object_store_path())
     }
 
     /// HashMap containing the last txn version stored for every app id writing txn
@@ -219,35 +151,24 @@ impl DeltaTableState {
         &self.app_transaction_version
     }
 
-    /// The min reader version required by the protocol.
-    pub fn min_reader_version(&self) -> i32 {
-        self.min_reader_version
-    }
-
-    /// The min writer version required by the protocol.
-    pub fn min_writer_version(&self) -> i32 {
-        self.min_writer_version
+    /// The most recent protocol of the table.
+    pub fn protocol(&self) -> &Protocol {
+        self.snapshot.protocol()
     }
 
     /// The most recent metadata of the table.
-    pub fn current_metadata(&self) -> Option<&DeltaTableMetaData> {
-        self.current_metadata.as_ref()
+    pub fn metadata(&self) -> &Metadata {
+        self.snapshot.metadata()
     }
 
     /// The table schema
-    pub fn schema(&self) -> Option<&Schema> {
-        self.current_metadata.as_ref().map(|m| &m.schema)
+    pub fn schema(&self) -> &StructType {
+        self.snapshot.schema()
     }
 
     /// Well known table configuration
     pub fn table_config(&self) -> TableConfig<'_> {
-        lazy_static! {
-            static ref DUMMY_CONF: HashMap<String, Option<String>> = HashMap::new();
-        }
-        self.current_metadata
-            .as_ref()
-            .map(|meta| TableConfig(&meta.configuration))
-            .unwrap_or_else(|| TableConfig(&DUMMY_CONF))
+        self.snapshot.table_config()
     }
 
     /// Merges new state information into our state
@@ -258,112 +179,27 @@ impl DeltaTableState {
     /// function will update the tracked version if the version on `new_state` is larger then the
     /// currently set version however it is up to the caller to update the `version` field according
     /// to the version the merged state represents.
-    pub fn merge(
+    pub(crate) fn merge(
         &mut self,
-        mut new_state: DeltaTableState,
-        require_tombstones: bool,
-        require_files: bool,
-    ) {
-        if !new_state.tombstones.is_empty() {
-            self.files
-                .retain(|a| !new_state.tombstones.contains(a.path.as_str()));
+        actions: Vec<Action>,
+        operation: &DeltaOperation,
+        version: i64,
+    ) -> Result<(), DeltaTableError> {
+        let commit_infos = vec![(actions, operation.clone(), None)];
+        let new_version = self.snapshot.advance(&commit_infos)?;
+        if new_version != version {
+            return Err(DeltaTableError::Generic("Version mismatch".to_string()));
         }
-
-        if require_tombstones && require_files {
-            new_state.tombstones.into_iter().for_each(|r| {
-                self.tombstones.insert(r);
-            });
-
-            if !new_state.files.is_empty() {
-                new_state.files.iter().for_each(|s| {
-                    self.tombstones.remove(s.path.as_str());
-                });
-            }
-        }
-
-        if require_files {
-            self.files.append(&mut new_state.files);
-        }
-
-        if new_state.min_reader_version > 0 {
-            self.min_reader_version = new_state.min_reader_version;
-            self.min_writer_version = new_state.min_writer_version;
-        }
-
-        if new_state.current_metadata.is_some() {
-            self.tombstone_retention_millis = new_state.tombstone_retention_millis;
-            self.log_retention_millis = new_state.log_retention_millis;
-            self.enable_expired_log_cleanup = new_state.enable_expired_log_cleanup;
-            self.current_metadata = new_state.current_metadata.take();
-        }
-
-        new_state
-            .app_transaction_version
-            .drain()
-            .for_each(|(app_id, version)| {
-                *self
-                    .app_transaction_version
-                    .entry(app_id)
-                    .or_insert(version) = version
-            });
-
-        if !new_state.commit_infos.is_empty() {
-            self.commit_infos.append(&mut new_state.commit_infos);
-        }
-
-        if self.version < new_state.version {
-            self.version = new_state.version
-        }
+        Ok(())
     }
 
-    /// Process given action by updating current state.
-    fn process_action(
+    /// Update the state of the table to the given version.
+    pub async fn update(
         &mut self,
-        action: protocol::Action,
-        require_tombstones: bool,
-        require_files: bool,
-    ) -> Result<(), ProtocolError> {
-        match action {
-            // TODO: optionally load CDC into TableState
-            protocol::Action::cdc(_v) => {}
-            protocol::Action::add(v) => {
-                if require_files {
-                    self.files.push(v);
-                }
-            }
-            protocol::Action::remove(v) => {
-                if require_tombstones && require_files {
-                    self.tombstones.insert(v);
-                }
-            }
-            protocol::Action::protocol(v) => {
-                self.min_reader_version = v.min_reader_version;
-                self.min_writer_version = v.min_writer_version;
-            }
-            protocol::Action::metaData(v) => {
-                let md = DeltaTableMetaData::try_from(v)?;
-                let table_config = TableConfig(&md.configuration);
-                self.tombstone_retention_millis =
-                    table_config.deleted_file_retention_duration().as_millis() as i64;
-                self.log_retention_millis =
-                    table_config.log_retention_duration().as_millis() as i64;
-                self.enable_expired_log_cleanup = table_config.enable_expired_log_cleanup();
-                self.current_metadata = Some(md);
-            }
-            protocol::Action::txn(v) => {
-                *self
-                    .app_transaction_version
-                    .entry(v.app_id)
-                    .or_insert(v.version) = v.version;
-            }
-            protocol::Action::commitInfo(v) => {
-                self.commit_infos.push(v);
-            }
-            protocol::Action::domainMetadata(v) => {
-                self.domain_metadatas.push(v);
-            }
-        }
-
+        store: Arc<dyn ObjectStore>,
+        version: Option<i64>,
+    ) -> Result<(), DeltaTableError> {
+        self.snapshot.update(store, version).await?;
         Ok(())
     }
 
@@ -371,8 +207,8 @@ impl DeltaTableState {
     pub fn get_active_add_actions_by_partitions<'a>(
         &'a self,
         filters: &'a [PartitionFilter],
-    ) -> Result<impl Iterator<Item = &Add> + '_, DeltaTableError> {
-        let current_metadata = self.current_metadata().ok_or(DeltaTableError::NoMetadata)?;
+    ) -> Result<impl Iterator<Item = DeltaResult<LogicalFile<'_>>> + '_, DeltaTableError> {
+        let current_metadata = self.metadata();
 
         let nonpartitioned_columns: Vec<String> = filters
             .iter()
@@ -386,81 +222,32 @@ impl DeltaTableState {
             });
         }
 
-        let partition_col_data_types: HashMap<&str, &SchemaDataType> = current_metadata
-            .get_partition_col_data_types()
-            .into_iter()
-            .collect();
+        let partition_col_data_types: HashMap<&String, &DataType> =
+            get_partition_col_data_types(self.schema(), current_metadata)
+                .into_iter()
+                .collect();
 
-        let actions = self.files().iter().filter(move |add| {
-            let partitions = add
-                .partition_values
+        Ok(self.log_data().into_iter().filter_map(move |add| {
+            let partitions = add.partition_values();
+            if partitions.is_err() {
+                return Some(Err(DeltaTableError::Generic(
+                    "Failed to parse partition values".to_string(),
+                )));
+            }
+            let partitions = partitions
+                .unwrap()
                 .iter()
-                .map(|p| DeltaTablePartition::from_partition_value((p.0, p.1), ""))
-                .collect::<Vec<DeltaTablePartition>>();
-            filters
+                .map(|(k, v)| DeltaTablePartition::from_partition_value((*k, v)))
+                .collect::<Vec<_>>();
+            let is_valid = filters
                 .iter()
-                .all(|filter| filter.match_partitions(&partitions, &partition_col_data_types))
-        });
-        Ok(actions)
-    }
-}
+                .all(|filter| filter.match_partitions(&partitions, &partition_col_data_types));
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use pretty_assertions::assert_eq;
-
-    #[test]
-    fn state_round_trip() {
-        let expected = DeltaTableState {
-            version: 0,
-            tombstones: Default::default(),
-            files: vec![],
-            commit_infos: vec![],
-            domain_metadatas: vec![],
-            app_transaction_version: Default::default(),
-            min_reader_version: 0,
-            min_writer_version: 0,
-            current_metadata: None,
-            tombstone_retention_millis: 0,
-            log_retention_millis: 0,
-            enable_expired_log_cleanup: false,
-        };
-        let bytes = serde_json::to_vec(&expected).unwrap();
-        let actual: DeltaTableState = serde_json::from_slice(&bytes).unwrap();
-        assert_eq!(actual.version, expected.version);
-    }
-
-    #[test]
-    fn state_records_new_txn_version() {
-        let mut app_transaction_version = HashMap::new();
-        app_transaction_version.insert("abc".to_string(), 1);
-        app_transaction_version.insert("xyz".to_string(), 1);
-
-        let mut state = DeltaTableState {
-            version: -1,
-            files: vec![],
-            commit_infos: vec![],
-            domain_metadatas: vec![],
-            tombstones: HashSet::new(),
-            current_metadata: None,
-            min_reader_version: 1,
-            min_writer_version: 1,
-            app_transaction_version,
-            tombstone_retention_millis: 0,
-            log_retention_millis: 0,
-            enable_expired_log_cleanup: true,
-        };
-
-        let txn_action = protocol::Action::txn(protocol::Txn {
-            app_id: "abc".to_string(),
-            version: 2,
-            last_updated: Some(0),
-        });
-
-        state.process_action(txn_action, false, true).unwrap();
-
-        assert_eq!(2, *state.app_transaction_version().get("abc").unwrap());
-        assert_eq!(1, *state.app_transaction_version().get("xyz").unwrap());
+            if is_valid {
+                Some(Ok(add))
+            } else {
+                None
+            }
+        }))
     }
 }

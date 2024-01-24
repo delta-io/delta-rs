@@ -9,7 +9,7 @@ from time import sleep
 import pyarrow as pa
 import pytest
 
-from deltalake import DeltaTable, write_deltalake
+from deltalake import DeltaTable, WriterProperties, write_deltalake
 
 
 def wait_till_host_is_available(host: str, timeout_sec: int = 0.5):
@@ -58,7 +58,7 @@ def s3_localstack_creds():
             "s3",
             "sync",
             "--quiet",
-            "../crates/deltalake-core/tests/data/simple_table",
+            "../crates/deltalake-test/tests/data/simple_table",
             "s3://deltars/simple",
             "--endpoint-url",
             endpoint_url,
@@ -248,3 +248,8 @@ def sample_table():
             "deleted": pa.array([False] * nrows),
         }
     )
+
+
+@pytest.fixture()
+def writer_properties():
+    return WriterProperties(compression="GZIP", compression_level=0)

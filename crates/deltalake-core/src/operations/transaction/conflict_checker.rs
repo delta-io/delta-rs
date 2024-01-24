@@ -1,15 +1,14 @@
 //! Helper module to check if a transaction can be committed in case of conflicting commits.
 use std::collections::HashSet;
-use std::io::{BufRead, BufReader, Cursor};
-
-use object_store::ObjectStore;
 
 use super::CommitInfo;
-use crate::errors::{DeltaResult, DeltaTableError};
-use crate::protocol::{Action, Add, DeltaOperation, MetaData, Protocol, Remove};
-use crate::storage::commit_uri_from_version;
+use crate::errors::DeltaResult;
+use crate::kernel::{Action, Add, Metadata, Protocol, Remove};
+use crate::logstore::{get_actions, LogStore};
+use crate::protocol::DeltaOperation;
 use crate::table::config::IsolationLevel;
 use crate::table::state::DeltaTableState;
+use crate::DeltaTableError;
 
 #[cfg(feature = "datafusion")]
 use super::state::AddContainer;
@@ -169,12 +168,12 @@ impl<'a> TransactionInfo<'a> {
     pub fn metadata_changed(&self) -> bool {
         self.actions
             .iter()
-            .any(|a| matches!(a, Action::metaData(_)))
+            .any(|a| matches!(a, Action::Metadata(_)))
     }
 
     #[cfg(feature = "datafusion")]
     /// Files read by the transaction
-    pub fn read_files(&self) -> Result<impl Iterator<Item = &Add>, CommitConflictError> {
+    pub fn read_files(&self) -> Result<impl Iterator<Item = Add>, CommitConflictError> {
         if let Some(predicate) = &self.read_predicates {
             Ok(Either::Left(
                 self.read_snapshot
@@ -190,8 +189,8 @@ impl<'a> TransactionInfo<'a> {
 
     #[cfg(not(feature = "datafusion"))]
     /// Files read by the transaction
-    pub fn read_files(&self) -> Result<impl Iterator<Item = &Add>, CommitConflictError> {
-        Ok(self.read_snapshot.files().iter())
+    pub fn read_files(&self) -> Result<impl Iterator<Item = Add>, CommitConflictError> {
+        Ok(self.read_snapshot.file_actions().unwrap().into_iter())
     }
 
     /// Whether the whole table was read during the transaction
@@ -201,6 +200,7 @@ impl<'a> TransactionInfo<'a> {
 }
 
 /// Summary of the Winning commit against which we want to check the conflict
+#[derive(Debug)]
 pub(crate) struct WinningCommitSummary {
     pub actions: Vec<Action>,
     pub commit_info: Option<CommitInfo>,
@@ -208,52 +208,40 @@ pub(crate) struct WinningCommitSummary {
 
 impl WinningCommitSummary {
     pub async fn try_new(
-        object_store: &dyn ObjectStore,
+        log_store: &dyn LogStore,
         read_version: i64,
         winning_commit_version: i64,
     ) -> DeltaResult<Self> {
-        // NOTE using asser, since a wrong version would right now mean a bug in our code.
+        // NOTE using assert, since a wrong version would right now mean a bug in our code.
         assert_eq!(winning_commit_version, read_version + 1);
 
-        let commit_uri = commit_uri_from_version(winning_commit_version);
-        let commit_log_bytes = object_store.get(&commit_uri).await?.bytes().await?;
+        let commit_log_bytes = log_store.read_commit_entry(winning_commit_version).await?;
+        match commit_log_bytes {
+            Some(bytes) => {
+                let actions = get_actions(winning_commit_version, bytes).await?;
+                let commit_info = actions
+                    .iter()
+                    .find(|action| matches!(action, Action::CommitInfo(_)))
+                    .map(|action| match action {
+                        Action::CommitInfo(info) => info.clone(),
+                        _ => unreachable!(),
+                    });
 
-        let reader = BufReader::new(Cursor::new(commit_log_bytes));
-
-        let actions = reader
-            .lines()
-            .map(|maybe_line| {
-                let line = maybe_line?;
-                serde_json::from_str::<Action>(line.as_str()).map_err(|e| {
-                    DeltaTableError::InvalidJsonLog {
-                        json_err: e,
-                        version: winning_commit_version,
-                        line,
-                    }
+                Ok(Self {
+                    actions,
+                    commit_info,
                 })
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-
-        let commit_info = actions
-            .iter()
-            .find(|action| matches!(action, Action::commitInfo(_)))
-            .map(|action| match action {
-                Action::commitInfo(info) => info.clone(),
-                _ => unreachable!(),
-            });
-
-        Ok(Self {
-            actions,
-            commit_info,
-        })
+            }
+            None => Err(DeltaTableError::InvalidVersion(winning_commit_version)),
+        }
     }
 
-    pub fn metadata_updates(&self) -> Vec<MetaData> {
+    pub fn metadata_updates(&self) -> Vec<Metadata> {
         self.actions
             .iter()
             .cloned()
             .filter_map(|action| match action {
-                Action::metaData(metadata) => Some(metadata),
+                Action::Metadata(metadata) => Some(metadata),
                 _ => None,
             })
             .collect()
@@ -264,7 +252,7 @@ impl WinningCommitSummary {
             .iter()
             .cloned()
             .filter_map(|action| match action {
-                Action::txn(txn) => Some(txn.app_id),
+                Action::Txn(txn) => Some(txn.app_id),
                 _ => None,
             })
             .collect()
@@ -275,7 +263,7 @@ impl WinningCommitSummary {
             .iter()
             .cloned()
             .filter_map(|action| match action {
-                Action::protocol(protocol) => Some(protocol),
+                Action::Protocol(protocol) => Some(protocol),
                 _ => None,
             })
             .collect()
@@ -286,7 +274,7 @@ impl WinningCommitSummary {
             .iter()
             .cloned()
             .filter_map(|action| match action {
-                Action::remove(remove) => Some(remove),
+                Action::Remove(remove) => Some(remove),
                 _ => None,
             })
             .collect()
@@ -297,7 +285,7 @@ impl WinningCommitSummary {
             .iter()
             .cloned()
             .filter_map(|action| match action {
-                Action::add(add) => Some(add),
+                Action::Add(add) => Some(add),
                 _ => None,
             })
             .collect()
@@ -397,11 +385,11 @@ impl<'a> ConflictChecker<'a> {
         for p in self.winning_commit_summary.protocol() {
             let (win_read, curr_read) = (
                 p.min_reader_version,
-                self.txn_info.read_snapshot.min_reader_version(),
+                self.txn_info.read_snapshot.protocol().min_reader_version,
             );
             let (win_write, curr_write) = (
                 p.min_writer_version,
-                self.txn_info.read_snapshot.min_writer_version(),
+                self.txn_info.read_snapshot.protocol().min_writer_version,
             );
             if curr_read < win_read || win_write < curr_write {
                 return Err(CommitConflictError::ProtocolChanged(
@@ -414,7 +402,7 @@ impl<'a> ConflictChecker<'a> {
                 .txn_info
                 .actions
                 .iter()
-                .any(|a| matches!(a, Action::protocol(_)))
+                .any(|a| matches!(a, Action::Protocol(_)))
         {
             return Err(CommitConflictError::ProtocolChanged(
                 "protocol changed".into(),
@@ -474,8 +462,7 @@ impl<'a> ConflictChecker<'a> {
                     let partition_columns = &self
                         .txn_info
                         .read_snapshot
-                        .current_metadata()
-                        .ok_or(CommitConflictError::NoMetadata)?
+                        .metadata()
                         .partition_columns;
                     AddContainer::new(&added_files_to_check, partition_columns, arrow_schema)
                         .predicate_matches(predicate.clone())
@@ -521,9 +508,8 @@ impl<'a> ConflictChecker<'a> {
             .winning_commit_summary
             .removed_files()
             .iter()
-            // TODO remove cloned
-            .cloned()
-            .find(|f| read_file_path.contains(&f.path));
+            .find(|&f| read_file_path.contains(&f.path))
+            .cloned();
         if deleted_read_overlap.is_some()
             || (!self.winning_commit_summary.removed_files().is_empty()
                 && self.txn_info.read_whole_table())
@@ -546,7 +532,7 @@ impl<'a> ConflictChecker<'a> {
             .iter()
             .cloned()
             .filter_map(|action| match action {
-                Action::remove(remove) => Some(remove.path),
+                Action::Remove(remove) => Some(remove.path),
                 _ => None,
             })
             .collect();
@@ -620,8 +606,8 @@ pub(super) fn can_downgrade_to_snapshot_isolation<'a>(
     let mut has_non_file_actions = false;
     for action in actions {
         match action {
-            Action::add(act) if act.data_change => data_changed = true,
-            Action::remove(rem) if rem.data_change => data_changed = true,
+            Action::Add(act) if act.data_change => data_changed = true,
+            Action::Remove(rem) if rem.data_change => data_changed = true,
             _ => has_non_file_actions = true,
         }
     }
@@ -644,7 +630,7 @@ mod tests {
     use super::super::test_utils as tu;
     use super::super::test_utils::init_table_actions;
     use super::*;
-    use crate::protocol::Action;
+    use crate::kernel::Action;
     #[cfg(feature = "datafusion")]
     use datafusion_expr::{col, lit};
     use serde_json::json;
@@ -692,7 +678,7 @@ mod tests {
         read_whole_table: bool,
     ) -> Result<(), CommitConflictError> {
         let setup_actions = setup.unwrap_or_else(|| init_table_actions(None));
-        let state = DeltaTableState::from_actions(setup_actions, 0).unwrap();
+        let state = DeltaTableState::from_actions(setup_actions).unwrap();
         let transaction_info = TransactionInfo::new(&state, reads, &actions, read_whole_table);
         let summary = WinningCommitSummary {
             actions: concurrent,

@@ -5,6 +5,7 @@
 //! the writer. Once written, add actions are returned by the writer. It's the users responsibility
 //! to create the transaction using those actions.
 
+use std::collections::BTreeMap;
 use std::{collections::HashMap, sync::Arc};
 
 use arrow::array::{Array, UInt32Array};
@@ -22,17 +23,17 @@ use uuid::Uuid;
 use super::stats::create_add;
 use super::utils::{
     arrow_schema_without_partitions, next_data_path, record_batch_without_partitions,
-    stringified_partition_value, PartitionPath, ShareableBuffer,
+    ShareableBuffer,
 };
 use super::{DeltaWriter, DeltaWriterError};
 use crate::errors::DeltaTableError;
+use crate::kernel::{Add, PartitionsExt, Scalar, StructType};
 use crate::table::builder::DeltaTableBuilder;
-use crate::table::DeltaTableMetaData;
-use crate::{protocol::Add, storage::DeltaObjectStore, DeltaTable, Schema};
+use crate::DeltaTable;
 
 /// Writes messages to a delta lake table.
 pub struct RecordBatchWriter {
-    storage: Arc<DeltaObjectStore>,
+    storage: Arc<dyn ObjectStore>,
     arrow_schema_ref: Arc<ArrowSchema>,
     writer_properties: WriterProperties,
     partition_columns: Vec<String>,
@@ -55,7 +56,8 @@ impl RecordBatchWriter {
     ) -> Result<Self, DeltaTableError> {
         let storage = DeltaTableBuilder::from_uri(table_uri)
             .with_storage_options(storage_options.unwrap_or_default())
-            .build_storage()?;
+            .build_storage()?
+            .object_store();
 
         // Initialize writer properties for the underlying arrow writer
         let writer_properties = WriterProperties::builder()
@@ -75,8 +77,9 @@ impl RecordBatchWriter {
     /// Creates a [`RecordBatchWriter`] to write data to provided Delta Table
     pub fn for_table(table: &DeltaTable) -> Result<Self, DeltaTableError> {
         // Initialize an arrow schema ref from the delta table schema
-        let metadata = table.get_metadata()?;
-        let arrow_schema = <ArrowSchema as TryFrom<&Schema>>::try_from(&metadata.schema.clone())?;
+        let metadata = table.metadata()?;
+        let arrow_schema =
+            <ArrowSchema as TryFrom<&StructType>>::try_from(&metadata.schema()?.clone())?;
         let arrow_schema_ref = Arc::new(arrow_schema);
         let partition_columns = metadata.partition_columns.clone();
 
@@ -87,36 +90,12 @@ impl RecordBatchWriter {
             .build();
 
         Ok(Self {
-            storage: table.storage.clone(),
+            storage: table.object_store(),
             arrow_schema_ref,
             writer_properties,
             partition_columns,
             arrow_writers: HashMap::new(),
         })
-    }
-
-    /// Retrieves the latest schema from table, compares to the current and updates if changed.
-    /// When schema is updated then `true` is returned which signals the caller that parquet
-    /// created file or arrow batch should be revisited.
-    // TODO Test schema update scenarios
-    pub fn update_schema(
-        &mut self,
-        metadata: &DeltaTableMetaData,
-    ) -> Result<bool, DeltaTableError> {
-        let schema: ArrowSchema = <ArrowSchema as TryFrom<&Schema>>::try_from(&metadata.schema)?;
-
-        let schema_updated = self.arrow_schema_ref.as_ref() != &schema
-            || self.partition_columns != metadata.partition_columns;
-
-        if schema_updated {
-            let _ = std::mem::replace(&mut self.arrow_schema_ref, Arc::new(schema));
-            let _ = std::mem::replace(
-                &mut self.partition_columns,
-                metadata.partition_columns.clone(),
-            );
-        }
-
-        Ok(schema_updated)
     }
 
     /// Returns the current byte length of the in memory buffer.
@@ -148,12 +127,11 @@ impl RecordBatchWriter {
     pub async fn write_partition(
         &mut self,
         record_batch: RecordBatch,
-        partition_values: &HashMap<String, Option<String>>,
+        partition_values: &BTreeMap<String, Scalar>,
     ) -> Result<(), DeltaTableError> {
         let arrow_schema =
             arrow_schema_without_partitions(&self.arrow_schema_ref, &self.partition_columns);
-        let partition_key =
-            PartitionPath::from_hashmap(&self.partition_columns, partition_values)?.into();
+        let partition_key = partition_values.hive_partition_path();
 
         let record_batch = record_batch_without_partitions(&record_batch, &self.partition_columns)?;
 
@@ -212,9 +190,7 @@ impl DeltaWriter<RecordBatch> for RecordBatchWriter {
 
         for (_, writer) in writers {
             let metadata = writer.arrow_writer.close()?;
-            let prefix =
-                PartitionPath::from_hashmap(&self.partition_columns, &writer.partition_values)?;
-            let prefix = Path::parse(prefix)?;
+            let prefix = Path::parse(writer.partition_values.hive_partition_path())?;
             let uuid = Uuid::new_v4();
             let path = next_data_path(&prefix, 0, &uuid, &writer.writer_properties);
             let obj_bytes = Bytes::from(writer.buffer.to_vec());
@@ -236,7 +212,7 @@ impl DeltaWriter<RecordBatch> for RecordBatchWriter {
 #[derive(Clone, Debug)]
 pub struct PartitionResult {
     /// values found in partition columns
-    pub partition_values: HashMap<String, Option<String>>,
+    pub partition_values: BTreeMap<String, Scalar>,
     /// remaining dataset with partition column values removed
     pub record_batch: RecordBatch,
 }
@@ -246,14 +222,14 @@ struct PartitionWriter {
     writer_properties: WriterProperties,
     pub(super) buffer: ShareableBuffer,
     pub(super) arrow_writer: ArrowWriter<ShareableBuffer>,
-    pub(super) partition_values: HashMap<String, Option<String>>,
+    pub(super) partition_values: BTreeMap<String, Scalar>,
     pub(super) buffered_record_batch_count: usize,
 }
 
 impl PartitionWriter {
     pub fn new(
         arrow_schema: Arc<ArrowSchema>,
-        partition_values: HashMap<String, Option<String>>,
+        partition_values: BTreeMap<String, Scalar>,
         writer_properties: WriterProperties,
     ) -> Result<Self, ParquetError> {
         let buffer = ShareableBuffer::default();
@@ -326,7 +302,7 @@ pub(crate) fn divide_by_partition_values(
 
     if partition_columns.is_empty() {
         partitions.push(PartitionResult {
-            partition_values: HashMap::new(),
+            partition_values: BTreeMap::new(),
             record_batch: values.clone(),
         });
         return Ok(partitions);
@@ -354,15 +330,20 @@ pub(crate) fn divide_by_partition_values(
             .map(|i| Some(indices.value(i)))
             .collect();
 
-        let partition_key_iter = sorted_partition_columns.iter().map(|col| {
-            stringified_partition_value(&col.slice(range.start, range.end - range.start))
-        });
+        let partition_key_iter = sorted_partition_columns
+            .iter()
+            .map(|col| {
+                Scalar::from_array(&col.slice(range.start, range.end - range.start), 0).ok_or(
+                    DeltaWriterError::MissingPartitionColumn("failed to parse".into()),
+                )
+            })
+            .collect::<Result<Vec<_>, _>>()?;
 
-        let mut partition_values = HashMap::new();
-        for (key, value) in partition_columns.clone().iter().zip(partition_key_iter) {
-            partition_values.insert(key.clone(), value?);
-        }
-
+        let partition_values = partition_columns
+            .clone()
+            .into_iter()
+            .zip(partition_key_iter)
+            .collect();
         let batch_data = arrow_schema
             .fields()
             .iter()
@@ -394,10 +375,7 @@ fn lexsort_to_indices(arrays: &[ArrayRef]) -> UInt32Array {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::writer::{
-        test_utils::{create_initialized_table, get_record_batch},
-        utils::PartitionPath,
-    };
+    use crate::writer::test_utils::{create_initialized_table, get_record_batch};
     use arrow::json::ReaderBuilder;
     use std::path::Path;
 
@@ -439,7 +417,7 @@ mod tests {
             String::from("modified=2021-02-01"),
             String::from("modified=2021-02-02"),
         ];
-        validate_partition_map(partitions, &partition_cols, expected_keys)
+        validate_partition_map(partitions, expected_keys)
     }
 
     /*
@@ -450,7 +428,7 @@ mod tests {
      */
     #[tokio::test]
     async fn test_divide_record_batch_with_map_single_partition() {
-        use crate::{DeltaOps, SchemaTypeStruct};
+        use crate::DeltaOps;
 
         let table = crate::writer::test_utils::create_bare_table();
         let partition_cols = vec!["modified".to_string()];
@@ -466,13 +444,13 @@ mod tests {
             ]
         }"#;
 
-        let delta_schema: SchemaTypeStruct =
+        let delta_schema: StructType =
             serde_json::from_str(delta_schema).expect("Failed to parse schema");
 
         let table = DeltaOps(table)
             .create()
             .with_partition_columns(partition_cols.to_vec())
-            .with_columns(delta_schema.get_fields().clone())
+            .with_columns(delta_schema.fields().clone())
             .await
             .unwrap();
 
@@ -483,8 +461,7 @@ mod tests {
                 "metadata" : {"some-key" : "some-value"}}"#
             .as_bytes();
 
-        let schema: ArrowSchema =
-            <ArrowSchema as TryFrom<&Schema>>::try_from(&delta_schema).unwrap();
+        let schema: ArrowSchema = (&delta_schema).try_into().unwrap();
 
         // Using a batch size of two since the buf above only has two records
         let mut decoder = ReaderBuilder::new(Arc::new(schema))
@@ -507,10 +484,7 @@ mod tests {
 
         assert_eq!(partitions.len(), expected_keys.len());
         for result in partitions {
-            let partition_key =
-                PartitionPath::from_hashmap(&partition_cols, &result.partition_values)
-                    .unwrap()
-                    .into();
+            let partition_key = result.partition_values.hive_partition_path();
             assert!(expected_keys.contains(&partition_key));
         }
     }
@@ -530,7 +504,7 @@ mod tests {
             String::from("modified=2021-02-02/id=A"),
             String::from("modified=2021-02-02/id=B"),
         ];
-        validate_partition_map(partitions, &partition_cols.clone(), expected_keys)
+        validate_partition_map(partitions, expected_keys)
     }
 
     #[tokio::test]
@@ -570,20 +544,42 @@ mod tests {
         }
     }
 
-    fn validate_partition_map(
-        partitions: Vec<PartitionResult>,
-        partition_cols: &[String],
-        expected_keys: Vec<String>,
-    ) {
+    fn validate_partition_map(partitions: Vec<PartitionResult>, expected_keys: Vec<String>) {
         assert_eq!(partitions.len(), expected_keys.len());
         for result in partitions {
-            let partition_key =
-                PartitionPath::from_hashmap(partition_cols, &result.partition_values)
-                    .unwrap()
-                    .into();
+            let partition_key = result.partition_values.hive_partition_path();
             assert!(expected_keys.contains(&partition_key));
             let ref_batch = get_record_batch(Some(partition_key.clone()), false);
             assert_eq!(ref_batch, result.record_batch);
         }
+    }
+
+    /// Validates <https://github.com/delta-io/delta-rs/issues/1806>
+    #[tokio::test]
+    async fn test_write_tilde() {
+        use crate::operations::create::CreateBuilder;
+        let table_schema = crate::writer::test_utils::get_delta_schema();
+        let partition_cols = vec!["modified".to_string(), "id".to_string()];
+        let table_dir = tempfile::Builder::new()
+            .prefix("example~with~tilde")
+            .tempdir()
+            .unwrap();
+        let table_path = table_dir.path();
+
+        let table = CreateBuilder::new()
+            .with_location(table_path.to_str().unwrap())
+            .with_table_name("test-table")
+            .with_comment("A table for running tests")
+            .with_columns(table_schema.fields().clone())
+            .with_partition_columns(partition_cols)
+            .await
+            .unwrap();
+
+        let batch = get_record_batch(None, false);
+        let mut writer = RecordBatchWriter::for_table(&table).unwrap();
+
+        writer.write(batch).await.unwrap();
+        let adds = writer.flush().await.unwrap();
+        assert_eq!(adds.len(), 4);
     }
 }

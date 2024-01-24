@@ -41,21 +41,20 @@ use datafusion_physical_expr::{
 use futures::future::BoxFuture;
 use parquet::file::properties::WriterProperties;
 use serde::Serialize;
-use serde_json::{Map, Value};
+use serde_json::Value;
 
-use crate::{
-    delta_datafusion::{expr::fmt_expr_to_sql, find_files, register_store, DeltaScanBuilder},
-    protocol::{Action, DeltaOperation, Remove},
-    storage::{DeltaObjectStore, ObjectStoreRef},
-    table::state::DeltaTableState,
-    DeltaResult, DeltaTable, DeltaTableError,
+use super::datafusion_utils::Expression;
+use super::transaction::{commit, PROTOCOL};
+use super::write::write_execution_plan;
+use crate::delta_datafusion::{
+    expr::fmt_expr_to_sql, physical::MetricObserverExec, DeltaColumn, DeltaSessionContext,
 };
-
-use super::{
-    datafusion_utils::{Expression, MetricObserverExec},
-    transaction::commit,
-    write::write_execution_plan,
-};
+use crate::delta_datafusion::{find_files, register_store, DeltaScanBuilder};
+use crate::kernel::{Action, Remove};
+use crate::logstore::LogStoreRef;
+use crate::protocol::DeltaOperation;
+use crate::table::state::DeltaTableState;
+use crate::{DeltaResult, DeltaTable};
 
 /// Updates records in the Delta Table.
 /// See this module's documentation for more information
@@ -67,13 +66,13 @@ pub struct UpdateBuilder {
     /// A snapshot of the table's state
     snapshot: DeltaTableState,
     /// Delta object store for handling data files
-    object_store: Arc<DeltaObjectStore>,
+    log_store: LogStoreRef,
     /// Datafusion session state relevant for executing the input plan
     state: Option<SessionState>,
     /// Properties passed to underlying parquet writer for when files are rewritten
     writer_properties: Option<WriterProperties>,
     /// Additional metadata to be added to commit
-    app_metadata: Option<Map<String, serde_json::Value>>,
+    app_metadata: Option<HashMap<String, serde_json::Value>>,
     /// safe_cast determines how data types that do not match the underlying table are handled
     /// By default an error is returned
     safe_cast: bool,
@@ -98,12 +97,12 @@ pub struct UpdateMetrics {
 
 impl UpdateBuilder {
     /// Create a new ['UpdateBuilder']
-    pub fn new(object_store: ObjectStoreRef, snapshot: DeltaTableState) -> Self {
+    pub fn new(log_store: LogStoreRef, snapshot: DeltaTableState) -> Self {
         Self {
             predicate: None,
             updates: HashMap::new(),
             snapshot,
-            object_store,
+            log_store,
             state: None,
             writer_properties: None,
             app_metadata: None,
@@ -117,13 +116,13 @@ impl UpdateBuilder {
         self
     }
 
-    /// Perform an additonal update expression during the operaton
-    pub fn with_update<S: Into<Column>, E: Into<Expression>>(
+    /// Perform an additional update expression during the operaton
+    pub fn with_update<S: Into<DeltaColumn>, E: Into<Expression>>(
         mut self,
         column: S,
         expression: E,
     ) -> Self {
-        self.updates.insert(column.into(), expression.into());
+        self.updates.insert(column.into().into(), expression.into());
         self
     }
 
@@ -138,7 +137,7 @@ impl UpdateBuilder {
         mut self,
         metadata: impl IntoIterator<Item = (String, serde_json::Value)>,
     ) -> Self {
-        self.app_metadata = Some(Map::from_iter(metadata));
+        self.app_metadata = Some(HashMap::from_iter(metadata));
         self
     }
 
@@ -167,13 +166,13 @@ impl UpdateBuilder {
 async fn execute(
     predicate: Option<Expression>,
     updates: HashMap<Column, Expression>,
-    object_store: ObjectStoreRef,
+    log_store: LogStoreRef,
     snapshot: &DeltaTableState,
     state: SessionState,
     writer_properties: Option<WriterProperties>,
-    app_metadata: Option<Map<String, Value>>,
+    app_metadata: Option<HashMap<String, Value>>,
     safe_cast: bool,
-) -> DeltaResult<((Vec<Action>, i64), UpdateMetrics)> {
+) -> DeltaResult<((Vec<Action>, i64, Option<DeltaOperation>), UpdateMetrics)> {
     // Validate the predicate and update expressions.
     //
     // If the predicate is not set, then all files need to be updated.
@@ -189,7 +188,7 @@ async fn execute(
     let mut version = snapshot.version();
 
     if updates.is_empty() {
-        return Ok(((Vec::new(), version), metrics));
+        return Ok(((Vec::new(), version, None), metrics));
     }
 
     let predicate = match predicate {
@@ -210,17 +209,15 @@ async fn execute(
         })
         .collect::<Result<HashMap<Column, Expr>, _>>()?;
 
-    let current_metadata = snapshot
-        .current_metadata()
-        .ok_or(DeltaTableError::NoMetadata)?;
+    let current_metadata = snapshot.metadata();
     let table_partition_cols = current_metadata.partition_columns.clone();
 
     let scan_start = Instant::now();
-    let candidates = find_files(snapshot, object_store.clone(), &state, predicate.clone()).await?;
+    let candidates = find_files(snapshot, log_store.clone(), &state, predicate.clone()).await?;
     metrics.scan_time_ms = Instant::now().duration_since(scan_start).as_millis() as u64;
 
     if candidates.candidates.is_empty() {
-        return Ok(((Vec::new(), version), metrics));
+        return Ok(((Vec::new(), version, None), metrics));
     }
 
     let predicate = predicate.unwrap_or(Expr::Literal(ScalarValue::Boolean(Some(true))));
@@ -228,7 +225,7 @@ async fn execute(
     let execution_props = state.execution_props();
     // For each rewrite evaluate the predicate and then modify each expression
     // to either compute the new value or obtain the old one then write these batches
-    let scan = DeltaScanBuilder::new(snapshot, object_store.clone(), &state)
+    let scan = DeltaScanBuilder::new(snapshot, log_store.clone(), &state)
         .with_files(&candidates.candidates)
         .build()
         .await?;
@@ -278,6 +275,7 @@ async fn execute(
         Arc::new(ProjectionExec::try_new(expressions, scan)?);
 
     let count_plan = Arc::new(MetricObserverExec::new(
+        "update_count".into(),
         projection_predicate.clone(),
         |batch, metrics| {
             let array = batch.column_by_name("__delta_rs_update_predicate").unwrap();
@@ -356,15 +354,16 @@ async fn execute(
     )?);
 
     let add_actions = write_execution_plan(
-        snapshot,
+        Some(snapshot),
         state.clone(),
         projection.clone(),
         table_partition_cols.clone(),
-        object_store.clone(),
+        log_store.object_store().clone(),
         Some(snapshot.table_config().target_file_size() as usize),
         None,
         writer_properties,
         safe_cast,
+        false,
     )
     .await?;
 
@@ -384,13 +383,13 @@ async fn execute(
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_millis() as i64;
-    let mut actions: Vec<Action> = add_actions.into_iter().map(Action::add).collect();
+    let mut actions: Vec<Action> = add_actions.into_iter().map(Action::Add).collect();
 
     metrics.num_added_files = actions.len();
     metrics.num_removed_files = candidates.candidates.len();
 
     for action in candidates.candidates {
-        actions.push(Action::remove(Remove {
+        actions.push(Action::Remove(Remove {
             path: action.path,
             deletion_timestamp: Some(deletion_timestamp),
             data_change: true,
@@ -399,6 +398,8 @@ async fn execute(
             size: Some(action.size),
             deletion_vector: action.deletion_vector,
             tags: None,
+            base_row_id: None,
+            default_row_commit_version: None,
         }))
     }
 
@@ -407,16 +408,28 @@ async fn execute(
     let operation = DeltaOperation::Update {
         predicate: Some(fmt_expr_to_sql(&predicate)?),
     };
+
+    let mut app_metadata = match app_metadata {
+        Some(meta) => meta,
+        None => HashMap::new(),
+    };
+
+    app_metadata.insert("readVersion".to_owned(), snapshot.version().into());
+
+    if let Ok(map) = serde_json::to_value(&metrics) {
+        app_metadata.insert("operationMetrics".to_owned(), map);
+    }
+
     version = commit(
-        object_store.as_ref(),
+        log_store.as_ref(),
         &actions,
-        operation,
-        snapshot,
-        app_metadata,
+        operation.clone(),
+        Some(snapshot),
+        Some(app_metadata),
     )
     .await?;
 
-    Ok(((actions, version), metrics))
+    Ok(((actions, version, Some(operation)), metrics))
 }
 
 impl std::future::IntoFuture for UpdateBuilder {
@@ -427,19 +440,23 @@ impl std::future::IntoFuture for UpdateBuilder {
         let mut this = self;
 
         Box::pin(async move {
+            PROTOCOL.check_append_only(&this.snapshot)?;
+
+            PROTOCOL.can_write_to(&this.snapshot)?;
+
             let state = this.state.unwrap_or_else(|| {
-                let session = SessionContext::new();
+                let session: SessionContext = DeltaSessionContext::default().into();
 
                 // If a user provides their own their DF state then they must register the store themselves
-                register_store(this.object_store.clone(), session.runtime_env());
+                register_store(this.log_store.clone(), session.runtime_env());
 
                 session.state()
             });
 
-            let ((actions, version), metrics) = execute(
+            let ((actions, version, operation), metrics) = execute(
                 this.predicate,
                 this.updates,
-                this.object_store.clone(),
+                this.log_store.clone(),
                 &this.snapshot,
                 state,
                 this.writer_properties,
@@ -448,10 +465,11 @@ impl std::future::IntoFuture for UpdateBuilder {
             )
             .await?;
 
-            this.snapshot
-                .merge(DeltaTableState::from_actions(actions, version)?, true, true);
-            let table = DeltaTable::new_with_state(this.object_store, this.snapshot);
+            if let Some(op) = &operation {
+                this.snapshot.merge(actions, op, version)?;
+            }
 
+            let table = DeltaTable::new_with_state(this.log_store, this.snapshot);
             Ok((table, metrics))
         })
     }
@@ -459,17 +477,23 @@ impl std::future::IntoFuture for UpdateBuilder {
 
 #[cfg(test)]
 mod tests {
+    use crate::kernel::DataType as DeltaDataType;
+    use crate::kernel::PrimitiveType;
+    use crate::kernel::StructField;
+    use crate::kernel::StructType;
     use crate::operations::DeltaOps;
     use crate::writer::test_utils::datafusion::get_data;
+    use crate::writer::test_utils::datafusion::write_batch;
     use crate::writer::test_utils::{
         get_arrow_schema, get_delta_schema, get_record_batch, setup_table_with_configuration,
-        write_batch,
     };
     use crate::DeltaConfigKey;
     use crate::DeltaTable;
+    use arrow::datatypes::Schema as ArrowSchema;
     use arrow::datatypes::{Field, Schema};
     use arrow::record_batch::RecordBatch;
     use arrow_array::Int32Array;
+    use arrow_schema::DataType;
     use datafusion::assert_batches_sorted_eq;
     use datafusion::prelude::*;
     use serde_json::json;
@@ -480,7 +504,7 @@ mod tests {
 
         let table = DeltaOps::new_in_memory()
             .create()
-            .with_columns(table_schema.get_fields().clone())
+            .with_columns(table_schema.fields().clone())
             .with_partition_columns(partitions.unwrap_or_default())
             .await
             .unwrap();
@@ -545,7 +569,7 @@ mod tests {
 
         let table = write_batch(table, batch).await;
         assert_eq!(table.version(), 1);
-        assert_eq!(table.get_file_uris().count(), 1);
+        assert_eq!(table.get_files_count(), 1);
 
         let (table, metrics) = DeltaOps(table)
             .update()
@@ -554,7 +578,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(table.version(), 2);
-        assert_eq!(table.get_file_uris().count(), 1);
+        assert_eq!(table.get_files_count(), 1);
         assert_eq!(metrics.num_added_files, 1);
         assert_eq!(metrics.num_removed_files, 1);
         assert_eq!(metrics.num_updated_rows, 4);
@@ -599,9 +623,9 @@ mod tests {
 
         let table = write_batch(table, batch).await;
         assert_eq!(table.version(), 1);
-        assert_eq!(table.get_file_uris().count(), 1);
+        assert_eq!(table.get_files_count(), 1);
 
-        let (mut table, metrics) = DeltaOps(table)
+        let (table, metrics) = DeltaOps(table)
             .update()
             .with_predicate(col("modified").eq(lit("2021-02-03")))
             .with_update("modified", lit("2023-05-14"))
@@ -609,14 +633,14 @@ mod tests {
             .unwrap();
 
         assert_eq!(table.version(), 2);
-        assert_eq!(table.get_file_uris().count(), 1);
+        assert_eq!(table.get_files_count(), 1);
         assert_eq!(metrics.num_added_files, 1);
         assert_eq!(metrics.num_removed_files, 1);
         assert_eq!(metrics.num_updated_rows, 2);
         assert_eq!(metrics.num_copied_rows, 2);
 
         let commit_info = table.history(None).await.unwrap();
-        let last_commit = &commit_info[commit_info.len() - 1];
+        let last_commit = &commit_info[0];
         let parameters = last_commit.operation_parameters.clone().unwrap();
         assert_eq!(parameters["predicate"], json!("modified = '2021-02-03'"));
 
@@ -656,7 +680,7 @@ mod tests {
 
         let table = write_batch(table, batch.clone()).await;
         assert_eq!(table.version(), 1);
-        assert_eq!(table.get_file_uris().count(), 2);
+        assert_eq!(table.get_files_count(), 2);
 
         let (table, metrics) = DeltaOps(table)
             .update()
@@ -667,7 +691,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(table.version(), 2);
-        assert_eq!(table.get_file_uris().count(), 2);
+        assert_eq!(table.get_files_count(), 2);
         assert_eq!(metrics.num_added_files, 1);
         assert_eq!(metrics.num_removed_files, 1);
         assert_eq!(metrics.num_updated_rows, 2);
@@ -691,7 +715,7 @@ mod tests {
         let table = setup_table(Some(vec!["modified"])).await;
         let table = write_batch(table, batch).await;
         assert_eq!(table.version(), 1);
-        assert_eq!(table.get_file_uris().count(), 2);
+        assert_eq!(table.get_files_count(), 2);
 
         let (table, metrics) = DeltaOps(table)
             .update()
@@ -706,7 +730,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(table.version(), 2);
-        assert_eq!(table.get_file_uris().count(), 3);
+        assert_eq!(table.get_files_count(), 3);
         assert_eq!(metrics.num_added_files, 2);
         assert_eq!(metrics.num_removed_files, 1);
         assert_eq!(metrics.num_updated_rows, 1);
@@ -728,19 +752,89 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_update_case_sensitive() {
+        let schema = StructType::new(vec![
+            StructField::new(
+                "Id".to_string(),
+                DeltaDataType::Primitive(PrimitiveType::String),
+                true,
+            ),
+            StructField::new(
+                "ValUe".to_string(),
+                DeltaDataType::Primitive(PrimitiveType::Integer),
+                true,
+            ),
+            StructField::new(
+                "mOdified".to_string(),
+                DeltaDataType::Primitive(PrimitiveType::String),
+                true,
+            ),
+        ]);
+
+        let arrow_schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("Id", DataType::Utf8, true),
+            Field::new("ValUe", DataType::Int32, true),
+            Field::new("mOdified", DataType::Utf8, true),
+        ]));
+
+        let batch = RecordBatch::try_new(
+            Arc::clone(&arrow_schema),
+            vec![
+                Arc::new(arrow::array::StringArray::from(vec!["A", "B", "A", "A"])),
+                Arc::new(arrow::array::Int32Array::from(vec![1, 10, 10, 100])),
+                Arc::new(arrow::array::StringArray::from(vec![
+                    "2021-02-02",
+                    "2021-02-02",
+                    "2021-02-03",
+                    "2021-02-03",
+                ])),
+            ],
+        )
+        .unwrap();
+
+        let table = DeltaOps::new_in_memory()
+            .create()
+            .with_columns(schema.fields().clone())
+            .await
+            .unwrap();
+        let table = write_batch(table, batch).await;
+
+        let (table, _metrics) = DeltaOps(table)
+            .update()
+            .with_predicate("mOdified = '2021-02-03'")
+            .with_update("mOdified", "'2023-05-14'")
+            .with_update("Id", "'C'")
+            .await
+            .unwrap();
+
+        let expected = vec![
+            "+----+-------+------------+",
+            "| Id | ValUe | mOdified   |",
+            "+----+-------+------------+",
+            "| A  | 1     | 2021-02-02 |",
+            "| B  | 10    | 2021-02-02 |",
+            "| C  | 10    | 2023-05-14 |",
+            "| C  | 100   | 2023-05-14 |",
+            "+----+-------+------------+",
+        ];
+
+        let actual = get_data(&table).await;
+        assert_batches_sorted_eq!(&expected, &actual);
+    }
+
+    #[tokio::test]
     async fn test_update_null() {
         let table = prepare_values_table().await;
         assert_eq!(table.version(), 0);
-        assert_eq!(table.get_file_uris().count(), 1);
+        assert_eq!(table.get_files_count(), 1);
 
         let (table, metrics) = DeltaOps(table)
             .update()
             .with_update("value", col("value") + lit(1))
             .await
             .unwrap();
-
         assert_eq!(table.version(), 1);
-        assert_eq!(table.get_file_uris().count(), 1);
+        assert_eq!(table.get_files_count(), 1);
         assert_eq!(metrics.num_added_files, 1);
         assert_eq!(metrics.num_removed_files, 1);
         assert_eq!(metrics.num_updated_rows, 5);
@@ -770,11 +864,19 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(table.version(), 1);
-        assert_eq!(table.get_file_uris().count(), 1);
+        assert_eq!(table.get_files_count(), 1);
         assert_eq!(metrics.num_added_files, 1);
         assert_eq!(metrics.num_removed_files, 1);
         assert_eq!(metrics.num_updated_rows, 2);
         assert_eq!(metrics.num_copied_rows, 3);
+
+        let commit_info = table.history(None).await.unwrap();
+        let last_commit = &commit_info[0];
+        let extra_info = last_commit.info.clone();
+        assert_eq!(
+            extra_info["operationMetrics"],
+            serde_json::to_value(&metrics).unwrap()
+        );
 
         let expected = [
             "+-------+",
@@ -798,7 +900,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(table.version(), 1);
-        assert_eq!(table.get_file_uris().count(), 1);
+        assert_eq!(table.get_files_count(), 1);
         assert_eq!(metrics.num_added_files, 1);
         assert_eq!(metrics.num_removed_files, 1);
         assert_eq!(metrics.num_updated_rows, 2);

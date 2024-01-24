@@ -2,35 +2,28 @@
 
 #![allow(non_camel_case_types)]
 
-#[cfg(all(feature = "arrow", feature = "parquet"))]
 pub mod checkpoints;
-#[cfg(feature = "parquet2")]
-pub mod parquet2_read;
-#[cfg(feature = "parquet")]
 mod parquet_read;
-mod serde_path;
 mod time_utils;
 
-#[cfg(feature = "arrow")]
 use arrow_schema::ArrowError;
 use futures::StreamExt;
 use lazy_static::lazy_static;
-use log::*;
 use object_store::{path::Path, Error as ObjectStoreError, ObjectStore};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
-use serde_json::{Map, Value};
+use serde_json::Value;
 use std::borrow::Borrow;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::mem::take;
 use std::str::FromStr;
+use tracing::{debug, error};
 
-use crate::errors::DeltaResult;
-use crate::storage::ObjectStoreRef;
-use crate::table::config::IsolationLevel;
-use crate::table::DeltaTableMetaData;
-use crate::{schema::*, table::CheckPoint};
+use crate::errors::{DeltaResult, DeltaTableError};
+use crate::kernel::{Add, CommitInfo, Metadata, Protocol, Remove};
+use crate::logstore::LogStore;
+use crate::table::CheckPoint;
 
 /// Error returned when an invalid Delta log action is encountered.
 #[allow(missing_docs)]
@@ -61,16 +54,10 @@ pub enum ProtocolError {
     #[error("Generic action error: {0}")]
     Generic(String),
 
-    #[cfg(any(feature = "parquet", feature = "parquet2"))]
     /// Error returned when parsing checkpoint parquet using the parquet crate.
     #[error("Failed to parse parquet checkpoint: {source}")]
     ParquetParseError {
         /// Parquet error details returned when parsing the checkpoint parquet
-        #[cfg(feature = "parquet2")]
-        #[from]
-        source: parquet2::error::Error,
-        /// Parquet error details returned when parsing the checkpoint parquet
-        #[cfg(feature = "parquet")]
         #[from]
         source: parquet::errors::ParquetError,
     },
@@ -84,7 +71,6 @@ pub enum ProtocolError {
     },
 
     /// Error returned when converting the schema to Arrow format failed.
-    #[cfg(feature = "arrow")]
     #[error("Failed to convert into Arrow schema: {}", .source)]
     Arrow {
         /// Arrow error details returned when converting the schema in Arrow format failed
@@ -104,6 +90,12 @@ pub enum ProtocolError {
     IO {
         #[from]
         source: std::io::Error,
+    },
+
+    #[error("Kernel: {source}")]
+    Kernel {
+        #[from]
+        source: crate::kernel::Error,
     },
 }
 
@@ -228,184 +220,12 @@ pub struct StatsParsed {
 
     // start of per column stats
     /// Contains a value smaller than all values present in the file for all columns.
-    #[cfg(feature = "parquet")]
     pub min_values: HashMap<String, parquet::record::Field>,
-    /// Contains a value smaller than all values present in the file for all columns.
-    #[cfg(feature = "parquet2")]
-    pub min_values: HashMap<String, String>,
     /// Contains a value larger than all values present in the file for all columns.
-    #[cfg(feature = "parquet")]
     /// Contains a value larger than all values present in the file for all columns.
     pub max_values: HashMap<String, parquet::record::Field>,
-    #[cfg(feature = "parquet2")]
-    /// Contains a value larger than all values present in the file for all columns.
-    pub max_values: HashMap<String, String>,
     /// The number of null values for all columns.
     pub null_count: HashMap<String, i64>,
-}
-
-/// Delta AddCDCFile action that describes a parquet CDC data file.
-#[derive(Serialize, Deserialize, Clone, Debug, Default)]
-#[serde(rename_all = "camelCase")]
-pub struct AddCDCFile {
-    /// A relative path, from the root of the table, or an
-    /// absolute path to a CDC file
-    #[serde(with = "serde_path")]
-    pub path: String,
-    /// The size of this file in bytes
-    pub size: i64,
-    /// A map from partition column to value for this file
-    pub partition_values: HashMap<String, Option<String>>,
-    /// Should always be set to false because they do not change the underlying data of the table
-    pub data_change: bool,
-    /// Map containing metadata about this file
-    pub tags: Option<HashMap<String, Option<String>>>,
-}
-
-///Storage type of deletion vector
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
-#[serde()]
-pub enum StorageType {
-    /// Stored at relative path derived from a UUID.
-    #[serde(rename = "u")]
-    UuidRelativePath,
-    /// Stored as inline string.
-    #[serde(rename = "i")]
-    Inline,
-    /// Stored at an absolute path.
-    #[serde(rename = "p")]
-    AbsolutePath,
-}
-
-impl Default for StorageType {
-    fn default() -> Self {
-        Self::UuidRelativePath // seems to be used by Databricks and therefore most common
-    }
-}
-
-impl FromStr for StorageType {
-    type Err = ProtocolError;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "u" => Ok(Self::UuidRelativePath),
-            "i" => Ok(Self::Inline),
-            "p" => Ok(Self::AbsolutePath),
-            _ => Err(ProtocolError::InvalidDeletionVectorStorageType(
-                s.to_string(),
-            )),
-        }
-    }
-}
-
-impl ToString for StorageType {
-    fn to_string(&self) -> String {
-        match self {
-            Self::UuidRelativePath => "u".to_string(),
-            Self::Inline => "i".to_string(),
-            Self::AbsolutePath => "p".to_string(),
-        }
-    }
-}
-
-/// Describes deleted rows of a parquet file as part of an add or remove action
-#[derive(Serialize, Deserialize, Clone, Debug, Default)]
-#[serde(rename_all = "camelCase")]
-pub struct DeletionVector {
-    ///storageType of the deletion vector. p = Absolute Path, i = Inline, u = UUid Relative Path
-    pub storage_type: StorageType,
-
-    ///If storageType = 'u' then <random prefix - optional><base85 encoded uuid>
-    ///If storageType = 'i' then <base85 encoded bytes> of the deletion vector data
-    ///If storageType = 'p' then <absolute path>
-    pub path_or_inline_dv: String,
-
-    ///Start of the data for this DV in number of bytes from the beginning of the file it is stored in. Always None (absent in JSON) when storageType = 'i'.
-    pub offset: Option<i32>,
-
-    ///Size of the serialized DV in bytes (raw data size, i.e. before base85 encoding, if inline).
-    pub size_in_bytes: i32,
-
-    ///Number of rows the given DV logically removes from the file.
-    pub cardinality: i64,
-}
-
-impl PartialEq for DeletionVector {
-    fn eq(&self, other: &Self) -> bool {
-        self.storage_type == other.storage_type
-            && self.path_or_inline_dv == other.path_or_inline_dv
-            && self.offset == other.offset
-            && self.size_in_bytes == other.size_in_bytes
-            && self.cardinality == other.cardinality
-    }
-}
-
-impl Eq for DeletionVector {}
-
-/// Delta log action that describes a parquet data file that is part of the table.
-#[derive(Serialize, Deserialize, Clone, Debug, Default)]
-#[serde(rename_all = "camelCase")]
-pub struct Add {
-    /// A relative path, from the root of the table, to a file that should be added to the table
-    #[serde(with = "serde_path")]
-    pub path: String,
-    /// The size of this file in bytes
-    pub size: i64,
-    /// A map from partition column to value for this file
-    pub partition_values: HashMap<String, Option<String>>,
-    /// Partition values stored in raw parquet struct format. In this struct, the column names
-    /// correspond to the partition columns and the values are stored in their corresponding data
-    /// type. This is a required field when the table is partitioned and the table property
-    /// delta.checkpoint.writeStatsAsStruct is set to true. If the table is not partitioned, this
-    /// column can be omitted.
-    ///
-    /// This field is only available in add action records read from checkpoints
-    #[cfg(feature = "parquet")]
-    #[serde(skip_serializing, skip_deserializing)]
-    pub partition_values_parsed: Option<parquet::record::Row>,
-    /// Partition values stored in raw parquet struct format. In this struct, the column names
-    /// correspond to the partition columns and the values are stored in their corresponding data
-    /// type. This is a required field when the table is partitioned and the table property
-    /// delta.checkpoint.writeStatsAsStruct is set to true. If the table is not partitioned, this
-    /// column can be omitted.
-    ///
-    /// This field is only available in add action records read from checkpoints
-    #[cfg(feature = "parquet2")]
-    #[serde(skip_serializing, skip_deserializing)]
-    pub partition_values_parsed: Option<String>,
-    /// The time this file was created, as milliseconds since the epoch
-    pub modification_time: i64,
-    /// When false the file must already be present in the table or the records in the added file
-    /// must be contained in one or more remove actions in the same version
-    ///
-    /// streaming queries that are tailing the transaction log can use this flag to skip actions
-    /// that would not affect the final results.
-    pub data_change: bool,
-    /// Contains statistics (e.g., count, min/max values for columns) about the data in this file
-    pub stats: Option<String>,
-    /// Contains statistics (e.g., count, min/max values for columns) about the data in this file in
-    /// raw parquet format. This field needs to be written when statistics are available and the
-    /// table property: delta.checkpoint.writeStatsAsStruct is set to true.
-    ///
-    /// This field is only available in add action records read from checkpoints
-    #[cfg(feature = "parquet")]
-    #[serde(skip_serializing, skip_deserializing)]
-    pub stats_parsed: Option<parquet::record::Row>,
-    /// Contains statistics (e.g., count, min/max values for columns) about the data in this file in
-    /// raw parquet format. This field needs to be written when statistics are available and the
-    /// table property: delta.checkpoint.writeStatsAsStruct is set to true.
-    ///
-    /// This field is only available in add action records read from checkpoints
-    #[cfg(feature = "parquet2")]
-    #[serde(skip_serializing, skip_deserializing)]
-    pub stats_parsed: Option<String>,
-    /// Map containing metadata about this file
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub tags: Option<HashMap<String, Option<String>>>,
-
-    /// Metadata about deletion vector
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub deletion_vector: Option<DeletionVector>,
 }
 
 impl Hash for Add {
@@ -431,13 +251,12 @@ impl Eq for Add {}
 
 impl Add {
     /// Get whatever stats are available. Uses (parquet struct) parsed_stats if present falling back to json stats.
-    #[cfg(any(feature = "parquet", feature = "parquet2"))]
-    pub fn get_stats(&self) -> Result<Option<Stats>, serde_json::error::Error> {
+    pub(crate) fn get_stats(&self) -> Result<Option<Stats>, serde_json::error::Error> {
         match self.get_stats_parsed() {
             Ok(Some(stats)) => Ok(Some(stats)),
             Ok(None) => self.get_json_stats(),
             Err(e) => {
-                log::error!(
+                error!(
                     "Error when reading parquet stats {:?} {e}. Attempting to read json stats",
                     self.stats_parsed
                 );
@@ -446,15 +265,9 @@ impl Add {
         }
     }
 
-    /// Get whatever stats are available.
-    #[cfg(not(any(feature = "parquet", feature = "parquet2")))]
-    pub fn get_stats(&self) -> Result<Option<Stats>, serde_json::error::Error> {
-        self.get_json_stats()
-    }
-
     /// Returns the serde_json representation of stats contained in the action if present.
     /// Since stats are defined as optional in the protocol, this may be None.
-    pub fn get_json_stats(&self) -> Result<Option<Stats>, serde_json::error::Error> {
+    fn get_json_stats(&self) -> Result<Option<Stats>, serde_json::error::Error> {
         let ps: Result<Option<PartialStats>, serde_json::error::Error> = self
             .stats
             .as_ref()
@@ -466,127 +279,6 @@ impl Add {
             Err(e) => Err(e),
         }
     }
-}
-
-/// Describes the data format of files in the table.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
-pub struct Format {
-    /// Name of the encoding for files in this table.
-    provider: String,
-    /// A map containing configuration options for the format.
-    options: HashMap<String, Option<String>>,
-}
-
-impl Format {
-    /// Allows creation of a new action::Format
-    pub fn new(provider: String, options: Option<HashMap<String, Option<String>>>) -> Self {
-        let options = options.unwrap_or_default();
-        Self { provider, options }
-    }
-
-    /// Return the Format provider
-    pub fn get_provider(self) -> String {
-        self.provider
-    }
-}
-
-// Assuming this is a more appropriate default than derived Default
-impl Default for Format {
-    fn default() -> Self {
-        Self {
-            provider: "parquet".to_string(),
-            options: Default::default(),
-        }
-    }
-}
-
-/// Return a default empty schema to be used for edge-cases when a schema is missing
-fn default_schema() -> String {
-    warn!("A `metaData` action was missing a `schemaString` and has been given an empty schema");
-    r#"{"type":"struct",  "fields": []}"#.into()
-}
-
-/// Action that describes the metadata of the table.
-/// This is a top-level action in Delta log entries.
-#[derive(Serialize, Deserialize, Debug, Default, Clone)]
-#[serde(rename_all = "camelCase")]
-pub struct MetaData {
-    /// Unique identifier for this table
-    pub id: Guid,
-    /// User-provided identifier for this table
-    pub name: Option<String>,
-    /// User-provided description for this table
-    pub description: Option<String>,
-    /// Specification of the encoding for the files stored in the table
-    pub format: Format,
-    /// Schema of the table
-    #[serde(default = "default_schema")]
-    pub schema_string: String,
-    /// An array containing the names of columns by which the data should be partitioned
-    pub partition_columns: Vec<String>,
-    /// The time when this metadata action is created, in milliseconds since the Unix epoch
-    pub created_time: Option<i64>,
-    /// A map containing configuration options for the table
-    pub configuration: HashMap<String, Option<String>>,
-}
-
-impl MetaData {
-    /// Returns the table schema from the embedded schema string contained within the metadata
-    /// action.
-    pub fn get_schema(&self) -> Result<Schema, serde_json::error::Error> {
-        serde_json::from_str(&self.schema_string)
-    }
-}
-
-impl TryFrom<DeltaTableMetaData> for MetaData {
-    type Error = ProtocolError;
-
-    fn try_from(metadata: DeltaTableMetaData) -> Result<Self, Self::Error> {
-        let schema_string = serde_json::to_string(&metadata.schema)
-            .map_err(|source| ProtocolError::SerializeOperation { source })?;
-        Ok(Self {
-            id: metadata.id,
-            name: metadata.name,
-            description: metadata.description,
-            format: metadata.format,
-            schema_string,
-            partition_columns: metadata.partition_columns,
-            created_time: metadata.created_time,
-            configuration: metadata.configuration,
-        })
-    }
-}
-
-/// Represents a tombstone (deleted file) in the Delta log.
-/// This is a top-level action in Delta log entries.
-#[derive(Serialize, Deserialize, Clone, Eq, Debug, Default)]
-#[serde(rename_all = "camelCase")]
-pub struct Remove {
-    /// The path of the file that is removed from the table.
-    #[serde(with = "serde_path")]
-    pub path: String,
-    /// The timestamp when the remove was added to table state.
-    pub deletion_timestamp: Option<i64>,
-    /// Whether data is changed by the remove. A table optimize will report this as false for
-    /// example, since it adds and removes files by combining many files into one.
-    pub data_change: bool,
-    /// When true the fields partitionValues, size, and tags are present
-    ///
-    /// NOTE: Although it's defined as required in scala delta implementation, but some writes
-    /// it's still nullable so we keep it as Option<> for compatibly.
-    pub extended_file_metadata: Option<bool>,
-    /// A map from partition column to value for this file.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub partition_values: Option<HashMap<String, Option<String>>>,
-    /// Size of this file in bytes
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub size: Option<i64>,
-    /// Map containing metadata about this file
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub tags: Option<HashMap<String, Option<String>>>,
-    /// Metadata about deletion vector
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub deletion_vector: Option<DeletionVector>,
 }
 
 impl Hash for Remove {
@@ -613,116 +305,6 @@ impl PartialEq for Remove {
             && self.size == other.size
             && self.tags == other.tags
             && self.deletion_vector == other.deletion_vector
-    }
-}
-
-/// Action used by streaming systems to track progress using application-specific versions to
-/// enable idempotency.
-#[derive(Serialize, Deserialize, Debug, Default, Clone)]
-#[serde(rename_all = "camelCase")]
-pub struct Txn {
-    /// A unique identifier for the application performing the transaction.
-    pub app_id: String,
-    /// An application-specific numeric identifier for this transaction.
-    pub version: i64,
-    /// The time when this transaction action was created in milliseconds since the Unix epoch.
-    pub last_updated: Option<i64>,
-}
-
-/// Action used to increase the version of the Delta protocol required to read or write to the
-/// table.
-#[derive(Serialize, Deserialize, Debug, Default, Clone, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct Protocol {
-    /// Minimum version of the Delta read protocol a client must implement to correctly read the
-    /// table.
-    pub min_reader_version: i32,
-    /// Minimum version of the Delta write protocol a client must implement to correctly read the
-    /// table.
-    pub min_writer_version: i32,
-}
-
-/// The commitInfo is a fairly flexible action within the delta specification, where arbitrary data can be stored.
-/// However the reference implementation as well as delta-rs store useful information that may for instance
-/// allow us to be more permissive in commit conflict resolution.
-#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub struct CommitInfo {
-    /// Timestamp in millis when the commit was created
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub timestamp: Option<i64>,
-    /// Id of the user invoking the commit
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub user_id: Option<String>,
-    /// Name of the user invoking the commit
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub user_name: Option<String>,
-    /// The operation performed during the
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub operation: Option<String>,
-    /// Parameters used for table operation
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub operation_parameters: Option<HashMap<String, serde_json::Value>>,
-    /// Version of the table when the operation was started
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub read_version: Option<i64>,
-    /// The isolation level of the commit
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub isolation_level: Option<IsolationLevel>,
-    /// TODO
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub is_blind_append: Option<bool>,
-    /// Delta engine which created the commit.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub engine_info: Option<String>,
-    /// Additional provenance information for the commit
-    #[serde(flatten, default)]
-    pub info: Map<String, serde_json::Value>,
-}
-
-/// The domain metadata action contains a configuration (string) for a named metadata domain
-#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub struct DomainMetaData {
-    /// Identifier for this domain (system or user-provided)
-    pub domain: String,
-    /// String containing configuration for the metadata domain
-    pub configuration: String,
-    /// When `true` the action serves as a tombstone
-    pub removed: bool,
-}
-
-/// Represents an action in the Delta log. The Delta log is an aggregate of all actions performed
-/// on the table, so the full list of actions is required to properly read a table.
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub enum Action {
-    /// Changes the current metadata of the table. Must be present in the first version of a table.
-    /// Subsequent `metaData` actions completely overwrite previous metadata.
-    metaData(MetaData),
-    /// Adds CDC a file to the table state.
-    cdc(AddCDCFile),
-    /// Adds a file to the table state.
-    add(Add),
-    /// Removes a file from the table state.
-    remove(Remove),
-    /// Used by streaming systems to track progress externally with application specific version
-    /// identifiers.
-    txn(Txn),
-    /// Describes the minimum reader and writer versions required to read or write to the table.
-    protocol(Protocol),
-    /// Describes commit provenance information for the table.
-    commitInfo(CommitInfo),
-    /// Describe s the configuration for a named metadata domain
-    domainMetadata(DomainMetaData),
-}
-
-impl Action {
-    /// Create a commit info from a map
-    pub fn commit_info(info: Map<String, serde_json::Value>) -> Self {
-        Self::commitInfo(CommitInfo {
-            info,
-            ..Default::default()
-        })
     }
 }
 
@@ -755,7 +337,7 @@ pub enum DeltaOperation {
         /// The min reader and writer protocol versions of the table
         protocol: Protocol,
         /// Metadata associated with the new table
-        metadata: DeltaTableMetaData,
+        metadata: Metadata,
     },
 
     /// Represents a Delta `Write` operation.
@@ -780,6 +362,13 @@ pub enum DeltaOperation {
     Update {
         /// The update predicate
         predicate: Option<String>,
+    },
+    /// Add constraints to a table
+    AddConstraint {
+        /// Constraints name
+        name: String,
+        /// Expression to check against
+        expr: String,
     },
 
     /// Merge data with a source data with the following predicate
@@ -868,6 +457,7 @@ impl DeltaOperation {
             DeltaOperation::Restore { .. } => "RESTORE",
             DeltaOperation::VacuumStart { .. } => "VACUUM START",
             DeltaOperation::VacuumEnd { .. } => "VACUUM END",
+            DeltaOperation::AddConstraint { .. } => "ADD CONSTRAINT",
         }
     }
 
@@ -903,7 +493,10 @@ impl DeltaOperation {
     /// Denotes if the operation changes the data contained in the table
     pub fn changes_data(&self) -> bool {
         match self {
-            Self::Optimize { .. } | Self::VacuumStart { .. } | Self::VacuumEnd { .. } => false,
+            Self::Optimize { .. }
+            | Self::VacuumStart { .. }
+            | Self::VacuumEnd { .. }
+            | Self::AddConstraint { .. } => false,
             Self::Create { .. }
             | Self::FileSystemCheck {}
             | Self::StreamingUpdate { .. }
@@ -949,7 +542,7 @@ impl DeltaOperation {
 }
 
 /// The SaveMode used when performing a DeltaOperation
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub enum SaveMode {
     /// Files will be appended to the target location.
     Append,
@@ -959,6 +552,23 @@ pub enum SaveMode {
     ErrorIfExists,
     /// If files exist for the target, the operation must not proceed or change any data.
     Ignore,
+}
+
+impl FromStr for SaveMode {
+    type Err = DeltaTableError;
+
+    fn from_str(s: &str) -> DeltaResult<Self> {
+        match s.to_ascii_lowercase().as_str() {
+            "append" => Ok(SaveMode::Append),
+            "overwrite" => Ok(SaveMode::Overwrite),
+            "error" => Ok(SaveMode::ErrorIfExists),
+            "ignore" => Ok(SaveMode::Ignore),
+            _ => Err(DeltaTableError::Generic(format!(
+                "Invalid save mode provided: {}, only these are supported: ['append', 'overwrite', 'error', 'ignore']",
+                s
+            ))),
+        }
+    }
 }
 
 /// The OutputMode used in streaming operations.
@@ -973,14 +583,14 @@ pub enum OutputMode {
 }
 
 pub(crate) async fn get_last_checkpoint(
-    object_store: &ObjectStoreRef,
+    log_store: &dyn LogStore,
 ) -> Result<CheckPoint, ProtocolError> {
     let last_checkpoint_path = Path::from_iter(["_delta_log", "_last_checkpoint"]);
     debug!("loading checkpoint from {last_checkpoint_path}");
-    match object_store.get(&last_checkpoint_path).await {
+    match log_store.object_store().get(&last_checkpoint_path).await {
         Ok(data) => Ok(serde_json::from_slice(&data.bytes().await?)?),
         Err(ObjectStoreError::NotFound { .. }) => {
-            match find_latest_check_point_for_version(object_store, i64::MAX).await {
+            match find_latest_check_point_for_version(log_store, i64::MAX).await {
                 Ok(Some(cp)) => Ok(cp),
                 _ => Err(ProtocolError::CheckpointNotFound),
             }
@@ -990,7 +600,7 @@ pub(crate) async fn get_last_checkpoint(
 }
 
 pub(crate) async fn find_latest_check_point_for_version(
-    object_store: &ObjectStoreRef,
+    log_store: &dyn LogStore,
     version: i64,
 ) -> Result<Option<CheckPoint>, ProtocolError> {
     lazy_static! {
@@ -1001,7 +611,8 @@ pub(crate) async fn find_latest_check_point_for_version(
     }
 
     let mut cp: Option<CheckPoint> = None;
-    let mut stream = object_store.list(Some(object_store.log_path())).await?;
+    let object_store = log_store.object_store();
+    let mut stream = object_store.list(Some(log_store.log_path()));
 
     while let Some(obj_meta) = stream.next().await {
         // Exit early if any objects can't be listed.
@@ -1048,6 +659,7 @@ pub(crate) async fn find_latest_check_point_for_version(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::kernel::Action;
 
     #[test]
     fn test_load_table_stats() {
@@ -1061,7 +673,17 @@ mod tests {
                 })
                 .to_string(),
             ),
-            ..Default::default()
+            path: Default::default(),
+            data_change: true,
+            deletion_vector: None,
+            partition_values: Default::default(),
+            stats_parsed: None,
+            tags: None,
+            size: 0,
+            modification_time: 0,
+            base_row_id: None,
+            default_row_commit_version: None,
+            clustering_provider: None,
         };
 
         let stats = action.get_stats().unwrap().unwrap();
@@ -1126,7 +748,17 @@ mod tests {
                 })
                 .to_string(),
             ),
-            ..Default::default()
+            path: Default::default(),
+            data_change: true,
+            deletion_vector: None,
+            partition_values: Default::default(),
+            stats_parsed: None,
+            tags: None,
+            size: 0,
+            modification_time: 0,
+            base_row_id: None,
+            default_row_commit_version: None,
+            clustering_provider: None,
         };
 
         let stats = action.get_stats().unwrap().unwrap();
@@ -1203,7 +835,6 @@ mod tests {
             serde_json::from_str(buf).expect("Expected to be able to deserialize");
     }
 
-    #[cfg(feature = "arrow")]
     mod arrow_tests {
         use arrow::array::{self, ArrayRef, StructArray};
         use arrow::compute::kernels::cast_utils::Parser;
@@ -1231,9 +862,9 @@ mod tests {
         #[tokio::test]
         async fn test_with_partitions() {
             // test table with partitions
-            let path = "./tests/data/delta-0.8.0-null-partition";
+            let path = "../deltalake-test/tests/data/delta-0.8.0-null-partition";
             let table = crate::open_table(path).await.unwrap();
-            let actions = table.get_state().add_actions_table(true).unwrap();
+            let actions = table.snapshot().unwrap().add_actions_table(true).unwrap();
             let actions = sort_batch_by(&actions, "path").unwrap();
 
             let mut expected_columns: Vec<(&str, ArrayRef)> = vec![
@@ -1252,7 +883,7 @@ mod tests {
 
             assert_eq!(expected, actions);
 
-            let actions = table.get_state().add_actions_table(false).unwrap();
+            let actions = table.snapshot().unwrap().add_actions_table(false).unwrap();
             let actions = sort_batch_by(&actions, "path").unwrap();
 
             expected_columns[4] = (
@@ -1270,9 +901,9 @@ mod tests {
         #[tokio::test]
         async fn test_with_deletion_vector() {
             // test table with partitions
-            let path = "./tests/data/table_with_deletion_logs";
+            let path = "../deltalake-test/tests/data/table_with_deletion_logs";
             let table = crate::open_table(path).await.unwrap();
-            let actions = table.get_state().add_actions_table(true).unwrap();
+            let actions = table.snapshot().unwrap().add_actions_table(true).unwrap();
             let actions = sort_batch_by(&actions, "path").unwrap();
             let actions = actions
                 .project(&[
@@ -1330,7 +961,7 @@ mod tests {
 
             assert_eq!(expected, actions);
 
-            let actions = table.get_state().add_actions_table(false).unwrap();
+            let actions = table.snapshot().unwrap().add_actions_table(false).unwrap();
             let actions = sort_batch_by(&actions, "path").unwrap();
             let actions = actions
                 .project(&[
@@ -1376,10 +1007,10 @@ mod tests {
         #[tokio::test]
         async fn test_without_partitions() {
             // test table without partitions
-            let path = "./tests/data/simple_table";
+            let path = "../deltalake-test/tests/data/simple_table";
             let table = crate::open_table(path).await.unwrap();
 
-            let actions = table.get_state().add_actions_table(true).unwrap();
+            let actions = table.snapshot().unwrap().add_actions_table(true).unwrap();
             let actions = sort_batch_by(&actions, "path").unwrap();
 
             let expected_columns: Vec<(&str, ArrayRef)> = vec![
@@ -1418,7 +1049,7 @@ mod tests {
 
             assert_eq!(expected, actions);
 
-            let actions = table.get_state().add_actions_table(false).unwrap();
+            let actions = table.snapshot().unwrap().add_actions_table(false).unwrap();
             let actions = sort_batch_by(&actions, "path").unwrap();
 
             // For now, this column is ignored.
@@ -1432,11 +1063,85 @@ mod tests {
         }
 
         #[tokio::test]
+        async fn test_with_column_mapping() {
+            // test table with column mapping and partitions
+            let path = "../deltalake-test/tests/data/table_with_column_mapping";
+            let table = crate::open_table(path).await.unwrap();
+            let actions = table.snapshot().unwrap().add_actions_table(true).unwrap();
+            let expected_columns: Vec<(&str, ArrayRef)> = vec![
+                (
+                    "path",
+                    Arc::new(array::StringArray::from(vec![
+                        "BH/part-00000-4d6e745c-8e04-48d9-aa60-438228358f1a.c000.zstd.parquet",
+                        "8v/part-00001-69b4a452-aeac-4ffa-bf5c-a0c2833d05eb.c000.zstd.parquet",
+                    ])),
+                ),
+                (
+                    "size_bytes",
+                    Arc::new(array::Int64Array::from(vec![890, 810])),
+                ),
+                (
+                    "modification_time",
+                    Arc::new(arrow::array::TimestampMillisecondArray::from(vec![
+                        1699946088000,
+                        1699946088000,
+                    ])),
+                ),
+                (
+                    "data_change",
+                    Arc::new(array::BooleanArray::from(vec![true, true])),
+                ),
+                (
+                    "partition.Company Very Short",
+                    Arc::new(array::StringArray::from(vec!["BMS", "BME"])),
+                ),
+                ("num_records", Arc::new(array::Int64Array::from(vec![4, 1]))),
+                (
+                    "null_count.Company Very Short",
+                    Arc::new(array::NullArray::new(2)),
+                ),
+                ("min.Company Very Short", Arc::new(array::NullArray::new(2))),
+                ("max.Company Very Short", Arc::new(array::NullArray::new(2))),
+                ("null_count.Super Name", Arc::new(array::NullArray::new(2))),
+                ("min.Super Name", Arc::new(array::NullArray::new(2))),
+                ("max.Super Name", Arc::new(array::NullArray::new(2))),
+                (
+                    "tags.INSERTION_TIME",
+                    Arc::new(array::StringArray::from(vec![
+                        "1699946088000000",
+                        "1699946088000001",
+                    ])),
+                ),
+                (
+                    "tags.MAX_INSERTION_TIME",
+                    Arc::new(array::StringArray::from(vec![
+                        "1699946088000000",
+                        "1699946088000001",
+                    ])),
+                ),
+                (
+                    "tags.MIN_INSERTION_TIME",
+                    Arc::new(array::StringArray::from(vec![
+                        "1699946088000000",
+                        "1699946088000001",
+                    ])),
+                ),
+                (
+                    "tags.OPTIMIZE_TARGET_SIZE",
+                    Arc::new(array::StringArray::from(vec!["33554432", "33554432"])),
+                ),
+            ];
+            let expected = RecordBatch::try_from_iter(expected_columns.clone()).unwrap();
+
+            assert_eq!(expected, actions);
+        }
+
+        #[tokio::test]
         async fn test_with_stats() {
             // test table with stats
-            let path = "./tests/data/delta-0.8.0";
+            let path = "../deltalake-test/tests/data/delta-0.8.0";
             let table = crate::open_table(path).await.unwrap();
-            let actions = table.get_state().add_actions_table(true).unwrap();
+            let actions = table.snapshot().unwrap().add_actions_table(true).unwrap();
             let actions = sort_batch_by(&actions, "path").unwrap();
 
             let expected_columns: Vec<(&str, ArrayRef)> = vec![
@@ -1478,11 +1183,11 @@ mod tests {
         #[tokio::test]
         async fn test_only_struct_stats() {
             // test table with no json stats
-            let path = "./tests/data/delta-1.2.1-only-struct-stats";
+            let path = "../deltalake-test/tests/data/delta-1.2.1-only-struct-stats";
             let mut table = crate::open_table(path).await.unwrap();
             table.load_version(1).await.unwrap();
 
-            let actions = table.get_state().add_actions_table(true).unwrap();
+            let actions = table.snapshot().unwrap().add_actions_table(true).unwrap();
 
             let expected_columns: Vec<(&str, ArrayRef)> = vec![
                 (
@@ -1663,7 +1368,7 @@ mod tests {
             );
             assert_eq!(expected, actions);
 
-            let actions = table.get_state().add_actions_table(false).unwrap();
+            let actions = table.snapshot().unwrap().add_actions_table(false).unwrap();
             // For brevity, just checking a few nested columns in stats
 
             assert_eq!(
