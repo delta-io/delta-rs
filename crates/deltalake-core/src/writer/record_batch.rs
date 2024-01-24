@@ -317,7 +317,7 @@ impl PartitionWriter {
 }
 
 /// Partition a RecordBatch along partition columns
-pub fn divide_by_partition_values(
+pub(crate) fn divide_by_partition_values(
     arrow_schema: ArrowSchemaRef,
     partition_columns: Vec<String>,
     values: &RecordBatch,
