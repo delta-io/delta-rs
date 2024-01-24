@@ -595,13 +595,11 @@ fn max_min_schema_for_fields(dest: &mut Vec<ArrowField>, f: &ArrowField) {
                 max_min_schema_for_fields(&mut child_dest, f);
             }
 
-            if !child_dest.is_empty() {
-                dest.push(ArrowField::new(
-                    f.name(),
-                    ArrowDataType::Struct(child_dest.into()),
-                    true,
-                ));
-            }
+            dest.push(ArrowField::new(
+                f.name(),
+                ArrowDataType::Struct(child_dest.into()),
+                true,
+            ));
         }
         // don't compute min or max for list, map or binary types
         ArrowDataType::List(_) | ArrowDataType::Map(_, _) | ArrowDataType::Binary => { /* noop */ }
