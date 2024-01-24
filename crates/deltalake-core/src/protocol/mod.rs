@@ -20,7 +20,6 @@ use object_store::{path::Path, Error as ObjectStoreError, ObjectStore};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
-use tracing::instrument;
 use std::borrow::Borrow;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
@@ -973,7 +972,6 @@ pub enum OutputMode {
     Update,
 }
 
-#[instrument(skip(object_store))]
 pub(crate) async fn get_last_checkpoint(
     object_store: &ObjectStoreRef,
 ) -> Result<CheckPoint, ProtocolError> {
@@ -991,7 +989,6 @@ pub(crate) async fn get_last_checkpoint(
     }
 }
 
-#[instrument(skip(object_store))]
 pub(crate) async fn find_latest_check_point_for_version(
     object_store: &ObjectStoreRef,
     version: i64,

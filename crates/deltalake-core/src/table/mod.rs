@@ -17,7 +17,6 @@ use regex::Regex;
 use serde::de::{Error, SeqAccess, Visitor};
 use serde::ser::SerializeSeq;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use tracing::instrument;
 use uuid::Uuid;
 
 use self::builder::DeltaTableConfig;
@@ -385,7 +384,6 @@ impl DeltaTable {
     }
 
     /// This method scans delta logs to find the earliest delta log version
-    #[instrument(skip(self))]
     async fn get_earliest_delta_log_version(&self) -> Result<i64, DeltaTableError> {
         // TODO check if regex matches against path
         lazy_static! {
@@ -412,15 +410,12 @@ impl DeltaTable {
     }
 
     #[cfg(any(feature = "parquet", feature = "parquet2"))]
-    #[instrument(skip(self))]
     async fn restore_checkpoint(&mut self, check_point: CheckPoint) -> Result<(), DeltaTableError> {
         self.state = DeltaTableState::from_checkpoint(self, &check_point).await?;
 
         Ok(())
     }
-
     /// returns the latest available version of the table
-    #[instrument(skip(self))]
     pub async fn get_latest_version(&mut self) -> Result<i64, DeltaTableError> {
         let version_start = match get_last_checkpoint(&self.storage).await {
             Ok(last_check_point) => last_check_point.version,
@@ -478,7 +473,6 @@ impl DeltaTable {
     }
 
     /// Load DeltaTable with data from latest checkpoint
-    #[instrument(skip(self))]
     pub async fn load(&mut self) -> Result<(), DeltaTableError> {
         self.last_check_point = None;
         self.state = DeltaTableState::with_version(-1);
@@ -486,7 +480,6 @@ impl DeltaTable {
     }
 
     /// Get the list of actions for the next commit
-    #[instrument(skip(self))]
     pub async fn peek_next_commit(
         &self,
         current_version: i64,
@@ -505,7 +498,6 @@ impl DeltaTable {
     }
 
     /// Reads a commit and gets list of actions
-    #[instrument(skip(commit_log_bytes))]
     async fn get_actions(
         version: i64,
         commit_log_bytes: bytes::Bytes,
@@ -531,7 +523,6 @@ impl DeltaTable {
     /// Updates the DeltaTable to the most recent state committed to the transaction log by
     /// loading the last checkpoint and incrementally applying each version since.
     #[cfg(any(feature = "parquet", feature = "parquet2"))]
-    #[instrument(skip(self))]
     pub async fn update(&mut self) -> Result<(), DeltaTableError> {
         match get_last_checkpoint(&self.storage).await {
             Ok(last_check_point) => {
@@ -560,7 +551,6 @@ impl DeltaTable {
 
     /// Updates the DeltaTable to the latest version by incrementally applying newer versions.
     /// It assumes that the table is already updated to the current version `self.version`.
-    #[instrument(skip(self))]
     pub async fn update_incremental(
         &mut self,
         max_version: Option<i64>,
@@ -618,7 +608,6 @@ impl DeltaTable {
     }
 
     /// Loads the DeltaTable state for the given version.
-    #[instrument(skip(self))]
     pub async fn load_version(&mut self, version: i64) -> Result<(), DeltaTableError> {
         // check if version is valid
         let commit_uri = commit_uri_from_version(version);
@@ -651,7 +640,6 @@ impl DeltaTable {
         Ok(())
     }
 
-    #[instrument(skip(self))]
     pub(crate) async fn get_version_timestamp(
         &mut self,
         version: i64,

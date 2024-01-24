@@ -139,7 +139,7 @@ arrow = [
     "arrow-select",
     "arrow-buffer",
 ]
-default = ["arrow", "parquet", "tracing"]
+default = ["arrow", "parquet"]
 datafusion = [
     "dep:datafusion",
     "datafusion-expr",
