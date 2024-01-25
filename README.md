@@ -6,7 +6,7 @@
 <p align="center">
   A native Rust library for Delta Lake, with bindings to Python
   <br>
-  <a href="https://delta-io.github.io/delta-rs/python/">Python docs</a>
+  <a href="https://delta-io.github.io/delta-rs/">Python docs</a>
   ·
   <a href="https://docs.rs/deltalake/latest/deltalake/">Rust docs</a>
   ·
@@ -32,7 +32,7 @@
   <a href="https://pypi.python.org/pypi/deltalake">
     <img alt="Deltalake" src="https://img.shields.io/pypi/pyversions/deltalake.svg?style=flat-square&color=00ADD4&logo=python">
   </a>
-  <a target="_blank" href="https://join.slack.com/t/delta-users/shared_invite/zt-23h0xwez7-wDTm43ZVEW2ZcbKn6Bc8Fg">
+  <a target="_blank" href="https://go.delta.io/slack">
     <img alt="#delta-rs in the Delta Lake Slack workspace" src="https://img.shields.io/badge/slack-delta-blue.svg?logo=slack&style=flat-square&color=F75101">
   </a>
 </p>
@@ -41,14 +41,14 @@ The Delta Lake project aims to unlock the power of the Deltalake for as many use
 by providing native low-level APIs aimed at developers and integrators, as well as a high-level operations
 API that lets you query, inspect, and operate your Delta Lake with ease.
 
-| Source                | Downloads                         | Installation Command    | Docs            |
-| --------------------- | --------------------------------- | ----------------------- | --------------- |
-| **[PyPi][pypi]**      | [![Downloads][pypi-dl]][pypi]     | `pip install deltalake` | [Docs][py-docs] |
-| **[Crates.io][pypi]** | [![Downloads][crates-dl]][crates] | `cargo add deltalake`   | [Docs][rs-docs] |
+| Source                  | Downloads                         | Installation Command    | Docs            |
+| ----------------------- | --------------------------------- | ----------------------- | --------------- |
+| **[PyPi][pypi]**        | [![Downloads][pypi-dl]][pypi]     | `pip install deltalake` | [Docs][py-docs] |
+| **[Crates.io][crates]** | [![Downloads][crates-dl]][crates] | `cargo add deltalake`   | [Docs][rs-docs] |
 
 [pypi]: https://pypi.org/project/deltalake/
 [pypi-dl]: https://img.shields.io/pypi/dm/deltalake?style=flat-square&color=00ADD4
-[py-docs]: https://delta-io.github.io/delta-rs/python/
+[py-docs]: https://delta-io.github.io/delta-rs/
 [rs-docs]: https://docs.rs/deltalake/latest/deltalake/
 [crates]: https://crates.io/crates/deltalake
 [crates-dl]: https://img.shields.io/crates/d/deltalake?color=F75101
@@ -92,7 +92,7 @@ async fn main() -> Result<(), DeltaTableError> {
 
     // show all active files in the table
     let files = table.get_files();
-    println!("{files}");
+    println!("{:?}", files);
 
     Ok(())
 }
@@ -105,7 +105,7 @@ You can also try Delta Lake docker at [DockerHub](https://go.delta.io/dockerhub)
 We encourage you to reach out, and are [committed](https://github.com/delta-io/delta-rs/blob/main/CODE_OF_CONDUCT.md)
 to provide a welcoming community.
 
-- [Join us in our Slack workspace](https://join.slack.com/t/delta-users/shared_invite/zt-23h0xwez7-wDTm43ZVEW2ZcbKn6Bc8Fg)
+- [Join us in our Slack workspace](https://go.delta.io/slack)
 - [Report an issue](https://github.com/delta-io/delta-rs/issues/new?template=bug_report.md)
 - Looking to contribute? See our [good first issues](https://github.com/delta-io/delta-rs/contribute).
 
@@ -130,40 +130,40 @@ of features outlined in the Delta [protocol][protocol] is also [tracked](#protoc
 
 ### Cloud Integrations
 
-| Storage              |         Rust          |        Python         | Comment                             |
-| -------------------- | :-------------------: | :-------------------: | ----------------------------------- |
-| Local                |        ![done]        |        ![done]        |                                     |
-| S3 - AWS             |        ![done]        |        ![done]        | requires lock for concurrent writes |
-| S3 - MinIO           |        ![done]        |        ![done]        | requires lock for concurrent writes |
-| S3 - R2              |        ![done]        |        ![done]        | requires lock for concurrent writes |
-| Azure Blob           |        ![done]        |        ![done]        |                                     |
-| Azure ADLS Gen2      |        ![done]        |        ![done]        |                                     |
-| Microsoft OneLake    |        ![done]        |        ![done]        |                                     |
-| Google Cloud Storage |        ![done]        |        ![done]        |                                     |
+| Storage              |  Rust   | Python  | Comment                             |
+| -------------------- | :-----: | :-----: | ----------------------------------- |
+| Local                | ![done] | ![done] |                                     |
+| S3 - AWS             | ![done] | ![done] | requires lock for concurrent writes |
+| S3 - MinIO           | ![done] | ![done] | requires lock for concurrent writes |
+| S3 - R2              | ![done] | ![done] | requires lock for concurrent writes |
+| Azure Blob           | ![done] | ![done] |                                     |
+| Azure ADLS Gen2      | ![done] | ![done] |                                     |
+| Microsoft OneLake    | ![done] | ![done] |                                     |
+| Google Cloud Storage | ![done] | ![done] |                                     |
 
 ### Supported Operations
 
-| Operation             |          Rust            |        Python       | Description                                 |
-| --------------------- | :----------------------: | :-----------------: | ------------------------------------------- |
-| Create                |         ![done]          |       ![done]       | Create a new table                          |
-| Read                  |         ![done]          |       ![done]       | Read data from a table                      |
-| Vacuum                |         ![done]          |       ![done]       | Remove unused files and log entries         |
-| Delete - partitions   |                          |       ![done]       | Delete a table partition                    |
-| Delete - predicates   |         ![done]          |       ![done]       | Delete data based on a predicate            |
-| Optimize - compaction |         ![done]          |       ![done]       | Harmonize the size of data file             |
-| Optimize - Z-order    |         ![done]          |       ![done]       | Place similar data into the same file       |
-| Merge                 | [![semi-done]][merge-rs] | [![open]][merge-py] | Merge two tables (limited to full re-write) |
-| FS check              |         ![done]          |                     | Remove corrupted files from table           |
+| Operation             |           Rust           |          Python          | Description                                 |
+| --------------------- | :----------------------: | :----------------------: | ------------------------------------------- |
+| Create                |         ![done]          |         ![done]          | Create a new table                          |
+| Read                  |         ![done]          |         ![done]          | Read data from a table                      |
+| Vacuum                |         ![done]          |         ![done]          | Remove unused files and log entries         |
+| Delete - partitions   |                          |         ![done]          | Delete a table partition                    |
+| Delete - predicates   |         ![done]          |         ![done]          | Delete data based on a predicate            |
+| Optimize - compaction |         ![done]          |         ![done]          | Harmonize the size of data file             |
+| Optimize - Z-order    |         ![done]          |         ![done]          | Place similar data into the same file       |
+| Merge                 |         ![done]          |         ![done]          | Merge a target Delta table with source data |
+| FS check              |         ![done]          |         ![done]          | Remove corrupted files from table           |
 
 ### Protocol Support Level
 
 | Writer Version | Requirement                                   |        Status        |
 | -------------- | --------------------------------------------- | :------------------: |
-| Version 2      | Append Only Tables                            |       ![done]  
+| Version 2      | Append Only Tables                            |       ![done]        |
 | Version 2      | Column Invariants                             |       ![done]        |
 | Version 3      | Enforce `delta.checkpoint.writeStatsAsJson`   | [![open]][writer-rs] |
 | Version 3      | Enforce `delta.checkpoint.writeStatsAsStruct` | [![open]][writer-rs] |
-| Version 3      | CHECK constraints                             | [![open]][writer-rs] |
+| Version 3      | CHECK constraints                             | [![semi-done]][check-constraints] |
 | Version 4      | Change Data Feed                              |                      |
 | Version 4      | Generated Columns                             |                      |
 | Version 5      | Column Mapping                                |                      |
@@ -182,8 +182,7 @@ of features outlined in the Delta [protocol][protocol] is also [tracked](#protoc
 [semi-done]: https://cdn.jsdelivr.net/gh/Readme-Workflows/Readme-Icons@main/icons/octicons/ApprovedChangesGrey.svg
 [done]: https://cdn.jsdelivr.net/gh/Readme-Workflows/Readme-Icons@main/icons/octicons/ApprovedChanges.svg
 [roadmap]: https://github.com/delta-io/delta-rs/issues/1128
-[merge-py]: https://github.com/delta-io/delta-rs/issues/1357
-[merge-rs]: https://github.com/delta-io/delta-rs/issues/850
 [writer-rs]: https://github.com/delta-io/delta-rs/issues/851
+[check-constraints]: https://github.com/delta-io/delta-rs/issues/1881
 [onelake-rs]: https://github.com/delta-io/delta-rs/issues/1418
 [protocol]: https://github.com/delta-io/delta/blob/master/PROTOCOL.md

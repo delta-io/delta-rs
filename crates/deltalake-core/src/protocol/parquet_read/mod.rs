@@ -5,13 +5,13 @@ use num_bigint::BigInt;
 use num_traits::cast::ToPrimitive;
 use parquet::record::{Field, ListAccessor, MapAccessor, RowAccessor};
 use serde_json::json;
+use tracing::{debug, error, warn};
 
-use crate::protocol::{
-    Action, Add, AddCDCFile, ColumnCountStat, ColumnValueStat, DeletionVector, MetaData, Protocol,
-    ProtocolError, Remove, Stats, Txn,
+use crate::kernel::models::actions::serde_path::decode_path;
+use crate::kernel::{
+    Action, Add, AddCDCFile, DeletionVectorDescriptor, Metadata, Protocol, Remove, StorageType, Txn,
 };
-
-use super::StorageType;
+use crate::protocol::{ColumnCountStat, ColumnValueStat, ProtocolError, Stats};
 
 fn populate_hashmap_with_option_from_parquet_map(
     map: &mut HashMap<String, Option<String>>,
@@ -46,10 +46,14 @@ impl AddCDCFile {
     }
 }
 
-impl DeletionVector {
+impl DeletionVectorDescriptor {
     fn from_parquet_record(record: &parquet::record::Row) -> Result<Self, ProtocolError> {
         let mut re = Self {
-            ..Default::default()
+            cardinality: -1,
+            offset: None,
+            path_or_inline_dv: "".to_string(),
+            size_in_bytes: -1,
+            storage_type: StorageType::default(),
         };
         for (i, (name, _)) in record.get_column_iter().enumerate() {
             match name.as_str() {
@@ -84,10 +88,9 @@ impl DeletionVector {
                     })?;
                 }
                 _ => {
-                    log::debug!(
+                    debug!(
                         "Unexpected field name `{}` for deletion vector: {:?}",
-                        name,
-                        record
+                        name, record
                     );
                 }
             }
@@ -99,16 +102,30 @@ impl DeletionVector {
 impl Add {
     fn from_parquet_record(record: &parquet::record::Row) -> Result<Self, ProtocolError> {
         let mut re = Self {
-            ..Default::default()
+            path: "".to_string(),
+            size: -1,
+            modification_time: -1,
+            data_change: true,
+            partition_values: HashMap::new(),
+            stats: None,
+            stats_parsed: None,
+            deletion_vector: None,
+            base_row_id: None,
+            default_row_commit_version: None,
+            tags: None,
+            clustering_provider: None,
         };
 
         for (i, (name, _)) in record.get_column_iter().enumerate() {
             match name.as_str() {
                 "path" => {
-                    re.path = record
-                        .get_string(i)
-                        .map_err(|_| gen_action_type_error("add", "path", "string"))?
-                        .clone();
+                    re.path = decode_path(
+                        record
+                            .get_string(i)
+                            .map_err(|_| gen_action_type_error("add", "path", "string"))?
+                            .clone()
+                            .as_str(),
+                    )?;
                 }
                 "size" => {
                     re.size = record
@@ -139,16 +156,16 @@ impl Add {
                         ))
                     })?;
                 }
-                "partitionValues_parsed" => {
-                    re.partition_values_parsed = Some(
-                        record
-                            .get_group(i)
-                            .map_err(|_| {
-                                gen_action_type_error("add", "partitionValues_parsed", "struct")
-                            })?
-                            .clone(),
-                    );
-                }
+                // "partitionValues_parsed" => {
+                //     re.partition_values_parsed = Some(
+                //         record
+                //             .get_group(i)
+                //             .map_err(|_| {
+                //                 gen_action_type_error("add", "partitionValues_parsed", "struct")
+                //             })?
+                //             .clone(),
+                //     );
+                // }
                 "tags" => match record.get_map(i) {
                     Ok(tags_map) => {
                         let mut tags = HashMap::new();
@@ -182,17 +199,17 @@ impl Add {
                 },
                 "deletionVector" => match record.get_group(i) {
                     Ok(row) => {
-                        re.deletion_vector = Some(DeletionVector::from_parquet_record(row)?);
+                        re.deletion_vector =
+                            Some(DeletionVectorDescriptor::from_parquet_record(row)?);
                     }
                     _ => {
                         re.deletion_vector = None;
                     }
                 },
                 _ => {
-                    log::debug!(
+                    debug!(
                         "Unexpected field name `{}` for add action: {:?}",
-                        name,
-                        record
+                        name, record
                     );
                 }
             }
@@ -212,7 +229,7 @@ impl Add {
                         "numRecords" => if let Ok(v) = record.get_long(i) {
                                 stats.num_records = v;
                             } else {
-                                log::error!("Expect type of stats_parsed field numRecords to be long, got: {}", record);
+                                error!("Expect type of stats_parsed field numRecords to be long, got: {}", record);
                             }
                         "minValues" => if let Ok(row) = record.get_group(i) {
                             for (name, field) in row.get_column_iter() {
@@ -223,7 +240,7 @@ impl Add {
                                 }
                             }
                         } else {
-                            log::error!("Expect type of stats_parsed field minRecords to be struct, got: {}", record);
+                            error!("Expect type of stats_parsed field minRecords to be struct, got: {}", record);
                         }
                         "maxValues" => if let Ok(row) = record.get_group(i) {
                             for (name, field) in row.get_column_iter() {
@@ -234,7 +251,7 @@ impl Add {
                                 }
                             }
                         } else {
-                            log::error!("Expect type of stats_parsed field maxRecords to be struct, got: {}", record);
+                            error!("Expect type of stats_parsed field maxRecords to be struct, got: {}", record);
                         }
                         "nullCount" => if let Ok(row) = record.get_group(i) {
                             for (name, field) in row.get_column_iter() {
@@ -245,10 +262,10 @@ impl Add {
                                 }
                             }
                         } else {
-                            log::error!("Expect type of stats_parsed field nullCount to be struct, got: {}", record);
+                            error!("Expect type of stats_parsed field nullCount to be struct, got: {}", record);
                         }
                         _ => {
-                            log::debug!(
+                            debug!(
                                 "Unexpected field name `{}` for stats_parsed: {:?}",
                                 name,
                                 record,
@@ -274,10 +291,9 @@ fn field_to_value_stat(field: &Field, field_name: &str) -> Option<ColumnValueSta
             if let Ok(val) = primitive_parquet_field_to_json_value(field) {
                 Some(ColumnValueStat::Value(val))
             } else {
-                log::warn!(
+                warn!(
                     "Unexpected type when parsing min/max values for {}. Found {}",
-                    field_name,
-                    field
+                    field_name, field
                 );
                 None
             }
@@ -295,10 +311,9 @@ fn field_to_count_stat(field: &Field, field_name: &str) -> Option<ColumnCountSta
         }
         Field::Long(value) => Some(ColumnCountStat::Value(*value)),
         _ => {
-            log::warn!(
+            warn!(
                 "Unexpected type when parsing nullCounts for {}. Found {}",
-                field_name,
-                field
+                field_name, field
             );
             None
         }
@@ -364,10 +379,17 @@ fn convert_date_to_string(value: i32) -> Result<String, &'static str> {
     Ok(format!("{}", dt.format("%Y-%m-%d")))
 }
 
-impl MetaData {
+impl Metadata {
     fn from_parquet_record(record: &parquet::record::Row) -> Result<Self, ProtocolError> {
         let mut re = Self {
-            ..Default::default()
+            id: "".to_string(),
+            name: None,
+            description: None,
+            partition_columns: vec![],
+            schema_string: "".to_string(),
+            created_time: None,
+            configuration: HashMap::new(),
+            format: Default::default(),
         };
 
         for (i, (name, _)) in record.get_column_iter().enumerate() {
@@ -462,10 +484,9 @@ impl MetaData {
                     }
                 }
                 _ => {
-                    log::debug!(
+                    debug!(
                         "Unexpected field name `{}` for metaData action: {:?}",
-                        name,
-                        record
+                        name, record
                     );
                 }
             }
@@ -480,16 +501,26 @@ impl Remove {
         let mut re = Self {
             data_change: true,
             extended_file_metadata: Some(false),
-            ..Default::default()
+            deletion_timestamp: None,
+            deletion_vector: None,
+            partition_values: None,
+            path: "".to_string(),
+            size: None,
+            tags: None,
+            base_row_id: None,
+            default_row_commit_version: None,
         };
 
         for (i, (name, _)) in record.get_column_iter().enumerate() {
             match name.as_str() {
                 "path" => {
-                    re.path = record
-                        .get_string(i)
-                        .map_err(|_| gen_action_type_error("remove", "path", "string"))?
-                        .clone();
+                    re.path = decode_path(
+                        record
+                            .get_string(i)
+                            .map_err(|_| gen_action_type_error("remove", "path", "string"))?
+                            .clone()
+                            .as_str(),
+                    )?;
                 }
                 "dataChange" => {
                     re.data_change = record
@@ -543,10 +574,9 @@ impl Remove {
                 }
                 "numRecords" => {}
                 _ => {
-                    log::debug!(
+                    debug!(
                         "Unexpected field name `{}` for remove action: {:?}",
-                        name,
-                        record
+                        name, record
                     );
                 }
             }
@@ -579,10 +609,9 @@ impl Txn {
                     re.last_updated = record.get_long(i).map(Some).unwrap_or(None);
                 }
                 _ => {
-                    log::debug!(
+                    debug!(
                         "Unexpected field name `{}` for txn action: {:?}",
-                        name,
-                        record
+                        name, record
                     );
                 }
             }
@@ -595,7 +624,10 @@ impl Txn {
 impl Protocol {
     fn from_parquet_record(record: &parquet::record::Row) -> Result<Self, ProtocolError> {
         let mut re = Self {
-            ..Default::default()
+            min_reader_version: -1,
+            min_writer_version: -1,
+            reader_features: None,
+            writer_features: None,
         };
 
         for (i, (name, _)) in record.get_column_iter().enumerate() {
@@ -610,11 +642,22 @@ impl Protocol {
                         gen_action_type_error("protocol", "minWriterVersion", "int")
                     })?;
                 }
+                "readerFeatures" => {
+                    re.reader_features = record
+                        .get_list(i)
+                        .map(|l| l.elements().iter().map(From::from).collect())
+                        .ok()
+                }
+                "writerFeatures" => {
+                    re.writer_features = record
+                        .get_list(i)
+                        .map(|l| l.elements().iter().map(From::from).collect())
+                        .ok()
+                }
                 _ => {
-                    log::debug!(
+                    debug!(
                         "Unexpected field name `{}` for protocol action: {:?}",
-                        name,
-                        record
+                        name, record
                     );
                 }
             }
@@ -661,12 +704,12 @@ impl Action {
         let field = &fields[col_idx];
 
         Ok(match field.get_basic_info().name() {
-            "add" => Action::add(Add::from_parquet_record(col_data)?),
-            "metaData" => Action::metaData(MetaData::from_parquet_record(col_data)?),
-            "remove" => Action::remove(Remove::from_parquet_record(col_data)?),
-            "txn" => Action::txn(Txn::from_parquet_record(col_data)?),
-            "protocol" => Action::protocol(Protocol::from_parquet_record(col_data)?),
-            "cdc" => Action::cdc(AddCDCFile::from_parquet_record(col_data)?),
+            "add" => Action::Add(Add::from_parquet_record(col_data)?),
+            "metaData" => Action::Metadata(Metadata::from_parquet_record(col_data)?),
+            "remove" => Action::Remove(Remove::from_parquet_record(col_data)?),
+            "txn" => Action::Txn(Txn::from_parquet_record(col_data)?),
+            "protocol" => Action::Protocol(Protocol::from_parquet_record(col_data)?),
+            "cdc" => Action::Cdc(AddCDCFile::from_parquet_record(col_data)?),
             name => {
                 return Err(ProtocolError::InvalidField(format!(
                     "Unexpected action from checkpoint: {name}",
@@ -685,7 +728,7 @@ mod tests {
         use parquet::file::reader::{FileReader, SerializedFileReader};
         use std::fs::File;
 
-        let path = "./tests/data/delta-0.2.0/_delta_log/00000000000000000003.checkpoint.parquet";
+        let path = "../deltalake-test/tests/data/delta-0.2.0/_delta_log/00000000000000000003.checkpoint.parquet";
         let preader = SerializedFileReader::new(File::open(path).unwrap()).unwrap();
 
         let mut iter = preader.get_row_iter(None).unwrap();

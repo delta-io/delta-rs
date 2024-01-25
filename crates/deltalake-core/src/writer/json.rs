@@ -1,12 +1,11 @@
 //! Main writer API to write json messages to delta table
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::convert::TryFrom;
 use std::sync::Arc;
 
 use arrow::datatypes::{Schema as ArrowSchema, SchemaRef as ArrowSchemaRef};
 use arrow::record_batch::*;
 use bytes::Bytes;
-use log::{info, warn};
 use object_store::path::Path;
 use object_store::ObjectStore;
 use parquet::{
@@ -14,26 +13,27 @@ use parquet::{
     file::properties::WriterProperties,
 };
 use serde_json::Value;
+use tracing::{info, warn};
 use uuid::Uuid;
 
 use super::stats::create_add;
 use super::utils::{
     arrow_schema_without_partitions, next_data_path, record_batch_from_message,
-    record_batch_without_partitions, stringified_partition_value,
+    record_batch_without_partitions,
 };
-use super::{utils::PartitionPath, DeltaWriter, DeltaWriterError};
+use super::{DeltaWriter, DeltaWriterError};
 use crate::errors::DeltaTableError;
+use crate::kernel::{Add, PartitionsExt, Scalar, StructType};
 use crate::table::builder::DeltaTableBuilder;
-use crate::table::DeltaTableMetaData;
-use crate::{protocol::Add, DeltaTable, Schema};
-use crate::{storage::DeltaObjectStore, writer::utils::ShareableBuffer};
+use crate::writer::utils::ShareableBuffer;
+use crate::DeltaTable;
 
 type BadValue = (Value, ParquetError);
 
 /// Writes messages to a delta lake table.
 pub struct JsonWriter {
-    storage: Arc<DeltaObjectStore>,
-    arrow_schema_ref: Arc<arrow::datatypes::Schema>,
+    storage: Arc<dyn ObjectStore>,
+    arrow_schema_ref: Arc<arrow_schema::Schema>,
     writer_properties: WriterProperties,
     partition_columns: Vec<String>,
     arrow_writers: HashMap<String, DataArrowWriter>,
@@ -45,7 +45,7 @@ pub(crate) struct DataArrowWriter {
     writer_properties: WriterProperties,
     buffer: ShareableBuffer,
     arrow_writer: ArrowWriter<ShareableBuffer>,
-    partition_values: HashMap<String, Option<String>>,
+    partition_values: BTreeMap<String, Scalar>,
     buffered_record_batch_count: usize,
 }
 
@@ -153,7 +153,7 @@ impl DataArrowWriter {
             writer_properties.clone(),
         )?;
 
-        let partition_values = HashMap::new();
+        let partition_values = BTreeMap::new();
         let buffered_record_batch_count = 0;
 
         Ok(Self {
@@ -194,7 +194,7 @@ impl JsonWriter {
             .build();
 
         Ok(Self {
-            storage,
+            storage: storage.object_store(),
             arrow_schema_ref: schema,
             writer_properties,
             partition_columns: partition_columns.unwrap_or_default(),
@@ -205,8 +205,8 @@ impl JsonWriter {
     /// Creates a JsonWriter to write to the given table
     pub fn for_table(table: &DeltaTable) -> Result<JsonWriter, DeltaTableError> {
         // Initialize an arrow schema ref from the delta table schema
-        let metadata = table.get_metadata()?;
-        let arrow_schema = <ArrowSchema as TryFrom<&Schema>>::try_from(&metadata.schema)?;
+        let metadata = table.metadata()?;
+        let arrow_schema = <ArrowSchema as TryFrom<&StructType>>::try_from(&metadata.schema()?)?;
         let arrow_schema_ref = Arc::new(arrow_schema);
         let partition_columns = metadata.partition_columns.clone();
 
@@ -217,35 +217,12 @@ impl JsonWriter {
             .build();
 
         Ok(Self {
-            storage: table.storage.clone(),
+            storage: table.object_store(),
             arrow_schema_ref,
             writer_properties,
             partition_columns,
             arrow_writers: HashMap::new(),
         })
-    }
-
-    /// Retrieves the latest schema from table, compares to the current and updates if changed.
-    /// When schema is updated then `true` is returned which signals the caller that parquet
-    /// created file or arrow batch should be revisited.
-    pub fn update_schema(
-        &mut self,
-        metadata: &DeltaTableMetaData,
-    ) -> Result<bool, DeltaTableError> {
-        let schema: ArrowSchema = <ArrowSchema as TryFrom<&Schema>>::try_from(&metadata.schema)?;
-
-        let schema_updated = self.arrow_schema_ref.as_ref() != &schema
-            || self.partition_columns != metadata.partition_columns;
-
-        if schema_updated {
-            let _ = std::mem::replace(&mut self.arrow_schema_ref, Arc::new(schema));
-            let _ = std::mem::replace(
-                &mut self.partition_columns,
-                metadata.partition_columns.clone(),
-            );
-        }
-
-        Ok(schema_updated)
     }
 
     /// Returns the current byte length of the in memory buffer.
@@ -363,8 +340,7 @@ impl DeltaWriter<Vec<Value>> for JsonWriter {
 
         for (_, writer) in writers {
             let metadata = writer.arrow_writer.close()?;
-            let prefix =
-                PartitionPath::from_hashmap(&self.partition_columns, &writer.partition_values)?;
+            let prefix = writer.partition_values.hive_partition_path();
             let prefix = Path::parse(prefix)?;
             let uuid = Uuid::new_v4();
 
@@ -421,18 +397,17 @@ fn quarantine_failed_parquet_rows(
 fn extract_partition_values(
     partition_cols: &[String],
     record_batch: &RecordBatch,
-) -> Result<HashMap<String, Option<String>>, DeltaWriterError> {
-    let mut partition_values = HashMap::new();
+) -> Result<BTreeMap<String, Scalar>, DeltaWriterError> {
+    let mut partition_values = BTreeMap::new();
 
     for col_name in partition_cols.iter() {
         let arrow_schema = record_batch.schema();
-
         let i = arrow_schema.index_of(col_name)?;
         let col = record_batch.column(i);
+        let value = Scalar::from_array(col.as_ref(), 0)
+            .ok_or(DeltaWriterError::MissingPartitionColumn(col_name.clone()))?;
 
-        let partition_string = stringified_partition_value(col)?;
-
-        partition_values.insert(col_name.clone(), partition_string);
+        partition_values.insert(col_name.clone(), value);
     }
 
     Ok(partition_values)
@@ -440,19 +415,20 @@ fn extract_partition_values(
 
 #[cfg(test)]
 mod tests {
+    use parquet::file::reader::FileReader;
+    use parquet::file::serialized_reader::SerializedFileReader;
+    use std::fs::File;
+    use std::sync::Arc;
+
     use super::*;
     use crate::arrow::array::Int32Array;
     use crate::arrow::datatypes::{
         DataType as ArrowDataType, Field as ArrowField, Schema as ArrowSchema,
     };
+    use crate::kernel::DataType;
     use crate::writer::test_utils::get_delta_schema;
     use crate::writer::DeltaWriter;
     use crate::writer::JsonWriter;
-    use crate::Schema;
-    use parquet::file::reader::FileReader;
-    use parquet::file::serialized_reader::SerializedFileReader;
-    use std::fs::File;
-    use std::sync::Arc;
 
     #[tokio::test]
     async fn test_partition_not_written_to_parquet() {
@@ -460,7 +436,7 @@ mod tests {
         let schema = get_delta_schema();
         let path = table_dir.path().to_str().unwrap().to_string();
 
-        let arrow_schema = <ArrowSchema as TryFrom<&Schema>>::try_from(&schema).unwrap();
+        let arrow_schema = <ArrowSchema as TryFrom<&StructType>>::try_from(&schema).unwrap();
         let mut writer = JsonWriter::try_new(
             path.clone(),
             Arc::new(arrow_schema),
@@ -522,15 +498,15 @@ mod tests {
                 &record_batch
             )
             .unwrap(),
-            HashMap::from([
-                (String::from("col1"), Some(String::from("1"))),
-                (String::from("col2"), Some(String::from("2"))),
-                (String::from("col3"), None),
+            BTreeMap::from([
+                (String::from("col1"), Scalar::Integer(1)),
+                (String::from("col2"), Scalar::Integer(2)),
+                (String::from("col3"), Scalar::Null(DataType::INTEGER)),
             ])
         );
         assert_eq!(
             extract_partition_values(&[String::from("col1")], &record_batch).unwrap(),
-            HashMap::from([(String::from("col1"), Some(String::from("1"))),])
+            BTreeMap::from([(String::from("col1"), Scalar::Integer(1)),])
         );
         assert!(extract_partition_values(&[String::from("col4")], &record_batch).is_err())
     }

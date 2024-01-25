@@ -1,0 +1,68 @@
+{
+  "type": "struct",
+  "fields": [
+    {
+      "name": "a",
+      "type": "integer",
+      "nullable": false,
+      "metadata": {}
+    },
+    {
+      "name": "b",
+      "type": {
+        "type": "struct",
+        "fields": [
+          {
+            "name": "d",
+            "type": "integer",
+            "nullable": false,
+            "metadata": {}
+          }
+        ]
+      },
+      "nullable": true,
+      "metadata": {}
+    },
+    {
+      "name": "c",
+      "type": {
+        "type": "array",
+        "elementType": "integer",
+        "containsNull": false
+      },
+      "nullable": true,
+      "metadata": {}
+    },
+    {
+      "name": "e",
+      "type": {
+        "type": "array",
+        "elementType": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "d",
+              "type": "integer",
+              "nullable": false,
+              "metadata": {}
+            }
+          ]
+        },
+        "containsNull": true
+      },
+      "nullable": true,
+      "metadata": {}
+    },
+    {
+      "name": "f",
+      "type": {
+        "type": "map",
+        "keyType": "string",
+        "valueType": "string",
+        "valueContainsNull": true
+      },
+      "nullable": true,
+      "metadata": {}
+    }
+  ]
+}

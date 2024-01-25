@@ -16,11 +16,11 @@ use arrow_array::{
 use arrow_schema::{DataType, Field, Fields, TimeUnit};
 use itertools::Itertools;
 
+use super::config::ColumnMappingMode;
 use super::state::DeltaTableState;
 use crate::errors::DeltaTableError;
+use crate::kernel::{Add, DataType as DeltaDataType, StructType};
 use crate::protocol::{ColumnCountStat, ColumnValueStat, Stats};
-use crate::SchemaDataType;
-use crate::SchemaTypeStruct;
 
 impl DeltaTableState {
     /// Get an [arrow::record_batch::RecordBatch] containing add action data.
@@ -54,27 +54,22 @@ impl DeltaTableState {
         &self,
         flatten: bool,
     ) -> Result<arrow::record_batch::RecordBatch, DeltaTableError> {
+        let files = self.file_actions()?;
         let mut paths = arrow::array::StringBuilder::with_capacity(
-            self.files().len(),
-            self.files().iter().map(|add| add.path.len()).sum(),
+            files.len(),
+            files.iter().map(|add| add.path.len()).sum(),
         );
-        for action in self.files() {
+        for action in &files {
             paths.append_value(&action.path);
         }
 
-        let size = self
-            .files()
-            .iter()
-            .map(|file| file.size)
-            .collect::<Int64Array>();
-        let mod_time: TimestampMillisecondArray = self
-            .files()
+        let size = files.iter().map(|file| file.size).collect::<Int64Array>();
+        let mod_time: TimestampMillisecondArray = files
             .iter()
             .map(|file| file.modification_time)
             .collect::<Vec<i64>>()
             .into();
-        let data_change = self
-            .files()
+        let data_change = files
             .iter()
             .map(|file| Some(file.data_change))
             .collect::<BooleanArray>();
@@ -86,10 +81,10 @@ impl DeltaTableState {
             (Cow::Borrowed("data_change"), Arc::new(data_change)),
         ];
 
-        let metadata = self.current_metadata().ok_or(DeltaTableError::NoMetadata)?;
+        let metadata = self.metadata();
 
         if !metadata.partition_columns.is_empty() {
-            let partition_cols_batch = self.partition_columns_as_batch(flatten)?;
+            let partition_cols_batch = self.partition_columns_as_batch(flatten, &files)?;
             arrays.extend(
                 partition_cols_batch
                     .schema()
@@ -100,7 +95,7 @@ impl DeltaTableState {
             )
         }
 
-        if self.files().iter().any(|add| add.stats.is_some()) {
+        if files.iter().any(|add| add.stats.is_some()) {
             let stats = self.stats_as_batch(flatten)?;
             arrays.extend(
                 stats
@@ -111,8 +106,8 @@ impl DeltaTableState {
                     .zip(stats.columns().iter().map(Arc::clone)),
             );
         }
-        if self.files().iter().any(|add| add.deletion_vector.is_some()) {
-            let delvs = self.deletion_vectors_as_batch(flatten)?;
+        if files.iter().any(|add| add.deletion_vector.is_some()) {
+            let delvs = self.deletion_vectors_as_batch(flatten, &files)?;
             arrays.extend(
                 delvs
                     .schema()
@@ -122,13 +117,13 @@ impl DeltaTableState {
                     .zip(delvs.columns().iter().map(Arc::clone)),
             );
         }
-        if self.files().iter().any(|add| {
+        if files.iter().any(|add| {
             add.tags
                 .as_ref()
                 .map(|tags| !tags.is_empty())
                 .unwrap_or(false)
         }) {
-            let tags = self.tags_as_batch(flatten)?;
+            let tags = self.tags_as_batch(flatten, &files)?;
             arrays.extend(
                 tags.schema()
                     .fields
@@ -144,16 +139,18 @@ impl DeltaTableState {
     fn partition_columns_as_batch(
         &self,
         flatten: bool,
+        files: &Vec<Add>,
     ) -> Result<arrow::record_batch::RecordBatch, DeltaTableError> {
-        let metadata = self.current_metadata().ok_or(DeltaTableError::NoMetadata)?;
-
+        let metadata = self.metadata();
+        let column_mapping_mode = self.table_config().column_mapping_mode();
         let partition_column_types: Vec<arrow::datatypes::DataType> = metadata
             .partition_columns
             .iter()
             .map(
                 |name| -> Result<arrow::datatypes::DataType, DeltaTableError> {
-                    let field = metadata.schema.get_field_with_name(name)?;
-                    Ok(field.get_type().try_into()?)
+                    let schema = metadata.schema()?;
+                    let field = schema.field_with_name(name)?;
+                    Ok(field.data_type().try_into()?)
                 },
             )
             .collect::<Result<_, DeltaTableError>>()?;
@@ -168,13 +165,44 @@ impl DeltaTableState {
             })
             .collect::<HashMap<&str, _>>();
 
+        let physical_name_to_logical_name = match column_mapping_mode {
+            ColumnMappingMode::None => HashMap::with_capacity(0), // No column mapping, no need for this HashMap
+            ColumnMappingMode::Id | ColumnMappingMode::Name => metadata
+                .partition_columns
+                .iter()
+                .map(|name| -> Result<_, DeltaTableError> {
+                    let physical_name = self
+                        .schema()
+                        .field_with_name(name)
+                        .or(Err(DeltaTableError::MetadataError(format!(
+                            "Invalid partition column {0}",
+                            name
+                        ))))?
+                        .physical_name()?
+                        .to_string();
+                    Ok((physical_name, name.as_str()))
+                })
+                .collect::<Result<HashMap<String, &str>, DeltaTableError>>()?,
+        };
         // Append values
-        for action in self.files() {
+        for action in files {
             for (name, maybe_value) in action.partition_values.iter() {
+                let logical_name = match column_mapping_mode {
+                    ColumnMappingMode::None => name.as_str(),
+                    ColumnMappingMode::Id | ColumnMappingMode::Name => {
+                        physical_name_to_logical_name.get(name.as_str()).ok_or(
+                            DeltaTableError::MetadataError(format!(
+                                "Invalid partition column {0}",
+                                name
+                            )),
+                        )?
+                    }
+                };
                 if let Some(value) = maybe_value {
-                    builders.get_mut(name.as_str()).unwrap().append_value(value);
+                    builders.get_mut(logical_name).unwrap().append_value(value);
+                // Unwrap is safe here since the name exists in the mapping where we check validity already
                 } else {
-                    builders.get_mut(name.as_str()).unwrap().append_null();
+                    builders.get_mut(logical_name).unwrap().append_null();
                 }
             }
         }
@@ -229,9 +257,9 @@ impl DeltaTableState {
     fn tags_as_batch(
         &self,
         flatten: bool,
+        files: &Vec<Add>,
     ) -> Result<arrow::record_batch::RecordBatch, DeltaTableError> {
-        let tag_keys: HashSet<&str> = self
-            .files()
+        let tag_keys: HashSet<&str> = files
             .iter()
             .flat_map(|add| add.tags.as_ref().map(|tags| tags.keys()))
             .flatten()
@@ -242,12 +270,12 @@ impl DeltaTableState {
             .map(|&key| {
                 (
                     key,
-                    arrow::array::StringBuilder::with_capacity(self.files().len(), 64),
+                    arrow::array::StringBuilder::with_capacity(files.len(), 64),
                 )
             })
             .collect();
 
-        for add in self.files() {
+        for add in files {
             for &key in &tag_keys {
                 if let Some(value) = add
                     .tags
@@ -289,17 +317,18 @@ impl DeltaTableState {
     fn deletion_vectors_as_batch(
         &self,
         flatten: bool,
+        files: &Vec<Add>,
     ) -> Result<arrow::record_batch::RecordBatch, DeltaTableError> {
-        let capacity = self.files().len();
+        let capacity = files.len();
         let mut storage_type = arrow::array::StringBuilder::with_capacity(capacity, 1);
         let mut path_or_inline_div = arrow::array::StringBuilder::with_capacity(capacity, 64);
         let mut offset = arrow::array::Int32Builder::with_capacity(capacity);
         let mut size_in_bytes = arrow::array::Int32Builder::with_capacity(capacity);
         let mut cardinality = arrow::array::Int64Builder::with_capacity(capacity);
 
-        for add in self.files() {
+        for add in files {
             if let Some(value) = &add.deletion_vector {
-                storage_type.append_value(value.storage_type.to_string());
+                storage_type.append_value(&value.storage_type);
                 path_or_inline_div.append_value(value.path_or_inline_dv.clone());
                 if let Some(ofs) = value.offset {
                     offset.append_value(ofs);
@@ -368,7 +397,7 @@ impl DeltaTableState {
         flatten: bool,
     ) -> Result<arrow::record_batch::RecordBatch, DeltaTableError> {
         let stats: Vec<Option<Stats>> = self
-            .files()
+            .file_actions()?
             .iter()
             .map(|f| {
                 f.get_stats()
@@ -382,8 +411,7 @@ impl DeltaTableState {
                 .map(|maybe_stat| maybe_stat.as_ref().map(|stat| stat.num_records))
                 .collect::<Vec<Option<i64>>>(),
         );
-        let metadata = self.current_metadata().ok_or(DeltaTableError::NoMetadata)?;
-        let schema = &metadata.schema;
+        let schema = self.schema();
 
         #[derive(Debug)]
         struct ColStats<'a> {
@@ -415,7 +443,7 @@ impl DeltaTableState {
         };
 
         let mut columnar_stats: Vec<ColStats> = SchemaLeafIterator::new(schema)
-            .filter(|(_path, datatype)| !matches!(datatype, SchemaDataType::r#struct(_)))
+            .filter(|(_path, datatype)| !matches!(datatype, DeltaDataType::Struct(_)))
             .map(|(path, datatype)| -> Result<ColStats, DeltaTableError> {
                 let null_count = stats
                     .iter()
@@ -432,7 +460,7 @@ impl DeltaTableState {
                 let arrow_type: arrow::datatypes::DataType = datatype.try_into()?;
 
                 // Min and max are collected for primitive values, not list or maps
-                let min_values = if matches!(datatype, SchemaDataType::primitive(_)) {
+                let min_values = if matches!(datatype, DeltaDataType::Primitive(_)) {
                     let min_values = stats
                         .iter()
                         .flat_map(|maybe_stat| {
@@ -449,7 +477,7 @@ impl DeltaTableState {
                     None
                 };
 
-                let max_values = if matches!(datatype, SchemaDataType::primitive(_)) {
+                let max_values = if matches!(datatype, DeltaDataType::Primitive(_)) {
                     let max_values = stats
                         .iter()
                         .flat_map(|maybe_stat| {
@@ -636,33 +664,33 @@ fn resolve_column_count_stat(
 }
 
 struct SchemaLeafIterator<'a> {
-    fields_remaining: VecDeque<(Vec<&'a str>, &'a SchemaDataType)>,
+    fields_remaining: VecDeque<(Vec<&'a str>, &'a DeltaDataType)>,
 }
 
 impl<'a> SchemaLeafIterator<'a> {
-    fn new(schema: &'a SchemaTypeStruct) -> Self {
+    fn new(schema: &'a StructType) -> Self {
         SchemaLeafIterator {
             fields_remaining: schema
-                .get_fields()
+                .fields()
                 .iter()
-                .map(|field| (vec![field.get_name()], field.get_type()))
+                .map(|field| (vec![field.name().as_ref()], field.data_type()))
                 .collect(),
         }
     }
 }
 
 impl<'a> std::iter::Iterator for SchemaLeafIterator<'a> {
-    type Item = (Vec<&'a str>, &'a SchemaDataType);
+    type Item = (Vec<&'a str>, &'a DeltaDataType);
 
     fn next(&mut self) -> Option<Self::Item> {
         if let Some((path, datatype)) = self.fields_remaining.pop_front() {
-            if let SchemaDataType::r#struct(struct_type) = datatype {
+            if let DeltaDataType::Struct(struct_type) = datatype {
                 // push child fields to front
-                for field in struct_type.get_fields() {
+                for field in struct_type.fields() {
                     let mut new_path = path.clone();
-                    new_path.push(field.get_name());
+                    new_path.push(field.name());
                     self.fields_remaining
-                        .push_front((new_path, field.get_type()));
+                        .push_front((new_path, field.data_type()));
                 }
             };
 

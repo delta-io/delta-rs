@@ -1,8 +1,8 @@
-#![cfg(all(feature = "integration_test", feature = "datafusion"))]
+#![cfg(feature = "datafusion")]
 
 use arrow::array::Int64Array;
-use common::datafusion::context_with_delta_table_factory;
-use deltalake_core::test_utils::{IntegrationContext, StorageIntegration, TestResult, TestTables};
+use deltalake_test::datafusion::*;
+use deltalake_test::utils::*;
 use serial_test::serial;
 
 use std::collections::{HashMap, HashSet};
@@ -10,11 +10,10 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use arrow::array::*;
-use arrow::datatypes::{
+use arrow::record_batch::RecordBatch;
+use arrow_schema::{
     DataType as ArrowDataType, Field as ArrowField, Schema as ArrowSchema, TimeUnit,
 };
-use arrow::record_batch::RecordBatch;
-use arrow_schema::{DataType, Field};
 use datafusion::assert_batches_sorted_eq;
 use datafusion::datasource::physical_plan::ParquetExec;
 use datafusion::datasource::TableProvider;
@@ -32,26 +31,29 @@ use datafusion_proto::bytes::{
 use url::Url;
 
 use deltalake_core::delta_datafusion::{DeltaPhysicalCodec, DeltaScan};
+use deltalake_core::kernel::{DataType, MapType, PrimitiveType, StructField, StructType};
+use deltalake_core::logstore::logstore_for;
 use deltalake_core::operations::create::CreateBuilder;
 use deltalake_core::protocol::SaveMode;
-use deltalake_core::storage::DeltaObjectStore;
 use deltalake_core::writer::{DeltaWriter, RecordBatchWriter};
 use deltalake_core::{
+    open_table,
     operations::{write::WriteBuilder, DeltaOps},
-    DeltaTable, DeltaTableError, Schema, SchemaDataType, SchemaField,
+    DeltaTable, DeltaTableError,
 };
 use std::error::Error;
 
-mod common;
-
 mod local {
-    use deltalake::{writer::JsonWriter, SchemaTypeMap};
+    use datafusion::common::stats::Precision;
+    use deltalake_core::writer::JsonWriter;
 
     use super::*;
     #[tokio::test]
     #[serial]
     async fn test_datafusion_local() -> TestResult {
-        test_datafusion(StorageIntegration::Local).await
+        let storage = Box::<LocalStorageIntegration>::default();
+        let context = IntegrationContext::new(storage)?;
+        test_datafusion(&context).await
     }
 
     fn get_scanned_files(node: &dyn ExecutionPlan) -> HashSet<Label> {
@@ -96,14 +98,14 @@ mod local {
         let table_dir = tempfile::tempdir().unwrap();
         let table_path = table_dir.path();
         let table_uri = table_path.to_str().unwrap().to_string();
-        let table_schema: Schema = batches[0].schema().try_into().unwrap();
+        let table_schema: StructType = batches[0].schema().try_into().unwrap();
 
         let mut table = DeltaOps::try_from_uri(table_uri)
             .await
             .unwrap()
             .create()
             .with_save_mode(SaveMode::Ignore)
-            .with_columns(table_schema.get_fields().clone())
+            .with_columns(table_schema.fields().clone())
             .with_partition_columns(partitions)
             .await
             .unwrap();
@@ -124,7 +126,7 @@ mod local {
         let ctx = context_with_delta_table_factory();
 
         let mut d = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        d.push("tests/data/delta-0.8.0-partitioned");
+        d.push("../deltalake-test/tests/data/delta-0.8.0-partitioned");
         let sql = format!(
             "CREATE EXTERNAL TABLE demo STORED AS DELTATABLE LOCATION '{}'",
             d.to_str().unwrap()
@@ -153,7 +155,7 @@ mod local {
     #[tokio::test]
     async fn test_datafusion_simple_query_partitioned() -> Result<()> {
         let ctx = SessionContext::new();
-        let table = deltalake::open_table("./tests/data/delta-0.8.0-partitioned")
+        let table = open_table("../deltalake-test/tests/data/delta-0.8.0-partitioned")
             .await
             .unwrap();
         ctx.register_table("demo", Arc::new(table))?;
@@ -182,7 +184,7 @@ mod local {
         let source_scan_bytes = {
             let ctx = SessionContext::new();
             let state = ctx.state();
-            let source_table = deltalake::open_table("./tests/data/delta-0.8.0-date").await?;
+            let source_table = open_table("../deltalake-test/tests/data/delta-0.8.0-date").await?;
             let source_scan = source_table.scan(&state, None, &[], None).await?;
             physical_plan_to_bytes_with_extension_codec(source_scan, &DeltaPhysicalCodec {})?
         };
@@ -195,9 +197,9 @@ mod local {
             &ctx,
             &DeltaPhysicalCodec {},
         )?;
-        let fields = Schema::try_from(source_scan.schema())
+        let fields = StructType::try_from(source_scan.schema())
             .unwrap()
-            .get_fields()
+            .fields()
             .clone();
 
         // Create target Delta Table
@@ -209,36 +211,41 @@ mod local {
 
         // Trying to execute the write from the input plan without providing Datafusion with a session
         // state containing the referenced object store in the registry results in an error.
-        assert!(
-            WriteBuilder::new(target_table.object_store(), target_table.state.clone())
-                .with_input_execution_plan(source_scan.clone())
-                .await
-                .unwrap_err()
-                .to_string()
-                .contains("No suitable object store found for delta-rs://")
-        );
+        assert!(WriteBuilder::new(
+            target_table.log_store(),
+            target_table.snapshot().ok().cloned()
+        )
+        .with_input_execution_plan(source_scan.clone())
+        .await
+        .unwrap_err()
+        .to_string()
+        .contains("No suitable object store found for delta-rs://"));
 
         // Register the missing source table object store
-        let source_uri = source_scan
-            .as_any()
-            .downcast_ref::<DeltaScan>()
-            .unwrap()
-            .table_uri
-            .clone();
-        let source_location = Url::parse(&source_uri).unwrap();
-        let source_store = DeltaObjectStore::try_new(source_location, HashMap::new()).unwrap();
+        let source_uri = Url::parse(
+            &source_scan
+                .as_any()
+                .downcast_ref::<DeltaScan>()
+                .unwrap()
+                .table_uri
+                .clone(),
+        )
+        .unwrap();
+        let source_store = logstore_for(source_uri, HashMap::new()).unwrap();
         let object_store_url = source_store.object_store_url();
         let source_store_url: &Url = object_store_url.as_ref();
         state
             .runtime_env()
-            .register_object_store(source_store_url, Arc::from(source_store));
+            .register_object_store(source_store_url, source_store.object_store());
 
         // Execute write to the target table with the proper state
-        let target_table =
-            WriteBuilder::new(target_table.object_store(), target_table.state.clone())
-                .with_input_execution_plan(source_scan)
-                .with_input_session_state(state)
-                .await?;
+        let target_table = WriteBuilder::new(
+            target_table.log_store(),
+            target_table.snapshot().ok().cloned(),
+        )
+        .with_input_execution_plan(source_scan)
+        .with_input_session_state(state)
+        .await?;
         ctx.register_table("target", Arc::new(target_table))?;
 
         // Check results
@@ -262,7 +269,7 @@ mod local {
     #[tokio::test]
     async fn test_datafusion_date_column() -> Result<()> {
         let ctx = SessionContext::new();
-        let table = deltalake::open_table("./tests/data/delta-0.8.0-date")
+        let table = open_table("../deltalake-test/tests/data/delta-0.8.0-date")
             .await
             .unwrap();
         ctx.register_table("dates", Arc::new(table))?;
@@ -283,68 +290,148 @@ mod local {
 
     #[tokio::test]
     async fn test_datafusion_stats() -> Result<()> {
-        let table = deltalake::open_table("./tests/data/delta-0.8.0")
+        // Validate a table that contains statisitics for all files
+        let table = open_table("../deltalake-test/tests/data/delta-0.8.0")
             .await
             .unwrap();
-        let statistics = table.state.datafusion_table_statistics();
+        let statistics = table.snapshot()?.datafusion_table_statistics().unwrap();
 
-        assert_eq!(statistics.num_rows, Some(4),);
-
-        assert_eq!(statistics.total_byte_size, Some(440 + 440));
+        assert_eq!(statistics.num_rows, Precision::Exact(4));
 
         assert_eq!(
-            statistics
-                .column_statistics
-                .clone()
-                .unwrap()
-                .iter()
-                .map(|x| x.null_count)
-                .collect::<Vec<Option<usize>>>(),
-            vec![Some(0)],
+            statistics.total_byte_size,
+            Precision::Inexact((440 + 440) as usize)
+        );
+        let column_stats = statistics.column_statistics.first().unwrap();
+        assert_eq!(column_stats.null_count, Precision::Exact(0));
+        assert_eq!(
+            column_stats.max_value,
+            Precision::Exact(ScalarValue::from(4_i32))
+        );
+        assert_eq!(
+            column_stats.min_value,
+            Precision::Exact(ScalarValue::from(0_i32))
         );
 
         let ctx = SessionContext::new();
         ctx.register_table("test_table", Arc::new(table))?;
-
-        let batches = ctx
+        let actual = ctx
             .sql("SELECT max(value), min(value) FROM test_table")
             .await?
             .collect()
             .await?;
 
-        assert_eq!(batches.len(), 1);
-        let batch = &batches[0];
-        assert_eq!(
-            batch.column(0).as_ref(),
-            Arc::new(Int32Array::from(vec![4])).as_ref(),
-        );
+        let expected = vec![
+            "+-----------------------+-----------------------+",
+            "| MAX(test_table.value) | MIN(test_table.value) |",
+            "+-----------------------+-----------------------+",
+            "| 4                     | 0                     |",
+            "+-----------------------+-----------------------+",
+        ];
+        assert_batches_sorted_eq!(&expected, &actual);
+
+        // Validate a table that does not contain column statisitics
+        let table = open_table("../deltalake-test/tests/data/delta-0.2.0")
+            .await
+            .unwrap();
+        let statistics = table.snapshot()?.datafusion_table_statistics().unwrap();
+
+        assert_eq!(statistics.num_rows, Precision::Absent);
 
         assert_eq!(
-            batch.column(1).as_ref(),
-            Arc::new(Int32Array::from(vec![0])).as_ref(),
+            statistics.total_byte_size,
+            Precision::Inexact((400 + 404 + 396) as usize)
+        );
+        let column_stats = statistics.column_statistics.first().unwrap();
+        assert_eq!(column_stats.null_count, Precision::Absent);
+        assert_eq!(column_stats.max_value, Precision::Absent);
+        assert_eq!(column_stats.min_value, Precision::Absent);
+
+        ctx.register_table("test_table2", Arc::new(table))?;
+        let actual = ctx
+            .sql("SELECT max(value), min(value) FROM test_table2")
+            .await?
+            .collect()
+            .await?;
+
+        let expected = vec![
+            "+------------------------+------------------------+",
+            "| MAX(test_table2.value) | MIN(test_table2.value) |",
+            "+------------------------+------------------------+",
+            "| 3                      | 1                      |",
+            "+------------------------+------------------------+",
+        ];
+        assert_batches_sorted_eq!(&expected, &actual);
+
+        // Validate a table that contains nested structures.
+
+        // This table is interesting since it goes through schema evolution.
+        // In particular 'new_column' contains statistics for when it
+        // is introduced (10) but the commit following (11) does not contain
+        // statistics for this column.
+        let table = open_table("../deltalake-test/tests/data/delta-1.2.1-only-struct-stats")
+            .await
+            .unwrap();
+        let schema = table.get_schema().unwrap();
+        let statistics = table.snapshot()?.datafusion_table_statistics().unwrap();
+        assert_eq!(statistics.num_rows, Precision::Exact(12));
+
+        // `new_column` statistics
+        let stats = statistics
+            .column_statistics
+            .get(schema.index_of("new_column").unwrap())
+            .unwrap();
+        assert_eq!(stats.null_count, Precision::Absent);
+        assert_eq!(stats.min_value, Precision::Absent);
+        assert_eq!(stats.max_value, Precision::Absent);
+
+        // `date` statistics
+        let stats = statistics
+            .column_statistics
+            .get(schema.index_of("date").unwrap())
+            .unwrap();
+        assert_eq!(stats.null_count, Precision::Exact(0));
+        // 2022-10-24
+        assert_eq!(
+            stats.min_value,
+            Precision::Exact(ScalarValue::Date32(Some(19289)))
+        );
+        assert_eq!(
+            stats.max_value,
+            Precision::Exact(ScalarValue::Date32(Some(19289)))
         );
 
+        // `timestamp` statistics
+        let stats = statistics
+            .column_statistics
+            .get(schema.index_of("timestamp").unwrap())
+            .unwrap();
+        assert_eq!(stats.null_count, Precision::Exact(0));
+        // 2022-10-24T22:59:32.846Z
         assert_eq!(
-            statistics
-                .column_statistics
-                .clone()
-                .unwrap()
-                .iter()
-                .map(|x| x.max_value.as_ref())
-                .collect::<Vec<Option<&ScalarValue>>>(),
-            vec![Some(&ScalarValue::from(4_i32))],
+            stats.min_value,
+            Precision::Exact(ScalarValue::TimestampMicrosecond(
+                Some(1666652372846000),
+                None
+            ))
+        );
+        // 2022-10-24T22:59:46.083Z
+        assert_eq!(
+            stats.max_value,
+            Precision::Exact(ScalarValue::TimestampMicrosecond(
+                Some(1666652386083000),
+                None
+            ))
         );
 
-        assert_eq!(
-            statistics
-                .column_statistics
-                .clone()
-                .unwrap()
-                .iter()
-                .map(|x| x.min_value.as_ref())
-                .collect::<Vec<Option<&ScalarValue>>>(),
-            vec![Some(&ScalarValue::from(0_i32))],
-        );
+        // `struct_element` statistics
+        let stats = statistics
+            .column_statistics
+            .get(schema.index_of("nested_struct").unwrap())
+            .unwrap();
+        assert_eq!(stats.null_count, Precision::Absent);
+        assert_eq!(stats.min_value, Precision::Absent);
+        assert_eq!(stats.max_value, Precision::Absent);
 
         Ok(())
     }
@@ -735,7 +822,7 @@ mod local {
         assert_eq!(metrics.num_scanned_files(), 1);
 
         // Ensure that tables without stats and partition columns can be pruned for just partitions
-        // let table = deltalake::open_table("./tests/data/delta-0.8.0-null-partition").await?;
+        // let table = open_table("./tests/data/delta-0.8.0-null-partition").await?;
 
         /*
         // Logically this should prune. See above
@@ -765,7 +852,7 @@ mod local {
     #[tokio::test]
     async fn test_datafusion_partitioned_types() -> Result<()> {
         let ctx = SessionContext::new();
-        let table = deltalake::open_table("./tests/data/delta-2.2.0-partitioned-types")
+        let table = open_table("../deltalake-test/tests/data/delta-2.2.0-partitioned-types")
             .await
             .unwrap();
         ctx.register_table("demo", Arc::new(table))?;
@@ -786,14 +873,14 @@ mod local {
 
         let expected_schema = ArrowSchema::new(vec![
             ArrowField::new("c3", ArrowDataType::Int32, true),
-            ArrowField::new("c1", ArrowDataType::Int32, false),
+            ArrowField::new("c1", ArrowDataType::Int32, true),
             ArrowField::new(
                 "c2",
                 ArrowDataType::Dictionary(
                     Box::new(ArrowDataType::UInt16),
                     Box::new(ArrowDataType::Utf8),
                 ),
-                false,
+                true,
             ),
         ]);
 
@@ -814,7 +901,7 @@ mod local {
     #[tokio::test]
     async fn test_datafusion_scan_timestamps() -> Result<()> {
         let ctx = SessionContext::new();
-        let table = deltalake::open_table("./tests/data/table_with_edge_timestamps")
+        let table = open_table("../deltalake-test/tests/data/table_with_edge_timestamps")
             .await
             .unwrap();
         ctx.register_table("demo", Arc::new(table))?;
@@ -838,7 +925,7 @@ mod local {
     #[tokio::test]
     async fn test_issue_1292_datafusion_sql_projection() -> Result<()> {
         let ctx = SessionContext::new();
-        let table = deltalake::open_table("./tests/data/http_requests")
+        let table = open_table("../deltalake-test/tests/data/http_requests")
             .await
             .unwrap();
         ctx.register_table("http_requests", Arc::new(table))?;
@@ -869,7 +956,7 @@ mod local {
     #[tokio::test]
     async fn test_issue_1291_datafusion_sql_partitioned_data() -> Result<()> {
         let ctx = SessionContext::new();
-        let table = deltalake::open_table("./tests/data/http_requests")
+        let table = open_table("../deltalake-test//tests/data/http_requests")
             .await
             .unwrap();
         ctx.register_table("http_requests", Arc::new(table))?;
@@ -902,7 +989,7 @@ mod local {
     #[tokio::test]
     async fn test_issue_1374() -> Result<()> {
         let ctx = SessionContext::new();
-        let table = deltalake::open_table("./tests/data/issue_1374")
+        let table = open_table("../deltalake-test/tests/data/issue_1374")
             .await
             .unwrap();
         ctx.register_table("t", Arc::new(table))?;
@@ -939,24 +1026,24 @@ mod local {
     #[tokio::test]
     async fn test_issue_1619_parquet_panic_using_map_type() -> Result<()> {
         let _ = tokio::fs::remove_dir_all("./tests/data/issue-1619").await;
-        let fields: Vec<SchemaField> = vec![SchemaField::new(
+        let fields: Vec<StructField> = vec![StructField::new(
             "metadata".to_string(),
-            SchemaDataType::map(SchemaTypeMap::new(
-                Box::new(SchemaDataType::primitive("string".to_string())),
-                Box::new(SchemaDataType::primitive("string".to_string())),
+            DataType::Map(Box::new(MapType::new(
+                DataType::Primitive(PrimitiveType::String),
+                DataType::Primitive(PrimitiveType::String),
                 true,
-            )),
+            ))),
             true,
-            HashMap::new(),
         )];
-        let schema = deltalake::Schema::new(fields);
-        let table = deltalake::DeltaTableBuilder::from_uri("./tests/data/issue-1619").build()?;
+        let schema = StructType::new(fields);
+        let table =
+            deltalake_core::DeltaTableBuilder::from_uri("./tests/data/issue-1619").build()?;
         let _ = DeltaOps::from(table)
             .create()
-            .with_columns(schema.get_fields().to_owned())
+            .with_columns(schema.fields().to_owned())
             .await?;
 
-        let mut table = deltalake::open_table("./tests/data/issue-1619").await?;
+        let mut table = open_table("./tests/data/issue-1619").await?;
 
         let mut writer = JsonWriter::for_table(&table).unwrap();
         writer
@@ -986,51 +1073,10 @@ mod local {
     }
 }
 
-#[cfg(any(feature = "s3", feature = "s3-native-tls"))]
-mod s3 {
-    use super::*;
-    #[tokio::test]
-    #[serial]
-    async fn test_datafusion_aws() -> TestResult {
-        test_datafusion(StorageIntegration::Amazon).await
-    }
-}
-
-#[cfg(feature = "azure")]
-mod azure {
-    use super::*;
-    #[tokio::test]
-    #[serial]
-    async fn test_datafusion_azure() -> TestResult {
-        test_datafusion(StorageIntegration::Microsoft).await
-    }
-}
-
-#[cfg(feature = "gcs")]
-mod gcs {
-    use super::*;
-    #[tokio::test]
-    #[serial]
-    async fn test_datafusion_gcp() -> TestResult {
-        test_datafusion(StorageIntegration::Google).await
-    }
-}
-
-#[cfg(feature = "hdfs")]
-mod hdfs {
-    use super::*;
-    #[tokio::test]
-    #[serial]
-    async fn test_datafusion_hdfs() -> TestResult {
-        Ok(test_datafusion(StorageIntegration::Hdfs).await?)
-    }
-}
-
-async fn test_datafusion(storage: StorageIntegration) -> TestResult {
-    let context = IntegrationContext::new(storage)?;
+async fn test_datafusion(context: &IntegrationContext) -> TestResult {
     context.load_table(TestTables::Simple).await?;
 
-    simple_query(&context).await?;
+    simple_query(context).await?;
 
     Ok(())
 }
@@ -1038,14 +1084,7 @@ async fn test_datafusion(storage: StorageIntegration) -> TestResult {
 async fn simple_query(context: &IntegrationContext) -> TestResult {
     let table_uri = context.uri_for_table(TestTables::Simple);
 
-    let dynamo_lock_option = "'DYNAMO_LOCK_OWNER_NAME' 's3::deltars/simple'".to_string();
-    let options = match context.integration {
-        StorageIntegration::Amazon => format!("'AWS_ALLOW_HTTP' '1', {dynamo_lock_option}"),
-        StorageIntegration::Microsoft => {
-            format!("'AZURE_STORAGE_ALLOW_HTTP' '1', {dynamo_lock_option}")
-        }
-        _ => dynamo_lock_option,
-    };
+    let options = "'DYNAMO_LOCK_OWNER_NAME' 's3::deltars/simple'".to_string();
 
     let sql = format!(
         "CREATE EXTERNAL TABLE demo \
@@ -1082,21 +1121,19 @@ mod date_partitions {
 
     async fn setup_test() -> Result<DeltaTable, Box<dyn Error>> {
         let columns = vec![
-            SchemaField::new(
+            StructField::new(
                 "id".to_owned(),
-                SchemaDataType::primitive("integer".to_owned()),
+                DataType::Primitive(PrimitiveType::Integer),
                 false,
-                HashMap::new(),
             ),
-            SchemaField::new(
+            StructField::new(
                 "date".to_owned(),
-                SchemaDataType::primitive("date".to_owned()),
+                DataType::Primitive(PrimitiveType::Date),
                 false,
-                HashMap::new(),
             ),
         ];
 
-        let tmp_dir = tempdir::TempDir::new("opt_table").unwrap();
+        let tmp_dir = tempfile::tempdir().unwrap();
         let table_uri = tmp_dir.path().to_str().to_owned().unwrap();
         let dt = DeltaOps::try_from_uri(table_uri)
             .await?
@@ -1114,8 +1151,8 @@ mod date_partitions {
 
         Ok(RecordBatch::try_new(
             Arc::new(ArrowSchema::new(vec![
-                Field::new("id", DataType::Int32, false),
-                Field::new("date", DataType::Date32, false),
+                ArrowField::new("id", ArrowDataType::Int32, false),
+                ArrowField::new("date", ArrowDataType::Date32, false),
             ])),
             vec![Arc::new(ids_array), Arc::new(date_array)],
         )?)

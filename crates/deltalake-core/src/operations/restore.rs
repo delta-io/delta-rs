@@ -10,7 +10,8 @@
 //! 5) If ignore_missing_files option is false (default value) check availability of AddFile
 //! in file system.
 //! 6) Commit Protocol, all RemoveFile and AddFile actions
-//! into delta log using `try_commit_transaction` (commit will be failed in case of parallel transaction)
+//! into delta log using `LogStore::write_commit_entry` (commit will be failed in case of parallel transaction)
+//! TODO: comment is outdated
 //! 7) If table was modified in parallel then ignore restore and raise exception.
 //!
 //! # Example
@@ -20,7 +21,7 @@
 //! ````
 
 use std::cmp::max;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::ops::BitXor;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -30,9 +31,10 @@ use object_store::path::Path;
 use object_store::ObjectStore;
 use serde::Serialize;
 
-use crate::operations::transaction::{prepare_commit, try_commit_transaction, TransactionError};
-use crate::protocol::{Action, Add, DeltaOperation, Protocol, Remove};
-use crate::storage::ObjectStoreRef;
+use crate::kernel::{Action, Add, Protocol, Remove};
+use crate::logstore::LogStoreRef;
+use crate::operations::transaction::{prepare_commit, TransactionError};
+use crate::protocol::DeltaOperation;
 use crate::table::state::DeltaTableState;
 use crate::{DeltaResult, DeltaTable, DeltaTableConfig, DeltaTableError, ObjectStoreError};
 
@@ -73,7 +75,7 @@ pub struct RestoreBuilder {
     /// A snapshot of the to-be-restored table's state
     snapshot: DeltaTableState,
     /// Delta object store for handling data files
-    store: ObjectStoreRef,
+    log_store: LogStoreRef,
     /// Version to restore
     version_to_restore: Option<i64>,
     /// Datetime to restore
@@ -82,18 +84,21 @@ pub struct RestoreBuilder {
     ignore_missing_files: bool,
     /// Protocol downgrade allowed
     protocol_downgrade_allowed: bool,
+    /// Additional metadata to be added to commit
+    app_metadata: Option<HashMap<String, serde_json::Value>>,
 }
 
 impl RestoreBuilder {
     /// Create a new [`RestoreBuilder`]
-    pub fn new(store: ObjectStoreRef, snapshot: DeltaTableState) -> Self {
+    pub fn new(log_store: LogStoreRef, snapshot: DeltaTableState) -> Self {
         Self {
             snapshot,
-            store,
+            log_store,
             version_to_restore: None,
             datetime_to_restore: None,
             ignore_missing_files: false,
             protocol_downgrade_allowed: false,
+            app_metadata: None,
         }
     }
 
@@ -121,15 +126,25 @@ impl RestoreBuilder {
         self.protocol_downgrade_allowed = protocol_downgrade_allowed;
         self
     }
+
+    /// Additional metadata to be added to commit info
+    pub fn with_metadata(
+        mut self,
+        metadata: impl IntoIterator<Item = (String, serde_json::Value)>,
+    ) -> Self {
+        self.app_metadata = Some(HashMap::from_iter(metadata));
+        self
+    }
 }
 
 async fn execute(
-    object_store: ObjectStoreRef,
+    log_store: LogStoreRef,
     snapshot: DeltaTableState,
     version_to_restore: Option<i64>,
     datetime_to_restore: Option<DateTime<Utc>>,
     ignore_missing_files: bool,
     protocol_downgrade_allowed: bool,
+    app_metadata: Option<HashMap<String, serde_json::Value>>,
 ) -> DeltaResult<RestoreMetrics> {
     if !(version_to_restore
         .is_none()
@@ -137,7 +152,8 @@ async fn execute(
     {
         return Err(DeltaTableError::from(RestoreError::InvalidRestoreParameter));
     }
-    let mut table = DeltaTable::new(object_store.clone(), DeltaTableConfig::default());
+    let mut table = DeltaTable::new(log_store.clone(), DeltaTableConfig::default());
+
     let version = match datetime_to_restore {
         Some(datetime) => {
             table.load_with_datetime(datetime).await?;
@@ -155,8 +171,8 @@ async fn execute(
             snapshot.version(),
         )));
     }
-    let state_to_restore_files = table.get_state().files().clone();
-    let latest_state_files = snapshot.files().clone();
+    let state_to_restore_files = table.snapshot()?.file_actions()?;
+    let latest_state_files = snapshot.file_actions()?;
     let state_to_restore_files_set =
         HashSet::<Add>::from_iter(state_to_restore_files.iter().cloned());
     let latest_state_files_set = HashSet::<Add>::from_iter(latest_state_files.iter().cloned());
@@ -187,12 +203,14 @@ async fn execute(
                 size: Some(a.size),
                 tags: a.tags,
                 deletion_vector: a.deletion_vector,
+                base_row_id: a.base_row_id,
+                default_row_commit_version: a.default_row_commit_version,
             }
         })
         .collect();
 
     if !ignore_missing_files {
-        check_files_available(object_store.as_ref(), &files_to_add).await?;
+        check_files_available(log_store.object_store().as_ref(), &files_to_add).await?;
     }
 
     let metrics = RestoreMetrics {
@@ -203,44 +221,66 @@ async fn execute(
     let mut actions = vec![];
     let protocol = if protocol_downgrade_allowed {
         Protocol {
-            min_reader_version: table.get_min_reader_version(),
-            min_writer_version: table.get_min_writer_version(),
+            min_reader_version: table.protocol()?.min_reader_version,
+            min_writer_version: table.protocol()?.min_writer_version,
+            writer_features: if snapshot.protocol().min_writer_version < 7 {
+                None
+            } else {
+                table.protocol()?.writer_features.clone()
+            },
+            reader_features: if snapshot.protocol().min_reader_version < 3 {
+                None
+            } else {
+                table.protocol()?.reader_features.clone()
+            },
         }
     } else {
         Protocol {
             min_reader_version: max(
-                table.get_min_reader_version(),
-                snapshot.min_reader_version(),
+                table.protocol()?.min_reader_version,
+                snapshot.protocol().min_reader_version,
             ),
             min_writer_version: max(
-                table.get_min_writer_version(),
-                snapshot.min_writer_version(),
+                table.protocol()?.min_writer_version,
+                snapshot.protocol().min_writer_version,
             ),
+            writer_features: snapshot.protocol().writer_features.clone(),
+            reader_features: snapshot.protocol().reader_features.clone(),
         }
     };
-    actions.push(Action::protocol(protocol));
-    actions.extend(files_to_add.into_iter().map(Action::add));
-    actions.extend(files_to_remove.into_iter().map(Action::remove));
+    let mut app_metadata = match app_metadata {
+        Some(meta) => meta,
+        None => HashMap::new(),
+    };
+
+    app_metadata.insert("readVersion".to_owned(), snapshot.version().into());
+
+    if let Ok(map) = serde_json::to_value(&metrics) {
+        app_metadata.insert("operationMetrics".to_owned(), map);
+    }
+
+    actions.push(Action::Protocol(protocol));
+    actions.extend(files_to_add.into_iter().map(Action::Add));
+    actions.extend(files_to_remove.into_iter().map(Action::Remove));
 
     let commit = prepare_commit(
-        object_store.as_ref(),
+        log_store.object_store().as_ref(),
         &DeltaOperation::Restore {
             version: version_to_restore,
             datetime: datetime_to_restore.map(|time| -> i64 { time.timestamp_millis() }),
         },
         &actions,
-        &snapshot,
-        None,
+        Some(app_metadata),
     )
     .await?;
     let commit_version = snapshot.version() + 1;
-    match try_commit_transaction(object_store.as_ref(), &commit, commit_version).await {
+    match log_store.write_commit_entry(commit_version, &commit).await {
         Ok(_) => {}
         Err(err @ TransactionError::VersionAlreadyExists(_)) => {
             return Err(err.into());
         }
         Err(err) => {
-            object_store.delete(&commit).await?;
+            log_store.object_store().delete(&commit).await?;
             return Err(err.into());
         }
     }
@@ -276,15 +316,16 @@ impl std::future::IntoFuture for RestoreBuilder {
 
         Box::pin(async move {
             let metrics = execute(
-                this.store.clone(),
+                this.log_store.clone(),
                 this.snapshot.clone(),
                 this.version_to_restore,
                 this.datetime_to_restore,
                 this.ignore_missing_files,
                 this.protocol_downgrade_allowed,
+                this.app_metadata,
             )
             .await?;
-            let mut table = DeltaTable::new_with_state(this.store, this.snapshot);
+            let mut table = DeltaTable::new_with_state(this.log_store, this.snapshot);
             table.update().await?;
             Ok((table, metrics))
         })

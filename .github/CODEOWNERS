@@ -1,6 +1,7 @@
-rust/ @wjones127 @roeap @rtyler
+crates/ @wjones127 @roeap @rtyler
+delta-inspect/ @wjones127 @rtyler
 proofs/ @houqp
-python/ @wjones127 @fvaleye @roeap
+python/ @wjones127 @fvaleye @roeap @ion-elgreco
 tlaplus/ @houqp
 .github/ @wjones127 @rtyler
 docs/ @MrPowers

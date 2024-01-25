@@ -18,7 +18,7 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v2
         with:
-          python-version: 3.7
+          python-version: 3.8
 
       - name: Check Python
         run: |
@@ -36,20 +36,19 @@ jobs:
         run: make check-rust
 
   test-minimal:
-    name: Python Build (Python 3.7 PyArrow 8.0.0)
+    name: Python Build (Python 3.8 PyArrow 8.0.0)
     runs-on: ubuntu-latest
     env:
       RUSTFLAGS: "-C debuginfo=line-tables-only"
       CARGO_INCREMENTAL: 0
 
-    # use the same environment we have for python release
-    container: quay.io/pypa/manylinux2014_x86_64:2022-09-24-4f086d0
     steps:
-      # actions/checkout@v3 is a node action, which runs on a fairly new
-      # version of node. however, manylinux environment's glibc is too old for
-      # that version of the node. so we will have to use v1 instead, which is a
-      # docker based action.
-      - uses: actions/checkout@v1
+      - uses: actions/checkout@v3
+
+      - name: Setup Python
+        uses: actions/setup-python@v2
+        with:
+          python-version: 3.8
 
       - name: Install latest nightly
         uses: actions-rs/toolchain@v1
@@ -60,14 +59,8 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
-      - name: Enable manylinux Python targets
-        run: |
-          echo "/opt/python/cp37-cp37m/bin" >> $GITHUB_PATH
-
       - name: Build and install deltalake
         run: |
-          # Needed for openssl build
-          yum install -y perl-IPC-Cmd
           pip install virtualenv
           virtualenv venv
           source venv/bin/activate
@@ -125,7 +118,7 @@ jobs:
       - name: Run tests
         run: |
           source venv/bin/activate
-          python -m pytest -m '((s3 or azure) and integration) or not integration and not benchmark'
+          python -m pytest -m '((s3 or azure) and integration) or not integration and not benchmark' --doctest-modules
 
       - name: Test without pandas
         run: |
@@ -133,11 +126,6 @@ jobs:
           pip uninstall --yes pandas
           python -m pytest -m "not pandas and not integration and not benchmark"
           pip install pandas
-
-      - name: Build Sphinx documentation
-        run: |
-          source venv/bin/activate
-          make build-documentation
 
   benchmark:
     name: Python Benchmark
@@ -238,7 +226,7 @@ jobs:
 
     strategy:
       matrix:
-        python-version: ["3.7", "3.8", "3.9", "3.10", "3.11"]
+        python-version: ["3.8", "3.9", "3.10", "3.11", "3.12"]
 
     steps:
       - uses: actions/checkout@v3

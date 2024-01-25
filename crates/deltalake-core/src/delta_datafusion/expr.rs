@@ -31,8 +31,7 @@ use datafusion::execution::context::SessionState;
 use datafusion_common::Result as DFResult;
 use datafusion_common::{config::ConfigOptions, DFSchema, Result, ScalarValue, TableReference};
 use datafusion_expr::{
-    expr::{InList, ScalarUDF},
-    AggregateUDF, Between, BinaryExpr, Cast, Expr, Like, TableSource,
+    expr::InList, AggregateUDF, Between, BinaryExpr, Cast, Expr, GetIndexedField, Like, TableSource,
 };
 use datafusion_sql::planner::{ContextProvider, SqlToRel};
 use sqlparser::ast::escape_quoted_string;
@@ -41,6 +40,8 @@ use sqlparser::parser::Parser;
 use sqlparser::tokenizer::Tokenizer;
 
 use crate::{DeltaResult, DeltaTableError};
+
+use super::DeltaParserOptions;
 
 pub(crate) struct DeltaContextProvider<'a> {
     state: &'a SessionState,
@@ -70,6 +71,10 @@ impl<'a> ContextProvider for DeltaContextProvider<'a> {
     fn get_window_meta(&self, name: &str) -> Option<Arc<datafusion_expr::WindowUDF>> {
         self.state.window_functions().get(name).cloned()
     }
+
+    fn get_table_source(&self, _name: TableReference) -> DFResult<Arc<dyn TableSource>> {
+        unimplemented!()
+    }
 }
 
 /// Parse a string predicate into an `Expr`
@@ -93,7 +98,8 @@ pub(crate) fn parse_predicate_expression(
         })?;
 
     let context_provider = DeltaContextProvider { state: df_state };
-    let sql_to_rel = SqlToRel::new(&context_provider);
+    let sql_to_rel =
+        SqlToRel::new_with_options(&context_provider, DeltaParserOptions::default().into());
 
     Ok(sql_to_rel.sql_to_expr(sql, schema, &mut Default::default())?)
 }
@@ -179,8 +185,7 @@ impl<'a> Display for SqlFormat<'a> {
             Expr::IsNotFalse(expr) => write!(f, "{} IS NOT FALSE", SqlFormat { expr }),
             Expr::IsNotUnknown(expr) => write!(f, "{} IS NOT UNKNOWN", SqlFormat { expr }),
             Expr::BinaryExpr(expr) => write!(f, "{}", BinaryExprFormat { expr }),
-            Expr::ScalarFunction(func) => fmt_function(f, &func.fun.to_string(), false, &func.args),
-            Expr::ScalarUDF(ScalarUDF { fun, args }) => fmt_function(f, &fun.name, false, args),
+            Expr::ScalarFunction(func) => fmt_function(f, func.func_def.name(), false, &func.args),
             Expr::Cast(Cast { expr, data_type }) => {
                 write!(f, "arrow_cast({}, '{}')", SqlFormat { expr }, data_type)
             }
@@ -258,6 +263,28 @@ impl<'a> Display for SqlFormat<'a> {
                     write!(f, "{expr} IN ({})", expr_vec_fmt!(list))
                 }
             }
+            Expr::GetIndexedField(GetIndexedField { expr, field }) => match field {
+                datafusion_expr::GetFieldAccess::NamedStructField { name } => {
+                    write!(
+                        f,
+                        "{}[{}]",
+                        SqlFormat { expr },
+                        ScalarValueFormat { scalar: name }
+                    )
+                }
+                datafusion_expr::GetFieldAccess::ListIndex { key } => {
+                    write!(f, "{}[{}]", SqlFormat { expr }, SqlFormat { expr: key })
+                }
+                datafusion_expr::GetFieldAccess::ListRange { start, stop } => {
+                    write!(
+                        f,
+                        "{}[{}:{}]",
+                        SqlFormat { expr },
+                        SqlFormat { expr: start },
+                        SqlFormat { expr: stop }
+                    )
+                }
+            },
             _ => Err(fmt::Error),
         }
     }
@@ -338,14 +365,14 @@ impl<'a> fmt::Display for ScalarValueFormat<'a> {
 
 #[cfg(test)]
 mod test {
-    use std::collections::HashMap;
-
-    use arrow_schema::DataType;
+    use arrow_schema::DataType as ArrowDataType;
     use datafusion::prelude::SessionContext;
-    use datafusion_common::{DFSchema, ScalarValue};
-    use datafusion_expr::{col, decode, lit, substring, Cast, Expr, ExprSchemable};
+    use datafusion_common::{Column, DFSchema, ScalarValue};
+    use datafusion_expr::{cardinality, col, decode, lit, substring, Cast, Expr, ExprSchemable};
 
-    use crate::{DeltaOps, DeltaTable, Schema, SchemaDataType, SchemaField};
+    use crate::delta_datafusion::DeltaSessionContext;
+    use crate::kernel::{ArrayType, DataType, PrimitiveType, StructField, StructType};
+    use crate::{DeltaOps, DeltaTable};
 
     use super::fmt_expr_to_sql;
 
@@ -366,66 +393,86 @@ mod test {
     }
 
     async fn setup_table() -> DeltaTable {
-        let schema = Schema::new(vec![
-            SchemaField::new(
+        let schema = StructType::new(vec![
+            StructField::new(
                 "id".to_string(),
-                SchemaDataType::primitive("string".to_string()),
+                DataType::Primitive(PrimitiveType::String),
                 true,
-                HashMap::new(),
             ),
-            SchemaField::new(
+            StructField::new(
                 "value".to_string(),
-                SchemaDataType::primitive("integer".to_string()),
+                DataType::Primitive(PrimitiveType::Integer),
                 true,
-                HashMap::new(),
             ),
-            SchemaField::new(
+            StructField::new(
                 "value2".to_string(),
-                SchemaDataType::primitive("integer".to_string()),
+                DataType::Primitive(PrimitiveType::Integer),
                 true,
-                HashMap::new(),
             ),
-            SchemaField::new(
+            StructField::new(
+                "Value3".to_string(),
+                DataType::Primitive(PrimitiveType::Integer),
+                true,
+            ),
+            StructField::new(
                 "modified".to_string(),
-                SchemaDataType::primitive("string".to_string()),
+                DataType::Primitive(PrimitiveType::String),
                 true,
-                HashMap::new(),
             ),
-            SchemaField::new(
+            StructField::new(
                 "active".to_string(),
-                SchemaDataType::primitive("boolean".to_string()),
+                DataType::Primitive(PrimitiveType::Boolean),
                 true,
-                HashMap::new(),
             ),
-            SchemaField::new(
+            StructField::new(
                 "money".to_string(),
-                SchemaDataType::primitive("decimal(12,2)".to_string()),
+                DataType::Primitive(PrimitiveType::Decimal(12, 2)),
                 true,
-                HashMap::new(),
             ),
-            SchemaField::new(
+            StructField::new(
                 "_date".to_string(),
-                SchemaDataType::primitive("date".to_string()),
+                DataType::Primitive(PrimitiveType::Date),
                 true,
-                HashMap::new(),
             ),
-            SchemaField::new(
+            StructField::new(
                 "_timestamp".to_string(),
-                SchemaDataType::primitive("timestamp".to_string()),
+                DataType::Primitive(PrimitiveType::Timestamp),
                 true,
-                HashMap::new(),
             ),
-            SchemaField::new(
+            StructField::new(
                 "_binary".to_string(),
-                SchemaDataType::primitive("binary".to_string()),
+                DataType::Primitive(PrimitiveType::Binary),
                 true,
-                HashMap::new(),
+            ),
+            StructField::new(
+                "_struct".to_string(),
+                DataType::Struct(Box::new(StructType::new(vec![
+                    StructField::new("a", DataType::Primitive(PrimitiveType::Integer), true),
+                    StructField::new(
+                        "nested",
+                        DataType::Struct(Box::new(StructType::new(vec![StructField::new(
+                            "b",
+                            DataType::Primitive(PrimitiveType::Integer),
+                            true,
+                        )]))),
+                        true,
+                    ),
+                ]))),
+                true,
+            ),
+            StructField::new(
+                "_list".to_string(),
+                DataType::Array(Box::new(ArrayType::new(
+                    DataType::Primitive(PrimitiveType::Integer),
+                    true,
+                ))),
+                true,
             ),
         ]);
 
         let table = DeltaOps::new_in_memory()
             .create()
-            .with_columns(schema.get_fields().clone())
+            .with_columns(schema.fields().clone())
             .await
             .unwrap();
         assert_eq!(table.version(), 0);
@@ -441,11 +488,14 @@ mod test {
             simple!(
                 Expr::Cast(Cast {
                     expr: Box::new(lit(1_i64)),
-                    data_type: DataType::Int32
+                    data_type: ArrowDataType::Int32
                 }),
                 "arrow_cast(1, 'Int32')".to_string()
             ),
-            simple!(col("value").eq(lit(3_i64)), "value = 3".to_string()),
+            simple!(
+                Expr::Column(Column::from_qualified_name_ignore_case("Value3")).eq(lit(3_i64)),
+                "Value3 = 3".to_string()
+            ),
             simple!(col("active").is_true(), "active IS TRUE".to_string()),
             simple!(col("active"), "active".to_string()),
             simple!(col("active").eq(lit(true)), "active = true".to_string()),
@@ -525,7 +575,8 @@ mod test {
                     .cast_to::<DFSchema>(
                         &arrow_schema::DataType::Utf8,
                         &table
-                            .state
+                            .snapshot()
+                            .unwrap()
                             .input_schema()
                             .unwrap()
                             .as_ref()
@@ -537,16 +588,33 @@ mod test {
                     .eq(lit("1")),
                 "arrow_cast(value, 'Utf8') = '1'".to_string()
             ),
+            simple!(
+                col("_struct").field("a").eq(lit(20_i64)),
+                "_struct['a'] = 20".to_string()
+            ),
+            simple!(
+                col("_struct").field("nested").field("b").eq(lit(20_i64)),
+                "_struct['nested']['b'] = 20".to_string()
+            ),
+            simple!(
+                col("_list").index(lit(1_i64)).eq(lit(20_i64)),
+                "_list[1] = 20".to_string()
+            ),
+            simple!(
+                cardinality(col("_list").range(col("value"), lit(10_i64))),
+                "cardinality(_list[value:10])".to_string()
+            ),
         ];
 
-        let session = SessionContext::new();
+        let session: SessionContext = DeltaSessionContext::default().into();
 
         for test in tests {
             let actual = fmt_expr_to_sql(&test.expr).unwrap();
             assert_eq!(test.expected, actual);
 
             let actual_expr = table
-                .state
+                .snapshot()
+                .unwrap()
                 .parse_predicate_expression(actual, &session.state())
                 .unwrap();
 

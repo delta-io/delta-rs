@@ -13,10 +13,12 @@ use self::vacuum::VacuumBuilder;
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::table::builder::DeltaTableBuilder;
 use crate::DeltaTable;
+use std::collections::HashMap;
 
+pub mod cast;
+pub mod convert_to_delta;
 pub mod create;
 pub mod filesystem_check;
-#[cfg(all(feature = "arrow", feature = "parquet"))]
 pub mod optimize;
 pub mod restore;
 pub mod transaction;
@@ -24,17 +26,18 @@ pub mod vacuum;
 
 #[cfg(feature = "datafusion")]
 use self::{
-    datafusion_utils::Expression, delete::DeleteBuilder, load::LoadBuilder, merge::MergeBuilder,
-    update::UpdateBuilder, write::WriteBuilder,
+    constraints::ConstraintBuilder, datafusion_utils::Expression, delete::DeleteBuilder,
+    load::LoadBuilder, merge::MergeBuilder, update::UpdateBuilder, write::WriteBuilder,
 };
 #[cfg(feature = "datafusion")]
 pub use ::datafusion::physical_plan::common::collect as collect_sendable_stream;
 #[cfg(feature = "datafusion")]
 use arrow::record_batch::RecordBatch;
-#[cfg(all(feature = "arrow", feature = "parquet"))]
 use optimize::OptimizeBuilder;
 use restore::RestoreBuilder;
 
+#[cfg(feature = "datafusion")]
+pub mod constraints;
 #[cfg(feature = "datafusion")]
 pub mod delete;
 #[cfg(feature = "datafusion")]
@@ -45,13 +48,9 @@ pub mod merge;
 pub mod update;
 #[cfg(feature = "datafusion")]
 pub mod write;
-#[cfg(all(feature = "arrow", feature = "parquet"))]
 pub mod writer;
 
-/// Maximum supported writer version
-pub const MAX_SUPPORTED_WRITER_VERSION: i32 = 2;
-/// Maximum supported reader version
-pub const MAX_SUPPORTED_READER_VERSION: i32 = 1;
+// TODO make ops consume a snapshot ...
 
 /// High level interface for executing commands against a DeltaTable
 pub struct DeltaOps(pub DeltaTable);
@@ -68,6 +67,22 @@ impl DeltaOps {
     /// ```
     pub async fn try_from_uri(uri: impl AsRef<str>) -> DeltaResult<Self> {
         let mut table = DeltaTableBuilder::from_uri(uri).build()?;
+        // We allow for uninitialized locations, since we may want to create the table
+        match table.load().await {
+            Ok(_) => Ok(table.into()),
+            Err(DeltaTableError::NotATable(_)) => Ok(table.into()),
+            Err(err) => Err(err),
+        }
+    }
+
+    /// try from uri with storage options
+    pub async fn try_from_uri_with_storage_options(
+        uri: impl AsRef<str>,
+        storage_options: HashMap<String, String>,
+    ) -> DeltaResult<Self> {
+        let mut table = DeltaTableBuilder::from_uri(uri)
+            .with_storage_options(storage_options)
+            .build()?;
         // We allow for uninitialized locations, since we may want to create the table
         match table.load().await {
             Ok(_) => Ok(table.into()),
@@ -107,60 +122,59 @@ impl DeltaOps {
     /// ```
     #[must_use]
     pub fn create(self) -> CreateBuilder {
-        CreateBuilder::default().with_object_store(self.0.object_store())
+        CreateBuilder::default().with_log_store(self.0.log_store)
     }
 
     /// Load data from a DeltaTable
     #[cfg(feature = "datafusion")]
     #[must_use]
     pub fn load(self) -> LoadBuilder {
-        LoadBuilder::new(self.0.object_store(), self.0.state)
+        LoadBuilder::new(self.0.log_store, self.0.state.unwrap())
     }
 
     /// Write data to Delta table
     #[cfg(feature = "datafusion")]
     #[must_use]
     pub fn write(self, batches: impl IntoIterator<Item = RecordBatch>) -> WriteBuilder {
-        WriteBuilder::new(self.0.object_store(), self.0.state).with_input_batches(batches)
+        WriteBuilder::new(self.0.log_store, self.0.state).with_input_batches(batches)
     }
 
     /// Vacuum stale files from delta table
     #[must_use]
     pub fn vacuum(self) -> VacuumBuilder {
-        VacuumBuilder::new(self.0.object_store(), self.0.state)
+        VacuumBuilder::new(self.0.log_store, self.0.state.unwrap())
     }
 
     /// Audit active files with files present on the filesystem
     #[must_use]
     pub fn filesystem_check(self) -> FileSystemCheckBuilder {
-        FileSystemCheckBuilder::new(self.0.object_store(), self.0.state)
+        FileSystemCheckBuilder::new(self.0.log_store, self.0.state.unwrap())
     }
 
     /// Audit active files with files present on the filesystem
-    #[cfg(all(feature = "arrow", feature = "parquet"))]
     #[must_use]
     pub fn optimize<'a>(self) -> OptimizeBuilder<'a> {
-        OptimizeBuilder::new(self.0.object_store(), self.0.state)
+        OptimizeBuilder::new(self.0.log_store, self.0.state.unwrap())
     }
 
     /// Delete data from Delta table
     #[cfg(feature = "datafusion")]
     #[must_use]
     pub fn delete(self) -> DeleteBuilder {
-        DeleteBuilder::new(self.0.object_store(), self.0.state)
+        DeleteBuilder::new(self.0.log_store, self.0.state.unwrap())
     }
 
     /// Update data from Delta table
     #[cfg(feature = "datafusion")]
     #[must_use]
     pub fn update(self) -> UpdateBuilder {
-        UpdateBuilder::new(self.0.object_store(), self.0.state)
+        UpdateBuilder::new(self.0.log_store, self.0.state.unwrap())
     }
 
     /// Restore delta table to a specified version or datetime
     #[must_use]
     pub fn restore(self) -> RestoreBuilder {
-        RestoreBuilder::new(self.0.object_store(), self.0.state)
+        RestoreBuilder::new(self.0.log_store, self.0.state.unwrap())
     }
 
     /// Update data from Delta table
@@ -172,11 +186,18 @@ impl DeltaOps {
         predicate: E,
     ) -> MergeBuilder {
         MergeBuilder::new(
-            self.0.object_store(),
-            self.0.state,
+            self.0.log_store,
+            self.0.state.unwrap(),
             predicate.into(),
             source,
         )
+    }
+
+    /// Add a check constraint to a table
+    #[cfg(feature = "datafusion")]
+    #[must_use]
+    pub fn add_constraint(self) -> ConstraintBuilder {
+        ConstraintBuilder::new(self.0.log_store, self.0.state.unwrap())
     }
 }
 
@@ -200,20 +221,9 @@ impl AsRef<DeltaTable> for DeltaOps {
 
 #[cfg(feature = "datafusion")]
 mod datafusion_utils {
-    use std::sync::Arc;
-
-    use arrow_schema::SchemaRef;
-    use datafusion::arrow::record_batch::RecordBatch;
-    use datafusion::error::Result as DataFusionResult;
     use datafusion::execution::context::SessionState;
-    use datafusion::physical_plan::DisplayAs;
-    use datafusion::physical_plan::{
-        metrics::{ExecutionPlanMetricsSet, MetricsSet},
-        ExecutionPlan, RecordBatchStream, SendableRecordBatchStream,
-    };
     use datafusion_common::DFSchema;
     use datafusion_expr::Expr;
-    use futures::{Stream, StreamExt};
 
     use crate::{delta_datafusion::expr::parse_predicate_expression, DeltaResult};
 
@@ -262,128 +272,5 @@ mod datafusion_utils {
             Some(predicate) => Some(into_expr(predicate, schema, df_state)?),
             None => None,
         })
-    }
-
-    pub(crate) type MetricObserverFunction = fn(&RecordBatch, &ExecutionPlanMetricsSet) -> ();
-
-    pub(crate) struct MetricObserverExec {
-        parent: Arc<dyn ExecutionPlan>,
-        metrics: ExecutionPlanMetricsSet,
-        update: MetricObserverFunction,
-    }
-
-    impl MetricObserverExec {
-        pub fn new(parent: Arc<dyn ExecutionPlan>, f: MetricObserverFunction) -> Self {
-            MetricObserverExec {
-                parent,
-                metrics: ExecutionPlanMetricsSet::new(),
-                update: f,
-            }
-        }
-    }
-
-    impl std::fmt::Debug for MetricObserverExec {
-        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            f.debug_struct("MergeStatsExec")
-                .field("parent", &self.parent)
-                .field("metrics", &self.metrics)
-                .finish()
-        }
-    }
-
-    impl DisplayAs for MetricObserverExec {
-        fn fmt_as(
-            &self,
-            _: datafusion::physical_plan::DisplayFormatType,
-            f: &mut std::fmt::Formatter,
-        ) -> std::fmt::Result {
-            write!(f, "MetricObserverExec")
-        }
-    }
-
-    impl ExecutionPlan for MetricObserverExec {
-        fn as_any(&self) -> &dyn std::any::Any {
-            self
-        }
-
-        fn schema(&self) -> arrow_schema::SchemaRef {
-            self.parent.schema()
-        }
-
-        fn output_partitioning(&self) -> datafusion::physical_plan::Partitioning {
-            self.parent.output_partitioning()
-        }
-
-        fn output_ordering(&self) -> Option<&[datafusion_physical_expr::PhysicalSortExpr]> {
-            self.parent.output_ordering()
-        }
-
-        fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
-            vec![self.parent.clone()]
-        }
-
-        fn execute(
-            &self,
-            partition: usize,
-            context: Arc<datafusion::execution::context::TaskContext>,
-        ) -> datafusion_common::Result<datafusion::physical_plan::SendableRecordBatchStream>
-        {
-            let res = self.parent.execute(partition, context)?;
-            Ok(Box::pin(MetricObserverStream {
-                schema: self.schema(),
-                input: res,
-                metrics: self.metrics.clone(),
-                update: self.update,
-            }))
-        }
-
-        fn statistics(&self) -> datafusion_common::Statistics {
-            self.parent.statistics()
-        }
-
-        fn with_new_children(
-            self: Arc<Self>,
-            children: Vec<Arc<dyn ExecutionPlan>>,
-        ) -> datafusion_common::Result<Arc<dyn ExecutionPlan>> {
-            ExecutionPlan::with_new_children(self.parent.clone(), children)
-        }
-
-        fn metrics(&self) -> Option<MetricsSet> {
-            Some(self.metrics.clone_inner())
-        }
-    }
-
-    struct MetricObserverStream {
-        schema: SchemaRef,
-        input: SendableRecordBatchStream,
-        metrics: ExecutionPlanMetricsSet,
-        update: MetricObserverFunction,
-    }
-
-    impl Stream for MetricObserverStream {
-        type Item = DataFusionResult<RecordBatch>;
-
-        fn poll_next(
-            mut self: std::pin::Pin<&mut Self>,
-            cx: &mut std::task::Context<'_>,
-        ) -> std::task::Poll<Option<Self::Item>> {
-            self.input.poll_next_unpin(cx).map(|x| match x {
-                Some(Ok(batch)) => {
-                    (self.update)(&batch, &self.metrics);
-                    Some(Ok(batch))
-                }
-                other => other,
-            })
-        }
-
-        fn size_hint(&self) -> (usize, Option<usize>) {
-            self.input.size_hint()
-        }
-    }
-
-    impl RecordBatchStream for MetricObserverStream {
-        fn schema(&self) -> SchemaRef {
-            self.schema.clone()
-        }
     }
 }

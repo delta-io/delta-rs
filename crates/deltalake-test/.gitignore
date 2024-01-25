@@ -1,0 +1,12 @@
+target/
+/.idea/
+*.bat
+tests/data/checkpoints_tombstones/expired/
+tests/data/checkpoints_tombstones/metadata_broken/
+tests/data/checkpoints_tombstones/metadata_false/
+tests/data/checkpoints_tombstones/metadata_true/
+tests/data/checkpoints_with_expired_logs/
+tests/data/read_null_partitions_from_checkpoint/
+tests/data/action_reconciliation/
+tests/data/simple_table_with_no_checkpoint/
+tests/data/simple_table_with_no_checkpoint_2/

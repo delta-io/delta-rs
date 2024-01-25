@@ -1,4 +1,3 @@
-#![cfg(all(feature = "arrow", feature = "parquet"))]
 //! Abstractions and implementations for writing data to delta tables
 
 use arrow::{datatypes::SchemaRef, error::ArrowError};
@@ -8,8 +7,9 @@ use parquet::errors::ParquetError;
 use serde_json::Value;
 
 use crate::errors::DeltaTableError;
+use crate::kernel::{Action, Add};
 use crate::operations::transaction::commit;
-use crate::protocol::{Action, Add, ColumnCountStat, DeltaOperation, SaveMode};
+use crate::protocol::{ColumnCountStat, DeltaOperation, SaveMode};
 use crate::DeltaTable;
 
 pub use json::JsonWriter;
@@ -26,7 +26,7 @@ pub mod test_utils;
 
 /// Enum representing an error when calling [`DeltaWriter`].
 #[derive(thiserror::Error, Debug)]
-pub enum DeltaWriterError {
+pub(crate) enum DeltaWriterError {
     /// Partition column is missing in a record written to delta.
     #[error("Missing partition column: {0}")]
     MissingPartitionColumn(String),
@@ -60,9 +60,7 @@ pub enum DeltaWriterError {
     /// Serialization of delta log statistics failed.
     #[error("Failed to write statistics value {debug_value} with logical type {logical_type:?}")]
     StatsParsingFailed {
-        /// The value that failed to be serialized.
         debug_value: String,
-        /// The logical type of the value.
         logical_type: Option<parquet::basic::LogicalType>,
     },
 
@@ -70,7 +68,6 @@ pub enum DeltaWriterError {
     #[error("Failed to serialize data to JSON: {source}")]
     JSONSerializationFailed {
         #[from]
-        /// The wrapped [`serde_json::Error`]
         source: serde_json::Error,
     },
 
@@ -136,8 +133,9 @@ pub trait DeltaWriter<T> {
     /// Flush the internal write buffers to files in the delta table folder structure.
     /// and commit the changes to the Delta log, creating a new table version.
     async fn flush_and_commit(&mut self, table: &mut DeltaTable) -> Result<i64, DeltaTableError> {
-        let adds: Vec<_> = self.flush().await?.drain(..).map(Action::add).collect();
-        let partition_cols = table.get_metadata()?.partition_columns.clone();
+        let adds: Vec<_> = self.flush().await?.drain(..).map(Action::Add).collect();
+        let snapshot = table.snapshot()?;
+        let partition_cols = snapshot.metadata().partition_columns.clone();
         let partition_by = if !partition_cols.is_empty() {
             Some(partition_cols)
         } else {
@@ -148,7 +146,14 @@ pub trait DeltaWriter<T> {
             partition_by,
             predicate: None,
         };
-        let version = commit(table.storage.as_ref(), &adds, operation, &table.state, None).await?;
+        let version = commit(
+            table.log_store.as_ref(),
+            &adds,
+            operation,
+            Some(snapshot),
+            None,
+        )
+        .await?;
         table.update().await?;
         Ok(version)
     }

@@ -20,29 +20,30 @@
 //! let (table, metrics) = OptimizeBuilder::new(table.object_store(), table.state).await?;
 //! ````
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use arrow::datatypes::{Schema as ArrowSchema, SchemaRef as ArrowSchemaRef};
+use arrow::datatypes::SchemaRef as ArrowSchemaRef;
 use arrow_array::RecordBatch;
 use futures::future::BoxFuture;
 use futures::stream::BoxStream;
 use futures::{Future, StreamExt, TryStreamExt};
 use itertools::Itertools;
-use log::debug;
 use num_cpus;
 use parquet::arrow::async_reader::{ParquetObjectReader, ParquetRecordBatchStreamBuilder};
 use parquet::basic::{Compression, ZstdLevel};
 use parquet::errors::ParquetError;
 use parquet::file::properties::WriterProperties;
 use serde::{Deserialize, Serialize};
-use serde_json::Map;
+use tracing::debug;
 
-use super::transaction::commit;
+use super::transaction::{commit, PROTOCOL};
 use super::writer::{PartitionWriter, PartitionWriterConfig};
 use crate::errors::{DeltaResult, DeltaTableError};
-use crate::protocol::{self, Action, DeltaOperation};
+use crate::kernel::{Action, PartitionsExt, Remove, Scalar};
+use crate::logstore::LogStoreRef;
+use crate::protocol::DeltaOperation;
 use crate::storage::ObjectStoreRef;
 use crate::table::state::DeltaTableState;
 use crate::writer::utils::arrow_schema_without_partitions;
@@ -155,7 +156,7 @@ pub struct OptimizeBuilder<'a> {
     /// A snapshot of the to-be-optimized table's state
     snapshot: DeltaTableState,
     /// Delta object store for handling data files
-    store: ObjectStoreRef,
+    log_store: LogStoreRef,
     /// Filters to select specific table partitions to be optimized
     filters: &'a [PartitionFilter],
     /// Desired file size after bin-packing files
@@ -177,10 +178,10 @@ pub struct OptimizeBuilder<'a> {
 
 impl<'a> OptimizeBuilder<'a> {
     /// Create a new [`OptimizeBuilder`]
-    pub fn new(store: ObjectStoreRef, snapshot: DeltaTableState) -> Self {
+    pub fn new(log_store: LogStoreRef, snapshot: DeltaTableState) -> Self {
         Self {
             snapshot,
-            store,
+            log_store,
             filters: &[],
             target_size: None,
             writer_properties: None,
@@ -259,6 +260,8 @@ impl<'a> std::future::IntoFuture for OptimizeBuilder<'a> {
         let this = self;
 
         Box::pin(async move {
+            PROTOCOL.can_write_to(&this.snapshot)?;
+
             let writer_properties = this.writer_properties.unwrap_or_else(|| {
                 WriterProperties::builder()
                     .set_compression(Compression::ZSTD(ZstdLevel::try_new(4).unwrap()))
@@ -274,14 +277,15 @@ impl<'a> std::future::IntoFuture for OptimizeBuilder<'a> {
             )?;
             let metrics = plan
                 .execute(
-                    this.store.clone(),
+                    this.log_store.clone(),
                     &this.snapshot,
                     this.max_concurrent_tasks,
                     this.max_spill_size,
                     this.min_commit_interval,
+                    this.app_metadata,
                 )
                 .await?;
-            let mut table = DeltaTable::new_with_state(this.store, this.snapshot);
+            let mut table = DeltaTable::new_with_state(this.log_store, this.snapshot);
             table.update().await?;
             Ok((table, metrics))
         })
@@ -304,22 +308,38 @@ impl From<OptimizeInput> for DeltaOperation {
 
 fn create_remove(
     path: &str,
-    partitions: &HashMap<String, Option<String>>,
+    partitions: &BTreeMap<String, Scalar>,
     size: i64,
 ) -> Result<Action, DeltaTableError> {
     // NOTE unwrap is safe since UNIX_EPOCH will always be earlier then now.
     let deletion_time = SystemTime::now().duration_since(UNIX_EPOCH).unwrap();
     let deletion_time = deletion_time.as_millis() as i64;
 
-    Ok(Action::remove(protocol::Remove {
+    Ok(Action::Remove(Remove {
         path: path.to_string(),
         deletion_timestamp: Some(deletion_time),
         data_change: false,
         extended_file_metadata: None,
-        partition_values: Some(partitions.to_owned()),
+        partition_values: Some(
+            partitions
+                .iter()
+                .map(|(k, v)| {
+                    (
+                        k.clone(),
+                        if v.is_null() {
+                            None
+                        } else {
+                            Some(v.serialize())
+                        },
+                    )
+                })
+                .collect(),
+        ),
         size: Some(size),
         deletion_vector: None,
         tags: None,
+        base_row_id: None,
+        default_row_commit_version: None,
     }))
 }
 
@@ -333,9 +353,12 @@ enum OptimizeOperations {
     ///
     /// Bins are determined by the bin-packing algorithm to reach an optimal size.
     /// Files that are large enough already are skipped. Bins of size 1 are dropped.
-    Compact(HashMap<PartitionTuples, Vec<MergeBin>>),
+    Compact(HashMap<String, (BTreeMap<String, Scalar>, Vec<MergeBin>)>),
     /// Plan to Z-order each partition
-    ZOrder(Vec<String>, HashMap<PartitionTuples, MergeBin>),
+    ZOrder(
+        Vec<String>,
+        HashMap<String, (BTreeMap<String, Scalar>, MergeBin)>,
+    ),
     // TODO: Sort
 }
 
@@ -364,8 +387,6 @@ pub struct MergeTaskParameters {
     input_parameters: OptimizeInput,
     /// Schema of written files
     file_schema: ArrowSchemaRef,
-    /// Column names the table is partitioned by.
-    partition_columns: Vec<String>,
     /// Properties passed to parquet writer
     writer_properties: WriterProperties,
 }
@@ -380,7 +401,7 @@ impl MergePlan {
     /// collected during the operation.
     async fn rewrite_files<F>(
         task_parameters: Arc<MergeTaskParameters>,
-        partition: PartitionTuples,
+        partition_values: BTreeMap<String, Scalar>,
         files: MergeBin,
         object_store: ObjectStoreRef,
         read_stream: F,
@@ -388,9 +409,8 @@ impl MergePlan {
     where
         F: Future<Output = Result<ParquetReadStream, DeltaTableError>> + Send + 'static,
     {
-        debug!("Rewriting files in partition: {:?}", partition);
+        debug!("Rewriting files in partition: {:?}", partition_values);
         // First, initialize metrics
-        let partition_values = partition.to_hashmap();
         let mut partial_actions = files
             .iter()
             .map(|file_meta| {
@@ -424,17 +444,19 @@ impl MergePlan {
         let writer_config = PartitionWriterConfig::try_new(
             task_parameters.file_schema.clone(),
             partition_values.clone(),
-            task_parameters.partition_columns.clone(),
             Some(task_parameters.writer_properties.clone()),
             Some(task_parameters.input_parameters.target_size as usize),
             None,
         )?;
-        let mut writer = PartitionWriter::try_with_config(object_store.clone(), writer_config)?;
+        let mut writer = PartitionWriter::try_with_config(object_store, writer_config)?;
 
         let mut read_stream = read_stream.await?;
 
         while let Some(maybe_batch) = read_stream.next().await {
-            let batch = maybe_batch?;
+            let mut batch = maybe_batch?;
+
+            batch =
+                super::cast::cast_record_batch(&batch, task_parameters.file_schema.clone(), false)?;
             partial_metrics.num_batches += 1;
             writer.write(&batch).await.map_err(DeltaTableError::from)?;
         }
@@ -450,11 +472,14 @@ impl MergePlan {
             partial_metrics.files_added.max = std::cmp::max(partial_metrics.files_added.max, size);
             partial_metrics.files_added.min = std::cmp::min(partial_metrics.files_added.min, size);
 
-            Action::add(add)
+            Action::Add(add)
         });
         partial_actions.extend(add_actions);
 
-        debug!("Finished rewriting files in partition: {:?}", partition);
+        debug!(
+            "Finished rewriting files in partition: {:?}",
+            partition_values
+        );
 
         Ok((partial_actions, partial_metrics))
     }
@@ -475,19 +500,7 @@ impl MergePlan {
 
         let object_store_ref = context.object_store.clone();
         // Read all batches into a vec
-        let batches: Vec<RecordBatch> = futures::stream::iter(files.clone())
-            .then(|file| {
-                let object_store_ref = object_store_ref.clone();
-                async move {
-                    let file_reader = ParquetObjectReader::new(object_store_ref.clone(), file);
-                    ParquetRecordBatchStreamBuilder::new(file_reader)
-                        .await?
-                        .build()
-                }
-            })
-            .try_flatten()
-            .try_collect::<Vec<_>>()
-            .await?;
+        let batches = zorder::collect_batches(object_store_ref, files).await?;
 
         // For each batch, compute the zorder key
         let zorder_keys: Vec<ArrayRef> =
@@ -537,7 +550,8 @@ impl MergePlan {
         context: Arc<zorder::ZOrderExecContext>,
     ) -> Result<BoxStream<'static, Result<RecordBatch, ParquetError>>, DeltaTableError> {
         use datafusion::prelude::{col, ParquetReadOptions};
-        use datafusion_expr::expr::ScalarUDF;
+        use datafusion_common::Column;
+        use datafusion_expr::expr::ScalarFunction;
         use datafusion_expr::Expr;
 
         let locations = files
@@ -553,13 +567,17 @@ impl MergePlan {
             .schema()
             .fields()
             .iter()
-            .map(|f| col(f.name()))
+            .map(|f| Expr::Column(Column::from_qualified_name_ignore_case(f.name())))
             .collect_vec();
 
         // Add a temporary z-order column we will sort by, and then drop.
         const ZORDER_KEY_COLUMN: &str = "__zorder_key";
-        let cols = context.columns.iter().map(col).collect_vec();
-        let expr = Expr::ScalarUDF(ScalarUDF::new(
+        let cols = context
+            .columns
+            .iter()
+            .map(|col| Expr::Column(Column::from_qualified_name_ignore_case(col)))
+            .collect_vec();
+        let expr = Expr::ScalarFunction(ScalarFunction::new_udf(
             Arc::new(zorder::datafusion::zorder_key_udf()),
             cols,
         ));
@@ -582,18 +600,19 @@ impl MergePlan {
     /// Perform the operations outlined in the plan.
     pub async fn execute(
         mut self,
-        object_store: ObjectStoreRef,
+        log_store: LogStoreRef,
         snapshot: &DeltaTableState,
         max_concurrent_tasks: usize,
         #[allow(unused_variables)] // used behind a feature flag
         max_spill_size: usize,
         min_commit_interval: Option<Duration>,
+        app_metadata: Option<HashMap<String, serde_json::Value>>,
     ) -> Result<Metrics, DeltaTableError> {
         let operations = std::mem::take(&mut self.operations);
 
         let stream = match operations {
             OptimizeOperations::Compact(bins) => futures::stream::iter(bins)
-                .flat_map(|(partition, bins)| {
+                .flat_map(|(_, (partition, bins))| {
                     futures::stream::iter(bins).map(move |bin| (partition.clone(), bin))
                 })
                 .map(|(partition, files)| {
@@ -605,7 +624,7 @@ impl MergePlan {
                     for file in files.iter() {
                         debug!("  file {}", file.location);
                     }
-                    let object_store_ref = object_store.clone();
+                    let object_store_ref = log_store.object_store();
                     let batch_stream = futures::stream::iter(files.clone())
                         .then(move |file| {
                             let object_store_ref = object_store_ref.clone();
@@ -623,7 +642,7 @@ impl MergePlan {
                         self.task_parameters.clone(),
                         partition,
                         files,
-                        object_store.clone(),
+                        log_store.object_store().clone(),
                         futures::future::ready(Ok(batch_stream)),
                     ));
                     util::flatten_join_error(rewrite_result)
@@ -633,32 +652,30 @@ impl MergePlan {
                 #[cfg(not(feature = "datafusion"))]
                 let exec_context = Arc::new(zorder::ZOrderExecContext::new(
                     zorder_columns,
-                    object_store.clone(),
+                    log_store.object_store(),
                     // If there aren't enough bins to use all threads, then instead
                     // use threads within the bins. This is important for the case where
                     // the table is un-partitioned, in which case the entire table is just
                     // one big bin.
                     bins.len() <= num_cpus::get(),
                 ));
+
                 #[cfg(feature = "datafusion")]
                 let exec_context = Arc::new(zorder::ZOrderExecContext::new(
                     zorder_columns,
-                    object_store.clone(),
+                    log_store.object_store(),
                     max_spill_size,
                 )?);
                 let task_parameters = self.task_parameters.clone();
-                let object_store = object_store.clone();
+                let log_store = log_store.clone();
                 futures::stream::iter(bins)
-                    .map(move |(partition, files)| {
+                    .map(move |(_, (partition, files))| {
                         let batch_stream = Self::read_zorder(files.clone(), exec_context.clone());
-
-                        let object_store = object_store.clone();
-
                         let rewrite_result = tokio::task::spawn(Self::rewrite_files(
                             task_parameters.clone(),
                             partition,
                             files,
-                            object_store,
+                            log_store.object_store(),
                             batch_stream,
                         ));
                         util::flatten_join_error(rewrite_result)
@@ -669,7 +686,7 @@ impl MergePlan {
 
         let mut stream = stream.buffer_unordered(max_concurrent_tasks);
 
-        let mut table = DeltaTable::new_with_state(object_store.clone(), snapshot.clone());
+        let mut table = DeltaTable::new_with_state(log_store.clone(), snapshot.clone());
 
         // Actions buffered so far. These will be flushed either at the end
         // or when we reach the commit interval.
@@ -703,26 +720,29 @@ impl MergePlan {
                 last_commit = now;
 
                 buffered_metrics.preserve_insertion_order = true;
-                let mut metadata = Map::new();
-                metadata.insert("readVersion".to_owned(), self.read_table_version.into());
+                let mut app_metadata = match app_metadata.clone() {
+                    Some(meta) => meta,
+                    None => HashMap::new(),
+                };
+                app_metadata.insert("readVersion".to_owned(), self.read_table_version.into());
                 let maybe_map_metrics = serde_json::to_value(std::mem::replace(
                     &mut buffered_metrics,
                     orig_metrics.clone(),
                 ));
                 if let Ok(map) = maybe_map_metrics {
-                    metadata.insert("operationMetrics".to_owned(), map);
+                    app_metadata.insert("operationMetrics".to_owned(), map);
                 }
 
-                table.update_incremental(None).await?;
+                table.update().await?;
                 debug!("committing {} actions", actions.len());
                 //// TODO: Check for remove actions on optimized partitions. If a
                 //// optimized partition was updated then abort the commit. Requires (#593).
                 commit(
-                    table.object_store().as_ref(),
+                    table.log_store.as_ref(),
                     &actions,
                     self.task_parameters.input_parameters.clone().into(),
-                    table.get_state(),
-                    Some(metadata),
+                    Some(table.snapshot()?),
+                    Some(app_metadata.clone()),
                 )
                 .await?;
             }
@@ -744,27 +764,6 @@ impl MergePlan {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-struct PartitionTuples(Vec<(String, Option<String>)>);
-
-impl PartitionTuples {
-    fn from_hashmap(
-        partition_columns: &[String],
-        partition_values: &HashMap<String, Option<String>>,
-    ) -> Self {
-        let mut tuples = Vec::new();
-        for column in partition_columns {
-            let value = partition_values.get(column).cloned().flatten();
-            tuples.push((column.clone(), value));
-        }
-        Self(tuples)
-    }
-
-    fn to_hashmap(&self) -> HashMap<String, Option<String>> {
-        self.0.iter().cloned().collect()
-    }
-}
-
 /// Build a Plan on which files to merge together. See [OptimizeBuilder]
 pub fn create_merge_plan(
     optimize_type: OptimizeType,
@@ -774,31 +773,18 @@ pub fn create_merge_plan(
     writer_properties: WriterProperties,
 ) -> Result<MergePlan, DeltaTableError> {
     let target_size = target_size.unwrap_or_else(|| snapshot.table_config().target_file_size());
-
-    let partitions_keys = &snapshot
-        .current_metadata()
-        .ok_or(DeltaTableError::NoMetadata)?
-        .partition_columns;
+    let partitions_keys = &snapshot.metadata().partition_columns;
 
     let (operations, metrics) = match optimize_type {
-        OptimizeType::Compact => {
-            build_compaction_plan(snapshot, partitions_keys, filters, target_size)?
-        }
+        OptimizeType::Compact => build_compaction_plan(snapshot, filters, target_size)?,
         OptimizeType::ZOrder(zorder_columns) => {
             build_zorder_plan(zorder_columns, snapshot, partitions_keys, filters)?
         }
     };
 
     let input_parameters = OptimizeInput { target_size };
-    let file_schema = arrow_schema_without_partitions(
-        &Arc::new(<ArrowSchema as TryFrom<&crate::schema::Schema>>::try_from(
-            &snapshot
-                .current_metadata()
-                .ok_or(DeltaTableError::NoMetadata)?
-                .schema,
-        )?),
-        partitions_keys,
-    );
+    let file_schema =
+        arrow_schema_without_partitions(&Arc::new(snapshot.schema().try_into()?), partitions_keys);
 
     Ok(MergePlan {
         operations,
@@ -806,7 +792,6 @@ pub fn create_merge_plan(
         task_parameters: Arc::new(MergeTaskParameters {
             input_parameters,
             file_schema,
-            partition_columns: partitions_keys.clone(),
             writer_properties,
         }),
         read_table_version: snapshot.version(),
@@ -859,33 +844,36 @@ impl IntoIterator for MergeBin {
 
 fn build_compaction_plan(
     snapshot: &DeltaTableState,
-    partition_keys: &[String],
     filters: &[PartitionFilter],
     target_size: i64,
 ) -> Result<(OptimizeOperations, Metrics), DeltaTableError> {
     let mut metrics = Metrics::default();
 
-    let mut partition_files: HashMap<PartitionTuples, Vec<ObjectMeta>> = HashMap::new();
+    let mut partition_files: HashMap<String, (BTreeMap<String, Scalar>, Vec<ObjectMeta>)> =
+        HashMap::new();
     for add in snapshot.get_active_add_actions_by_partitions(filters)? {
+        let add = add?;
         metrics.total_considered_files += 1;
-        let object_meta = ObjectMeta::try_from(add)?;
+        let object_meta = ObjectMeta::try_from(&add)?;
         if (object_meta.size as i64) > target_size {
             metrics.total_files_skipped += 1;
             continue;
         }
 
-        let part = PartitionTuples::from_hashmap(partition_keys, &add.partition_values);
-
-        partition_files.entry(part).or_default().push(object_meta);
+        partition_files
+            .entry(add.partition_values()?.hive_partition_path())
+            .or_default()
+            .1
+            .push(object_meta);
     }
 
-    for file in partition_files.values_mut() {
+    for (_, file) in partition_files.values_mut() {
         // Sort files by size: largest to smallest
         file.sort_by(|a, b| b.size.cmp(&a.size));
     }
 
-    let mut operations: HashMap<PartitionTuples, Vec<MergeBin>> = HashMap::new();
-    for (part, files) in partition_files {
+    let mut operations: HashMap<String, (BTreeMap<String, Scalar>, Vec<MergeBin>)> = HashMap::new();
+    for (part, (partition, files)) in partition_files {
         let mut merge_bins = vec![MergeBin::new()];
 
         'files: for file in files {
@@ -902,17 +890,21 @@ fn build_compaction_plan(
             merge_bins.push(new_bin);
         }
 
-        operations.insert(part, merge_bins);
+        operations.insert(part, (partition, merge_bins));
     }
 
     // Prune merge bins with only 1 file, since they have no effect
-    for (_, bins) in operations.iter_mut() {
-        if bins.len() == 1 && bins[0].len() == 1 {
-            metrics.total_files_skipped += 1;
-            bins.clear();
-        }
+    for (_, (_, bins)) in operations.iter_mut() {
+        bins.retain(|bin| {
+            if bin.len() == 1 {
+                metrics.total_files_skipped += 1;
+                false
+            } else {
+                true
+            }
+        })
     }
-    operations.retain(|_, files| !files.is_empty());
+    operations.retain(|_, (_, files)| !files.is_empty());
 
     metrics.partitions_optimized = operations.len() as u64;
 
@@ -940,12 +932,10 @@ fn build_zorder_plan(
         )));
     }
     let field_names = snapshot
-        .current_metadata()
-        .unwrap()
-        .schema
-        .get_fields()
+        .schema()
+        .fields()
         .iter()
-        .map(|field| field.get_name().to_string())
+        .map(|field| field.name().to_string())
         .collect_vec();
     let unknown_columns = zorder_columns
         .iter()
@@ -960,15 +950,21 @@ fn build_zorder_plan(
     // For now, just be naive and optimize all files in each selected partition.
     let mut metrics = Metrics::default();
 
-    let mut partition_files: HashMap<PartitionTuples, MergeBin> = HashMap::new();
+    let mut partition_files: HashMap<String, (BTreeMap<String, Scalar>, MergeBin)> = HashMap::new();
     for add in snapshot.get_active_add_actions_by_partitions(filters)? {
+        let add = add?;
+        let partition_values = add
+            .partition_values()?
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), v))
+            .collect::<BTreeMap<_, _>>();
         metrics.total_considered_files += 1;
-        let object_meta = ObjectMeta::try_from(add)?;
-        let part = PartitionTuples::from_hashmap(partition_keys, &add.partition_values);
+        let object_meta = ObjectMeta::try_from(&add)?;
 
         partition_files
-            .entry(part)
-            .or_insert_with(MergeBin::new)
+            .entry(partition_values.hive_partition_path())
+            .or_insert_with(|| (partition_values, MergeBin::new()))
+            .1
             .add(object_meta);
     }
 
@@ -1073,6 +1069,7 @@ pub(super) mod zorder {
     use arrow_buffer::bit_util::{get_bit_raw, set_bit_raw, unset_bit_raw};
     use arrow_row::{Row, RowConverter, SortField};
     use arrow_schema::ArrowError;
+    // use arrow_schema::Schema as ArrowSchema;
 
     /// Execution context for Z-order scan
     #[cfg(not(feature = "datafusion"))]
@@ -1101,6 +1098,26 @@ pub(super) mod zorder {
         }
     }
 
+    /// Read all batches into a vec - is an async function in disguise
+    #[cfg(not(feature = "datafusion"))]
+    pub(super) fn collect_batches(
+        object_store: ObjectStoreRef,
+        files: MergeBin,
+    ) -> impl Future<Output = Result<Vec<RecordBatch>, ParquetError>> {
+        futures::stream::iter(files.clone())
+            .then(move |file| {
+                let object_store = object_store.clone();
+                async move {
+                    let file_reader = ParquetObjectReader::new(object_store.clone(), file);
+                    ParquetRecordBatchStreamBuilder::new(file_reader)
+                        .await?
+                        .build()
+                }
+            })
+            .try_flatten()
+            .try_collect::<Vec<_>>()
+    }
+
     #[cfg(feature = "datafusion")]
     pub use self::datafusion::ZOrderExecContext;
 
@@ -1116,7 +1133,10 @@ pub(super) mod zorder {
         };
         use arrow_schema::DataType;
         use datafusion_common::DataFusionError;
-        use datafusion_expr::{ColumnarValue, ScalarUDF, Signature, TypeSignature, Volatility};
+        use datafusion_expr::{
+            ColumnarValue, ReturnTypeFunction, ScalarFunctionImplementation, ScalarUDF, Signature,
+            TypeSignature, Volatility,
+        };
         use itertools::Itertools;
 
         pub const ZORDER_UDF_NAME: &str = "zorder_key";
@@ -1152,12 +1172,9 @@ pub(super) mod zorder {
                 type_signature: TypeSignature::VariadicAny,
                 volatility: Volatility::Immutable,
             };
-            ScalarUDF {
-                name: ZORDER_UDF_NAME.to_string(),
-                signature,
-                return_type: Arc::new(|_| Ok(Arc::new(DataType::Binary))),
-                fun: Arc::new(zorder_key_datafusion),
-            }
+            let return_type: ReturnTypeFunction = Arc::new(|_| Ok(Arc::new(DataType::Binary)));
+            let fun: ScalarFunctionImplementation = Arc::new(zorder_key_datafusion);
+            ScalarUDF::new(ZORDER_UDF_NAME, &signature, &return_type, &fun)
         }
 
         /// Datafusion zorder UDF body
@@ -1174,10 +1191,10 @@ pub(super) mod zorder {
                 .ok_or(DataFusionError::NotImplemented(
                     "z-order on zero columns.".to_string(),
                 ))?;
-            let columns = columns
+            let columns: Vec<ArrayRef> = columns
                 .iter()
                 .map(|col| col.clone().into_array(length))
-                .collect_vec();
+                .try_collect()?;
             let array = zorder_key(&columns)?;
             Ok(ColumnarValue::Array(array))
         }
@@ -1188,6 +1205,7 @@ pub(super) mod zorder {
             use ::datafusion::assert_batches_eq;
             use arrow_array::{Int32Array, StringArray};
             use arrow_ord::sort::sort_to_indices;
+            use arrow_schema::Field;
             use arrow_select::take::take;
             use rand::Rng;
             #[test]
@@ -1279,6 +1297,43 @@ pub(super) mod zorder {
                     array.swap(i, j);
                 }
                 array
+            }
+
+            #[tokio::test]
+            async fn test_zorder_mixed_case() {
+                use arrow_schema::Schema as ArrowSchema;
+                let schema = Arc::new(ArrowSchema::new(vec![
+                    Field::new("moDified", DataType::Utf8, true),
+                    Field::new("ID", DataType::Utf8, true),
+                    Field::new("vaLue", DataType::Int32, true),
+                ]));
+
+                let batch = RecordBatch::try_new(
+                    schema.clone(),
+                    vec![
+                        Arc::new(arrow::array::StringArray::from(vec![
+                            "2021-02-01",
+                            "2021-02-01",
+                            "2021-02-02",
+                            "2021-02-02",
+                        ])),
+                        Arc::new(arrow::array::StringArray::from(vec!["A", "B", "C", "D"])),
+                        Arc::new(arrow::array::Int32Array::from(vec![1, 10, 20, 100])),
+                    ],
+                )
+                .unwrap();
+                // write some data
+                let table = crate::DeltaOps::new_in_memory()
+                    .write(vec![batch.clone()])
+                    .with_save_mode(crate::protocol::SaveMode::Append)
+                    .await
+                    .unwrap();
+
+                let res = crate::DeltaOps(table)
+                    .optimize()
+                    .with_type(OptimizeType::ZOrder(vec!["moDified".into()]))
+                    .await;
+                assert!(res.is_ok());
             }
         }
     }
@@ -1432,7 +1487,6 @@ pub(super) mod zorder {
             assert_eq!(result.null_count(), 0);
 
             let data: &BinaryArray = as_generic_binary_array(result.as_ref());
-            dbg!(data);
             assert_eq!(data.value_data().len(), 3 * 16 * 3);
             assert!(data.iter().all(|x| x.unwrap().len() == 3 * 16));
         }

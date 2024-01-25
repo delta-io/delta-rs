@@ -1,15 +1,19 @@
 use chrono::Utc;
+use deltalake_core::kernel::{
+    Action, Add, DataType, PrimitiveType, Remove, StructField, StructType,
+};
 use deltalake_core::operations::create::CreateBuilder;
 use deltalake_core::operations::transaction::commit;
-use deltalake_core::protocol::{Action, Add, DeltaOperation, Remove, SaveMode};
-use deltalake_core::storage::{DeltaObjectStore, GetResult, ObjectStoreResult};
-use deltalake_core::{DeltaTable, Schema, SchemaDataType, SchemaField};
+use deltalake_core::protocol::{DeltaOperation, SaveMode};
+use deltalake_core::storage::{GetResult, ObjectStoreResult};
+use deltalake_core::DeltaTable;
 use object_store::path::Path as StorePath;
-use object_store::ObjectStore;
+use object_store::{ObjectStore, PutOptions, PutResult};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
+use std::sync::Arc;
 use url::Url;
 use uuid::Uuid;
 
@@ -32,18 +36,18 @@ pub async fn create_table_from_json(
     partition_columns: Vec<&str>,
     config: Value,
 ) -> DeltaTable {
-    assert!(path.starts_with("./tests/data"));
+    assert!(path.starts_with("../deltalake-test/tests/data"));
     std::fs::create_dir_all(path).unwrap();
     std::fs::remove_dir_all(path).unwrap();
     std::fs::create_dir_all(path).unwrap();
-    let schema: Schema = serde_json::from_value(schema).unwrap();
+    let schema: StructType = serde_json::from_value(schema).unwrap();
     let config: HashMap<String, Option<String>> = serde_json::from_value(config).unwrap();
     create_test_table(path, schema, partition_columns, config).await
 }
 
 pub async fn create_test_table(
     path: &str,
-    schema: Schema,
+    schema: StructType,
     partition_columns: Vec<&str>,
     config: HashMap<String, Option<String>>,
 ) -> DeltaTable {
@@ -51,7 +55,7 @@ pub async fn create_test_table(
         .with_location(path)
         .with_table_name("test-table")
         .with_comment("A table for running tests")
-        .with_columns(schema.get_fields().clone())
+        .with_columns(schema.fields().clone())
         .with_partition_columns(partition_columns)
         .with_configuration(config)
         .await
@@ -66,11 +70,10 @@ pub async fn create_table(
     fs::create_dir_all(&log_dir).unwrap();
     cleanup_dir_except(log_dir, vec![]);
 
-    let schema = Schema::new(vec![SchemaField::new(
+    let schema = StructType::new(vec![StructField::new(
         "id".to_string(),
-        SchemaDataType::primitive("integer".to_string()),
+        DataType::Primitive(PrimitiveType::Integer),
         true,
-        HashMap::new(),
     )]);
 
     create_test_table(path, schema, Vec::new(), config.unwrap_or_default()).await
@@ -81,13 +84,15 @@ pub fn add(offset_millis: i64) -> Add {
         path: Uuid::new_v4().to_string(),
         size: 100,
         partition_values: Default::default(),
-        partition_values_parsed: None,
         modification_time: Utc::now().timestamp_millis() - offset_millis,
         data_change: true,
         stats: None,
         stats_parsed: None,
         tags: None,
         deletion_vector: None,
+        base_row_id: None,
+        default_row_commit_version: None,
+        clustering_provider: None,
     }
 }
 
@@ -97,13 +102,13 @@ pub async fn commit_add(table: &mut DeltaTable, add: &Add) -> i64 {
         partition_by: None,
         predicate: None,
     };
-    commit_actions(table, vec![Action::add(add.clone())], operation).await
+    commit_actions(table, vec![Action::Add(add.clone())], operation).await
 }
 
 pub async fn commit_removes(table: &mut DeltaTable, removes: Vec<&Remove>) -> i64 {
     let vec = removes
         .iter()
-        .map(|r| Action::remove((*r).clone()))
+        .map(|r| Action::Remove((*r).clone()))
         .collect();
     let operation = DeltaOperation::Delete { predicate: None };
     commit_actions(table, vec, operation).await
@@ -115,10 +120,10 @@ pub async fn commit_actions(
     operation: DeltaOperation,
 ) -> i64 {
     let version = commit(
-        table.object_store().as_ref(),
+        table.log_store().as_ref(),
         &actions,
         operation,
-        &table.state,
+        Some(table.snapshot().unwrap()),
         None,
     )
     .await
@@ -129,7 +134,7 @@ pub async fn commit_actions(
 
 #[derive(Debug)]
 pub struct SlowStore {
-    inner: DeltaObjectStore,
+    inner: Arc<dyn ObjectStore>,
 }
 impl std::fmt::Display for SlowStore {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -137,14 +142,13 @@ impl std::fmt::Display for SlowStore {
     }
 }
 
-#[allow(dead_code)]
 impl SlowStore {
     pub fn new(
         location: Url,
-        options: impl Into<deltalake_core::storage::config::StorageOptions> + Clone,
+        _options: impl Into<deltalake_core::storage::StorageOptions> + Clone,
     ) -> deltalake_core::DeltaResult<Self> {
         Ok(Self {
-            inner: DeltaObjectStore::try_new(location, options).unwrap(),
+            inner: deltalake_core::storage::store_for(&location)?,
         })
     }
 }
@@ -152,8 +156,17 @@ impl SlowStore {
 #[async_trait::async_trait]
 impl ObjectStore for SlowStore {
     /// Save the provided bytes to the specified location.
-    async fn put(&self, location: &StorePath, bytes: bytes::Bytes) -> ObjectStoreResult<()> {
+    async fn put(&self, location: &StorePath, bytes: bytes::Bytes) -> ObjectStoreResult<PutResult> {
         self.inner.put(location, bytes).await
+    }
+
+    async fn put_opts(
+        &self,
+        location: &StorePath,
+        bytes: bytes::Bytes,
+        options: PutOptions,
+    ) -> ObjectStoreResult<PutResult> {
+        self.inner.put_opts(location, bytes, options).await
     }
 
     /// Return the bytes that are stored at the specified location.
@@ -197,27 +210,23 @@ impl ObjectStore for SlowStore {
     ///
     /// Prefixes are evaluated on a path segment basis, i.e. `foo/bar/` is a prefix of `foo/bar/x` but not of
     /// `foo/bar_baz/x`.
-    async fn list(
+    fn list(
         &self,
         prefix: Option<&StorePath>,
-    ) -> ObjectStoreResult<
-        futures::stream::BoxStream<'_, ObjectStoreResult<object_store::ObjectMeta>>,
-    > {
-        self.inner.list(prefix).await
+    ) -> futures::stream::BoxStream<'_, ObjectStoreResult<object_store::ObjectMeta>> {
+        self.inner.list(prefix)
     }
 
     /// List all the objects with the given prefix and a location greater than `offset`
     ///
     /// Some stores, such as S3 and GCS, may be able to push `offset` down to reduce
     /// the number of network requests required
-    async fn list_with_offset(
+    fn list_with_offset(
         &self,
         prefix: Option<&StorePath>,
         offset: &StorePath,
-    ) -> ObjectStoreResult<
-        futures::stream::BoxStream<'_, ObjectStoreResult<object_store::ObjectMeta>>,
-    > {
-        self.inner.list_with_offset(prefix, offset).await
+    ) -> futures::stream::BoxStream<'_, ObjectStoreResult<object_store::ObjectMeta>> {
+        self.inner.list_with_offset(prefix, offset)
     }
 
     /// List objects with the given prefix and an implementation specific

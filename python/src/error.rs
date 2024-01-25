@@ -20,7 +20,7 @@ fn inner_to_py_err(err: DeltaTableError) -> PyErr {
         DeltaTableError::InvalidJsonLog { .. } => DeltaProtocolError::new_err(err.to_string()),
         DeltaTableError::InvalidStatsJson { .. } => DeltaProtocolError::new_err(err.to_string()),
         DeltaTableError::InvalidData { violations } => {
-            DeltaProtocolError::new_err(format!("Inaviant violations: {:?}", violations))
+            DeltaProtocolError::new_err(format!("Invariant violations: {:?}", violations))
         }
 
         // commit errors
@@ -73,6 +73,7 @@ fn checkpoint_to_py(err: ProtocolError) -> PyErr {
         ProtocolError::ParquetParseError { source } => PyIOError::new_err(source.to_string()),
         ProtocolError::IO { source } => PyIOError::new_err(source.to_string()),
         ProtocolError::Generic(msg) => DeltaError::new_err(msg),
+        ProtocolError::Kernel { source } => DeltaError::new_err(source.to_string()),
     }
 }
 

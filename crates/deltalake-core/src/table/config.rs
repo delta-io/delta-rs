@@ -7,10 +7,13 @@ use serde::{Deserialize, Serialize};
 
 use crate::errors::DeltaTableError;
 
+use super::Constraint;
+
 /// Typed property keys that can be defined on a delta table
 /// <https://docs.delta.io/latest/table-properties.html#delta-table-properties-reference>
 /// <https://learn.microsoft.com/en-us/azure/databricks/delta/table-properties>
 #[derive(PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum DeltaConfigKey {
     /// true for this Delta table to be append-only. If append-only,
     /// existing records cannot be deleted, and existing values cannot be updated.
@@ -100,6 +103,9 @@ pub enum DeltaConfigKey {
 
     /// The target file size in bytes or higher units for file tuning. For example, 104857600 (bytes) or 100mb.
     TuneFileSizesForRewrites,
+
+    /// 'classic' for classic Delta Lake checkpoints. 'v2' for v2 checkpoints.
+    CheckpointPolicy,
 }
 
 impl AsRef<str> for DeltaConfigKey {
@@ -111,6 +117,7 @@ impl AsRef<str> for DeltaConfigKey {
             Self::AutoOptimizeOptimizeWrite => "delta.autoOptimize.optimizeWrite",
             Self::CheckpointWriteStatsAsJson => "delta.checkpoint.writeStatsAsJson",
             Self::CheckpointWriteStatsAsStruct => "delta.checkpoint.writeStatsAsStruct",
+            Self::CheckpointPolicy => "delta.checkpointPolicy",
             Self::ColumnMappingMode => "delta.columnMapping.mode",
             Self::DataSkippingNumIndexedCols => "delta.dataSkippingNumIndexedCols",
             Self::DeletedFileRetentionDuration => "delta.deletedFileRetentionDuration",
@@ -140,6 +147,7 @@ impl FromStr for DeltaConfigKey {
             "delta.autoOptimize.optimizeWrite" => Ok(Self::AutoOptimizeOptimizeWrite),
             "delta.checkpoint.writeStatsAsJson" => Ok(Self::CheckpointWriteStatsAsJson),
             "delta.checkpoint.writeStatsAsStruct" => Ok(Self::CheckpointWriteStatsAsStruct),
+            "delta.checkpointPolicy" => Ok(Self::CheckpointPolicy),
             "delta.columnMapping.mode" => Ok(Self::ColumnMappingMode),
             "delta.dataSkippingNumIndexedCols" => Ok(Self::DataSkippingNumIndexedCols),
             "delta.deletedFileRetentionDuration" | "deletedFileRetentionDuration" => {
@@ -201,7 +209,7 @@ impl<'a> TableConfig<'a> {
             DeltaConfigKey::CheckpointWriteStatsAsStruct,
             write_stats_as_struct,
             bool,
-            true
+            false
         ),
         (
             DeltaConfigKey::TargetFileSize,
@@ -280,6 +288,36 @@ impl<'a> TableConfig<'a> {
             .and_then(|o| o.as_ref().and_then(|v| v.parse().ok()))
             .unwrap_or_default()
     }
+
+    /// Policy applied during chepoint creation
+    pub fn checkpoint_policy(&self) -> CheckpointPolicy {
+        self.0
+            .get(DeltaConfigKey::CheckpointPolicy.as_ref())
+            .and_then(|o| o.as_ref().and_then(|v| v.parse().ok()))
+            .unwrap_or_default()
+    }
+
+    /// Return the column mapping mode according to delta.columnMapping.mode
+    pub fn column_mapping_mode(&self) -> ColumnMappingMode {
+        self.0
+            .get(DeltaConfigKey::ColumnMappingMode.as_ref())
+            .and_then(|o| o.as_ref().and_then(|v| v.parse().ok()))
+            .unwrap_or_default()
+    }
+
+    /// Return the check constraints on the current table
+    pub fn get_constraints(&self) -> Vec<Constraint> {
+        self.0
+            .iter()
+            .filter_map(|(field, value)| {
+                if field.starts_with("delta.constraints") {
+                    value.as_ref().map(|f| Constraint::new("*", f))
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
@@ -338,6 +376,91 @@ impl FromStr for IsolationLevel {
     }
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+/// The checkpoint policy applied when writing checkpoints
+#[serde(rename_all = "camelCase")]
+pub enum CheckpointPolicy {
+    /// classic Delta Lake checkpoints
+    Classic,
+    /// v2 checkpoints
+    V2,
+    /// unknown checkpoint policy
+    Other(String),
+}
+
+impl Default for CheckpointPolicy {
+    fn default() -> Self {
+        Self::Classic
+    }
+}
+
+impl AsRef<str> for CheckpointPolicy {
+    fn as_ref(&self) -> &str {
+        match self {
+            Self::Classic => "classic",
+            Self::V2 => "v2",
+            Self::Other(s) => s,
+        }
+    }
+}
+
+impl FromStr for CheckpointPolicy {
+    type Err = DeltaTableError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_ascii_lowercase().as_str() {
+            "classic" => Ok(Self::Classic),
+            "v2" => Ok(Self::V2),
+            _ => Err(DeltaTableError::Generic(
+                "Invalid string for CheckpointPolicy".into(),
+            )),
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+/// The Column Mapping modes used for reading and writing data
+#[serde(rename_all = "camelCase")]
+pub enum ColumnMappingMode {
+    /// No column mapping is applied
+    None,
+    /// Columns are mapped by their field_id in parquet
+    Id,
+    /// Columns are mapped to a physical name
+    Name,
+}
+
+impl Default for ColumnMappingMode {
+    fn default() -> Self {
+        Self::None
+    }
+}
+
+impl AsRef<str> for ColumnMappingMode {
+    fn as_ref(&self) -> &str {
+        match self {
+            Self::None => "none",
+            Self::Id => "id",
+            Self::Name => "name",
+        }
+    }
+}
+
+impl FromStr for ColumnMappingMode {
+    type Err = DeltaTableError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_ascii_lowercase().as_str() {
+            "none" => Ok(Self::None),
+            "id" => Ok(Self::Id),
+            "name" => Ok(Self::Name),
+            _ => Err(DeltaTableError::Generic(
+                "Invalid string for ColumnMappingMode".into(),
+            )),
+        }
+    }
+}
+
 const SECONDS_PER_MINUTE: u64 = 60;
 const SECONDS_PER_HOUR: u64 = 60 * SECONDS_PER_MINUTE;
 const SECONDS_PER_DAY: u64 = 24 * SECONDS_PER_HOUR;
@@ -387,13 +510,12 @@ fn parse_int(value: &str) -> Result<i64, DeltaConfigError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::table::DeltaTableMetaData;
-    use crate::Schema;
+    use crate::kernel::{Metadata, StructType};
     use std::collections::HashMap;
 
-    fn dummy_metadata() -> DeltaTableMetaData {
-        let schema = Schema::new(Vec::new());
-        DeltaTableMetaData::new(None, None, None, schema, Vec::new(), HashMap::new())
+    fn dummy_metadata() -> Metadata {
+        let schema = StructType::new(Vec::new());
+        Metadata::try_new(schema, Vec::<String>::new(), HashMap::new()).unwrap()
     }
 
     #[test]

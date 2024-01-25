@@ -1,21 +1,20 @@
-#![cfg(all(feature = "arrow", feature = "parquet"))]
-
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use std::{collections::HashMap, error::Error, sync::Arc};
+use std::time::Duration;
+use std::{error::Error, sync::Arc};
 
 use arrow_array::{Int32Array, RecordBatch, StringArray};
-use arrow_schema::{DataType, Field, Schema as ArrowSchema};
+use arrow_schema::{DataType as ArrowDataType, Field, Schema as ArrowSchema};
 use arrow_select::concat::concat_batches;
 use deltalake_core::errors::DeltaTableError;
+use deltalake_core::kernel::{Action, DataType, PrimitiveType, StructField};
 use deltalake_core::operations::optimize::{
     create_merge_plan, MetricDetails, Metrics, OptimizeType,
 };
 use deltalake_core::operations::transaction::commit;
 use deltalake_core::operations::DeltaOps;
-use deltalake_core::protocol::{Action, DeltaOperation, Remove};
+use deltalake_core::protocol::DeltaOperation;
 use deltalake_core::storage::ObjectStoreRef;
 use deltalake_core::writer::{DeltaWriter, RecordBatchWriter};
-use deltalake_core::{DeltaTable, PartitionFilter, Path, SchemaDataType, SchemaField};
+use deltalake_core::{DeltaTable, PartitionFilter, Path};
 use futures::TryStreamExt;
 use object_store::ObjectStore;
 use parquet::arrow::async_reader::ParquetObjectReader;
@@ -23,7 +22,7 @@ use parquet::arrow::ParquetRecordBatchStreamBuilder;
 use parquet::file::properties::WriterProperties;
 use rand::prelude::*;
 use serde_json::json;
-use tempdir::TempDir;
+use tempfile::TempDir;
 
 struct Context {
     pub tmp_dir: TempDir,
@@ -32,23 +31,20 @@ struct Context {
 
 async fn setup_test(partitioned: bool) -> Result<Context, Box<dyn Error>> {
     let columns = vec![
-        SchemaField::new(
+        StructField::new(
             "x".to_owned(),
-            SchemaDataType::primitive("integer".to_owned()),
+            DataType::Primitive(PrimitiveType::Integer),
             false,
-            HashMap::new(),
         ),
-        SchemaField::new(
+        StructField::new(
             "y".to_owned(),
-            SchemaDataType::primitive("integer".to_owned()),
+            DataType::Primitive(PrimitiveType::Integer),
             false,
-            HashMap::new(),
         ),
-        SchemaField::new(
+        StructField::new(
             "date".to_owned(),
-            SchemaDataType::primitive("string".to_owned()),
+            DataType::Primitive(PrimitiveType::String),
             false,
-            HashMap::new(),
         ),
     ];
 
@@ -58,7 +54,7 @@ async fn setup_test(partitioned: bool) -> Result<Context, Box<dyn Error>> {
         vec![]
     };
 
-    let tmp_dir = tempdir::TempDir::new("opt_table").unwrap();
+    let tmp_dir = tempfile::tempdir().unwrap();
     let table_uri = tmp_dir.path().to_str().to_owned().unwrap();
     let dt = DeltaOps::try_from_uri(table_uri)
         .await?
@@ -92,9 +88,9 @@ fn generate_random_batch<T: Into<String>>(
 
     Ok(RecordBatch::try_new(
         Arc::new(ArrowSchema::new(vec![
-            Field::new("x", DataType::Int32, false),
-            Field::new("y", DataType::Int32, false),
-            Field::new("date", DataType::Utf8, false),
+            Field::new("x", ArrowDataType::Int32, false),
+            Field::new("y", ArrowDataType::Int32, false),
+            Field::new("date", ArrowDataType::Utf8, false),
         ])),
         vec![Arc::new(x_array), Arc::new(y_array), Arc::new(date_array)],
     )?)
@@ -121,9 +117,9 @@ fn tuples_to_batch<T: Into<String>>(
 
     Ok(RecordBatch::try_new(
         Arc::new(ArrowSchema::new(vec![
-            Field::new("x", DataType::Int32, false),
-            Field::new("y", DataType::Int32, false),
-            Field::new("date", DataType::Utf8, false),
+            Field::new("x", ArrowDataType::Int32, false),
+            Field::new("y", ArrowDataType::Int32, false),
+            Field::new("date", ArrowDataType::Utf8, false),
         ])),
         vec![Arc::new(x_array), Arc::new(y_array), Arc::new(date_array)],
     )?)
@@ -172,7 +168,7 @@ async fn test_optimize_non_partitioned_table() -> Result<(), Box<dyn Error>> {
     .await?;
 
     let version = dt.version();
-    assert_eq!(dt.get_state().files().len(), 5);
+    assert_eq!(dt.get_files_count(), 5);
 
     let optimize = DeltaOps(dt).optimize().with_target_size(2_000_000);
     let (dt, metrics) = optimize.await?;
@@ -182,7 +178,7 @@ async fn test_optimize_non_partitioned_table() -> Result<(), Box<dyn Error>> {
     assert_eq!(metrics.num_files_removed, 4);
     assert_eq!(metrics.total_considered_files, 5);
     assert_eq!(metrics.partitions_optimized, 1);
-    assert_eq!(dt.get_state().files().len(), 2);
+    assert_eq!(dt.get_files_count(), 2);
 
     Ok(())
 }
@@ -238,7 +234,7 @@ async fn test_optimize_with_partitions() -> Result<(), Box<dyn Error>> {
     assert_eq!(version + 1, dt.version());
     assert_eq!(metrics.num_files_added, 1);
     assert_eq!(metrics.num_files_removed, 2);
-    assert_eq!(dt.get_state().files().len(), 3);
+    assert_eq!(dt.get_files_count(), 3);
 
     Ok(())
 }
@@ -271,7 +267,7 @@ async fn test_conflict_for_remove_actions() -> Result<(), Box<dyn Error>> {
     let filter = vec![PartitionFilter::try_from(("date", "=", "2022-05-22"))?];
     let plan = create_merge_plan(
         OptimizeType::Compact,
-        &dt.state,
+        dt.snapshot()?,
         &filter,
         None,
         WriterProperties::builder().build(),
@@ -279,35 +275,21 @@ async fn test_conflict_for_remove_actions() -> Result<(), Box<dyn Error>> {
 
     let uri = context.tmp_dir.path().to_str().to_owned().unwrap();
     let other_dt = deltalake_core::open_table(uri).await?;
-    let add = &other_dt.get_state().files()[0];
-    let remove = Remove {
-        path: add.path.clone(),
-        deletion_timestamp: Some(
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_millis() as i64,
-        ),
-        data_change: true,
-        extended_file_metadata: None,
-        size: Some(add.size),
-        partition_values: Some(add.partition_values.clone()),
-        tags: Some(HashMap::new()),
-        deletion_vector: add.deletion_vector.clone(),
-    };
+    let add = &other_dt.snapshot()?.log_data().into_iter().next().unwrap();
+    let remove = add.remove_action(true);
 
     let operation = DeltaOperation::Delete { predicate: None };
     commit(
-        other_dt.object_store().as_ref(),
-        &vec![Action::remove(remove)],
+        other_dt.log_store().as_ref(),
+        &vec![Action::Remove(remove)],
         operation,
-        &other_dt.state,
+        Some(other_dt.snapshot()?),
         None,
     )
     .await?;
 
     let maybe_metrics = plan
-        .execute(dt.object_store(), &dt.state, 1, 20, None)
+        .execute(dt.log_store(), dt.snapshot()?, 1, 20, None, None)
         .await;
 
     assert!(maybe_metrics.is_err());
@@ -341,7 +323,7 @@ async fn test_no_conflict_for_append_actions() -> Result<(), Box<dyn Error>> {
     let filter = vec![PartitionFilter::try_from(("date", "=", "2022-05-22"))?];
     let plan = create_merge_plan(
         OptimizeType::Compact,
-        &dt.state,
+        dt.snapshot()?,
         &filter,
         None,
         WriterProperties::builder().build(),
@@ -358,7 +340,7 @@ async fn test_no_conflict_for_append_actions() -> Result<(), Box<dyn Error>> {
     .await?;
 
     let metrics = plan
-        .execute(dt.object_store(), &dt.state, 1, 20, None)
+        .execute(dt.log_store(), dt.snapshot()?, 1, 20, None, None)
         .await?;
     assert_eq!(metrics.num_files_added, 1);
     assert_eq!(metrics.num_files_removed, 2);
@@ -391,7 +373,7 @@ async fn test_commit_interval() -> Result<(), Box<dyn Error>> {
 
     let plan = create_merge_plan(
         OptimizeType::Compact,
-        &dt.state,
+        dt.snapshot()?,
         &[],
         None,
         WriterProperties::builder().build(),
@@ -399,11 +381,12 @@ async fn test_commit_interval() -> Result<(), Box<dyn Error>> {
 
     let metrics = plan
         .execute(
-            dt.object_store(),
-            &dt.state,
+            dt.log_store(),
+            dt.snapshot()?,
             1,
             20,
             Some(Duration::from_secs(0)), // this will cause as many commits as num_files_added
+            None,
         )
         .await?;
     assert_eq!(metrics.num_files_added, 2);
@@ -513,6 +496,71 @@ async fn test_idempotent_metrics() -> Result<(), Box<dyn Error>> {
 }
 
 #[tokio::test]
+/// Validate that multiple bins packing is idempotent.
+async fn test_idempotent_with_multiple_bins() -> Result<(), Box<dyn Error>> {
+    //TODO: Compression makes it hard to get the target file size...
+    //Maybe just commit files with a known size
+    let context = setup_test(true).await?;
+    let mut dt = context.table;
+    let mut writer = RecordBatchWriter::for_table(&dt)?;
+
+    write(
+        &mut writer,
+        &mut dt,
+        generate_random_batch(records_for_size(6_000_000), "2022-05-22")?,
+    )
+    .await?;
+    write(
+        &mut writer,
+        &mut dt,
+        generate_random_batch(records_for_size(3_000_000), "2022-05-22")?,
+    )
+    .await?;
+    write(
+        &mut writer,
+        &mut dt,
+        generate_random_batch(records_for_size(6_000_000), "2022-05-22")?,
+    )
+    .await?;
+    write(
+        &mut writer,
+        &mut dt,
+        generate_random_batch(records_for_size(3_000_000), "2022-05-22")?,
+    )
+    .await?;
+    write(
+        &mut writer,
+        &mut dt,
+        generate_random_batch(records_for_size(9_900_000), "2022-05-22")?,
+    )
+    .await?;
+
+    let version = dt.version();
+
+    let filter = vec![PartitionFilter::try_from(("date", "=", "2022-05-22"))?];
+
+    let optimize = DeltaOps(dt)
+        .optimize()
+        .with_filters(&filter)
+        .with_target_size(10_000_000);
+    let (dt, metrics) = optimize.await?;
+    assert_eq!(metrics.num_files_added, 2);
+    assert_eq!(metrics.num_files_removed, 4);
+    assert_eq!(dt.version(), version + 1);
+
+    let optimize = DeltaOps(dt)
+        .optimize()
+        .with_filters(&filter)
+        .with_target_size(10_000_000);
+    let (dt, metrics) = optimize.await?;
+    assert_eq!(metrics.num_files_added, 0);
+    assert_eq!(metrics.num_files_removed, 0);
+    assert_eq!(dt.version(), version + 1);
+
+    Ok(())
+}
+
+#[tokio::test]
 /// Validate operation data and metadata was written
 async fn test_commit_info() -> Result<(), Box<dyn Error>> {
     let context = setup_test(true).await?;
@@ -541,10 +589,10 @@ async fn test_commit_info() -> Result<(), Box<dyn Error>> {
         .optimize()
         .with_target_size(2_000_000)
         .with_filters(&filter);
-    let (mut dt, metrics) = optimize.await?;
+    let (dt, metrics) = optimize.await?;
 
     let commit_info = dt.history(None).await?;
-    let last_commit = &commit_info[commit_info.len() - 1];
+    let last_commit = &commit_info[0];
 
     let commit_metrics =
         serde_json::from_value::<Metrics>(last_commit.info["operationMetrics"].clone())?;
@@ -653,7 +701,7 @@ async fn test_zorder_unpartitioned() -> Result<(), Box<dyn Error>> {
     assert_eq!(metrics.total_considered_files, 2);
 
     // Check data
-    let files = dt.get_files();
+    let files = dt.get_files_iter()?.collect::<Vec<_>>();
     assert_eq!(files.len(), 1);
 
     let actual = read_parquet_file(&files[0], dt.object_store()).await?;
