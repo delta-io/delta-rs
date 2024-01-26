@@ -415,6 +415,7 @@ fn extract_partition_values(
 
 #[cfg(test)]
 mod tests {
+    use arrow_schema::ArrowError;
     use parquet::file::reader::FileReader;
     use parquet::file::serialized_reader::SerializedFileReader;
     use std::fs::File;
@@ -509,5 +510,37 @@ mod tests {
             BTreeMap::from([(String::from("col1"), Scalar::Integer(1)),])
         );
         assert!(extract_partition_values(&[String::from("col4")], &record_batch).is_err())
+    }
+
+    #[tokio::test]
+    async fn test_parsing_error() {
+        let table_dir = tempfile::tempdir().unwrap();
+        let schema = get_delta_schema();
+        let path = table_dir.path().to_str().unwrap().to_string();
+
+        let arrow_schema = <ArrowSchema as TryFrom<&StructType>>::try_from(&schema).unwrap();
+        let mut writer = JsonWriter::try_new(
+            path.clone(),
+            Arc::new(arrow_schema),
+            Some(vec!["modified".to_string()]),
+            None,
+        )
+        .unwrap();
+
+        let data = serde_json::json!(
+            {
+                "id" : "A",
+                "value": "abc",
+                "modified": "2021-02-01"
+            }
+        );
+
+        let res = writer.write(vec![data]).await;
+        assert!(matches!(
+            res,
+            Err(DeltaTableError::Arrow {
+                source: ArrowError::JsonError(_)
+            })
+        ));
     }
 }
