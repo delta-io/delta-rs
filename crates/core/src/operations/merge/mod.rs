@@ -1416,9 +1416,7 @@ impl std::future::IntoFuture for MergeBuilder {
             PROTOCOL.can_write_to(&this.snapshot)?;
 
             let state = this.state.unwrap_or_else(|| {
-                //TODO: Datafusion's Hashjoin has some memory issues. Running with all cores results in a OoM. Can be removed when upstream improvemetns are made.
                 let config: SessionConfig = DeltaSessionConfig::default().into();
-                let config = config.with_target_partitions(1);
                 let session = SessionContext::new_with_config(config);
 
                 // If a user provides their own their DF state then they must register the store themselves
