@@ -30,6 +30,7 @@ use self::parse::{read_adds, read_removes};
 use self::replay::{LogMapper, LogReplayScanner, ReplayStream};
 use super::{Action, Add, CommitInfo, Metadata, Protocol, Remove};
 use crate::kernel::StructType;
+use crate::logstore::LogStore;
 use crate::table::config::TableConfig;
 use crate::{DeltaResult, DeltaTableConfig, DeltaTableError};
 
@@ -109,16 +110,16 @@ impl Snapshot {
     /// Update the snapshot to the given version
     pub async fn update(
         &mut self,
-        store: Arc<dyn ObjectStore>,
+        log_store: Arc<dyn LogStore>,
         target_version: Option<i64>,
     ) -> DeltaResult<()> {
-        self.update_inner(store, target_version).await?;
+        self.update_inner(log_store, target_version).await?;
         Ok(())
     }
 
     async fn update_inner(
         &mut self,
-        store: Arc<dyn ObjectStore>,
+        log_store: Arc<dyn LogStore>,
         target_version: Option<i64>,
     ) -> DeltaResult<Option<LogSegment>> {
         if let Some(version) = target_version {
@@ -126,16 +127,14 @@ impl Snapshot {
                 return Ok(None);
             }
             if version < self.version() {
-                return Err(DeltaTableError::Generic(
-                    "Cannoit downgrade snapshot".into(),
-                ));
+                return Err(DeltaTableError::Generic("Cannot downgrade snapshot".into()));
             }
         }
         let log_segment = LogSegment::try_new_slice(
             &Path::default(),
             self.version() + 1,
             target_version,
-            store.as_ref(),
+            log_store.as_ref(),
         )
         .await?;
         if log_segment.commit_files.is_empty() && log_segment.checkpoint_files.is_empty() {
@@ -143,7 +142,7 @@ impl Snapshot {
         }
 
         let (protocol, metadata) = log_segment
-            .read_metadata(store.clone(), &self.config)
+            .read_metadata(log_store.object_store().clone(), &self.config)
             .await?;
         if let Some(protocol) = protocol {
             self.protocol = protocol;
@@ -329,7 +328,7 @@ impl EagerSnapshot {
     /// Update the snapshot to the given version
     pub async fn update(
         &mut self,
-        store: Arc<dyn ObjectStore>,
+        log_store: Arc<dyn LogStore>,
         target_version: Option<i64>,
     ) -> DeltaResult<()> {
         if Some(self.version()) == target_version {
@@ -337,12 +336,12 @@ impl EagerSnapshot {
         }
         let new_slice = self
             .snapshot
-            .update_inner(store.clone(), target_version)
+            .update_inner(log_store.clone(), target_version)
             .await?;
         if let Some(new_slice) = new_slice {
             let files = std::mem::take(&mut self.files);
             let log_stream = new_slice.commit_stream(
-                store.clone(),
+                log_store.object_store().clone(),
                 &log_segment::COMMIT_SCHEMA,
                 &self.snapshot.config,
             )?;
@@ -351,7 +350,7 @@ impl EagerSnapshot {
             } else {
                 new_slice
                     .checkpoint_stream(
-                        store,
+                        log_store.object_store(),
                         &log_segment::CHECKPOINT_SCHEMA,
                         &self.snapshot.config,
                     )

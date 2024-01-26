@@ -14,6 +14,7 @@ use crate::kernel::{
     Action, Add, DataType, EagerSnapshot, LogDataHandler, LogicalFile, Metadata, Protocol, Remove,
     StructType,
 };
+use crate::logstore::LogStore;
 use crate::partitions::{DeltaTablePartition, PartitionFilter};
 use crate::protocol::DeltaOperation;
 use crate::{DeltaResult, DeltaTableError};
@@ -196,10 +197,10 @@ impl DeltaTableState {
     /// Update the state of the table to the given version.
     pub async fn update(
         &mut self,
-        store: Arc<dyn ObjectStore>,
+        log_store: Arc<dyn LogStore>,
         version: Option<i64>,
     ) -> Result<(), DeltaTableError> {
-        self.snapshot.update(store, version).await?;
+        self.snapshot.update(log_store, version).await?;
         Ok(())
     }
 
