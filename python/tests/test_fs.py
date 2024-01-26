@@ -91,6 +91,9 @@ def test_read_simple_table_from_remote(s3_localstack):
 @pytest.mark.s3
 @pytest.mark.integration
 @pytest.mark.timeout(timeout=15, method="thread")
+@pytest.mark.skip(
+    reason="Temporarily disabled until we can resolve https://github.com/delta-io/delta-rs/pull/2120#issuecomment-1912367573"
+)
 def test_roundtrip_s3_env(s3_localstack, sample_data: pa.Table, monkeypatch):
     table_path = "s3://deltars/roundtrip"
 
