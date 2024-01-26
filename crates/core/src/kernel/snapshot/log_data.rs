@@ -247,7 +247,7 @@ impl LogicalFile<'_> {
                 .is_valid(self.index)
                 .then_some(DeletionVectorView {
                     data: arr,
-                    index: self.index
+                    index: self.index,
                 })
         })
     }
