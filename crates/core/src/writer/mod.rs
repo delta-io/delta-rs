@@ -115,6 +115,7 @@ impl From<DeltaWriterError> for DeltaTableError {
             DeltaWriterError::Io { source } => DeltaTableError::Io { source },
             DeltaWriterError::ObjectStore { source } => DeltaTableError::ObjectStore { source },
             DeltaWriterError::Parquet { source } => DeltaTableError::Parquet { source },
+            DeltaWriterError::DeltaTable(e) => e,
             _ => DeltaTableError::Generic(err.to_string()),
         }
     }
