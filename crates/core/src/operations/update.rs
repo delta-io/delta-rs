@@ -266,7 +266,6 @@ async fn execute(
     let predicate_expr = create_physical_expr(
         &predicate_null,
         &input_dfschema,
-        &input_schema,
         execution_props,
     )?;
     expressions.push((predicate_expr, "__delta_rs_update_predicate".to_string()));
@@ -316,7 +315,7 @@ async fn execute(
             .when(lit(true), expr.to_owned())
             .otherwise(col(column.to_owned()))?;
         let predicate_expr =
-            create_physical_expr(&expr, &input_dfschema, &input_schema, execution_props)?;
+            create_physical_expr(&expr, &input_dfschema,  execution_props)?;
         map.insert(column.name.clone(), expressions.len());
         let c = "__delta_rs_".to_string() + &column.name;
         expressions.push((predicate_expr, c.clone()));

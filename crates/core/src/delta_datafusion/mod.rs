@@ -90,7 +90,7 @@ pub mod physical;
 impl From<DeltaTableError> for DataFusionError {
     fn from(err: DeltaTableError) -> Self {
         match err {
-            DeltaTableError::Arrow { source } => DataFusionError::ArrowError(source),
+            DeltaTableError::Arrow { source } => DataFusionError::ArrowError(source, None),
             DeltaTableError::Io { source } => DataFusionError::IoError(source),
             DeltaTableError::ObjectStore { source } => DataFusionError::ObjectStore(source),
             DeltaTableError::Parquet { source } => DataFusionError::ParquetError(source),
@@ -102,7 +102,7 @@ impl From<DeltaTableError> for DataFusionError {
 impl From<DataFusionError> for DeltaTableError {
     fn from(err: DataFusionError) -> Self {
         match err {
-            DataFusionError::ArrowError(source) => DeltaTableError::Arrow { source },
+            DataFusionError::ArrowError(source, _) => DeltaTableError::Arrow { source },
             DataFusionError::IoError(source) => DeltaTableError::Io { source },
             DataFusionError::ObjectStore(source) => DeltaTableError::ObjectStore { source },
             DataFusionError::ParquetError(source) => DeltaTableError::Parquet { source },
@@ -430,7 +430,6 @@ impl<'a> DeltaScanBuilder<'a> {
                     limit: self.limit,
                     table_partition_cols,
                     output_ordering: vec![],
-                    infinite_source: false,
                 },
                 logical_filter.as_ref(),
             )
@@ -808,7 +807,7 @@ pub(crate) fn logical_expr_to_physical_expr(
 ) -> Arc<dyn PhysicalExpr> {
     let df_schema = schema.clone().to_dfschema().unwrap();
     let execution_props = ExecutionProps::new();
-    create_physical_expr(expr, &df_schema, schema, &execution_props).unwrap()
+    create_physical_expr(expr, &df_schema, &execution_props).unwrap()
 }
 
 pub(crate) async fn execute_plan_to_batch(
@@ -1238,7 +1237,6 @@ pub(crate) async fn find_files_scan<'a>(
     let predicate_expr = create_physical_expr(
         &Expr::IsTrue(Box::new(expression.clone())),
         &input_dfschema,
-        &input_schema,
         state.execution_props(),
     )?;
 

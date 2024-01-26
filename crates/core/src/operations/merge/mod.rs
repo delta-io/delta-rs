@@ -661,7 +661,7 @@ impl ExtensionPlanner for MergeMetricExtensionPlanner {
             return Ok(Some(Arc::new(MergeBarrierExec::new(
                 physical_inputs.first().unwrap().clone(),
                 barrier.file_column.clone(),
-                planner.create_physical_expr(&barrier.expr, schema, &exec_schema, session_state)?,
+                planner.create_physical_expr(&barrier.expr, schema, session_state)?,
             ))));
         }
 
