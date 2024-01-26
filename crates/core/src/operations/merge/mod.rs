@@ -32,7 +32,6 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
 
-use arrow_schema::Schema as ArrowSchema;
 use async_trait::async_trait;
 use datafusion::datasource::provider_as_source;
 use datafusion::error::Result as DataFusionResult;
@@ -657,7 +656,6 @@ impl ExtensionPlanner for MergeMetricExtensionPlanner {
 
         if let Some(barrier) = node.as_any().downcast_ref::<MergeBarrier>() {
             let schema = barrier.input.schema();
-            let exec_schema: ArrowSchema = schema.as_ref().to_owned().into();
             return Ok(Some(Arc::new(MergeBarrierExec::new(
                 physical_inputs.first().unwrap().clone(),
                 barrier.file_column.clone(),
