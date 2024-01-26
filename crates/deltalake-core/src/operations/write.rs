@@ -403,14 +403,13 @@ impl std::future::IntoFuture for WriteBuilder {
                 Ok(this.partition_columns.unwrap_or_default())
             }?;
 
-            let mut schema: ArrowSchemaRef = arrow_schema::Schema::empty().into();
             let plan = if let Some(plan) = this.input {
                 Ok(plan)
             } else if let Some(batches) = this.batches {
                 if batches.is_empty() {
                     Err(WriteError::MissingData)
                 } else {
-                    schema = batches[0].schema();
+                    let schema = batches[0].schema();
 
                     if let Some(snapshot) = &this.snapshot {
                         let table_schema = snapshot
@@ -460,6 +459,7 @@ impl std::future::IntoFuture for WriteBuilder {
             } else {
                 Err(WriteError::MissingData)
             }?;
+            let schema = plan.schema();
 
             let state = match this.state {
                 Some(state) => state,
