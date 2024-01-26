@@ -45,7 +45,8 @@ use std::error::Error;
 
 mod local {
     use datafusion::common::stats::Precision;
-    use deltalake_core::writer::JsonWriter;
+    use deltalake_core::{logstore::default_logstore, writer::JsonWriter};
+    use object_store::local::LocalFileSystem;
 
     use super::*;
     #[tokio::test]
@@ -1069,6 +1070,62 @@ mod local {
 
         assert_batches_sorted_eq!(&expected, &batches);
 
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_issue_2105() -> Result<()> {
+        use datafusion::arrow::datatypes::{DataType as ArrowDataType, Field, Schema};
+        let path = tempfile::tempdir().unwrap();
+        let path = path.into_path();
+
+        let file_store = LocalFileSystem::new_with_prefix(path.clone()).unwrap();
+        let log_store = default_logstore(
+            Arc::new(file_store),
+            &Url::from_file_path(path.clone()).unwrap(),
+            &Default::default(),
+        );
+
+        let tbl = CreateBuilder::new()
+            .with_log_store(log_store.clone())
+            .with_save_mode(SaveMode::Overwrite)
+            .with_table_name("test")
+            .with_column(
+                "id",
+                DataType::Primitive(PrimitiveType::Integer),
+                true,
+                None,
+            );
+        let tbl = tbl.await.unwrap();
+        let ctx = SessionContext::new();
+        let plan = ctx
+            .sql("SELECT 1 as id")
+            .await
+            .unwrap()
+            .create_physical_plan()
+            .await
+            .unwrap();
+        let write_builder = WriteBuilder::new(log_store, tbl.state);
+        let _ = write_builder
+            .with_input_execution_plan(plan)
+            .with_save_mode(SaveMode::Overwrite)
+            .await
+            .unwrap();
+
+        let table = open_table(path.to_str().unwrap()).await.unwrap();
+        let prov: Arc<dyn TableProvider> = Arc::new(table);
+        ctx.register_table("test", prov).unwrap();
+        let mut batches = ctx
+            .sql("SELECT * FROM test")
+            .await
+            .unwrap()
+            .collect()
+            .await
+            .unwrap();
+        let batch = batches.pop().unwrap();
+
+        let expected_schema = Schema::new(vec![Field::new("id", ArrowDataType::Int32, true)]);
+        assert_eq!(batch.schema().as_ref(), &expected_schema);
         Ok(())
     }
 }
