@@ -19,28 +19,27 @@ debug = "line-tables-only"
 
 [workspace.dependencies]
 # arrow
-arrow = { version = "49" }
-arrow-arith = { version = "49" }
-arrow-array = { version = "49" }
-arrow-buffer = { version = "49" }
-arrow-cast = { version = "49" }
-arrow-ipc = { version = "49" }
-arrow-json = { version = "49" }
-arrow-ord = { version = "49" }
-arrow-row = { version = "49" }
-arrow-schema = { version = "49" }
-arrow-select = { version = "49" }
+arrow = { version = "50" }
+arrow-arith = { version = "50" }
+arrow-array = { version = "50" }
+arrow-buffer = { version = "50" }
+arrow-cast = { version = "50" }
+arrow-ipc = { version = "50" }
+arrow-json = { version = "50" }
+arrow-ord = { version = "50" }
+arrow-row = { version = "50" }
+arrow-schema = { version = "50" }
+arrow-select = { version = "50" }
 object_store = { version = "0.8" }
-parquet = { version = "49" }
+parquet = { version = "50" }
 
 # datafusion
-datafusion = { version = "34" }
-datafusion-expr = { version = "34" }
-datafusion-common = { version = "34" }
-datafusion-proto = { version = "34" }
-datafusion-sql = { version = "34" }
-datafusion-physical-expr = { version = "34" }
-
+datafusion = { version = "35" }
+datafusion-expr = { version = "35" }
+datafusion-common = { version = "35" }
+datafusion-proto = { version = "35" }
+datafusion-sql = { version = "35" }
+datafusion-physical-expr = { version = "35" }
 
 # serde
 serde = { version = "1.0.194", features = ["derive"] }
