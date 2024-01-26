@@ -7,6 +7,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::errors::DeltaTableError;
 
+use super::Constraint;
+
 /// Typed property keys that can be defined on a delta table
 /// <https://docs.delta.io/latest/table-properties.html#delta-table-properties-reference>
 /// <https://learn.microsoft.com/en-us/azure/databricks/delta/table-properties>
@@ -207,7 +209,7 @@ impl<'a> TableConfig<'a> {
             DeltaConfigKey::CheckpointWriteStatsAsStruct,
             write_stats_as_struct,
             bool,
-            true
+            false
         ),
         (
             DeltaConfigKey::TargetFileSize,
@@ -301,6 +303,20 @@ impl<'a> TableConfig<'a> {
             .get(DeltaConfigKey::ColumnMappingMode.as_ref())
             .and_then(|o| o.as_ref().and_then(|v| v.parse().ok()))
             .unwrap_or_default()
+    }
+
+    /// Return the check constraints on the current table
+    pub fn get_constraints(&self) -> Vec<Constraint> {
+        self.0
+            .iter()
+            .filter_map(|(field, value)| {
+                if field.starts_with("delta.constraints") {
+                    value.as_ref().map(|f| Constraint::new("*", f))
+                } else {
+                    None
+                }
+            })
+            .collect()
     }
 }
 
@@ -494,13 +510,12 @@ fn parse_int(value: &str) -> Result<i64, DeltaConfigError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::kernel::StructType;
-    use crate::table::DeltaTableMetaData;
+    use crate::kernel::{Metadata, StructType};
     use std::collections::HashMap;
 
-    fn dummy_metadata() -> DeltaTableMetaData {
+    fn dummy_metadata() -> Metadata {
         let schema = StructType::new(Vec::new());
-        DeltaTableMetaData::new(None, None, None, schema, Vec::new(), HashMap::new())
+        Metadata::try_new(schema, Vec::<String>::new(), HashMap::new()).unwrap()
     }
 
     #[test]

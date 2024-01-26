@@ -148,10 +148,13 @@ impl IntegrationContext {
 /// Reference tables from the test data folder
 pub enum TestTables {
     Simple,
+    SimpleWithCheckpoint,
     SimpleCommit,
     Golden,
     Delta0_8_0Partitioned,
     Delta0_8_0SpecialPartitioned,
+    Checkpoints,
+    WithDvSmall,
     Custom(String),
 }
 
@@ -164,6 +167,11 @@ impl TestTables {
         let data_path = std::path::Path::new(dir).join("tests/data");
         match self {
             Self::Simple => data_path.join("simple_table").to_str().unwrap().to_owned(),
+            Self::SimpleWithCheckpoint => data_path
+                .join("simple_table_with_checkpoint")
+                .to_str()
+                .unwrap()
+                .to_owned(),
             Self::SimpleCommit => data_path.join("simple_commit").to_str().unwrap().to_owned(),
             Self::Golden => data_path
                 .join("golden/data-reader-array-primitives")
@@ -180,6 +188,12 @@ impl TestTables {
                 .to_str()
                 .unwrap()
                 .to_owned(),
+            Self::Checkpoints => data_path.join("checkpoints").to_str().unwrap().to_owned(),
+            Self::WithDvSmall => data_path
+                .join("table-with-dv-small")
+                .to_str()
+                .unwrap()
+                .to_owned(),
             // the data path for upload does not apply to custom tables.
             Self::Custom(_) => todo!(),
         }
@@ -188,10 +202,13 @@ impl TestTables {
     pub fn as_name(&self) -> String {
         match self {
             Self::Simple => "simple".into(),
+            Self::SimpleWithCheckpoint => "simple_table_with_checkpoint".into(),
             Self::SimpleCommit => "simple_commit".into(),
             Self::Golden => "golden".into(),
             Self::Delta0_8_0Partitioned => "delta-0.8.0-partitioned".into(),
             Self::Delta0_8_0SpecialPartitioned => "delta-0.8.0-special-partition".into(),
+            Self::Checkpoints => "checkpoints".into(),
+            Self::WithDvSmall => "table-with-dv-small".into(),
             Self::Custom(name) => name.to_owned(),
         }
     }
@@ -202,61 +219,6 @@ pub fn set_env_if_not_set(key: impl AsRef<str>, value: impl AsRef<str>) {
     if std::env::var(key.as_ref()).is_err() {
         std::env::set_var(key.as_ref(), value.as_ref())
     };
-}
-
-/// small wrapper around google api
-pub mod gs_cli {
-    use super::set_env_if_not_set;
-    use serde_json::json;
-    use std::process::{Command, ExitStatus};
-
-    pub fn create_bucket(container_name: impl AsRef<str>) -> std::io::Result<ExitStatus> {
-        let endpoint = std::env::var("GOOGLE_ENDPOINT_URL")
-            .expect("variable GOOGLE_ENDPOINT_URL must be set to connect to GCS Emulator");
-        let payload = json!({ "name": container_name.as_ref() });
-        let mut child = Command::new("curl")
-            .args([
-                "--insecure",
-                "-v",
-                "-X",
-                "POST",
-                "--data-binary",
-                &serde_json::to_string(&payload)?,
-                "-H",
-                "Content-Type: application/json",
-                &endpoint,
-            ])
-            .spawn()
-            .expect("curl command is installed");
-        child.wait()
-    }
-
-    pub fn delete_bucket(container_name: impl AsRef<str>) -> std::io::Result<ExitStatus> {
-        let endpoint = std::env::var("GOOGLE_ENDPOINT_URL")
-            .expect("variable GOOGLE_ENDPOINT_URL must be set to connect to GCS Emulator");
-        let payload = json!({ "name": container_name.as_ref() });
-        let mut child = Command::new("curl")
-            .args([
-                "--insecure",
-                "-v",
-                "-X",
-                "DELETE",
-                "--data-binary",
-                &serde_json::to_string(&payload)?,
-                "-H",
-                "Content-Type: application/json",
-                &endpoint,
-            ])
-            .spawn()
-            .expect("curl command is installed");
-        child.wait()
-    }
-
-    /// prepare_env
-    pub fn prepare_env() {
-        set_env_if_not_set("GOOGLE_BASE_URL", "http://localhost:4443");
-        set_env_if_not_set("GOOGLE_ENDPOINT_URL", "http://localhost:4443/storage/v1/b");
-    }
 }
 
 /// small wrapper around hdfs cli
@@ -300,3 +262,37 @@ pub mod hdfs_cli {
         child.wait()
     }
 }
+
+#[macro_export]
+macro_rules! assert_batches_sorted_eq {
+    ($EXPECTED_LINES: expr, $CHUNKS: expr) => {
+        let mut expected_lines: Vec<String> = $EXPECTED_LINES.iter().map(|&s| s.into()).collect();
+
+        // sort except for header + footer
+        let num_lines = expected_lines.len();
+        if num_lines > 3 {
+            expected_lines.as_mut_slice()[2..num_lines - 1].sort_unstable()
+        }
+
+        let formatted = arrow::util::pretty::pretty_format_batches($CHUNKS)
+            .unwrap()
+            .to_string();
+        // fix for windows: \r\n -->
+
+        let mut actual_lines: Vec<&str> = formatted.trim().lines().collect();
+
+        // sort except for header + footer
+        let num_lines = actual_lines.len();
+        if num_lines > 3 {
+            actual_lines.as_mut_slice()[2..num_lines - 1].sort_unstable()
+        }
+
+        assert_eq!(
+            expected_lines, actual_lines,
+            "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
+            expected_lines, actual_lines
+        );
+    };
+}
+
+pub use assert_batches_sorted_eq;

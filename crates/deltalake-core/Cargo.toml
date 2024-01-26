@@ -19,19 +19,22 @@ features = ["azure", "datafusion", "gcs", "hdfs", "json", "python", "s3", "unity
 
 [dependencies]
 # arrow
-arrow = { workspace = true, optional = true }
-arrow-arith = { workspace = true, optional = true }
-arrow-array = { workspace = true, optional = true }
-arrow-buffer = { workspace = true, optional = true }
-arrow-cast = { workspace = true, optional = true }
-arrow-ord = { workspace = true, optional = true }
-arrow-row = { workspace = true, optional = true }
-arrow-schema = { workspace = true, optional = true, features = ["serde"] }
-arrow-select = { workspace = true, optional = true }
+arrow = { workspace = true }
+arrow-arith = { workspace = true }
+arrow-array = { workspace = true }
+arrow-buffer = { workspace = true }
+arrow-cast = { workspace = true }
+arrow-ipc = { workspace = true }
+arrow-json = { workspace = true }
+arrow-ord = { workspace = true }
+arrow-row = { workspace = true }
+arrow-schema = { workspace = true, features = ["serde"] }
+arrow-select = { workspace = true }
 parquet = { workspace = true, features = [
     "async",
     "object_store",
-], optional = true }
+] }
+pin-project-lite = "^0.2.7"
 
 # datafusion
 datafusion = { workspace = true, optional = true }
@@ -48,6 +51,7 @@ serde_json = { workspace = true }
 # "stdlib"
 bytes = { workspace = true }
 chrono = { workspace = true, default-features = false, features = ["clock"] }
+hashbrown = "*"
 regex = { workspace = true }
 thiserror = { workspace = true }
 uuid = { workspace = true, features = ["serde", "v4"] }
@@ -111,18 +115,7 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 utime = "0.3"
 
 [features]
-arrow = [
-    "dep:arrow",
-    "arrow-arith",
-    "arrow-array",
-    "arrow-cast",
-    "arrow-ord",
-    "arrow-row",
-    "arrow-schema",
-    "arrow-select",
-    "arrow-buffer",
-]
-default = ["arrow", "parquet"]
+default = []
 datafusion = [
     "dep:datafusion",
     "datafusion-expr",
@@ -131,15 +124,8 @@ datafusion = [
     "datafusion-physical-expr",
     "datafusion-sql",
     "sqlparser",
-    "arrow",
-    "parquet",
 ]
 datafusion-ext = ["datafusion"]
-gcs = ["object_store/gcp"]
 json = ["parquet/json"]
 python = ["arrow/pyarrow"]
 unity-experimental = ["reqwest", "hyper"]
-
-[[bench]]
-name = "read_checkpoint"
-harness = false

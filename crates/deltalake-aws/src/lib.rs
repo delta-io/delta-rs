@@ -5,6 +5,7 @@ pub mod logstore;
 pub mod storage;
 
 use lazy_static::lazy_static;
+use object_store::aws::AmazonS3ConfigKey;
 use regex::Regex;
 use std::{
     collections::HashMap,
@@ -41,6 +42,17 @@ impl LogStoreFactory for S3LogStoreFactory {
         options: &StorageOptions,
     ) -> DeltaResult<Arc<dyn LogStore>> {
         let store = url_prefix_handler(store, Path::parse(location.path())?)?;
+
+        if options
+            .0
+            .contains_key(AmazonS3ConfigKey::CopyIfNotExists.as_ref())
+        {
+            debug!("S3LogStoreFactory has been asked to create a LogStore where the underlying store has copy-if-not-exists enabled - no locking provider required");
+            return Ok(deltalake_core::logstore::default_logstore(
+                store, location, options,
+            ));
+        }
+
         let s3_options = S3StorageOptions::from_map(&options.0);
 
         if s3_options.locking_provider.as_deref() != Some("dynamodb") {
