@@ -859,10 +859,15 @@ fn build_compaction_plan(
             metrics.total_files_skipped += 1;
             continue;
         }
+        let partition_values = add
+            .partition_values()?
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), v))
+            .collect::<BTreeMap<_, _>>();
 
         partition_files
             .entry(add.partition_values()?.hive_partition_path())
-            .or_default()
+            .or_insert_with(|| (partition_values, vec![]))
             .1
             .push(object_meta);
     }
