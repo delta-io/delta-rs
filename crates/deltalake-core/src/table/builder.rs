@@ -450,8 +450,6 @@ mod tests {
         // parse an existing relative directory
         let uri = ensure_table_uri(".");
         assert!(uri.is_ok());
-        let uri = ensure_table_uri("./nonexistent");
-        assert!(uri.is_ok());
         let uri = ensure_table_uri("s3://container/path");
         assert!(uri.is_ok());
         #[cfg(not(windows))]
@@ -459,6 +457,10 @@ mod tests {
             let uri = ensure_table_uri("file:///tmp/nonexistent/some/path");
             assert!(uri.is_ok());
         }
+        let uri = ensure_table_uri("./nonexistent");
+        assert!(uri.is_ok());
+        let file_path = std::path::Path::new("./nonexistent");
+        std::fs::remove_dir(file_path).unwrap();
 
         // These cases should all roundtrip to themselves
         cfg_if::cfg_if! {
@@ -535,7 +537,7 @@ mod tests {
         assert!(!relative_path.exists());
         ensure_table_uri(relative_path.as_os_str().to_str().unwrap()).unwrap();
         assert!(relative_path.exists());
-        std::fs::remove_dir_all(relative_path).unwrap();
+        std::fs::remove_dir_all(std::path::Path::new("_tmp")).unwrap();
     }
 
     #[test]
