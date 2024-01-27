@@ -21,8 +21,9 @@ use tracing::debug;
 
 use crate::kernel::arrow::extract::{self as ex, ProvidesColumnByName};
 use crate::kernel::arrow::json;
-use crate::kernel::{DataType, Schema, StructField, StructType};
 use crate::{DeltaResult, DeltaTableConfig, DeltaTableError};
+
+use super::Snapshot;
 
 pin_project! {
     pub struct ReplayStream<S> {
@@ -38,60 +39,12 @@ pin_project! {
     }
 }
 
-fn to_count_field(field: &StructField) -> Option<StructField> {
-    match field.data_type() {
-        DataType::Map(_) | DataType::Array(_) | &DataType::BINARY => None,
-        DataType::Struct(s) => Some(StructField::new(
-            field.name(),
-            StructType::new(
-                s.fields()
-                    .iter()
-                    .filter_map(to_count_field)
-                    .collect::<Vec<_>>(),
-            ),
-            true,
-        )),
-        _ => Some(StructField::new(field.name(), DataType::LONG, true)),
-    }
-}
-
-pub(super) fn get_stats_schema(table_schema: &StructType) -> DeltaResult<ArrowSchemaRef> {
-    let data_fields: Vec<_> = table_schema
-        .fields
-        .iter()
-        .enumerate()
-        .filter_map(|(idx, f)| match f.data_type() {
-            DataType::Map(_) | DataType::Array(_) | &DataType::BINARY => None,
-            // TODO: the number of stats fields shopuld be configurable?
-            // or rather we should likely read all of we parse JSON?
-            _ if idx < 32 => Some(StructField::new(f.name(), f.data_type().clone(), true)),
-            _ => None,
-        })
-        .collect();
-    let stats_schema = StructType::new(vec![
-        StructField::new("numRecords", DataType::LONG, true),
-        StructField::new("minValues", StructType::new(data_fields.clone()), true),
-        StructField::new("maxValues", StructType::new(data_fields.clone()), true),
-        StructField::new(
-            "nullCount",
-            StructType::new(data_fields.iter().filter_map(to_count_field).collect()),
-            true,
-        ),
-    ]);
-    Ok(std::sync::Arc::new((&stats_schema).try_into()?))
-}
-
 impl<S> ReplayStream<S> {
-    pub(super) fn try_new(
-        commits: S,
-        checkpoint: S,
-        table_schema: &Schema,
-        config: DeltaTableConfig,
-    ) -> DeltaResult<Self> {
-        let stats_schema = get_stats_schema(table_schema)?;
+    pub(super) fn try_new(commits: S, checkpoint: S, snapshot: &Snapshot) -> DeltaResult<Self> {
+        let stats_schema = Arc::new((&snapshot.stats_schema()?).try_into()?);
         let mapper = Arc::new(LogMapper {
             stats_schema,
-            config,
+            config: snapshot.config.clone(),
         });
         Ok(Self {
             commits,
@@ -108,10 +61,10 @@ pub(super) struct LogMapper {
 }
 
 impl LogMapper {
-    pub(super) fn try_new(table_schema: &Schema, config: DeltaTableConfig) -> DeltaResult<Self> {
+    pub(super) fn try_new(snapshot: &Snapshot) -> DeltaResult<Self> {
         Ok(Self {
-            stats_schema: get_stats_schema(table_schema)?,
-            config,
+            stats_schema: Arc::new((&snapshot.stats_schema()?).try_into()?),
+            config: snapshot.config.clone(),
         })
     }
 
@@ -120,7 +73,7 @@ impl LogMapper {
     }
 }
 
-pub(super) fn map_batch(
+fn map_batch(
     batch: RecordBatch,
     stats_schema: ArrowSchemaRef,
     config: &DeltaTableConfig,
@@ -135,7 +88,7 @@ pub(super) fn map_batch(
             Arc::new(json::parse_json(stats, stats_schema.clone(), config)?.into());
         let schema = batch.schema();
         let add_col = ex::extract_and_cast::<StructArray>(&batch, "add")?;
-        let add_idx = schema.column_with_name("add").unwrap();
+        let (add_idx, _) = schema.column_with_name("add").unwrap();
         let add_type = add_col
             .fields()
             .iter()
@@ -162,9 +115,9 @@ pub(super) fn map_batch(
             true,
         ));
         let mut fields = schema.fields().to_vec();
-        let _ = std::mem::replace(&mut fields[add_idx.0], new_add_field);
+        let _ = std::mem::replace(&mut fields[add_idx], new_add_field);
         let mut columns = batch.columns().to_vec();
-        let _ = std::mem::replace(&mut columns[add_idx.0], new_add);
+        let _ = std::mem::replace(&mut columns[add_idx], new_add);
         return Ok(RecordBatch::try_new(
             Arc::new(ArrowSchema::new(fields)),
             columns,
