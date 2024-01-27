@@ -141,14 +141,29 @@ pub(crate) fn register_store(store: LogStoreRef, env: Arc<RuntimeEnv>) {
     env.register_object_store(url, store.object_store());
 }
 
-pub(crate) fn logical_schema(
+/// The logical schema for a Deltatable is different then protocol level schema since partiton columns must appear at the end of the schema.
+/// This is to align with how partition are handled at the physical level
+pub(crate) fn df_logical_schema(
     snapshot: &DeltaTableState,
     scan_config: &DeltaScanConfig,
 ) -> DeltaResult<SchemaRef> {
     let input_schema = snapshot.arrow_schema()?;
-    let mut fields = Vec::new();
-    for field in input_schema.fields.iter() {
-        fields.push(field.to_owned());
+    let table_partition_cols = &snapshot.metadata().partition_columns;
+
+    let mut fields: Vec<Arc<Field>> = input_schema
+        .fields()
+        .iter()
+        .filter(|f| !table_partition_cols.contains(f.name()))
+        .cloned()
+        .collect();
+
+    for partition_col in table_partition_cols.iter() {
+        fields.push(Arc::new(
+            input_schema
+                .field_with_name(partition_col)
+                .unwrap()
+                .to_owned(),
+        ));
     }
 
     if let Some(file_column_name) = &scan_config.file_column_name {
@@ -309,7 +324,7 @@ impl<'a> DeltaScanBuilder<'a> {
                     .await?
             }
         };
-        let logical_schema = logical_schema(self.snapshot, &config)?;
+        let logical_schema = df_logical_schema(self.snapshot, &config)?;
 
         let logical_schema = if let Some(used_columns) = self.projection {
             let mut fields = vec![];
@@ -501,7 +516,7 @@ impl DeltaTableProvider {
         config: DeltaScanConfig,
     ) -> DeltaResult<Self> {
         Ok(DeltaTableProvider {
-            schema: logical_schema(&snapshot, &config)?,
+            schema: df_logical_schema(&snapshot, &config)?,
             snapshot,
             log_store,
             config,
@@ -1197,7 +1212,7 @@ pub(crate) async fn find_files_scan<'a>(
     }
     .build(snapshot)?;
 
-    let logical_schema = logical_schema(snapshot, &scan_config)?;
+    let logical_schema = df_logical_schema(snapshot, &scan_config)?;
 
     // Identify which columns we need to project
     let mut used_columns = expression
@@ -1750,8 +1765,16 @@ mod tests {
         let provider =
             DeltaTableProvider::try_new(table.snapshot().unwrap().clone(), log_store, config)
                 .unwrap();
+        let logical_schema = provider.schema();
         let ctx = SessionContext::new();
         ctx.register_table("test", Arc::new(provider)).unwrap();
+
+        let expected_logical_order = vec!["value", "modified", "id"];
+        let actual_order: Vec<String> = logical_schema
+            .fields()
+            .iter()
+            .map(|f| f.name().to_owned())
+            .collect();
 
         let df = ctx.sql("select * from test").await.unwrap();
         let actual = df.collect().await.unwrap();
@@ -1766,6 +1789,7 @@ mod tests {
             "+-------+------------+----+",
         ];
         assert_batches_sorted_eq!(&expected, &actual);
+        assert_eq!(expected_logical_order, actual_order);
     }
 
     #[tokio::test]
