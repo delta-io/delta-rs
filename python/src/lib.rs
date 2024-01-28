@@ -478,10 +478,12 @@ impl RawDeltaTable {
         raise_if_not_exists: bool,
         custom_metadata: Option<HashMap<String, String>>,
     ) -> PyResult<()> {
-        let mut cmd =
-            DropConstraintBuilder::new(self._table.log_store(), self._table.get_state().clone())
-                .with_constraint(name)
-                .with_raise_if_not_exists(raise_if_not_exists);
+        let mut cmd = DropConstraintBuilder::new(
+            self._table.log_store(),
+            self._table.snapshot().map_err(PythonError::from)?.clone(),
+        )
+        .with_constraint(name)
+        .with_raise_if_not_exists(raise_if_not_exists);
 
         if let Some(metadata) = custom_metadata {
             let json_metadata: Map<String, Value> =
