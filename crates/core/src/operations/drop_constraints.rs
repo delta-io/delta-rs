@@ -171,7 +171,8 @@ mod tests {
 
     async fn get_constraint_op_params(table: &mut DeltaTable) -> String {
         let commit_info = table.history(None).await.unwrap();
-        let last_commit = &commit_info[commit_info.len() - 1];
+        let last_commit = &commit_info[0];
+
         last_commit
             .operation_parameters
             .as_ref()
@@ -208,7 +209,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn drop_invalid_constraint() -> DeltaResult<()> {
+    async fn drop_invalid_constraint_not_existing() -> DeltaResult<()> {
         let batch = get_record_batch(None, false);
         let write = DeltaOps(create_bare_table())
             .write(vec![batch.clone()])
