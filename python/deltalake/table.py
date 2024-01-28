@@ -1884,7 +1884,7 @@ class TableOptimizer:
 
         Args:
             columns: the columns to use for Z-ordering. There must be at least one column.
-                        partition_filters: the partition filters that will be used for getting the matched files
+            partition_filters: the partition filters that will be used for getting the matched files
             target_size: desired file size after bin-packing files, in bytes. If not
                             provided, will attempt to read the table configuration value ``delta.targetFileSize``.
                             If that value isn't set, will use default value of 256MB.
