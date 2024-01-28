@@ -28,7 +28,7 @@ use object_store::ObjectStore;
 use self::log_segment::{CommitData, LogSegment, PathExt};
 use self::parse::{read_adds, read_removes};
 use self::replay::{LogMapper, LogReplayScanner, ReplayStream};
-use super::{Action, Add, CommitInfo, Metadata, Protocol, Remove};
+use super::{Action, Add, CommitInfo, DataType, Metadata, Protocol, Remove, StructField};
 use crate::kernel::StructType;
 use crate::logstore::LogStore;
 use crate::table::config::TableConfig;
@@ -70,8 +70,7 @@ impl Snapshot {
                 "Cannot read metadata from log segment".into(),
             ));
         };
-        let metadata = metadata.unwrap();
-        let protocol = protocol.unwrap();
+        let (metadata, protocol) = (metadata.unwrap(), protocol.unwrap());
         let schema = serde_json::from_str(&metadata.schema_string)?;
         Ok(Self {
             log_segment,
@@ -211,12 +210,7 @@ impl Snapshot {
             &log_segment::CHECKPOINT_SCHEMA,
             &self.config,
         );
-        ReplayStream::try_new(
-            log_stream,
-            checkpoint_stream,
-            &self.schema,
-            self.config.clone(),
-        )
+        ReplayStream::try_new(log_stream, checkpoint_stream, &self)
     }
 
     /// Get the commit infos in the snapshot
@@ -287,6 +281,59 @@ impl Snapshot {
             })
             .boxed())
     }
+
+    /// Get the statistics schema of the snapshot
+    pub fn stats_schema(&self) -> DeltaResult<StructType> {
+        let stats_fields = if let Some(stats_cols) = self.table_config().stats_columns() {
+            stats_cols
+                .iter()
+                .map(|col| match self.schema().field_with_name(col) {
+                    Ok(field) => match field.data_type() {
+                        DataType::Map(_) | DataType::Array(_) | &DataType::BINARY => {
+                            Err(DeltaTableError::Generic(format!(
+                                "Stats column {} has unsupported type {}",
+                                col,
+                                field.data_type()
+                            )))
+                        }
+                        _ => Ok(StructField::new(
+                            field.name(),
+                            field.data_type().clone(),
+                            true,
+                        )),
+                    },
+                    _ => Err(DeltaTableError::Generic(format!(
+                        "Stats column {} not found in schema",
+                        col
+                    ))),
+                })
+                .collect::<Result<Vec<_>, _>>()?
+        } else {
+            let num_indexed_cols = self.table_config().num_indexed_cols();
+            self.schema()
+                .fields
+                .iter()
+                .enumerate()
+                .filter_map(|(idx, f)| match f.data_type() {
+                    DataType::Map(_) | DataType::Array(_) | &DataType::BINARY => None,
+                    _ if num_indexed_cols < 0 || (idx as i32) < num_indexed_cols => {
+                        Some(StructField::new(f.name(), f.data_type().clone(), true))
+                    }
+                    _ => None,
+                })
+                .collect()
+        };
+        Ok(StructType::new(vec![
+            StructField::new("numRecords", DataType::LONG, true),
+            StructField::new("minValues", StructType::new(stats_fields.clone()), true),
+            StructField::new("maxValues", StructType::new(stats_fields.clone()), true),
+            StructField::new(
+                "nullCount",
+                StructType::new(stats_fields.iter().filter_map(to_count_field).collect()),
+                true,
+            ),
+        ]))
+    }
 }
 
 /// A snapshot of a Delta table that has been eagerly loaded into memory.
@@ -317,7 +364,7 @@ impl EagerSnapshot {
         let mut files = Vec::new();
         let mut scanner = LogReplayScanner::new();
         files.push(scanner.process_files_batch(&batch, true)?);
-        let mapper = LogMapper::try_new(snapshot.schema(), snapshot.config.clone())?;
+        let mapper = LogMapper::try_new(&snapshot)?;
         files = files
             .into_iter()
             .map(|b| mapper.map_batch(b))
@@ -356,16 +403,11 @@ impl EagerSnapshot {
                     )
                     .boxed()
             };
-            let mapper = LogMapper::try_new(self.snapshot.schema(), self.snapshot.config.clone())?;
-            let files = ReplayStream::try_new(
-                log_stream,
-                checkpoint_stream,
-                self.schema(),
-                self.snapshot.config.clone(),
-            )?
-            .map(|batch| batch.and_then(|b| mapper.map_batch(b)))
-            .try_collect()
-            .await?;
+            let mapper = LogMapper::try_new(&self.snapshot)?;
+            let files = ReplayStream::try_new(log_stream, checkpoint_stream, &self.snapshot)?
+                .map(|batch| batch.and_then(|b| mapper.map_batch(b)))
+                .try_collect()
+                .await?;
 
             self.files = files;
         }
@@ -472,7 +514,7 @@ impl EagerSnapshot {
             files.push(scanner.process_files_batch(&batch?, true)?);
         }
 
-        let mapper = LogMapper::try_new(self.snapshot.schema(), self.snapshot.config.clone())?;
+        let mapper = LogMapper::try_new(&self.snapshot)?;
         self.files = files
             .into_iter()
             .chain(
@@ -492,6 +534,23 @@ impl EagerSnapshot {
         }
 
         Ok(self.snapshot.version())
+    }
+}
+
+fn to_count_field(field: &StructField) -> Option<StructField> {
+    match field.data_type() {
+        DataType::Map(_) | DataType::Array(_) | &DataType::BINARY => None,
+        DataType::Struct(s) => Some(StructField::new(
+            field.name(),
+            StructType::new(
+                s.fields()
+                    .iter()
+                    .filter_map(to_count_field)
+                    .collect::<Vec<_>>(),
+            ),
+            true,
+        )),
+        _ => Some(StructField::new(field.name(), DataType::LONG, true)),
     }
 }
 
