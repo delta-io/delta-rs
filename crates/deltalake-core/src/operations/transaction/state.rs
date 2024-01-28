@@ -18,7 +18,7 @@ use crate::delta_datafusion::expr::parse_predicate_expression;
 use crate::delta_datafusion::{
     get_null_of_arrow_type, logical_expr_to_physical_expr, to_correct_scalar_value,
 };
-use crate::errors::{DeltaResult, DeltaTableError};
+use crate::errors::DeltaResult;
 use crate::kernel::Add;
 use crate::table::state::DeltaTableState;
 
@@ -29,15 +29,15 @@ impl DeltaTableState {
     }
 
     fn _arrow_schema(&self, wrap_partitions: bool) -> DeltaResult<ArrowSchemaRef> {
-        let meta = self.delta_metadata().ok_or(DeltaTableError::NoMetadata)?;
+        let meta = self.metadata();
         let fields = meta
-            .schema
+            .schema()?
             .fields()
             .iter()
             .filter(|f| !meta.partition_columns.contains(&f.name().to_string()))
             .map(|f| f.try_into())
             .chain(
-                meta.schema
+                meta.schema()?
                     .fields()
                     .iter()
                     .filter(|f| meta.partition_columns.contains(&f.name().to_string()))
@@ -74,15 +74,15 @@ impl DeltaTableState {
     pub fn files_matching_predicate(
         &self,
         filters: &[Expr],
-    ) -> DeltaResult<impl Iterator<Item = &Add>> {
+    ) -> DeltaResult<impl Iterator<Item = Add>> {
         if let Some(Some(predicate)) =
             (!filters.is_empty()).then_some(conjunction(filters.iter().cloned()))
         {
             let expr = logical_expr_to_physical_expr(&predicate, self.arrow_schema()?.as_ref());
             let pruning_predicate = PruningPredicate::try_new(expr, self.arrow_schema()?)?;
             Ok(Either::Left(
-                self.files()
-                    .iter()
+                self.file_actions()?
+                    .into_iter()
                     .zip(pruning_predicate.prune(self)?)
                     .filter_map(
                         |(action, keep_file)| {
@@ -95,7 +95,7 @@ impl DeltaTableState {
                     ),
             ))
         } else {
-            Ok(Either::Right(self.files().iter()))
+            Ok(Either::Right(self.file_actions()?.into_iter()))
         }
     }
 
@@ -117,7 +117,11 @@ impl DeltaTableState {
         &self,
         object_store: Arc<dyn ObjectStore>,
     ) -> DeltaResult<ArrowSchemaRef> {
-        if let Some(add) = self.files().iter().max_by_key(|obj| obj.modification_time) {
+        if let Some(add) = self
+            .file_actions()?
+            .iter()
+            .max_by_key(|obj| obj.modification_time)
+        {
             let file_meta = add.try_into()?;
             let file_reader = ParquetObjectReader::new(object_store, file_meta);
             let file_schema = ParquetRecordBatchStreamBuilder::new(file_reader)
@@ -298,25 +302,25 @@ impl PruningStatistics for DeltaTableState {
     /// return the minimum values for the named column, if known.
     /// Note: the returned array must contain `num_containers()` rows
     fn min_values(&self, column: &Column) -> Option<ArrayRef> {
-        let partition_columns = &self.metadata().ok()?.partition_columns;
-        let container =
-            AddContainer::new(self.files(), partition_columns, self.arrow_schema().ok()?);
+        let files = self.file_actions().ok()?;
+        let partition_columns = &self.metadata().partition_columns;
+        let container = AddContainer::new(&files, partition_columns, self.arrow_schema().ok()?);
         container.min_values(column)
     }
 
     /// return the maximum values for the named column, if known.
     /// Note: the returned array must contain `num_containers()` rows.
     fn max_values(&self, column: &Column) -> Option<ArrayRef> {
-        let partition_columns = &self.metadata().ok()?.partition_columns;
-        let container =
-            AddContainer::new(self.files(), partition_columns, self.arrow_schema().ok()?);
+        let files = self.file_actions().ok()?;
+        let partition_columns = &self.metadata().partition_columns;
+        let container = AddContainer::new(&files, partition_columns, self.arrow_schema().ok()?);
         container.max_values(column)
     }
 
     /// return the number of containers (e.g. row groups) being
     /// pruned with these statistics
     fn num_containers(&self) -> usize {
-        self.files().len()
+        self.files_count()
     }
 
     /// return the number of null values for the named column as an
@@ -324,9 +328,9 @@ impl PruningStatistics for DeltaTableState {
     ///
     /// Note: the returned array must contain `num_containers()` rows.
     fn null_counts(&self, column: &Column) -> Option<ArrayRef> {
-        let partition_columns = &self.metadata().ok()?.partition_columns;
-        let container =
-            AddContainer::new(self.files(), partition_columns, self.arrow_schema().ok()?);
+        let files = self.file_actions().ok()?;
+        let partition_columns = &self.metadata().partition_columns;
+        let container = AddContainer::new(&files, partition_columns, self.arrow_schema().ok()?);
         container.null_counts(column)
     }
 }
@@ -340,7 +344,7 @@ mod tests {
 
     #[test]
     fn test_parse_predicate_expression() {
-        let snapshot = DeltaTableState::from_actions(init_table_actions(None), 0).unwrap();
+        let snapshot = DeltaTableState::from_actions(init_table_actions(None)).unwrap();
         let session = SessionContext::new();
         let state = session.state();
 
@@ -372,7 +376,7 @@ mod tests {
         actions.push(create_add_action("included-1", true, Some("{\"numRecords\":10,\"minValues\":{\"value\":1},\"maxValues\":{\"value\":100},\"nullCount\":{\"value\":0}}".into())));
         actions.push(create_add_action("included-2", true, Some("{\"numRecords\":10,\"minValues\":{\"value\":-10},\"maxValues\":{\"value\":3},\"nullCount\":{\"value\":0}}".into())));
 
-        let state = DeltaTableState::from_actions(actions, 0).unwrap();
+        let state = DeltaTableState::from_actions(actions).unwrap();
         let files = state
             .files_matching_predicate(&[])
             .unwrap()

@@ -9,7 +9,6 @@ use crate::kernel::{
 use crate::operations::transaction::PROTOCOL;
 use crate::protocol::{DeltaOperation, SaveMode};
 use crate::table::state::DeltaTableState;
-use crate::table::DeltaTableMetaData;
 use crate::{DeltaTable, DeltaTableBuilder};
 
 pub fn create_add_action(
@@ -24,7 +23,6 @@ pub fn create_add_action(
         stats,
         modification_time: -1,
         partition_values: Default::default(),
-        partition_values_parsed: None,
         stats_parsed: None,
         base_row_id: None,
         default_row_commit_version: None,
@@ -80,15 +78,14 @@ pub fn create_metadata_action(
             true,
         ),
     ]);
-    let metadata = DeltaTableMetaData::new(
-        None,
-        None,
-        None,
-        table_schema,
-        parttiton_columns.unwrap_or_default(),
-        configuration.unwrap_or_default(),
-    );
-    Action::Metadata(Metadata::try_from(metadata).unwrap())
+    Action::Metadata(
+        Metadata::try_new(
+            table_schema,
+            parttiton_columns.unwrap_or_default(),
+            configuration.unwrap_or_default(),
+        )
+        .unwrap(),
+    )
 }
 
 pub fn init_table_actions(configuration: Option<HashMap<String, Option<String>>>) -> Vec<Action> {
@@ -143,7 +140,7 @@ pub async fn create_initialized_table(
             true,
         ),
     ]);
-    let state = DeltaTableState::from_actions(init_table_actions(None), 0).unwrap();
+    let state = DeltaTableState::from_actions(init_table_actions(None)).unwrap();
     let operation = DeltaOperation::Create {
         mode: SaveMode::ErrorIfExists,
         location: "location".into(),
@@ -153,14 +150,16 @@ pub async fn create_initialized_table(
             writer_features: None,
             reader_features: None,
         },
-        metadata: DeltaTableMetaData::new(
-            None,
-            None,
-            None,
-            table_schema,
-            partition_cols.to_vec(),
-            configuration.unwrap_or_default(),
-        ),
+        metadata: Metadata {
+            id: uuid::Uuid::new_v4().to_string(),
+            name: None,
+            description: None,
+            format: Default::default(),
+            schema_string: serde_json::to_string(&table_schema).unwrap(),
+            partition_columns: partition_cols.to_vec(),
+            configuration: configuration.unwrap_or_default(),
+            created_time: Some(chrono::Utc::now().timestamp_millis()),
+        },
     };
     let actions = init_table_actions(None);
     let prepared_commit = prepare_commit(

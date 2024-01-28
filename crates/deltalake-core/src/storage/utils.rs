@@ -69,7 +69,6 @@ mod tests {
             base_row_id: None,
             default_row_commit_version: None,
             deletion_vector: None,
-            partition_values_parsed: None,
             stats_parsed: None,
             clustering_provider: None,
         };
