@@ -169,29 +169,13 @@ def write_deltalake(
 
     If the table does not already exist, it will be created.
 
-    This function only supports writer protocol version 2 currently. When
-    attempting to write to an existing table with a higher min_writer_version,
-    this function will throw DeltaProtocolError.
-
-    Note that this function does NOT register this table in a data catalog.
+    The pyarrow writer supports protocol version 2 currently and won't be updated.
+    For higher protocol support use engine='rust', this will become the default
+    eventually.
 
     A locking mechanism is needed to prevent unsafe concurrent writes to a
-    delta lake directory when writing to S3. DynamoDB is the only available
-    locking provider at the moment in delta-rs. To enable DynamoDB as the
-    locking provider, you need to set the `AWS_S3_LOCKING_PROVIDER` to 'dynamodb'
-    as a storage_option or as an environment variable.
-
-    Additionally, you must create a DynamoDB table with the name 'delta_rs_lock_table'
-    so that it can be automatically discovered by delta-rs. Alternatively, you can
-    use a table name of your choice, but you must set the `DELTA_DYNAMO_TABLE_NAME`
-    variable to match your chosen table name. The required schema for the DynamoDB
-    table is as follows:
-
-    - Key Schema: AttributeName=key, KeyType=HASH
-    - Attribute Definitions: AttributeName=key, AttributeType=S
-
-    Please note that this locking mechanism is not compatible with any other
-    locking mechanisms, including the one used by Spark.
+    delta lake directory when writing to S3. For more information on the setup, follow
+    this usage guide: https://delta-io.github.io/delta-rs/usage/writing/writing-to-s3-with-locking-provider/
 
     Args:
         table_or_uri: URI of a table or a DeltaTable object.

@@ -23,17 +23,14 @@ pub enum DeltaTableError {
     },
 
     /// Error returned when parsing checkpoint parquet.
-    #[cfg(feature = "parquet")]
     #[error("Failed to parse parquet: {}", .source)]
     Parquet {
         /// Parquet error details returned when reading the checkpoint failed.
-        #[cfg(feature = "parquet")]
         #[from]
         source: parquet::errors::ParquetError,
     },
 
     /// Error returned when converting the schema in Arrow format failed.
-    #[cfg(feature = "arrow")]
     #[error("Failed to convert into Arrow schema: {}", .source)]
     Arrow {
         /// Arrow error details returned when converting the schema in Arrow format failed
@@ -210,6 +207,9 @@ pub enum DeltaTableError {
 
     #[error("Table metadata is invalid: {0}")]
     MetadataError(String),
+
+    #[error("Table has not yet been initialized")]
+    NotInitialized,
 }
 
 impl From<object_store::path::Error> for DeltaTableError {
@@ -223,11 +223,9 @@ impl From<object_store::path::Error> for DeltaTableError {
 impl From<ProtocolError> for DeltaTableError {
     fn from(value: ProtocolError) -> Self {
         match value {
-            #[cfg(feature = "arrow")]
             ProtocolError::Arrow { source } => DeltaTableError::Arrow { source },
             ProtocolError::IO { source } => DeltaTableError::Io { source },
             ProtocolError::ObjectStore { source } => DeltaTableError::ObjectStore { source },
-            #[cfg(feature = "parquet")]
             ProtocolError::ParquetParseError { source } => DeltaTableError::Parquet { source },
             _ => DeltaTableError::Protocol { source: value },
         }

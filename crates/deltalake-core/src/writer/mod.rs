@@ -1,4 +1,3 @@
-#![cfg(all(feature = "arrow", feature = "parquet"))]
 //! Abstractions and implementations for writing data to delta tables
 
 use arrow::{datatypes::SchemaRef, error::ArrowError};
@@ -135,7 +134,8 @@ pub trait DeltaWriter<T> {
     /// and commit the changes to the Delta log, creating a new table version.
     async fn flush_and_commit(&mut self, table: &mut DeltaTable) -> Result<i64, DeltaTableError> {
         let adds: Vec<_> = self.flush().await?.drain(..).map(Action::Add).collect();
-        let partition_cols = table.metadata()?.partition_columns.clone();
+        let snapshot = table.snapshot()?;
+        let partition_cols = snapshot.metadata().partition_columns.clone();
         let partition_by = if !partition_cols.is_empty() {
             Some(partition_cols)
         } else {
@@ -150,7 +150,7 @@ pub trait DeltaWriter<T> {
             table.log_store.as_ref(),
             &adds,
             operation,
-            &table.state,
+            Some(snapshot),
             None,
         )
         .await?;

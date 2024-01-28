@@ -169,8 +169,11 @@ pub static INSTANCE: Lazy<ProtocolChecker> = Lazy::new(|| {
 
     let mut writer_features = HashSet::new();
     writer_features.insert(WriterFeatures::AppendOnly);
-    writer_features.insert(WriterFeatures::Invariants);
-    writer_features.insert(WriterFeatures::CheckConstraints);
+    #[cfg(feature = "datafusion")]
+    {
+        writer_features.insert(WriterFeatures::Invariants);
+        writer_features.insert(WriterFeatures::CheckConstraints);
+    }
     // writer_features.insert(WriterFeatures::ChangeDataFeed);
     // writer_features.insert(WriterFeatures::GeneratedColumns);
     // writer_features.insert(WriterFeatures::ColumnMapping);
@@ -240,37 +243,37 @@ mod tests {
         let checker = ProtocolChecker::new(HashSet::new(), WRITER_V2.clone());
 
         let actions = create_actions(1, "true", vec![]);
-        let snapshot = DeltaTableState::from_actions(actions, 1).unwrap();
+        let snapshot = DeltaTableState::from_actions(actions).unwrap();
         assert!(checker.can_commit(&snapshot, &append_actions).is_ok());
         assert!(checker.can_commit(&snapshot, &change_actions).is_ok());
         assert!(checker.can_commit(&snapshot, &neutral_actions).is_ok());
 
         let actions = create_actions(2, "true", vec![]);
-        let snapshot = DeltaTableState::from_actions(actions, 1).unwrap();
+        let snapshot = DeltaTableState::from_actions(actions).unwrap();
         assert!(checker.can_commit(&snapshot, &append_actions).is_ok());
         assert!(checker.can_commit(&snapshot, &change_actions).is_err());
         assert!(checker.can_commit(&snapshot, &neutral_actions).is_ok());
 
         let actions = create_actions(2, "false", vec![]);
-        let snapshot = DeltaTableState::from_actions(actions, 1).unwrap();
+        let snapshot = DeltaTableState::from_actions(actions).unwrap();
         assert!(checker.can_commit(&snapshot, &append_actions).is_ok());
         assert!(checker.can_commit(&snapshot, &change_actions).is_ok());
         assert!(checker.can_commit(&snapshot, &neutral_actions).is_ok());
 
         let actions = create_actions(7, "true", vec![WriterFeatures::AppendOnly]);
-        let snapshot = DeltaTableState::from_actions(actions, 1).unwrap();
+        let snapshot = DeltaTableState::from_actions(actions).unwrap();
         assert!(checker.can_commit(&snapshot, &append_actions).is_ok());
         assert!(checker.can_commit(&snapshot, &change_actions).is_err());
         assert!(checker.can_commit(&snapshot, &neutral_actions).is_ok());
 
         let actions = create_actions(7, "false", vec![WriterFeatures::AppendOnly]);
-        let snapshot = DeltaTableState::from_actions(actions, 1).unwrap();
+        let snapshot = DeltaTableState::from_actions(actions).unwrap();
         assert!(checker.can_commit(&snapshot, &append_actions).is_ok());
         assert!(checker.can_commit(&snapshot, &change_actions).is_ok());
         assert!(checker.can_commit(&snapshot, &neutral_actions).is_ok());
 
         let actions = create_actions(7, "true", vec![]);
-        let snapshot = DeltaTableState::from_actions(actions, 1).unwrap();
+        let snapshot = DeltaTableState::from_actions(actions).unwrap();
         assert!(checker.can_commit(&snapshot, &append_actions).is_ok());
         assert!(checker.can_commit(&snapshot, &change_actions).is_ok());
         assert!(checker.can_commit(&snapshot, &neutral_actions).is_ok());
@@ -279,22 +282,28 @@ mod tests {
     #[test]
     fn test_versions() {
         let checker_1 = ProtocolChecker::new(HashSet::new(), HashSet::new());
-        let actions = vec![Action::Protocol(Protocol {
-            min_reader_version: 1,
-            min_writer_version: 1,
-            ..Default::default()
-        })];
-        let snapshot_1 = DeltaTableState::from_actions(actions, 1).unwrap();
+        let actions = vec![
+            Action::Protocol(Protocol {
+                min_reader_version: 1,
+                min_writer_version: 1,
+                ..Default::default()
+            }),
+            create_metadata_action(None, Some(HashMap::new())),
+        ];
+        let snapshot_1 = DeltaTableState::from_actions(actions).unwrap();
         assert!(checker_1.can_read_from(&snapshot_1).is_ok());
         assert!(checker_1.can_write_to(&snapshot_1).is_ok());
 
         let checker_2 = ProtocolChecker::new(READER_V2.clone(), HashSet::new());
-        let actions = vec![Action::Protocol(Protocol {
-            min_reader_version: 2,
-            min_writer_version: 1,
-            ..Default::default()
-        })];
-        let snapshot_2 = DeltaTableState::from_actions(actions, 1).unwrap();
+        let actions = vec![
+            Action::Protocol(Protocol {
+                min_reader_version: 2,
+                min_writer_version: 1,
+                ..Default::default()
+            }),
+            create_metadata_action(None, Some(HashMap::new())),
+        ];
+        let snapshot_2 = DeltaTableState::from_actions(actions).unwrap();
         assert!(checker_1.can_read_from(&snapshot_2).is_err());
         assert!(checker_1.can_write_to(&snapshot_2).is_err());
         assert!(checker_2.can_read_from(&snapshot_1).is_ok());
@@ -302,12 +311,15 @@ mod tests {
         assert!(checker_2.can_write_to(&snapshot_2).is_ok());
 
         let checker_3 = ProtocolChecker::new(READER_V2.clone(), WRITER_V2.clone());
-        let actions = vec![Action::Protocol(Protocol {
-            min_reader_version: 2,
-            min_writer_version: 2,
-            ..Default::default()
-        })];
-        let snapshot_3 = DeltaTableState::from_actions(actions, 1).unwrap();
+        let actions = vec![
+            Action::Protocol(Protocol {
+                min_reader_version: 2,
+                min_writer_version: 2,
+                ..Default::default()
+            }),
+            create_metadata_action(None, Some(HashMap::new())),
+        ];
+        let snapshot_3 = DeltaTableState::from_actions(actions).unwrap();
         assert!(checker_1.can_read_from(&snapshot_3).is_err());
         assert!(checker_1.can_write_to(&snapshot_3).is_err());
         assert!(checker_2.can_read_from(&snapshot_3).is_ok());
@@ -318,12 +330,15 @@ mod tests {
         assert!(checker_3.can_write_to(&snapshot_3).is_ok());
 
         let checker_4 = ProtocolChecker::new(READER_V2.clone(), WRITER_V3.clone());
-        let actions = vec![Action::Protocol(Protocol {
-            min_reader_version: 2,
-            min_writer_version: 3,
-            ..Default::default()
-        })];
-        let snapshot_4 = DeltaTableState::from_actions(actions, 1).unwrap();
+        let actions = vec![
+            Action::Protocol(Protocol {
+                min_reader_version: 2,
+                min_writer_version: 3,
+                ..Default::default()
+            }),
+            create_metadata_action(None, Some(HashMap::new())),
+        ];
+        let snapshot_4 = DeltaTableState::from_actions(actions).unwrap();
         assert!(checker_1.can_read_from(&snapshot_4).is_err());
         assert!(checker_1.can_write_to(&snapshot_4).is_err());
         assert!(checker_2.can_read_from(&snapshot_4).is_ok());
@@ -337,12 +352,15 @@ mod tests {
         assert!(checker_4.can_write_to(&snapshot_4).is_ok());
 
         let checker_5 = ProtocolChecker::new(READER_V2.clone(), WRITER_V4.clone());
-        let actions = vec![Action::Protocol(Protocol {
-            min_reader_version: 2,
-            min_writer_version: 4,
-            ..Default::default()
-        })];
-        let snapshot_5 = DeltaTableState::from_actions(actions, 1).unwrap();
+        let actions = vec![
+            Action::Protocol(Protocol {
+                min_reader_version: 2,
+                min_writer_version: 4,
+                ..Default::default()
+            }),
+            create_metadata_action(None, Some(HashMap::new())),
+        ];
+        let snapshot_5 = DeltaTableState::from_actions(actions).unwrap();
         assert!(checker_1.can_read_from(&snapshot_5).is_err());
         assert!(checker_1.can_write_to(&snapshot_5).is_err());
         assert!(checker_2.can_read_from(&snapshot_5).is_ok());
@@ -359,12 +377,15 @@ mod tests {
         assert!(checker_5.can_write_to(&snapshot_5).is_ok());
 
         let checker_6 = ProtocolChecker::new(READER_V2.clone(), WRITER_V5.clone());
-        let actions = vec![Action::Protocol(Protocol {
-            min_reader_version: 2,
-            min_writer_version: 5,
-            ..Default::default()
-        })];
-        let snapshot_6 = DeltaTableState::from_actions(actions, 1).unwrap();
+        let actions = vec![
+            Action::Protocol(Protocol {
+                min_reader_version: 2,
+                min_writer_version: 5,
+                ..Default::default()
+            }),
+            create_metadata_action(None, Some(HashMap::new())),
+        ];
+        let snapshot_6 = DeltaTableState::from_actions(actions).unwrap();
         assert!(checker_1.can_read_from(&snapshot_6).is_err());
         assert!(checker_1.can_write_to(&snapshot_6).is_err());
         assert!(checker_2.can_read_from(&snapshot_6).is_ok());
@@ -384,12 +405,15 @@ mod tests {
         assert!(checker_6.can_write_to(&snapshot_6).is_ok());
 
         let checker_7 = ProtocolChecker::new(READER_V2.clone(), WRITER_V6.clone());
-        let actions = vec![Action::Protocol(Protocol {
-            min_reader_version: 2,
-            min_writer_version: 6,
-            ..Default::default()
-        })];
-        let snapshot_7 = DeltaTableState::from_actions(actions, 1).unwrap();
+        let actions = vec![
+            Action::Protocol(Protocol {
+                min_reader_version: 2,
+                min_writer_version: 6,
+                ..Default::default()
+            }),
+            create_metadata_action(None, Some(HashMap::new())),
+        ];
+        let snapshot_7 = DeltaTableState::from_actions(actions).unwrap();
         assert!(checker_1.can_read_from(&snapshot_7).is_err());
         assert!(checker_1.can_write_to(&snapshot_7).is_err());
         assert!(checker_2.can_read_from(&snapshot_7).is_ok());

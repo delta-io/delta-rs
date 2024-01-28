@@ -1,8 +1,8 @@
 # Deltalake-python
 
 [![PyPI](https://img.shields.io/pypi/v/deltalake.svg?style=flat-square)](https://pypi.org/project/deltalake/)
-[![userdoc](https://img.shields.io/badge/docs-user-blue)](https://delta-io.github.io/delta-rs/python/)
-[![apidoc](https://img.shields.io/badge/docs-api-blue)](https://delta-io.github.io/delta-rs/python/api_reference.html)
+[![userdoc](https://img.shields.io/badge/docs-user-blue)](https://delta-io.github.io/delta-rs/)
+[![apidoc](https://img.shields.io/badge/docs-api-blue)](https://delta-io.github.io/delta-rs/api/delta_table/)
 
 Native [Delta Lake](https://delta.io/) Python binding based on
 [delta-rs](https://github.com/delta-io/delta-rs) with
@@ -22,7 +22,7 @@ dt.files()
  'part-00001-c373a5bd-85f0-4758-815e-7eb62007a15c-c000.snappy.parquet']
 ```
 
-See the [user guide](https://delta-io.github.io/delta-rs/python/usage.html) for more examples.
+See the [user guide](https://delta-io.github.io/delta-rs/usage/installation/) for more examples.
 
 ## Installation
 

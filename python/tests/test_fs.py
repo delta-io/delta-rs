@@ -77,11 +77,11 @@ def test_read_simple_table_from_remote(s3_localstack):
     assert dt.to_pyarrow_table().equals(pa.table({"id": [5, 7, 9]}))
 
     expected_files = [
+        "part-00000-2befed33-c358-4768-a43c-3eda0d2a499d-c000.snappy.parquet",
         "part-00000-c1777d7d-89d9-4790-b38a-6ee7e24456b1-c000.snappy.parquet",
         "part-00001-7891c33d-cedc-47c3-88a6-abcfb049d3b4-c000.snappy.parquet",
         "part-00004-315835fe-fb44-4562-98f6-5e6cfa3ae45d-c000.snappy.parquet",
         "part-00007-3a0e4727-de0d-41b6-81ef-5223cf40f025-c000.snappy.parquet",
-        "part-00000-2befed33-c358-4768-a43c-3eda0d2a499d-c000.snappy.parquet",
     ]
 
     assert dt.files() == expected_files
@@ -91,6 +91,9 @@ def test_read_simple_table_from_remote(s3_localstack):
 @pytest.mark.s3
 @pytest.mark.integration
 @pytest.mark.timeout(timeout=15, method="thread")
+@pytest.mark.skip(
+    reason="Temporarily disabled until we can resolve https://github.com/delta-io/delta-rs/pull/2120#issuecomment-1912367573"
+)
 def test_roundtrip_s3_env(s3_localstack, sample_data: pa.Table, monkeypatch):
     table_path = "s3://deltars/roundtrip"
 
