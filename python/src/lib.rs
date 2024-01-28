@@ -1057,7 +1057,7 @@ impl RawDeltaTable {
     ) -> PyResult<()> {
         let mut cmd = UnsetTablePropertiesBuilder::new(
             self._table.log_store(),
-            self._table.get_state().clone(),
+            self._table.snapshot().map_err(PythonError::from)?.clone(),
         )
         .with_properties(properties)
         .with_raise_if_not_exists(raise_if_not_exists);

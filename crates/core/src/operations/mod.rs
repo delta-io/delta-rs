@@ -206,7 +206,7 @@ impl DeltaOps {
 
     /// Unset table properties
     pub fn unset_tbl_properties(self) -> UnsetTablePropertiesBuilder {
-        UnsetTablePropertiesBuilder::new(self.0.log_store, self.0.state)
+        UnsetTablePropertiesBuilder::new(self.0.log_store, self.0.state.unwrap())
     }
 }
 

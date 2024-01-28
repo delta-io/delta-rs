@@ -100,7 +100,7 @@ impl std::future::IntoFuture for UnsetTablePropertiesBuilder {
                 }
             };
 
-            let mut metadata = this.snapshot.metadata()?.clone();
+            let mut metadata = this.snapshot.metadata().clone();
 
             // Check if names are valid config keys
             for key in &properties {
@@ -132,7 +132,7 @@ impl std::future::IntoFuture for UnsetTablePropertiesBuilder {
                 HashMap::from_iter([("properties".to_string(), json!(&properties))]);
 
             let operations = DeltaOperation::UnsetTblProperties {
-                properties: properties.clone(),
+                properties: properties,
             };
 
             let app_metadata = match this.app_metadata {
@@ -156,14 +156,13 @@ impl std::future::IntoFuture for UnsetTablePropertiesBuilder {
             let version = commit(
                 this.log_store.as_ref(),
                 &actions,
-                operations,
-                &this.snapshot,
+                operations.clone(),
+                Some(&this.snapshot),
                 None,
             )
             .await?;
-
-            this.snapshot
-                .merge(DeltaTableState::from_actions(actions, version)?, true, true);
+        
+            this.snapshot.merge(actions, &operations, version)?;
             Ok(DeltaTable::new_with_state(this.log_store, this.snapshot))
         })
     }
