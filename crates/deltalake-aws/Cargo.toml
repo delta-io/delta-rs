@@ -26,6 +26,7 @@ url = { workspace = true }
 backoff = { version = "0.4", features = [ "tokio" ] }
 
 [dev-dependencies]
+deltalake-core = { path = "../deltalake-core", features = ["datafusion"] }
 chrono = { workspace = true }
 serial_test = "3"
 deltalake-test = { path = "../deltalake-test" }

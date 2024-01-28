@@ -156,6 +156,7 @@ async fn test_repair_commit_entry() -> TestResult<()> {
 
 #[tokio::test]
 #[serial]
+#[ignore = "https://github.com/delta-io/delta-rs/issues/2109"]
 async fn test_repair_on_update() -> TestResult<()> {
     let context = IntegrationContext::new(Box::new(S3Integration::default()))?;
     let mut table = prepare_table(&context, "repair_on_update").await?;
@@ -267,12 +268,11 @@ fn add_action(name: &str) -> Action {
     let ts = (SystemTime::now() - Duration::from_secs(1800))
         .duration_since(UNIX_EPOCH)
         .unwrap()
-        .as_secs();
-    Action::Add(Add {
+        .as_millis();
+    Add {
         path: format!("{}.parquet", name),
         size: 396,
         partition_values: HashMap::new(),
-        partition_values_parsed: None,
         modification_time: ts as i64,
         data_change: true,
         stats: None,
@@ -282,7 +282,8 @@ fn add_action(name: &str) -> Action {
         base_row_id: None,
         default_row_commit_version: None,
         clustering_provider: None,
-    })
+    }
+    .into()
 }
 
 async fn prepare_table(context: &IntegrationContext, table_name: &str) -> TestResult<DeltaTable> {
@@ -322,7 +323,7 @@ async fn append_to_table(
         table.log_store().as_ref(),
         &actions,
         operation,
-        &table.state,
+        Some(table.snapshot()?),
         metadata,
     )
     .await
