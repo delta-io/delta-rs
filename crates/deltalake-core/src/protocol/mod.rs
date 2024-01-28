@@ -2,19 +2,13 @@
 
 #![allow(non_camel_case_types)]
 
-#[cfg(all(feature = "arrow", feature = "parquet"))]
 pub mod checkpoints;
-#[cfg(feature = "parquet2")]
-pub mod parquet2_read;
-#[cfg(feature = "parquet")]
 mod parquet_read;
 mod time_utils;
 
-#[cfg(feature = "arrow")]
 use arrow_schema::ArrowError;
 use futures::StreamExt;
 use lazy_static::lazy_static;
-use log::debug;
 use object_store::{path::Path, Error as ObjectStoreError, ObjectStore};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -24,12 +18,12 @@ use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::mem::take;
 use std::str::FromStr;
+use tracing::{debug, error};
 
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::{Add, CommitInfo, Metadata, Protocol, Remove};
 use crate::logstore::LogStore;
 use crate::table::CheckPoint;
-use crate::table::DeltaTableMetaData;
 
 /// Error returned when an invalid Delta log action is encountered.
 #[allow(missing_docs)]
@@ -60,16 +54,10 @@ pub enum ProtocolError {
     #[error("Generic action error: {0}")]
     Generic(String),
 
-    #[cfg(any(feature = "parquet", feature = "parquet2"))]
     /// Error returned when parsing checkpoint parquet using the parquet crate.
     #[error("Failed to parse parquet checkpoint: {source}")]
     ParquetParseError {
         /// Parquet error details returned when parsing the checkpoint parquet
-        #[cfg(feature = "parquet2")]
-        #[from]
-        source: parquet2::error::Error,
-        /// Parquet error details returned when parsing the checkpoint parquet
-        #[cfg(feature = "parquet")]
         #[from]
         source: parquet::errors::ParquetError,
     },
@@ -83,7 +71,6 @@ pub enum ProtocolError {
     },
 
     /// Error returned when converting the schema to Arrow format failed.
-    #[cfg(feature = "arrow")]
     #[error("Failed to convert into Arrow schema: {}", .source)]
     Arrow {
         /// Arrow error details returned when converting the schema in Arrow format failed
@@ -233,18 +220,10 @@ pub struct StatsParsed {
 
     // start of per column stats
     /// Contains a value smaller than all values present in the file for all columns.
-    #[cfg(feature = "parquet")]
     pub min_values: HashMap<String, parquet::record::Field>,
-    /// Contains a value smaller than all values present in the file for all columns.
-    #[cfg(feature = "parquet2")]
-    pub min_values: HashMap<String, String>,
     /// Contains a value larger than all values present in the file for all columns.
-    #[cfg(feature = "parquet")]
     /// Contains a value larger than all values present in the file for all columns.
     pub max_values: HashMap<String, parquet::record::Field>,
-    #[cfg(feature = "parquet2")]
-    /// Contains a value larger than all values present in the file for all columns.
-    pub max_values: HashMap<String, String>,
     /// The number of null values for all columns.
     pub null_count: HashMap<String, i64>,
 }
@@ -272,13 +251,12 @@ impl Eq for Add {}
 
 impl Add {
     /// Get whatever stats are available. Uses (parquet struct) parsed_stats if present falling back to json stats.
-    #[cfg(any(feature = "parquet", feature = "parquet2"))]
-    pub fn get_stats(&self) -> Result<Option<Stats>, serde_json::error::Error> {
+    pub(crate) fn get_stats(&self) -> Result<Option<Stats>, serde_json::error::Error> {
         match self.get_stats_parsed() {
             Ok(Some(stats)) => Ok(Some(stats)),
             Ok(None) => self.get_json_stats(),
             Err(e) => {
-                log::error!(
+                error!(
                     "Error when reading parquet stats {:?} {e}. Attempting to read json stats",
                     self.stats_parsed
                 );
@@ -287,15 +265,9 @@ impl Add {
         }
     }
 
-    /// Get whatever stats are available.
-    #[cfg(not(any(feature = "parquet", feature = "parquet2")))]
-    pub fn get_stats(&self) -> Result<Option<Stats>, serde_json::error::Error> {
-        self.get_json_stats()
-    }
-
     /// Returns the serde_json representation of stats contained in the action if present.
     /// Since stats are defined as optional in the protocol, this may be None.
-    pub fn get_json_stats(&self) -> Result<Option<Stats>, serde_json::error::Error> {
+    fn get_json_stats(&self) -> Result<Option<Stats>, serde_json::error::Error> {
         let ps: Result<Option<PartialStats>, serde_json::error::Error> = self
             .stats
             .as_ref()
@@ -336,25 +308,6 @@ impl PartialEq for Remove {
     }
 }
 
-impl TryFrom<DeltaTableMetaData> for Metadata {
-    type Error = ProtocolError;
-
-    fn try_from(metadata: DeltaTableMetaData) -> Result<Self, Self::Error> {
-        let schema_string = serde_json::to_string(&metadata.schema)
-            .map_err(|source| ProtocolError::SerializeOperation { source })?;
-        Ok(Self {
-            id: metadata.id,
-            name: metadata.name,
-            description: metadata.description,
-            format: metadata.format,
-            schema_string,
-            partition_columns: metadata.partition_columns,
-            created_time: metadata.created_time,
-            configuration: metadata.configuration,
-        })
-    }
-}
-
 #[allow(clippy::large_enum_variant)]
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -384,7 +337,7 @@ pub enum DeltaOperation {
         /// The min reader and writer protocol versions of the table
         protocol: Protocol,
         /// Metadata associated with the new table
-        metadata: DeltaTableMetaData,
+        metadata: Metadata,
     },
 
     /// Represents a Delta `Write` operation.
@@ -659,7 +612,7 @@ pub(crate) async fn find_latest_check_point_for_version(
 
     let mut cp: Option<CheckPoint> = None;
     let object_store = log_store.object_store();
-    let mut stream = object_store.list(Some(log_store.log_path())).await?;
+    let mut stream = object_store.list(Some(log_store.log_path()));
 
     while let Some(obj_meta) = stream.next().await {
         // Exit early if any objects can't be listed.
@@ -724,7 +677,6 @@ mod tests {
             data_change: true,
             deletion_vector: None,
             partition_values: Default::default(),
-            partition_values_parsed: None,
             stats_parsed: None,
             tags: None,
             size: 0,
@@ -800,7 +752,6 @@ mod tests {
             data_change: true,
             deletion_vector: None,
             partition_values: Default::default(),
-            partition_values_parsed: None,
             stats_parsed: None,
             tags: None,
             size: 0,
@@ -884,7 +835,6 @@ mod tests {
             serde_json::from_str(buf).expect("Expected to be able to deserialize");
     }
 
-    #[cfg(feature = "arrow")]
     mod arrow_tests {
         use arrow::array::{self, ArrayRef, StructArray};
         use arrow::compute::kernels::cast_utils::Parser;
@@ -912,9 +862,9 @@ mod tests {
         #[tokio::test]
         async fn test_with_partitions() {
             // test table with partitions
-            let path = "./tests/data/delta-0.8.0-null-partition";
+            let path = "../deltalake-test/tests/data/delta-0.8.0-null-partition";
             let table = crate::open_table(path).await.unwrap();
-            let actions = table.get_state().add_actions_table(true).unwrap();
+            let actions = table.snapshot().unwrap().add_actions_table(true).unwrap();
             let actions = sort_batch_by(&actions, "path").unwrap();
 
             let mut expected_columns: Vec<(&str, ArrayRef)> = vec![
@@ -933,7 +883,7 @@ mod tests {
 
             assert_eq!(expected, actions);
 
-            let actions = table.get_state().add_actions_table(false).unwrap();
+            let actions = table.snapshot().unwrap().add_actions_table(false).unwrap();
             let actions = sort_batch_by(&actions, "path").unwrap();
 
             expected_columns[4] = (
@@ -951,9 +901,9 @@ mod tests {
         #[tokio::test]
         async fn test_with_deletion_vector() {
             // test table with partitions
-            let path = "./tests/data/table_with_deletion_logs";
+            let path = "../deltalake-test/tests/data/table_with_deletion_logs";
             let table = crate::open_table(path).await.unwrap();
-            let actions = table.get_state().add_actions_table(true).unwrap();
+            let actions = table.snapshot().unwrap().add_actions_table(true).unwrap();
             let actions = sort_batch_by(&actions, "path").unwrap();
             let actions = actions
                 .project(&[
@@ -1011,7 +961,7 @@ mod tests {
 
             assert_eq!(expected, actions);
 
-            let actions = table.get_state().add_actions_table(false).unwrap();
+            let actions = table.snapshot().unwrap().add_actions_table(false).unwrap();
             let actions = sort_batch_by(&actions, "path").unwrap();
             let actions = actions
                 .project(&[
@@ -1057,10 +1007,10 @@ mod tests {
         #[tokio::test]
         async fn test_without_partitions() {
             // test table without partitions
-            let path = "./tests/data/simple_table";
+            let path = "../deltalake-test/tests/data/simple_table";
             let table = crate::open_table(path).await.unwrap();
 
-            let actions = table.get_state().add_actions_table(true).unwrap();
+            let actions = table.snapshot().unwrap().add_actions_table(true).unwrap();
             let actions = sort_batch_by(&actions, "path").unwrap();
 
             let expected_columns: Vec<(&str, ArrayRef)> = vec![
@@ -1099,7 +1049,7 @@ mod tests {
 
             assert_eq!(expected, actions);
 
-            let actions = table.get_state().add_actions_table(false).unwrap();
+            let actions = table.snapshot().unwrap().add_actions_table(false).unwrap();
             let actions = sort_batch_by(&actions, "path").unwrap();
 
             // For now, this column is ignored.
@@ -1115,9 +1065,9 @@ mod tests {
         #[tokio::test]
         async fn test_with_column_mapping() {
             // test table with column mapping and partitions
-            let path = "./tests/data/table_with_column_mapping";
+            let path = "../deltalake-test/tests/data/table_with_column_mapping";
             let table = crate::open_table(path).await.unwrap();
-            let actions = table.get_state().add_actions_table(true).unwrap();
+            let actions = table.snapshot().unwrap().add_actions_table(true).unwrap();
             let expected_columns: Vec<(&str, ArrayRef)> = vec![
                 (
                     "path",
@@ -1189,9 +1139,9 @@ mod tests {
         #[tokio::test]
         async fn test_with_stats() {
             // test table with stats
-            let path = "./tests/data/delta-0.8.0";
+            let path = "../deltalake-test/tests/data/delta-0.8.0";
             let table = crate::open_table(path).await.unwrap();
-            let actions = table.get_state().add_actions_table(true).unwrap();
+            let actions = table.snapshot().unwrap().add_actions_table(true).unwrap();
             let actions = sort_batch_by(&actions, "path").unwrap();
 
             let expected_columns: Vec<(&str, ArrayRef)> = vec![
@@ -1233,11 +1183,11 @@ mod tests {
         #[tokio::test]
         async fn test_only_struct_stats() {
             // test table with no json stats
-            let path = "./tests/data/delta-1.2.1-only-struct-stats";
+            let path = "../deltalake-test/tests/data/delta-1.2.1-only-struct-stats";
             let mut table = crate::open_table(path).await.unwrap();
             table.load_version(1).await.unwrap();
 
-            let actions = table.get_state().add_actions_table(true).unwrap();
+            let actions = table.snapshot().unwrap().add_actions_table(true).unwrap();
 
             let expected_columns: Vec<(&str, ArrayRef)> = vec![
                 (
@@ -1418,7 +1368,7 @@ mod tests {
             );
             assert_eq!(expected, actions);
 
-            let actions = table.get_state().add_actions_table(false).unwrap();
+            let actions = table.snapshot().unwrap().add_actions_table(false).unwrap();
             // For brevity, just checking a few nested columns in stats
 
             assert_eq!(

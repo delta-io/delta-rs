@@ -7,10 +7,9 @@ use arrow::compute::take;
 use arrow_array::{Int32Array, Int64Array, RecordBatch, StringArray, StructArray, UInt32Array};
 use arrow_schema::{DataType, Field, Schema as ArrowSchema};
 
-use crate::kernel::{DataType as DeltaDataType, PrimitiveType, StructField, StructType};
+use crate::kernel::{DataType as DeltaDataType, Metadata, PrimitiveType, StructField, StructType};
 use crate::operations::create::CreateBuilder;
 use crate::operations::DeltaOps;
-use crate::table::DeltaTableMetaData;
 use crate::{DeltaConfigKey, DeltaTable, DeltaTableBuilder};
 
 pub type TestResult = Result<(), Box<dyn std::error::Error + 'static>>;
@@ -152,16 +151,9 @@ pub fn get_delta_schema() -> StructType {
     ])
 }
 
-pub fn get_delta_metadata(partition_cols: &[String]) -> DeltaTableMetaData {
+pub fn get_delta_metadata(partition_cols: &[String]) -> Metadata {
     let table_schema = get_delta_schema();
-    DeltaTableMetaData::new(
-        None,
-        None,
-        None,
-        table_schema,
-        partition_cols.to_vec(),
-        HashMap::new(),
-    )
+    Metadata::try_new(table_schema, partition_cols.to_vec(), HashMap::new()).unwrap()
 }
 
 pub fn get_record_batch_with_nested_struct() -> RecordBatch {
@@ -323,7 +315,8 @@ pub mod datafusion {
     use std::sync::Arc;
 
     pub async fn get_data(table: &DeltaTable) -> Vec<RecordBatch> {
-        let table = DeltaTable::new_with_state(table.log_store.clone(), table.state.clone());
+        let table =
+            DeltaTable::new_with_state(table.log_store.clone(), table.snapshot().unwrap().clone());
         let ctx = SessionContext::new();
         ctx.register_table("test", Arc::new(table)).unwrap();
         ctx.sql("select * from test")

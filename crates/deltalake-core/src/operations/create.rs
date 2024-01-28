@@ -14,7 +14,6 @@ use crate::logstore::{LogStore, LogStoreRef};
 use crate::protocol::{DeltaOperation, SaveMode};
 use crate::table::builder::ensure_table_uri;
 use crate::table::config::DeltaConfigKey;
-use crate::table::DeltaTableMetaData;
 use crate::{DeltaTable, DeltaTableBuilder};
 
 #[derive(thiserror::Error, Debug)]
@@ -251,14 +250,18 @@ impl CreateBuilder {
                 reader_features: None,
             });
 
-        let metadata = DeltaTableMetaData::new(
-            self.name,
-            self.comment,
-            None,
+        let mut metadata = Metadata::try_new(
             StructType::new(self.columns),
             self.partition_columns.unwrap_or_default(),
             self.configuration,
-        );
+        )?
+        .with_created_time(chrono::Utc::now().timestamp_millis());
+        if let Some(name) = self.name {
+            metadata = metadata.with_name(name);
+        }
+        if let Some(comment) = self.comment {
+            metadata = metadata.with_description(comment);
+        }
 
         let operation = DeltaOperation::Create {
             mode: self.mode.clone(),
@@ -267,10 +270,7 @@ impl CreateBuilder {
             protocol: protocol.clone(),
         };
 
-        let mut actions = vec![
-            Action::Protocol(protocol),
-            Action::Metadata(Metadata::try_from(metadata)?),
-        ];
+        let mut actions = vec![Action::Protocol(protocol), Action::Metadata(metadata)];
         actions.extend(
             self.actions
                 .into_iter()
@@ -292,6 +292,7 @@ impl std::future::IntoFuture for CreateBuilder {
             let app_metadata = this.metadata.clone();
             let (mut table, actions, operation) = this.into_table_and_actions()?;
             let log_store = table.log_store();
+
             let table_state = if log_store.is_delta_table_location().await? {
                 match mode {
                     SaveMode::ErrorIfExists => return Err(CreateError::TableAlreadyExists.into()),
@@ -302,11 +303,11 @@ impl std::future::IntoFuture for CreateBuilder {
                     }
                     SaveMode::Overwrite => {
                         table.load().await?;
-                        &table.state
+                        Some(table.snapshot()?)
                     }
                 }
             } else {
-                &table.state
+                None
             };
 
             let version = commit(
@@ -317,6 +318,7 @@ impl std::future::IntoFuture for CreateBuilder {
                 app_metadata,
             )
             .await?;
+
             table.load_version(version).await?;
 
             Ok(table)
@@ -324,13 +326,13 @@ impl std::future::IntoFuture for CreateBuilder {
     }
 }
 
-#[cfg(all(test, feature = "parquet"))]
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::operations::DeltaOps;
     use crate::table::config::DeltaConfigKey;
     use crate::writer::test_utils::get_delta_schema;
-    use tempdir::TempDir;
+    use tempfile::TempDir;
 
     #[tokio::test]
     async fn test_create() {
@@ -349,7 +351,7 @@ mod tests {
     #[tokio::test]
     async fn test_create_local_relative_path() {
         let table_schema = get_delta_schema();
-        let tmp_dir = TempDir::new_in(".", "tmp_").unwrap();
+        let tmp_dir = TempDir::new_in(".").unwrap();
         let relative_path = format!(
             "./{}",
             tmp_dir.path().file_name().unwrap().to_str().unwrap()
@@ -369,7 +371,7 @@ mod tests {
     #[tokio::test]
     async fn test_create_table_local_path() {
         let schema = get_delta_schema();
-        let tmp_dir = TempDir::new_in(".", "tmp_").unwrap();
+        let tmp_dir = TempDir::new_in(".").unwrap();
         let relative_path = format!(
             "./{}",
             tmp_dir.path().file_name().unwrap().to_str().unwrap()
@@ -392,11 +394,11 @@ mod tests {
             .unwrap();
         assert_eq!(table.version(), 0);
         assert_eq!(
-            table.protocol().min_reader_version,
+            table.protocol().unwrap().min_reader_version,
             PROTOCOL.default_reader_version()
         );
         assert_eq!(
-            table.protocol().min_writer_version,
+            table.protocol().unwrap().min_writer_version,
             PROTOCOL.default_writer_version()
         );
         assert_eq!(table.get_schema().unwrap(), &schema);
@@ -414,8 +416,8 @@ mod tests {
             .with_actions(vec![Action::Protocol(protocol)])
             .await
             .unwrap();
-        assert_eq!(table.protocol().min_reader_version, 0);
-        assert_eq!(table.protocol().min_writer_version, 0);
+        assert_eq!(table.protocol().unwrap().min_reader_version, 0);
+        assert_eq!(table.protocol().unwrap().min_writer_version, 0);
 
         let table = CreateBuilder::new()
             .with_location("memory://")

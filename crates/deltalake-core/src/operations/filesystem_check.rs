@@ -42,6 +42,8 @@ pub struct FileSystemCheckBuilder {
     log_store: LogStoreRef,
     /// Don't remove actions to the table log. Just determine which files can be removed
     dry_run: bool,
+    /// Additional metadata to be added to commit
+    app_metadata: Option<HashMap<String, serde_json::Value>>,
 }
 
 /// Details of the FSCK operation including which files were removed from the log
@@ -78,6 +80,7 @@ impl FileSystemCheckBuilder {
             snapshot: state,
             log_store,
             dry_run: false,
+            app_metadata: None,
         }
     }
 
@@ -87,23 +90,32 @@ impl FileSystemCheckBuilder {
         self
     }
 
+    /// Additional metadata to be added to commit info
+    pub fn with_metadata(
+        mut self,
+        metadata: impl IntoIterator<Item = (String, serde_json::Value)>,
+    ) -> Self {
+        self.app_metadata = Some(HashMap::from_iter(metadata));
+        self
+    }
+
     async fn create_fsck_plan(&self) -> DeltaResult<FileSystemCheckPlan> {
-        let mut files_relative: HashMap<&str, &Add> =
-            HashMap::with_capacity(self.snapshot.files().len());
+        let mut files_relative: HashMap<String, Add> =
+            HashMap::with_capacity(self.snapshot.file_actions()?.len());
         let log_store = self.log_store.clone();
 
-        for active in self.snapshot.files() {
+        for active in self.snapshot.file_actions()? {
             if is_absolute_path(&active.path)? {
                 return Err(DeltaTableError::Generic(
                     "Filesystem check does not support absolute paths".to_string(),
                 ));
             } else {
-                files_relative.insert(&active.path, active);
+                files_relative.insert(active.path.clone(), active);
             }
         }
 
         let object_store = log_store.object_store();
-        let mut files = object_store.list(None).await?;
+        let mut files = object_store.list(None);
         while let Some(result) = files.next().await {
             let file = result?;
             files_relative.remove(file.location.as_ref());
@@ -126,7 +138,11 @@ impl FileSystemCheckBuilder {
 }
 
 impl FileSystemCheckPlan {
-    pub async fn execute(self, snapshot: &DeltaTableState) -> DeltaResult<FileSystemCheckMetrics> {
+    pub async fn execute(
+        self,
+        snapshot: &DeltaTableState,
+        app_metadata: Option<HashMap<String, serde_json::Value>>,
+    ) -> DeltaResult<FileSystemCheckMetrics> {
         if self.files_to_remove.is_empty() {
             return Ok(FileSystemCheckMetrics {
                 dry_run: false,
@@ -154,21 +170,32 @@ impl FileSystemCheckPlan {
                 default_row_commit_version: file.default_row_commit_version,
             }));
         }
+        let metrics = FileSystemCheckMetrics {
+            dry_run: false,
+            files_removed: removed_file_paths,
+        };
+
+        let mut app_metadata = match app_metadata {
+            Some(meta) => meta,
+            None => HashMap::new(),
+        };
+
+        app_metadata.insert("readVersion".to_owned(), snapshot.version().into());
+        if let Ok(map) = serde_json::to_value(&metrics) {
+            app_metadata.insert("operationMetrics".to_owned(), map);
+        }
 
         commit(
             self.log_store.as_ref(),
             &actions,
             DeltaOperation::FileSystemCheck {},
-            snapshot,
+            Some(snapshot),
             // TODO pass through metadata
-            None,
+            Some(app_metadata),
         )
         .await?;
 
-        Ok(FileSystemCheckMetrics {
-            dry_run: false,
-            files_removed: removed_file_paths,
-        })
+        Ok(metrics)
     }
 }
 
@@ -191,7 +218,7 @@ impl std::future::IntoFuture for FileSystemCheckBuilder {
                 ));
             }
 
-            let metrics = plan.execute(&this.snapshot).await?;
+            let metrics = plan.execute(&this.snapshot, this.app_metadata).await?;
             let mut table = DeltaTable::new_with_state(this.log_store, this.snapshot);
             table.update().await?;
             Ok((table, metrics))

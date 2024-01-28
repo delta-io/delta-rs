@@ -1,3 +1,4 @@
+#![cfg(feature = "deltalake")]
 use std::collections::HashMap;
 use std::convert::TryFrom;
 
@@ -116,8 +117,6 @@ fn test_match_filters() {
     assert!(!invalid_filter.match_partitions(&partitions, &partition_data_types),);
 }
 
-// FIXME: enable this for parquet2
-#[cfg(all(feature = "arrow", feature = "parquet"))]
 #[tokio::test]
 async fn read_null_partitions_from_checkpoint() {
     use deltalake_core::kernel::Add;
@@ -125,7 +124,7 @@ async fn read_null_partitions_from_checkpoint() {
     use serde_json::json;
 
     let mut table = fs_common::create_table_from_json(
-        "./tests/data/read_null_partitions_from_checkpoint",
+        "../deltalake-test/tests/data/read_null_partitions_from_checkpoint",
         json!({
             "type": "struct",
             "fields": [
@@ -175,9 +174,10 @@ async fn load_from_delta_8_0_table_with_special_partition() {
     use deltalake_core::{DeltaOps, DeltaTable};
     use futures::{future, StreamExt};
 
-    let table = deltalake_core::open_table("./tests/data/delta-0.8.0-special-partition")
-        .await
-        .unwrap();
+    let table =
+        deltalake_core::open_table("../deltalake-test/tests/data/delta-0.8.0-special-partition")
+            .await
+            .unwrap();
 
     let (_, stream): (DeltaTable, SendableRecordBatchStream) = DeltaOps(table)
         .load()

@@ -24,6 +24,7 @@ def test_local_convert_to_delta(tmp_path: pathlib.Path, sample_data: pa.Table):
         name=name,
         description=description,
         configuration={"delta.AppendOnly": "True"},
+        custom_metadata={"userName": "John Doe"},
     )
 
     dt = DeltaTable(tmp_path)
@@ -33,6 +34,7 @@ def test_local_convert_to_delta(tmp_path: pathlib.Path, sample_data: pa.Table):
     assert dt.metadata().name == name
     assert dt.metadata().description == description
     assert dt.metadata().configuration == {"delta.AppendOnly": "True"}
+    assert dt.history()[0]["userName"] == "John Doe"
 
 
 def test_convert_delta_write_modes(tmp_path: pathlib.Path, sample_data: pa.Table):

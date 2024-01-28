@@ -3,6 +3,7 @@ import operator
 import warnings
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from enum import Enum
 from functools import reduce
 from pathlib import Path
 from typing import (
@@ -36,8 +37,6 @@ from pyarrow.dataset import (
 if TYPE_CHECKING:
     import os
 
-    import pandas
-
 from deltalake._internal import DeltaDataChecker as _DeltaDataChecker
 from deltalake._internal import RawDeltaTable
 from deltalake._internal import create_deltalake as _create_deltalake
@@ -47,8 +46,68 @@ from deltalake.exceptions import DeltaProtocolError
 from deltalake.fs import DeltaStorageHandler
 from deltalake.schema import Schema as DeltaSchema
 
+try:
+    import pandas as pd  # noqa: F811
+except ModuleNotFoundError:
+    _has_pandas = False
+else:
+    _has_pandas = True
+
 MAX_SUPPORTED_READER_VERSION = 1
 MAX_SUPPORTED_WRITER_VERSION = 2
+
+
+class Compression(Enum):
+    UNCOMPRESSED = "UNCOMPRESSED"
+    SNAPPY = "SNAPPY"
+    GZIP = "GZIP"
+    BROTLI = "BROTLI"
+    LZ4 = "LZ4"
+    ZSTD = "ZSTD"
+    LZ4_RAW = "LZ4_RAW"
+
+    @classmethod
+    def from_str(cls, value: str) -> "Compression":
+        try:
+            return cls(value.upper())
+        except ValueError:
+            raise ValueError(
+                f"{value} is not a valid Compression. Valid values are: {[item.value for item in Compression]}"
+            )
+
+    def get_level_range(self) -> Tuple[int, int]:
+        if self == Compression.GZIP:
+            MIN_LEVEL = 0
+            MAX_LEVEL = 10
+        elif self == Compression.BROTLI:
+            MIN_LEVEL = 0
+            MAX_LEVEL = 11
+        elif self == Compression.ZSTD:
+            MIN_LEVEL = 1
+            MAX_LEVEL = 22
+        else:
+            raise KeyError(f"{self.value} does not have a compression level.")
+        return MIN_LEVEL, MAX_LEVEL
+
+    def get_default_level(self) -> int:
+        if self == Compression.GZIP:
+            DEFAULT = 6
+        elif self == Compression.BROTLI:
+            DEFAULT = 1
+        elif self == Compression.ZSTD:
+            DEFAULT = 1
+        else:
+            raise KeyError(f"{self.value} does not have a compression level.")
+        return DEFAULT
+
+    def check_valid_level(self, level: int) -> bool:
+        MIN_LEVEL, MAX_LEVEL = self.get_level_range()
+        if level < MIN_LEVEL or level > MAX_LEVEL:
+            raise ValueError(
+                f"Compression level for {self.value} should fall between {MIN_LEVEL}-{MAX_LEVEL}"
+            )
+        else:
+            return True
 
 
 @dataclass(init=True)
@@ -62,11 +121,20 @@ class WriterProperties:
         data_page_row_count_limit: Optional[int] = None,
         write_batch_size: Optional[int] = None,
         max_row_group_size: Optional[int] = None,
-        compression: Optional[str] = None,
+        compression: Optional[
+            Literal[
+                "UNCOMPRESSED",
+                "SNAPPY",
+                "GZIP",
+                "BROTLI",
+                "LZ4",
+                "ZSTD",
+                "LZ4_RAW",
+            ]
+        ] = None,
         compression_level: Optional[int] = None,
     ):
-        """Create a Writer Properties instance for the Rust parquet writer,
-        see options https://arrow.apache.org/rust/parquet/file/properties/struct.WriterProperties.html:
+        """Create a Writer Properties instance for the Rust parquet writer:
 
         Args:
             data_page_size_limit: Limit DataPage size to this in bytes.
@@ -74,27 +142,41 @@ class WriterProperties:
             data_page_row_count_limit: Limit the number of rows in each DataPage.
             write_batch_size: Splits internally to smaller batch size.
             max_row_group_size: Max number of rows in row group.
-            compression: compression type
-            compression_level: level of compression, only relevant for subset of compression types
+            compression: compression type.
+            compression_level: If none and compression has a level, the default level will be used, only relevant for
+                GZIP: levels (1-9),
+                BROTLI: levels (1-11),
+                ZSTD: levels (1-22),
         """
         self.data_page_size_limit = data_page_size_limit
         self.dictionary_page_size_limit = dictionary_page_size_limit
         self.data_page_row_count_limit = data_page_row_count_limit
         self.write_batch_size = write_batch_size
         self.max_row_group_size = max_row_group_size
+        self.compression = None
 
         if compression_level is not None and compression is None:
             raise ValueError(
                 """Providing a compression level without the compression type is not possible, 
                              please provide the compression as well."""
             )
-
-        if compression in ["gzip", "brotli", "zstd"]:
-            if compression_level is not None:
-                compression = compression = f"{compression}({compression_level})"
+        if isinstance(compression, str):
+            compression_enum = Compression.from_str(compression)
+            if compression_enum in [
+                Compression.GZIP,
+                Compression.BROTLI,
+                Compression.ZSTD,
+            ]:
+                if compression_level is not None:
+                    if compression_enum.check_valid_level(compression_level):
+                        parquet_compression = (
+                            f"{compression_enum.value}({compression_level})"
+                        )
+                else:
+                    parquet_compression = f"{compression_enum.value}({compression_enum.get_default_level()})"
             else:
-                raise ValueError("""Gzip, brotli, ztsd require a compression level""")
-        self.compression = compression
+                parquet_compression = compression_enum.value
+            self.compression = parquet_compression
 
     def __str__(self) -> str:
         return (
@@ -370,6 +452,7 @@ class DeltaTable:
         description: Optional[str] = None,
         configuration: Optional[Mapping[str, Optional[str]]] = None,
         storage_options: Optional[Dict[str, str]] = None,
+        custom_metadata: Optional[Dict[str, str]] = None,
     ) -> "DeltaTable":
         """`CREATE` or `CREATE_OR_REPLACE` a delta table given a table_uri.
 
@@ -385,6 +468,7 @@ class DeltaTable:
             description: User-provided description for this table.
             configuration:  A map containing configuration options for the metadata action.
             storage_options: options passed to the object store crate.
+            custom_metadata: custom metadata that will be added to the transaction commit.
 
         Returns:
             DeltaTable: created delta table
@@ -422,6 +506,7 @@ class DeltaTable:
             description,
             configuration,
             storage_options,
+            custom_metadata,
         )
 
         return cls(table_uri=table_uri, storage_options=storage_options)
@@ -642,8 +727,7 @@ class DeltaTable:
                 yield n, elem
                 n -= 1
 
-        commits = list(reversed(self._table.history(limit)))
-
+        commits = list(self._table.history(limit))
         history = []
         for version, commit_info_raw in _backwards_enumerate(
             commits, start_end=self._table.get_latest_version()
@@ -658,6 +742,7 @@ class DeltaTable:
         retention_hours: Optional[int] = None,
         dry_run: bool = True,
         enforce_retention_duration: bool = True,
+        custom_metadata: Optional[Dict[str, str]] = None,
     ) -> List[str]:
         """
         Run the Vacuum command on the Delta Table: list and delete files no longer referenced by the Delta table and are older than the retention threshold.
@@ -666,7 +751,7 @@ class DeltaTable:
             retention_hours: the retention threshold in hours, if none then the value from `configuration.deletedFileRetentionDuration` is used or default of 1 week otherwise.
             dry_run: when activated, list only the files, delete otherwise
             enforce_retention_duration: when disabled, accepts retention hours smaller than the value from `configuration.deletedFileRetentionDuration`.
-
+            custom_metadata: custom metadata that will be added to the transaction commit.
         Returns:
             the list of files no longer referenced by the Delta Table and are older than the retention threshold.
         """
@@ -678,6 +763,7 @@ class DeltaTable:
             dry_run,
             retention_hours,
             enforce_retention_duration,
+            custom_metadata,
         )
 
     def update(
@@ -689,6 +775,7 @@ class DeltaTable:
         predicate: Optional[str] = None,
         writer_properties: Optional[WriterProperties] = None,
         error_on_type_mismatch: bool = True,
+        custom_metadata: Optional[Dict[str, str]] = None,
     ) -> Dict[str, Any]:
         """`UPDATE` records in the Delta Table that matches an optional predicate. Either updates or new_values needs
         to be passed for it to execute.
@@ -699,7 +786,7 @@ class DeltaTable:
             predicate: a logical expression.
             writer_properties: Pass writer properties to the Rust parquet writer.
             error_on_type_mismatch: specify if update will return error if data types are mismatching :default = True
-
+            custom_metadata: custom metadata that will be added to the transaction commit.
         Returns:
             the metrics from update
 
@@ -759,7 +846,6 @@ class DeltaTable:
                 updates[key] = value
         elif updates is not None and new_values is None:
             for key, value in updates.items():
-                print(type(key), type(value))
                 if not isinstance(value, str) or not isinstance(key, str):
                     raise TypeError(
                         f"The values of the updates parameter must all be SQL strings. Got {updates}. Did you mean to use the new_values parameter?"
@@ -778,6 +864,7 @@ class DeltaTable:
             predicate,
             writer_properties._to_dict() if writer_properties else None,
             safe_cast=not error_on_type_mismatch,
+            custom_metadata=custom_metadata,
         )
         return json.loads(metrics)
 
@@ -810,7 +897,7 @@ class DeltaTable:
             pyarrow.RecordBatch,
             pyarrow.RecordBatchReader,
             ds.Dataset,
-            "pandas.DataFrame",
+            "pd.DataFrame",
         ],
         predicate: str,
         source_alias: Optional[str] = None,
@@ -818,6 +905,7 @@ class DeltaTable:
         error_on_type_mismatch: bool = True,
         writer_properties: Optional[WriterProperties] = None,
         large_dtypes: bool = True,
+        custom_metadata: Optional[Dict[str, str]] = None,
     ) -> "TableMerger":
         """Pass the source data which you want to merge on the target delta table, providing a
         predicate in SQL query like format. You can also specify on what to do when the underlying data types do not
@@ -831,6 +919,7 @@ class DeltaTable:
             error_on_type_mismatch: specify if merge will return error if data types are mismatching :default = True
             writer_properties: Pass writer properties to the Rust parquet writer
             large_dtypes: If True, the data schema is kept in large_dtypes.
+            custom_metadata: custom metadata that will be added to the transaction commit.
 
         Returns:
             TableMerger: TableMerger Object
@@ -853,7 +942,7 @@ class DeltaTable:
             source = convert_pyarrow_table(source, large_dtypes)
         elif isinstance(source, ds.Dataset):
             source = convert_pyarrow_dataset(source, large_dtypes)
-        elif isinstance(source, pandas.DataFrame):
+        elif _has_pandas and isinstance(source, pd.DataFrame):
             source = convert_pyarrow_table(
                 pyarrow.Table.from_pandas(source), large_dtypes
             )
@@ -878,6 +967,7 @@ class DeltaTable:
             target_alias=target_alias,
             safe_cast=not error_on_type_mismatch,
             writer_properties=writer_properties,
+            custom_metadata=custom_metadata,
         )
 
     def restore(
@@ -886,6 +976,7 @@ class DeltaTable:
         *,
         ignore_missing_files: bool = False,
         protocol_downgrade_allowed: bool = False,
+        custom_metadata: Optional[Dict[str, str]] = None,
     ) -> Dict[str, Any]:
         """
         Run the Restore command on the Delta Table: restore table to a given version or datetime.
@@ -894,6 +985,7 @@ class DeltaTable:
             target: the expected version will restore, which represented by int, date str or datetime.
             ignore_missing_files: whether the operation carry on when some data files missing.
             protocol_downgrade_allowed: whether the operation when protocol version upgraded.
+            custom_metadata: custom metadata that will be added to the transaction commit.
 
         Returns:
             the metrics from restore.
@@ -903,12 +995,14 @@ class DeltaTable:
                 target.isoformat(),
                 ignore_missing_files=ignore_missing_files,
                 protocol_downgrade_allowed=protocol_downgrade_allowed,
+                custom_metadata=custom_metadata,
             )
         else:
             metrics = self._table.restore(
                 target,
                 ignore_missing_files=ignore_missing_files,
                 protocol_downgrade_allowed=protocol_downgrade_allowed,
+                custom_metadata=custom_metadata,
             )
         return json.loads(metrics)
 
@@ -1005,7 +1099,7 @@ class DeltaTable:
         columns: Optional[List[str]] = None,
         filesystem: Optional[Union[str, pa_fs.FileSystem]] = None,
         filters: Optional[FilterType] = None,
-    ) -> "pandas.DataFrame":
+    ) -> "pd.DataFrame":
         """
         Build a pandas dataframe using data from the DeltaTable.
 
@@ -1099,6 +1193,7 @@ class DeltaTable:
         self,
         predicate: Optional[str] = None,
         writer_properties: Optional[WriterProperties] = None,
+        custom_metadata: Optional[Dict[str, str]] = None,
     ) -> Dict[str, Any]:
         """Delete records from a Delta Table that statisfy a predicate.
 
@@ -1109,16 +1204,22 @@ class DeltaTable:
 
         Args:
             predicate: a SQL where clause. If not passed, will delete all rows.
+            writer_properties: Pass writer properties to the Rust parquet writer.
+            custom_metadata: custom metadata that will be added to the transaction commit.
 
         Returns:
             the metrics from delete.
         """
         metrics = self._table.delete(
-            predicate, writer_properties._to_dict() if writer_properties else None
+            predicate,
+            writer_properties._to_dict() if writer_properties else None,
+            custom_metadata,
         )
         return json.loads(metrics)
 
-    def repair(self, dry_run: bool = False) -> Dict[str, Any]:
+    def repair(
+        self, dry_run: bool = False, custom_metadata: Optional[Dict[str, str]] = None
+    ) -> Dict[str, Any]:
         """Repair the Delta Table by auditing active files that do not exist in the underlying
         filesystem and removes them. This can be useful when there are accidental deletions or corrupted files.
 
@@ -1128,6 +1229,7 @@ class DeltaTable:
 
         Args:
             dry_run: when activated, list only the files, otherwise add remove actions to transaction log. Defaults to False.
+            custom_metadata: custom metadata that will be added to the transaction commit.
         Returns:
             The metrics from repair (FSCK) action.
 
@@ -1142,7 +1244,7 @@ class DeltaTable:
             {'dry_run': False, 'files_removed': ['6-0d084325-6885-4847-b008-82c1cf30674c-0.parquet', 5-4fba1d3e-3e20-4de1-933d-a8e13ac59f53-0.parquet']}
             ```
         """
-        metrics = self._table.repair(dry_run)
+        metrics = self._table.repair(dry_run, custom_metadata)
         return json.loads(metrics)
 
 
@@ -1158,6 +1260,7 @@ class TableMerger:
         target_alias: Optional[str] = None,
         safe_cast: bool = True,
         writer_properties: Optional[WriterProperties] = None,
+        custom_metadata: Optional[Dict[str, str]] = None,
     ):
         self.table = table
         self.source = source
@@ -1166,6 +1269,7 @@ class TableMerger:
         self.target_alias = target_alias
         self.safe_cast = safe_cast
         self.writer_properties = writer_properties
+        self.custom_metadata = custom_metadata
         self.matched_update_updates: Optional[List[Dict[str, str]]] = None
         self.matched_update_predicate: Optional[List[Optional[str]]] = None
         self.matched_delete_predicate: Optional[List[str]] = None
@@ -1615,6 +1719,7 @@ class TableMerger:
             writer_properties=self.writer_properties._to_dict()
             if self.writer_properties
             else None,
+            custom_metadata=self.custom_metadata,
             matched_update_updates=self.matched_update_updates,
             matched_update_predicate=self.matched_update_predicate,
             matched_delete_predicate=self.matched_delete_predicate,
@@ -1636,13 +1741,17 @@ class TableAlterer:
     def __init__(self, table: DeltaTable) -> None:
         self.table = table
 
-    def add_constraint(self, constraints: Dict[str, str]) -> None:
+    def add_constraint(
+        self,
+        constraints: Dict[str, str],
+        custom_metadata: Optional[Dict[str, str]] = None,
+    ) -> None:
         """
         Add constraints to the table. Limited to `single constraint` at once.
 
         Args:
             constraints: mapping of constraint name to SQL-expression to evaluate on write
-
+            custom_metadata: custom metadata that will be added to the transaction commit.
         Example:
             ```python
             from deltalake import DeltaTable
@@ -1664,7 +1773,7 @@ class TableAlterer:
                 Please execute add_constraints multiple times with each time a different constraint."""
             )
 
-        self.table._table.add_constraints(constraints)
+        self.table._table.add_constraints(constraints, custom_metadata)
 
 
 class TableOptimizer:
@@ -1699,6 +1808,7 @@ class TableOptimizer:
         max_concurrent_tasks: Optional[int] = None,
         min_commit_interval: Optional[Union[int, timedelta]] = None,
         writer_properties: Optional[WriterProperties] = None,
+        custom_metadata: Optional[Dict[str, str]] = None,
     ) -> Dict[str, Any]:
         """
         Compacts small files to reduce the total number of files in the table.
@@ -1721,6 +1831,7 @@ class TableOptimizer:
                                     created. Interval is useful for long running executions. Set to 0 or timedelta(0), if you
                                     want a commit per partition.
             writer_properties: Pass writer properties to the Rust parquet writer.
+            custom_metadata: custom metadata that will be added to the transaction commit.
 
         Returns:
             the metrics from optimize
@@ -1750,6 +1861,7 @@ class TableOptimizer:
             max_concurrent_tasks,
             min_commit_interval,
             writer_properties._to_dict() if writer_properties else None,
+            custom_metadata,
         )
         self.table.update_incremental()
         return json.loads(metrics)
@@ -1763,6 +1875,7 @@ class TableOptimizer:
         max_spill_size: int = 20 * 1024 * 1024 * 1024,
         min_commit_interval: Optional[Union[int, timedelta]] = None,
         writer_properties: Optional[WriterProperties] = None,
+        custom_metadata: Optional[Dict[str, str]] = None,
     ) -> Dict[str, Any]:
         """
         Reorders the data using a Z-order curve to improve data skipping.
@@ -1771,7 +1884,7 @@ class TableOptimizer:
 
         Args:
             columns: the columns to use for Z-ordering. There must be at least one column.
-                        partition_filters: the partition filters that will be used for getting the matched files
+            partition_filters: the partition filters that will be used for getting the matched files
             target_size: desired file size after bin-packing files, in bytes. If not
                             provided, will attempt to read the table configuration value ``delta.targetFileSize``.
                             If that value isn't set, will use default value of 256MB.
@@ -1783,6 +1896,7 @@ class TableOptimizer:
                                     created. Interval is useful for long running executions. Set to 0 or timedelta(0), if you
                                     want a commit per partition.
             writer_properties: Pass writer properties to the Rust parquet writer.
+            custom_metadata: custom metadata that will be added to the transaction commit.
 
         Returns:
             the metrics from optimize
@@ -1814,6 +1928,7 @@ class TableOptimizer:
             max_spill_size,
             min_commit_interval,
             writer_properties._to_dict() if writer_properties else None,
+            custom_metadata,
         )
         self.table.update_incremental()
         return json.loads(metrics)

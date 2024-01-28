@@ -46,3 +46,17 @@ def test_add_multiple_constraints(tmp_path: pathlib.Path, sample_table: pa.Table
         dt.alter.add_constraint(
             {"check_price": "price >= 0", "check_price2": "price >= 0"}
         )
+
+
+def test_add_constraint_roundtrip_metadata(
+    tmp_path: pathlib.Path, sample_table: pa.Table
+):
+    write_deltalake(tmp_path, sample_table, mode="append", engine="rust")
+
+    dt = DeltaTable(tmp_path)
+
+    dt.alter.add_constraint(
+        {"check_price2": "price >= 0"}, custom_metadata={"userName": "John Doe"}
+    )
+
+    assert dt.history(1)[0]["userName"] == "John Doe"

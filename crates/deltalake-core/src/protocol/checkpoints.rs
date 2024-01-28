@@ -1,31 +1,29 @@
 //! Implementation for writing delta checkpoints.
 
 use std::collections::HashMap;
-use std::convert::TryFrom;
 use std::iter::Iterator;
 
-use arrow::json::ReaderBuilder;
-use arrow_schema::{ArrowError, Schema as ArrowSchema};
+use arrow_json::ReaderBuilder;
+use arrow_schema::ArrowError;
 
 use chrono::{Datelike, Utc};
 use futures::{StreamExt, TryStreamExt};
 use lazy_static::lazy_static;
-use log::*;
-use object_store::ObjectStore;
+use object_store::{Error, ObjectStore};
 use parquet::arrow::ArrowWriter;
 use parquet::errors::ParquetError;
 use regex::Regex;
 use serde_json::Value;
+use tracing::{debug, error};
 
 use super::{time_utils, ProtocolError};
 use crate::kernel::arrow::delta_log_schema_for_table;
 use crate::kernel::{
-    Action, Add as AddAction, DataType, Metadata, PrimitiveType, Protocol, StructField, StructType,
-    Txn,
+    Action, Add as AddAction, DataType, PrimitiveType, Protocol, Remove, StructField, Txn,
 };
 use crate::logstore::LogStore;
 use crate::table::state::DeltaTableState;
-use crate::table::{CheckPoint, CheckPointBuilder};
+use crate::table::{get_partition_col_data_types, CheckPoint, CheckPointBuilder};
 use crate::{open_table_with_version, DeltaTable};
 
 type SchemaPath = Vec<String>;
@@ -82,7 +80,12 @@ pub const CHECKPOINT_RECORD_BATCH_SIZE: usize = 5000;
 
 /// Creates checkpoint at current table version
 pub async fn create_checkpoint(table: &DeltaTable) -> Result<(), ProtocolError> {
-    create_checkpoint_for(table.version(), table.get_state(), table.log_store.as_ref()).await?;
+    create_checkpoint_for(
+        table.version(),
+        table.snapshot().map_err(|_| ProtocolError::NoMetaData)?,
+        table.log_store.as_ref(),
+    )
+    .await?;
     Ok(())
 }
 
@@ -91,7 +94,8 @@ pub async fn create_checkpoint(table: &DeltaTable) -> Result<(), ProtocolError> 
 pub async fn cleanup_metadata(table: &DeltaTable) -> Result<usize, ProtocolError> {
     let log_retention_timestamp = Utc::now().timestamp_millis()
         - table
-            .get_state()
+            .snapshot()
+            .map_err(|_| ProtocolError::NoMetaData)?
             .table_config()
             .log_retention_duration()
             .as_millis() as i64;
@@ -114,14 +118,11 @@ pub async fn create_checkpoint_from_table_uri_and_cleanup(
     let table = open_table_with_version(table_uri, version)
         .await
         .map_err(|err| ProtocolError::Generic(err.to_string()))?;
-    create_checkpoint_for(version, table.get_state(), table.log_store.as_ref()).await?;
+    let snapshot = table.snapshot().map_err(|_| ProtocolError::NoMetaData)?;
+    create_checkpoint_for(version, snapshot, table.log_store.as_ref()).await?;
 
-    let enable_expired_log_cleanup = cleanup.unwrap_or_else(|| {
-        table
-            .get_state()
-            .table_config()
-            .enable_expired_log_cleanup()
-    });
+    let enable_expired_log_cleanup =
+        cleanup.unwrap_or_else(|| snapshot.table_config().enable_expired_log_cleanup());
 
     if table.version() >= 0 && enable_expired_log_cleanup {
         let deleted_log_num = cleanup_metadata(&table).await?;
@@ -151,7 +152,12 @@ pub async fn create_checkpoint_for(
     let last_checkpoint_path = log_store.log_path().child("_last_checkpoint");
 
     debug!("Writing parquet bytes to checkpoint buffer.");
-    let (checkpoint, parquet_bytes) = parquet_bytes_from_state(state)?;
+    let tombstones = state
+        .unexpired_tombstones(log_store.object_store().clone())
+        .await
+        .map_err(|_| ProtocolError::Generic("filed to get tombstones".into()))?
+        .collect::<Vec<_>>();
+    let (checkpoint, parquet_bytes) = parquet_bytes_from_state(state, tombstones)?;
 
     let file_name = format!("{version:020}.checkpoint.parquet");
     let checkpoint_path = log_store.log_path().child(file_name);
@@ -183,6 +189,19 @@ pub async fn cleanup_expired_logs_for(
             Regex::new(r"_delta_log/(\d{20})\.(json|checkpoint).*$").unwrap();
     }
 
+    let object_store = log_store.object_store();
+    let maybe_last_checkpoint = object_store
+        .get(&log_store.log_path().child("_last_checkpoint"))
+        .await;
+
+    if let Err(Error::NotFound { path: _, source: _ }) = maybe_last_checkpoint {
+        return Ok(0);
+    }
+
+    let last_checkpoint = maybe_last_checkpoint?.bytes().await?;
+    let last_checkpoint: CheckPoint = serde_json::from_slice(&last_checkpoint)?;
+    let until_version = i64::min(until_version, last_checkpoint.version);
+
     // Feed a stream of candidate deletion files directly into the delete_stream
     // function to try to improve the speed of cleanup and reduce the need for
     // intermediate memory.
@@ -191,7 +210,6 @@ pub async fn cleanup_expired_logs_for(
         .delete_stream(
             object_store
                 .list(Some(log_store.log_path()))
-                .await?
                 // This predicate function will filter out any locations that don't
                 // match the given timestamp range
                 .filter_map(|meta: Result<crate::ObjectMeta, _>| async move {
@@ -227,19 +245,16 @@ pub async fn cleanup_expired_logs_for(
 
 fn parquet_bytes_from_state(
     state: &DeltaTableState,
+    mut tombstones: Vec<Remove>,
 ) -> Result<(CheckPoint, bytes::Bytes), ProtocolError> {
-    let current_metadata = state.metadata().ok_or(ProtocolError::NoMetaData)?;
+    let current_metadata = state.metadata();
+    let schema = current_metadata.schema()?;
 
-    let partition_col_data_types = current_metadata.get_partition_col_data_types();
+    let partition_col_data_types = get_partition_col_data_types(&schema, current_metadata);
 
     // Collect a map of paths that require special stats conversion.
     let mut stats_conversions: Vec<(SchemaPath, DataType)> = Vec::new();
-    collect_stats_conversions(
-        &mut stats_conversions,
-        current_metadata.schema.fields().as_slice(),
-    );
-
-    let mut tombstones = state.unexpired_tombstones().cloned().collect::<Vec<_>>();
+    collect_stats_conversions(&mut stats_conversions, schema.fields().as_slice());
 
     // if any, tombstones do not include extended file metadata, we must omit the extended metadata fields from the remove schema
     // See https://github.com/delta-io/delta/blob/master/PROTOCOL.md#add-file-and-remove-file
@@ -259,7 +274,7 @@ fn parquet_bytes_from_state(
             remove.extended_file_metadata = Some(false);
         }
     }
-
+    let files = state.file_actions().unwrap();
     // protocol
     let jsons = std::iter::once(Action::Protocol(Protocol {
         min_reader_version: state.protocol().min_reader_version,
@@ -268,9 +283,7 @@ fn parquet_bytes_from_state(
         reader_features: None,
     }))
     // metaData
-    .chain(std::iter::once(Action::Metadata(Metadata::try_from(
-        current_metadata.clone(),
-    )?)))
+    .chain(std::iter::once(Action::Metadata(current_metadata.clone())))
     // txns
     .chain(
         state
@@ -298,13 +311,13 @@ fn parquet_bytes_from_state(
     }))
     .map(|a| serde_json::to_value(a).map_err(ProtocolError::from))
     // adds
-    .chain(state.files().iter().map(|f| {
+    .chain(files.iter().map(|f| {
         checkpoint_add_from_state(f, partition_col_data_types.as_slice(), &stats_conversions)
     }));
 
     // Create the arrow schema that represents the Checkpoint parquet file.
     let arrow_schema = delta_log_schema_for_table(
-        <ArrowSchema as TryFrom<&StructType>>::try_from(&current_metadata.schema)?,
+        (&schema).try_into()?,
         current_metadata.partition_columns.as_slice(),
         use_extended_remove_schema,
     );
@@ -507,13 +520,20 @@ fn apply_stats_conversion(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::sync::Arc;
+
+    use arrow_array::builder::{Int32Builder, ListBuilder, StructBuilder};
+    use arrow_array::{ArrayRef, Int32Array, RecordBatch};
+    use arrow_schema::Schema as ArrowSchema;
+    use chrono::Duration;
     use lazy_static::lazy_static;
+    use object_store::path::Path;
     use serde_json::json;
 
+    use super::*;
+    use crate::kernel::StructType;
     use crate::operations::DeltaOps;
     use crate::writer::test_utils::get_delta_schema;
-    use object_store::path::Path;
 
     #[tokio::test]
     async fn test_create_checkpoint_for() {
@@ -527,7 +547,8 @@ mod tests {
             .unwrap();
         assert_eq!(table.version(), 0);
         assert_eq!(table.get_schema().unwrap(), &table_schema);
-        let res = create_checkpoint_for(0, table.get_state(), table.log_store.as_ref()).await;
+        let res =
+            create_checkpoint_for(0, table.snapshot().unwrap(), table.log_store.as_ref()).await;
         assert!(res.is_ok());
 
         // Look at the "files" and verify that the _last_checkpoint has the right version
@@ -556,7 +577,7 @@ mod tests {
             .unwrap();
         assert_eq!(table.version(), 0);
         assert_eq!(table.get_schema().unwrap(), &table_schema);
-        match create_checkpoint_for(1, table.get_state(), table.log_store.as_ref()).await {
+        match create_checkpoint_for(1, table.snapshot().unwrap(), table.log_store.as_ref()).await {
             Ok(_) => {
                 /*
                  * If a checkpoint is allowed to be created here, it will use the passed in
@@ -703,6 +724,97 @@ mod tests {
         );
     }
 
+    async fn setup_table() -> DeltaTable {
+        use arrow_schema::{DataType, Field};
+        let schema = Arc::new(ArrowSchema::new(vec![Field::new(
+            "id",
+            DataType::Utf8,
+            false,
+        )]));
+
+        let data =
+            vec![Arc::new(arrow::array::StringArray::from(vec!["A", "B", "C", "D"])) as ArrayRef];
+        let batches = vec![RecordBatch::try_new(schema.clone(), data).unwrap()];
+
+        let table = DeltaOps::new_in_memory()
+            .write(batches.clone())
+            .await
+            .unwrap();
+
+        DeltaOps(table)
+            .write(batches)
+            .with_save_mode(crate::protocol::SaveMode::Overwrite)
+            .await
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn test_cleanup_no_checkpoints() {
+        // Test that metadata clean up does not corrupt the table when no checkpoints exist
+        let table = setup_table().await;
+
+        let log_retention_timestamp = (Utc::now().timestamp_millis()
+            + Duration::days(31).num_milliseconds())
+            - table
+                .snapshot()
+                .unwrap()
+                .table_config()
+                .log_retention_duration()
+                .as_millis() as i64;
+        let count = cleanup_expired_logs_for(
+            table.version(),
+            table.log_store().as_ref(),
+            log_retention_timestamp,
+        )
+        .await
+        .unwrap();
+        assert_eq!(count, 0);
+        println!("{:?}", count);
+
+        let path = Path::from("_delta_log/00000000000000000000.json");
+        let res = table.log_store().object_store().get(&path).await;
+        assert!(res.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_cleanup_with_checkpoints() {
+        let table = setup_table().await;
+        create_checkpoint(&table).await.unwrap();
+
+        let log_retention_timestamp = (Utc::now().timestamp_millis()
+            + Duration::days(32).num_milliseconds())
+            - table
+                .snapshot()
+                .unwrap()
+                .table_config()
+                .log_retention_duration()
+                .as_millis() as i64;
+        let count = cleanup_expired_logs_for(
+            table.version(),
+            table.log_store().as_ref(),
+            log_retention_timestamp,
+        )
+        .await
+        .unwrap();
+        assert_eq!(count, 1);
+
+        let log_store = table.log_store();
+
+        let path = log_store.log_path().child("00000000000000000000.json");
+        let res = table.log_store().object_store().get(&path).await;
+        assert!(res.is_err());
+
+        let path = log_store
+            .log_path()
+            .child("00000000000000000001.checkpoint.parquet");
+        let res = table.log_store().object_store().get(&path).await;
+        assert!(res.is_ok());
+
+        let path = log_store.log_path().child("00000000000000000001.json");
+        let res = table.log_store().object_store().get(&path).await;
+        assert!(res.is_ok());
+    }
+
     #[test]
     fn apply_stats_conversion_test() {
         let mut stats = STATS_JSON.clone();
@@ -790,6 +902,43 @@ mod tests {
             1627668685594000i64,
             stats["maxValues"]["some_timestamp"].as_i64().unwrap()
         );
+    }
+
+    #[tokio::test]
+    async fn test_struct_with_single_list_field() {
+        // you need another column otherwise the entire stats struct is empty
+        // which also fails parquet write during checkpoint
+        let other_column_array: ArrayRef = Arc::new(Int32Array::from(vec![1]));
+
+        let mut list_item_builder = Int32Builder::new();
+        list_item_builder.append_value(1);
+
+        let mut list_in_struct_builder = ListBuilder::new(list_item_builder);
+        list_in_struct_builder.append(true);
+
+        let mut struct_builder = StructBuilder::new(
+            vec![arrow_schema::Field::new(
+                "list_in_struct",
+                arrow_schema::DataType::List(Arc::new(arrow_schema::Field::new(
+                    "item",
+                    arrow_schema::DataType::Int32,
+                    true,
+                ))),
+                true,
+            )],
+            vec![Box::new(list_in_struct_builder)],
+        );
+        struct_builder.append(true);
+
+        let struct_with_list_array: ArrayRef = Arc::new(struct_builder.finish());
+        let batch = RecordBatch::try_from_iter(vec![
+            ("other_column", other_column_array),
+            ("struct_with_list", struct_with_list_array),
+        ])
+        .unwrap();
+        let table = DeltaOps::new_in_memory().write(vec![batch]).await.unwrap();
+
+        create_checkpoint(&table).await.unwrap();
     }
 
     lazy_static! {

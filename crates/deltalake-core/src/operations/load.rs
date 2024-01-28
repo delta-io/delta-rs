@@ -50,7 +50,7 @@ impl std::future::IntoFuture for LoadBuilder {
             PROTOCOL.can_read_from(&this.snapshot)?;
 
             let table = DeltaTable::new_with_state(this.log_store, this.snapshot);
-            let schema = table.state.arrow_schema()?;
+            let schema = table.snapshot()?.arrow_schema()?;
             let projection = this
                 .columns
                 .map(|cols| {
@@ -88,7 +88,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_load_local() -> TestResult {
-        let table = DeltaTableBuilder::from_uri("./tests/data/delta-0.8.0")
+        let table = DeltaTableBuilder::from_uri("../deltalake-test/tests/data/delta-0.8.0")
             .load()
             .await
             .unwrap();

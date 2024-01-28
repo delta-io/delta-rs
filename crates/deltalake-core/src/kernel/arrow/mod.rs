@@ -8,12 +8,23 @@ use arrow_schema::{
 };
 use lazy_static::lazy_static;
 
-use super::schema::{ArrayType, DataType, MapType, PrimitiveType, StructField, StructType};
+use super::{ActionType, ArrayType, DataType, MapType, PrimitiveType, StructField, StructType};
 
-pub mod schemas;
+pub(crate) mod extract;
+pub(crate) mod json;
 
-const MAP_KEYS_NAME: &str = "keys";
-const MAP_VALUES_NAME: &str = "values";
+const MAP_ROOT_DEFAULT: &str = "entries";
+const MAP_KEY_DEFAULT: &str = "keys";
+const MAP_VALUE_DEFAULT: &str = "values";
+const LIST_ROOT_DEFAULT: &str = "item";
+
+impl TryFrom<ActionType> for ArrowField {
+    type Error = ArrowError;
+
+    fn try_from(value: ActionType) -> Result<Self, Self::Error> {
+        value.schema_field().try_into()
+    }
+}
 
 impl TryFrom<&StructType> for ArrowSchema {
     type Error = ArrowError;
@@ -22,7 +33,7 @@ impl TryFrom<&StructType> for ArrowSchema {
         let fields = s
             .fields()
             .iter()
-            .map(<ArrowField as TryFrom<&StructField>>::try_from)
+            .map(TryInto::try_into)
             .collect::<Result<Vec<ArrowField>, ArrowError>>()?;
 
         Ok(ArrowSchema::new(fields))
@@ -53,11 +64,11 @@ impl TryFrom<&StructField> for ArrowField {
 
 impl TryFrom<&ArrayType> for ArrowField {
     type Error = ArrowError;
-
     fn try_from(a: &ArrayType) -> Result<Self, ArrowError> {
         Ok(ArrowField::new(
-            "item",
+            LIST_ROOT_DEFAULT,
             ArrowDataType::try_from(a.element_type())?,
+            // TODO check how to handle nullability
             a.contains_null(),
         ))
     }
@@ -68,19 +79,24 @@ impl TryFrom<&MapType> for ArrowField {
 
     fn try_from(a: &MapType) -> Result<Self, ArrowError> {
         Ok(ArrowField::new(
-            "entries",
+            MAP_ROOT_DEFAULT,
             ArrowDataType::Struct(
                 vec![
-                    ArrowField::new(MAP_KEYS_NAME, ArrowDataType::try_from(a.key_type())?, false),
                     ArrowField::new(
-                        MAP_VALUES_NAME,
+                        MAP_KEY_DEFAULT,
+                        ArrowDataType::try_from(a.key_type())?,
+                        false,
+                    ),
+                    ArrowField::new(
+                        MAP_VALUE_DEFAULT,
                         ArrowDataType::try_from(a.value_type())?,
                         a.value_contains_null(),
                     ),
                 ]
                 .into(),
             ),
-            false, // always non-null
+            // always non-null
+            false,
         ))
     }
 }
@@ -102,20 +118,10 @@ impl TryFrom<&DataType> for ArrowDataType {
                     PrimitiveType::Boolean => Ok(ArrowDataType::Boolean),
                     PrimitiveType::Binary => Ok(ArrowDataType::Binary),
                     PrimitiveType::Decimal(precision, scale) => {
-                        let precision = u8::try_from(*precision).map_err(|_| {
-                            ArrowError::SchemaError(format!(
-                                "Invalid precision for decimal: {}",
-                                precision
-                            ))
-                        })?;
-                        let scale = i8::try_from(*scale).map_err(|_| {
-                            ArrowError::SchemaError(format!("Invalid scale for decimal: {}", scale))
-                        })?;
-
-                        if precision <= 38 {
-                            Ok(ArrowDataType::Decimal128(precision, scale))
-                        } else if precision <= 76 {
-                            Ok(ArrowDataType::Decimal256(precision, scale))
+                        if precision <= &38 {
+                            Ok(ArrowDataType::Decimal128(*precision, *scale))
+                        } else if precision <= &76 {
+                            Ok(ArrowDataType::Decimal256(*precision, *scale))
                         } else {
                             Err(ArrowError::SchemaError(format!(
                                 "Precision too large to be represented in Arrow: {}",
@@ -137,35 +143,12 @@ impl TryFrom<&DataType> for ArrowDataType {
             DataType::Struct(s) => Ok(ArrowDataType::Struct(
                 s.fields()
                     .iter()
-                    .map(<ArrowField as TryFrom<&StructField>>::try_from)
+                    .map(TryInto::try_into)
                     .collect::<Result<Vec<ArrowField>, ArrowError>>()?
                     .into(),
             )),
-            DataType::Array(a) => Ok(ArrowDataType::List(Arc::new(<ArrowField as TryFrom<
-                &ArrayType,
-            >>::try_from(a)?))),
-            DataType::Map(m) => Ok(ArrowDataType::Map(
-                Arc::new(ArrowField::new(
-                    "entries",
-                    ArrowDataType::Struct(
-                        vec![
-                            ArrowField::new(
-                                MAP_KEYS_NAME,
-                                <ArrowDataType as TryFrom<&DataType>>::try_from(m.key_type())?,
-                                false,
-                            ),
-                            ArrowField::new(
-                                MAP_VALUES_NAME,
-                                <ArrowDataType as TryFrom<&DataType>>::try_from(m.value_type())?,
-                                m.value_contains_null(),
-                            ),
-                        ]
-                        .into(),
-                    ),
-                    false,
-                )),
-                false,
-            )),
+            DataType::Array(a) => Ok(ArrowDataType::List(Arc::new(a.as_ref().try_into()?))),
+            DataType::Map(m) => Ok(ArrowDataType::Map(Arc::new(m.as_ref().try_into()?), false)),
         }
     }
 }
@@ -197,7 +180,7 @@ impl TryFrom<&ArrowField> for StructField {
     fn try_from(arrow_field: &ArrowField) -> Result<Self, ArrowError> {
         Ok(StructField::new(
             arrow_field.name().clone(),
-            arrow_field.data_type().try_into()?,
+            DataType::try_from(arrow_field.data_type())?,
             arrow_field.is_nullable(),
         )
         .with_metadata(arrow_field.metadata().iter().map(|(k, v)| (k.clone(), v))))
@@ -218,19 +201,19 @@ impl TryFrom<&ArrowDataType> for DataType {
             ArrowDataType::UInt64 => Ok(DataType::Primitive(PrimitiveType::Long)), // undocumented type
             ArrowDataType::UInt32 => Ok(DataType::Primitive(PrimitiveType::Integer)),
             ArrowDataType::UInt16 => Ok(DataType::Primitive(PrimitiveType::Short)),
-            ArrowDataType::UInt8 => Ok(DataType::Primitive(PrimitiveType::Boolean)),
+            ArrowDataType::UInt8 => Ok(DataType::Primitive(PrimitiveType::Byte)),
             ArrowDataType::Float32 => Ok(DataType::Primitive(PrimitiveType::Float)),
             ArrowDataType::Float64 => Ok(DataType::Primitive(PrimitiveType::Double)),
             ArrowDataType::Boolean => Ok(DataType::Primitive(PrimitiveType::Boolean)),
             ArrowDataType::Binary => Ok(DataType::Primitive(PrimitiveType::Binary)),
             ArrowDataType::FixedSizeBinary(_) => Ok(DataType::Primitive(PrimitiveType::Binary)),
             ArrowDataType::LargeBinary => Ok(DataType::Primitive(PrimitiveType::Binary)),
-            ArrowDataType::Decimal128(p, s) => Ok(DataType::Primitive(PrimitiveType::Decimal(
-                *p as i32, *s as i32,
-            ))),
-            ArrowDataType::Decimal256(p, s) => Ok(DataType::Primitive(PrimitiveType::Decimal(
-                *p as i32, *s as i32,
-            ))),
+            ArrowDataType::Decimal128(p, s) => {
+                Ok(DataType::Primitive(PrimitiveType::Decimal(*p, *s)))
+            }
+            ArrowDataType::Decimal256(p, s) => {
+                Ok(DataType::Primitive(PrimitiveType::Decimal(*p, *s)))
+            }
             ArrowDataType::Date32 => Ok(DataType::Primitive(PrimitiveType::Date)),
             ArrowDataType::Date64 => Ok(DataType::Primitive(PrimitiveType::Date)),
             ArrowDataType::Timestamp(TimeUnit::Microsecond, None) => {
@@ -288,11 +271,11 @@ macro_rules! arrow_map {
             stringify!($fieldname),
             ArrowDataType::Map(
                 Arc::new(ArrowField::new(
-                    "entries",
+                    MAP_ROOT_DEFAULT,
                     ArrowDataType::Struct(
                         vec![
-                            ArrowField::new("key", ArrowDataType::Utf8, false),
-                            ArrowField::new("value", ArrowDataType::Utf8, true),
+                            ArrowField::new(MAP_KEY_DEFAULT, ArrowDataType::Utf8, false),
+                            ArrowField::new(MAP_VALUE_DEFAULT, ArrowDataType::Utf8, true),
                         ]
                         .into(),
                     ),
@@ -308,11 +291,11 @@ macro_rules! arrow_map {
             stringify!($fieldname),
             ArrowDataType::Map(
                 Arc::new(ArrowField::new(
-                    "entries",
+                    MAP_ROOT_DEFAULT,
                     ArrowDataType::Struct(
                         vec![
-                            ArrowField::new("key", ArrowDataType::Utf8, false),
-                            ArrowField::new("value", ArrowDataType::Utf8, false),
+                            ArrowField::new(MAP_KEY_DEFAULT, ArrowDataType::Utf8, false),
+                            ArrowField::new(MAP_VALUE_DEFAULT, ArrowDataType::Utf8, false),
                         ]
                         .into(),
                     ),
@@ -581,11 +564,13 @@ fn max_min_schema_for_fields(dest: &mut Vec<ArrowField>, f: &ArrowField) {
                 max_min_schema_for_fields(&mut child_dest, f);
             }
 
-            dest.push(ArrowField::new(
-                f.name(),
-                ArrowDataType::Struct(child_dest.into()),
-                true,
-            ));
+            if !child_dest.is_empty() {
+                dest.push(ArrowField::new(
+                    f.name(),
+                    ArrowDataType::Struct(child_dest.into()),
+                    true,
+                ));
+            }
         }
         // don't compute min or max for list, map or binary types
         ArrowDataType::List(_) | ArrowDataType::Map(_, _) | ArrowDataType::Binary => { /* noop */ }
@@ -778,7 +763,7 @@ mod tests {
         let decimal_field = DataType::Primitive(PrimitiveType::Decimal(precision, scale));
         assert_eq!(
             <ArrowDataType as TryFrom<&DataType>>::try_from(&decimal_field).unwrap(),
-            ArrowDataType::Decimal128(precision as u8, scale as i8)
+            ArrowDataType::Decimal128(precision, scale)
         );
     }
 

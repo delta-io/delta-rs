@@ -1,8 +1,7 @@
 //! Glue Data Catalog.
 //!
-use aws_config::SdkConfig;
+use aws_config::{BehaviorVersion, SdkConfig};
 use deltalake_core::data_catalog::{DataCatalog, DataCatalogError};
-use log::*;
 
 #[derive(thiserror::Error, Debug)]
 pub enum GlueError {
@@ -38,7 +37,7 @@ pub struct GlueDataCatalog {
 impl GlueDataCatalog {
     /// Creates a new GlueDataCatalog with environmental configuration
     pub async fn from_env() -> Result<Self, GlueError> {
-        let config = aws_config::load_from_env().await;
+        let config = aws_config::load_defaults(BehaviorVersion::latest()).await;
         let client = aws_sdk_glue::Client::new(&config);
         Ok(Self { client })
     }

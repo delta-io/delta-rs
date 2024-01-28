@@ -6,11 +6,10 @@ use deltalake_core::operations::transaction::commit;
 use deltalake_core::protocol::{DeltaOperation, SaveMode};
 use serde_json::json;
 use std::error::Error;
-use tempdir::TempDir;
 
 #[tokio::test]
 async fn test_operational_parameters() -> Result<(), Box<dyn Error>> {
-    let path = TempDir::new("operational_parameters").unwrap();
+    let path = tempfile::tempdir().unwrap();
     let mut table = fs_common::create_table(path.path().to_str().unwrap(), None).await;
 
     let add = fs_common::add(0);
@@ -25,14 +24,14 @@ async fn test_operational_parameters() -> Result<(), Box<dyn Error>> {
         table.log_store().as_ref(),
         &actions,
         operation,
-        &table.state,
+        Some(table.snapshot()?),
         None,
     )
     .await?;
     table.update().await?;
 
     let commit_info = table.history(None).await?;
-    let last_commit = &commit_info[commit_info.len() - 1];
+    let last_commit = &commit_info[0];
     let parameters = last_commit.operation_parameters.clone().unwrap();
     assert_eq!(parameters["mode"], json!("Append"));
     assert_eq!(parameters["partitionBy"], json!("[\"some_partition\"]"));

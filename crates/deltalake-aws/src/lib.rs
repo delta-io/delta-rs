@@ -1,34 +1,94 @@
 //! Lock client implementation based on DynamoDb.
 
 pub mod errors;
+pub mod logstore;
+pub mod storage;
 
 use lazy_static::lazy_static;
+use object_store::aws::AmazonS3ConfigKey;
 use regex::Regex;
 use std::{
     collections::HashMap,
     str::FromStr,
+    sync::Arc,
     time::{Duration, SystemTime},
 };
+use tracing::debug;
 
-use object_store::path::Path;
+use deltalake_core::logstore::{logstores, LogStore, LogStoreFactory};
+use deltalake_core::storage::{factories, url_prefix_handler, ObjectStoreRef, StorageOptions};
+use deltalake_core::{DeltaResult, Path};
 use rusoto_core::{HttpClient, Region, RusotoError};
 use rusoto_credential::AutoRefreshingProvider;
 use rusoto_dynamodb::{
     AttributeDefinition, AttributeValue, CreateTableError, CreateTableInput, DynamoDb,
-    DynamoDbClient, GetItemInput, KeySchemaElement, PutItemError, PutItemInput, QueryInput,
-    UpdateItemError, UpdateItemInput,
+    DynamoDbClient, GetItemError, GetItemInput, KeySchemaElement, PutItemError, PutItemInput,
+    QueryError, QueryInput, UpdateItemError, UpdateItemInput,
 };
 use rusoto_sts::WebIdentityProvider;
+use url::Url;
 
 use errors::{DynamoDbConfigError, LockClientError};
+use storage::{S3ObjectStoreFactory, S3StorageOptions};
+
+#[derive(Clone, Debug, Default)]
+struct S3LogStoreFactory {}
+
+impl LogStoreFactory for S3LogStoreFactory {
+    fn with_options(
+        &self,
+        store: ObjectStoreRef,
+        location: &Url,
+        options: &StorageOptions,
+    ) -> DeltaResult<Arc<dyn LogStore>> {
+        let store = url_prefix_handler(store, Path::parse(location.path())?)?;
+
+        if options
+            .0
+            .contains_key(AmazonS3ConfigKey::CopyIfNotExists.as_ref())
+        {
+            debug!("S3LogStoreFactory has been asked to create a LogStore where the underlying store has copy-if-not-exists enabled - no locking provider required");
+            return Ok(deltalake_core::logstore::default_logstore(
+                store, location, options,
+            ));
+        }
+
+        let s3_options = S3StorageOptions::from_map(&options.0);
+
+        if s3_options.locking_provider.as_deref() != Some("dynamodb") {
+            debug!("S3LogStoreFactory has been asked to create a LogStore without the dynamodb locking provider");
+            return Ok(deltalake_core::logstore::default_logstore(
+                store, location, options,
+            ));
+        }
+
+        Ok(Arc::new(logstore::S3DynamoDbLogStore::try_new(
+            location.clone(),
+            options.clone(),
+            &s3_options,
+            store,
+        )?))
+    }
+}
+
+/// Register an [ObjectStoreFactory] for common S3 [Url] schemes
+pub fn register_handlers(_additional_prefixes: Option<Url>) {
+    let object_stores = Arc::new(S3ObjectStoreFactory::default());
+    let log_stores = Arc::new(S3LogStoreFactory::default());
+    for scheme in ["s3", "s3a"].iter() {
+        let url = Url::parse(&format!("{}://", scheme)).unwrap();
+        factories().insert(url.clone(), object_stores.clone());
+        logstores().insert(url.clone(), log_stores.clone());
+    }
+}
 
 /// Representation of a log entry stored in DynamoDb
 /// dynamo db item consists of:
-/// - tablePath: String - tracked in the log store implementation
-/// - fileName: String - commit version.json (part of primary key), stored as i64 in this struct
-/// - tempPath: String - name of temporary file containing commit info
+/// - table_path: String - tracked in the log store implementation
+/// - file_name: String - commit version.json (part of primary key), stored as i64 in this struct
+/// - temp_path: String - name of temporary file containing commit info
 /// - complete: bool - operation completed, i.e. atomic rename from `tempPath` to `fileName` succeeded
-/// - expireTime: `Option<SystemTime>` - epoch seconds at which this external commit entry is safe to be deleted
+/// - expire_time: `Option<SystemTime>` - epoch seconds at which this external commit entry is safe to be deleted
 #[derive(Debug, PartialEq)]
 pub struct CommitEntry {
     /// Commit version, stored as file name (e.g., 00000N.json) in dynamodb (relative to `_delta_log/`
@@ -62,35 +122,46 @@ pub struct DynamoDbLockClient {
     config: DynamoDbConfig,
 }
 
+impl std::fmt::Debug for DynamoDbLockClient {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
+        write!(f, "DynamoDbLockClient(config: {:?})", self.config)
+    }
+}
+
 impl DynamoDbLockClient {
     /// Creates a new DynamoDbLockClient from the supplied storage options.
     pub fn try_new(
-        lock_table_name: Option<&String>,
-        billing_mode: Option<&String>,
+        lock_table_name: Option<String>,
+        billing_mode: Option<String>,
+        max_elapsed_request_time: Option<String>,
         region: Region,
         use_web_identity: bool,
     ) -> Result<Self, DynamoDbConfigError> {
         let dynamodb_client = create_dynamodb_client(region.clone(), use_web_identity)?;
-        let lock_table_name = lock_table_name.map_or_else(
-            || {
-                std::env::var(constants::LOCK_TABLE_KEY_NAME)
-                    .unwrap_or(constants::DEFAULT_LOCK_TABLE_NAME.to_owned())
-            },
-            Clone::clone,
-        );
 
-        let billing_mode: BillingMode = billing_mode.map_or_else(
-            || {
-                std::env::var(constants::BILLING_MODE_KEY_NAME).map_or_else(
-                    |_| Ok(BillingMode::PayPerRequest),
-                    |bm| BillingMode::from_str(&bm),
-                )
-            },
-            |bm| BillingMode::from_str(bm),
-        )?;
+        let lock_table_name = lock_table_name
+            .or_else(|| std::env::var(constants::LOCK_TABLE_KEY_NAME).ok())
+            .unwrap_or(constants::DEFAULT_LOCK_TABLE_NAME.to_owned());
+
+        let billing_mode = billing_mode
+            .or_else(|| std::env::var(constants::BILLING_MODE_KEY_NAME).ok())
+            .map_or_else(
+                || Ok(BillingMode::PayPerRequest),
+                |bm| BillingMode::from_str(&bm),
+            )?;
+
+        let max_elapsed_request_time = max_elapsed_request_time
+            .or_else(|| std::env::var(constants::MAX_ELAPSED_REQUEST_TIME_KEY_NAME).ok())
+            .map_or_else(
+                || Ok(Duration::from_secs(60)),
+                |secs| u64::from_str(&secs).map(Duration::from_secs),
+            )
+            .map_err(|err| DynamoDbConfigError::ParseMaxElapsedRequestTime { source: err })?;
+
         let config = DynamoDbConfig {
             billing_mode,
             lock_table_name,
+            max_elapsed_request_time,
             use_web_identity,
             region,
         };
@@ -102,7 +173,7 @@ impl DynamoDbLockClient {
 
     /// Create the lock table where DynamoDb stores the commit information for all delta tables.
     ///
-    /// Transparently handles the case where that table already exists, so it's to call.
+    /// Transparently handles the case where that table already exists, so it's safe to call.
     /// After `create_table` operation is executed, the table state in DynamoDb is `creating`, and
     /// it's not immediately useable. This method does not wait for the table state to become
     /// `active`, so transient failures might occurr when immediately using the lock client.
@@ -150,6 +221,10 @@ impl DynamoDbLockClient {
         self.config.lock_table_name.clone()
     }
 
+    pub fn get_dynamodb_config(&self) -> &DynamoDbConfig {
+        &self.config
+    }
+
     fn get_primary_key(&self, version: i64, table_path: &str) -> HashMap<String, AttributeValue> {
         maplit::hashmap! {
             constants::ATTR_TABLE_PATH.to_owned()  => string_attr(table_path),
@@ -169,7 +244,19 @@ impl DynamoDbLockClient {
             key: self.get_primary_key(version, table_path),
             ..Default::default()
         };
-        let item = self.dynamodb_client.get_item(input).await?;
+        let item = self
+            .retry(|| async {
+                match self.dynamodb_client.get_item(input.clone()).await {
+                    Ok(x) => Ok(x),
+                    Err(RusotoError::Service(GetItemError::ProvisionedThroughputExceeded(_))) => {
+                        Err(backoff::Error::transient(
+                            LockClientError::ProvisionedThroughputExceeded,
+                        ))
+                    }
+                    Err(err) => Err(backoff::Error::permanent(err.into())),
+                }
+            })
+            .await?;
         item.item.as_ref().map(CommitEntry::try_from).transpose()
     }
 
@@ -186,22 +273,25 @@ impl DynamoDbLockClient {
             item,
             ..Default::default()
         };
-        match self.dynamodb_client.put_item(input).await {
-            Ok(_) => Ok(()),
-            Err(RusotoError::Service(PutItemError::ConditionalCheckFailed(_))) => {
-                Err(LockClientError::VersionAlreadyExists {
-                    table_path: table_path.to_owned(),
-                    version: entry.version,
-                })
+        self.retry(|| async {
+            match self.dynamodb_client.put_item(input.clone()).await {
+                Ok(_) => Ok(()),
+                Err(RusotoError::Service(PutItemError::ProvisionedThroughputExceeded(_))) => Err(
+                    backoff::Error::transient(LockClientError::ProvisionedThroughputExceeded),
+                ),
+                Err(RusotoError::Service(PutItemError::ConditionalCheckFailed(_))) => Err(
+                    backoff::Error::permanent(LockClientError::VersionAlreadyExists {
+                        table_path: table_path.to_owned(),
+                        version: entry.version,
+                    }),
+                ),
+                Err(RusotoError::Service(PutItemError::ResourceNotFound(_))) => Err(
+                    backoff::Error::permanent(LockClientError::LockTableNotFound),
+                ),
+                Err(err) => Err(backoff::Error::permanent(err.into())),
             }
-            Err(RusotoError::Service(PutItemError::ProvisionedThroughputExceeded(_))) => {
-                Err(LockClientError::ProvisionedThroughputExceeded)
-            }
-            Err(RusotoError::Service(PutItemError::ResourceNotFound(_))) => {
-                Err(LockClientError::LockTableNotFound)
-            }
-            Err(err) => Err(err.into()),
-        }
+        })
+        .await
     }
 
     /// Get the latest entry (entry with highest version).
@@ -233,7 +323,18 @@ impl DynamoDbLockClient {
             ),
             ..Default::default()
         };
-        let query_result = self.dynamodb_client.query(input).await?;
+        let query_result = self
+            .retry(|| async {
+                match self.dynamodb_client.query(input.clone()).await {
+                    Ok(result) => Ok(result),
+                    Err(RusotoError::Service(QueryError::ProvisionedThroughputExceeded(_))) => Err(
+                        backoff::Error::transient(LockClientError::ProvisionedThroughputExceeded),
+                    ),
+                    Err(err) => Err(backoff::Error::permanent(err.into())),
+                }
+            })
+            .await?;
+
         query_result
             .items
             .unwrap()
@@ -266,13 +367,34 @@ impl DynamoDbLockClient {
             ..Default::default()
         };
 
-        match self.dynamodb_client.update_item(input).await {
-            Ok(_) => Ok(UpdateLogEntryResult::UpdatePerformed),
-            Err(RusotoError::Service(UpdateItemError::ConditionalCheckFailed(_))) => {
-                Ok(UpdateLogEntryResult::AlreadyCompleted)
+        self.retry(|| async {
+            match self.dynamodb_client.update_item(input.clone()).await {
+                Ok(_) => Ok(UpdateLogEntryResult::UpdatePerformed),
+                Err(RusotoError::Service(UpdateItemError::ConditionalCheckFailed(_))) => {
+                    Ok(UpdateLogEntryResult::AlreadyCompleted)
+                }
+                Err(RusotoError::Service(UpdateItemError::ProvisionedThroughputExceeded(_))) => {
+                    Err(backoff::Error::transient(
+                        LockClientError::ProvisionedThroughputExceeded,
+                    ))
+                }
+                Err(err) => Err(backoff::Error::permanent(err.into())),
             }
-            Err(err) => Err(err)?,
-        }
+        })
+        .await
+    }
+
+    async fn retry<I, E, Fn, Fut>(&self, operation: Fn) -> Result<I, E>
+    where
+        Fn: FnMut() -> Fut,
+        Fut: std::future::Future<Output = Result<I, backoff::Error<E>>>,
+    {
+        let backoff = backoff::ExponentialBackoffBuilder::new()
+            .with_multiplier(2.)
+            .with_max_interval(Duration::from_secs(15))
+            .with_max_elapsed_time(Some(self.config.max_elapsed_request_time))
+            .build();
+        backoff::future::retry(backoff, operation).await
     }
 }
 
@@ -346,7 +468,7 @@ fn create_value_map(
 }
 
 #[derive(Debug, PartialEq)]
-enum BillingMode {
+pub enum BillingMode {
     PayPerRequest,
     Provisioned,
 }
@@ -374,10 +496,11 @@ impl FromStr for BillingMode {
 
 #[derive(Debug, PartialEq)]
 pub struct DynamoDbConfig {
-    billing_mode: BillingMode,
-    lock_table_name: String,
-    use_web_identity: bool,
-    region: Region,
+    pub billing_mode: BillingMode,
+    pub lock_table_name: String,
+    pub max_elapsed_request_time: Duration,
+    pub use_web_identity: bool,
+    pub region: Region,
 }
 
 /// Represents the possible, positive outcomes of calling `DynamoDbClient::try_create_lock_table()`
@@ -398,6 +521,7 @@ pub mod constants {
     pub const DEFAULT_LOCK_TABLE_NAME: &str = "delta_log";
     pub const LOCK_TABLE_KEY_NAME: &str = "DELTA_DYNAMO_TABLE_NAME";
     pub const BILLING_MODE_KEY_NAME: &str = "DELTA_DYNAMO_BILLING_MODE";
+    pub const MAX_ELAPSED_REQUEST_TIME_KEY_NAME: &str = "DELTA_DYNAMO_MAX_ELAPSED_REQUEST_TIME";
 
     pub const ATTR_TABLE_PATH: &str = "tablePath";
     pub const ATTR_FILE_NAME: &str = "fileName";
@@ -514,8 +638,9 @@ fn extract_version_from_filename(name: &str) -> Option<i64> {
 
 #[cfg(test)]
 mod tests {
-
     use super::*;
+    use object_store::memory::InMemory;
+    use serial_test::serial;
 
     fn commit_entry_roundtrip(c: &CommitEntry) -> Result<(), LockClientError> {
         let item_data: HashMap<String, AttributeValue> = create_value_map(c, "some_table");
@@ -546,5 +671,20 @@ mod tests {
             expire_time: None,
         })?;
         Ok(())
+    }
+
+    /// In cases where there is no dynamodb specified locking provider, this should get a default
+    /// logstore
+    #[test]
+    #[serial]
+    fn test_logstore_factory_default() {
+        let factory = S3LogStoreFactory::default();
+        let store = InMemory::new();
+        let url = Url::parse("s3://test-bucket").unwrap();
+        std::env::remove_var(storage::s3_constants::AWS_S3_LOCKING_PROVIDER);
+        let logstore = factory
+            .with_options(Arc::new(store), &url, &StorageOptions::from(HashMap::new()))
+            .unwrap();
+        assert_eq!(logstore.name(), "DefaultLogStore");
     }
 }

@@ -5,11 +5,10 @@ use deltalake_core::kernel::{
 use deltalake_core::operations::create::CreateBuilder;
 use deltalake_core::operations::transaction::commit;
 use deltalake_core::protocol::{DeltaOperation, SaveMode};
-use deltalake_core::storage::config::configure_store;
 use deltalake_core::storage::{GetResult, ObjectStoreResult};
 use deltalake_core::DeltaTable;
 use object_store::path::Path as StorePath;
-use object_store::ObjectStore;
+use object_store::{ObjectStore, PutOptions, PutResult};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::fs;
@@ -37,7 +36,7 @@ pub async fn create_table_from_json(
     partition_columns: Vec<&str>,
     config: Value,
 ) -> DeltaTable {
-    assert!(path.starts_with("./tests/data"));
+    assert!(path.starts_with("../deltalake-test/tests/data"));
     std::fs::create_dir_all(path).unwrap();
     std::fs::remove_dir_all(path).unwrap();
     std::fs::create_dir_all(path).unwrap();
@@ -85,7 +84,6 @@ pub fn add(offset_millis: i64) -> Add {
         path: Uuid::new_v4().to_string(),
         size: 100,
         partition_values: Default::default(),
-        partition_values_parsed: None,
         modification_time: Utc::now().timestamp_millis() - offset_millis,
         data_change: true,
         stats: None,
@@ -125,7 +123,7 @@ pub async fn commit_actions(
         table.log_store().as_ref(),
         &actions,
         operation,
-        &table.state,
+        Some(table.snapshot().unwrap()),
         None,
     )
     .await
@@ -144,15 +142,13 @@ impl std::fmt::Display for SlowStore {
     }
 }
 
-#[allow(dead_code)]
 impl SlowStore {
     pub fn new(
         location: Url,
-        options: impl Into<deltalake_core::storage::config::StorageOptions> + Clone,
+        _options: impl Into<deltalake_core::storage::StorageOptions> + Clone,
     ) -> deltalake_core::DeltaResult<Self> {
-        let mut options = options.into();
         Ok(Self {
-            inner: configure_store(&location, &mut options).unwrap(),
+            inner: deltalake_core::storage::store_for(&location)?,
         })
     }
 }
@@ -160,8 +156,17 @@ impl SlowStore {
 #[async_trait::async_trait]
 impl ObjectStore for SlowStore {
     /// Save the provided bytes to the specified location.
-    async fn put(&self, location: &StorePath, bytes: bytes::Bytes) -> ObjectStoreResult<()> {
+    async fn put(&self, location: &StorePath, bytes: bytes::Bytes) -> ObjectStoreResult<PutResult> {
         self.inner.put(location, bytes).await
+    }
+
+    async fn put_opts(
+        &self,
+        location: &StorePath,
+        bytes: bytes::Bytes,
+        options: PutOptions,
+    ) -> ObjectStoreResult<PutResult> {
+        self.inner.put_opts(location, bytes, options).await
     }
 
     /// Return the bytes that are stored at the specified location.
@@ -205,27 +210,23 @@ impl ObjectStore for SlowStore {
     ///
     /// Prefixes are evaluated on a path segment basis, i.e. `foo/bar/` is a prefix of `foo/bar/x` but not of
     /// `foo/bar_baz/x`.
-    async fn list(
+    fn list(
         &self,
         prefix: Option<&StorePath>,
-    ) -> ObjectStoreResult<
-        futures::stream::BoxStream<'_, ObjectStoreResult<object_store::ObjectMeta>>,
-    > {
-        self.inner.list(prefix).await
+    ) -> futures::stream::BoxStream<'_, ObjectStoreResult<object_store::ObjectMeta>> {
+        self.inner.list(prefix)
     }
 
     /// List all the objects with the given prefix and a location greater than `offset`
     ///
     /// Some stores, such as S3 and GCS, may be able to push `offset` down to reduce
     /// the number of network requests required
-    async fn list_with_offset(
+    fn list_with_offset(
         &self,
         prefix: Option<&StorePath>,
         offset: &StorePath,
-    ) -> ObjectStoreResult<
-        futures::stream::BoxStream<'_, ObjectStoreResult<object_store::ObjectMeta>>,
-    > {
-        self.inner.list_with_offset(prefix, offset).await
+    ) -> futures::stream::BoxStream<'_, ObjectStoreResult<object_store::ObjectMeta>> {
+        self.inner.list_with_offset(prefix, offset)
     }
 
     /// List objects with the given prefix and an implementation specific

@@ -10,6 +10,8 @@ DataType: Any
 ListType: Any
 StructType: Any
 MapType: Any
+FixedSizeListType: Any
+FixedSizeBinaryType: Any
 schema: Any
 map_: Any
 list_: Any

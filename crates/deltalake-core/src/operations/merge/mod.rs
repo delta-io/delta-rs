@@ -7,10 +7,6 @@
 //! and specify additional predicates for finer control. The order of operations
 //! specified matter.  See [`MergeBuilder`] for more information
 //!
-//! *WARNING* The current implementation rewrites the entire delta table so only
-//! use on small to medium sized tables.
-//! Enhancements tracked at #850
-//!
 //! # Example
 //! ```rust ignore
 //! let table = open_table("../path/to/table")?;
@@ -34,7 +30,7 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use std::time::Instant;
 
 use arrow_schema::Schema as ArrowSchema;
 use async_trait::async_trait;
@@ -76,7 +72,7 @@ use crate::delta_datafusion::{
     execute_plan_to_batch, register_store, DeltaColumn, DeltaScanConfigBuilder, DeltaSessionConfig,
     DeltaTableProvider,
 };
-use crate::kernel::{Action, Remove};
+use crate::kernel::Action;
 use crate::logstore::LogStoreRef;
 use crate::operations::merge::barrier::find_barrier_node;
 use crate::operations::write::write_execution_plan;
@@ -663,7 +659,7 @@ impl ExtensionPlanner for MergeMetricExtensionPlanner {
             let schema = barrier.input.schema();
             let exec_schema: ArrowSchema = schema.as_ref().to_owned().into();
             return Ok(Some(Arc::new(MergeBarrierExec::new(
-                physical_inputs.get(0).unwrap().clone(),
+                physical_inputs.first().unwrap().clone(),
                 barrier.file_column.clone(),
                 planner.create_physical_expr(&barrier.expr, schema, &exec_schema, session_state)?,
             ))));
@@ -719,13 +715,6 @@ fn generalize_filter(
             Expr::ScalarFunction(func) => {
                 if func.args.len() == 1 {
                     references_table(&func.args[0], table)
-                } else {
-                    None
-                }
-            }
-            Expr::ScalarUDF(udf) => {
-                if udf.args.len() == 1 {
-                    references_table(&udf.args[0], table)
                 } else {
                     None
                 }
@@ -833,13 +822,6 @@ async fn try_construct_early_filter(
     target_name: &TableReference<'_>,
 ) -> DeltaResult<Option<Expr>> {
     let table_metadata = table_snapshot.metadata();
-
-    if table_metadata.is_none() {
-        return Ok(None);
-    }
-
-    let table_metadata = table_metadata.unwrap();
-
     let partition_columns = &table_metadata.partition_columns;
 
     if partition_columns.is_empty() {
@@ -863,8 +845,8 @@ async fn try_construct_early_filter(
             } else {
                 // if we have some recognised partitions, then discover the distinct set of partitions in the source data and
                 // make a new filter, which expands out the placeholders for each distinct partition (and then OR these together)
-                let distinct_partitions = LogicalPlan::Distinct(Distinct {
-                    input: LogicalPlan::Projection(Projection::try_new(
+                let distinct_partitions = LogicalPlan::Distinct(Distinct::All(
+                    LogicalPlan::Projection(Projection::try_new(
                         placeholders
                             .into_iter()
                             .map(|(alias, expr)| expr.alias(alias))
@@ -872,7 +854,7 @@ async fn try_construct_early_filter(
                         source.clone().into(),
                     )?)
                     .into(),
-                });
+                ));
 
                 let execution_plan = session_state
                     .create_physical_plan(&distinct_partitions)
@@ -924,11 +906,11 @@ async fn execute(
     match_operations: Vec<MergeOperationConfig>,
     not_match_target_operations: Vec<MergeOperationConfig>,
     not_match_source_operations: Vec<MergeOperationConfig>,
-) -> DeltaResult<((Vec<Action>, i64), MergeMetrics)> {
+) -> DeltaResult<((Vec<Action>, i64, Option<DeltaOperation>), MergeMetrics)> {
     let mut metrics = MergeMetrics::default();
     let exec_start = Instant::now();
 
-    let current_metadata = snapshot.metadata().ok_or(DeltaTableError::NoMetadata)?;
+    let current_metadata = snapshot.metadata();
 
     // TODO: Given the join predicate, remove any expression that involve the
     // source table and keep expressions that only involve the target table.
@@ -1160,7 +1142,7 @@ async fn execute(
     let mut new_columns = projection;
     let mut write_projection = Vec::new();
 
-    for delta_field in snapshot.schema().unwrap().fields() {
+    for delta_field in snapshot.schema().fields() {
         let mut when_expr = Vec::with_capacity(operations_size);
         let mut then_expr = Vec::with_capacity(operations_size);
 
@@ -1321,7 +1303,7 @@ async fn execute(
 
     let rewrite_start = Instant::now();
     let add_actions = write_execution_plan(
-        snapshot,
+        Some(snapshot),
         state.clone(),
         write,
         table_partition_cols.clone(),
@@ -1336,11 +1318,6 @@ async fn execute(
 
     metrics.rewrite_time_ms = Instant::now().duration_since(rewrite_start).as_millis() as u64;
 
-    let deletion_timestamp = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_millis() as i64;
-
     let mut actions: Vec<Action> = add_actions.into_iter().map(Action::Add).collect();
     metrics.num_target_files_added = actions.len();
 
@@ -1352,21 +1329,10 @@ async fn execute(
 
     {
         let lock = survivors.lock().unwrap();
-        for action in snapshot.files() {
-            if lock.contains(&action.path) {
+        for action in snapshot.log_data() {
+            if lock.contains(action.path().as_ref()) {
                 metrics.num_target_files_removed += 1;
-                actions.push(Action::Remove(Remove {
-                    path: action.path.clone(),
-                    deletion_timestamp: Some(deletion_timestamp),
-                    data_change: true,
-                    extended_file_metadata: Some(true),
-                    partition_values: Some(action.partition_values.clone()),
-                    deletion_vector: action.deletion_vector.clone(),
-                    size: Some(action.size),
-                    tags: None,
-                    base_row_id: action.base_row_id,
-                    default_row_commit_version: action.default_row_commit_version,
-                }))
+                actions.push(action.remove_action(true).into());
             }
         }
     }
@@ -1390,25 +1356,36 @@ async fn execute(
 
     metrics.execution_time_ms = Instant::now().duration_since(exec_start).as_millis() as u64;
 
+    let mut app_metadata = match app_metadata {
+        Some(meta) => meta,
+        None => HashMap::new(),
+    };
+
+    app_metadata.insert("readVersion".to_owned(), snapshot.version().into());
+
+    if let Ok(map) = serde_json::to_value(&metrics) {
+        app_metadata.insert("operationMetrics".to_owned(), map);
+    }
+
     // Do not make a commit when there are zero updates to the state
+    let operation = DeltaOperation::Merge {
+        predicate: Some(fmt_expr_to_sql(&predicate)?),
+        matched_predicates: match_operations,
+        not_matched_predicates: not_match_target_operations,
+        not_matched_by_source_predicates: not_match_source_operations,
+    };
     if !actions.is_empty() {
-        let operation = DeltaOperation::Merge {
-            predicate: Some(fmt_expr_to_sql(&predicate)?),
-            matched_predicates: match_operations,
-            not_matched_predicates: not_match_target_operations,
-            not_matched_by_source_predicates: not_match_source_operations,
-        };
         version = commit(
             log_store.as_ref(),
             &actions,
-            operation,
-            snapshot,
-            app_metadata,
+            operation.clone(),
+            Some(snapshot),
+            Some(app_metadata),
         )
         .await?;
     }
-
-    Ok(((actions, version), metrics))
+    let op = (!actions.is_empty()).then_some(operation);
+    Ok(((actions, version, op), metrics))
 }
 
 // TODO: Abstract MergePlanner into DeltaPlanner to support other delta operations in the future.
@@ -1452,7 +1429,7 @@ impl std::future::IntoFuture for MergeBuilder {
                 session.state()
             });
 
-            let ((actions, version), metrics) = execute(
+            let ((actions, version, operation), metrics) = execute(
                 this.predicate,
                 this.source,
                 this.log_store.clone(),
@@ -1469,8 +1446,9 @@ impl std::future::IntoFuture for MergeBuilder {
             )
             .await?;
 
-            this.snapshot
-                .merge(DeltaTableState::from_actions(actions, version)?, true, true);
+            if let Some(op) = &operation {
+                this.snapshot.merge(actions, op, version)?;
+            }
             let table = DeltaTable::new_with_state(this.log_store, this.snapshot);
 
             Ok((table, metrics))
@@ -1594,14 +1572,14 @@ mod tests {
 
         let table = write_data(table, &schema).await;
         assert_eq!(table.version(), 1);
-        assert_eq!(table.get_file_uris().count(), 1);
+        assert_eq!(table.get_files_count(), 1);
 
         (table, merge_source(schema))
     }
 
     async fn assert_merge(table: DeltaTable, metrics: MergeMetrics) {
         assert_eq!(table.version(), 2);
-        assert!(table.get_file_uris().count() >= 1);
+        assert!(table.get_files_count() >= 1);
         assert!(metrics.num_target_files_added >= 1);
         assert_eq!(metrics.num_target_files_removed, 1);
         assert_eq!(metrics.num_target_rows_copied, 1);
@@ -1630,7 +1608,7 @@ mod tests {
     async fn test_merge() {
         let (table, source) = setup().await;
 
-        let (mut table, metrics) = DeltaOps(table)
+        let (table, metrics) = DeltaOps(table)
             .merge(source, col("target.id").eq(col("source.id")))
             .with_source_alias("source")
             .with_target_alias("target")
@@ -1657,7 +1635,7 @@ mod tests {
             .unwrap();
 
         let commit_info = table.history(None).await.unwrap();
-        let last_commit = &commit_info[commit_info.len() - 1];
+        let last_commit = &commit_info[0];
         let parameters = last_commit.operation_parameters.clone().unwrap();
         assert_eq!(parameters["predicate"], json!("target.id = source.id"));
         assert_eq!(
@@ -1682,7 +1660,7 @@ mod tests {
         // Also validates that update and set operations can contain the target alias
         let (table, source) = setup().await;
 
-        let (mut table, metrics) = DeltaOps(table)
+        let (table, metrics) = DeltaOps(table)
             .merge(source, "target.id = source.id")
             .with_source_alias("source")
             .with_target_alias("target")
@@ -1709,7 +1687,7 @@ mod tests {
             .unwrap();
 
         let commit_info = table.history(None).await.unwrap();
-        let last_commit = &commit_info[commit_info.len() - 1];
+        let last_commit = &commit_info[0];
         let parameters = last_commit.operation_parameters.clone().unwrap();
         assert_eq!(parameters["predicate"], json!("target.id = source.id"));
         assert_eq!(
@@ -1849,7 +1827,7 @@ mod tests {
 
         let table = write_data(table, &schema).await;
         assert_eq!(table.version(), 1);
-        assert_eq!(table.get_file_uris().count(), 2);
+        assert_eq!(table.get_files_count(), 2);
 
         let ctx = SessionContext::new();
         let batch = RecordBatch::try_new(
@@ -1905,7 +1883,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(table.version(), 2);
-        assert!(table.get_file_uris().count() >= 3);
+        assert!(table.get_files_count() >= 3);
         assert!(metrics.num_target_files_added >= 3);
         assert_eq!(metrics.num_target_files_removed, 2);
         assert_eq!(metrics.num_target_rows_copied, 1);
@@ -1939,7 +1917,7 @@ mod tests {
 
         let table = write_data(table, &schema).await;
         assert_eq!(table.version(), 1);
-        assert_eq!(table.get_file_uris().count(), 4);
+        assert_eq!(table.get_files_count(), 4);
 
         let ctx = SessionContext::new();
         let batch = RecordBatch::try_new(
@@ -1978,7 +1956,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(table.version(), 2);
-        assert!(table.get_file_uris().count() >= 3);
+        assert!(table.get_files_count() >= 3);
         assert_eq!(metrics.num_target_files_added, 3);
         assert_eq!(metrics.num_target_files_removed, 2);
         assert_eq!(metrics.num_target_rows_copied, 0);
@@ -2012,7 +1990,7 @@ mod tests {
 
         let table = write_data(table, &schema).await;
         assert_eq!(table.version(), 1);
-        assert_eq!(table.get_file_uris().count(), 2);
+        assert_eq!(table.get_files_count(), 2);
 
         let ctx = SessionContext::new();
         let batch = RecordBatch::try_new(
@@ -2030,7 +2008,7 @@ mod tests {
         .unwrap();
         let source = ctx.read_batch(batch).unwrap();
 
-        let (mut table, metrics) = DeltaOps(table)
+        let (table, metrics) = DeltaOps(table)
             .merge(source, col("target.id").eq(col("source.id")))
             .with_source_alias("source")
             .with_target_alias("target")
@@ -2040,7 +2018,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(table.version(), 2);
-        assert!(table.get_file_uris().count() >= 2);
+        assert!(table.get_files_count() >= 2);
         assert_eq!(metrics.num_target_files_added, 2);
         assert_eq!(metrics.num_target_files_removed, 2);
         assert_eq!(metrics.num_target_rows_copied, 2);
@@ -2051,8 +2029,13 @@ mod tests {
         assert_eq!(metrics.num_source_rows, 3);
 
         let commit_info = table.history(None).await.unwrap();
-        let last_commit = &commit_info[commit_info.len() - 1];
+        let last_commit = &commit_info[0];
         let parameters = last_commit.operation_parameters.clone().unwrap();
+        let extra_info = last_commit.info.clone();
+        assert_eq!(
+            extra_info["operationMetrics"],
+            serde_json::to_value(&metrics).unwrap()
+        );
         assert_eq!(parameters["predicate"], json!("target.id = source.id"));
         assert_eq!(
             parameters["matchedPredicates"],
@@ -2076,7 +2059,7 @@ mod tests {
 
         let table = write_data(table, &schema).await;
         assert_eq!(table.version(), 1);
-        assert_eq!(table.get_file_uris().count(), 2);
+        assert_eq!(table.get_files_count(), 2);
 
         let ctx = SessionContext::new();
         let batch = RecordBatch::try_new(
@@ -2094,7 +2077,7 @@ mod tests {
         .unwrap();
         let source = ctx.read_batch(batch).unwrap();
 
-        let (mut table, metrics) = DeltaOps(table)
+        let (table, metrics) = DeltaOps(table)
             .merge(source, col("target.id").eq(col("source.id")))
             .with_source_alias("source")
             .with_target_alias("target")
@@ -2104,7 +2087,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(table.version(), 2);
-        assert!(table.get_file_uris().count() >= 2);
+        assert!(table.get_files_count() >= 2);
         assert_eq!(metrics.num_target_files_added, 1);
         assert_eq!(metrics.num_target_files_removed, 1);
         assert_eq!(metrics.num_target_rows_copied, 1);
@@ -2115,7 +2098,7 @@ mod tests {
         assert_eq!(metrics.num_source_rows, 3);
 
         let commit_info = table.history(None).await.unwrap();
-        let last_commit = &commit_info[commit_info.len() - 1];
+        let last_commit = &commit_info[0];
         let parameters = last_commit.operation_parameters.clone().unwrap();
         assert_eq!(parameters["predicate"], json!("target.id = source.id"));
         assert_eq!(
@@ -2145,7 +2128,7 @@ mod tests {
 
         let table = write_data(table, &schema).await;
         assert_eq!(table.version(), 1);
-        assert_eq!(table.get_file_uris().count(), 2);
+        assert_eq!(table.get_files_count(), 2);
 
         let ctx = SessionContext::new();
         let batch = RecordBatch::try_new(
@@ -2163,7 +2146,7 @@ mod tests {
         .unwrap();
         let source = ctx.read_batch(batch).unwrap();
 
-        let (mut table, metrics) = DeltaOps(table)
+        let (table, metrics) = DeltaOps(table)
             .merge(source, col("target.id").eq(col("source.id")))
             .with_source_alias("source")
             .with_target_alias("target")
@@ -2173,7 +2156,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(table.version(), 2);
-        assert_eq!(table.get_file_uris().count(), 2);
+        assert_eq!(table.get_files_count(), 2);
         assert_eq!(metrics.num_target_files_added, 2);
         assert_eq!(metrics.num_target_files_removed, 2);
         assert_eq!(metrics.num_target_rows_copied, 2);
@@ -2184,7 +2167,7 @@ mod tests {
         assert_eq!(metrics.num_source_rows, 3);
 
         let commit_info = table.history(None).await.unwrap();
-        let last_commit = &commit_info[commit_info.len() - 1];
+        let last_commit = &commit_info[0];
         let parameters = last_commit.operation_parameters.clone().unwrap();
         assert_eq!(parameters["predicate"], json!("target.id = source.id"));
         assert_eq!(
@@ -2208,7 +2191,7 @@ mod tests {
 
         let table = write_data(table, &schema).await;
         assert_eq!(table.version(), 1);
-        assert_eq!(table.get_file_uris().count(), 2);
+        assert_eq!(table.get_files_count(), 2);
 
         let ctx = SessionContext::new();
         let batch = RecordBatch::try_new(
@@ -2226,7 +2209,7 @@ mod tests {
         .unwrap();
         let source = ctx.read_batch(batch).unwrap();
 
-        let (mut table, metrics) = DeltaOps(table)
+        let (table, metrics) = DeltaOps(table)
             .merge(source, col("target.id").eq(col("source.id")))
             .with_source_alias("source")
             .with_target_alias("target")
@@ -2248,7 +2231,7 @@ mod tests {
         assert_eq!(metrics.num_source_rows, 3);
 
         let commit_info = table.history(None).await.unwrap();
-        let last_commit = &commit_info[commit_info.len() - 1];
+        let last_commit = &commit_info[0];
         let parameters = last_commit.operation_parameters.clone().unwrap();
         assert_eq!(parameters["predicate"], json!("target.id = source.id"));
         assert_eq!(
@@ -2275,7 +2258,7 @@ mod tests {
         let table = setup_table(Some(vec!["modified"])).await;
 
         assert_eq!(table.version(), 0);
-        assert_eq!(table.get_file_uris().count(), 0);
+        assert_eq!(table.get_files_count(), 0);
 
         let ctx = SessionContext::new();
         let batch = RecordBatch::try_new(
@@ -2319,7 +2302,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(table.version(), 1);
-        assert!(table.get_file_uris().count() >= 2);
+        assert!(table.get_files_count() >= 2);
         assert!(metrics.num_target_files_added >= 2);
         assert_eq!(metrics.num_target_files_removed, 0);
         assert_eq!(metrics.num_target_rows_copied, 0);
@@ -2392,7 +2375,7 @@ mod tests {
 
         let table = write_data(table, &arrow_schema).await;
         assert_eq!(table.version(), 1);
-        assert_eq!(table.get_file_uris().count(), 1);
+        assert_eq!(table.get_files_count(), 1);
 
         let (table, _metrics) = DeltaOps(table)
             .merge(source, "target.Id = source.Id")
@@ -2555,7 +2538,7 @@ mod tests {
         let table = setup_table(Some(vec!["id"])).await;
 
         assert_eq!(table.version(), 0);
-        assert_eq!(table.get_file_uris().count(), 0);
+        assert_eq!(table.get_files_count(), 0);
 
         let ctx = SessionContext::new();
         let batch = RecordBatch::try_new(
@@ -2596,7 +2579,7 @@ mod tests {
 
         let pred = try_construct_early_filter(
             join_predicate,
-            &table.state,
+            table.snapshot().unwrap(),
             &ctx.state(),
             &source,
             &source_name,

@@ -25,7 +25,6 @@ use std::collections::{HashMap, HashSet};
 use std::fmt::{self, Debug};
 use std::sync::Arc;
 
-use arrow::array::ArrayRef;
 use arrow::compute::{cast_with_options, CastOptions};
 use arrow::datatypes::DataType;
 use arrow::datatypes::{DataType as ArrowDataType, Schema as ArrowSchema, SchemaRef, TimeUnit};
@@ -47,21 +46,20 @@ use datafusion::datasource::{listing::PartitionedFile, MemTable, TableProvider, 
 use datafusion::execution::context::{SessionConfig, SessionContext, SessionState, TaskContext};
 use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::execution::FunctionRegistry;
-use datafusion::optimizer::utils::conjunction;
 use datafusion::physical_expr::PhysicalSortExpr;
-use datafusion::physical_optimizer::pruning::{PruningPredicate, PruningStatistics};
+use datafusion::physical_optimizer::pruning::PruningPredicate;
 use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::limit::LocalLimitExec;
 use datafusion::physical_plan::{
-    ColumnStatistics, DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning,
-    SendableRecordBatchStream, Statistics,
+    DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning, SendableRecordBatchStream,
+    Statistics,
 };
 use datafusion_common::scalar::ScalarValue;
-use datafusion_common::stats::Precision;
 use datafusion_common::tree_node::{TreeNode, TreeNodeVisitor, VisitRecursion};
 use datafusion_common::{Column, DataFusionError, Result as DataFusionResult, ToDFSchema};
-use datafusion_expr::expr::{ScalarFunction, ScalarUDF};
+use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::logical_plan::CreateExternalTable;
+use datafusion_expr::utils::conjunction;
 use datafusion_expr::{col, Expr, Extension, LogicalPlan, TableProviderFilterPushDown, Volatility};
 use datafusion_physical_expr::execution_props::ExecutionProps;
 use datafusion_physical_expr::{create_physical_expr, PhysicalExpr};
@@ -71,15 +69,13 @@ use datafusion_sql::planner::ParserOptions;
 use futures::TryStreamExt;
 
 use itertools::Itertools;
-use log::error;
 use object_store::ObjectMeta;
 use serde::{Deserialize, Serialize};
 use url::Url;
 
 use crate::errors::{DeltaResult, DeltaTableError};
-use crate::kernel::{Add, DataCheck, DataType as DeltaDataType, Invariant, PrimitiveType};
+use crate::kernel::{Add, DataCheck, Invariant};
 use crate::logstore::LogStoreRef;
-use crate::protocol::{ColumnCountStat, ColumnValueStat};
 use crate::table::builder::ensure_table_uri;
 use crate::table::state::DeltaTableState;
 use crate::table::Constraint;
@@ -115,23 +111,6 @@ impl From<DataFusionError> for DeltaTableError {
     }
 }
 
-fn get_scalar_value(value: Option<&ColumnValueStat>, field: &Arc<Field>) -> Precision<ScalarValue> {
-    match value {
-        Some(ColumnValueStat::Value(value)) => to_correct_scalar_value(value, field.data_type())
-            .map(|maybe_scalar| maybe_scalar.map(Precision::Exact).unwrap_or_default())
-            .unwrap_or_else(|_| {
-                error!(
-                    "Unable to parse scalar value of {:?} with type {} for column {}",
-                    value,
-                    field.data_type(),
-                    field.name()
-                );
-                Precision::Absent
-            }),
-        _ => Precision::Absent,
-    }
-}
-
 pub(crate) fn get_path_column<'a>(
     batch: &'a RecordBatch,
     path_column: &str,
@@ -149,217 +128,8 @@ pub(crate) fn get_path_column<'a>(
 
 impl DeltaTableState {
     /// Provide table level statistics to Datafusion
-    pub fn datafusion_table_statistics(&self) -> DataFusionResult<Statistics> {
-        // Statistics only support primitive types. Any non primitive column will not have their statistics captured
-        // If column statistics are missing for any add actions then we simply downgrade to Absent.
-
-        let schema = self.arrow_schema()?;
-        // Downgrade statistics to absent if file metadata is not present.
-        let mut downgrade = false;
-        let unknown_stats = Statistics::new_unknown(&schema);
-
-        let files = self.files();
-
-        // Initalize statistics
-        let mut table_stats = match files.first() {
-            Some(file) => match file.get_stats() {
-                Ok(Some(stats)) => {
-                    let mut column_statistics = Vec::with_capacity(schema.fields().size());
-                    let total_byte_size = Precision::Exact(file.size as usize);
-                    let num_rows = Precision::Exact(stats.num_records as usize);
-
-                    for field in schema.fields() {
-                        let null_count = match stats.null_count.get(field.name()) {
-                            Some(ColumnCountStat::Value(x)) => Precision::Exact(*x as usize),
-                            _ => Precision::Absent,
-                        };
-
-                        let max_value = get_scalar_value(stats.max_values.get(field.name()), field);
-                        let min_value = get_scalar_value(stats.min_values.get(field.name()), field);
-
-                        column_statistics.push(ColumnStatistics {
-                            null_count,
-                            max_value,
-                            min_value,
-                            distinct_count: Precision::Absent,
-                        });
-                    }
-
-                    Statistics {
-                        total_byte_size,
-                        num_rows,
-                        column_statistics,
-                    }
-                }
-                Ok(None) => {
-                    downgrade = true;
-                    let mut stats = unknown_stats.clone();
-                    stats.total_byte_size = Precision::Exact(file.size as usize);
-                    stats
-                }
-                _ => return Ok(unknown_stats),
-            },
-            None => {
-                // The Table is empty
-                let mut stats = unknown_stats;
-                stats.num_rows = Precision::Exact(0);
-                stats.total_byte_size = Precision::Exact(0);
-                return Ok(stats);
-            }
-        };
-
-        // Populate the remaining statistics. If file statistics are not present then relevant statistics are downgraded to absent.
-        for file in &files.as_slice()[1..] {
-            let byte_size = Precision::Exact(file.size as usize);
-            table_stats.total_byte_size = table_stats.total_byte_size.add(&byte_size);
-
-            if !downgrade {
-                match file.get_stats() {
-                    Ok(Some(stats)) => {
-                        let num_records = Precision::Exact(stats.num_records as usize);
-
-                        table_stats.num_rows = table_stats.num_rows.add(&num_records);
-
-                        for (idx, field) in schema.fields().iter().enumerate() {
-                            let column_stats = table_stats.column_statistics.get_mut(idx).unwrap();
-
-                            let null_count = match stats.null_count.get(field.name()) {
-                                Some(ColumnCountStat::Value(x)) => Precision::Exact(*x as usize),
-                                _ => Precision::Absent,
-                            };
-
-                            let max_value =
-                                get_scalar_value(stats.max_values.get(field.name()), field);
-                            let min_value =
-                                get_scalar_value(stats.min_values.get(field.name()), field);
-
-                            column_stats.null_count = column_stats.null_count.add(&null_count);
-                            column_stats.max_value = column_stats.max_value.max(&max_value);
-                            column_stats.min_value = column_stats.min_value.min(&min_value);
-                        }
-                    }
-                    Ok(None) => {
-                        downgrade = true;
-                    }
-                    Err(_) => return Ok(unknown_stats),
-                }
-            }
-        }
-
-        if downgrade {
-            table_stats.column_statistics = unknown_stats.column_statistics;
-            table_stats.num_rows = Precision::Absent;
-        }
-
-        Ok(table_stats)
-    }
-}
-
-// TODO: Collapse with operations/transaction/state.rs method of same name
-fn get_prune_stats(table: &DeltaTable, column: &Column, get_max: bool) -> Option<ArrayRef> {
-    let field = table
-        .get_schema()
-        .ok()
-        .map(|s| s.field_with_name(&column.name).ok())??;
-
-    // See issue 1214. Binary type does not support natural order which is required for Datafusion to prune
-    if let DeltaDataType::Primitive(PrimitiveType::Binary) = &field.data_type() {
-        return None;
-    }
-
-    let data_type = field.data_type().try_into().ok()?;
-    let partition_columns = &table.metadata().ok()?.partition_columns;
-
-    let values = table.get_state().files().iter().map(|add| {
-        if partition_columns.contains(&column.name) {
-            let value = add.partition_values.get(&column.name).unwrap();
-            let value = match value {
-                Some(v) => serde_json::Value::String(v.to_string()),
-                None => serde_json::Value::Null,
-            };
-            to_correct_scalar_value(&value, &data_type)
-                .ok()
-                .flatten()
-                .unwrap_or(
-                    get_null_of_arrow_type(&data_type).expect("Could not determine null type"),
-                )
-        } else if let Ok(Some(statistics)) = add.get_stats() {
-            let values = if get_max {
-                statistics.max_values
-            } else {
-                statistics.min_values
-            };
-
-            values
-                .get(&column.name)
-                .and_then(|f| {
-                    to_correct_scalar_value(f.as_value()?, &data_type)
-                        .ok()
-                        .flatten()
-                })
-                .unwrap_or(
-                    get_null_of_arrow_type(&data_type).expect("Could not determine null type"),
-                )
-        } else {
-            // No statistics available
-            get_null_of_arrow_type(&data_type).expect("Could not determine null type")
-        }
-    });
-    ScalarValue::iter_to_array(values).ok()
-}
-
-impl PruningStatistics for DeltaTable {
-    /// return the minimum values for the named column, if known.
-    /// Note: the returned array must contain `num_containers()` rows
-    fn min_values(&self, column: &Column) -> Option<ArrayRef> {
-        get_prune_stats(self, column, false)
-    }
-
-    /// return the maximum values for the named column, if known.
-    /// Note: the returned array must contain `num_containers()` rows.
-    fn max_values(&self, column: &Column) -> Option<ArrayRef> {
-        get_prune_stats(self, column, true)
-    }
-
-    /// return the number of containers (e.g. row groups) being
-    /// pruned with these statistics
-    fn num_containers(&self) -> usize {
-        self.get_state().files().len()
-    }
-
-    /// return the number of null values for the named column as an
-    /// `Option<UInt64Array>`.
-    ///
-    /// Note: the returned array must contain `num_containers()` rows.
-    fn null_counts(&self, column: &Column) -> Option<ArrayRef> {
-        let partition_columns = &self.metadata().ok()?.partition_columns;
-
-        let values = self.get_state().files().iter().map(|add| {
-            if let Ok(Some(statistics)) = add.get_stats() {
-                if partition_columns.contains(&column.name) {
-                    let value = add.partition_values.get(&column.name).unwrap();
-                    match value {
-                        Some(_) => ScalarValue::UInt64(Some(0)),
-                        None => ScalarValue::UInt64(Some(statistics.num_records as u64)),
-                    }
-                } else {
-                    statistics
-                        .null_count
-                        .get(&column.name)
-                        .map(|f| ScalarValue::UInt64(f.as_value().map(|val| val as u64)))
-                        .unwrap_or(ScalarValue::UInt64(None))
-                }
-            } else if partition_columns.contains(&column.name) {
-                let value = add.partition_values.get(&column.name).unwrap();
-                match value {
-                    Some(_) => ScalarValue::UInt64(Some(0)),
-                    None => ScalarValue::UInt64(None),
-                }
-            } else {
-                ScalarValue::UInt64(None)
-            }
-        });
-        ScalarValue::iter_to_array(values).ok()
+    pub fn datafusion_table_statistics(&self) -> Option<Statistics> {
+        self.snapshot.datafusion_table_statistics()
     }
 }
 
@@ -371,14 +141,29 @@ pub(crate) fn register_store(store: LogStoreRef, env: Arc<RuntimeEnv>) {
     env.register_object_store(url, store.object_store());
 }
 
-pub(crate) fn logical_schema(
+/// The logical schema for a Deltatable is different then protocol level schema since partiton columns must appear at the end of the schema.
+/// This is to align with how partition are handled at the physical level
+pub(crate) fn df_logical_schema(
     snapshot: &DeltaTableState,
     scan_config: &DeltaScanConfig,
 ) -> DeltaResult<SchemaRef> {
     let input_schema = snapshot.arrow_schema()?;
-    let mut fields = Vec::new();
-    for field in input_schema.fields.iter() {
-        fields.push(field.to_owned());
+    let table_partition_cols = &snapshot.metadata().partition_columns;
+
+    let mut fields: Vec<Arc<Field>> = input_schema
+        .fields()
+        .iter()
+        .filter(|f| !table_partition_cols.contains(f.name()))
+        .cloned()
+        .collect();
+
+    for partition_col in table_partition_cols.iter() {
+        fields.push(Arc::new(
+            input_schema
+                .field_with_name(partition_col)
+                .unwrap()
+                .to_owned(),
+        ));
     }
 
     if let Some(file_column_name) = &scan_config.file_column_name {
@@ -539,7 +324,7 @@ impl<'a> DeltaScanBuilder<'a> {
                     .await?
             }
         };
-        let logical_schema = logical_schema(self.snapshot, &config)?;
+        let logical_schema = df_logical_schema(self.snapshot, &config)?;
 
         let logical_schema = if let Some(used_columns) = self.projection {
             let mut fields = vec![];
@@ -564,7 +349,7 @@ impl<'a> DeltaScanBuilder<'a> {
                         PruningPredicate::try_new(predicate.clone(), logical_schema.clone())?;
                     let files_to_prune = pruning_predicate.prune(self.snapshot)?;
                     self.snapshot
-                        .files()
+                        .file_actions()?
                         .iter()
                         .zip(files_to_prune.into_iter())
                         .filter_map(
@@ -578,7 +363,7 @@ impl<'a> DeltaScanBuilder<'a> {
                         )
                         .collect()
                 } else {
-                    self.snapshot.files().to_owned()
+                    self.snapshot.file_actions()?
                 }
             }
         };
@@ -588,11 +373,7 @@ impl<'a> DeltaScanBuilder<'a> {
         // However we may want to do some additional balancing in case we are far off from the above.
         let mut file_groups: HashMap<Vec<ScalarValue>, Vec<PartitionedFile>> = HashMap::new();
 
-        let table_partition_cols = &self
-            .snapshot
-            .metadata()
-            .ok_or(DeltaTableError::NoMetadata)?
-            .partition_columns;
+        let table_partition_cols = &self.snapshot.metadata().partition_columns;
 
         for action in files.iter() {
             let mut part = partitioned_file_from_action(action, table_partition_cols, &schema);
@@ -635,13 +416,7 @@ impl<'a> DeltaScanBuilder<'a> {
         let stats = self
             .snapshot
             .datafusion_table_statistics()
-            .unwrap_or_else(|e| {
-                error!(
-                    "Error while computing table statistics. Using unknown statistics. {}",
-                    e
-                );
-                Statistics::new_unknown(&schema)
-            });
+            .unwrap_or(Statistics::new_unknown(&schema));
 
         let scan = ParquetFormat::new()
             .create_physical_plan(
@@ -670,6 +445,7 @@ impl<'a> DeltaScanBuilder<'a> {
     }
 }
 
+// TODO: implement this for Snapshot, not for DeltaTable
 #[async_trait]
 impl TableProvider for DeltaTable {
     fn as_any(&self) -> &dyn Any {
@@ -677,7 +453,7 @@ impl TableProvider for DeltaTable {
     }
 
     fn schema(&self) -> Arc<ArrowSchema> {
-        self.state.arrow_schema().unwrap()
+        self.snapshot().unwrap().arrow_schema().unwrap()
     }
 
     fn table_type(&self) -> TableType {
@@ -702,7 +478,7 @@ impl TableProvider for DeltaTable {
         register_store(self.log_store(), session.runtime_env().clone());
         let filter_expr = conjunction(filters.iter().cloned());
 
-        let scan = DeltaScanBuilder::new(&self.state, self.log_store(), session)
+        let scan = DeltaScanBuilder::new(self.snapshot()?, self.log_store(), session)
             .with_projection(projection)
             .with_limit(limit)
             .with_filter(filter_expr)
@@ -720,7 +496,7 @@ impl TableProvider for DeltaTable {
     }
 
     fn statistics(&self) -> Option<Statistics> {
-        self.state.datafusion_table_statistics().ok()
+        self.snapshot().ok()?.datafusion_table_statistics()
     }
 }
 
@@ -740,7 +516,7 @@ impl DeltaTableProvider {
         config: DeltaScanConfig,
     ) -> DeltaResult<Self> {
         Ok(DeltaTableProvider {
-            schema: logical_schema(&snapshot, &config)?,
+            schema: df_logical_schema(&snapshot, &config)?,
             snapshot,
             log_store,
             config,
@@ -799,7 +575,7 @@ impl TableProvider for DeltaTableProvider {
     }
 
     fn statistics(&self) -> Option<Statistics> {
-        self.snapshot.datafusion_table_statistics().ok()
+        self.snapshot.datafusion_table_statistics()
     }
 }
 
@@ -1069,6 +845,15 @@ pub struct DeltaDataChecker {
 }
 
 impl DeltaDataChecker {
+    /// Create a new DeltaDataChecker with no invariants or constraints
+    pub fn empty() -> Self {
+        Self {
+            invariants: vec![],
+            constraints: vec![],
+            ctx: DeltaSessionContext::default().into(),
+        }
+    }
+
     /// Create a new DeltaDataChecker with a specified set of invariants
     pub fn new_with_invariants(invariants: Vec<Invariant>) -> Self {
         Self {
@@ -1095,14 +880,8 @@ impl DeltaDataChecker {
 
     /// Create a new DeltaDataChecker
     pub fn new(snapshot: &DeltaTableState) -> Self {
-        let metadata = snapshot.metadata();
-
-        let invariants = metadata
-            .and_then(|meta| meta.schema.get_invariants().ok())
-            .unwrap_or_default();
-        let constraints = metadata
-            .map(|meta| meta.get_constraints())
-            .unwrap_or_default();
+        let invariants = snapshot.schema().get_invariants().unwrap_or_default();
+        let constraints = snapshot.table_config().get_constraints();
         Self {
             invariants,
             constraints,
@@ -1329,22 +1108,21 @@ impl TreeNodeVisitor for FindFilesExprProperties {
             | Expr::Case(_)
             | Expr::Cast(_)
             | Expr::TryCast(_) => (),
-            Expr::ScalarFunction(ScalarFunction { fun, .. }) => {
-                let v = fun.volatility();
+            Expr::ScalarFunction(ScalarFunction { func_def, .. }) => {
+                let v = match func_def {
+                    datafusion_expr::ScalarFunctionDefinition::BuiltIn(f) => f.volatility(),
+                    datafusion_expr::ScalarFunctionDefinition::UDF(u) => u.signature().volatility,
+                    datafusion_expr::ScalarFunctionDefinition::Name(n) => {
+                        self.result = Err(DeltaTableError::Generic(format!(
+                            "Cannot determine volatility of find files predicate function {n}",
+                        )));
+                        return Ok(VisitRecursion::Stop);
+                    }
+                };
                 if v > Volatility::Immutable {
                     self.result = Err(DeltaTableError::Generic(format!(
                         "Find files predicate contains nondeterministic function {}",
-                        fun
-                    )));
-                    return Ok(VisitRecursion::Stop);
-                }
-            }
-            Expr::ScalarUDF(ScalarUDF { fun, .. }) => {
-                let v = fun.signature.volatility;
-                if v > Volatility::Immutable {
-                    self.result = Err(DeltaTableError::Generic(format!(
-                        "Find files predicate contains nondeterministic function {}",
-                        fun.name
+                        func_def.name()
                     )));
                     return Ok(VisitRecursion::Stop);
                 }
@@ -1423,7 +1201,7 @@ pub(crate) async fn find_files_scan<'a>(
     expression: Expr,
 ) -> DeltaResult<Vec<Add>> {
     let candidate_map: HashMap<String, Add> = snapshot
-        .files()
+        .file_actions()?
         .iter()
         .map(|add| (add.path.clone(), add.to_owned()))
         .collect();
@@ -1434,7 +1212,7 @@ pub(crate) async fn find_files_scan<'a>(
     }
     .build(snapshot)?;
 
-    let logical_schema = logical_schema(snapshot, &scan_config)?;
+    let logical_schema = df_logical_schema(snapshot, &scan_config)?;
 
     // Identify which columns we need to project
     let mut used_columns = expression
@@ -1483,7 +1261,7 @@ pub(crate) async fn scan_memory_table(
     snapshot: &DeltaTableState,
     predicate: &Expr,
 ) -> DeltaResult<Vec<Add>> {
-    let actions = snapshot.files().to_owned();
+    let actions = snapshot.file_actions()?;
 
     let batch = snapshot.add_actions_table(true)?;
     let mut arrays = Vec::new();
@@ -1540,7 +1318,7 @@ pub async fn find_files<'a>(
     state: &SessionState,
     predicate: Option<Expr>,
 ) -> DeltaResult<FindFiles> {
-    let current_metadata = snapshot.metadata().ok_or(DeltaTableError::NoMetadata)?;
+    let current_metadata = snapshot.metadata();
 
     match &predicate {
         Some(predicate) => {
@@ -1571,7 +1349,7 @@ pub async fn find_files<'a>(
             }
         }
         None => Ok(FindFiles {
-            candidates: snapshot.files().to_owned(),
+            candidates: snapshot.file_actions()?,
             partition_scan: true,
         }),
     }
@@ -1782,7 +1560,6 @@ mod tests {
             size: 10644,
             partition_values,
             modification_time: 1660497727833,
-            partition_values_parsed: None,
             data_change: true,
             stats: None,
             deletion_vector: None,
@@ -1804,7 +1581,8 @@ mod tests {
                 location: Path::from("year=2015/month=1/part-00000-4dcb50d3-d017-450c-9df7-a7257dbd3c5d-c000.snappy.parquet".to_string()), 
                 last_modified: Utc.timestamp_millis_opt(1660497727833).unwrap(),
                 size: 10644,
-                e_tag: None
+                e_tag: None,
+                version: None,
             },
             partition_values: [ScalarValue::Int64(Some(2015)), ScalarValue::Int64(Some(1))].to_vec(),
             range: None,
@@ -1894,7 +1672,7 @@ mod tests {
         ]));
         let exec_plan = Arc::from(DeltaScan {
             table_uri: "s3://my_bucket/this/is/some/path".to_string(),
-            parquet_scan: Arc::from(EmptyExec::new(false, schema.clone())),
+            parquet_scan: Arc::from(EmptyExec::new(schema.clone())),
             config: DeltaScanConfig::default(),
             logical_schema: schema.clone(),
         });
@@ -1911,16 +1689,18 @@ mod tests {
 
     #[tokio::test]
     async fn delta_table_provider_with_config() {
-        let table = crate::open_table("tests/data/delta-2.2.0-partitioned-types")
+        let table = crate::open_table("../deltalake-test/tests/data/delta-2.2.0-partitioned-types")
             .await
             .unwrap();
         let config = DeltaScanConfigBuilder::new()
             .with_file_column_name(&"file_source")
-            .build(&table.state)
+            .build(table.snapshot().unwrap())
             .unwrap();
 
         let log_store = table.log_store();
-        let provider = DeltaTableProvider::try_new(table.state, log_store, config).unwrap();
+        let provider =
+            DeltaTableProvider::try_new(table.snapshot().unwrap().clone(), log_store, config)
+                .unwrap();
         let ctx = SessionContext::new();
         ctx.register_table("test", Arc::new(provider)).unwrap();
 
@@ -1977,12 +1757,24 @@ mod tests {
             .await
             .unwrap();
 
-        let config = DeltaScanConfigBuilder::new().build(&table.state).unwrap();
+        let config = DeltaScanConfigBuilder::new()
+            .build(table.snapshot().unwrap())
+            .unwrap();
 
         let log_store = table.log_store();
-        let provider = DeltaTableProvider::try_new(table.state, log_store, config).unwrap();
+        let provider =
+            DeltaTableProvider::try_new(table.snapshot().unwrap().clone(), log_store, config)
+                .unwrap();
+        let logical_schema = provider.schema();
         let ctx = SessionContext::new();
         ctx.register_table("test", Arc::new(provider)).unwrap();
+
+        let expected_logical_order = vec!["value", "modified", "id"];
+        let actual_order: Vec<String> = logical_schema
+            .fields()
+            .iter()
+            .map(|f| f.name().to_owned())
+            .collect();
 
         let df = ctx.sql("select * from test").await.unwrap();
         let actual = df.collect().await.unwrap();
@@ -1997,6 +1789,7 @@ mod tests {
             "+-------+------------+----+",
         ];
         assert_batches_sorted_eq!(&expected, &actual);
+        assert_eq!(expected_logical_order, actual_order);
     }
 
     #[tokio::test]
@@ -2028,10 +1821,13 @@ mod tests {
             .await
             .unwrap();
 
-        let config = DeltaScanConfigBuilder::new().build(&table.state).unwrap();
+        let config = DeltaScanConfigBuilder::new()
+            .build(table.snapshot().unwrap())
+            .unwrap();
         let log = table.log_store();
 
-        let provider = DeltaTableProvider::try_new(table.state, log, config).unwrap();
+        let provider =
+            DeltaTableProvider::try_new(table.snapshot().unwrap().clone(), log, config).unwrap();
         let ctx: SessionContext = DeltaSessionContext::default().into();
         ctx.register_table("test", Arc::new(provider)).unwrap();
 

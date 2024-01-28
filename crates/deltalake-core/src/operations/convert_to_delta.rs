@@ -2,21 +2,19 @@
 // https://github.com/delta-io/delta/blob/1d5dd774111395b0c4dc1a69c94abc169b1c83b6/spark/src/main/scala/org/apache/spark/sql/delta/commands/ConvertToDeltaCommand.scala
 
 use crate::{
-    kernel::{Action, Add, Schema, StructField},
+    kernel::{Add, DataType, Schema, StructField},
     logstore::{LogStore, LogStoreRef},
     operations::create::CreateBuilder,
     protocol::SaveMode,
-    storage::config::configure_log_store,
+    table::builder::ensure_table_uri,
     table::config::DeltaConfigKey,
-    DeltaResult, DeltaTable, DeltaTableError, DeltaTablePartition, ObjectStoreError,
-    NULL_PARTITION_VALUE_DATA_PATH,
+    DeltaResult, DeltaTable, DeltaTableError, ObjectStoreError, NULL_PARTITION_VALUE_DATA_PATH,
 };
 use arrow::{datatypes::Schema as ArrowSchema, error::ArrowError};
 use futures::{
     future::{self, BoxFuture},
     TryStreamExt,
 };
-use log::{debug, info};
 use parquet::{
     arrow::async_reader::{ParquetObjectReader, ParquetRecordBatchStreamBuilder},
     errors::ParquetError,
@@ -29,6 +27,7 @@ use std::{
     str::{FromStr, Utf8Error},
     sync::Arc,
 };
+use tracing::debug;
 
 /// Error converting a Parquet table to a Delta table
 #[derive(Debug, thiserror::Error)]
@@ -55,6 +54,8 @@ enum Error {
     DeltaTableAlready,
     #[error("Location must be provided to convert a Parquet table to a Delta table")]
     MissingLocation,
+    #[error("The location provided must be a valid URL")]
+    InvalidLocation(#[from] url::ParseError),
 }
 
 impl From<Error> for DeltaTableError {
@@ -231,7 +232,10 @@ impl ConvertToDeltaBuilder {
         let log_store = if let Some(log_store) = self.log_store {
             log_store
         } else if let Some(location) = self.location {
-            configure_log_store(&location, self.storage_options.unwrap_or_default(), None)?
+            crate::logstore::logstore_for(
+                ensure_table_uri(location)?,
+                self.storage_options.unwrap_or_default(),
+            )?
         } else {
             return Err(Error::MissingLocation);
         };
@@ -240,7 +244,7 @@ impl ConvertToDeltaBuilder {
         if log_store.is_delta_table_location().await? {
             return Err(Error::DeltaTableAlready);
         }
-        info!(
+        debug!(
             "Converting Parquet table in log store location: {:?}",
             log_store.root_uri()
         );
@@ -250,7 +254,6 @@ impl ConvertToDeltaBuilder {
         let mut files = Vec::new();
         object_store
             .list(None)
-            .await?
             .try_for_each_concurrent(10, |meta| {
                 if Some("parquet") == meta.location.extension() {
                     debug!("Found parquet file {:#?}", meta.location);
@@ -259,6 +262,7 @@ impl ConvertToDeltaBuilder {
                 future::ready(Ok(()))
             })
             .await?;
+
         if files.is_empty() {
             return Err(Error::ParquetFileNotFound);
         }
@@ -269,57 +273,77 @@ impl ConvertToDeltaBuilder {
         // A HashSet of all unique partition columns in a Parquet table
         let mut partition_columns = HashSet::new();
         // A vector of StructField of all unique partition columns in a Parquet table
-        let mut partition_schema_fields = Vec::new();
+        let mut partition_schema_fields = HashMap::new();
+
         for file in files {
             // A HashMap from partition column to value for this parquet file only
             let mut partition_values = HashMap::new();
-            let mut iter = file.location.as_ref().split('/').peekable();
+            let location = file.location.clone().to_string();
+            let mut iter = location.split('/').peekable();
             let mut subpath = iter.next();
+
             // Get partitions from subpaths. Skip the last subpath
             while iter.peek().is_some() {
-                if let Some(subpath) = subpath {
-                    // Return an error if the partition is not hive-partitioning
-                    let partition = DeltaTablePartition::try_from(
-                        percent_decode_str(subpath).decode_utf8()?.as_ref(),
-                    )?;
-                    debug!(
-                        "Found partition {partition:#?} in parquet file {:#?}",
-                        file.location
-                    );
-                    let (key, val) = (partition.key, partition.value);
-                    partition_values.insert(
-                        key.clone(),
-                        if val == NULL_PARTITION_VALUE_DATA_PATH {
-                            None
-                        } else {
-                            Some(val)
-                        },
-                    );
-                    if partition_columns.insert(key.clone()) {
-                        if let Some(schema) = self.partition_schema.take(key.as_str()) {
-                            partition_schema_fields.push(schema);
-                        } else {
-                            // Return an error if the schema of a partition column is not provided by user
-                            return Err(Error::MissingPartitionSchema);
-                        }
+                let curr_path = subpath.unwrap();
+                let (key, value) = curr_path
+                    .split_once('=')
+                    .ok_or(Error::MissingPartitionSchema)?;
+
+                if partition_columns.insert(key.to_string()) {
+                    if let Some(schema) = self.partition_schema.take(key) {
+                        partition_schema_fields.insert(key.to_string(), schema);
+                    } else {
+                        // Return an error if the schema of a partition column is not provided by user
+                        return Err(Error::MissingPartitionSchema);
                     }
-                } else {
-                    // This error shouldn't happen. The while condition ensures that subpath is not none
-                    panic!("Subpath iterator index overflows");
                 }
+
+                // Safety: we just checked that the key is present in the map
+                let field = partition_schema_fields.get(key).unwrap();
+                let scalar = if value == NULL_PARTITION_VALUE_DATA_PATH {
+                    Ok(crate::kernel::Scalar::Null(field.data_type().clone()))
+                } else {
+                    let decoded = percent_decode_str(value).decode_utf8()?;
+                    match field.data_type() {
+                        DataType::Primitive(p) => p.parse_scalar(decoded.as_ref()),
+                        _ => Err(crate::kernel::Error::Generic(format!(
+                            "Exprected primitive type, found: {:?}",
+                            field.data_type()
+                        ))),
+                    }
+                }
+                .map_err(|_| Error::MissingPartitionSchema)?;
+
+                partition_values.insert(key.to_string(), scalar);
+
                 subpath = iter.next();
             }
 
-            actions.push(Action::Add(Add {
-                path: percent_decode_str(file.location.as_ref())
-                    .decode_utf8()?
-                    .to_string(),
-                size: i64::try_from(file.size)?,
-                partition_values,
-                modification_time: file.last_modified.timestamp_millis(),
-                data_change: true,
-                ..Default::default()
-            }));
+            actions.push(
+                Add {
+                    path: percent_decode_str(file.location.as_ref())
+                        .decode_utf8()?
+                        .to_string(),
+                    size: i64::try_from(file.size)?,
+                    partition_values: partition_values
+                        .into_iter()
+                        .map(|(k, v)| {
+                            (
+                                k,
+                                if v.is_null() {
+                                    None
+                                } else {
+                                    Some(v.serialize())
+                                },
+                            )
+                        })
+                        .collect(),
+                    modification_time: file.last_modified.timestamp_millis(),
+                    data_change: true,
+                    ..Default::default()
+                }
+                .into(),
+            );
 
             let mut arrow_schema = ParquetRecordBatchStreamBuilder::new(ParquetObjectReader::new(
                 object_store.clone(),
@@ -329,6 +353,7 @@ impl ConvertToDeltaBuilder {
             .schema()
             .as_ref()
             .clone();
+
             // Arrow schema of Parquet files may have conflicting metatdata
             // Since Arrow schema metadata is not used to generate Delta table schema, we set the metadata field to an empty HashMap
             arrow_schema.metadata = HashMap::new();
@@ -345,8 +370,12 @@ impl ConvertToDeltaBuilder {
         let mut schema_fields = Schema::try_from(&ArrowSchema::try_merge(arrow_schemas)?)?
             .fields()
             .clone();
-        schema_fields.append(&mut partition_schema_fields);
-        debug!("Schema fields for the parquet table: {schema_fields:#?}");
+        schema_fields.append(
+            &mut partition_schema_fields
+                .values()
+                .cloned()
+                .collect::<Vec<_>>(),
+        );
 
         // Generate CreateBuilder with corresponding add actions, schemas and operation meta
         let mut builder = CreateBuilder::new()
@@ -365,6 +394,7 @@ impl ConvertToDeltaBuilder {
         if let Some(metadata) = self.metadata {
             builder = builder.with_metadata(metadata);
         }
+
         Ok(builder)
     }
 }
@@ -389,11 +419,11 @@ impl std::future::IntoFuture for ConvertToDeltaBuilder {
 
 #[cfg(test)]
 mod tests {
-    use super::{configure_log_store, ConvertToDeltaBuilder, DeltaTable, LogStoreRef, StructField};
+    use super::*;
     use crate::{
-        kernel::schema::{DataType, PrimitiveType},
+        kernel::{DataType, PrimitiveType, Scalar},
         open_table,
-        storage::config::StorageOptions,
+        storage::StorageOptions,
         Path,
     };
     use itertools::Itertools;
@@ -424,7 +454,9 @@ mod tests {
     }
 
     fn log_store(path: impl Into<String>) -> LogStoreRef {
-        configure_log_store(&path.into(), StorageOptions::default(), None)
+        let path: String = path.into();
+        let location = ensure_table_uri(path).expect("Failed to get the URI from the path");
+        crate::logstore::logstore_for(location, StorageOptions::default())
             .expect("Failed to create an object store")
     }
 
@@ -442,7 +474,9 @@ mod tests {
         // Copy all files to a temp directory to perform testing. Skip Delta log
         copy_files(format!("{}/{}", env!("CARGO_MANIFEST_DIR"), path), temp_dir);
         let builder = if from_path {
-            ConvertToDeltaBuilder::new().with_location(temp_dir)
+            ConvertToDeltaBuilder::new().with_location(
+                ensure_table_uri(temp_dir).expect("Failed to turn temp dir into a URL"),
+            )
         } else {
             ConvertToDeltaBuilder::new().with_log_store(log_store(temp_dir))
         };
@@ -482,7 +516,7 @@ mod tests {
         expected_version: i64,
         expected_paths: Vec<Path>,
         expected_schema: Vec<StructField>,
-        expected_partition_values: &[(String, Option<String>)],
+        expected_partition_values: &[(String, Scalar)],
     ) {
         assert_eq!(
             table.version(),
@@ -490,7 +524,7 @@ mod tests {
             "Testing location: {test_data_from:?}"
         );
 
-        let mut files = table.get_files_iter().collect_vec();
+        let mut files = table.get_files_iter().unwrap().collect_vec();
         files.sort();
         assert_eq!(
             files, expected_paths,
@@ -509,28 +543,38 @@ mod tests {
         );
 
         let mut partition_values = table
-            .get_partition_values()
-            .flat_map(|map| map.clone())
+            .snapshot()
+            .unwrap()
+            .log_data()
+            .into_iter()
+            .flat_map(|add| {
+                add.partition_values()
+                    .unwrap()
+                    .iter()
+                    .map(|(k, v)| (k.to_string(), v.clone()))
+                    .collect::<Vec<_>>()
+            })
             .collect::<Vec<_>>();
-        partition_values.sort();
+        partition_values.sort_by_key(|(k, v)| (k.clone(), v.serialize()));
         assert_eq!(partition_values, expected_partition_values);
     }
 
     // Test Parquet files in object store location
     #[tokio::test]
     async fn test_convert_to_delta() {
-        let path = "tests/data/delta-0.8.0-date";
+        let path = "../deltalake-test/tests/data/delta-0.8.0-date";
         let table = create_delta_table(path, Vec::new(), false).await;
         let action = table
             .get_active_add_actions_by_partitions(&[])
             .expect("Failed to get Add actions")
             .next()
-            .expect("Iterator index overflows");
+            .expect("Iterator index overflows")
+            .unwrap();
         assert_eq!(
-            action.path,
+            action.path(),
             "part-00000-d22c627d-9655-4153-9527-f8995620fa42-c000.snappy.parquet"
         );
-        assert!(action.data_change);
+
         assert_delta_table(
             table,
             path,
@@ -539,13 +583,13 @@ mod tests {
                 "part-00000-d22c627d-9655-4153-9527-f8995620fa42-c000.snappy.parquet",
             )],
             vec![
-                schema_field("date", PrimitiveType::Date, true),
+                StructField::new("date", DataType::DATE, true),
                 schema_field("dayOfYear", PrimitiveType::Integer, true),
             ],
             &[],
         );
 
-        let path = "tests/data/delta-0.8.0-null-partition";
+        let path = "../deltalake-test/tests/data/delta-0.8.0-null-partition";
         let table = create_delta_table(
             path,
             vec![schema_field("k", PrimitiveType::String, true)],
@@ -561,16 +605,16 @@ mod tests {
                     Path::from("k=__HIVE_DEFAULT_PARTITION__/part-00001-8474ac85-360b-4f58-b3ea-23990c71b932.c000.snappy.parquet")
             ],
             vec![
-                schema_field("k", PrimitiveType::String, true),
-                schema_field("v", PrimitiveType::Long, true),
+                StructField::new("k", DataType::STRING, true),
+                StructField::new("v", DataType::LONG, true),
             ],
             &[
-                ("k".to_string(), None),
-                ("k".to_string(), Some("A".to_string())),
+                ("k".to_string(), Scalar::String("A".to_string())),
+                ("k".to_string(), Scalar::Null(DataType::STRING)),
             ],
         );
 
-        let path = "tests/data/delta-0.8.0-special-partition";
+        let path = "../deltalake-test/tests/data/delta-0.8.0-special-partition";
         let table = create_delta_table(
             path,
             vec![schema_field("x", PrimitiveType::String, true)],
@@ -596,12 +640,12 @@ mod tests {
                 schema_field("y", PrimitiveType::Long, true),
             ],
             &[
-                ("x".to_string(), Some("A/A".to_string())),
-                ("x".to_string(), Some("B B".to_string())),
+                ("x".to_string(), Scalar::String("A/A".to_string())),
+                ("x".to_string(), Scalar::String("B B".to_string())),
             ],
         );
 
-        let path = "tests/data/delta-0.8.0-partitioned";
+        let path = "../deltalake-test/tests/data/delta-0.8.0-partitioned";
         let table = create_delta_table(
             path,
             vec![
@@ -643,24 +687,24 @@ mod tests {
                 schema_field("year", PrimitiveType::String, true),
             ],
             &[
-                ("day".to_string(), Some("1".to_string())),
-                ("day".to_string(), Some("20".to_string())),
-                ("day".to_string(), Some("3".to_string())),
-                ("day".to_string(), Some("4".to_string())),
-                ("day".to_string(), Some("5".to_string())),
-                ("day".to_string(), Some("5".to_string())),
-                ("month".to_string(), Some("1".to_string())),
-                ("month".to_string(), Some("12".to_string())),
-                ("month".to_string(), Some("12".to_string())),
-                ("month".to_string(), Some("2".to_string())),
-                ("month".to_string(), Some("2".to_string())),
-                ("month".to_string(), Some("4".to_string())),
-                ("year".to_string(), Some("2020".to_string())),
-                ("year".to_string(), Some("2020".to_string())),
-                ("year".to_string(), Some("2020".to_string())),
-                ("year".to_string(), Some("2021".to_string())),
-                ("year".to_string(), Some("2021".to_string())),
-                ("year".to_string(), Some("2021".to_string())),
+                ("day".to_string(), Scalar::String("1".to_string())),
+                ("day".to_string(), Scalar::String("20".to_string())),
+                ("day".to_string(), Scalar::String("3".to_string())),
+                ("day".to_string(), Scalar::String("4".to_string())),
+                ("day".to_string(), Scalar::String("5".to_string())),
+                ("day".to_string(), Scalar::String("5".to_string())),
+                ("month".to_string(), Scalar::String("1".to_string())),
+                ("month".to_string(), Scalar::String("12".to_string())),
+                ("month".to_string(), Scalar::String("12".to_string())),
+                ("month".to_string(), Scalar::String("2".to_string())),
+                ("month".to_string(), Scalar::String("2".to_string())),
+                ("month".to_string(), Scalar::String("4".to_string())),
+                ("year".to_string(), Scalar::String("2020".to_string())),
+                ("year".to_string(), Scalar::String("2020".to_string())),
+                ("year".to_string(), Scalar::String("2020".to_string())),
+                ("year".to_string(), Scalar::String("2021".to_string())),
+                ("year".to_string(), Scalar::String("2021".to_string())),
+                ("year".to_string(), Scalar::String("2021".to_string())),
             ],
         );
     }
@@ -668,7 +712,7 @@ mod tests {
     // Test opening the newly created Delta table
     #[tokio::test]
     async fn test_open_created_delta_table() {
-        let path = "tests/data/delta-0.2.0";
+        let path = "../deltalake-test/tests/data/delta-0.2.0";
         let table = open_created_delta_table(path, Vec::new()).await;
         assert_delta_table(
             table,
@@ -687,7 +731,7 @@ mod tests {
             &[],
         );
 
-        let path = "tests/data/delta-0.8-empty";
+        let path = "../deltalake-test/tests/data/delta-0.8-empty";
         let table = open_created_delta_table(path, Vec::new()).await;
         assert_delta_table(
             table,
@@ -701,7 +745,7 @@ mod tests {
             &[],
         );
 
-        let path = "tests/data/delta-0.8.0";
+        let path = "../deltalake-test/tests/data/delta-0.8.0";
         let table = open_created_delta_table(path, Vec::new()).await;
         assert_delta_table(
             table,
@@ -720,7 +764,7 @@ mod tests {
     // Test Parquet files in path
     #[tokio::test]
     async fn test_convert_to_delta_from_path() {
-        let path = "tests/data/delta-2.2.0-partitioned-types";
+        let path = "../deltalake-test/tests/data/delta-2.2.0-partitioned-types";
         let table = create_delta_table(
             path,
             vec![
@@ -751,16 +795,16 @@ mod tests {
                 schema_field("c3", PrimitiveType::Integer, true),
             ],
             &[
-                ("c1".to_string(), Some("4".to_string())),
-                ("c1".to_string(), Some("5".to_string())),
-                ("c1".to_string(), Some("6".to_string())),
-                ("c2".to_string(), Some("a".to_string())),
-                ("c2".to_string(), Some("b".to_string())),
-                ("c2".to_string(), Some("c".to_string())),
+                ("c1".to_string(), Scalar::Integer(4)),
+                ("c1".to_string(), Scalar::Integer(5)),
+                ("c1".to_string(), Scalar::Integer(6)),
+                ("c2".to_string(), Scalar::String("a".to_string())),
+                ("c2".to_string(), Scalar::String("b".to_string())),
+                ("c2".to_string(), Scalar::String("c".to_string())),
             ],
         );
 
-        let path = "tests/data/delta-0.8.0-numeric-partition";
+        let path = "../deltalake-test/tests/data/delta-0.8.0-numeric-partition";
         let table = create_delta_table(
             path,
             vec![
@@ -788,10 +832,10 @@ mod tests {
                 schema_field("z", PrimitiveType::String, true),
             ],
             &[
-                ("x".to_string(), Some("10".to_string())),
-                ("x".to_string(), Some("9".to_string())),
-                ("y".to_string(), Some("10.0".to_string())),
-                ("y".to_string(), Some("9.9".to_string())),
+                ("x".to_string(), Scalar::Long(10)),
+                ("x".to_string(), Scalar::Long(9)),
+                ("y".to_string(), Scalar::Double(10.0)),
+                ("y".to_string(), Scalar::Double(9.9)),
             ],
         );
     }
@@ -819,7 +863,7 @@ mod tests {
     #[tokio::test]
     async fn test_partition_column_not_exist() {
         let _table = ConvertToDeltaBuilder::new()
-            .with_location("tests/data/delta-0.8.0-null-partition")
+            .with_location("../deltalake-test/tests/data/delta-0.8.0-null-partition")
             .with_partition_schema(vec![schema_field("foo", PrimitiveType::String, true)])
             .await
             .expect_err(
@@ -830,7 +874,7 @@ mod tests {
     #[tokio::test]
     async fn test_missing_partition_schema() {
         let _table = ConvertToDeltaBuilder::new()
-            .with_location("tests/data/delta-0.8.0-numeric-partition")
+            .with_location("../deltalake-test/tests/data/delta-0.8.0-numeric-partition")
             .await
             .expect_err("The schema of a partition column is not provided by user. Should error");
     }
@@ -838,7 +882,7 @@ mod tests {
     #[tokio::test]
     async fn test_delta_table_already() {
         let _table = ConvertToDeltaBuilder::new()
-            .with_location("tests/data/delta-0.2.0")
+            .with_location("../deltalake-test/tests/data/delta-0.2.0")
             .await
             .expect_err("The given location is already a delta table location. Should error");
     }

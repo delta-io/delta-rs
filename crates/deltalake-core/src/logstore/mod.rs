@@ -1,4 +1,5 @@
 //! Delta log store.
+use dashmap::DashMap;
 use futures::StreamExt;
 use lazy_static::lazy_static;
 use regex::Regex;
@@ -8,6 +9,7 @@ use serde::{
     Deserialize, Serialize,
 };
 use std::io::{BufRead, BufReader, Cursor};
+use std::sync::OnceLock;
 use std::{cmp::max, collections::HashMap, sync::Arc};
 use url::Url;
 
@@ -16,25 +18,127 @@ use crate::{
     kernel::Action,
     operations::transaction::TransactionError,
     protocol::{get_last_checkpoint, ProtocolError},
-    storage::{commit_uri_from_version, config::StorageOptions},
+    storage::{commit_uri_from_version, ObjectStoreRef, StorageOptions},
     DeltaTableError,
 };
 use bytes::Bytes;
-use log::debug;
 use object_store::{path::Path, Error as ObjectStoreError, ObjectStore};
+use tracing::{debug, warn};
 
 #[cfg(feature = "datafusion")]
 use datafusion::datasource::object_store::ObjectStoreUrl;
 
-pub mod default_logstore;
-#[cfg(any(feature = "s3", feature = "s3-native-tls"))]
-pub mod s3;
+pub(crate) mod default_logstore;
+
+/// Trait for generating [LogStore] implementations
+pub trait LogStoreFactory: Send + Sync {
+    /// Create a new [LogStore]
+    fn with_options(
+        &self,
+        store: ObjectStoreRef,
+        location: &Url,
+        options: &StorageOptions,
+    ) -> DeltaResult<Arc<dyn LogStore>> {
+        Ok(default_logstore(store, location, options))
+    }
+}
+
+/// Return the [DefaultLogStore] implementation with the provided configuration options
+pub fn default_logstore(
+    store: ObjectStoreRef,
+    location: &Url,
+    options: &StorageOptions,
+) -> Arc<dyn LogStore> {
+    Arc::new(default_logstore::DefaultLogStore::new(
+        store,
+        LogStoreConfig {
+            location: location.clone(),
+            options: options.clone(),
+        },
+    ))
+}
+
+#[derive(Clone, Debug, Default)]
+struct DefaultLogStoreFactory {}
+impl LogStoreFactory for DefaultLogStoreFactory {}
+
+/// Registry of [LogStoreFactory] instances
+pub type FactoryRegistry = Arc<DashMap<Url, Arc<dyn LogStoreFactory>>>;
+
+/// TODO
+pub fn logstores() -> FactoryRegistry {
+    static REGISTRY: OnceLock<FactoryRegistry> = OnceLock::new();
+    REGISTRY
+        .get_or_init(|| {
+            let registry = FactoryRegistry::default();
+            registry.insert(
+                Url::parse("memory://").unwrap(),
+                Arc::new(DefaultLogStoreFactory::default()),
+            );
+            registry.insert(
+                Url::parse("file://").unwrap(),
+                Arc::new(DefaultLogStoreFactory::default()),
+            );
+            registry
+        })
+        .clone()
+}
 
 /// Sharable reference to [`LogStore`]
 pub type LogStoreRef = Arc<dyn LogStore>;
 
 lazy_static! {
     static ref DELTA_LOG_PATH: Path = Path::from("_delta_log");
+}
+
+/// Return the [LogStoreRef] for the provided [Url] location
+///
+/// This will use the built-in process global [crate::storage::ObjectStoreRegistry] by default
+///
+/// ```rust
+/// # use deltalake_core::logstore::*;
+/// # use std::collections::HashMap;
+/// # use url::Url;
+/// let location = Url::parse("memory:///").expect("Failed to make location");
+/// let logstore = logstore_for(location, HashMap::new()).expect("Failed to get a logstore");
+/// ```
+pub fn logstore_for(
+    location: Url,
+    options: impl Into<StorageOptions> + Clone,
+) -> DeltaResult<LogStoreRef> {
+    // turn location into scheme
+    let scheme = Url::parse(&format!("{}://", location.scheme()))
+        .map_err(|_| DeltaTableError::InvalidTableLocation(location.clone().into()))?;
+
+    if let Some(entry) = crate::storage::factories().get(&scheme) {
+        debug!("Found a storage provider for {scheme} ({location})");
+        let (store, _prefix) = entry
+            .value()
+            .parse_url_opts(&location, &options.clone().into())?;
+        return logstore_with(store, location, options);
+    }
+    Err(DeltaTableError::InvalidTableLocation(location.into()))
+}
+
+/// Return the [LogStoreRef] using the given [ObjectStoreRef]
+pub fn logstore_with(
+    store: ObjectStoreRef,
+    location: Url,
+    options: impl Into<StorageOptions> + Clone,
+) -> DeltaResult<LogStoreRef> {
+    let scheme = Url::parse(&format!("{}://", location.scheme()))
+        .map_err(|_| DeltaTableError::InvalidTableLocation(location.clone().into()))?;
+
+    if let Some(factory) = logstores().get(&scheme) {
+        debug!("Found a logstore provider for {scheme}");
+        return factory.with_options(store, &location, &options.into());
+    } else {
+        println!("Could not find a logstore for the scheme {scheme}");
+        warn!("Could not find a logstore for the scheme {scheme}");
+    }
+    Err(DeltaTableError::InvalidTableLocation(
+        location.clone().into(),
+    ))
 }
 
 /// Configuration parameters for a log store
@@ -58,6 +162,9 @@ pub struct LogStoreConfig {
 ///   become visible immediately.
 #[async_trait::async_trait]
 pub trait LogStore: Sync + Send {
+    /// Return the name of this LogStore implementation
+    fn name(&self) -> String;
+
     /// Read data for commit entry with the given version.
     async fn read_commit_entry(&self, version: i64) -> DeltaResult<Option<Bytes>>;
 
@@ -78,7 +185,10 @@ pub trait LogStore: Sync + Send {
     fn object_store(&self) -> Arc<dyn ObjectStore>;
 
     /// [Path] to Delta log
-    fn to_uri(&self, location: &Path) -> String;
+    fn to_uri(&self, location: &Path) -> String {
+        let root = &self.config().location;
+        to_uri(root, location)
+    }
 
     /// Get fully qualified uri for table root
     fn root_uri(&self) -> String {
@@ -94,7 +204,7 @@ pub trait LogStore: Sync + Send {
     async fn is_delta_table_location(&self) -> DeltaResult<bool> {
         // TODO We should really be using HEAD here, but this fails in windows tests
         let object_store = self.object_store();
-        let mut stream = object_store.list(Some(self.log_path())).await?;
+        let mut stream = object_store.list(Some(self.log_path()));
         if let Some(res) = stream.next().await {
             match res {
                 Ok(_) => Ok(true),
@@ -112,10 +222,54 @@ pub trait LogStore: Sync + Send {
     /// registering/fetching. In our case the scheme is hard-coded to "delta-rs", so to get a unique
     /// host we convert the location from this `LogStore` to a valid name, combining the
     /// original scheme, host and path with invalid characters replaced.
-    fn object_store_url(&self) -> ObjectStoreUrl;
+    fn object_store_url(&self) -> ObjectStoreUrl {
+        crate::logstore::object_store_url(&self.config().location)
+    }
 
     /// Get configuration representing configured log store.
     fn config(&self) -> &LogStoreConfig;
+}
+
+#[cfg(feature = "datafusion")]
+fn object_store_url(location: &Url) -> ObjectStoreUrl {
+    use object_store::path::DELIMITER;
+    ObjectStoreUrl::parse(format!(
+        "delta-rs://{}-{}{}",
+        location.scheme(),
+        location.host_str().unwrap_or("-"),
+        location.path().replace(DELIMITER, "-").replace(':', "-")
+    ))
+    .expect("Invalid object store url.")
+}
+
+/// TODO
+pub fn to_uri(root: &Url, location: &Path) -> String {
+    match root.scheme() {
+        "file" => {
+            #[cfg(windows)]
+            let uri = format!(
+                "{}/{}",
+                root.as_ref().trim_end_matches('/'),
+                location.as_ref()
+            )
+            .replace("file:///", "");
+            #[cfg(unix)]
+            let uri = format!(
+                "{}/{}",
+                root.as_ref().trim_end_matches('/'),
+                location.as_ref()
+            )
+            .replace("file://", "");
+            uri
+        }
+        _ => {
+            if location.as_ref().is_empty() || location.as_ref() == "/" {
+                root.as_ref().to_string()
+            } else {
+                format!("{}/{}", root.as_ref(), location.as_ref())
+            }
+        }
+    }
 }
 
 /// Reads a commit and gets list of actions
@@ -199,50 +353,6 @@ lazy_static! {
     static ref DELTA_LOG_REGEX: Regex = Regex::new(r"(\d{20})\.(json|checkpoint).*$").unwrap();
 }
 
-fn to_uri(root: &Url, location: &Path) -> String {
-    match root.scheme() {
-        "file" => {
-            #[cfg(windows)]
-            let uri = format!(
-                "{}/{}",
-                root.as_ref().trim_end_matches('/'),
-                location.as_ref()
-            )
-            .replace("file:///", "");
-            #[cfg(unix)]
-            let uri = format!(
-                "{}/{}",
-                root.as_ref().trim_end_matches('/'),
-                location.as_ref()
-            )
-            .replace("file://", "");
-            uri
-        }
-        _ => {
-            if location.as_ref().is_empty() || location.as_ref() == "/" {
-                root.as_ref().to_string()
-            } else {
-                format!("{}/{}", root.as_ref(), location.as_ref())
-            }
-        }
-    }
-}
-
-#[cfg(feature = "datafusion")]
-fn object_store_url(location: &Url) -> ObjectStoreUrl {
-    // we are certain, that the URL can be parsed, since
-    // we make sure when we are parsing the table uri
-
-    use object_store::path::DELIMITER;
-    ObjectStoreUrl::parse(format!(
-        "delta-rs://{}-{}{}",
-        location.scheme(),
-        location.host_str().unwrap_or("-"),
-        location.path().replace(DELIMITER, "-").replace(':', "-")
-    ))
-    .expect("Invalid object store url.")
-}
-
 /// Extract version from a file name in the delta log
 pub fn extract_version_from_filename(name: &str) -> Option<i64> {
     DELTA_LOG_REGEX
@@ -250,7 +360,11 @@ pub fn extract_version_from_filename(name: &str) -> Option<i64> {
         .map(|captures| captures.get(1).unwrap().as_str().parse().unwrap())
 }
 
-async fn get_latest_version(log_store: &dyn LogStore, current_version: i64) -> DeltaResult<i64> {
+/// Default implementation for retrieving the latest version
+pub async fn get_latest_version(
+    log_store: &dyn LogStore,
+    current_version: i64,
+) -> DeltaResult<i64> {
     let version_start = match get_last_checkpoint(log_store).await {
         Ok(last_check_point) => last_check_point.version,
         Err(ProtocolError::CheckpointNotFound) => {
@@ -272,7 +386,7 @@ async fn get_latest_version(log_store: &dyn LogStore, current_version: i64) -> D
         let prefix = Some(log_store.log_path());
         let offset_path = commit_uri_from_version(max_version);
         let object_store = log_store.object_store();
-        let mut files = object_store.list_with_offset(prefix, &offset_path).await?;
+        let mut files = object_store.list_with_offset(prefix, &offset_path);
 
         while let Some(obj_meta) = files.next().await {
             let obj_meta = obj_meta?;
@@ -296,7 +410,10 @@ async fn get_latest_version(log_store: &dyn LogStore, current_version: i64) -> D
 }
 
 /// Read delta log for a specific version
-async fn read_commit_entry(storage: &dyn ObjectStore, version: i64) -> DeltaResult<Option<Bytes>> {
+pub async fn read_commit_entry(
+    storage: &dyn ObjectStore,
+    version: i64,
+) -> DeltaResult<Option<Bytes>> {
     let commit_uri = commit_uri_from_version(version);
     match storage.get(&commit_uri).await {
         Ok(res) => Ok(Some(res.bytes().await?)),
@@ -305,7 +422,8 @@ async fn read_commit_entry(storage: &dyn ObjectStore, version: i64) -> DeltaResu
     }
 }
 
-async fn write_commit_entry(
+/// Default implementation for writing a commit entry
+pub async fn write_commit_entry(
     storage: &dyn ObjectStore,
     version: i64,
     tmp_commit: &Path,
@@ -326,9 +444,29 @@ async fn write_commit_entry(
     Ok(())
 }
 
-#[cfg(feature = "datafusion")]
 #[cfg(test)]
 mod tests {
+    use super::*;
+
+    #[test]
+    fn logstore_with_invalid_url() {
+        let location = Url::parse("nonexistent://table").unwrap();
+        let store = logstore_for(location, HashMap::default());
+        assert!(store.is_err());
+    }
+
+    #[test]
+    fn logstore_with_memory() {
+        let location = Url::parse("memory://table").unwrap();
+        let store = logstore_for(location, HashMap::default());
+        assert!(store.is_ok());
+    }
+}
+
+#[cfg(feature = "datafusion")]
+#[cfg(test)]
+mod datafusion_tests {
+    use super::*;
     use url::Url;
 
     #[tokio::test]
@@ -345,8 +483,8 @@ mod tests {
             let url_2 = Url::parse(location_2).unwrap();
 
             assert_ne!(
-                super::object_store_url(&url_1).as_str(),
-                super::object_store_url(&url_2).as_str(),
+                object_store_url(&url_1).as_str(),
+                object_store_url(&url_2).as_str(),
             );
         }
     }

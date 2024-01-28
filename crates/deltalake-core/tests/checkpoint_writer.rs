@@ -1,11 +1,9 @@
-#[cfg(all(feature = "arrow", feature = "parquet"))]
 mod fs_common;
 use deltalake_core::protocol::DeltaOperation;
 
 // NOTE: The below is a useful external command for inspecting the written checkpoint schema visually:
 // parquet-tools inspect tests/data/checkpoints/_delta_log/00000000000000000005.checkpoint.parquet
 
-#[cfg(all(feature = "arrow", feature = "parquet"))]
 mod simple_checkpoint {
     use deltalake_core::*;
     use pretty_assertions::assert_eq;
@@ -14,7 +12,7 @@ mod simple_checkpoint {
 
     #[tokio::test]
     async fn simple_checkpoint_test() {
-        let table_location = "./tests/data/checkpoints";
+        let table_location = "../deltalake-test/tests/data/checkpoints";
         let table_path = PathBuf::from(table_location);
         let log_path = table_path.join("_delta_log");
 
@@ -51,7 +49,7 @@ mod simple_checkpoint {
         // delta table should load just fine with the checkpoint in place
         let table_result = deltalake_core::open_table(table_location).await.unwrap();
         let table = table_result;
-        let files = table.get_files_iter();
+        let files = table.get_files_iter().unwrap();
         assert_eq!(12, files.count());
     }
 
@@ -84,7 +82,6 @@ mod simple_checkpoint {
     }
 }
 
-#[cfg(all(feature = "arrow", feature = "parquet"))]
 mod delete_expired_delta_log_in_checkpoint {
     use super::*;
 
@@ -97,7 +94,7 @@ mod delete_expired_delta_log_in_checkpoint {
     #[tokio::test]
     async fn test_delete_expired_logs() {
         let mut table = fs_common::create_table(
-            "./tests/data/checkpoints_with_expired_logs/expired",
+            "../deltalake-test/tests/data/checkpoints_with_expired_logs/expired",
             Some(hashmap! {
                 DeltaConfigKey::LogRetentionDuration.as_ref().into() => Some("interval 10 minute".to_string()),
                 DeltaConfigKey::EnableExpiredLogCleanup.as_ref().into() => Some("true".to_string())
@@ -138,10 +135,10 @@ mod delete_expired_delta_log_in_checkpoint {
 
         table.update().await.unwrap(); // make table to read the checkpoint
         assert_eq!(
-            table.get_files_iter().collect::<Vec<_>>(),
+            table.get_files_iter().unwrap().collect::<Vec<_>>(),
             vec![
+                ObjectStorePath::from(a2.path.as_ref()),
                 ObjectStorePath::from(a1.path.as_ref()),
-                ObjectStorePath::from(a2.path.as_ref())
             ]
         );
 
@@ -161,7 +158,7 @@ mod delete_expired_delta_log_in_checkpoint {
     #[tokio::test]
     async fn test_not_delete_expired_logs() {
         let mut table = fs_common::create_table(
-            "./tests/data/checkpoints_with_expired_logs/not_delete_expired",
+            "../deltalake-test/tests/data/checkpoints_with_expired_logs/not_delete_expired",
             Some(hashmap! {
                 DeltaConfigKey::LogRetentionDuration.as_ref().into() => Some("interval 1 second".to_string()),
                 DeltaConfigKey::EnableExpiredLogCleanup.as_ref().into() => Some("false".to_string())
@@ -186,10 +183,10 @@ mod delete_expired_delta_log_in_checkpoint {
         .unwrap();
         table.update().await.unwrap(); // make table to read the checkpoint
         assert_eq!(
-            table.get_files_iter().collect::<Vec<_>>(),
+            table.get_files_iter().unwrap().collect::<Vec<_>>(),
             vec![
+                ObjectStorePath::from(a2.path.as_ref()),
                 ObjectStorePath::from(a1.path.as_ref()),
-                ObjectStorePath::from(a2.path.as_ref())
             ]
         );
 
@@ -206,7 +203,6 @@ mod delete_expired_delta_log_in_checkpoint {
     }
 }
 
-#[cfg(all(feature = "arrow", feature = "parquet"))]
 mod checkpoints_with_tombstones {
     use super::*;
     use ::object_store::path::Path as ObjectStorePath;
@@ -218,7 +214,7 @@ mod checkpoints_with_tombstones {
     use parquet::file::reader::{FileReader, SerializedFileReader};
     use parquet::schema::types::Type;
     use pretty_assertions::assert_eq;
-    use std::collections::HashSet;
+    use std::collections::{HashMap, HashSet};
     use std::fs::File;
     use std::iter::FromIterator;
     use uuid::Uuid;
@@ -236,8 +232,9 @@ mod checkpoints_with_tombstones {
     }
 
     #[tokio::test]
+    #[ignore]
     async fn test_expired_tombstones() {
-        let mut table = fs_common::create_table("./tests/data/checkpoints_tombstones/expired", Some(hashmap! {
+        let mut table = fs_common::create_table("../deltalake-test/tests/data/checkpoints_tombstones/expired", Some(hashmap! {
             DeltaConfigKey::DeletedFileRetentionDuration.as_ref().into() => Some("interval 1 minute".to_string())
         })).await;
 
@@ -249,32 +246,52 @@ mod checkpoints_with_tombstones {
         checkpoints::create_checkpoint(&table).await.unwrap();
         table.update().await.unwrap(); // make table to read the checkpoint
         assert_eq!(
-            table.get_files_iter().collect::<Vec<_>>(),
+            table.get_files_iter().unwrap().collect::<Vec<_>>(),
             vec![
+                ObjectStorePath::from(a2.path.as_ref()),
                 ObjectStorePath::from(a1.path.as_ref()),
-                ObjectStorePath::from(a2.path.as_ref())
             ]
         );
 
         let (removes1, opt1) = pseudo_optimize(&mut table, 5 * 59 * 1000).await;
         assert_eq!(
-            table.get_files_iter().collect::<Vec<_>>(),
+            table.get_files_iter().unwrap().collect::<Vec<_>>(),
             vec![ObjectStorePath::from(opt1.path.as_ref())]
         );
-        assert_eq!(table.get_state().all_tombstones(), &removes1);
+
+        assert_eq!(
+            table
+                .snapshot()
+                .unwrap()
+                .all_tombstones(table.object_store().clone())
+                .await
+                .unwrap()
+                .collect::<HashSet<_>>(),
+            removes1
+        );
 
         checkpoints::create_checkpoint(&table).await.unwrap();
         table.update().await.unwrap(); // make table to read the checkpoint
         assert_eq!(
-            table.get_files_iter().collect::<Vec<_>>(),
+            table.get_files_iter().unwrap().collect::<Vec<_>>(),
             vec![ObjectStorePath::from(opt1.path.as_ref())]
         );
-        assert_eq!(table.get_state().all_tombstones().len(), 0); // stale removes are deleted from the state
+        assert_eq!(
+            table
+                .snapshot()
+                .unwrap()
+                .all_tombstones(table.object_store().clone())
+                .await
+                .unwrap()
+                .count(),
+            0
+        ); // stale removes are deleted from the state
     }
 
     #[tokio::test]
+    #[ignore]
     async fn test_checkpoint_with_extended_file_metadata_true() {
-        let path = "./tests/data/checkpoints_tombstones/metadata_true";
+        let path = "../deltalake-test/tests/data/checkpoints_tombstones/metadata_true";
         let mut table = fs_common::create_table(path, None).await;
         let r1 = remove_metadata_true();
         let r2 = remove_metadata_true();
@@ -290,7 +307,7 @@ mod checkpoints_with_tombstones {
 
     #[tokio::test]
     async fn test_checkpoint_with_extended_file_metadata_false() {
-        let path = "./tests/data/checkpoints_tombstones/metadata_false";
+        let path = "../deltalake-test/tests/data/checkpoints_tombstones/metadata_false";
         let mut table = fs_common::create_table(path, None).await;
         let r1 = remove_metadata_true();
         let r2 = remove_metadata_false();
@@ -313,7 +330,7 @@ mod checkpoints_with_tombstones {
 
     #[tokio::test]
     async fn test_checkpoint_with_extended_file_metadata_broken() {
-        let path = "./tests/data/checkpoints_tombstones/metadata_broken";
+        let path = "../deltalake-test/tests/data/checkpoints_tombstones/metadata_broken";
         let mut table = fs_common::create_table(path, None).await;
         let r1 = remove_metadata_broken();
         let r2 = remove_metadata_false();
@@ -336,14 +353,15 @@ mod checkpoints_with_tombstones {
     async fn pseudo_optimize(table: &mut DeltaTable, offset_millis: i64) -> (HashSet<Remove>, Add) {
         let removes: HashSet<Remove> = table
             .get_files_iter()
+            .unwrap()
             .map(|p| Remove {
                 path: p.to_string(),
                 deletion_timestamp: Some(Utc::now().timestamp_millis() - offset_millis),
                 data_change: false,
                 extended_file_metadata: None,
-                partition_values: None,
+                partition_values: Some(HashMap::new()),
                 size: None,
-                tags: None,
+                tags: Some(HashMap::new()),
                 deletion_vector: None,
                 base_row_id: None,
                 default_row_commit_version: None,

@@ -24,9 +24,10 @@ def test_restore_with_version(
 
     dt = DeltaTable(table_path)
     old_version = dt.version()
-    dt.restore(1)
+    dt.restore(1, custom_metadata={"userName": "John Doe"})
     last_action = dt.history(1)[0]
     assert last_action["operation"] == "RESTORE"
+    assert last_action["userName"] == "John Doe"
     assert dt.version() == old_version + 1
 
 

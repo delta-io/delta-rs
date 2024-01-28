@@ -7,6 +7,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::errors::DeltaTableError;
 
+use super::Constraint;
+
 /// Typed property keys that can be defined on a delta table
 /// <https://docs.delta.io/latest/table-properties.html#delta-table-properties-reference>
 /// <https://learn.microsoft.com/en-us/azure/databricks/delta/table-properties>
@@ -45,6 +47,11 @@ pub enum DeltaConfigKey {
     /// statistics beyond this number, even when such statistics exist).
     DataSkippingNumIndexedCols,
 
+    /// A comma-separated list of column names on which Delta Lake collects statistics to enhance
+    /// data skipping functionality. This property takes precedence over
+    /// [DataSkippingNumIndexedCols](Self::DataSkippingNumIndexedCols).
+    DataSkippingStatsColumns,
+
     /// The shortest duration for Delta Lake to keep logically deleted data files before deleting
     /// them physically. This is to prevent failures in stale readers after compactions or partition overwrites.
     ///
@@ -58,6 +65,9 @@ pub enum DeltaConfigKey {
 
     /// true to enable change data feed.
     EnableChangeDataFeed,
+
+    /// true to enable deletion vectors and predictive I/O for updates.
+    EnableDeletionVectors,
 
     /// The degree to which a transaction must be isolated from modifications made by concurrent transactions.
     ///
@@ -118,8 +128,10 @@ impl AsRef<str> for DeltaConfigKey {
             Self::CheckpointPolicy => "delta.checkpointPolicy",
             Self::ColumnMappingMode => "delta.columnMapping.mode",
             Self::DataSkippingNumIndexedCols => "delta.dataSkippingNumIndexedCols",
+            Self::DataSkippingStatsColumns => "delta.dataSkippingStatsColumns",
             Self::DeletedFileRetentionDuration => "delta.deletedFileRetentionDuration",
             Self::EnableChangeDataFeed => "delta.enableChangeDataFeed",
+            Self::EnableDeletionVectors => "delta.enableDeletionVectors",
             Self::IsolationLevel => "delta.isolationLevel",
             Self::LogRetentionDuration => "delta.logRetentionDuration",
             Self::EnableExpiredLogCleanup => "delta.enableExpiredLogCleanup",
@@ -148,10 +160,12 @@ impl FromStr for DeltaConfigKey {
             "delta.checkpointPolicy" => Ok(Self::CheckpointPolicy),
             "delta.columnMapping.mode" => Ok(Self::ColumnMappingMode),
             "delta.dataSkippingNumIndexedCols" => Ok(Self::DataSkippingNumIndexedCols),
+            "delta.dataSkippingStatsColumns" => Ok(Self::DataSkippingStatsColumns),
             "delta.deletedFileRetentionDuration" | "deletedFileRetentionDuration" => {
                 Ok(Self::DeletedFileRetentionDuration)
             }
             "delta.enableChangeDataFeed" => Ok(Self::EnableChangeDataFeed),
+            "delta.enableDeletionVectors" => Ok(Self::EnableDeletionVectors),
             "delta.isolationLevel" => Ok(Self::IsolationLevel),
             "delta.logRetentionDuration" | "logRetentionDuration" => Ok(Self::LogRetentionDuration),
             "delta.enableExpiredLogCleanup" | "enableExpiredLogCleanup" => {
@@ -178,9 +192,9 @@ pub enum DeltaConfigError {
 }
 
 macro_rules! table_config {
-    ($(($key:expr, $name:ident, $ret:ty, $default:literal),)*) => {
+    ($(($docs:literal, $key:expr, $name:ident, $ret:ty, $default:literal),)*) => {
         $(
-            /// read property $key
+            #[doc = $docs]
             pub fn $name(&self) -> $ret {
                 self.0
                     .get($key.as_ref())
@@ -196,20 +210,29 @@ pub struct TableConfig<'a>(pub(crate) &'a HashMap<String, Option<String>>);
 
 impl<'a> TableConfig<'a> {
     table_config!(
-        (DeltaConfigKey::AppendOnly, append_only, bool, false),
         (
+            "true for this Delta table to be append-only",
+            DeltaConfigKey::AppendOnly,
+            append_only,
+            bool,
+            false
+        ),
+        (
+            "true for Delta Lake to write file statistics in checkpoints in JSON format for the stats column.",
             DeltaConfigKey::CheckpointWriteStatsAsJson,
             write_stats_as_json,
             bool,
             true
         ),
         (
+            "true for Delta Lake to write file statistics to checkpoints in struct format",
             DeltaConfigKey::CheckpointWriteStatsAsStruct,
             write_stats_as_struct,
             bool,
-            true
+            false
         ),
         (
+            "The target file size in bytes or higher units for file tuning",
             DeltaConfigKey::TargetFileSize,
             target_file_size,
             i64,
@@ -217,24 +240,37 @@ impl<'a> TableConfig<'a> {
             104857600
         ),
         (
+            "true to enable change data feed.",
             DeltaConfigKey::EnableChangeDataFeed,
             enable_change_data_feed,
             bool,
             false
         ),
         (
+            "true to enable deletion vectors and predictive I/O for updates.",
+            DeltaConfigKey::EnableDeletionVectors,
+            enable_deletio0n_vectors,
+            bool,
+            // in databricks the default is dependent on the workspace settings and runtime version
+            // https://learn.microsoft.com/en-us/azure/databricks/administration-guide/workspace-settings/deletion-vectors
+            false
+        ),
+        (
+            "The number of columns for Delta Lake to collect statistics about for data skipping.",
             DeltaConfigKey::DataSkippingNumIndexedCols,
             num_indexed_cols,
             i32,
             32
         ),
         (
+            "whether to cleanup expired logs",
             DeltaConfigKey::EnableExpiredLogCleanup,
             enable_expired_log_cleanup,
             bool,
             true
         ),
         (
+            "Interval (number of commits) after which a new checkpoint should be created",
             DeltaConfigKey::CheckpointInterval,
             checkpoint_interval,
             i32,
@@ -301,6 +337,28 @@ impl<'a> TableConfig<'a> {
             .get(DeltaConfigKey::ColumnMappingMode.as_ref())
             .and_then(|o| o.as_ref().and_then(|v| v.parse().ok()))
             .unwrap_or_default()
+    }
+
+    /// Return the check constraints on the current table
+    pub fn get_constraints(&self) -> Vec<Constraint> {
+        self.0
+            .iter()
+            .filter_map(|(field, value)| {
+                if field.starts_with("delta.constraints") {
+                    value.as_ref().map(|f| Constraint::new("*", f))
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+
+    /// Column names on which Delta Lake collects statistics to enhance data skipping functionality.
+    /// This property takes precedence over [num_indexed_cols](Self::num_indexed_cols).
+    pub fn stats_columns(&self) -> Option<Vec<&str>> {
+        self.0
+            .get(DeltaConfigKey::DataSkippingStatsColumns.as_ref())
+            .and_then(|o| o.as_ref().map(|v| v.split(',').collect()))
     }
 }
 
@@ -494,13 +552,12 @@ fn parse_int(value: &str) -> Result<i64, DeltaConfigError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::kernel::StructType;
-    use crate::table::DeltaTableMetaData;
+    use crate::kernel::{Metadata, StructType};
     use std::collections::HashMap;
 
-    fn dummy_metadata() -> DeltaTableMetaData {
+    fn dummy_metadata() -> Metadata {
         let schema = StructType::new(Vec::new());
-        DeltaTableMetaData::new(None, None, None, schema, Vec::new(), HashMap::new())
+        Metadata::try_new(schema, Vec::<String>::new(), HashMap::new()).unwrap()
     }
 
     #[test]
