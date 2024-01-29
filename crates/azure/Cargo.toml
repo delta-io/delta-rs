@@ -1,0 +1,30 @@
+[package]
+name = "deltalake-azure"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+deltalake-core = { version = "0.17.0", path = "../core" }
+lazy_static = "1"
+
+# workspace depenndecies
+async-trait = { workspace = true }
+bytes = { workspace = true }
+futures = { workspace = true }
+tracing = { workspace = true }
+object_store = { workspace = true, features = ["azure"]}
+thiserror = { workspace = true }
+tokio = { workspace = true }
+regex = { workspace = true }
+url = { workspace = true }
+
+[dev-dependencies]
+chrono = { workspace = true }
+serial_test = "3"
+deltalake-test = { path = "../test" }
+pretty_env_logger = "*"
+rand = "0.8"
+serde_json = { workspace = true }
+
+[features]
+integration_test = []

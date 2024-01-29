@@ -1,0 +1,23 @@
+[package]
+name = "deltalake-test"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+bytes = { workspace = true }
+chrono = { workspace = true, default-features = false, features = ["clock"] }
+deltalake-core = { version = "0.17.0", path = "../core" }
+dotenvy = "0"
+fs_extra = "1.3.0"
+futures = { version = "0.3" }
+object_store = { workspace = true }
+rand = "0.8"
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+tempfile = "3"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+
+[features]
+default = []
+datafusion = ["deltalake-core/datafusion"]

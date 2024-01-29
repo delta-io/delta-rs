@@ -41,6 +41,6 @@ datafusion-sql = { workspace = true }
 datafusion-physical-expr = { workspace = true }
 
 [dependencies.deltalake-core]
-path = "../deltalake-core"
+path = "../core"
 version = "0"
 features = ["datafusion"]
