@@ -18,7 +18,10 @@ fn cast_struct(
         .map(|field| {
             let col_opt = struct_array.column_by_name(field.name());
             if col_opt.is_none() {
-                return Err(arrow_schema::ArrowError::SchemaError(format!("Missing column {}", field.name())));
+                return Err(arrow_schema::ArrowError::SchemaError(format!(
+                    "Missing column {}",
+                    field.name()
+                )));
             }
 
             let col = col_opt.unwrap();
