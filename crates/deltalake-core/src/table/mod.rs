@@ -425,7 +425,6 @@ impl DeltaTable {
         &self,
         filters: &[PartitionFilter],
     ) -> Result<Vec<Path>, DeltaTableError> {
-        println!("get_files_by_partitions ----------->");
         Ok(self
             .get_active_add_actions_by_partitions(filters)?
             .collect::<Result<Vec<_>, _>>()?

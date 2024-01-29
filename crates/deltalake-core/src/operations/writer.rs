@@ -322,8 +322,7 @@ impl PartitionWriter {
         // replace counter / buffers and close the current writer
         let (writer, buffer) = self.reset_writer()?;
         let metadata = writer.close()?;
-
-        // don't write an empty file
+        // don't write empty file
         if metadata.num_rows == 0 {
             return Ok(());
         }
@@ -374,11 +373,12 @@ impl PartitionWriter {
             self.write_batch(&batch.slice(offset, length))?;
 
             // flush currently buffered data to disk once we meet or exceed the target file size.
-            let unflushed_estimate = self.arrow_writer.in_progress_size();
-            let flushed_size = self.buffer.len();
-            let estimate = unflushed_estimate + flushed_size + 0x2000;
-            if estimate >= self.config.target_file_size {
-                debug!("Writing file with estimated size {:?} to disk.", estimate);
+            let estimated_size = self.buffer.len() + self.arrow_writer.in_progress_size();
+            if estimated_size >= self.config.target_file_size {
+                debug!(
+                    "Writing file with estimated size {:?} to disk.",
+                    estimated_size
+                );
                 self.flush_arrow_writer().await?;
             }
         }
@@ -411,7 +411,7 @@ mod tests {
         let batch = get_record_batch(None, false);
 
         // write single un-partitioned batch
-        let mut writer = get_writer(object_store.clone(), &batch, None, None);
+        let mut writer = get_writer(object_store.clone(), &batch, None, None, None);
         writer.write(&batch).await.unwrap();
         let files = list(object_store.as_ref(), None).await.unwrap();
         assert_eq!(files.len(), 0);
@@ -443,8 +443,8 @@ mod tests {
         let properties = WriterProperties::builder()
             .set_max_row_group_size(1024)
             .build();
-        // configure small target file size and and row group size so we can observe multiple files written
-        let mut writer = get_writer(object_store, &batch, Some(properties), Some(10_000));
+        // configure small target file size and row group size so we can observe multiple files written
+        let mut writer = get_writer(object_store, &batch, Some(properties), Some(10_000), None);
         writer.write(&batch).await.unwrap();
 
         // check that we have written more then once file, and no more then 1 is below target size
@@ -456,18 +456,69 @@ mod tests {
         assert!(target_file_count >= adds.len() as i32 - 1)
     }
 
+    #[tokio::test]
+    async fn test_unflushed_row_group_size() {
+        let base_int = Arc::new(Int32Array::from((0..10000).collect::<Vec<i32>>()));
+        let base_str = Arc::new(StringArray::from(vec!["A"; 10000]));
+        let schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("id", DataType::Utf8, true),
+            Field::new("value", DataType::Int32, true),
+        ]));
+        let batch = RecordBatch::try_new(schema, vec![base_str, base_int]).unwrap();
+
+        let object_store = DeltaTableBuilder::from_uri("memory://")
+            .build_storage()
+            .unwrap()
+            .object_store();
+        // configure small target file size so we can observe multiple files written
+        let mut writer = get_writer(object_store, &batch, None, Some(10_000), None);
+        writer.write(&batch).await.unwrap();
+
+        // check that we have written more then once file, and no more then 1 is below target size
+        let adds = writer.close().await.unwrap();
+        assert!(adds.len() > 1);
+        let target_file_count = adds
+            .iter()
+            .fold(0, |acc, add| acc + (add.size > 10_000) as i32);
+        assert!(target_file_count >= adds.len() as i32 - 1)
+    }
+
+    #[tokio::test]
+    async fn test_do_not_write_empty_file_on_close() {
+        let base_int = Arc::new(Int32Array::from((0..10000 as i32).collect::<Vec<i32>>()));
+        let base_str = Arc::new(StringArray::from(vec!["A"; 10000]));
+        let schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("id", DataType::Utf8, true),
+            Field::new("value", DataType::Int32, true),
+        ]));
+        let batch = RecordBatch::try_new(schema, vec![base_str, base_int]).unwrap();
+
+        let object_store = DeltaTableBuilder::from_uri("memory://")
+            .build_storage()
+            .unwrap()
+            .object_store();
+        // configure high batch size and low file size to observe one file written and flushed immediately
+        // upon writing batch, then ensures the buffer is empty upon closing writer
+        let mut writer = get_writer(object_store, &batch, None, Some(9000), Some(10000));
+        writer.write(&batch).await.unwrap();
+
+        let adds = writer.close().await.unwrap();
+        assert!(adds.len() == 1);
+    }
+
     fn get_writer(
         object_store: ObjectStoreRef,
         batch: &RecordBatch,
         writer_properties: Option<WriterProperties>,
         target_file_size: Option<usize>,
+        write_batch_size: Option<usize>,
     ) -> PartitionWriter {
         let config = PartitionWriterConfig::try_new(
             batch.schema(),
             BTreeMap::new(),
             writer_properties,
             target_file_size,
-            None,
+            write_batch_size,
         )
         .unwrap();
         PartitionWriter::try_with_config(object_store, config).unwrap()
