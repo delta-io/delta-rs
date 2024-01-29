@@ -22,7 +22,7 @@ use crate::{
     DeltaTableError,
 };
 use bytes::Bytes;
-use object_store::{path::Path, Error as ObjectStoreError, ObjectStore};
+use object_store::{path::Path, Error as ObjectStoreError, ObjectMeta, ObjectStore};
 use tracing::{debug, warn};
 
 #[cfg(feature = "datafusion")]
@@ -164,6 +164,9 @@ pub struct LogStoreConfig {
 pub trait LogStore: Sync + Send {
     /// Return the name of this LogStore implementation
     fn name(&self) -> String;
+
+    /// TODO: add docs
+    async fn list_from(&self, version: i64) -> DeltaResult<Vec<ObjectMeta>>;
 
     /// Read data for commit entry with the given version.
     async fn read_commit_entry(&self, version: i64) -> DeltaResult<Option<Bytes>>;

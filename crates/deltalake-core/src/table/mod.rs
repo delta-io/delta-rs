@@ -349,7 +349,7 @@ impl DeltaTable {
             _ => {
                 let state = DeltaTableState::try_new(
                     &Path::default(),
-                    self.log_store.object_store(),
+                    self.log_store.clone(),
                     self.config.clone(),
                     max_version,
                 )

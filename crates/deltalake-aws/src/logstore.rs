@@ -9,6 +9,8 @@ use crate::{constants, CommitEntry, DynamoDbLockClient, UpdateLogEntryResult};
 
 use bytes::Bytes;
 use deltalake_core::{ObjectStoreError, Path};
+use futures::TryStreamExt as _;
+use object_store::ObjectMeta;
 use tracing::{debug, error, warn};
 use url::Url;
 
@@ -175,6 +177,25 @@ impl LogStore for S3DynamoDbLogStore {
             self.repair_entry(&entry).await?;
         }
         read_commit_entry(&self.storage, version).await
+    }
+
+    async fn list_from(&self, version: i64) -> DeltaResult<Vec<ObjectMeta>> {
+        let entry = self
+            .lock_client
+            .get_commit_entry(&self.table_path, version)
+            .await;
+        if let Ok(Some(entry)) = entry {
+            self.repair_entry(&entry).await?;
+        }
+        let commit_uri = {
+            let version = format!("{version:020}");
+            Path::from("_delta_log").child(version.as_str())
+        };
+        Ok(self
+            .storage
+            .list_with_offset(Some(&Path::from("_delta_log")), &commit_uri)
+            .try_collect::<Vec<_>>()
+            .await?)
     }
 
     /// Tries to commit a prepared commit file. Returns [DeltaTableError::VersionAlreadyExists]
