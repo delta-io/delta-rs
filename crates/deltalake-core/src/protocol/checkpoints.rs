@@ -522,7 +522,8 @@ fn apply_stats_conversion(
 mod tests {
     use std::sync::Arc;
 
-    use arrow_array::{ArrayRef, RecordBatch};
+    use arrow_array::builder::{Int32Builder, ListBuilder, StructBuilder};
+    use arrow_array::{ArrayRef, Int32Array, RecordBatch};
     use arrow_schema::Schema as ArrowSchema;
     use chrono::Duration;
     use lazy_static::lazy_static;
@@ -901,6 +902,43 @@ mod tests {
             1627668685594000i64,
             stats["maxValues"]["some_timestamp"].as_i64().unwrap()
         );
+    }
+
+    #[tokio::test]
+    async fn test_struct_with_single_list_field() {
+        // you need another column otherwise the entire stats struct is empty
+        // which also fails parquet write during checkpoint
+        let other_column_array: ArrayRef = Arc::new(Int32Array::from(vec![1]));
+
+        let mut list_item_builder = Int32Builder::new();
+        list_item_builder.append_value(1);
+
+        let mut list_in_struct_builder = ListBuilder::new(list_item_builder);
+        list_in_struct_builder.append(true);
+
+        let mut struct_builder = StructBuilder::new(
+            vec![arrow_schema::Field::new(
+                "list_in_struct",
+                arrow_schema::DataType::List(Arc::new(arrow_schema::Field::new(
+                    "item",
+                    arrow_schema::DataType::Int32,
+                    true,
+                ))),
+                true,
+            )],
+            vec![Box::new(list_in_struct_builder)],
+        );
+        struct_builder.append(true);
+
+        let struct_with_list_array: ArrayRef = Arc::new(struct_builder.finish());
+        let batch = RecordBatch::try_from_iter(vec![
+            ("other_column", other_column_array),
+            ("struct_with_list", struct_with_list_array),
+        ])
+        .unwrap();
+        let table = DeltaOps::new_in_memory().write(vec![batch]).await.unwrap();
+
+        create_checkpoint(&table).await.unwrap();
     }
 
     lazy_static! {
