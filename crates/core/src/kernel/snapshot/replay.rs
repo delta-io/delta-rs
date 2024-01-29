@@ -338,7 +338,10 @@ pub(super) mod tests {
 
     use super::super::log_segment::LogSegment;
     use super::*;
-    use crate::kernel::{models::ActionType, StructType};
+    use crate::{
+        kernel::{models::ActionType, StructType},
+        logstore::LogStore,
+    };
 
     pub(crate) async fn test_log_replay(context: &IntegrationContext) -> TestResult {
         let log_schema = Arc::new(StructType::new(vec![
@@ -346,16 +349,15 @@ pub(super) mod tests {
             ActionType::Remove.schema_field().clone(),
         ]));
 
-        let store = context
+        let store: Arc<dyn LogStore> = context
             .table_builder(TestTables::SimpleWithCheckpoint)
-            .build_storage()?
-            .object_store();
+            .build_storage()?;
 
         let segment = LogSegment::try_new(&Path::default(), Some(9), store.as_ref()).await?;
         let mut scanner = LogReplayScanner::new();
 
         let batches = segment
-            .commit_stream(store.clone(), &log_schema, &Default::default())?
+            .commit_stream(store.object_store(), &log_schema, &Default::default())?
             .try_collect::<Vec<_>>()
             .await?;
         let batch = concat_batches(&batches[0].schema(), &batches)?;
@@ -368,13 +370,10 @@ pub(super) mod tests {
         let filtered = scanner.process_files_batch(&batch, true)?;
         assert_eq!(filtered.schema().fields().len(), 1);
 
-        let store = context
-            .table_builder(TestTables::Simple)
-            .build_storage()?
-            .object_store();
+        let store = context.table_builder(TestTables::Simple).build_storage()?;
         let segment = LogSegment::try_new(&Path::default(), None, store.as_ref()).await?;
         let batches = segment
-            .commit_stream(store.clone(), &log_schema, &Default::default())?
+            .commit_stream(store.object_store(), &log_schema, &Default::default())?
             .try_collect::<Vec<_>>()
             .await?;
 

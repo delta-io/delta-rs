@@ -31,11 +31,11 @@ impl DeltaTableState {
     /// Create a new DeltaTableState
     pub async fn try_new(
         table_root: &Path,
-        store: Arc<dyn ObjectStore>,
+        log_store: Arc<dyn LogStore>,
         config: DeltaTableConfig,
         version: Option<i64>,
     ) -> DeltaResult<Self> {
-        let snapshot = EagerSnapshot::try_new(table_root, store.clone(), config, version).await?;
+        let snapshot = EagerSnapshot::try_new(table_root, log_store, config, version).await?;
         Ok(Self {
             snapshot,
             app_transaction_version: HashMap::new(),

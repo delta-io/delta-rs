@@ -97,18 +97,22 @@ impl LogSegment {
     pub async fn try_new(
         table_root: &Path,
         version: Option<i64>,
-        store: &dyn ObjectStore,
+        log_store: &dyn LogStore,
     ) -> DeltaResult<Self> {
         let log_url = table_root.child("_delta_log");
-        let maybe_cp = read_last_checkpoint(store, &log_url).await?;
+        let maybe_cp = read_last_checkpoint(log_store.object_store().as_ref(), &log_url).await?;
 
         // List relevant files from log
         let (mut commit_files, checkpoint_files) = match (maybe_cp, version) {
-            (Some(cp), None) => list_log_files_with_checkpoint(&cp, store, &log_url).await?,
-            (Some(cp), Some(v)) if cp.version <= v => {
-                list_log_files_with_checkpoint(&cp, store, &log_url).await?
+            (Some(cp), None) => {
+                list_log_files_with_checkpoint(&cp, log_store.object_store().as_ref(), &log_url)
+                    .await?
             }
-            _ => list_log_files(store, &log_url, version, None).await?,
+            (Some(cp), Some(v)) if cp.version <= v => {
+                list_log_files_with_checkpoint(&cp, log_store.object_store().as_ref(), &log_url)
+                    .await?
+            }
+            _ => list_log_files(log_store, &log_url, version, None).await?,
         };
 
         // remove all files above requested version
@@ -155,15 +159,9 @@ impl LogSegment {
             "try_new_slice: start_version: {}, end_version: {:?}",
             start_version, end_version
         );
-        let max_version_2 = log_store.get_latest_version(start_version).await?;
         let log_url = table_root.child("_delta_log");
-        let (mut commit_files, checkpoint_files) = list_log_files(
-            log_store.object_store().as_ref(),
-            &log_url,
-            end_version,
-            Some(start_version),
-        )
-        .await?;
+        let (mut commit_files, checkpoint_files) =
+            list_log_files(log_store, &log_url, end_version, Some(start_version)).await?;
         // remove all files above requested version
         if let Some(version) = end_version {
             commit_files.retain(|meta| meta.location.commit_version() <= Some(version));
@@ -467,23 +465,18 @@ async fn list_log_files_with_checkpoint(
 ///
 /// Relevant files are the max checkpoint found and all subsequent commits.
 pub(super) async fn list_log_files(
-    fs_client: &dyn ObjectStore,
+    log_store: &dyn LogStore,
     log_root: &Path,
     max_version: Option<i64>,
     start_version: Option<i64>,
 ) -> DeltaResult<(Vec<ObjectMeta>, Vec<ObjectMeta>)> {
     let max_version = max_version.unwrap_or(i64::MAX - 1);
-    let start_from = log_root.child(format!("{:020}", start_version.unwrap_or(0)).as_str());
 
     let mut max_checkpoint_version = -1_i64;
     let mut commit_files = Vec::with_capacity(25);
     let mut checkpoint_files = Vec::with_capacity(10);
 
-    for meta in fs_client
-        .list_with_offset(Some(log_root), &start_from)
-        .try_collect::<Vec<_>>()
-        .await?
-    {
+    for meta in log_store.list_from(start_version.unwrap_or(0)).await? {
         if meta.location.commit_version().unwrap_or(i64::MAX) <= max_version
             && meta.location.commit_version() >= start_version
         {
@@ -528,12 +521,9 @@ pub(super) mod tests {
     }
 
     async fn log_segment_serde(context: &IntegrationContext) -> TestResult {
-        let store = context
-            .table_builder(TestTables::Simple)
-            .build_storage()?
-            .object_store();
+        let log_store = context.table_builder(TestTables::Simple).build_storage()?;
 
-        let segment = LogSegment::try_new(&Path::default(), None, store.as_ref()).await?;
+        let segment = LogSegment::try_new(&Path::default(), None, log_store.as_ref()).await?;
         let bytes = serde_json::to_vec(&segment).unwrap();
         let actual: LogSegment = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(actual.version(), segment.version());
@@ -547,43 +537,41 @@ pub(super) mod tests {
     }
 
     async fn read_log_files(context: &IntegrationContext) -> TestResult {
-        let store = context
+        let log_store: Arc<dyn LogStore> = context
             .table_builder(TestTables::SimpleWithCheckpoint)
-            .build_storage()?
-            .object_store();
+            .build_storage()?;
 
         let log_path = Path::from("_delta_log");
-        let cp = read_last_checkpoint(store.as_ref(), &log_path)
+        let cp = read_last_checkpoint(log_store.object_store().as_ref(), &log_path)
             .await?
             .unwrap();
         assert_eq!(cp.version, 10);
 
-        let (log, check) = list_log_files_with_checkpoint(&cp, store.as_ref(), &log_path).await?;
+        let (log, check) =
+            list_log_files_with_checkpoint(&cp, log_store.object_store().as_ref(), &log_path)
+                .await?;
         assert_eq!(log.len(), 0);
         assert_eq!(check.len(), 1);
 
-        let (log, check) = list_log_files(store.as_ref(), &log_path, None, None).await?;
+        let (log, check) = list_log_files(log_store.as_ref(), &log_path, None, None).await?;
         assert_eq!(log.len(), 0);
         assert_eq!(check.len(), 1);
 
-        let (log, check) = list_log_files(store.as_ref(), &log_path, Some(8), None).await?;
+        let (log, check) = list_log_files(log_store.as_ref(), &log_path, Some(8), None).await?;
         assert_eq!(log.len(), 9);
         assert_eq!(check.len(), 0);
 
-        let segment = LogSegment::try_new(&Path::default(), None, store.as_ref()).await?;
+        let segment = LogSegment::try_new(&Path::default(), None, log_store.as_ref()).await?;
         assert_eq!(segment.version, 10);
         assert_eq!(segment.commit_files.len(), 0);
         assert_eq!(segment.checkpoint_files.len(), 1);
 
-        let segment = LogSegment::try_new(&Path::default(), Some(8), store.as_ref()).await?;
+        let segment = LogSegment::try_new(&Path::default(), Some(8), log_store.as_ref()).await?;
         assert_eq!(segment.version, 8);
         assert_eq!(segment.commit_files.len(), 9);
         assert_eq!(segment.checkpoint_files.len(), 0);
 
-        let store = context
-            .table_builder(TestTables::Simple)
-            .build_storage()?
-            .object_store();
+        let store = context.table_builder(TestTables::Simple).build_storage()?;
 
         let (log, check) = list_log_files(store.as_ref(), &log_path, None, None).await?;
         assert_eq!(log.len(), 5);
@@ -597,13 +585,12 @@ pub(super) mod tests {
     }
 
     async fn read_metadata(context: &IntegrationContext) -> TestResult {
-        let store = context
+        let log_store = context
             .table_builder(TestTables::WithDvSmall)
-            .build_storage()?
-            .object_store();
-        let segment = LogSegment::try_new(&Path::default(), None, store.as_ref()).await?;
+            .build_storage()?;
+        let segment = LogSegment::try_new(&Path::default(), None, log_store.as_ref()).await?;
         let (protocol, _metadata) = segment
-            .read_metadata(store.clone(), &Default::default())
+            .read_metadata(log_store.object_store(), &Default::default())
             .await?;
         let protocol = protocol.unwrap();
 
