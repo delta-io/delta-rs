@@ -13,11 +13,11 @@ readme = "../README.md"
 edition = "2021"
 
 [dependencies]
-deltalake-core = { path = "../deltalake-core" }
-deltalake-aws = { path = "../deltalake-aws", default-features = false, optional = true }
-deltalake-azure = { path = "../deltalake-azure", optional = true }
-deltalake-gcp = { path = "../deltalake-gcp", optional = true }
-deltalake-catalog-glue = { path = "../deltalake-catalog-glue", optional = true }
+deltalake-core = { path = "../core" }
+deltalake-aws = { path = "../aws", default-features = false, optional = true }
+deltalake-azure = { path = "../azure", optional = true }
+deltalake-gcp = { path = "../gcp", optional = true }
+deltalake-catalog-glue = { path = "../catalog-glue", optional = true }
 
 [features]
 # All of these features are just reflected into the core crate until that

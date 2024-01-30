@@ -1,6 +1,6 @@
 <p align="center">
   <a href="https://delta.io/">
-    <img src="https://github.com/delta-io/delta-rs/blob/main/logo.png?raw=true" alt="delta-rs logo" height="250">
+    <img src="https://github.com/delta-io/delta-rs/blob/main/docs\delta-rust-no-whitespace.svg?raw=true" alt="delta-rs logo" height="200">
   </a>
 </p>
 <p align="center">

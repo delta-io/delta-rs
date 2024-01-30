@@ -1,0 +1,16 @@
+[package]
+name = "deltalake-catalog-glue"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+async-trait = { workspace = true }
+aws-config = "1"
+aws-sdk-glue = "1"
+deltalake-core = { version = "0.17.0", path = "../core" }
+# This can depend on a lowest common denominator of core once that's released
+# deltalake_core = { version = "0.17.0" }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
