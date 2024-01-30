@@ -35,6 +35,7 @@ enum AzureCredential {
     /// Authorizing with secret
     ClientSecret,
     /// Using a shared access signature
+    #[allow(dead_code)]
     ManagedIdentity,
     /// Using a shared access signature
     SasKey,

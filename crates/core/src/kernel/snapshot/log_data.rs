@@ -245,7 +245,7 @@ impl LogicalFile<'_> {
         self.deletion_vector.as_ref().and_then(|arr| {
             arr.storage_type
                 .is_valid(self.index)
-                .then(|| DeletionVectorView {
+                .then_some(DeletionVectorView {
                     data: arr,
                     index: self.index,
                 })
