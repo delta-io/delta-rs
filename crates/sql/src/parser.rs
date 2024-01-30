@@ -1,7 +1,7 @@
 use std::collections::VecDeque;
 use std::fmt;
 
-use datafusion_sql::parser::{DFParser, DescribeTableStmt, Statement as DFStatement};
+use datafusion_sql::parser::{DFParser, Statement as DFStatement};
 use datafusion_sql::sqlparser::ast::{ObjectName, Value};
 use datafusion_sql::sqlparser::dialect::{keywords::Keyword, Dialect, GenericDialect};
 use datafusion_sql::sqlparser::parser::{Parser, ParserError};
@@ -138,10 +138,6 @@ impl<'a> DeltaParser<'a> {
         match self.parser.peek_token().token {
             Token::Word(w) => {
                 match w.keyword {
-                    Keyword::DESCRIBE => {
-                        self.parser.next_token();
-                        self.parse_describe()
-                    }
                     Keyword::VACUUM => {
                         self.parser.next_token();
                         self.parse_vacuum()
@@ -163,50 +159,6 @@ impl<'a> DeltaParser<'a> {
                 let stmt = df.parse_statement()?;
                 self.parser.parse_statement()?;
                 Ok(Statement::Datafusion(stmt))
-            }
-        }
-    }
-
-    /// Parse a SQL `DESCRIBE` statement
-    pub fn parse_describe(&mut self) -> Result<Statement, ParserError> {
-        match self.parser.peek_token().token {
-            Token::Word(w) => match w.keyword {
-                Keyword::DETAIL => {
-                    self.parser.next_token();
-                    let table = self.parser.parse_object_name()?;
-                    Ok(Statement::Describe(DescribeStatement {
-                        table,
-                        operation: DescribeOperation::Detail,
-                    }))
-                }
-                Keyword::HISTORY => {
-                    self.parser.next_token();
-                    let table = self.parser.parse_object_name()?;
-                    Ok(Statement::Describe(DescribeStatement {
-                        table,
-                        operation: DescribeOperation::History,
-                    }))
-                }
-                Keyword::FILES => {
-                    self.parser.next_token();
-                    let table = self.parser.parse_object_name()?;
-                    Ok(Statement::Describe(DescribeStatement {
-                        table,
-                        operation: DescribeOperation::Files,
-                    }))
-                }
-                _ => {
-                    let table = self.parser.parse_object_name()?;
-                    Ok(Statement::Datafusion(DFStatement::DescribeTableStmt(
-                        DescribeTableStmt { table_name: table },
-                    )))
-                }
-            },
-            _ => {
-                let table_name = self.parser.parse_object_name()?;
-                Ok(Statement::Datafusion(DFStatement::DescribeTableStmt(
-                    DescribeTableStmt { table_name },
-                )))
             }
         }
     }
@@ -285,44 +237,6 @@ mod tests {
         );
         assert_eq!(statements[0], expected, "actual:\n{:#?}", statements[0]);
         Ok(())
-    }
-
-    #[test]
-    fn test_parse_describe() {
-        let stmt = Statement::Describe(DescribeStatement {
-            table: ObjectName(vec![Ident {
-                value: "data_table".to_string(),
-                quote_style: None,
-            }]),
-            operation: DescribeOperation::History,
-        });
-        assert!(expect_parse_ok("DESCRIBE HISTORY data_table", stmt).is_ok());
-
-        let stmt = Statement::Describe(DescribeStatement {
-            table: ObjectName(vec![Ident {
-                value: "data_table".to_string(),
-                quote_style: None,
-            }]),
-            operation: DescribeOperation::Detail,
-        });
-        assert!(expect_parse_ok("DESCRIBE DETAIL data_table", stmt).is_ok());
-
-        let stmt = Statement::Describe(DescribeStatement {
-            table: ObjectName(vec![Ident {
-                value: "data_table".to_string(),
-                quote_style: None,
-            }]),
-            operation: DescribeOperation::Files,
-        });
-        assert!(expect_parse_ok("DESCRIBE FILES data_table", stmt).is_ok());
-
-        let stmt = Statement::Datafusion(DFStatement::DescribeTableStmt(DescribeTableStmt {
-            table_name: ObjectName(vec![Ident {
-                value: "data_table".to_string(),
-                quote_style: None,
-            }]),
-        }));
-        assert!(expect_parse_ok("DESCRIBE data_table", stmt).is_ok())
     }
 
     #[test]

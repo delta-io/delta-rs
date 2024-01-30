@@ -32,7 +32,6 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
 
-use arrow_schema::Schema as ArrowSchema;
 use async_trait::async_trait;
 use datafusion::datasource::provider_as_source;
 use datafusion::error::Result as DataFusionResult;
@@ -657,11 +656,10 @@ impl ExtensionPlanner for MergeMetricExtensionPlanner {
 
         if let Some(barrier) = node.as_any().downcast_ref::<MergeBarrier>() {
             let schema = barrier.input.schema();
-            let exec_schema: ArrowSchema = schema.as_ref().to_owned().into();
             return Ok(Some(Arc::new(MergeBarrierExec::new(
                 physical_inputs.first().unwrap().clone(),
                 barrier.file_column.clone(),
-                planner.create_physical_expr(&barrier.expr, schema, &exec_schema, session_state)?,
+                planner.create_physical_expr(&barrier.expr, schema, session_state)?,
             ))));
         }
 
@@ -1418,9 +1416,7 @@ impl std::future::IntoFuture for MergeBuilder {
             PROTOCOL.can_write_to(&this.snapshot)?;
 
             let state = this.state.unwrap_or_else(|| {
-                //TODO: Datafusion's Hashjoin has some memory issues. Running with all cores results in a OoM. Can be removed when upstream improvemetns are made.
                 let config: SessionConfig = DeltaSessionConfig::default().into();
-                let config = config.with_target_partitions(1);
                 let session = SessionContext::new_with_config(config);
 
                 // If a user provides their own their DF state then they must register the store themselves
