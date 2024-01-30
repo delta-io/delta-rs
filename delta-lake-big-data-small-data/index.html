@@ -8,28 +8,28 @@
       
       
       
-        <link rel="canonical" href="https://github.com/delta-io/delta-rs/api/delta_table/delta_table_alterer/">
+        <link rel="canonical" href="https://github.com/delta-io/delta-rs/delta-lake-big-data-small-data/">
       
       
-        <link rel="prev" href="../delta_table_optimizer/">
+        <link rel="prev" href="../why-use-delta-lake/">
       
       
-        <link rel="next" href="../../schema/">
+        <link rel="next" href="../usage/installation/">
       
       
-      <link rel="icon" href="../../../delta-rust-no-whitespace.svg">
+      <link rel="icon" href="../delta-rust-no-whitespace.svg">
       <meta name="generator" content="mkdocs-1.5.3, mkdocs-material-9.4.5">
     
     
       
-        <title>TableAlterer - Delta Lake Documentation</title>
+        <title>Delta Lake for big and small data - Delta Lake Documentation</title>
       
     
     
-      <link rel="stylesheet" href="../../../assets/stylesheets/main.6a10b989.min.css">
+      <link rel="stylesheet" href="../assets/stylesheets/main.6a10b989.min.css">
       
         
-        <link rel="stylesheet" href="../../../assets/stylesheets/palette.356b1318.min.css">
+        <link rel="stylesheet" href="../assets/stylesheets/palette.356b1318.min.css">
       
       
 
@@ -48,11 +48,11 @@
       
     
     
-      <link rel="stylesheet" href="../../../assets/_markdown_exec_ansi.css">
+      <link rel="stylesheet" href="../assets/_markdown_exec_ansi.css">
     
-      <link rel="stylesheet" href="../../../assets/_mkdocstrings.css">
+      <link rel="stylesheet" href="../assets/_mkdocstrings.css">
     
-    <script>__md_scope=new URL("../../..",location),__md_hash=e=>[...e].reduce((e,_)=>(e<<5)-e+_.charCodeAt(0),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce((e,_)=>(e<<5)-e+_.charCodeAt(0),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
     
       
 
@@ -81,7 +81,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#tablealterer" class="md-skip">
+        <a href="#delta-lake-for-big-data-and-small-data" class="md-skip">
           Skip to content
         </a>
       
@@ -97,9 +97,9 @@
 
 <header class="md-header md-header--shadow md-header--lifted" data-md-component="header">
   <nav class="md-header__inner md-grid" aria-label="Header">
-    <a href="../../.." title="Delta Lake Documentation" class="md-header__button md-logo" aria-label="Delta Lake Documentation" data-md-component="logo">
+    <a href=".." title="Delta Lake Documentation" class="md-header__button md-logo" aria-label="Delta Lake Documentation" data-md-component="logo">
       
-  <img src="../../../delta-rust-no-whitespace.svg" alt="logo">
+  <img src="../delta-rust-no-whitespace.svg" alt="logo">
 
     </a>
     <label class="md-header__button md-icon" for="__drawer">
@@ -116,7 +116,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              TableAlterer
+              Delta Lake for big and small data
             
           </span>
         </div>
@@ -222,11 +222,13 @@
         
   
   
+    
+  
   
     
     
-      <li class="md-tabs__item">
-        <a href="../../.." class="md-tabs__link">
+      <li class="md-tabs__item md-tabs__item--active">
+        <a href=".." class="md-tabs__link">
           
   
     
@@ -246,7 +248,7 @@
     
     
       <li class="md-tabs__item">
-        <a href="../../../usage/installation/" class="md-tabs__link">
+        <a href="../usage/installation/" class="md-tabs__link">
           
   
     
@@ -262,13 +264,11 @@
         
   
   
-    
-  
   
     
     
-      <li class="md-tabs__item md-tabs__item--active">
-        <a href="../../delta_writer/" class="md-tabs__link">
+      <li class="md-tabs__item">
+        <a href="../api/delta_writer/" class="md-tabs__link">
           
   
     
@@ -288,7 +288,7 @@
     
     
       <li class="md-tabs__item">
-        <a href="../../../integrations/delta-lake-arrow/" class="md-tabs__link">
+        <a href="../integrations/delta-lake-arrow/" class="md-tabs__link">
           
   
     
@@ -308,7 +308,7 @@
     
     
       <li class="md-tabs__item">
-        <a href="../../../how-delta-lake-works/architecture-of-delta-table/" class="md-tabs__link">
+        <a href="../how-delta-lake-works/architecture-of-delta-table/" class="md-tabs__link">
           
   
     
@@ -349,9 +349,9 @@
 
 <nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
   <label class="md-nav__title" for="__drawer">
-    <a href="../../.." title="Delta Lake Documentation" class="md-nav__button md-logo" aria-label="Delta Lake Documentation" data-md-component="logo">
+    <a href=".." title="Delta Lake Documentation" class="md-nav__button md-logo" aria-label="Delta Lake Documentation" data-md-component="logo">
       
-  <img src="../../../delta-rust-no-whitespace.svg" alt="logo">
+  <img src="../delta-rust-no-whitespace.svg" alt="logo">
 
     </a>
     Delta Lake Documentation
@@ -375,6 +375,8 @@
       
   
   
+    
+  
   
     
     
@@ -394,19 +396,17 @@
       
       
     
-    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
       
         
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_1" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_1" checked>
         
           
           
           <div class="md-nav__link md-nav__container">
-            <a href="../../.." class="md-nav__link ">
+            <a href=".." class="md-nav__link ">
               
   
   <span class="md-ellipsis">
@@ -423,7 +423,7 @@
             
           </div>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_1_label" aria-expanded="false">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_1_label" aria-expanded="true">
           <label class="md-nav__title" for="__nav_1">
             <span class="md-nav__icon md-icon"></span>
             Home
@@ -438,7 +438,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../why-use-delta-lake/" class="md-nav__link">
+      <a href="../why-use-delta-lake/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -456,9 +456,29 @@
                 
   
   
+    
   
-    <li class="md-nav__item">
-      <a href="../../../delta-lake-big-data-small-data/" class="md-nav__link">
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  <span class="md-ellipsis">
+    Delta Lake for big and small data
+  </span>
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
         
   
   <span class="md-ellipsis">
@@ -467,6 +487,61 @@
   
 
       </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#delta-lake-for-small-data-tables" class="md-nav__link">
+    Delta Lake for small data tables
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#delta-lake-for-large-data-tables" class="md-nav__link">
+    Delta Lake for large data tables
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#small-data-operations-on-large-tables" class="md-nav__link">
+    Small data operations on large tables
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#when-delta-lake-isnt-needed" class="md-nav__link">
+    When Delta Lake isn’t needed
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#conclusion" class="md-nav__link">
+    Conclusion
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
     </li>
   
 
@@ -552,7 +627,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../usage/installation/" class="md-nav__link">
+      <a href="../usage/installation/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -572,7 +647,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../usage/overview/" class="md-nav__link">
+      <a href="../usage/overview/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -592,7 +667,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../usage/create-delta-lake-table/" class="md-nav__link">
+      <a href="../usage/create-delta-lake-table/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -612,7 +687,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../usage/loading-table/" class="md-nav__link">
+      <a href="../usage/loading-table/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -632,7 +707,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../usage/appending-overwriting-delta-lake-table/" class="md-nav__link">
+      <a href="../usage/appending-overwriting-delta-lake-table/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -652,7 +727,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../usage/constraints/" class="md-nav__link">
+      <a href="../usage/constraints/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -672,7 +747,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../usage/examining-table/" class="md-nav__link">
+      <a href="../usage/examining-table/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -692,7 +767,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../usage/querying-delta-tables/" class="md-nav__link">
+      <a href="../usage/querying-delta-tables/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -712,7 +787,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../usage/managing-tables/" class="md-nav__link">
+      <a href="../usage/managing-tables/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -756,7 +831,7 @@
           
           
           <div class="md-nav__link md-nav__container">
-            <a href="../../../usage/writing/" class="md-nav__link ">
+            <a href="../usage/writing/" class="md-nav__link ">
               
   
   <span class="md-ellipsis">
@@ -788,7 +863,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../usage/writing/writing-to-s3-with-locking-provider/" class="md-nav__link">
+      <a href="../usage/writing/writing-to-s3-with-locking-provider/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -816,7 +891,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../usage/deleting-rows-from-delta-lake-table/" class="md-nav__link">
+      <a href="../usage/deleting-rows-from-delta-lake-table/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -880,7 +955,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../usage/optimize/small-file-compaction-with-optimize/" class="md-nav__link">
+      <a href="../usage/optimize/small-file-compaction-with-optimize/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -900,7 +975,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../usage/optimize/delta-lake-z-order/" class="md-nav__link">
+      <a href="../usage/optimize/delta-lake-z-order/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -933,8 +1008,6 @@
       
   
   
-    
-  
   
     
     
@@ -958,12 +1031,14 @@
       
       
     
-    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
       
         
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" checked>
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3" >
         
           
           <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="">
@@ -977,7 +1052,7 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="true">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
           <label class="md-nav__title" for="__nav_3">
             <span class="md-nav__icon md-icon"></span>
             API Reference
@@ -990,7 +1065,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../delta_writer/" class="md-nav__link">
+      <a href="../api/delta_writer/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1008,8 +1083,6 @@
                 
   
   
-    
-  
   
     
     
@@ -1030,17 +1103,19 @@
     
     
     
-    <li class="md-nav__item md-nav__item--active md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--nested">
       
         
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_2" checked>
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_2" >
         
           
           
           <div class="md-nav__link md-nav__container">
-            <a href="../" class="md-nav__link ">
+            <a href="../api/delta_table/" class="md-nav__link ">
               
   
   <span class="md-ellipsis">
@@ -1057,7 +1132,7 @@
             
           </div>
         
-        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_3_2_label" aria-expanded="true">
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_3_2_label" aria-expanded="false">
           <label class="md-nav__title" for="__nav_3_2">
             <span class="md-nav__icon md-icon"></span>
             Table
@@ -1072,7 +1147,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../metadata/" class="md-nav__link">
+      <a href="../api/delta_table/metadata/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1092,7 +1167,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../delta_table_merger/" class="md-nav__link">
+      <a href="../api/delta_table/delta_table_merger/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1112,7 +1187,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../delta_table_optimizer/" class="md-nav__link">
+      <a href="../api/delta_table/delta_table_optimizer/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1130,29 +1205,9 @@
                 
   
   
-    
   
-  
-    <li class="md-nav__item md-nav__item--active">
-      
-      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
-      
-      
-        
-      
-      
-        <label class="md-nav__link md-nav__link--active" for="__toc">
-          
-  
-  <span class="md-ellipsis">
-    TableAlterer
-  </span>
-  
-
-          <span class="md-nav__icon md-icon"></span>
-        </label>
-      
-      <a href="./" class="md-nav__link md-nav__link--active">
+    <li class="md-nav__item">
+      <a href="../api/delta_table/delta_table_alterer/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1161,46 +1216,6 @@
   
 
       </a>
-      
-        
-
-<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
-  
-  
-  
-    
-  
-  
-    <label class="md-nav__title" for="__toc">
-      <span class="md-nav__icon md-icon"></span>
-      Table of contents
-    </label>
-    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
-      
-        <li class="md-nav__item">
-  <a href="#deltalake.table.TableAlterer" class="md-nav__link">
-    TableAlterer
-  </a>
-  
-    <nav class="md-nav" aria-label="TableAlterer">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#deltalake.table.TableAlterer.add_constraint" class="md-nav__link">
-    add_constraint
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-    </ul>
-  
-</nav>
-      
     </li>
   
 
@@ -1220,7 +1235,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../schema/" class="md-nav__link">
+      <a href="../api/schema/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1240,7 +1255,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../storage/" class="md-nav__link">
+      <a href="../api/storage/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1260,7 +1275,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../catalog/" class="md-nav__link">
+      <a href="../api/catalog/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1280,7 +1295,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../exceptions/" class="md-nav__link">
+      <a href="../api/exceptions/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1358,7 +1373,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../integrations/delta-lake-arrow/" class="md-nav__link">
+      <a href="../integrations/delta-lake-arrow/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1378,7 +1393,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../integrations/delta-lake-datafusion/" class="md-nav__link">
+      <a href="../integrations/delta-lake-datafusion/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1398,7 +1413,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../integrations/delta-lake-pandas/" class="md-nav__link">
+      <a href="../integrations/delta-lake-pandas/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1418,7 +1433,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../integrations/delta-lake-polars/" class="md-nav__link">
+      <a href="../integrations/delta-lake-polars/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1494,7 +1509,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../how-delta-lake-works/architecture-of-delta-table/" class="md-nav__link">
+      <a href="../how-delta-lake-works/architecture-of-delta-table/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1514,7 +1529,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../how-delta-lake-works/delta-lake-acid-transactions/" class="md-nav__link">
+      <a href="../how-delta-lake-works/delta-lake-acid-transactions/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1534,7 +1549,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../how-delta-lake-works/delta-lake-file-skipping/" class="md-nav__link">
+      <a href="../how-delta-lake-works/delta-lake-file-skipping/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1582,22 +1597,37 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#deltalake.table.TableAlterer" class="md-nav__link">
-    TableAlterer
-  </a>
-  
-    <nav class="md-nav" aria-label="TableAlterer">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#deltalake.table.TableAlterer.add_constraint" class="md-nav__link">
-    add_constraint
+  <a href="#delta-lake-for-small-data-tables" class="md-nav__link">
+    Delta Lake for small data tables
   </a>
   
 </li>
-        
-      </ul>
-    </nav>
+      
+        <li class="md-nav__item">
+  <a href="#delta-lake-for-large-data-tables" class="md-nav__link">
+    Delta Lake for large data tables
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#small-data-operations-on-large-tables" class="md-nav__link">
+    Small data operations on large tables
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#when-delta-lake-isnt-needed" class="md-nav__link">
+    When Delta Lake isn’t needed
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#conclusion" class="md-nav__link">
+    Conclusion
+  </a>
   
 </li>
       
@@ -1619,125 +1649,44 @@
   
 
 
-<h1 id="tablealterer">TableAlterer</h1>
-
-
-<div class="doc doc-object doc-class">
-
-
-
-<h3 id="deltalake.table.TableAlterer" class="doc doc-heading">
-          <span class="doc doc-object-name doc-class-name">deltalake.table.TableAlterer</span>
-
-
-</h3>
-<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">TableAlterer</span><span class="p">(</span><span class="n">table</span><span class="p">:</span> <span class="n">DeltaTable</span><span class="p">)</span>
-</span></code></pre></div>
-
-  <div class="doc doc-contents first">
-
-  
-      <p>API for various table alteration commands.</p>
-
-
-  
-
-  <div class="doc doc-children">
-
-
-
-
-
-
-
-
-
-
-<div class="doc doc-object doc-function">
-
-
-
-<h4 id="deltalake.table.TableAlterer.add_constraint" class="doc doc-heading">
-          <span class="doc doc-object-name doc-function-name">add_constraint</span>
-
-
-</h4>
-<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">add_constraint</span><span class="p">(</span><span class="n">constraints</span><span class="p">:</span> <span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">],</span> <span class="n">custom_metadata</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span>
-</span></code></pre></div>
-
-  <div class="doc doc-contents ">
-  
-      <p>Add constraints to the table. Limited to <code>single constraint</code> at once.</p>
-
-
-
-  <p><strong>Parameters:</strong></p>
-  <table>
-    <thead>
-      <tr>
-        <th>Name</th>
-        <th>Type</th>
-        <th>Description</th>
-        <th>Default</th>
-      </tr>
-    </thead>
-    <tbody>
-        <tr>
-          <td><code>constraints</code></td>
-          <td>
-                <code><span title="typing.Dict">Dict</span>[str, str]</code>
-          </td>
-          <td>
-            <div class="doc-md-description">
-              <p>mapping of constraint name to SQL-expression to evaluate on write</p>
-            </div>
-          </td>
-          <td>
-              <em>required</em>
-          </td>
-        </tr>
-        <tr>
-          <td><code>custom_metadata</code></td>
-          <td>
-                <code><span title="typing.Optional">Optional</span>[<span title="typing.Dict">Dict</span>[str, str]]</code>
-          </td>
-          <td>
-            <div class="doc-md-description">
-              <p>custom metadata that will be added to the transaction commit.</p>
-            </div>
-          </td>
-          <td>
-                <code>None</code>
-          </td>
-        </tr>
-    </tbody>
-  </table>
-      <p>Example:
-    <div class="language-python highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="kn">from</span> <span class="nn">deltalake</span> <span class="kn">import</span> <span class="n">DeltaTable</span>
-</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="n">dt</span> <span class="o">=</span> <span class="n">DeltaTable</span><span class="p">(</span><span class="s2">&quot;test_table_constraints&quot;</span><span class="p">)</span>
-</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="n">dt</span><span class="o">.</span><span class="n">alter</span><span class="o">.</span><span class="n">add_constraint</span><span class="p">({</span>
-</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>    <span class="s2">&quot;value_gt_5&quot;</span><span class="p">:</span> <span class="s2">&quot;value &gt; 5&quot;</span><span class="p">,</span>
-</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="p">})</span>
-</span></code></pre></div></p>
-<div class="language-text highlight"><pre><span></span><code>**Check configuration**
-```
-dt.metadata().configuration
-{&#39;delta.constraints.value_gt_5&#39;: &#39;value &gt; 5&#39;}
-```
-</code></pre></div>
-
-  </div>
-
-</div>
-
-
-
-  </div>
-
-  </div>
-
-
-</div>
+<h1 id="delta-lake-for-big-data-and-small-data">Delta Lake for big data and small data</h1>
+<p>Delta Lake is an excellent storage format for big data and small data.</p>
+<p>This post explains why Delta Lake is suitable for massive datasets and why many of these features that are great, even for tiny tables.  Delta Lake is fine for a table with less than 1 GB of data or hundreds of petabytes of data.</p>
+<p>Let’s start by discussing the features that are great for small data.</p>
+<h2 id="delta-lake-for-small-data-tables">Delta Lake for small data tables</h2>
+<p>Delta Lake has many features that are useful for small datasets:</p>
+<ul>
+<li><a href="https://delta-io.github.io/delta-rs/how-delta-lake-works/delta-lake-acid-transactions/">Reliable transactions</a></li>
+<li>Better performance via file skipping</li>
+<li>DML operations to make deletes, updates, and merges easy and performant</li>
+<li>Features like schema enforcement and constraints to enforce data quality</li>
+<li>Versioned data &amp; time travel</li>
+</ul>
+<p>All of these features are great for large and small tables.</p>
+<p>Delta Lake DML operations are ACID transactions, so they either finish entirely or don’t finish at all.  Delta tables don’t require any downtime while DML operations are running.  The Delta Lake user experience is better than a data lake that doesn’t support transactions and has downtime while running DML operations.</p>
+<p>The Delta Lake API also makes it easy to run DML operations.  You can delete a line of code from a Delta table with a single line of code.  Writing code to delete rows from CSV files is more challenging, especially if you want to implement this operation efficiently.</p>
+<p>Delta Lake has built-in checks to retain the integrity of your tables.  For example, Delta tables have schema enforcement and prevent you from appending DataFrames with mismatched schema from the existing table.  Delta Lake also lets you add constraints that only allow appending specific values to a column.  Data quality is also essential for small tables!</p>
+<p>Delta Lake splits data into multiple files with file-level metadata in the transaction log, so query engines can sometimes skip data.  Data skipping can be a huge performance benefit, depending on how much data can be ignored by the query engine.  </p>
+<p>As previously mentioned, Delta tables record all DML operations as transactions.  Recording operations as transactions means that existing data isn’t mutated.  So Delta Lake provides versioned data and time travel out of the box.  Versioning data is better because it allows you to roll back mistakes and compare the state of the table at different points in time.</p>
+<p>Delta Lake has many useful features for small data tables.  Let’s look at how Delta Lake is scalable for massive datasets.</p>
+<h2 id="delta-lake-for-large-data-tables">Delta Lake for large data tables</h2>
+<p>Delta Lake is designed to be scalable and can handle tables with terabytes or petabytes of data.</p>
+<p><a href="https://www.databricks.com/dataaisummit/session/flink-delta-driving-real-time-pipelines-doordash/">See here</a> for an example of an organization ingesting 220 TB of data into a Delta table daily.</p>
+<p>Delta tables store data in Parquet files, and cloud object stores allow engines to write any number of files.  Delta tables store metadata information in the transaction log as JSON files, which are periodically compacted into Parquet files, so an arbitrarily large amount of Delta table metadata can also be stored.</p>
+<p>Delta Lake transactions and concurrency protection maintain the integrity of tables, even for large write operations or long-running computations.</p>
+<p>It’s well known that Delta tables are scalable, even for the most enormous tables.</p>
+<h2 id="small-data-operations-on-large-tables">Small data operations on large tables</h2>
+<p>Delta Lake is flexible and allows you to use “small data engines,” even for large tables, depending on the computation.</p>
+<p>Suppose you have a Delta table containing 10 TB of data and a pipeline that appends 0.5 GB of data to the table every hour.  You don’t need a big data query engine to append a small amount of data.  You can set up this job to run the Delta table append with a small data engine like pandas or Polars.</p>
+<p>Delta tables are flexible and interoperable with many technologies so that you can use the right tool for each data processing job.  This allows you to design pipelines how you’d like and minimize costs.</p>
+<h2 id="when-delta-lake-isnt-needed">When Delta Lake isn’t needed</h2>
+<p>You don’t need Delta Lake for a small dataset that never changes and can be stored in a single Parquet file.</p>
+<p>Suppose you have a 0.5 GB dataset in a Parquet file that never needs to be updated.  You can just keep that data in a Parquet table.  Reading the metadata from the Parquet footer of a single file isn’t expensive.  You won’t be taking advantage of Delta Lake's features like transactions, convenient DML operations, or versioned data.</p>
+<p>But in most cases, it’s best to use Delta Lake because its features protect the integrity of your tables and make your life easier.</p>
+<h2 id="conclusion">Conclusion</h2>
+<p>Delta Lake is well known for being scalable to huge tables but is also an excellent technology for small tables.</p>
+<p>Delta Lake is a lightweight technology, so there is little overhead.  Writing the metadata file after performing a transaction is fast.  It’s a minuscule cost, considering the benefits you receive.</p>
+<p>Many reasons that make Delta Lake better than data lakes for large tables also apply to small tables!</p>
 
 
 
@@ -1761,7 +1710,7 @@ dt.metadata().configuration
       <nav class="md-footer__inner md-grid" aria-label="Footer" >
         
           
-          <a href="../delta_table_optimizer/" class="md-footer__link md-footer__link--prev" aria-label="Previous: TableOptimizer">
+          <a href="../why-use-delta-lake/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Why Use Delta Lake">
             <div class="md-footer__button md-icon">
               
               <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11h12Z"/></svg>
@@ -1771,20 +1720,20 @@ dt.metadata().configuration
                 Previous
               </span>
               <div class="md-ellipsis">
-                TableOptimizer
+                Why Use Delta Lake
               </div>
             </div>
           </a>
         
         
           
-          <a href="../../schema/" class="md-footer__link md-footer__link--next" aria-label="Next: Schema">
+          <a href="../usage/installation/" class="md-footer__link md-footer__link--next" aria-label="Next: Installation">
             <div class="md-footer__title">
               <span class="md-footer__direction">
                 Next
               </span>
               <div class="md-ellipsis">
-                Schema
+                Installation
               </div>
             </div>
             <div class="md-footer__button md-icon">
@@ -1825,10 +1774,10 @@ dt.metadata().configuration
     </div>
     
     
-    <script id="__config" type="application/json">{"base": "../../..", "features": ["navigation.tracking", "navigation.instant", "navigation.expand", "navigation.tabs", "navigation.indexes", "navigation.tabs.sticky", "navigation.footer", "content.tabs.link", "content.code.annotation", "content.code.copy"], "search": "../../../assets/javascripts/workers/search.f886a092.min.js", "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}}</script>
+    <script id="__config" type="application/json">{"base": "..", "features": ["navigation.tracking", "navigation.instant", "navigation.expand", "navigation.tabs", "navigation.indexes", "navigation.tabs.sticky", "navigation.footer", "content.tabs.link", "content.code.annotation", "content.code.copy"], "search": "../assets/javascripts/workers/search.f886a092.min.js", "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}}</script>
     
     
-      <script src="../../../assets/javascripts/bundle.aecac24b.min.js"></script>
+      <script src="../assets/javascripts/bundle.aecac24b.min.js"></script>
       
     
   </body>

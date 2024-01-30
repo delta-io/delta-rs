@@ -8,28 +8,24 @@
       
       
       
-        <link rel="canonical" href="https://github.com/delta-io/delta-rs/api/delta_table/delta_table_alterer/">
+        <link rel="canonical" href="https://github.com/delta-io/delta-rs/integrations/delta-lake-dask/">
       
       
-        <link rel="prev" href="../delta_table_optimizer/">
       
       
-        <link rel="next" href="../../schema/">
-      
-      
-      <link rel="icon" href="../../../delta-rust-no-whitespace.svg">
+      <link rel="icon" href="../../delta-rust-no-whitespace.svg">
       <meta name="generator" content="mkdocs-1.5.3, mkdocs-material-9.4.5">
     
     
       
-        <title>TableAlterer - Delta Lake Documentation</title>
+        <title>Using Delta Lake with Dask - Delta Lake Documentation</title>
       
     
     
-      <link rel="stylesheet" href="../../../assets/stylesheets/main.6a10b989.min.css">
+      <link rel="stylesheet" href="../../assets/stylesheets/main.6a10b989.min.css">
       
         
-        <link rel="stylesheet" href="../../../assets/stylesheets/palette.356b1318.min.css">
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.356b1318.min.css">
       
       
 
@@ -48,11 +44,11 @@
       
     
     
-      <link rel="stylesheet" href="../../../assets/_markdown_exec_ansi.css">
+      <link rel="stylesheet" href="../../assets/_markdown_exec_ansi.css">
     
-      <link rel="stylesheet" href="../../../assets/_mkdocstrings.css">
+      <link rel="stylesheet" href="../../assets/_mkdocstrings.css">
     
-    <script>__md_scope=new URL("../../..",location),__md_hash=e=>[...e].reduce((e,_)=>(e<<5)-e+_.charCodeAt(0),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce((e,_)=>(e<<5)-e+_.charCodeAt(0),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
     
       
 
@@ -81,7 +77,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#tablealterer" class="md-skip">
+        <a href="#using-delta-lake-with-dask" class="md-skip">
           Skip to content
         </a>
       
@@ -97,9 +93,9 @@
 
 <header class="md-header md-header--shadow md-header--lifted" data-md-component="header">
   <nav class="md-header__inner md-grid" aria-label="Header">
-    <a href="../../.." title="Delta Lake Documentation" class="md-header__button md-logo" aria-label="Delta Lake Documentation" data-md-component="logo">
+    <a href="../.." title="Delta Lake Documentation" class="md-header__button md-logo" aria-label="Delta Lake Documentation" data-md-component="logo">
       
-  <img src="../../../delta-rust-no-whitespace.svg" alt="logo">
+  <img src="../../delta-rust-no-whitespace.svg" alt="logo">
 
     </a>
     <label class="md-header__button md-icon" for="__drawer">
@@ -116,7 +112,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              TableAlterer
+              Using Delta Lake with Dask
             
           </span>
         </div>
@@ -226,7 +222,7 @@
     
     
       <li class="md-tabs__item">
-        <a href="../../.." class="md-tabs__link">
+        <a href="../.." class="md-tabs__link">
           
   
     
@@ -246,7 +242,7 @@
     
     
       <li class="md-tabs__item">
-        <a href="../../../usage/installation/" class="md-tabs__link">
+        <a href="../../usage/installation/" class="md-tabs__link">
           
   
     
@@ -262,13 +258,11 @@
         
   
   
-    
-  
   
     
     
-      <li class="md-tabs__item md-tabs__item--active">
-        <a href="../../delta_writer/" class="md-tabs__link">
+      <li class="md-tabs__item">
+        <a href="../../api/delta_writer/" class="md-tabs__link">
           
   
     
@@ -288,7 +282,7 @@
     
     
       <li class="md-tabs__item">
-        <a href="../../../integrations/delta-lake-arrow/" class="md-tabs__link">
+        <a href="../delta-lake-arrow/" class="md-tabs__link">
           
   
     
@@ -308,7 +302,7 @@
     
     
       <li class="md-tabs__item">
-        <a href="../../../how-delta-lake-works/architecture-of-delta-table/" class="md-tabs__link">
+        <a href="../../how-delta-lake-works/architecture-of-delta-table/" class="md-tabs__link">
           
   
     
@@ -349,9 +343,9 @@
 
 <nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
   <label class="md-nav__title" for="__drawer">
-    <a href="../../.." title="Delta Lake Documentation" class="md-nav__button md-logo" aria-label="Delta Lake Documentation" data-md-component="logo">
+    <a href="../.." title="Delta Lake Documentation" class="md-nav__button md-logo" aria-label="Delta Lake Documentation" data-md-component="logo">
       
-  <img src="../../../delta-rust-no-whitespace.svg" alt="logo">
+  <img src="../../delta-rust-no-whitespace.svg" alt="logo">
 
     </a>
     Delta Lake Documentation
@@ -406,7 +400,7 @@
           
           
           <div class="md-nav__link md-nav__container">
-            <a href="../../.." class="md-nav__link ">
+            <a href="../.." class="md-nav__link ">
               
   
   <span class="md-ellipsis">
@@ -438,7 +432,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../why-use-delta-lake/" class="md-nav__link">
+      <a href="../../why-use-delta-lake/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -458,7 +452,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../delta-lake-big-data-small-data/" class="md-nav__link">
+      <a href="../../delta-lake-big-data-small-data/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -552,7 +546,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../usage/installation/" class="md-nav__link">
+      <a href="../../usage/installation/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -572,7 +566,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../usage/overview/" class="md-nav__link">
+      <a href="../../usage/overview/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -592,7 +586,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../usage/create-delta-lake-table/" class="md-nav__link">
+      <a href="../../usage/create-delta-lake-table/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -612,7 +606,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../usage/loading-table/" class="md-nav__link">
+      <a href="../../usage/loading-table/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -632,7 +626,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../usage/appending-overwriting-delta-lake-table/" class="md-nav__link">
+      <a href="../../usage/appending-overwriting-delta-lake-table/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -652,7 +646,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../usage/constraints/" class="md-nav__link">
+      <a href="../../usage/constraints/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -672,7 +666,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../usage/examining-table/" class="md-nav__link">
+      <a href="../../usage/examining-table/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -692,7 +686,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../usage/querying-delta-tables/" class="md-nav__link">
+      <a href="../../usage/querying-delta-tables/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -712,7 +706,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../usage/managing-tables/" class="md-nav__link">
+      <a href="../../usage/managing-tables/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -756,7 +750,7 @@
           
           
           <div class="md-nav__link md-nav__container">
-            <a href="../../../usage/writing/" class="md-nav__link ">
+            <a href="../../usage/writing/" class="md-nav__link ">
               
   
   <span class="md-ellipsis">
@@ -788,7 +782,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../usage/writing/writing-to-s3-with-locking-provider/" class="md-nav__link">
+      <a href="../../usage/writing/writing-to-s3-with-locking-provider/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -816,7 +810,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../usage/deleting-rows-from-delta-lake-table/" class="md-nav__link">
+      <a href="../../usage/deleting-rows-from-delta-lake-table/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -880,7 +874,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../usage/optimize/small-file-compaction-with-optimize/" class="md-nav__link">
+      <a href="../../usage/optimize/small-file-compaction-with-optimize/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -900,7 +894,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../usage/optimize/delta-lake-z-order/" class="md-nav__link">
+      <a href="../../usage/optimize/delta-lake-z-order/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -933,8 +927,6 @@
       
   
   
-    
-  
   
     
     
@@ -958,12 +950,14 @@
       
       
     
-    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
       
         
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" checked>
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3" >
         
           
           <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="">
@@ -977,7 +971,7 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="true">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
           <label class="md-nav__title" for="__nav_3">
             <span class="md-nav__icon md-icon"></span>
             API Reference
@@ -990,7 +984,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../delta_writer/" class="md-nav__link">
+      <a href="../../api/delta_writer/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1008,8 +1002,6 @@
                 
   
   
-    
-  
   
     
     
@@ -1030,17 +1022,19 @@
     
     
     
-    <li class="md-nav__item md-nav__item--active md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--nested">
       
         
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_2" checked>
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_2" >
         
           
           
           <div class="md-nav__link md-nav__container">
-            <a href="../" class="md-nav__link ">
+            <a href="../../api/delta_table/" class="md-nav__link ">
               
   
   <span class="md-ellipsis">
@@ -1057,7 +1051,7 @@
             
           </div>
         
-        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_3_2_label" aria-expanded="true">
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_3_2_label" aria-expanded="false">
           <label class="md-nav__title" for="__nav_3_2">
             <span class="md-nav__icon md-icon"></span>
             Table
@@ -1072,7 +1066,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../metadata/" class="md-nav__link">
+      <a href="../../api/delta_table/metadata/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1092,7 +1086,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../delta_table_merger/" class="md-nav__link">
+      <a href="../../api/delta_table/delta_table_merger/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1112,7 +1106,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../delta_table_optimizer/" class="md-nav__link">
+      <a href="../../api/delta_table/delta_table_optimizer/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1130,29 +1124,9 @@
                 
   
   
-    
   
-  
-    <li class="md-nav__item md-nav__item--active">
-      
-      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
-      
-      
-        
-      
-      
-        <label class="md-nav__link md-nav__link--active" for="__toc">
-          
-  
-  <span class="md-ellipsis">
-    TableAlterer
-  </span>
-  
-
-          <span class="md-nav__icon md-icon"></span>
-        </label>
-      
-      <a href="./" class="md-nav__link md-nav__link--active">
+    <li class="md-nav__item">
+      <a href="../../api/delta_table/delta_table_alterer/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1161,46 +1135,6 @@
   
 
       </a>
-      
-        
-
-<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
-  
-  
-  
-    
-  
-  
-    <label class="md-nav__title" for="__toc">
-      <span class="md-nav__icon md-icon"></span>
-      Table of contents
-    </label>
-    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
-      
-        <li class="md-nav__item">
-  <a href="#deltalake.table.TableAlterer" class="md-nav__link">
-    TableAlterer
-  </a>
-  
-    <nav class="md-nav" aria-label="TableAlterer">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#deltalake.table.TableAlterer.add_constraint" class="md-nav__link">
-    add_constraint
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-    </ul>
-  
-</nav>
-      
     </li>
   
 
@@ -1220,7 +1154,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../schema/" class="md-nav__link">
+      <a href="../../api/schema/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1240,7 +1174,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../storage/" class="md-nav__link">
+      <a href="../../api/storage/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1260,7 +1194,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../catalog/" class="md-nav__link">
+      <a href="../../api/catalog/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1280,7 +1214,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../exceptions/" class="md-nav__link">
+      <a href="../../api/exceptions/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1358,7 +1292,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../integrations/delta-lake-arrow/" class="md-nav__link">
+      <a href="../delta-lake-arrow/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1378,7 +1312,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../integrations/delta-lake-datafusion/" class="md-nav__link">
+      <a href="../delta-lake-datafusion/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1398,7 +1332,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../integrations/delta-lake-pandas/" class="md-nav__link">
+      <a href="../delta-lake-pandas/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1418,7 +1352,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../integrations/delta-lake-polars/" class="md-nav__link">
+      <a href="../delta-lake-polars/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1494,7 +1428,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../how-delta-lake-works/architecture-of-delta-table/" class="md-nav__link">
+      <a href="../../how-delta-lake-works/architecture-of-delta-table/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1514,7 +1448,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../how-delta-lake-works/delta-lake-acid-transactions/" class="md-nav__link">
+      <a href="../../how-delta-lake-works/delta-lake-acid-transactions/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1534,7 +1468,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../how-delta-lake-works/delta-lake-file-skipping/" class="md-nav__link">
+      <a href="../../how-delta-lake-works/delta-lake-file-skipping/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1582,22 +1516,16 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#deltalake.table.TableAlterer" class="md-nav__link">
-    TableAlterer
-  </a>
-  
-    <nav class="md-nav" aria-label="TableAlterer">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#deltalake.table.TableAlterer.add_constraint" class="md-nav__link">
-    add_constraint
+  <a href="#install-dask-deltatable" class="md-nav__link">
+    Install Dask-Deltatable
   </a>
   
 </li>
-        
-      </ul>
-    </nav>
+      
+        <li class="md-nav__item">
+  <a href="#reading-delta-tables-into-a-dask-dataframe" class="md-nav__link">
+    Reading Delta Tables into a Dask DataFrame
+  </a>
   
 </li>
       
@@ -1619,125 +1547,339 @@
   
 
 
-<h1 id="tablealterer">TableAlterer</h1>
-
-
-<div class="doc doc-object doc-class">
-
-
-
-<h3 id="deltalake.table.TableAlterer" class="doc doc-heading">
-          <span class="doc doc-object-name doc-class-name">deltalake.table.TableAlterer</span>
-
-
-</h3>
-<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">TableAlterer</span><span class="p">(</span><span class="n">table</span><span class="p">:</span> <span class="n">DeltaTable</span><span class="p">)</span>
+<h1 id="using-delta-lake-with-dask">Using Delta Lake with Dask</h1>
+<p>Delta Lake is a great storage format for Dask analyses. This page explains why and how to use Delta Lake with Dask.</p>
+<p>You will learn how to read Delta Lakes into Dask DataFrames, how to query Delta tables with Dask, and the unique advantages Delta Lake offers the Dask community.</p>
+<p>Here are some of the benefits that Delta Lake provides Dask users:
+- better performance with file skipping
+- enhanced file skipping via Z Ordering
+- ACID transactions for reliable writes
+- easy time-travel functionality</p>
+<blockquote>
+<p>❗️ dask-deltatable currently works with deltalake&lt;=13.0. See https://github.com/dask-contrib/dask-deltatable/issues/65</p>
+</blockquote>
+<h2 id="install-dask-deltatable">Install Dask-Deltatable</h2>
+<p>To use Delta Lake with Dask, first install the library using</p>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>pip install dask-deltatable
 </span></code></pre></div>
-
-  <div class="doc doc-contents first">
-
-  
-      <p>API for various table alteration commands.</p>
-
-
-  
-
-  <div class="doc doc-children">
-
-
-
-
-
-
-
-
-
-
-<div class="doc doc-object doc-function">
-
-
-
-<h4 id="deltalake.table.TableAlterer.add_constraint" class="doc doc-heading">
-          <span class="doc doc-object-name doc-function-name">add_constraint</span>
-
-
-</h4>
-<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">add_constraint</span><span class="p">(</span><span class="n">constraints</span><span class="p">:</span> <span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">],</span> <span class="n">custom_metadata</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span>
+<h2 id="reading-delta-tables-into-a-dask-dataframe">Reading Delta Tables into a Dask DataFrame</h2>
+<p>You can read data stored in a Delta Lake into a Dask DataFrame using <code>dask-deltatable.read_deltalake</code>. </p>
+<p>Let's read in a toy dataset to see what we can do with Delta Lake and Dask. You can access the data stored as a Delta Lake <a href="https://github.com/rrpelgrim/delta-examples/tree/master/data">on Github</a></p>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>import dask_deltatable as ddt
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>
+</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a># read delta table into Dask DataFrame
+</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a>delta_path = &quot;path/to/data/people_countries_delta_dask&quot;
+</span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a>ddf = ddt.read_deltalake(delta_path)
 </span></code></pre></div>
-
-  <div class="doc doc-contents ">
-  
-      <p>Add constraints to the table. Limited to <code>single constraint</code> at once.</p>
-
-
-
-  <p><strong>Parameters:</strong></p>
-  <table>
-    <thead>
-      <tr>
-        <th>Name</th>
-        <th>Type</th>
-        <th>Description</th>
-        <th>Default</th>
-      </tr>
-    </thead>
-    <tbody>
-        <tr>
-          <td><code>constraints</code></td>
-          <td>
-                <code><span title="typing.Dict">Dict</span>[str, str]</code>
-          </td>
-          <td>
-            <div class="doc-md-description">
-              <p>mapping of constraint name to SQL-expression to evaluate on write</p>
-            </div>
-          </td>
-          <td>
-              <em>required</em>
-          </td>
-        </tr>
-        <tr>
-          <td><code>custom_metadata</code></td>
-          <td>
-                <code><span title="typing.Optional">Optional</span>[<span title="typing.Dict">Dict</span>[str, str]]</code>
-          </td>
-          <td>
-            <div class="doc-md-description">
-              <p>custom metadata that will be added to the transaction commit.</p>
-            </div>
-          </td>
-          <td>
-                <code>None</code>
-          </td>
-        </tr>
-    </tbody>
-  </table>
-      <p>Example:
-    <div class="language-python highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="kn">from</span> <span class="nn">deltalake</span> <span class="kn">import</span> <span class="n">DeltaTable</span>
-</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="n">dt</span> <span class="o">=</span> <span class="n">DeltaTable</span><span class="p">(</span><span class="s2">&quot;test_table_constraints&quot;</span><span class="p">)</span>
-</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="n">dt</span><span class="o">.</span><span class="n">alter</span><span class="o">.</span><span class="n">add_constraint</span><span class="p">({</span>
-</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>    <span class="s2">&quot;value_gt_5&quot;</span><span class="p">:</span> <span class="s2">&quot;value &gt; 5&quot;</span><span class="p">,</span>
-</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="p">})</span>
+<p>Dask is a library for efficient distributed computing and works with lazy evaluation. Function calls to <code>dask.dataframe</code> build a task graph in the background. To trigger computation, call <code>.compute()</code>:</p>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>&gt; ddf.compute()
+</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>
+</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>|    | first_name   | last_name   | country   | continent   |
+</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a>|---:|:-------------|:------------|:----------|:------------|
+</span><span id="__span-2-5"><a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a>|  0 | Ernesto      | Guevara     | Argentina | NaN         |
+</span><span id="__span-2-6"><a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a>|  0 | Bruce        | Lee         | China     | Asia        |
+</span><span id="__span-2-7"><a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a>|  1 | Jack         | Ma          | China     | Asia        |
+</span><span id="__span-2-8"><a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a>|  0 | Wolfgang     | Manche      | Germany   | NaN         |
+</span><span id="__span-2-9"><a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a>|  1 | Soraya       | Jala        | Germany   | NaN         |
+</span></code></pre></div>
+<p>You can read in specific versions of Delta tables by specifying a <code>version</code> number or a timestamp:</p>
+<p><div class="language-text highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a># with specific version
+</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>ddf = ddt.read_deltalake(delta_path, version=3)
+</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>
+</span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a># with specific datetime
+</span><span id="__span-3-5"><a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a>ddt.read_deltalake(delta_path, datetime=&quot;2018-12-19T16:39:57-08:00&quot;)```
+</span><span id="__span-3-6"><a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a>
+</span><span id="__span-3-7"><a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a>`dask-deltatable` also supports reading from remote sources like S3 with:
+</span></code></pre></div>
+ddt.read_deltalake("s3://bucket_name/delta_path", version=3)
+<div class="language-text highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>&gt; To read data from remote sources you&#39;ll need to make sure the credentials are properly configured in environment variables or config files. Refer to your cloud provider documentation to configure these.
+</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>
+</span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a>## What can I do with a Dask Deltatable?
+</span><span id="__span-4-4"><a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a>
+</span><span id="__span-4-5"><a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a>Reading a Delta Lake in with `dask-deltatable` returns a regular Dask DataFrame. You can perform [all the regular Dask operations](https://docs.dask.org/en/stable/dataframe.html) on this DataFrame.
+</span><span id="__span-4-6"><a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a>
+</span><span id="__span-4-7"><a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a>Let&#39;s take a look at the first few rows:
 </span></code></pre></div></p>
-<div class="language-text highlight"><pre><span></span><code>**Check configuration**
-```
-dt.metadata().configuration
-{&#39;delta.constraints.value_gt_5&#39;: &#39;value &gt; 5&#39;}
-```
-</code></pre></div>
-
-  </div>
-
-</div>
-
-
-
-  </div>
-
-  </div>
-
-
-</div>
+<blockquote>
+<p>ddf.head(n=3)</p>
+</blockquote>
+<table>
+<thead>
+<tr>
+<th style="text-align: right;"></th>
+<th style="text-align: left;">first_name</th>
+<th style="text-align: left;">last_name</th>
+<th style="text-align: left;">country</th>
+<th style="text-align: right;">continent</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: right;">0</td>
+<td style="text-align: left;">Ernesto</td>
+<td style="text-align: left;">Guevara</td>
+<td style="text-align: left;">Argentina</td>
+<td style="text-align: right;">nan</td>
+</tr>
+<tr>
+<td style="text-align: right;"><div class="language-text highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>`dask.dataframe.head()` shows you the first rows of the first partition in the dataframe. In this case, the first partition only has 1 row.
+</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>
+</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a>This is because the Delta Lake has been partitioned by country:
+</span></code></pre></div></td>
+<td style="text-align: left;"></td>
+<td style="text-align: left;"></td>
+<td style="text-align: left;"></td>
+<td style="text-align: right;"></td>
+</tr>
+<tr>
+<td style="text-align: right;">&gt; !ls ../../data/people_countries_delta_dask</td>
+<td style="text-align: left;"></td>
+<td style="text-align: left;"></td>
+<td style="text-align: left;"></td>
+<td style="text-align: right;"></td>
+</tr>
+<tr>
+<td style="text-align: right;">_delta_log        country=Argentina country=China     country=Germany</td>
+<td style="text-align: left;"></td>
+<td style="text-align: left;"></td>
+<td style="text-align: left;"></td>
+<td style="text-align: right;"></td>
+</tr>
+<tr>
+<td style="text-align: right;"><div class="language-text highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>`dask-deltatable` neatly reads in the partitioned Delta Lake into corresponding Dask DataFrame partitions:
+</span></code></pre></div></td>
+<td style="text-align: left;"></td>
+<td style="text-align: left;"></td>
+<td style="text-align: left;"></td>
+<td style="text-align: right;"></td>
+</tr>
+<tr>
+<td style="text-align: right;">&gt; # see number of partitions</td>
+<td style="text-align: left;"></td>
+<td style="text-align: left;"></td>
+<td style="text-align: left;"></td>
+<td style="text-align: right;"></td>
+</tr>
+<tr>
+<td style="text-align: right;">&gt; ddf.npartitions</td>
+<td style="text-align: left;"></td>
+<td style="text-align: left;"></td>
+<td style="text-align: left;"></td>
+<td style="text-align: right;"></td>
+</tr>
+<tr>
+<td style="text-align: right;">3</td>
+<td style="text-align: left;"></td>
+<td style="text-align: left;"></td>
+<td style="text-align: left;"></td>
+<td style="text-align: right;"></td>
+</tr>
+<tr>
+<td style="text-align: right;"><div class="language-text highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>You can inspect a single partition using `dask.dataframe.get_partition()`:
+</span></code></pre></div></td>
+<td style="text-align: left;"></td>
+<td style="text-align: left;"></td>
+<td style="text-align: left;"></td>
+<td style="text-align: right;"></td>
+</tr>
+<tr>
+<td style="text-align: right;">&gt; ddf.get_partition(n=1).compute()</td>
+<td style="text-align: left;"></td>
+<td style="text-align: left;"></td>
+<td style="text-align: left;"></td>
+<td style="text-align: right;"></td>
+</tr>
+</tbody>
+</table>
+<table>
+<thead>
+<tr>
+<th style="text-align: right;"></th>
+<th style="text-align: left;">first_name</th>
+<th style="text-align: left;">last_name</th>
+<th style="text-align: left;">country</th>
+<th style="text-align: left;">continent</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: right;">0</td>
+<td style="text-align: left;">Bruce</td>
+<td style="text-align: left;">Lee</td>
+<td style="text-align: left;">China</td>
+<td style="text-align: left;">Asia</td>
+</tr>
+<tr>
+<td style="text-align: right;">1</td>
+<td style="text-align: left;">Jack</td>
+<td style="text-align: left;">Ma</td>
+<td style="text-align: left;">China</td>
+<td style="text-align: left;">Asia</td>
+</tr>
+<tr>
+<td style="text-align: right;"><div class="language-text highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>## Perform Dask Operations
+</span><span id="__span-8-2"><a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a>
+</span><span id="__span-8-3"><a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a>Let&#39;s perform some basic computations over the Delta Lake data that&#39;s now stored in our Dask DataFrame. 
+</span><span id="__span-8-4"><a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a>
+</span><span id="__span-8-5"><a id="__codelineno-8-5" name="__codelineno-8-5" href="#__codelineno-8-5"></a>Suppose you want to group the dataset by the `country` column:
+</span></code></pre></div></td>
+<td style="text-align: left;"></td>
+<td style="text-align: left;"></td>
+<td style="text-align: left;"></td>
+<td style="text-align: left;"></td>
+</tr>
+<tr>
+<td style="text-align: right;">&gt; ddf.groupby(['country']).count().compute()</td>
+<td style="text-align: left;"></td>
+<td style="text-align: left;"></td>
+<td style="text-align: left;"></td>
+<td style="text-align: left;"></td>
+</tr>
+</tbody>
+</table>
+<table>
+<thead>
+<tr>
+<th style="text-align: left;">country</th>
+<th style="text-align: right;">first_name</th>
+<th style="text-align: right;">last_name</th>
+<th style="text-align: right;">continent</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;">Argentina</td>
+<td style="text-align: right;">1</td>
+<td style="text-align: right;">1</td>
+<td style="text-align: right;">1</td>
+</tr>
+<tr>
+<td style="text-align: left;">China</td>
+<td style="text-align: right;">2</td>
+<td style="text-align: right;">2</td>
+<td style="text-align: right;">2</td>
+</tr>
+<tr>
+<td style="text-align: left;">Germany</td>
+<td style="text-align: right;">2</td>
+<td style="text-align: right;">2</td>
+<td style="text-align: right;">2</td>
+</tr>
+<tr>
+<td style="text-align: left;"><div class="language-text highlight"><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a>Dask executes this `groupby` operation in parallel across all available cores. 
+</span><span id="__span-9-2"><a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a>
+</span><span id="__span-9-3"><a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a>## Map Functions over Partitions
+</span><span id="__span-9-4"><a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a>
+</span><span id="__span-9-5"><a id="__codelineno-9-5" name="__codelineno-9-5" href="#__codelineno-9-5"></a>You can also use Dask&#39;s `map_partitions` method to map a custom Python function over all the partitions. 
+</span><span id="__span-9-6"><a id="__codelineno-9-6" name="__codelineno-9-6" href="#__codelineno-9-6"></a>
+</span><span id="__span-9-7"><a id="__codelineno-9-7" name="__codelineno-9-7" href="#__codelineno-9-7"></a>Let&#39;s write a function that will replace the missing `continent` values with the right continent names.
+</span></code></pre></div></td>
+<td style="text-align: right;"></td>
+<td style="text-align: right;"></td>
+<td style="text-align: right;"></td>
+</tr>
+<tr>
+<td style="text-align: left;"># define custom python function</td>
+<td style="text-align: right;"></td>
+<td style="text-align: right;"></td>
+<td style="text-align: right;"></td>
+</tr>
+</tbody>
+</table>
+<h1 id="get-na_string">get na_string</h1>
+<p>df = ddf.get_partition(0).compute()
+na_string = df.iloc[0].continent
+na_string</p>
+<h1 id="define-function">define function</h1>
+<p>def replace_proper(partition, na_string):
+    if [partition.country == "Argentina"]:
+        partition.loc[partition.country=="Argentina"] = partition.loc[partition.country=="Argentina"].replace(na_string, "South America")
+    if [partition.country == "Germany"]:
+        partition.loc[partition.country=="Germany"] = partition.loc[partition.country=="Germany"].replace(na_string, "Europe")
+    else:
+        pass
+    return partition      <br />
+<div class="language-text highlight"><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a>Now map this over all partitions in the Dask DataFrame:
+</span></code></pre></div></p>
+<h1 id="define-metadata-and-map-function-over-partitions">define metadata and map function over partitions</h1>
+<blockquote>
+<p>meta = dict(ddf.dtypes)
+ddf3 = ddf.map_partitions(replace_proper, na_string, meta=meta)
+ddf3.compute()</p>
+</blockquote>
+<table>
+<thead>
+<tr>
+<th style="text-align: right;"></th>
+<th style="text-align: left;">first_name</th>
+<th style="text-align: left;">last_name</th>
+<th style="text-align: left;">country</th>
+<th style="text-align: left;">continent</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: right;">0</td>
+<td style="text-align: left;">Ernesto</td>
+<td style="text-align: left;">Guevara</td>
+<td style="text-align: left;">Argentina</td>
+<td style="text-align: left;">South America</td>
+</tr>
+<tr>
+<td style="text-align: right;">0</td>
+<td style="text-align: left;">Bruce</td>
+<td style="text-align: left;">Lee</td>
+<td style="text-align: left;">China</td>
+<td style="text-align: left;">Asia</td>
+</tr>
+<tr>
+<td style="text-align: right;">1</td>
+<td style="text-align: left;">Jack</td>
+<td style="text-align: left;">Ma</td>
+<td style="text-align: left;">China</td>
+<td style="text-align: left;">Asia</td>
+</tr>
+<tr>
+<td style="text-align: right;">0</td>
+<td style="text-align: left;">Wolfgang</td>
+<td style="text-align: left;">Manche</td>
+<td style="text-align: left;">Germany</td>
+<td style="text-align: left;">Europe</td>
+</tr>
+<tr>
+<td style="text-align: right;">1</td>
+<td style="text-align: left;">Soraya</td>
+<td style="text-align: left;">Jala</td>
+<td style="text-align: left;">Germany</td>
+<td style="text-align: left;">Europe</td>
+</tr>
+<tr>
+<td style="text-align: right;"><div class="language-text highlight"><pre><span></span><code><span id="__span-11-1"><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a>## Write to Delta Lake
+</span><span id="__span-11-2"><a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a>After doing your data processing in Dask, you can write the data back out to Delta Lake using `to_deltalake`:
+</span></code></pre></div></td>
+<td style="text-align: left;"></td>
+<td style="text-align: left;"></td>
+<td style="text-align: left;"></td>
+<td style="text-align: left;"></td>
+</tr>
+<tr>
+<td style="text-align: right;">ddt.to_deltalake(ddf, "tmp/test_write")</td>
+<td style="text-align: left;"></td>
+<td style="text-align: left;"></td>
+<td style="text-align: left;"></td>
+<td style="text-align: left;"></td>
+</tr>
+<tr>
+<td style="text-align: right;">```</td>
+<td style="text-align: left;"></td>
+<td style="text-align: left;"></td>
+<td style="text-align: left;"></td>
+<td style="text-align: left;"></td>
+</tr>
+</tbody>
+</table>
+<h2 id="contribute-to-dask-deltalake">Contribute to <code>dask-deltalake</code></h2>
+<p>To contribute, go to the <a href="https://github.com/rrpelgrim/dask-deltatable"><code>dask-deltalake</code> Github repository</a>.</p>
 
 
 
@@ -1756,44 +1898,6 @@ dt.metadata().configuration
       
         <footer class="md-footer">
   
-    
-      
-      <nav class="md-footer__inner md-grid" aria-label="Footer" >
-        
-          
-          <a href="../delta_table_optimizer/" class="md-footer__link md-footer__link--prev" aria-label="Previous: TableOptimizer">
-            <div class="md-footer__button md-icon">
-              
-              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11h12Z"/></svg>
-            </div>
-            <div class="md-footer__title">
-              <span class="md-footer__direction">
-                Previous
-              </span>
-              <div class="md-ellipsis">
-                TableOptimizer
-              </div>
-            </div>
-          </a>
-        
-        
-          
-          <a href="../../schema/" class="md-footer__link md-footer__link--next" aria-label="Next: Schema">
-            <div class="md-footer__title">
-              <span class="md-footer__direction">
-                Next
-              </span>
-              <div class="md-ellipsis">
-                Schema
-              </div>
-            </div>
-            <div class="md-footer__button md-icon">
-              
-              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M4 11v2h12l-5.5 5.5 1.42 1.42L19.84 12l-7.92-7.92L10.5 5.5 16 11H4Z"/></svg>
-            </div>
-          </a>
-        
-      </nav>
     
   
   <div class="md-footer-meta md-typeset">
@@ -1825,10 +1929,10 @@ dt.metadata().configuration
     </div>
     
     
-    <script id="__config" type="application/json">{"base": "../../..", "features": ["navigation.tracking", "navigation.instant", "navigation.expand", "navigation.tabs", "navigation.indexes", "navigation.tabs.sticky", "navigation.footer", "content.tabs.link", "content.code.annotation", "content.code.copy"], "search": "../../../assets/javascripts/workers/search.f886a092.min.js", "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}}</script>
+    <script id="__config" type="application/json">{"base": "../..", "features": ["navigation.tracking", "navigation.instant", "navigation.expand", "navigation.tabs", "navigation.indexes", "navigation.tabs.sticky", "navigation.footer", "content.tabs.link", "content.code.annotation", "content.code.copy"], "search": "../../assets/javascripts/workers/search.f886a092.min.js", "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}}</script>
     
     
-      <script src="../../../assets/javascripts/bundle.aecac24b.min.js"></script>
+      <script src="../../assets/javascripts/bundle.aecac24b.min.js"></script>
       
     
   </body>

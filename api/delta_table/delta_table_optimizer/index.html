@@ -385,6 +385,8 @@
       
         
       
+        
+      
     
     
     
@@ -441,6 +443,26 @@
   
   <span class="md-ellipsis">
     Why Use Delta Lake
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../delta-lake-big-data-small-data/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Delta Lake for big and small data
   </span>
   
 
@@ -1853,12 +1875,25 @@ it will fail.</p>
           </td>
           <td>
             <div class="doc-md-description">
-              <p>the columns to use for Z-ordering. There must be at least one column.
-        partition_filters: the partition filters that will be used for getting the matched files</p>
+              <p>the columns to use for Z-ordering. There must be at least one column.</p>
             </div>
           </td>
           <td>
               <em>required</em>
+          </td>
+        </tr>
+        <tr>
+          <td><code>partition_filters</code></td>
+          <td>
+                <code><span title="typing.Optional">Optional</span>[<span title="deltalake.table.FilterType">FilterType</span>]</code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>the partition filters that will be used for getting the matched files</p>
+            </div>
+          </td>
+          <td>
+                <code>None</code>
           </td>
         </tr>
         <tr>
