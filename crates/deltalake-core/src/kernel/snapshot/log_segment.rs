@@ -451,9 +451,13 @@ async fn list_log_files_with_checkpoint(
         .collect_vec();
 
     // TODO raise a proper error
-    assert_eq!(checkpoint_files.len(), cp.parts.unwrap_or(1) as usize);
-
-    Ok((commit_files, checkpoint_files))
+    if checkpoint_files.len() != cp.parts.unwrap_or(1) as usize {
+        Err(DeltaTableError::Generic(
+            format!("Checkpoint files inconsistent with checkpoint version {} metadata: expected {} files, found {:#?}", cp.version, cp.parts.unwrap_or(1), checkpoint_files)
+        ))
+    } else {
+        Ok((commit_files, checkpoint_files))
+    }
 }
 
 /// List relevant log files.
