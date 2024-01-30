@@ -18,6 +18,7 @@ use tracing::debug;
 
 use super::parse;
 use crate::kernel::{arrow::json, Action, ActionType, Metadata, Protocol, Schema, StructType};
+use crate::logstore::LogStore;
 use crate::operations::transaction::get_commit_bytes;
 use crate::protocol::DeltaOperation;
 use crate::{DeltaResult, DeltaTableConfig, DeltaTableError};
@@ -148,15 +149,21 @@ impl LogSegment {
         table_root: &Path,
         start_version: i64,
         end_version: Option<i64>,
-        store: &dyn ObjectStore,
+        log_store: &dyn LogStore,
     ) -> DeltaResult<Self> {
         debug!(
             "try_new_slice: start_version: {}, end_version: {:?}",
             start_version, end_version
         );
+        log_store.refresh().await?;
         let log_url = table_root.child("_delta_log");
-        let (mut commit_files, checkpoint_files) =
-            list_log_files(store, &log_url, end_version, Some(start_version)).await?;
+        let (mut commit_files, checkpoint_files) = list_log_files(
+            log_store.object_store().as_ref(),
+            &log_url,
+            end_version,
+            Some(start_version),
+        )
+        .await?;
         // remove all files above requested version
         if let Some(version) = end_version {
             commit_files.retain(|meta| meta.location.commit_version() <= Some(version));

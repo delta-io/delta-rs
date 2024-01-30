@@ -166,6 +166,20 @@ impl LogStore for S3DynamoDbLogStore {
         self.table_path.clone()
     }
 
+    async fn refresh(&self) -> DeltaResult<()> {
+        let entry = self
+            .lock_client
+            .get_latest_entry(&self.table_path)
+            .await
+            .map_err(|err| DeltaTableError::GenericError {
+                source: Box::new(err),
+            })?;
+        if let Some(entry) = entry {
+            self.repair_entry(&entry).await?;
+        }
+        Ok(())
+    }
+
     async fn read_commit_entry(&self, version: i64) -> DeltaResult<Option<Bytes>> {
         let entry = self
             .lock_client

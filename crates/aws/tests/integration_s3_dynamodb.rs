@@ -156,13 +156,25 @@ async fn test_repair_commit_entry() -> TestResult<()> {
 
 #[tokio::test]
 #[serial]
-#[ignore = "https://github.com/delta-io/delta-rs/issues/2109"]
 async fn test_repair_on_update() -> TestResult<()> {
     let context = IntegrationContext::new(Box::new(S3Integration::default()))?;
     let mut table = prepare_table(&context, "repair_on_update").await?;
     let _entry = create_incomplete_commit_entry(&table, 1, "unfinished_commit").await?;
     table.update().await?;
     // table update should find and update to newest, incomplete commit entry
+    assert_eq!(table.version(), 1);
+    validate_lock_table_state(&table, 1).await?;
+    Ok(())
+}
+
+#[tokio::test]
+#[serial]
+async fn test_repair_on_load() -> TestResult<()> {
+    let context = IntegrationContext::new(Box::new(S3Integration::default()))?;
+    let mut table = prepare_table(&context, "repair_on_update").await?;
+    let _entry = create_incomplete_commit_entry(&table, 1, "unfinished_commit").await?;
+    table.load_version(1).await?;
+    // table should fix the broken entry while loading a specific version
     assert_eq!(table.version(), 1);
     validate_lock_table_state(&table, 1).await?;
     Ok(())

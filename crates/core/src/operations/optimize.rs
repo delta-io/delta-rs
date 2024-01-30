@@ -552,7 +552,7 @@ impl MergePlan {
         use datafusion::prelude::{col, ParquetReadOptions};
         use datafusion_common::Column;
         use datafusion_expr::expr::ScalarFunction;
-        use datafusion_expr::Expr;
+        use datafusion_expr::{Expr, ScalarUDF};
 
         let locations = files
             .iter()
@@ -578,7 +578,7 @@ impl MergePlan {
             .map(|col| Expr::Column(Column::from_qualified_name_ignore_case(col)))
             .collect_vec();
         let expr = Expr::ScalarFunction(ScalarFunction::new_udf(
-            Arc::new(zorder::datafusion::zorder_key_udf()),
+            Arc::new(ScalarUDF::from(zorder::datafusion::ZOrderUDF)),
             cols,
         ));
         let df = df.with_column(ZORDER_KEY_COLUMN, expr)?;
@@ -1139,10 +1139,10 @@ pub(super) mod zorder {
         use arrow_schema::DataType;
         use datafusion_common::DataFusionError;
         use datafusion_expr::{
-            ColumnarValue, ReturnTypeFunction, ScalarFunctionImplementation, ScalarUDF, Signature,
-            TypeSignature, Volatility,
+            ColumnarValue, ScalarUDF, ScalarUDFImpl, Signature, TypeSignature, Volatility,
         };
         use itertools::Itertools;
+        use std::any::Any;
 
         pub const ZORDER_UDF_NAME: &str = "zorder_key";
 
@@ -1166,20 +1166,38 @@ pub(super) mod zorder {
 
                 use url::Url;
                 let ctx = SessionContext::new_with_config_rt(SessionConfig::default(), runtime);
-                ctx.register_udf(datafusion::zorder_key_udf());
+                ctx.register_udf(ScalarUDF::from(datafusion::ZOrderUDF));
                 Ok(Self { columns, ctx })
             }
         }
 
-        /// Get the DataFusion UDF struct for zorder_key
-        pub fn zorder_key_udf() -> ScalarUDF {
-            let signature = Signature {
-                type_signature: TypeSignature::VariadicAny,
-                volatility: Volatility::Immutable,
-            };
-            let return_type: ReturnTypeFunction = Arc::new(|_| Ok(Arc::new(DataType::Binary)));
-            let fun: ScalarFunctionImplementation = Arc::new(zorder_key_datafusion);
-            ScalarUDF::new(ZORDER_UDF_NAME, &signature, &return_type, &fun)
+        // DataFusion UDF impl for zorder_key
+        #[derive(Debug)]
+        pub struct ZOrderUDF;
+
+        impl ScalarUDFImpl for ZOrderUDF {
+            fn as_any(&self) -> &dyn Any {
+                self
+            }
+
+            fn name(&self) -> &str {
+                ZORDER_UDF_NAME
+            }
+
+            fn signature(&self) -> &Signature {
+                &Signature {
+                    type_signature: TypeSignature::VariadicAny,
+                    volatility: Volatility::Immutable,
+                }
+            }
+
+            fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType, DataFusionError> {
+                Ok(DataType::Binary)
+            }
+
+            fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue, DataFusionError> {
+                zorder_key_datafusion(args)
+            }
         }
 
         /// Datafusion zorder UDF body
