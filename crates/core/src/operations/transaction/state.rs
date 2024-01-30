@@ -1,6 +1,7 @@
+use std::collections::HashSet;
 use std::sync::Arc;
 
-use arrow::array::ArrayRef;
+use arrow::array::{ArrayRef, BooleanArray};
 use arrow::datatypes::{
     DataType, Field as ArrowField, Schema as ArrowSchema, SchemaRef as ArrowSchemaRef,
 };
@@ -296,6 +297,12 @@ impl<'a> PruningStatistics for AddContainer<'a> {
         });
         ScalarValue::iter_to_array(values).ok()
     }
+
+    // This function is required since DataFusion 35.0, but is implemented as a no-op
+    // https://github.com/apache/arrow-datafusion/blob/ec6abece2dcfa68007b87c69eefa6b0d7333f628/datafusion/core/src/datasource/physical_plan/parquet/page_filter.rs#L550
+    fn contained(&self, _column: &Column, _value: &HashSet<ScalarValue>) -> Option<BooleanArray> {
+        None
+    }
 }
 
 impl PruningStatistics for DeltaTableState {
@@ -332,6 +339,12 @@ impl PruningStatistics for DeltaTableState {
         let partition_columns = &self.metadata().partition_columns;
         let container = AddContainer::new(&files, partition_columns, self.arrow_schema().ok()?);
         container.null_counts(column)
+    }
+
+    // This function is required since DataFusion 35.0, but is implemented as a no-op
+    // https://github.com/apache/arrow-datafusion/blob/ec6abece2dcfa68007b87c69eefa6b0d7333f628/datafusion/core/src/datasource/physical_plan/parquet/page_filter.rs#L550
+    fn contained(&self, _column: &Column, _value: &HashSet<ScalarValue>) -> Option<BooleanArray> {
+        None
     }
 }
 

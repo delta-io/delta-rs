@@ -4,6 +4,7 @@ pub(crate) type Result<T, E = Error> = std::result::Result<T, E>;
 
 #[derive(thiserror::Error, Debug)]
 pub(crate) enum Error {
+    #[allow(dead_code)]
     #[error("failed to parse config: {0}")]
     Parse(String),
 
