@@ -152,7 +152,6 @@ async fn excute_non_empty_expr(
     let predicate_expr = create_physical_expr(
         &negated_expression,
         &input_dfschema,
-        &input_schema,
         state.execution_props(),
     )?;
     let filter: Arc<dyn ExecutionPlan> =
