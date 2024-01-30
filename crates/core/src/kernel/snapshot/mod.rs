@@ -59,14 +59,12 @@ impl Snapshot {
     /// Create a new [`Snapshot`] instance
     pub async fn try_new(
         table_root: &Path,
-        log_store: Arc<dyn LogStore>,
+        store: Arc<dyn ObjectStore>,
         config: DeltaTableConfig,
         version: Option<i64>,
     ) -> DeltaResult<Self> {
-        let log_segment = LogSegment::try_new(table_root, version, log_store.as_ref()).await?;
-        let (protocol, metadata) = log_segment
-            .read_metadata(log_store.object_store(), &config)
-            .await?;
+        let log_segment = LogSegment::try_new(table_root, version, store.as_ref()).await?;
+        let (protocol, metadata) = log_segment.read_metadata(store.clone(), &config).await?;
         if metadata.is_none() || protocol.is_none() {
             return Err(DeltaTableError::Generic(
                 "Cannot read metadata from log segment".into(),
@@ -351,15 +349,12 @@ impl EagerSnapshot {
     /// Create a new [`EagerSnapshot`] instance
     pub async fn try_new(
         table_root: &Path,
-        log_store: Arc<dyn LogStore>,
+        store: Arc<dyn ObjectStore>,
         config: DeltaTableConfig,
         version: Option<i64>,
     ) -> DeltaResult<Self> {
-        let snapshot = Snapshot::try_new(table_root, log_store.clone(), config, version).await?;
-        let files = snapshot
-            .files(log_store.object_store())?
-            .try_collect()
-            .await?;
+        let snapshot = Snapshot::try_new(table_root, store.clone(), config, version).await?;
+        let files = snapshot.files(store)?.try_collect().await?;
         Ok(Self { snapshot, files })
     }
 
@@ -603,7 +598,10 @@ mod tests {
     }
 
     async fn test_snapshot(context: &IntegrationContext) -> TestResult {
-        let store = context.table_builder(TestTables::Simple).build_storage()?;
+        let store = context
+            .table_builder(TestTables::Simple)
+            .build_storage()?
+            .object_store();
 
         let snapshot =
             Snapshot::try_new(&Path::default(), store.clone(), Default::default(), None).await?;
@@ -617,7 +615,7 @@ mod tests {
         assert_eq!(snapshot.schema(), &expected);
 
         let infos = snapshot
-            .commit_infos(store.object_store(), None)
+            .commit_infos(store.clone(), None)
             .await?
             .try_collect::<Vec<_>>()
             .await?;
@@ -625,14 +623,14 @@ mod tests {
         assert_eq!(infos.len(), 5);
 
         let tombstones = snapshot
-            .tombstones(store.object_store())?
+            .tombstones(store.clone())?
             .try_collect::<Vec<_>>()
             .await?;
         let tombstones = tombstones.into_iter().flatten().collect_vec();
         assert_eq!(tombstones.len(), 31);
 
         let batches = snapshot
-            .files(store.object_store())?
+            .files(store.clone())?
             .try_collect::<Vec<_>>()
             .await?;
         let expected = [
@@ -650,7 +648,8 @@ mod tests {
 
         let store = context
             .table_builder(TestTables::Checkpoints)
-            .build_storage()?;
+            .build_storage()?
+            .object_store();
 
         for version in 0..=12 {
             let snapshot = Snapshot::try_new(
@@ -661,7 +660,7 @@ mod tests {
             )
             .await?;
             let batches = snapshot
-                .files(store.object_store())?
+                .files(store.clone())?
                 .try_collect::<Vec<_>>()
                 .await?;
             let num_files = batches.iter().map(|b| b.num_rows() as i64).sum::<i64>();
@@ -672,7 +671,10 @@ mod tests {
     }
 
     async fn test_eager_snapshot(context: &IntegrationContext) -> TestResult {
-        let store = context.table_builder(TestTables::Simple).build_storage()?;
+        let store = context
+            .table_builder(TestTables::Simple)
+            .build_storage()?
+            .object_store();
 
         let snapshot =
             EagerSnapshot::try_new(&Path::default(), store.clone(), Default::default(), None)
@@ -688,7 +690,8 @@ mod tests {
 
         let store = context
             .table_builder(TestTables::Checkpoints)
-            .build_storage()?;
+            .build_storage()?
+            .object_store();
 
         for version in 0..=12 {
             let snapshot = EagerSnapshot::try_new(
@@ -710,7 +713,10 @@ mod tests {
         let context = IntegrationContext::new(Box::<LocalStorageIntegration>::default())?;
         context.load_table(TestTables::Simple).await?;
 
-        let store = context.table_builder(TestTables::Simple).build_storage()?;
+        let store = context
+            .table_builder(TestTables::Simple)
+            .build_storage()?
+            .object_store();
 
         let mut snapshot =
             EagerSnapshot::try_new(&Path::default(), store.clone(), Default::default(), None)

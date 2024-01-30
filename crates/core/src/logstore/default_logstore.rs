@@ -3,15 +3,10 @@
 use std::sync::Arc;
 
 use bytes::Bytes;
-use futures::TryStreamExt as _;
-use object_store::{path::Path, ObjectMeta, ObjectStore};
+use object_store::{path::Path, ObjectStore};
 
 use super::{LogStore, LogStoreConfig};
-use crate::{
-    operations::transaction::TransactionError,
-    storage::{commit_uri_from_version, ObjectStoreRef},
-    DeltaResult,
-};
+use crate::{operations::transaction::TransactionError, storage::ObjectStoreRef, DeltaResult};
 
 /// Default [`LogStore`] implementation
 #[derive(Debug, Clone)]
@@ -40,15 +35,6 @@ impl LogStore for DefaultLogStore {
 
     async fn read_commit_entry(&self, version: i64) -> DeltaResult<Option<Bytes>> {
         super::read_commit_entry(self.storage.as_ref(), version).await
-    }
-
-    async fn list_from(&self, version: i64) -> DeltaResult<Vec<ObjectMeta>> {
-        let commit_uri = commit_uri_from_version(version);
-        Ok(self
-            .storage
-            .list_with_offset(None, &commit_uri)
-            .try_collect::<Vec<_>>()
-            .await?)
     }
 
     /// Tries to commit a prepared commit file. Returns [`TransactionError`]
