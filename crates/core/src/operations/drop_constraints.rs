@@ -93,24 +93,16 @@ impl std::future::IntoFuture for DropConstraintBuilder {
                 .configuration
                 .remove(format!("delta.constraints.{}", name).as_str());
 
-            let mut contains_constraints: bool = false;
-            for key in metadata.configuration.keys() {
-                if key.starts_with("delta.constraints") {
-                    contains_constraints = true;
-                    break;
-                } else {
-                    continue;
-                }
-            }
+            let contains_constraints = metadata
+                .configuration
+                .keys()
+                .any(|k| k.starts_with("delta.constraints"));
 
             let operational_parameters = HashMap::from_iter([("name".to_string(), json!(&name))]);
 
             let operations = DeltaOperation::DropConstraint { name: name.clone() };
 
-            let app_metadata = match this.app_metadata {
-                Some(metadata) => metadata,
-                None => HashMap::default(),
-            };
+            let app_metadata = this.app_metadata.unwrap_or_default();
 
             let commit_info = CommitInfo {
                 timestamp: Some(Utc::now().timestamp_millis()),
@@ -146,7 +138,9 @@ impl std::future::IntoFuture for DropConstraintBuilder {
 
             let mut actions = vec![Action::CommitInfo(commit_info), Action::Metadata(metadata)];
 
-            protocol.map(|protocol| actions.push(Action::Protocol(protocol)));
+            if let Some(protocol) = protocol {
+                actions.push(Action::Protocol(protocol))
+            };
 
             let version = commit(
                 this.log_store.as_ref(),
