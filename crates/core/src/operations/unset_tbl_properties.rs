@@ -161,7 +161,7 @@ impl std::future::IntoFuture for UnsetTablePropertiesBuilder {
                 None,
             )
             .await?;
-        
+
             this.snapshot.merge(actions, &operations, version)?;
             Ok(DeltaTable::new_with_state(this.log_store, this.snapshot))
         })
