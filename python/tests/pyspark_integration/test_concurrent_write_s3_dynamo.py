@@ -183,11 +183,11 @@ def delete_dynamodb_table(table_name: str):
 
 @pytest.fixture
 def setup():
-    os.environ['AWS_ENDPOINT_URL'] = 'http://localhost:4566'
-    os.environ['AWS_REGION'] = 'us-east-1'
-    os.environ['AWS_ACCESS_KEY_ID'] = 'deltalake'
-    os.environ['AWS_SECRET_ACCESS_KEY'] = 'weloverust'
-    os.environ['AWS_ALLOW_HTTP'] = 'true'
+    os.environ["AWS_ENDPOINT_URL"] = "http://localhost:4566"
+    os.environ["AWS_REGION"] = "us-east-1"
+    os.environ["AWS_ACCESS_KEY_ID"] = "deltalake"
+    os.environ["AWS_SECRET_ACCESS_KEY"] = "weloverust"
+    os.environ["AWS_ALLOW_HTTP"] = "true"
     id = uuid.uuid4()
     bucket_name = f"delta-rs-integration-{id}"
     bucket_url = f"s3://{bucket_name}"
