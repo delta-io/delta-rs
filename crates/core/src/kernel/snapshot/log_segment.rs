@@ -155,7 +155,7 @@ impl LogSegment {
             "try_new_slice: start_version: {}, end_version: {:?}",
             start_version, end_version
         );
-        let max_version_2 = log_store.get_latest_version(start_version).await?;
+        log_store.refresh().await?;
         let log_url = table_root.child("_delta_log");
         let (mut commit_files, checkpoint_files) = list_log_files(
             log_store.object_store().as_ref(),
