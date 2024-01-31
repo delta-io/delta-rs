@@ -458,7 +458,7 @@ async fn list_log_files_with_checkpoint(
         .collect_vec();
 
     // TODO raise a proper error
-    println!("cp: {:#?}, checkpoint_files: {:#?}", cp, checkpoint_files);
+    println!("{:?} - cp: {:#?}, checkpoint_files: {:#?}", std::thread::current().name(), cp, checkpoint_files);
     assert_eq!(checkpoint_files.len(), cp.parts.unwrap_or(1) as usize);
 
     Ok((commit_files, checkpoint_files))
@@ -641,7 +641,7 @@ pub(super) mod tests {
             let segment =
                 LogSegment::try_new(&Path::default(), Some(version), slow_list_store.as_ref())
                     .await?;
-            println!("segment: {:?}", segment);
+            println!("{:?} - segment: {:?}", std::thread::current().name(), segment);
             Ok(())
         });
 
@@ -651,10 +651,10 @@ pub(super) mod tests {
             Some(false),
         )
         .await?;
-        println!("checkpoint created");
+        println!("{:?} - checkpoint created", std::thread::current().name());
 
         load_task.await??;
-        println!("load task finished");
+        println!("{:?} - load task finished", std::thread::current().name());
 
         Ok(())
     }
@@ -707,7 +707,7 @@ pub(super) mod tests {
             }
 
             async fn get_opts(&self, location: &Path, options: GetOptions) -> Result<GetResult> {
-                println!("getting: {:?}", location);
+                println!("{:?} - getting: {:?}", std::thread::current().name(), location);
                 self.store.get_opts(location, options).await
             }
 
@@ -716,7 +716,7 @@ pub(super) mod tests {
             }
 
             fn list(&self, prefix: Option<&Path>) -> BoxStream<'_, Result<ObjectMeta>> {
-                println!("slow list: {:?}", prefix);
+                println!("{:?} - slow list: {:?}", std::thread::current().name(), prefix);
                 std::thread::sleep(std::time::Duration::from_secs(1));
                 self.store.list(prefix)
             }
