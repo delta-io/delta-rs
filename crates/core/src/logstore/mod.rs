@@ -165,6 +165,11 @@ pub trait LogStore: Sync + Send {
     /// Return the name of this LogStore implementation
     fn name(&self) -> String;
 
+    /// Trigger sync operation on log store to.
+    async fn refresh(&self) -> DeltaResult<()> {
+        Ok(())
+    }
+
     /// Read data for commit entry with the given version.
     async fn read_commit_entry(&self, version: i64) -> DeltaResult<Option<Bytes>>;
 
