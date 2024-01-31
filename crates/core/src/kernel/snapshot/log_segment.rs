@@ -458,6 +458,7 @@ async fn list_log_files_with_checkpoint(
         .collect_vec();
 
     // TODO raise a proper error
+    println!("cp: {:#?}, checkpoint_files: {:#?}", cp, checkpoint_files);
     assert_eq!(checkpoint_files.len(), cp.parts.unwrap_or(1) as usize);
 
     Ok((commit_files, checkpoint_files))
@@ -516,6 +517,9 @@ pub(super) async fn list_log_files(
 #[cfg(test)]
 pub(super) mod tests {
     use deltalake_test::utils::*;
+    use tokio::task::JoinHandle;
+
+    use crate::checkpoints::create_checkpoint_from_table_uri_and_cleanup;
 
     use super::*;
 
@@ -616,5 +620,118 @@ pub(super) mod tests {
         assert_eq!(protocol, expected);
 
         Ok(())
+    }
+
+    pub(crate) async fn concurrent_checkpoint(context: &IntegrationContext) -> TestResult {
+        context
+            .load_table(TestTables::LatestNotCheckpointed)
+            .await?;
+        let table_to_checkpoint = context
+            .table_builder(TestTables::LatestNotCheckpointed)
+            .load()
+            .await?;
+        let store = context
+            .table_builder(TestTables::LatestNotCheckpointed)
+            .build_storage()?
+            .object_store();
+        let slow_list_store = Arc::new(slow_store::SlowListStore { store });
+
+        let version = table_to_checkpoint.version();
+        let load_task: JoinHandle<Result<(), DeltaTableError>> = tokio::spawn(async move {
+            let segment =
+                LogSegment::try_new(&Path::default(), Some(version), slow_list_store.as_ref())
+                    .await?;
+            println!("segment: {:?}", segment);
+            Ok(())
+        });
+
+        create_checkpoint_from_table_uri_and_cleanup(
+            &table_to_checkpoint.table_uri(),
+            version,
+            Some(false),
+        )
+        .await?;
+        println!("checkpoint created");
+
+        load_task.await??;
+        println!("load task finished");
+
+        Ok(())
+    }
+
+    mod slow_store {
+        use std::sync::Arc;
+
+        use bytes::Bytes;
+        use futures::stream::BoxStream;
+        use object_store::{
+            path::Path, GetOptions, GetResult, ListResult, MultipartId, ObjectMeta, ObjectStore,
+            PutOptions, PutResult, Result,
+        };
+        use tokio::io::AsyncWrite;
+
+        #[derive(Debug)]
+        pub(super) struct SlowListStore {
+            pub store: Arc<dyn ObjectStore>,
+        }
+
+        impl std::fmt::Display for SlowListStore {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                write!(f, "SlowListStore {{ store: {} }}", self.store)
+            }
+        }
+
+        #[async_trait::async_trait]
+        impl object_store::ObjectStore for SlowListStore {
+            async fn put_opts(
+                &self,
+                location: &Path,
+                bytes: Bytes,
+                opts: PutOptions,
+            ) -> Result<PutResult> {
+                self.store.put_opts(location, bytes, opts).await
+            }
+            async fn put_multipart(
+                &self,
+                location: &Path,
+            ) -> Result<(MultipartId, Box<dyn AsyncWrite + Unpin + Send>)> {
+                self.store.put_multipart(location).await
+            }
+
+            async fn abort_multipart(
+                &self,
+                location: &Path,
+                multipart_id: &MultipartId,
+            ) -> Result<()> {
+                self.store.abort_multipart(location, multipart_id).await
+            }
+
+            async fn get_opts(&self, location: &Path, options: GetOptions) -> Result<GetResult> {
+                println!("getting: {:?}", location);
+                self.store.get_opts(location, options).await
+            }
+
+            async fn delete(&self, location: &Path) -> Result<()> {
+                self.store.delete(location).await
+            }
+
+            fn list(&self, prefix: Option<&Path>) -> BoxStream<'_, Result<ObjectMeta>> {
+                println!("slow list: {:?}", prefix);
+                std::thread::sleep(std::time::Duration::from_secs(1));
+                self.store.list(prefix)
+            }
+
+            async fn list_with_delimiter(&self, prefix: Option<&Path>) -> Result<ListResult> {
+                self.store.list_with_delimiter(prefix).await
+            }
+
+            async fn copy(&self, from: &Path, to: &Path) -> Result<()> {
+                self.store.copy(from, to).await
+            }
+
+            async fn copy_if_not_exists(&self, from: &Path, to: &Path) -> Result<()> {
+                self.store.copy_if_not_exists(from, to).await
+            }
+        }
     }
 }
