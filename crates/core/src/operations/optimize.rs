@@ -29,6 +29,7 @@ use arrow_array::RecordBatch;
 use futures::future::BoxFuture;
 use futures::stream::BoxStream;
 use futures::{Future, StreamExt, TryStreamExt};
+use indexmap::IndexMap;
 use itertools::Itertools;
 use num_cpus;
 use parquet::arrow::async_reader::{ParquetObjectReader, ParquetRecordBatchStreamBuilder};
@@ -308,7 +309,7 @@ impl From<OptimizeInput> for DeltaOperation {
 
 fn create_remove(
     path: &str,
-    partitions: &BTreeMap<String, Scalar>,
+    partitions: &IndexMap<String, Scalar>,
     size: i64,
 ) -> Result<Action, DeltaTableError> {
     // NOTE unwrap is safe since UNIX_EPOCH will always be earlier then now.
@@ -353,11 +354,11 @@ enum OptimizeOperations {
     ///
     /// Bins are determined by the bin-packing algorithm to reach an optimal size.
     /// Files that are large enough already are skipped. Bins of size 1 are dropped.
-    Compact(HashMap<String, (BTreeMap<String, Scalar>, Vec<MergeBin>)>),
+    Compact(HashMap<String, (IndexMap<String, Scalar>, Vec<MergeBin>)>),
     /// Plan to Z-order each partition
     ZOrder(
         Vec<String>,
-        HashMap<String, (BTreeMap<String, Scalar>, MergeBin)>,
+        HashMap<String, (IndexMap<String, Scalar>, MergeBin)>,
     ),
     // TODO: Sort
 }
@@ -401,7 +402,7 @@ impl MergePlan {
     /// collected during the operation.
     async fn rewrite_files<F>(
         task_parameters: Arc<MergeTaskParameters>,
-        partition_values: BTreeMap<String, Scalar>,
+        partition_values: IndexMap<String, Scalar>,
         files: MergeBin,
         object_store: ObjectStoreRef,
         read_stream: F,
@@ -849,7 +850,7 @@ fn build_compaction_plan(
 ) -> Result<(OptimizeOperations, Metrics), DeltaTableError> {
     let mut metrics = Metrics::default();
 
-    let mut partition_files: HashMap<String, (BTreeMap<String, Scalar>, Vec<ObjectMeta>)> =
+    let mut partition_files: HashMap<String, (IndexMap<String, Scalar>, Vec<ObjectMeta>)> =
         HashMap::new();
     for add in snapshot.get_active_add_actions_by_partitions(filters)? {
         let add = add?;
@@ -863,7 +864,7 @@ fn build_compaction_plan(
             .partition_values()?
             .into_iter()
             .map(|(k, v)| (k.to_string(), v))
-            .collect::<BTreeMap<_, _>>();
+            .collect::<IndexMap<_, _>>();
 
         partition_files
             .entry(add.partition_values()?.hive_partition_path())
@@ -877,7 +878,7 @@ fn build_compaction_plan(
         file.sort_by(|a, b| b.size.cmp(&a.size));
     }
 
-    let mut operations: HashMap<String, (BTreeMap<String, Scalar>, Vec<MergeBin>)> = HashMap::new();
+    let mut operations: HashMap<String, (IndexMap<String, Scalar>, Vec<MergeBin>)> = HashMap::new();
     for (part, (partition, files)) in partition_files {
         let mut merge_bins = vec![MergeBin::new()];
 
@@ -955,14 +956,14 @@ fn build_zorder_plan(
     // For now, just be naive and optimize all files in each selected partition.
     let mut metrics = Metrics::default();
 
-    let mut partition_files: HashMap<String, (BTreeMap<String, Scalar>, MergeBin)> = HashMap::new();
+    let mut partition_files: HashMap<String, (IndexMap<String, Scalar>, MergeBin)> = HashMap::new();
     for add in snapshot.get_active_add_actions_by_partitions(filters)? {
         let add = add?;
         let partition_values = add
             .partition_values()?
             .into_iter()
             .map(|(k, v)| (k.to_string(), v))
-            .collect::<BTreeMap<_, _>>();
+            .collect::<IndexMap<_, _>>();
         metrics.total_considered_files += 1;
         let object_meta = ObjectMeta::try_from(&add)?;
 
