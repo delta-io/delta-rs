@@ -34,7 +34,7 @@ Hive-style partitioning also has some significant downsides.
 
 * It’s only suitable for low-cardinality columns.
 * It can create many small files, especially if you use the wrong partition key or frequently update the Delta table.
-* It can cause some queries that don’t rely on the partition key to run slower (because of the excessive number of small files)
+* It can cause some queries that don’t rely on the partition key to run slower (because of the excessive number of small files).  A large number of small files is problematic for I/O throughput.
 
 Hive-style partitioning can be a great data management tactic and a fantastic option for many Delta tables.  Beware of the downsides before partitioning your tables.
 
@@ -79,16 +79,6 @@ If you don’t want to leverage older versions of a table, then you should remov
 You only need to vacuum when you perform operations that mark files for removal in the transaction log.  An append-only table doesn’t create legacy files that need to be vacuumed.
 
 Create a good vacuum strategy for your tables to minimize your storage costs.
-
-## Registering tables in a metastore/catalog
-
-You can register Delta tables in a metastore or catalog, making them easier to access.
-
-Suppose you are working on a team with data engineers building ETL pipelines with Delta Lake.  The data analysts want to query these tables via a SQL interface.
-
-It’s nice for the data engineers to register the Delta tables in a catalog so the data analysts can easily query them by name.  It’s easier for an analyst to query the `students` table than having to `/know/the/path/for/every/table/like/students`.
-
-It’s good to register Delta tables in a catalog whenever a catalog is readily available in your production environment, making querying your tables easier.
 
 ## Delta Lake best practices to minimize costs
 
