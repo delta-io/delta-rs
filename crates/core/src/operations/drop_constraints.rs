@@ -71,26 +71,22 @@ impl std::future::IntoFuture for DropConstraintBuilder {
         let mut this = self;
 
         Box::pin(async move {
-            let name = this.name.ok_or(Err(DeltaTableError::Generic("No name provided".to_string())))?;
+            let name = this
+                .name
+                .ok_or(DeltaTableError::Generic("No name provided".to_string()))?;
 
             let mut metadata = this.snapshot.metadata().clone();
             let configuration_key = format!("delta.constraints.{}", name);
 
-           if metadata.configuration.remove(&configuration_key).is_none() {
-               if this.raise_if_not_exists {
-                   return Err(DeltaTableError::Generic(format!(
-                       "Constraint with name: {} doesn't exists",
-                       name
-                   )));
-               }
-               return Ok(DeltaTable::new_with_state(this.log_store, this.snapshot));
-           }
-
-            let contains_constraints = metadata
-                .configuration
-                .keys()
-                .any(|k| k.starts_with("delta.constraints"));
-
+            if metadata.configuration.remove(&configuration_key).is_none() {
+                if this.raise_if_not_exists {
+                    return Err(DeltaTableError::Generic(format!(
+                        "Constraint with name: {} doesn't exists",
+                        name
+                    )));
+                }
+                return Ok(DeltaTable::new_with_state(this.log_store, this.snapshot));
+            }
             let operational_parameters = HashMap::from_iter([("name".to_string(), json!(&name))]);
 
             let operations = DeltaOperation::DropConstraint { name: name.clone() };
