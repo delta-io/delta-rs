@@ -190,6 +190,7 @@ pub enum PeekCommit {
 }
 
 /// In memory representation of a Delta Table
+#[derive(Clone)]
 pub struct DeltaTable {
     /// The state of the table as of the most recent loaded Delta log entry.
     pub state: Option<DeltaTableState>,
