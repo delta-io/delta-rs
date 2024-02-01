@@ -1386,7 +1386,7 @@ fn write_to_deltalake(
         builder = builder.with_description(description);
     };
 
-    if let Some(predicate) = &predicate {
+    if let Some(predicate) = predicate {
         builder = builder.with_replace_where(predicate);
     };
 

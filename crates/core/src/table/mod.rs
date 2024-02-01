@@ -346,11 +346,7 @@ impl DeltaTable {
             self.version(),
         );
         match self.state.as_mut() {
-            Some(state) => {
-                state
-                    .update(self.log_store.object_store(), max_version)
-                    .await
-            }
+            Some(state) => state.update(self.log_store.clone(), max_version).await,
             _ => {
                 let state = DeltaTableState::try_new(
                     &Path::default(),

@@ -51,3 +51,20 @@ that partition or else the method will raise an error.
 
 This method could also be used to insert a new partition if one doesn't
 already exist, making this operation idempotent.
+
+## Overwriting part of the table data using a predicate
+
+!!! note
+
+    This predicate is often called a `replaceWhere` predicate
+
+When you don’t specify the `predicate`, the overwrite save mode will replace the entire table. 
+Instead of replacing the entire table (which is costly!), you may want to overwrite only the specific parts of the table that should be changed. 
+In this case, you can use a `predicate` to overwrite only the relevant records or partitions.
+
+!!! note
+
+    Data written must conform to the same predicate, i.e. not contain any records that don't match the `predicate` condition, 
+    otherwise the operation will fail 
+
+{{ code_example('operations', 'replace_where', ['replaceWhere'])}}

@@ -676,4 +676,13 @@ mod tests {
             DeltaTableError::InvalidTableLocation(_expected_error_msg),
         ))
     }
+
+    /// <https://github.com/delta-io/delta-rs/issues/2152>
+    #[tokio::test]
+    async fn test_identity_column() {
+        let path = "../test/tests/data/issue-2152";
+        let _ = crate::open_table(path)
+            .await
+            .expect("Failed to load the table");
+    }
 }

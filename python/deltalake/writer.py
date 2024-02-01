@@ -84,7 +84,6 @@ def write_deltalake(
     *,
     schema: Optional[Union[pa.Schema, DeltaSchema]] = ...,
     partition_by: Optional[Union[List[str], str]] = ...,
-    filesystem: Optional[pa_fs.FileSystem] = None,
     mode: Literal["error", "append", "overwrite", "ignore"] = ...,
     file_options: Optional[ds.ParquetFileWriteOptions] = ...,
     max_partitions: Optional[int] = ...,
@@ -119,7 +118,35 @@ def write_deltalake(
     *,
     schema: Optional[Union[pa.Schema, DeltaSchema]] = ...,
     partition_by: Optional[Union[List[str], str]] = ...,
-    mode: Literal["error", "append", "overwrite", "ignore"] = ...,
+    mode: Literal["error", "append", "ignore"] = ...,
+    name: Optional[str] = ...,
+    description: Optional[str] = ...,
+    configuration: Optional[Mapping[str, Optional[str]]] = ...,
+    overwrite_schema: bool = ...,
+    storage_options: Optional[Dict[str, str]] = ...,
+    large_dtypes: bool = ...,
+    engine: Literal["rust"],
+    writer_properties: WriterProperties = ...,
+    custom_metadata: Optional[Dict[str, str]] = ...,
+) -> None:
+    ...
+
+
+@overload
+def write_deltalake(
+    table_or_uri: Union[str, Path, DeltaTable],
+    data: Union[
+        "pd.DataFrame",
+        ds.Dataset,
+        pa.Table,
+        pa.RecordBatch,
+        Iterable[pa.RecordBatch],
+        RecordBatchReader,
+    ],
+    *,
+    schema: Optional[Union[pa.Schema, DeltaSchema]] = ...,
+    partition_by: Optional[Union[List[str], str]] = ...,
+    mode: Literal["overwrite"],
     name: Optional[str] = ...,
     description: Optional[str] = ...,
     configuration: Optional[Mapping[str, Optional[str]]] = ...,
@@ -147,7 +174,6 @@ def write_deltalake(
     *,
     schema: Optional[Union[pa.Schema, DeltaSchema]] = None,
     partition_by: Optional[Union[List[str], str]] = None,
-    filesystem: Optional[pa_fs.FileSystem] = None,
     mode: Literal["error", "append", "overwrite", "ignore"] = "error",
     file_options: Optional[ds.ParquetFileWriteOptions] = None,
     max_partitions: Optional[int] = None,
@@ -185,9 +211,6 @@ def write_deltalake(
         schema: Optional schema to write.
         partition_by: List of columns to partition the table by. Only required
             when creating a new table.
-        filesystem: Optional filesystem to pass to PyArrow. If not provided will
-            be inferred from uri. The file system has to be rooted in the table root.
-            Use the pyarrow.fs.SubTreeFileSystem, to adopt the root of pyarrow file systems.
         mode: How to handle existing data. Default is to error if table already exists.
             If 'append', will add new data.
             If 'overwrite', will replace table with new data.
@@ -216,7 +239,7 @@ def write_deltalake(
         description: User-provided description for this table.
         configuration: A map containing configuration options for the metadata action.
         overwrite_schema: If True, allows updating the schema of the table.
-        storage_options: options passed to the native delta filesystem. Unused if 'filesystem' is defined.
+        storage_options: options passed to the native delta filesystem.
         predicate: When using `Overwrite` mode, replace data that matches a predicate. Only used in rust engine.
         partition_filters: the partition filters that will be used for partition overwrite. Only used in pyarrow engine.
         large_dtypes: If True, the data schema is kept in large_dtypes, has no effect on pandas dataframe input.
@@ -295,11 +318,6 @@ def write_deltalake(
 
     elif engine == "pyarrow":
         # We need to write against the latest table version
-        if filesystem is not None:
-            raise NotImplementedError(
-                "Filesystem support is not yet implemented.  #570"
-            )
-
         filesystem = pa_fs.PyFileSystem(DeltaStorageHandler(table_uri, storage_options))
 
         if table:  # already exists
