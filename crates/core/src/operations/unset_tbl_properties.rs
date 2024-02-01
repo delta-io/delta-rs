@@ -130,7 +130,7 @@ impl std::future::IntoFuture for UnsetTablePropertiesBuilder {
             let operational_parameters =
                 HashMap::from_iter([("properties".to_string(), json!(&properties))]);
 
-            let operations = DeltaOperation::UnsetTblProperties {
+            let operations = DeltaOperation::UnsetTableProperties {
                 properties: properties,
             };
 
