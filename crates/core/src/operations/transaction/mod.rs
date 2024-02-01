@@ -11,7 +11,7 @@ use self::conflict_checker::{CommitConflictError, TransactionInfo, WinningCommit
 use crate::crate_version;
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::{Action, CommitInfo, ReaderFeatures, WriterFeatures};
-use crate::logstore::LogStore;
+use crate::logstore::LogStoreRef;
 use crate::protocol::DeltaOperation;
 use crate::table::state::DeltaTableState;
 
@@ -119,8 +119,8 @@ fn log_entry_from_actions<'a>(
 
 pub(crate) fn get_commit_bytes(
     operation: &DeltaOperation,
-    actions: &Vec<Action>,
-    app_metadata: Option<HashMap<String, Value>>,
+    actions: &[Action],
+    app_metadata: &HashMap<String, Value>,
 ) -> Result<bytes::Bytes, TransactionError> {
     if !actions.iter().any(|a| matches!(a, Action::CommitInfo(..))) {
         let mut extra_info = HashMap::<String, Value>::new();
@@ -130,8 +130,8 @@ pub(crate) fn get_commit_bytes(
             "clientVersion".to_string(),
             Value::String(format!("delta-rs.{}", crate_version())),
         );
-        if let Some(meta) = app_metadata {
-            extra_info.extend(meta)
+        if !app_metadata.is_empty() {
+            extra_info.extend(app_metadata.to_owned())
         }
         commit_info.info = extra_info;
         Ok(bytes::Bytes::from(log_entry_from_actions(
@@ -151,8 +151,8 @@ pub(crate) fn get_commit_bytes(
 pub async fn prepare_commit<'a>(
     storage: &dyn ObjectStore,
     operation: &DeltaOperation,
-    actions: &Vec<Action>,
-    app_metadata: Option<HashMap<String, Value>>,
+    actions: &[Action],
+    app_metadata: &HashMap<String, Value>,
 ) -> Result<Path, TransactionError> {
     // Serialize all actions that are part of this log entry.
     let log_entry = get_commit_bytes(operation, actions, app_metadata)?;
@@ -167,94 +167,155 @@ pub async fn prepare_commit<'a>(
     Ok(path)
 }
 
-/// Commit a transaction, with up to 15 retries. This is higher-level transaction API.
-///
-/// Will error early if the a concurrent transaction has already been committed
-/// and conflicts with this transaction.
-pub async fn commit(
-    log_store: &dyn LogStore,
-    actions: &Vec<Action>,
-    operation: DeltaOperation,
-    read_snapshot: Option<&DeltaTableState>,
-    app_metadata: Option<HashMap<String, Value>>,
-) -> DeltaResult<i64> {
-    commit_with_retries(
-        log_store,
-        actions,
-        operation,
-        read_snapshot,
-        app_metadata,
-        15,
-    )
-    .await
+#[derive(Default, Clone)]
+pub struct CommitProperties {
+    pub(crate) app_metadata: HashMap<String, Value>,
+    max_retries: usize,
 }
 
-/// Commit a transaction, with up configurable number of retries. This is higher-level transaction API.
-///
-/// The function will error early if the a concurrent transaction has already been committed
-/// and conflicts with this transaction.
-pub async fn commit_with_retries(
-    log_store: &dyn LogStore,
-    actions: &Vec<Action>,
-    operation: DeltaOperation,
-    read_snapshot: Option<&DeltaTableState>,
-    app_metadata: Option<HashMap<String, Value>>,
-    max_retries: usize,
-) -> DeltaResult<i64> {
-    if let Some(read_snapshot) = read_snapshot {
-        PROTOCOL.can_commit(read_snapshot, actions)?;
-    }
-
-    let tmp_commit = prepare_commit(
-        log_store.object_store().as_ref(),
-        &operation,
-        actions,
-        app_metadata,
-    )
-    .await?;
-
-    if read_snapshot.is_none() {
-        log_store.write_commit_entry(0, &tmp_commit).await?;
-        return Ok(0);
-    }
-
-    let read_snapshot = read_snapshot.unwrap();
-
-    let mut attempt_number = 1;
-    while attempt_number <= max_retries {
-        let version = read_snapshot.version() + attempt_number as i64;
-        match log_store.write_commit_entry(version, &tmp_commit).await {
-            Ok(()) => return Ok(version),
-            Err(TransactionError::VersionAlreadyExists(version)) => {
-                let summary =
-                    WinningCommitSummary::try_new(log_store, version - 1, version).await?;
-                let transaction_info = TransactionInfo::try_new(
-                    read_snapshot,
-                    operation.read_predicate(),
-                    actions,
-                    // TODO allow tainting whole table
-                    false,
-                )?;
-                let conflict_checker =
-                    ConflictChecker::new(transaction_info, summary, Some(&operation));
-                match conflict_checker.check_conflicts() {
-                    Ok(_) => {
-                        attempt_number += 1;
-                    }
-                    Err(err) => {
-                        log_store.object_store().delete(&tmp_commit).await?;
-                        return Err(TransactionError::CommitConflict(err).into());
-                    }
-                };
-            }
-            Err(err) => {
-                log_store.object_store().delete(&tmp_commit).await?;
-                return Err(err.into());
-            }
+impl<'a> From<CommitProperties> for CommitBuilder<'a> {
+    fn from(value: CommitProperties) -> Self {
+        CommitBuilder {
+            max_retries: value.max_retries,
+            app_metadata: value.app_metadata,
+            ..Default::default()
         }
     }
+}
 
-    Err(TransactionError::MaxCommitAttempts(max_retries as i32).into())
+/// TODO
+pub struct CommitBuilder<'a> {
+    actions: &'a [Action],
+    read_snapshot: Option<&'a DeltaTableState>,
+    app_metadata: HashMap<String, Value>,
+    max_retries: usize,
+}
+
+impl<'a> Default for CommitBuilder<'a> {
+    fn default() -> Self {
+        CommitBuilder {
+            max_retries: 15,
+            ..Default::default()
+        }
+    }
+}
+
+impl<'a> CommitBuilder<'a> {
+    pub fn with_actions(mut self, actions: &'a [Action]) -> Self {
+        self.actions = actions;
+        self
+    }
+
+    pub fn with_snapshot(mut self, snapshot: &'a DeltaTableState) -> Self {
+        self.read_snapshot = Some(snapshot);
+        self
+    }
+
+    pub fn with_maybe_snapshot(mut self, snapshot: Option<&'a DeltaTableState>) -> Self {
+        self.read_snapshot = snapshot;
+        self
+    }
+
+    pub fn with_app_metadata(mut self, app_metadata: HashMap<String, Value>) -> Self {
+        self.app_metadata = app_metadata;
+        self
+    }
+
+    pub fn with_retries(mut self, retries: usize) -> Self {
+        self.max_retries = retries;
+        self
+    }
+
+    pub fn build(self, log_store: LogStoreRef, operation: DeltaOperation) -> Commit<'a> {
+        Commit {
+            log_store,
+            actions: self.actions,
+            operation,
+            app_metadata: self.app_metadata,
+            read_snapshot: self.read_snapshot,
+            max_retries: self.max_retries,
+        }
+    }
+}
+
+struct Commit<'a> {
+    log_store: LogStoreRef,
+    read_snapshot: Option<&'a DeltaTableState>,
+    actions: &'a [Action],
+    operation: DeltaOperation,
+    app_metadata: HashMap<String, Value>,
+    max_retries: usize,
+}
+
+impl<'a> Commit<'a> {
+    /// Commit a transaction, with up configurable number of retries. This is higher-level transaction API.
+    ///
+    /// The function will error early if the a concurrent transaction has already been committed
+    /// and conflicts with this transaction.
+    pub async fn execute(&self) -> DeltaResult<i64> {
+        if let Some(read_snapshot) = &self.read_snapshot {
+            PROTOCOL.can_commit(read_snapshot, &self.actions)?;
+        }
+
+        let tmp_commit = prepare_commit(
+            self.log_store.object_store().as_ref(),
+            &self.operation,
+            &self.actions,
+            &self.app_metadata,
+        )
+        .await?;
+
+        if self.read_snapshot.is_none() {
+            self.log_store.write_commit_entry(0, &tmp_commit).await?;
+            return Ok(0);
+        }
+
+        let read_snapshot = self.read_snapshot.as_ref().unwrap();
+
+        let mut attempt_number = 1;
+        while attempt_number <= self.max_retries {
+            let version = read_snapshot.version() + attempt_number as i64;
+            match self
+                .log_store
+                .write_commit_entry(version, &tmp_commit)
+                .await
+            {
+                Ok(()) => return Ok(version),
+                Err(TransactionError::VersionAlreadyExists(version)) => {
+                    let summary = WinningCommitSummary::try_new(
+                        self.log_store.as_ref(),
+                        version - 1,
+                        version,
+                    )
+                    .await?;
+                    let transaction_info = TransactionInfo::try_new(
+                        read_snapshot,
+                        self.operation.read_predicate(),
+                        &self.actions,
+                        // TODO allow tainting whole table
+                        false,
+                    )?;
+                    let conflict_checker =
+                        ConflictChecker::new(transaction_info, summary, Some(&self.operation));
+                    match conflict_checker.check_conflicts() {
+                        Ok(_) => {
+                            attempt_number += 1;
+                        }
+                        Err(err) => {
+                            self.log_store.object_store().delete(&tmp_commit).await?;
+                            return Err(TransactionError::CommitConflict(err).into());
+                        }
+                    };
+                }
+                Err(err) => {
+                    self.log_store.object_store().delete(&tmp_commit).await?;
+                    return Err(err.into());
+                }
+            }
+        }
+
+        Err(TransactionError::MaxCommitAttempts(self.max_retries as i32).into())
+    }
 }
 
 #[cfg(test)]

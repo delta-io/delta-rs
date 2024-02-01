@@ -98,7 +98,7 @@ pub(crate) struct TransactionInfo<'a> {
     /// appIds that have been seen by the transaction
     pub(crate) read_app_ids: HashSet<String>,
     /// delta log actions that the transaction wants to commit
-    actions: &'a Vec<Action>,
+    actions: &'a [Action],
     /// read [`DeltaTableState`] used for the transaction
     pub(crate) read_snapshot: &'a DeltaTableState,
     /// Whether the transaction tainted the whole table
@@ -110,7 +110,7 @@ impl<'a> TransactionInfo<'a> {
     pub fn try_new(
         read_snapshot: &'a DeltaTableState,
         read_predicates: Option<String>,
-        actions: &'a Vec<Action>,
+        actions: &'a [Action],
         read_whole_table: bool,
     ) -> DeltaResult<Self> {
         use datafusion::prelude::SessionContext;
