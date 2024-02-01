@@ -42,7 +42,7 @@ use deltalake::parquet::errors::ParquetError;
 use deltalake::parquet::file::properties::WriterProperties;
 use deltalake::partitions::PartitionFilter;
 use deltalake::protocol::{DeltaOperation, SaveMode};
-use deltalake::DeltaTableBuilder;
+use deltalake::{DeltaConfigKey, DeltaTableBuilder};
 use deltalake::{DeltaOps, DeltaResult};
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
@@ -1055,11 +1055,15 @@ impl RawDeltaTable {
         raise_if_not_exists: bool,
         custom_metadata: Option<HashMap<String, String>>,
     ) -> PyResult<()> {
+        let properties: Result<Vec<_>, _> = properties
+            .iter()
+            .map(|v| v.parse::<DeltaConfigKey>())
+            .collect();
         let mut cmd = UnsetTablePropertiesBuilder::new(
             self._table.log_store(),
             self._table.snapshot().map_err(PythonError::from)?.clone(),
         )
-        .with_properties(properties)
+        .with_properties(properties.map_err(PythonError::from)?)
         .with_raise_if_not_exists(raise_if_not_exists);
 
         if let Some(metadata) = custom_metadata {

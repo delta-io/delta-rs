@@ -1,13 +1,12 @@
 //! Unset table properties of the table
 
 use std::collections::HashMap;
-use std::str::FromStr;
 
 use chrono::Utc;
 use futures::future::BoxFuture;
 use serde_json::json;
 
-use crate::kernel::{Action, CommitInfo, IsolationLevel, Protocol};
+use crate::kernel::{Action, CommitInfo, IsolationLevel};
 use crate::logstore::LogStoreRef;
 use crate::operations::transaction::commit;
 use crate::protocol::DeltaOperation;
@@ -20,7 +19,7 @@ pub struct UnsetTablePropertiesBuilder {
     /// A snapshot of the table's state
     snapshot: DeltaTableState,
     /// Name of the property
-    properties: Option<Vec<String>>,
+    properties: Vec<DeltaConfigKey>,
     /// Raise if property doesn't exist
     raise_if_not_exists: bool,
     /// Delta object store for handling data files
@@ -33,7 +32,7 @@ impl UnsetTablePropertiesBuilder {
     /// Create a new builder
     pub fn new(log_store: LogStoreRef, snapshot: DeltaTableState) -> Self {
         Self {
-            properties: None,
+            properties: vec![],
             raise_if_not_exists: true,
             snapshot,
             log_store,
@@ -41,31 +40,23 @@ impl UnsetTablePropertiesBuilder {
         }
     }
 
-    /// Specify the constraint to be removed
-    pub fn with_property(mut self, name: String) -> Self {
-        match self.properties {
-            Some(mut vec_name) => {
-                vec_name.push(name);
-                self.properties = Some(vec_name);
-            }
-            None => self.properties = Some(vec![name]),
-        }
+    /// Specify the property to be removed
+    pub fn with_property(mut self, name: DeltaConfigKey) -> Self {
+        let mut properties = self.properties;
+        properties.push(name);
+        self.properties = properties;
         self
     }
 
-    /// Specify the constraint to be removed
-    pub fn with_properties(mut self, names: Vec<String>) -> Self {
-        match self.properties {
-            Some(mut vec_name) => {
-                vec_name.extend(names);
-                self.properties = Some(vec_name);
-            }
-            None => self.properties = Some(names),
-        }
+    /// Specify the properties to be removed
+    pub fn with_properties(mut self, names: Vec<DeltaConfigKey>) -> Self {
+        let mut properties = self.properties;
+        properties.extend(names);
+        self.properties = properties;
         self
     }
 
-    /// Specify if you want to raise if the constraint does not exist
+    /// Specify if you want to raise if the property does not exist
     pub fn with_raise_if_not_exists(mut self, raise: bool) -> Self {
         self.raise_if_not_exists = raise;
         self
@@ -90,25 +81,17 @@ impl std::future::IntoFuture for UnsetTablePropertiesBuilder {
         let mut this = self;
 
         Box::pin(async move {
-            let properties = match this.properties {
-                Some(v) => v,
-                None => {
-                    return Err(DeltaTableError::Generic(
-                        "No properties provided".to_string(),
-                    ))
-                }
-            };
+            let properties = this
+                .properties
+                .iter()
+                .map(|v| v.as_ref())
+                .collect::<Vec<&str>>();
 
             let mut metadata = this.snapshot.metadata().clone();
 
-            // Check if names are valid config keys
-            for key in &properties {
-                DeltaConfigKey::from_str(key)?;
-            }
-
             let mut incorrect_config_names: Vec<&str> = Vec::new();
             for key in &properties {
-                if !metadata.configuration.contains_key(key) {
+                if !metadata.configuration.contains_key(*key) {
                     incorrect_config_names.push(key)
                 }
             }
@@ -124,14 +107,14 @@ impl std::future::IntoFuture for UnsetTablePropertiesBuilder {
             }
 
             for key in &properties {
-                metadata.configuration.remove(key);
+                metadata.configuration.remove(*key);
             }
 
             let operational_parameters =
-                HashMap::from_iter([("properties".to_string(), json!(&properties))]);
+                HashMap::from_iter([("properties".to_string(), json!(properties))]);
 
             let operations = DeltaOperation::UnsetTableProperties {
-                properties: properties,
+                properties: properties.iter().map(|v| v.to_string()).collect(),
             };
 
             let app_metadata = this.app_metadata.unwrap_or_default();
