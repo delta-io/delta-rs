@@ -75,7 +75,7 @@ def test_drop_constraint(tmp_path: pathlib.Path, sample_table: pa.Table):
     assert last_action["operation"] == "DROP CONSTRAINT"
     assert dt.version() == 2
     assert dt.metadata().configuration == {}
-    assert dt.protocol().min_writer_version == 2
+    assert dt.protocol().min_writer_version == 3
 
 
 def test_drop_constraint_invalid(tmp_path: pathlib.Path, sample_table: pa.Table):

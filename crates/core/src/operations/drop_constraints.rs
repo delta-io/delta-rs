@@ -6,7 +6,7 @@ use chrono::Utc;
 use futures::future::BoxFuture;
 use serde_json::json;
 
-use crate::kernel::{Action, CommitInfo, IsolationLevel, Protocol};
+use crate::kernel::{Action, CommitInfo, IsolationLevel};
 use crate::logstore::LogStoreRef;
 use crate::operations::transaction::commit;
 use crate::protocol::DeltaOperation;
@@ -115,32 +115,7 @@ impl std::future::IntoFuture for DropConstraintBuilder {
                 ..Default::default()
             };
 
-            let protocol = if !contains_constraints {
-                // downgrade the protocol if possible since there are no more constraints
-                let old_protocol = this.snapshot.protocol();
-                Some(Protocol {
-                    min_reader_version: if old_protocol.min_reader_version > 1 {
-                        old_protocol.min_reader_version
-                    } else {
-                        1
-                    },
-                    min_writer_version: if old_protocol.min_writer_version > 3 {
-                        old_protocol.min_writer_version
-                    } else {
-                        2
-                    },
-                    reader_features: old_protocol.reader_features.clone(),
-                    writer_features: old_protocol.writer_features.clone(),
-                })
-            } else {
-                None
-            };
-
-            let mut actions = vec![Action::CommitInfo(commit_info), Action::Metadata(metadata)];
-
-            if let Some(protocol) = protocol {
-                actions.push(Action::Protocol(protocol))
-            };
+            let actions = vec![Action::CommitInfo(commit_info), Action::Metadata(metadata)];
 
             let version = commit(
                 this.log_store.as_ref(),
