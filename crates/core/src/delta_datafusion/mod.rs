@@ -877,6 +877,12 @@ impl DeltaDataChecker {
         self
     }
 
+    /// Add the specified set of constraints to the current DeltaDataChecker's constraints
+    pub fn with_extra_constraints(mut self, constraints: Vec<Constraint>) -> Self {
+        self.constraints.extend(constraints);
+        self
+    }
+
     /// Create a new DeltaDataChecker
     pub fn new(snapshot: &DeltaTableState) -> Self {
         let invariants = snapshot.schema().get_invariants().unwrap_or_default();
