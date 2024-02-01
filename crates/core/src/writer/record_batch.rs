@@ -5,7 +5,6 @@
 //! the writer. Once written, add actions are returned by the writer. It's the users responsibility
 //! to create the transaction using those actions.
 
-use std::collections::BTreeMap;
 use std::{collections::HashMap, sync::Arc};
 
 use arrow::array::{Array, UInt32Array};
@@ -15,6 +14,7 @@ use arrow_array::ArrayRef;
 use arrow_row::{RowConverter, SortField};
 use arrow_schema::{ArrowError, Schema as ArrowSchema, SchemaRef as ArrowSchemaRef};
 use bytes::Bytes;
+use indexmap::IndexMap;
 use object_store::{path::Path, ObjectStore};
 use parquet::{arrow::ArrowWriter, errors::ParquetError};
 use parquet::{basic::Compression, file::properties::WriterProperties};
@@ -127,7 +127,7 @@ impl RecordBatchWriter {
     pub async fn write_partition(
         &mut self,
         record_batch: RecordBatch,
-        partition_values: &BTreeMap<String, Scalar>,
+        partition_values: &IndexMap<String, Scalar>,
     ) -> Result<(), DeltaTableError> {
         let arrow_schema =
             arrow_schema_without_partitions(&self.arrow_schema_ref, &self.partition_columns);
@@ -212,7 +212,7 @@ impl DeltaWriter<RecordBatch> for RecordBatchWriter {
 #[derive(Clone, Debug)]
 pub struct PartitionResult {
     /// values found in partition columns
-    pub partition_values: BTreeMap<String, Scalar>,
+    pub partition_values: IndexMap<String, Scalar>,
     /// remaining dataset with partition column values removed
     pub record_batch: RecordBatch,
 }
@@ -222,14 +222,14 @@ struct PartitionWriter {
     writer_properties: WriterProperties,
     pub(super) buffer: ShareableBuffer,
     pub(super) arrow_writer: ArrowWriter<ShareableBuffer>,
-    pub(super) partition_values: BTreeMap<String, Scalar>,
+    pub(super) partition_values: IndexMap<String, Scalar>,
     pub(super) buffered_record_batch_count: usize,
 }
 
 impl PartitionWriter {
     pub fn new(
         arrow_schema: Arc<ArrowSchema>,
-        partition_values: BTreeMap<String, Scalar>,
+        partition_values: IndexMap<String, Scalar>,
         writer_properties: WriterProperties,
     ) -> Result<Self, ParquetError> {
         let buffer = ShareableBuffer::default();
@@ -302,7 +302,7 @@ pub(crate) fn divide_by_partition_values(
 
     if partition_columns.is_empty() {
         partitions.push(PartitionResult {
-            partition_values: BTreeMap::new(),
+            partition_values: IndexMap::new(),
             record_batch: values.clone(),
         });
         return Ok(partitions);
