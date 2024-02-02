@@ -13,8 +13,7 @@ use crate::operations::transaction::commit;
 use crate::protocol::DeltaOperation;
 use crate::table::config::DeltaConfigKey;
 use crate::table::state::DeltaTableState;
-use crate::DeltaTable;
-use crate::{DeltaResult, DeltaTableError};
+use crate::{DeltaResult, DeltaTable, DeltaTableError};
 
 /// Remove constraints from the table
 pub struct UnsetTablePropertiesBuilder {
