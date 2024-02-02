@@ -71,10 +71,7 @@ impl std::future::IntoFuture for DropConstraintBuilder {
         let mut this = self;
 
         Box::pin(async move {
-            let name = match this.name {
-                Some(v) => v,
-                None => return Err(DeltaTableError::Generic("No name provided".to_string())),
-            };
+            let name = this.name.ok_or(Err(DeltaTableError::Generic("No name provided".to_string())))?;
 
             let mut metadata = this.snapshot.metadata().clone();
             let configuration_key = format!("delta.constraints.{}", name);
