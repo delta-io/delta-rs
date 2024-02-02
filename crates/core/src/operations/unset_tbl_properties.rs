@@ -134,10 +134,7 @@ impl std::future::IntoFuture for UnsetTablePropertiesBuilder {
                 properties: properties,
             };
 
-            let app_metadata = match this.app_metadata {
-                Some(metadata) => metadata,
-                None => HashMap::default(),
-            };
+            let app_metadata = this.app_metadata.unwrap_or_default();
 
             let commit_info = CommitInfo {
                 timestamp: Some(Utc::now().timestamp_millis()),
