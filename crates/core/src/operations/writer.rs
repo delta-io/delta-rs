@@ -485,7 +485,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_do_not_write_empty_file_on_close() {
-        let base_int = Arc::new(Int32Array::from((0..10000 as i32).collect::<Vec<i32>>()));
+        let base_int = Arc::new(Int32Array::from((0..10000_i32).collect::<Vec<i32>>()));
         let base_str = Arc::new(StringArray::from(vec!["A"; 10000]));
         let schema = Arc::new(ArrowSchema::new(vec![
             Field::new("id", DataType::Utf8, true),
