@@ -10,10 +10,9 @@ use serde_json::Value;
 use self::conflict_checker::{CommitConflictError, TransactionInfo, WinningCommitSummary};
 use crate::crate_version;
 use crate::errors::{DeltaResult, DeltaTableError};
-use crate::kernel::{Action, CommitInfo, ReaderFeatures, WriterFeatures};
+use crate::kernel::{Action, CommitInfo, EagerSnapshot, ReaderFeatures, WriterFeatures};
 use crate::logstore::LogStoreRef;
 use crate::protocol::DeltaOperation;
-use crate::table::state::DeltaTableState;
 
 pub use self::protocol::INSTANCE as PROTOCOL;
 
@@ -88,6 +87,9 @@ pub enum TransactionError {
         source: Box<dyn std::error::Error + Send + Sync + 'static>,
     },
 }
+/// Error raised while commititng transaction
+#[derive(thiserror::Error, Debug)]
+pub enum CommitBuilderError {}
 
 impl From<TransactionError> for DeltaTableError {
     fn from(err: TransactionError) -> Self {
@@ -186,7 +188,7 @@ impl<'a> From<CommitProperties> for CommitBuilder<'a> {
 /// TODO
 pub struct CommitBuilder<'a> {
     actions: &'a [Action],
-    read_snapshot: Option<&'a DeltaTableState>,
+    read_snapshot: Option<&'a EagerSnapshot>,
     app_metadata: HashMap<String, Value>,
     max_retries: usize,
 }
@@ -206,12 +208,12 @@ impl<'a> CommitBuilder<'a> {
         self
     }
 
-    pub fn with_snapshot(mut self, snapshot: &'a DeltaTableState) -> Self {
+    pub fn with_snapshot(mut self, snapshot: &'a EagerSnapshot) -> Self {
         self.read_snapshot = Some(snapshot);
         self
     }
 
-    pub fn with_maybe_snapshot(mut self, snapshot: Option<&'a DeltaTableState>) -> Self {
+    pub fn with_maybe_snapshot(mut self, snapshot: Option<&'a EagerSnapshot>) -> Self {
         self.read_snapshot = snapshot;
         self
     }
@@ -226,21 +228,21 @@ impl<'a> CommitBuilder<'a> {
         self
     }
 
-    pub fn build(self, log_store: LogStoreRef, operation: DeltaOperation) -> Commit<'a> {
-        Commit {
+    pub fn build(self, log_store: LogStoreRef, operation: DeltaOperation) -> Result<Commit<'a>, CommitBuilderError> {
+        Ok(Commit {
             log_store,
             actions: self.actions,
             operation,
             app_metadata: self.app_metadata,
             read_snapshot: self.read_snapshot,
             max_retries: self.max_retries,
-        }
+        })
     }
 }
 
 struct Commit<'a> {
     log_store: LogStoreRef,
-    read_snapshot: Option<&'a DeltaTableState>,
+    read_snapshot: Option<&'a EagerSnapshot>,
     actions: &'a [Action],
     operation: DeltaOperation,
     app_metadata: HashMap<String, Value>,

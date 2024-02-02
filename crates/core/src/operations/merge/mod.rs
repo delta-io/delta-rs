@@ -1367,7 +1367,7 @@ async fn execute(
     if !actions.is_empty() {
         version = CommitBuilder::from(commit_properties)
             .with_actions(&actions)
-            .with_snapshot(&snapshot)
+            .with_snapshot(&snapshot.snapshot)
             .build(log_store.clone(), operation.clone())
             .execute()
             .await?;
@@ -1403,7 +1403,7 @@ impl std::future::IntoFuture for MergeBuilder {
         let mut this = self;
 
         Box::pin(async move {
-            PROTOCOL.can_write_to(&this.snapshot)?;
+            PROTOCOL.can_write_to(&this.snapshot.snapshot)?;
 
             let state = this.state.unwrap_or_else(|| {
                 let config: SessionConfig = DeltaSessionConfig::default().into();
