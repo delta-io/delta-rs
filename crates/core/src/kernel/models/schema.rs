@@ -864,6 +864,6 @@ mod tests {
     #[test]
     fn test_identity_columns() {
         let buf = r#"{"type":"struct","fields":[{"name":"ID_D_DATE","type":"long","nullable":true,"metadata":{"delta.identity.start":1,"delta.identity.step":1,"delta.identity.allowExplicitInsert":false}},{"name":"TXT_DateKey","type":"string","nullable":true,"metadata":{}}]}"#;
-        let schema: StructType = serde_json::from_str(buf).expect("Failed to load");
+        let _schema: StructType = serde_json::from_str(buf).expect("Failed to load");
     }
 }
