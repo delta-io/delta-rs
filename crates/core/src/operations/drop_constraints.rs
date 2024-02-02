@@ -76,19 +76,15 @@ impl std::future::IntoFuture for DropConstraintBuilder {
             let mut metadata = this.snapshot.metadata().clone();
             let configuration_key = format!("delta.constraints.{}", name);
 
-            let found_constraint = metadata.configuration.contains_key(&configuration_key);
-            if this.raise_if_not_exists && !found_constraint {
-                return Err(DeltaTableError::Generic(format!(
-                    "Constraint with name: {} doesn't exists",
-                    name
-                )));
-            } else if !this.raise_if_not_exists && !found_constraint {
-                return Ok(DeltaTable::new_with_state(this.log_store, this.snapshot));
-            }
-
-            metadata
-                .configuration
-                .remove(format!("delta.constraints.{}", name).as_str());
+           if metadata.configuration.remove(&configuration_key).is_none() {
+               if this.raise_if_not_exists {
+                   return Err(DeltaTableError::Generic(format!(
+                       "Constraint with name: {} doesn't exists",
+                       name
+                   )));
+               }
+               return Ok(DeltaTable::new_with_state(this.log_store, this.snapshot));
+           }
 
             let contains_constraints = metadata
                 .configuration
