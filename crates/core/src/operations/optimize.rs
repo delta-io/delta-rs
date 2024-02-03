@@ -1575,5 +1575,30 @@ pub(super) mod zorder {
             assert_eq!(data.value_data().len(), 3 * 16 * 3);
             assert!(data.iter().all(|x| x.unwrap().len() == 3 * 16));
         }
+
+        #[tokio::test]
+        async fn works_on_spark_table() {
+            use crate::DeltaOps;
+            use tempfile::TempDir;
+            // Create a temporary directory
+            let tmp_dir = TempDir::new().expect("Failed to make temp dir");
+            let table_name = "delta-1.2.1-only-struct-stats";
+
+            // Copy recursively from the test data directory to the temporary directory
+            let source_path = format!("../test/tests/data/{table_name}");
+            fs_extra::dir::copy(source_path, tmp_dir.path(), &Default::default()).unwrap();
+
+            // Run optimize
+            let (_, metrics) =
+                DeltaOps::try_from_uri(tmp_dir.path().join(table_name).to_str().unwrap())
+                    .await
+                    .unwrap()
+                    .optimize()
+                    .await
+                    .unwrap();
+
+            // Verify it worked
+            assert_eq!(metrics.num_files_added, 1);
+        }
     }
 }
