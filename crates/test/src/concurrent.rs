@@ -145,7 +145,8 @@ impl Worker {
             .build(self.table.log_store(), operation)
             .unwrap()
             .await
-            .unwrap();
+            .unwrap()
+            .version();
         self.table.update().await.unwrap();
         version
     }

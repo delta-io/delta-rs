@@ -151,7 +151,8 @@ pub trait DeltaWriter<T> {
             .with_snapshot(&snapshot.snapshot)
             .with_actions(&adds)
             .build(table.log_store.clone(), operation)?
-            .await?;
+            .await?
+            .version();
         table.update().await?;
         Ok(version)
     }

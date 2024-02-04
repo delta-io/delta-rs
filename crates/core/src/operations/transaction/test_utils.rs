@@ -1,7 +1,7 @@
 #![allow(unused)]
 use std::collections::HashMap;
 
-use super::{prepare_commit, CommitBuilder};
+use super::CommitBuilder;
 use crate::kernel::{
     Action, Add, CommitInfo, DataType, Metadata, PrimitiveType, Protocol, Remove, StructField,
     StructType,

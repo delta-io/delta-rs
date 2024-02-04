@@ -1416,7 +1416,8 @@ async fn execute(
             .with_actions(&actions)
             .with_snapshot(&snapshot.snapshot)
             .build(log_store.clone(), operation.clone())?
-            .await?;
+            .await?
+            .version();
     }
     let op = (!actions.is_empty()).then_some(operation);
     Ok(((actions, version, op), metrics))

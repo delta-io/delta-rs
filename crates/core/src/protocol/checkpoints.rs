@@ -602,7 +602,8 @@ mod tests {
             .build(table.log_store(), operation)
             .unwrap()
             .await
-            .unwrap();
+            .unwrap()
+            .version();
 
         assert_eq!(1, v, "Expected the commit to create table version 1");
         table.load().await.expect("Failed to reload table");

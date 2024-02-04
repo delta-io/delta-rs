@@ -315,7 +315,8 @@ impl std::future::IntoFuture for CreateBuilder {
                 .with_maybe_snapshot(table_state.map(|t| &t.snapshot))
                 .with_app_metadata(app_metadata)
                 .build(table.log_store.clone(), operation)?
-                .await?;
+                .await?
+                .version();
             table.load_version(version).await?;
 
             Ok(table)

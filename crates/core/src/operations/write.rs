@@ -706,7 +706,8 @@ impl std::future::IntoFuture for WriteBuilder {
                 .with_actions(&actions)
                 .with_maybe_snapshot(this.snapshot.as_ref().map(|t| t.snapshot()))
                 .build(this.log_store.clone(), operation.clone())?
-                .await?;
+                .await?
+                .version();
 
             // TODO we do not have the table config available, but since we are merging only our newly
             // created actions, it may be safe to assume, that we want to include all actions.

@@ -185,7 +185,8 @@ impl std::future::IntoFuture for ConstraintBuilder {
                 .with_actions(&actions)
                 .with_snapshot(&this.snapshot.snapshot)
                 .build(this.log_store.clone(), operations.clone())?
-                .await?;
+                .await?
+                .version();
 
             this.snapshot.merge(actions, &operations, version)?;
             Ok(DeltaTable::new_with_state(this.log_store, this.snapshot))

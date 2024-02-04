@@ -10,7 +10,7 @@ use deltalake_aws::storage::S3StorageOptions;
 use deltalake_aws::{CommitEntry, DynamoDbConfig, DynamoDbLockClient};
 use deltalake_core::kernel::{Action, Add, DataType, PrimitiveType, StructField, StructType};
 use deltalake_core::logstore::LogStore;
-use deltalake_core::operations::transaction::{prepare_commit, CommitBuilder};
+use deltalake_core::operations::transaction::{prepare_commit, CommitBuilder, PreparedCommit};
 use deltalake_core::parquet::file::metadata;
 use deltalake_core::protocol::{DeltaOperation, SaveMode};
 use deltalake_core::storage::commit_uri_from_version;
@@ -259,18 +259,19 @@ async fn create_incomplete_commit_entry(
     tag: &str,
 ) -> TestResult<CommitEntry> {
     let actions = vec![add_action(tag)];
-    let temp_path = prepare_commit(
-        table.object_store().as_ref(),
-        &DeltaOperation::Write {
-            mode: SaveMode::Append,
-            partition_by: None,
-            predicate: None,
-        },
-        &actions,
-        &HashMap::new(),
-    )
-    .await?;
-    let commit_entry = CommitEntry::new(version, temp_path);
+    let operation = DeltaOperation::Write {
+        mode: SaveMode::Append,
+        partition_by: None,
+        predicate: None,
+    };
+    let prepared = CommitBuilder::default()
+        .with_actions(actions)
+        .with_snapshot(table)
+        .build(table.log_store(), operation)?
+        .into_prepared_commit_future()
+        .await?;
+
+    let commit_entry = CommitEntry::new(version, prepared.path());
     make_client()?
         .put_commit_entry(&table.table_uri(), &commit_entry)
         .await?;

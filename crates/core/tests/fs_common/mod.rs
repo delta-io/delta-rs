@@ -125,7 +125,8 @@ pub async fn commit_actions(
         .build(table.log_store().clone(), operation)
         .unwrap()
         .await
-        .unwrap();
+        .unwrap()
+        .version();
     table.update().await.unwrap();
     version
 }

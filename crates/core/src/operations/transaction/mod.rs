@@ -154,27 +154,21 @@ pub(crate) fn get_commit_bytes(
     }
 }
 
-/// Low-level transaction API. Creates a temporary commit file. Once created,
-/// the transaction object could be dropped and the actual commit could be executed
-/// with `DeltaTable.try_commit_transaction`.
-/// TODO: comment is outdated now
-pub async fn prepare_commit<'a>(
-    storage: &dyn ObjectStore,
-    operation: &DeltaOperation,
-    actions: &[Action],
-    app_metadata: &HashMap<String, Value>,
-) -> Result<Path, TransactionError> {
-    // Serialize all actions that are part of this log entry.
-    let log_entry = get_commit_bytes(operation, actions, app_metadata)?;
+/// Represents a inflight commit with a temporary commit marker on the log store
+pub struct PreparedCommit<'a> {
+    path: Path,
+    log_store: LogStoreRef,
+    actions: &'a [Action],
+    operation: DeltaOperation,
+    read_snapshot: Option<&'a EagerSnapshot>,
+    max_retries: usize,
+}
 
-    // Write delta log entry as temporary file to storage. For the actual commit,
-    // the temporary file is moved (atomic rename) to the delta log folder within `commit` function.
-    let token = uuid::Uuid::new_v4().to_string();
-    let file_name = format!("_commit_{token}.json.tmp");
-    let path = Path::from_iter([DELTA_LOG_FOLDER, &file_name]);
-    storage.put(&path, log_entry).await?;
-
-    Ok(path)
+impl<'a> PreparedCommit<'a> {
+    /// The temporary commit file created
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -263,8 +257,8 @@ impl<'a> CommitBuilder<'a> {
         self,
         log_store: LogStoreRef,
         operation: DeltaOperation,
-    ) -> Result<Commit<'a>, CommitBuilderError> {
-        Ok(Commit {
+    ) -> Result<PreCommit<'a>, CommitBuilderError> {
+        Ok(PreCommit {
             log_store,
             actions: self.actions,
             operation,
@@ -275,8 +269,8 @@ impl<'a> CommitBuilder<'a> {
     }
 }
 
-/// Commit to a Delta table
-pub struct Commit<'a> {
+/// Represents a commit that has not yet started but all details are finalized
+pub struct PreCommit<'a> {
     log_store: LogStoreRef,
     read_snapshot: Option<&'a EagerSnapshot>,
     actions: &'a [Action],
@@ -285,29 +279,63 @@ pub struct Commit<'a> {
     max_retries: usize,
 }
 
-impl<'a> std::future::IntoFuture for Commit<'a> {
-    type Output = DeltaResult<i64>;
+/// A commit that successfully completed
+pub struct FinalizedCommit {
+    version: i64,
+}
+
+impl FinalizedCommit {
+    /// The materialized version of the commit
+    pub fn version(&self) -> i64 {
+        self.version
+    }
+}
+
+impl<'a> PreCommit<'a> {
+    /// Prepare the commit but do not finalize it
+    pub fn into_prepared_commit_future(self) -> BoxFuture<'a, DeltaResult<PreparedCommit<'a>>> {
+        let this = self;
+
+        Box::pin(async move {
+            if let Some(read_snapshot) = &this.read_snapshot {
+                PROTOCOL.can_commit(read_snapshot, this.actions, &this.operation)?;
+            }
+
+            // Serialize all actions that are part of this log entry.
+            let log_entry = get_commit_bytes(&this.operation, &this.actions, &this.app_metadata)?;
+
+            // Write delta log entry as temporary file to storage. For the actual commit,
+            // the temporary file is moved (atomic rename) to the delta log folder within `commit` function.
+            let token = uuid::Uuid::new_v4().to_string();
+            let file_name = format!("_commit_{token}.json.tmp");
+            let path = Path::from_iter([DELTA_LOG_FOLDER, &file_name]);
+            this.log_store.object_store().put(&path, log_entry).await?;
+
+            Ok(PreparedCommit {
+                path,
+                log_store: this.log_store,
+                read_snapshot: this.read_snapshot,
+                max_retries: this.max_retries,
+                actions: this.actions,
+                operation: this.operation,
+            })
+        })
+    }
+}
+
+impl<'a> std::future::IntoFuture for PreparedCommit<'a> {
+    type Output = DeltaResult<FinalizedCommit>;
     type IntoFuture = BoxFuture<'a, Self::Output>;
 
     fn into_future(self) -> Self::IntoFuture {
         let this = self;
 
         Box::pin(async move {
-            if let Some(read_snapshot) = &this.read_snapshot {
-                PROTOCOL.can_commit(read_snapshot, this.actions)?;
-            }
-
-            let tmp_commit = prepare_commit(
-                this.log_store.object_store().as_ref(),
-                &this.operation,
-                this.actions,
-                &this.app_metadata,
-            )
-            .await?;
+            let tmp_commit = &this.path;
 
             if this.read_snapshot.is_none() {
-                this.log_store.write_commit_entry(0, &tmp_commit).await?;
-                return Ok(0);
+                this.log_store.write_commit_entry(0, tmp_commit).await?;
+                return Ok(FinalizedCommit { version: 0 });
             }
 
             let read_snapshot = this.read_snapshot.as_ref().unwrap();
@@ -317,10 +345,10 @@ impl<'a> std::future::IntoFuture for Commit<'a> {
                 let version = read_snapshot.version() + attempt_number as i64;
                 match this
                     .log_store
-                    .write_commit_entry(version, &tmp_commit)
+                    .write_commit_entry(version, tmp_commit)
                     .await
                 {
-                    Ok(()) => return Ok(version),
+                    Ok(()) => return Ok(FinalizedCommit { version }),
                     Err(TransactionError::VersionAlreadyExists(version)) => {
                         let summary = WinningCommitSummary::try_new(
                             this.log_store.as_ref(),
@@ -342,13 +370,13 @@ impl<'a> std::future::IntoFuture for Commit<'a> {
                                 attempt_number += 1;
                             }
                             Err(err) => {
-                                this.log_store.object_store().delete(&tmp_commit).await?;
+                                this.log_store.object_store().delete(tmp_commit).await?;
                                 return Err(TransactionError::CommitConflict(err).into());
                             }
                         };
                     }
                     Err(err) => {
-                        this.log_store.object_store().delete(&tmp_commit).await?;
+                        this.log_store.object_store().delete(tmp_commit).await?;
                         return Err(err.into());
                     }
                 }
@@ -356,6 +384,17 @@ impl<'a> std::future::IntoFuture for Commit<'a> {
 
             Err(TransactionError::MaxCommitAttempts(this.max_retries as i32).into())
         })
+    }
+}
+
+impl<'a> std::future::IntoFuture for PreCommit<'a> {
+    type Output = DeltaResult<FinalizedCommit>;
+    type IntoFuture = BoxFuture<'a, Self::Output>;
+
+    fn into_future(self) -> Self::IntoFuture {
+        let this = self;
+
+        Box::pin(async move { this.into_prepared_commit_future().await?.await })
     }
 }
 
