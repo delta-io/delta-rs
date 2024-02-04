@@ -81,7 +81,7 @@ impl DeltaTableState {
                 protocol: protocol.clone(),
                 metadata: metadata.clone(),
             },
-            None,
+            HashMap::new(),
         )];
         let snapshot = EagerSnapshot::new_test(&commit_data).unwrap();
         Ok(Self {
@@ -186,12 +186,17 @@ impl DeltaTableState {
         operation: &DeltaOperation,
         version: i64,
     ) -> Result<(), DeltaTableError> {
-        let commit_infos = vec![(actions, operation.clone(), None)];
+        let commit_infos = vec![(actions, operation.clone(), HashMap::new())];
         let new_version = self.snapshot.advance(&commit_infos)?;
         if new_version != version {
             return Err(DeltaTableError::Generic("Version mismatch".to_string()));
         }
         Ok(())
+    }
+
+    /// Obtain the Eager snapshot of the state
+    pub fn snapshot(&self) -> &EagerSnapshot {
+        &self.snapshot
     }
 
     /// Update the state of the table to the given version.

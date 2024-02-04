@@ -285,6 +285,7 @@ impl PruningStatistics for DeltaTableState {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::delta_datafusion::DataFusionFileMixins;
     use crate::operations::transaction::test_utils::{create_add_action, init_table_actions};
     use datafusion::prelude::SessionContext;
     use datafusion_expr::{col, lit};
@@ -325,6 +326,7 @@ mod tests {
 
         let state = DeltaTableState::from_actions(actions).unwrap();
         let files = state
+            .snapshot
             .files_matching_predicate(&[])
             .unwrap()
             .collect::<Vec<_>>();
@@ -335,6 +337,7 @@ mod tests {
             .or(col("value").lt_eq(lit::<i32>(0)));
 
         let files = state
+            .snapshot
             .files_matching_predicate(&[predictate])
             .unwrap()
             .collect::<Vec<_>>();

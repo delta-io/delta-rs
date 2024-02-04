@@ -174,7 +174,7 @@ impl<'a> TransactionInfo<'a> {
 
     #[cfg(feature = "datafusion")]
     /// Files read by the transaction
-    pub fn read_files<'t>(&'t self) -> Result<impl Iterator<Item = Add> + 't, CommitConflictError> {
+    pub fn read_files(&self) -> Result<impl Iterator<Item = Add> + '_, CommitConflictError> {
         use crate::delta_datafusion::files_matching_predicate;
 
         if let Some(predicate) = &self.read_predicates {
@@ -680,9 +680,13 @@ mod tests {
         actions: Vec<Action>,
         read_whole_table: bool,
     ) -> Result<(), CommitConflictError> {
+        use crate::table::state::DeltaTableState;
+
         let setup_actions = setup.unwrap_or_else(|| init_table_actions(None));
-        let state = DeltaTableState::from_actions(setup_actions).unwrap();
-        let transaction_info = TransactionInfo::new(&state, reads, &actions, read_whole_table);
+        let state = DeltaTableState::from_actions(setup_actions)
+            .unwrap();
+        let snapshot = state.snapshot();
+        let transaction_info = TransactionInfo::new(&snapshot, reads, &actions, read_whole_table);
         let summary = WinningCommitSummary {
             actions: concurrent,
             commit_info: None,

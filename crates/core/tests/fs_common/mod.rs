@@ -3,7 +3,7 @@ use deltalake_core::kernel::{
     Action, Add, DataType, PrimitiveType, Remove, StructField, StructType,
 };
 use deltalake_core::operations::create::CreateBuilder;
-use deltalake_core::operations::transaction::commit;
+use deltalake_core::operations::transaction::CommitBuilder;
 use deltalake_core::protocol::{DeltaOperation, SaveMode};
 use deltalake_core::storage::{GetResult, ObjectStoreResult};
 use deltalake_core::DeltaTable;
@@ -119,15 +119,13 @@ pub async fn commit_actions(
     actions: Vec<Action>,
     operation: DeltaOperation,
 ) -> i64 {
-    let version = commit(
-        table.log_store().as_ref(),
-        &actions,
-        operation,
-        Some(table.snapshot().unwrap()),
-        None,
-    )
-    .await
-    .unwrap();
+    let version = CommitBuilder::default()
+        .with_actions(&actions)
+        .with_snapshot(table.snapshot().unwrap().snapshot())
+        .build(table.log_store().clone(), operation)
+        .unwrap()
+        .await
+        .unwrap();
     table.update().await.unwrap();
     version
 }

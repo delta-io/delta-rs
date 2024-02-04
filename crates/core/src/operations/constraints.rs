@@ -1,9 +1,7 @@
 //! Add a check constraint to a table
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
-use chrono::Utc;
 use datafusion::execution::context::SessionState;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::physical_plan::ExecutionPlan;
@@ -11,22 +9,21 @@ use datafusion::prelude::SessionContext;
 use datafusion_common::ToDFSchema;
 use futures::future::BoxFuture;
 use futures::StreamExt;
-use serde_json::json;
 
 use crate::delta_datafusion::expr::fmt_expr_to_sql;
 use crate::delta_datafusion::{
     register_store, DeltaDataChecker, DeltaScanBuilder, DeltaSessionContext,
 };
-use crate::kernel::{CommitInfo, IsolationLevel, Protocol};
+use crate::kernel::Protocol;
 use crate::logstore::LogStoreRef;
 use crate::operations::datafusion_utils::Expression;
-use crate::operations::transaction::commit;
 use crate::protocol::DeltaOperation;
 use crate::table::state::DeltaTableState;
 use crate::table::Constraint;
 use crate::{DeltaResult, DeltaTable, DeltaTableError};
 
 use super::datafusion_utils::into_expr;
+use super::transaction::{CommitBuilder, CommitProperties};
 
 /// Build a constraint to add to a table
 pub struct ConstraintBuilder {
@@ -40,8 +37,8 @@ pub struct ConstraintBuilder {
     log_store: LogStoreRef,
     /// Datafusion session state relevant for executing the input plan
     state: Option<SessionState>,
-    /// Additional metadata to be added to commit
-    app_metadata: Option<HashMap<String, serde_json::Value>>,
+    /// Additional information to add to the commit
+    commit_properties: CommitProperties,
 }
 
 impl ConstraintBuilder {
@@ -53,7 +50,7 @@ impl ConstraintBuilder {
             snapshot,
             log_store,
             state: None,
-            app_metadata: None,
+            commit_properties: CommitProperties::default(),
         }
     }
 
@@ -75,11 +72,8 @@ impl ConstraintBuilder {
     }
 
     /// Additional metadata to be added to commit info
-    pub fn with_metadata(
-        mut self,
-        metadata: impl IntoIterator<Item = (String, serde_json::Value)>,
-    ) -> Self {
-        self.app_metadata = Some(HashMap::from_iter(metadata));
+    pub fn commit_properties(mut self, commit_properties: CommitProperties) -> Self {
+        self.commit_properties = commit_properties;
         self
     }
 }
@@ -180,21 +174,19 @@ impl std::future::IntoFuture for ConstraintBuilder {
                 writer_features: old_protocol.writer_features.clone(),
             };
 
+            /*
             let operational_parameters = HashMap::from_iter([
                 ("name".to_string(), json!(&name)),
                 ("expr".to_string(), json!(&expr_str)),
             ]);
+            */
 
             let operations = DeltaOperation::AddConstraint {
                 name: name.clone(),
                 expr: expr_str.clone(),
             };
 
-            let app_metadata = match this.app_metadata {
-                Some(metadata) => metadata,
-                None => HashMap::default(),
-            };
-
+            /* why here?
             let commit_info = CommitInfo {
                 timestamp: Some(Utc::now().timestamp_millis()),
                 operation: Some(operations.name().to_string()),
@@ -205,17 +197,15 @@ impl std::future::IntoFuture for ConstraintBuilder {
                 info: app_metadata,
                 ..Default::default()
             };
+            */
 
-            let actions = vec![commit_info.into(), metadata.into(), protocol.into()];
+            let actions = vec![metadata.into(), protocol.into()];
 
-            let version = commit(
-                this.log_store.as_ref(),
-                &actions,
-                operations.clone(),
-                Some(&this.snapshot),
-                None,
-            )
-            .await?;
+            let version = CommitBuilder::from(this.commit_properties)
+                .with_actions(&actions)
+                .with_snapshot(&this.snapshot.snapshot)
+                .build(this.log_store.clone(), operations.clone())?
+                .await?;
 
             this.snapshot.merge(actions, &operations, version)?;
             Ok(DeltaTable::new_with_state(this.log_store, this.snapshot))

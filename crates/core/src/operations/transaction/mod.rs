@@ -3,6 +3,7 @@ use std::collections::HashMap;
 
 use chrono::Utc;
 use conflict_checker::ConflictChecker;
+use futures::future::BoxFuture;
 use object_store::path::Path;
 use object_store::{Error as ObjectStoreError, ObjectStore};
 use serde_json::Value;
@@ -106,6 +107,12 @@ impl From<TransactionError> for DeltaTableError {
     }
 }
 
+impl From<CommitBuilderError> for DeltaTableError {
+    fn from(err: CommitBuilderError) -> Self {
+        DeltaTableError::CommitValidation { source: err }
+    }
+}
+
 // Convert actions to their json representation
 fn log_entry_from_actions<'a>(
     actions: impl IntoIterator<Item = &'a Action>,
@@ -169,7 +176,8 @@ pub async fn prepare_commit<'a>(
     Ok(path)
 }
 
-#[derive(Default, Clone)]
+#[derive(Default, Clone, Debug)]
+/// Control commit behaviour and modify metadata information that is comitted during an operation */
 pub struct CommitProperties {
     pub(crate) app_metadata: HashMap<String, Value>,
     max_retries: usize,
@@ -185,6 +193,17 @@ impl<'a> From<CommitProperties> for CommitBuilder<'a> {
     }
 }
 
+impl CommitProperties {
+    /// Specify metadata the be comitted
+    pub fn with_metadata(
+        mut self,
+        metadata: impl IntoIterator<Item = (String, serde_json::Value)>,
+    ) -> Self {
+        self.app_metadata = HashMap::from_iter(metadata);
+        self
+    }
+}
+
 /// TODO
 pub struct CommitBuilder<'a> {
     actions: &'a [Action],
@@ -196,39 +215,45 @@ pub struct CommitBuilder<'a> {
 impl<'a> Default for CommitBuilder<'a> {
     fn default() -> Self {
         CommitBuilder {
+            actions: &[],
+            read_snapshot: None,
+            app_metadata: HashMap::new(),
             max_retries: 15,
-            ..Default::default()
         }
     }
 }
 
 impl<'a> CommitBuilder<'a> {
+    /// Actions to be included in the commit
     pub fn with_actions(mut self, actions: &'a [Action]) -> Self {
         self.actions = actions;
         self
     }
 
+    /// The snapshot of the Delta table used to perform the commit
     pub fn with_snapshot(mut self, snapshot: &'a EagerSnapshot) -> Self {
         self.read_snapshot = Some(snapshot);
         self
     }
 
+    /// An optional snapshot of the Delta table used to perform the commit
     pub fn with_maybe_snapshot(mut self, snapshot: Option<&'a EagerSnapshot>) -> Self {
         self.read_snapshot = snapshot;
         self
     }
 
+    /// Metadata for the operation performed like metrics, user, and notebook
     pub fn with_app_metadata(mut self, app_metadata: HashMap<String, Value>) -> Self {
         self.app_metadata = app_metadata;
         self
     }
 
-    pub fn with_retries(mut self, retries: usize) -> Self {
-        self.max_retries = retries;
-        self
-    }
-
-    pub fn build(self, log_store: LogStoreRef, operation: DeltaOperation) -> Result<Commit<'a>, CommitBuilderError> {
+    /// Prepare a Commit operation using the configured builder
+    pub fn build(
+        self,
+        log_store: LogStoreRef,
+        operation: DeltaOperation,
+    ) -> Result<Commit<'a>, CommitBuilderError> {
         Ok(Commit {
             log_store,
             actions: self.actions,
@@ -240,7 +265,8 @@ impl<'a> CommitBuilder<'a> {
     }
 }
 
-struct Commit<'a> {
+/// Commit to a Delta table
+pub struct Commit<'a> {
     log_store: LogStoreRef,
     read_snapshot: Option<&'a EagerSnapshot>,
     actions: &'a [Action],
@@ -249,74 +275,77 @@ struct Commit<'a> {
     max_retries: usize,
 }
 
-impl<'a> Commit<'a> {
-    /// Commit a transaction, with up configurable number of retries. This is higher-level transaction API.
-    ///
-    /// The function will error early if the a concurrent transaction has already been committed
-    /// and conflicts with this transaction.
-    pub async fn execute(&self) -> DeltaResult<i64> {
-        if let Some(read_snapshot) = &self.read_snapshot {
-            PROTOCOL.can_commit(read_snapshot, &self.actions)?;
-        }
+impl<'a> std::future::IntoFuture for Commit<'a> {
+    type Output = DeltaResult<i64>;
+    type IntoFuture = BoxFuture<'a, Self::Output>;
 
-        let tmp_commit = prepare_commit(
-            self.log_store.object_store().as_ref(),
-            &self.operation,
-            &self.actions,
-            &self.app_metadata,
-        )
-        .await?;
+    fn into_future(self) -> Self::IntoFuture {
+        let this = self;
 
-        if self.read_snapshot.is_none() {
-            self.log_store.write_commit_entry(0, &tmp_commit).await?;
-            return Ok(0);
-        }
+        Box::pin(async move {
+            if let Some(read_snapshot) = &this.read_snapshot {
+                PROTOCOL.can_commit(read_snapshot, this.actions)?;
+            }
 
-        let read_snapshot = self.read_snapshot.as_ref().unwrap();
+            let tmp_commit = prepare_commit(
+                this.log_store.object_store().as_ref(),
+                &this.operation,
+                this.actions,
+                &this.app_metadata,
+            )
+            .await?;
 
-        let mut attempt_number = 1;
-        while attempt_number <= self.max_retries {
-            let version = read_snapshot.version() + attempt_number as i64;
-            match self
-                .log_store
-                .write_commit_entry(version, &tmp_commit)
-                .await
-            {
-                Ok(()) => return Ok(version),
-                Err(TransactionError::VersionAlreadyExists(version)) => {
-                    let summary = WinningCommitSummary::try_new(
-                        self.log_store.as_ref(),
-                        version - 1,
-                        version,
-                    )
-                    .await?;
-                    let transaction_info = TransactionInfo::try_new(
-                        read_snapshot,
-                        self.operation.read_predicate(),
-                        &self.actions,
-                        // TODO allow tainting whole table
-                        false,
-                    )?;
-                    let conflict_checker =
-                        ConflictChecker::new(transaction_info, summary, Some(&self.operation));
-                    match conflict_checker.check_conflicts() {
-                        Ok(_) => {
-                            attempt_number += 1;
-                        }
-                        Err(err) => {
-                            self.log_store.object_store().delete(&tmp_commit).await?;
-                            return Err(TransactionError::CommitConflict(err).into());
-                        }
-                    };
-                }
-                Err(err) => {
-                    self.log_store.object_store().delete(&tmp_commit).await?;
-                    return Err(err.into());
+            if this.read_snapshot.is_none() {
+                this.log_store.write_commit_entry(0, &tmp_commit).await?;
+                return Ok(0);
+            }
+
+            let read_snapshot = this.read_snapshot.as_ref().unwrap();
+
+            let mut attempt_number = 1;
+            while attempt_number <= this.max_retries {
+                let version = read_snapshot.version() + attempt_number as i64;
+                match this
+                    .log_store
+                    .write_commit_entry(version, &tmp_commit)
+                    .await
+                {
+                    Ok(()) => return Ok(version),
+                    Err(TransactionError::VersionAlreadyExists(version)) => {
+                        let summary = WinningCommitSummary::try_new(
+                            this.log_store.as_ref(),
+                            version - 1,
+                            version,
+                        )
+                        .await?;
+                        let transaction_info = TransactionInfo::try_new(
+                            read_snapshot,
+                            this.operation.read_predicate(),
+                            this.actions,
+                            // TODO allow tainting whole table
+                            false,
+                        )?;
+                        let conflict_checker =
+                            ConflictChecker::new(transaction_info, summary, Some(&this.operation));
+                        match conflict_checker.check_conflicts() {
+                            Ok(_) => {
+                                attempt_number += 1;
+                            }
+                            Err(err) => {
+                                this.log_store.object_store().delete(&tmp_commit).await?;
+                                return Err(TransactionError::CommitConflict(err).into());
+                            }
+                        };
+                    }
+                    Err(err) => {
+                        this.log_store.object_store().delete(&tmp_commit).await?;
+                        return Err(err.into());
+                    }
                 }
             }
-        }
 
-        Err(TransactionError::MaxCommitAttempts(self.max_retries as i32).into())
+            Err(TransactionError::MaxCommitAttempts(this.max_retries as i32).into())
+        })
     }
 }
 
@@ -326,7 +355,10 @@ mod tests {
 
     use self::test_utils::init_table_actions;
     use super::*;
-    use crate::{logstore::default_logstore::DefaultLogStore, storage::commit_uri_from_version};
+    use crate::{
+        logstore::{default_logstore::DefaultLogStore, LogStore},
+        storage::commit_uri_from_version,
+    };
     use object_store::memory::InMemory;
     use url::Url;
 

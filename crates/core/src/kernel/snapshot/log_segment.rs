@@ -25,7 +25,7 @@ use crate::{DeltaResult, DeltaTableConfig, DeltaTableError};
 
 const LAST_CHECKPOINT_FILE_NAME: &str = "_last_checkpoint";
 
-pub type CommitData = (Vec<Action>, DeltaOperation, Option<HashMap<String, Value>>);
+pub type CommitData = (Vec<Action>, DeltaOperation, HashMap<String, Value>);
 
 lazy_static! {
     static ref CHECKPOINT_FILE_PATTERN: Regex =
@@ -354,7 +354,7 @@ impl LogSegment {
         for (actions, operation, app_metadata) in commits {
             self.version += 1;
             let path = log_path.child(format!("{:020}.json", self.version));
-            let bytes = get_commit_bytes(operation, actions, app_metadata.clone())?;
+            let bytes = get_commit_bytes(operation, actions, app_metadata)?;
             let meta = ObjectMeta {
                 location: path,
                 size: bytes.len(),

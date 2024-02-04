@@ -118,7 +118,9 @@ impl From<DataFusionError> for DeltaTableError {
     }
 }
 
-pub(crate) trait DataFusionMixins {
+/// Convience trait for calling common methods on snapshot heirarchies
+pub trait DataFusionMixins {
+    /// The physical datafusion schema of a table
     fn arrow_schema(&self) -> DeltaResult<ArrowSchemaRef>;
 
     /// Get the table schema as an [`ArrowSchemaRef`]
@@ -233,6 +235,15 @@ pub(crate) trait DataFusionFileMixins {
     ) -> DeltaResult<impl Iterator<Item = Add>>;
 }
 
+impl DataFusionFileMixins for EagerSnapshot {
+    fn files_matching_predicate<'a>(
+        &'a self,
+        filters: &'a [Expr],
+    ) -> DeltaResult<impl Iterator<Item = Add>> {
+        files_matching_predicate(self, filters)
+    }
+}
+
 pub(crate) fn files_matching_predicate<'a>(
     snapshot: &'a EagerSnapshot,
     filters: &[Expr],
@@ -245,7 +256,6 @@ pub(crate) fn files_matching_predicate<'a>(
         Ok(Either::Left(
             snapshot
                 .file_actions()?
-                .into_iter()
                 .zip(pruning_predicate.prune(snapshot)?)
                 .filter_map(
                     |(action, keep_file)| {
@@ -258,7 +268,7 @@ pub(crate) fn files_matching_predicate<'a>(
                 ),
         ))
     } else {
-        Ok(Either::Right(snapshot.file_actions()?.into_iter()))
+        Ok(Either::Right(snapshot.file_actions()?))
     }
 }
 

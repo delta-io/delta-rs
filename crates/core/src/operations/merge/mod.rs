@@ -126,7 +126,7 @@ pub struct MergeBuilder {
     state: Option<SessionState>,
     /// Properties passed to underlying parquet writer for when files are rewritten
     writer_properties: Option<WriterProperties>,
-    ///  Commit Properties
+    /// Additional information to add to the commit
     commit_properties: CommitProperties,
     /// safe_cast determines how data types that do not match the underlying table are handled
     /// By default an error is returned
@@ -351,7 +351,7 @@ impl MergeBuilder {
     }
 
     /// Additional metadata to be added to commit info
-    pub fn commit_properties(mut self, commit_properties: CommitProperties) -> Self {
+    pub fn with_commit_properties(mut self, commit_properties: CommitProperties) -> Self {
         self.commit_properties = commit_properties;
         self
     }
@@ -1368,8 +1368,7 @@ async fn execute(
         version = CommitBuilder::from(commit_properties)
             .with_actions(&actions)
             .with_snapshot(&snapshot.snapshot)
-            .build(log_store.clone(), operation.clone())
-            .execute()
+            .build(log_store.clone(), operation.clone())?
             .await?;
     }
     let op = (!actions.is_empty()).then_some(operation);

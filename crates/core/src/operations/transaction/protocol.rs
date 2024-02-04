@@ -5,7 +5,6 @@ use once_cell::sync::Lazy;
 
 use super::TransactionError;
 use crate::kernel::{Action, EagerSnapshot, ReaderFeatures, WriterFeatures};
-use crate::table::state::DeltaTableState;
 
 lazy_static! {
     static ref READER_V2: HashSet<ReaderFeatures> =
@@ -69,7 +68,7 @@ impl ProtocolChecker {
     }
 
     /// Check append-only at the high level (operation level)
-    pub fn check_append_only(&self, snapshot: &DeltaTableState) -> Result<(), TransactionError> {
+    pub fn check_append_only(&self, snapshot: &EagerSnapshot) -> Result<(), TransactionError> {
         if snapshot.table_config().append_only() {
             return Err(TransactionError::DeltaTableAppendOnly);
         }
@@ -187,6 +186,7 @@ mod tests {
     use super::super::test_utils::create_metadata_action;
     use super::*;
     use crate::kernel::{Action, Add, Protocol, Remove};
+    use crate::table::state::DeltaTableState;
     use crate::DeltaConfigKey;
     use std::collections::HashMap;
 
@@ -244,39 +244,45 @@ mod tests {
 
         let actions = create_actions(1, "true", vec![]);
         let snapshot = DeltaTableState::from_actions(actions).unwrap();
-        assert!(checker.can_commit(&snapshot, &append_actions).is_ok());
-        assert!(checker.can_commit(&snapshot, &change_actions).is_ok());
-        assert!(checker.can_commit(&snapshot, &neutral_actions).is_ok());
+        let eager = snapshot.snapshot();
+        assert!(checker.can_commit(eager, &append_actions).is_ok());
+        assert!(checker.can_commit(eager, &change_actions).is_ok());
+        assert!(checker.can_commit(eager, &neutral_actions).is_ok());
 
         let actions = create_actions(2, "true", vec![]);
         let snapshot = DeltaTableState::from_actions(actions).unwrap();
-        assert!(checker.can_commit(&snapshot, &append_actions).is_ok());
-        assert!(checker.can_commit(&snapshot, &change_actions).is_err());
-        assert!(checker.can_commit(&snapshot, &neutral_actions).is_ok());
+        let eager = snapshot.snapshot();
+        assert!(checker.can_commit(eager, &append_actions).is_ok());
+        assert!(checker.can_commit(eager, &change_actions).is_err());
+        assert!(checker.can_commit(eager, &neutral_actions).is_ok());
 
         let actions = create_actions(2, "false", vec![]);
         let snapshot = DeltaTableState::from_actions(actions).unwrap();
-        assert!(checker.can_commit(&snapshot, &append_actions).is_ok());
-        assert!(checker.can_commit(&snapshot, &change_actions).is_ok());
-        assert!(checker.can_commit(&snapshot, &neutral_actions).is_ok());
+        let eager = snapshot.snapshot();
+        assert!(checker.can_commit(eager, &append_actions).is_ok());
+        assert!(checker.can_commit(eager, &change_actions).is_ok());
+        assert!(checker.can_commit(eager, &neutral_actions).is_ok());
 
         let actions = create_actions(7, "true", vec![WriterFeatures::AppendOnly]);
         let snapshot = DeltaTableState::from_actions(actions).unwrap();
-        assert!(checker.can_commit(&snapshot, &append_actions).is_ok());
-        assert!(checker.can_commit(&snapshot, &change_actions).is_err());
-        assert!(checker.can_commit(&snapshot, &neutral_actions).is_ok());
+        let eager = snapshot.snapshot();
+        assert!(checker.can_commit(eager, &append_actions).is_ok());
+        assert!(checker.can_commit(eager, &change_actions).is_err());
+        assert!(checker.can_commit(eager, &neutral_actions).is_ok());
 
         let actions = create_actions(7, "false", vec![WriterFeatures::AppendOnly]);
         let snapshot = DeltaTableState::from_actions(actions).unwrap();
-        assert!(checker.can_commit(&snapshot, &append_actions).is_ok());
-        assert!(checker.can_commit(&snapshot, &change_actions).is_ok());
-        assert!(checker.can_commit(&snapshot, &neutral_actions).is_ok());
+        let eager = snapshot.snapshot();
+        assert!(checker.can_commit(eager, &append_actions).is_ok());
+        assert!(checker.can_commit(eager, &change_actions).is_ok());
+        assert!(checker.can_commit(eager, &neutral_actions).is_ok());
 
         let actions = create_actions(7, "true", vec![]);
         let snapshot = DeltaTableState::from_actions(actions).unwrap();
-        assert!(checker.can_commit(&snapshot, &append_actions).is_ok());
-        assert!(checker.can_commit(&snapshot, &change_actions).is_ok());
-        assert!(checker.can_commit(&snapshot, &neutral_actions).is_ok());
+        let eager = snapshot.snapshot();
+        assert!(checker.can_commit(eager, &append_actions).is_ok());
+        assert!(checker.can_commit(eager, &change_actions).is_ok());
+        assert!(checker.can_commit(eager, &neutral_actions).is_ok());
     }
 
     #[test]
@@ -291,8 +297,9 @@ mod tests {
             create_metadata_action(None, Some(HashMap::new())),
         ];
         let snapshot_1 = DeltaTableState::from_actions(actions).unwrap();
-        assert!(checker_1.can_read_from(&snapshot_1).is_ok());
-        assert!(checker_1.can_write_to(&snapshot_1).is_ok());
+        let eager_1 = snapshot_1.snapshot();
+        assert!(checker_1.can_read_from(&eager_1).is_ok());
+        assert!(checker_1.can_write_to(&eager_1).is_ok());
 
         let checker_2 = ProtocolChecker::new(READER_V2.clone(), HashSet::new());
         let actions = vec![
@@ -304,11 +311,12 @@ mod tests {
             create_metadata_action(None, Some(HashMap::new())),
         ];
         let snapshot_2 = DeltaTableState::from_actions(actions).unwrap();
-        assert!(checker_1.can_read_from(&snapshot_2).is_err());
-        assert!(checker_1.can_write_to(&snapshot_2).is_err());
-        assert!(checker_2.can_read_from(&snapshot_1).is_ok());
-        assert!(checker_2.can_read_from(&snapshot_2).is_ok());
-        assert!(checker_2.can_write_to(&snapshot_2).is_ok());
+        let eager_2 = snapshot_2.snapshot();
+        assert!(checker_1.can_read_from(&eager_2).is_err());
+        assert!(checker_1.can_write_to(&eager_2).is_err());
+        assert!(checker_2.can_read_from(&eager_1).is_ok());
+        assert!(checker_2.can_read_from(&eager_2).is_ok());
+        assert!(checker_2.can_write_to(&eager_2).is_ok());
 
         let checker_3 = ProtocolChecker::new(READER_V2.clone(), WRITER_V2.clone());
         let actions = vec![
@@ -320,14 +328,15 @@ mod tests {
             create_metadata_action(None, Some(HashMap::new())),
         ];
         let snapshot_3 = DeltaTableState::from_actions(actions).unwrap();
-        assert!(checker_1.can_read_from(&snapshot_3).is_err());
-        assert!(checker_1.can_write_to(&snapshot_3).is_err());
-        assert!(checker_2.can_read_from(&snapshot_3).is_ok());
-        assert!(checker_2.can_write_to(&snapshot_3).is_err());
-        assert!(checker_3.can_read_from(&snapshot_1).is_ok());
-        assert!(checker_3.can_read_from(&snapshot_2).is_ok());
-        assert!(checker_3.can_read_from(&snapshot_3).is_ok());
-        assert!(checker_3.can_write_to(&snapshot_3).is_ok());
+        let eager_3 = snapshot_3.snapshot();
+        assert!(checker_1.can_read_from(&eager_3).is_err());
+        assert!(checker_1.can_write_to(&eager_3).is_err());
+        assert!(checker_2.can_read_from(&eager_3).is_ok());
+        assert!(checker_2.can_write_to(&eager_3).is_err());
+        assert!(checker_3.can_read_from(&eager_1).is_ok());
+        assert!(checker_3.can_read_from(&eager_2).is_ok());
+        assert!(checker_3.can_read_from(&eager_3).is_ok());
+        assert!(checker_3.can_write_to(&eager_3).is_ok());
 
         let checker_4 = ProtocolChecker::new(READER_V2.clone(), WRITER_V3.clone());
         let actions = vec![
@@ -339,17 +348,18 @@ mod tests {
             create_metadata_action(None, Some(HashMap::new())),
         ];
         let snapshot_4 = DeltaTableState::from_actions(actions).unwrap();
-        assert!(checker_1.can_read_from(&snapshot_4).is_err());
-        assert!(checker_1.can_write_to(&snapshot_4).is_err());
-        assert!(checker_2.can_read_from(&snapshot_4).is_ok());
-        assert!(checker_2.can_write_to(&snapshot_4).is_err());
-        assert!(checker_3.can_read_from(&snapshot_4).is_ok());
-        assert!(checker_3.can_write_to(&snapshot_4).is_err());
-        assert!(checker_4.can_read_from(&snapshot_1).is_ok());
-        assert!(checker_4.can_read_from(&snapshot_2).is_ok());
-        assert!(checker_4.can_read_from(&snapshot_3).is_ok());
-        assert!(checker_4.can_read_from(&snapshot_4).is_ok());
-        assert!(checker_4.can_write_to(&snapshot_4).is_ok());
+        let eager_4 = snapshot_4.snapshot();
+        assert!(checker_1.can_read_from(&eager_4).is_err());
+        assert!(checker_1.can_write_to(&eager_4).is_err());
+        assert!(checker_2.can_read_from(&eager_4).is_ok());
+        assert!(checker_2.can_write_to(&eager_4).is_err());
+        assert!(checker_3.can_read_from(&eager_4).is_ok());
+        assert!(checker_3.can_write_to(&eager_4).is_err());
+        assert!(checker_4.can_read_from(&eager_1).is_ok());
+        assert!(checker_4.can_read_from(&eager_2).is_ok());
+        assert!(checker_4.can_read_from(&eager_3).is_ok());
+        assert!(checker_4.can_read_from(&eager_4).is_ok());
+        assert!(checker_4.can_write_to(&eager_4).is_ok());
 
         let checker_5 = ProtocolChecker::new(READER_V2.clone(), WRITER_V4.clone());
         let actions = vec![
@@ -361,20 +371,21 @@ mod tests {
             create_metadata_action(None, Some(HashMap::new())),
         ];
         let snapshot_5 = DeltaTableState::from_actions(actions).unwrap();
-        assert!(checker_1.can_read_from(&snapshot_5).is_err());
-        assert!(checker_1.can_write_to(&snapshot_5).is_err());
-        assert!(checker_2.can_read_from(&snapshot_5).is_ok());
-        assert!(checker_2.can_write_to(&snapshot_5).is_err());
-        assert!(checker_3.can_read_from(&snapshot_5).is_ok());
-        assert!(checker_3.can_write_to(&snapshot_5).is_err());
-        assert!(checker_4.can_read_from(&snapshot_5).is_ok());
-        assert!(checker_4.can_write_to(&snapshot_5).is_err());
-        assert!(checker_5.can_read_from(&snapshot_1).is_ok());
-        assert!(checker_5.can_read_from(&snapshot_2).is_ok());
-        assert!(checker_5.can_read_from(&snapshot_3).is_ok());
-        assert!(checker_5.can_read_from(&snapshot_4).is_ok());
-        assert!(checker_5.can_read_from(&snapshot_5).is_ok());
-        assert!(checker_5.can_write_to(&snapshot_5).is_ok());
+        let eager_5 = snapshot_5.snapshot();
+        assert!(checker_1.can_read_from(&eager_5).is_err());
+        assert!(checker_1.can_write_to(&eager_5).is_err());
+        assert!(checker_2.can_read_from(&eager_5).is_ok());
+        assert!(checker_2.can_write_to(&eager_5).is_err());
+        assert!(checker_3.can_read_from(&eager_5).is_ok());
+        assert!(checker_3.can_write_to(&eager_5).is_err());
+        assert!(checker_4.can_read_from(&eager_5).is_ok());
+        assert!(checker_4.can_write_to(&eager_5).is_err());
+        assert!(checker_5.can_read_from(&eager_1).is_ok());
+        assert!(checker_5.can_read_from(&eager_2).is_ok());
+        assert!(checker_5.can_read_from(&eager_3).is_ok());
+        assert!(checker_5.can_read_from(&eager_4).is_ok());
+        assert!(checker_5.can_read_from(&eager_5).is_ok());
+        assert!(checker_5.can_write_to(&eager_5).is_ok());
 
         let checker_6 = ProtocolChecker::new(READER_V2.clone(), WRITER_V5.clone());
         let actions = vec![
@@ -386,23 +397,24 @@ mod tests {
             create_metadata_action(None, Some(HashMap::new())),
         ];
         let snapshot_6 = DeltaTableState::from_actions(actions).unwrap();
-        assert!(checker_1.can_read_from(&snapshot_6).is_err());
-        assert!(checker_1.can_write_to(&snapshot_6).is_err());
-        assert!(checker_2.can_read_from(&snapshot_6).is_ok());
-        assert!(checker_2.can_write_to(&snapshot_6).is_err());
-        assert!(checker_3.can_read_from(&snapshot_6).is_ok());
-        assert!(checker_3.can_write_to(&snapshot_6).is_err());
-        assert!(checker_4.can_read_from(&snapshot_6).is_ok());
-        assert!(checker_4.can_write_to(&snapshot_6).is_err());
-        assert!(checker_5.can_read_from(&snapshot_6).is_ok());
-        assert!(checker_5.can_write_to(&snapshot_6).is_err());
-        assert!(checker_6.can_read_from(&snapshot_1).is_ok());
-        assert!(checker_6.can_read_from(&snapshot_2).is_ok());
-        assert!(checker_6.can_read_from(&snapshot_3).is_ok());
-        assert!(checker_6.can_read_from(&snapshot_4).is_ok());
-        assert!(checker_6.can_read_from(&snapshot_5).is_ok());
-        assert!(checker_6.can_read_from(&snapshot_6).is_ok());
-        assert!(checker_6.can_write_to(&snapshot_6).is_ok());
+        let eager_6 = snapshot_6.snapshot();
+        assert!(checker_1.can_read_from(&eager_6).is_err());
+        assert!(checker_1.can_write_to(&eager_6).is_err());
+        assert!(checker_2.can_read_from(&eager_6).is_ok());
+        assert!(checker_2.can_write_to(&eager_6).is_err());
+        assert!(checker_3.can_read_from(&eager_6).is_ok());
+        assert!(checker_3.can_write_to(&eager_6).is_err());
+        assert!(checker_4.can_read_from(&eager_6).is_ok());
+        assert!(checker_4.can_write_to(&eager_6).is_err());
+        assert!(checker_5.can_read_from(&eager_6).is_ok());
+        assert!(checker_5.can_write_to(&eager_6).is_err());
+        assert!(checker_6.can_read_from(&eager_1).is_ok());
+        assert!(checker_6.can_read_from(&eager_2).is_ok());
+        assert!(checker_6.can_read_from(&eager_3).is_ok());
+        assert!(checker_6.can_read_from(&eager_4).is_ok());
+        assert!(checker_6.can_read_from(&eager_5).is_ok());
+        assert!(checker_6.can_read_from(&eager_6).is_ok());
+        assert!(checker_6.can_write_to(&eager_6).is_ok());
 
         let checker_7 = ProtocolChecker::new(READER_V2.clone(), WRITER_V6.clone());
         let actions = vec![
@@ -414,25 +426,26 @@ mod tests {
             create_metadata_action(None, Some(HashMap::new())),
         ];
         let snapshot_7 = DeltaTableState::from_actions(actions).unwrap();
-        assert!(checker_1.can_read_from(&snapshot_7).is_err());
-        assert!(checker_1.can_write_to(&snapshot_7).is_err());
-        assert!(checker_2.can_read_from(&snapshot_7).is_ok());
-        assert!(checker_2.can_write_to(&snapshot_7).is_err());
-        assert!(checker_3.can_read_from(&snapshot_7).is_ok());
-        assert!(checker_3.can_write_to(&snapshot_7).is_err());
-        assert!(checker_4.can_read_from(&snapshot_7).is_ok());
-        assert!(checker_4.can_write_to(&snapshot_7).is_err());
-        assert!(checker_5.can_read_from(&snapshot_7).is_ok());
-        assert!(checker_5.can_write_to(&snapshot_7).is_err());
-        assert!(checker_6.can_read_from(&snapshot_7).is_ok());
-        assert!(checker_6.can_write_to(&snapshot_7).is_err());
-        assert!(checker_7.can_read_from(&snapshot_1).is_ok());
-        assert!(checker_7.can_read_from(&snapshot_2).is_ok());
-        assert!(checker_7.can_read_from(&snapshot_3).is_ok());
-        assert!(checker_7.can_read_from(&snapshot_4).is_ok());
-        assert!(checker_7.can_read_from(&snapshot_5).is_ok());
-        assert!(checker_7.can_read_from(&snapshot_6).is_ok());
-        assert!(checker_7.can_read_from(&snapshot_7).is_ok());
-        assert!(checker_7.can_write_to(&snapshot_7).is_ok());
+        let eager_7 = snapshot_7.snapshot();
+        assert!(checker_1.can_read_from(&eager_7).is_err());
+        assert!(checker_1.can_write_to(&eager_7).is_err());
+        assert!(checker_2.can_read_from(&eager_7).is_ok());
+        assert!(checker_2.can_write_to(&eager_7).is_err());
+        assert!(checker_3.can_read_from(&eager_7).is_ok());
+        assert!(checker_3.can_write_to(&eager_7).is_err());
+        assert!(checker_4.can_read_from(&eager_7).is_ok());
+        assert!(checker_4.can_write_to(&eager_7).is_err());
+        assert!(checker_5.can_read_from(&eager_7).is_ok());
+        assert!(checker_5.can_write_to(&eager_7).is_err());
+        assert!(checker_6.can_read_from(&eager_7).is_ok());
+        assert!(checker_6.can_write_to(&eager_7).is_err());
+        assert!(checker_7.can_read_from(&eager_1).is_ok());
+        assert!(checker_7.can_read_from(&eager_2).is_ok());
+        assert!(checker_7.can_read_from(&eager_3).is_ok());
+        assert!(checker_7.can_read_from(&eager_4).is_ok());
+        assert!(checker_7.can_read_from(&eager_5).is_ok());
+        assert!(checker_7.can_read_from(&eager_6).is_ok());
+        assert!(checker_7.can_read_from(&eager_7).is_ok());
+        assert!(checker_7.can_write_to(&eager_7).is_ok());
     }
 }

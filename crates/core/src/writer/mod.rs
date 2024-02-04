@@ -8,7 +8,7 @@ use serde_json::Value;
 
 use crate::errors::DeltaTableError;
 use crate::kernel::{Action, Add};
-use crate::operations::transaction::commit;
+use crate::operations::transaction::CommitBuilder;
 use crate::protocol::{ColumnCountStat, DeltaOperation, SaveMode};
 use crate::DeltaTable;
 
@@ -147,14 +147,11 @@ pub trait DeltaWriter<T> {
             partition_by,
             predicate: None,
         };
-        let version = commit(
-            table.log_store.as_ref(),
-            &adds,
-            operation,
-            Some(snapshot),
-            None,
-        )
-        .await?;
+        let version = CommitBuilder::default()
+            .with_snapshot(&snapshot.snapshot)
+            .with_actions(&adds)
+            .build(table.log_store.clone(), operation)?
+            .await?;
         table.update().await?;
         Ok(version)
     }

@@ -106,8 +106,8 @@ impl DeleteBuilder {
         self
     }
 
-    /// Commit properties
-    pub fn commit_properties(mut self, commit_properties: CommitProperties) -> Self {
+    /// Additonal information to write to the commit
+    pub fn with_commit_properties(mut self, commit_properties: CommitProperties) -> Self {
         self.commit_properties = commit_properties;
         self
     }
@@ -243,12 +243,10 @@ async fn execute(
     commit_properties
         .app_metadata
         .insert("readVersion".to_owned(), snapshot.version().into());
-
-    if let Ok(map) = serde_json::to_value(&metrics) {
-        commit_properties
-            .app_metadata
-            .insert("operationMetrics".to_owned(), map);
-    }
+    commit_properties.app_metadata.insert(
+        "operationMetrics".to_owned(),
+        serde_json::to_value(&metrics)?,
+    );
 
     // Do not make a commit when there are zero updates to the state
     let operation = DeltaOperation::Delete {
@@ -258,8 +256,7 @@ async fn execute(
         version = CommitBuilder::from(commit_properties)
             .with_actions(&actions)
             .with_snapshot(&snapshot.snapshot)
-            .build(log_store, operation.clone())
-            .execute()
+            .build(log_store, operation.clone())?
             .await?;
     }
     let op = (!actions.is_empty()).then_some(operation);
@@ -274,8 +271,7 @@ impl std::future::IntoFuture for DeleteBuilder {
         let mut this = self;
 
         Box::pin(async move {
-            PROTOCOL.check_append_only(&this.snapshot)?;
-
+            PROTOCOL.check_append_only(&this.snapshot.snapshot)?;
             PROTOCOL.can_write_to(&this.snapshot.snapshot)?;
 
             let state = this.state.unwrap_or_else(|| {

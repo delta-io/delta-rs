@@ -37,10 +37,10 @@ use futures::future::BoxFuture;
 use futures::StreamExt;
 use parquet::file::properties::WriterProperties;
 
-use super::transaction::PROTOCOL;
+use super::transaction::{CommitBuilder, CommitProperties, PROTOCOL};
 use super::writer::{DeltaWriter, WriterConfig};
-use super::{transaction::commit, CreateBuilder};
-use crate::delta_datafusion::DeltaDataChecker;
+use super::CreateBuilder;
+use crate::delta_datafusion::{DataFusionMixins, DeltaDataChecker};
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::{Action, Add, PartitionsExt, StructType};
 use crate::logstore::LogStoreRef;
@@ -107,8 +107,8 @@ pub struct WriteBuilder {
     safe_cast: bool,
     /// Parquet writer properties
     writer_properties: Option<WriterProperties>,
-    /// Additional metadata to be added to commit
-    app_metadata: Option<HashMap<String, serde_json::Value>>,
+    /// Additional information to add to the commit
+    commit_properties: CommitProperties,
     /// Name of the table, only used when table doesn't exist yet
     name: Option<String>,
     /// Description of the table, only used when table doesn't exist yet
@@ -134,7 +134,7 @@ impl WriteBuilder {
             safe_cast: false,
             overwrite_schema: false,
             writer_properties: None,
-            app_metadata: None,
+            commit_properties: CommitProperties::default(),
             name: None,
             description: None,
             configuration: Default::default(),
@@ -213,11 +213,8 @@ impl WriteBuilder {
     }
 
     /// Additional metadata to be added to commit info
-    pub fn with_metadata(
-        mut self,
-        metadata: impl IntoIterator<Item = (String, serde_json::Value)>,
-    ) -> Self {
-        self.app_metadata = Some(HashMap::from_iter(metadata));
+    pub fn with_commit_properties(mut self, commit_properties: CommitProperties) -> Self {
+        self.commit_properties = commit_properties;
         self
     }
 
@@ -249,7 +246,7 @@ impl WriteBuilder {
     async fn check_preconditions(&self) -> DeltaResult<Vec<Action>> {
         match &self.snapshot {
             Some(snapshot) => {
-                PROTOCOL.can_write_to(snapshot)?;
+                PROTOCOL.can_write_to(&snapshot.snapshot)?;
                 match self.mode {
                     SaveMode::ErrorIfExists => {
                         Err(WriteError::AlreadyExists(self.log_store.root_uri()).into())
@@ -373,7 +370,7 @@ impl std::future::IntoFuture for WriteBuilder {
         Box::pin(async move {
             if this.mode == SaveMode::Overwrite {
                 if let Some(snapshot) = &this.snapshot {
-                    PROTOCOL.check_append_only(snapshot)?;
+                    PROTOCOL.check_append_only(&snapshot.snapshot)?;
                 }
             }
 
@@ -528,14 +525,11 @@ impl std::future::IntoFuture for WriteBuilder {
                 },
                 predicate: this.predicate,
             };
-            let version = commit(
-                this.log_store.as_ref(),
-                &actions,
-                operation.clone(),
-                this.snapshot.as_ref(),
-                this.app_metadata,
-            )
-            .await?;
+            let version = CommitBuilder::from(this.commit_properties)
+                .with_actions(&actions)
+                .with_maybe_snapshot(this.snapshot.as_ref().map(|s| &s.snapshot))
+                .build(this.log_store.clone(), operation.clone())?
+                .await?;
 
             // TODO we do not have the table config available, but since we are merging only our newly
             // created actions, it may be safe to assume, that we want to include all actions.
@@ -623,7 +617,7 @@ mod tests {
         let mut table = DeltaOps(table)
             .write(vec![batch.clone()])
             .with_save_mode(SaveMode::Append)
-            .with_metadata(metadata.clone())
+            .with_commit_properties(CommitProperties::default().with_metadata(metadata.clone()))
             .await
             .unwrap();
         assert_eq!(table.version(), 1);
@@ -646,7 +640,7 @@ mod tests {
         let mut table = DeltaOps(table)
             .write(vec![batch.clone()])
             .with_save_mode(SaveMode::Append)
-            .with_metadata(metadata.clone())
+            .with_commit_properties(CommitProperties::default().with_metadata(metadata.clone()))
             .await
             .unwrap();
         assert_eq!(table.version(), 2);
@@ -669,7 +663,7 @@ mod tests {
         let mut table = DeltaOps(table)
             .write(vec![batch])
             .with_save_mode(SaveMode::Overwrite)
-            .with_metadata(metadata.clone())
+            .with_commit_properties(CommitProperties::default().with_metadata(metadata.clone()))
             .await
             .unwrap();
         assert_eq!(table.version(), 3);

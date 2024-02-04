@@ -41,13 +41,16 @@ use datafusion_physical_expr::{
 use futures::future::BoxFuture;
 use parquet::file::properties::WriterProperties;
 use serde::Serialize;
-use serde_json::Value;
 
-use super::datafusion_utils::Expression;
-use super::transaction::{commit, PROTOCOL};
+use super::transaction::PROTOCOL;
 use super::write::write_execution_plan;
+use super::{
+    datafusion_utils::Expression,
+    transaction::{CommitBuilder, CommitProperties},
+};
 use crate::delta_datafusion::{
-    expr::fmt_expr_to_sql, physical::MetricObserverExec, DeltaColumn, DeltaSessionContext,
+    expr::fmt_expr_to_sql, physical::MetricObserverExec, DataFusionMixins, DeltaColumn,
+    DeltaSessionContext,
 };
 use crate::delta_datafusion::{find_files, register_store, DeltaScanBuilder};
 use crate::kernel::{Action, Remove};
@@ -71,8 +74,8 @@ pub struct UpdateBuilder {
     state: Option<SessionState>,
     /// Properties passed to underlying parquet writer for when files are rewritten
     writer_properties: Option<WriterProperties>,
-    /// Additional metadata to be added to commit
-    app_metadata: Option<HashMap<String, serde_json::Value>>,
+    /// Additional information to add to the commit
+    commit_properties: CommitProperties,
     /// safe_cast determines how data types that do not match the underlying table are handled
     /// By default an error is returned
     safe_cast: bool,
@@ -105,7 +108,7 @@ impl UpdateBuilder {
             log_store,
             state: None,
             writer_properties: None,
-            app_metadata: None,
+            commit_properties: CommitProperties::default(),
             safe_cast: false,
         }
     }
@@ -133,11 +136,8 @@ impl UpdateBuilder {
     }
 
     /// Additional metadata to be added to commit info
-    pub fn with_metadata(
-        mut self,
-        metadata: impl IntoIterator<Item = (String, serde_json::Value)>,
-    ) -> Self {
-        self.app_metadata = Some(HashMap::from_iter(metadata));
+    pub fn with_commit_properties(mut self, commit_properties: CommitProperties) -> Self {
+        self.commit_properties = commit_properties;
         self
     }
 
@@ -170,7 +170,7 @@ async fn execute(
     snapshot: &DeltaTableState,
     state: SessionState,
     writer_properties: Option<WriterProperties>,
-    app_metadata: Option<HashMap<String, Value>>,
+    mut commit_properties: CommitProperties,
     safe_cast: bool,
 ) -> DeltaResult<((Vec<Action>, i64, Option<DeltaOperation>), UpdateMetrics)> {
     // Validate the predicate and update expressions.
@@ -403,25 +403,20 @@ async fn execute(
         predicate: Some(fmt_expr_to_sql(&predicate)?),
     };
 
-    let mut app_metadata = match app_metadata {
-        Some(meta) => meta,
-        None => HashMap::new(),
-    };
+    commit_properties
+        .app_metadata
+        .insert("readVersion".to_owned(), snapshot.version().into());
 
-    app_metadata.insert("readVersion".to_owned(), snapshot.version().into());
+    commit_properties.app_metadata.insert(
+        "operationMetrics".to_owned(),
+        serde_json::to_value(&metrics)?,
+    );
 
-    if let Ok(map) = serde_json::to_value(&metrics) {
-        app_metadata.insert("operationMetrics".to_owned(), map);
-    }
-
-    version = commit(
-        log_store.as_ref(),
-        &actions,
-        operation.clone(),
-        Some(snapshot),
-        Some(app_metadata),
-    )
-    .await?;
+    version = CommitBuilder::from(commit_properties)
+        .with_actions(&actions)
+        .with_snapshot(&snapshot.snapshot)
+        .build(log_store, operation.clone())?
+        .await?;
 
     Ok(((actions, version, Some(operation)), metrics))
 }
@@ -434,9 +429,8 @@ impl std::future::IntoFuture for UpdateBuilder {
         let mut this = self;
 
         Box::pin(async move {
-            PROTOCOL.check_append_only(&this.snapshot)?;
-
-            PROTOCOL.can_write_to(&this.snapshot)?;
+            PROTOCOL.check_append_only(&this.snapshot.snapshot)?;
+            PROTOCOL.can_write_to(&this.snapshot.snapshot)?;
 
             let state = this.state.unwrap_or_else(|| {
                 let session: SessionContext = DeltaSessionContext::default().into();
@@ -454,7 +448,7 @@ impl std::future::IntoFuture for UpdateBuilder {
                 &this.snapshot,
                 state,
                 this.writer_properties,
-                this.app_metadata,
+                this.commit_properties,
                 this.safe_cast,
             )
             .await?;

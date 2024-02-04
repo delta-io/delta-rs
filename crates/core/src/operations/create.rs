@@ -312,10 +312,9 @@ impl std::future::IntoFuture for CreateBuilder {
 
             let version = CommitBuilder::default()
                 .with_actions(&actions)
-                .with_maybe_snapshot(table_state)
+                .with_maybe_snapshot(table_state.map(|t| &t.snapshot))
                 .with_app_metadata(app_metadata)
-                .build(table.log_store.clone(), operation)
-                .execute()
+                .build(table.log_store.clone(), operation)?
                 .await?;
             table.load_version(version).await?;
 
