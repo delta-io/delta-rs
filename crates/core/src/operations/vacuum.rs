@@ -313,9 +313,10 @@ impl VacuumPlan {
         // Begin VACUUM START COMMIT
         let mut start_props = CommitProperties::default();
         start_props.app_metadata = commit_properties.app_metadata.clone();
-        start_props
-            .app_metadata
-            .insert("operationMetrics".to_owned(), serde_json::to_value(start_metrics)?);
+        start_props.app_metadata.insert(
+            "operationMetrics".to_owned(),
+            serde_json::to_value(start_metrics)?,
+        );
 
         CommitBuilder::from(start_props)
             .with_snapshot(&snapshot.snapshot)
@@ -345,9 +346,10 @@ impl VacuumPlan {
         };
 
         // Begin VACUUM END COMMIT
-        commit_properties
-            .app_metadata
-            .insert("operationMetrics".to_owned(), serde_json::to_value(end_metrics)?);
+        commit_properties.app_metadata.insert(
+            "operationMetrics".to_owned(),
+            serde_json::to_value(end_metrics)?,
+        );
         CommitBuilder::from(commit_properties)
             .with_snapshot(&snapshot.snapshot)
             .build(store.clone(), end_operation)?
