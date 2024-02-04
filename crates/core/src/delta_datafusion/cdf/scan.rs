@@ -20,8 +20,11 @@ use crate::{DeltaResult, DeltaTableError};
 
 use super::*;
 
+/// Change type column name
 pub const CHANGE_TYPE_COL: &str = "_change_type";
+/// Commit version column name
 pub const COMMIT_VERSION_COL: &str = "_commit_version";
+/// Commit Timestamp column name
 pub const COMMIT_TIMESTAMP_COL: &str = "_commit_timestamp";
 
 lazy_static! {
@@ -44,6 +47,7 @@ lazy_static! {
     ];
 }
 
+/// Physical execution of a scan
 pub struct DeltaCdfScan {
     log_store: LogStoreRef,
     starting_version: i64,
@@ -52,6 +56,8 @@ pub struct DeltaCdfScan {
 }
 
 impl DeltaCdfScan {
+
+    /// Creates a new scan
     pub fn new(
         log_store: LogStoreRef,
         starting_version: i64,
@@ -157,6 +163,7 @@ impl DeltaCdfScan {
         Some(ScalarValue::Utf8(Some(String::from("insert"))))
     }
 
+    /// Executes the scan
     pub async fn scan(&self) -> DeltaResult<SendableRecordBatchStream> {
         let (cdc, add, _remove) = self.determine_files_to_read().await?;
         let ctx = SessionContext::new();
@@ -214,7 +221,6 @@ impl DeltaCdfScan {
                     limit: None,
                     table_partition_cols: cdc_partition_cols.clone(),
                     output_ordering: vec![],
-                    infinite_source: false,
                 },
                 None,
             )
@@ -232,7 +238,6 @@ impl DeltaCdfScan {
                     limit: None,
                     table_partition_cols: add_partition_cols.clone(),
                     output_ordering: vec![],
-                    infinite_source: false,
                 },
                 None,
             )
@@ -302,12 +307,14 @@ mod tests {
     #[tokio::test]
     async fn test_load_local() -> TestResult {
         // I checked in a pre-built table from spark, once the writing side is finished I will circle back to make these
-        // tests self contained and not rely on a physical table with them
-        let _table = DeltaOps::try_from_uri("./tests/data/cdf-table").await?;
-        let schema = _table.0.state.arrow_schema()?;
-        let partition_cols = _table.0.metadata()?.clone().partition_columns.clone();
+        // tests self-contained and not rely on a physical table with them
+        let _table = DeltaOps::try_from_uri("../test/tests/data/cdf-table").await?.0.clone();
+        let metadata = _table.metadata()?;
+        let state = _table.clone().state.unwrap().clone();
+        let schema = state.arrow_schema()?;
+        let partition_cols = metadata.partition_columns.clone();
 
-        let scan = DeltaCdfScan::new(_table.0.log_store.clone(), 0, schema, partition_cols);
+        let scan = DeltaCdfScan::new(_table.log_store.clone(), 0, schema, partition_cols);
 
         let results = scan.scan().await?;
         let data: Vec<RecordBatch> = collect_sendable_stream(results).await?;

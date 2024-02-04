@@ -135,10 +135,11 @@ impl DeltaOps {
         LoadBuilder::new(self.0.log_store, self.0.state.unwrap())
     }
 
+    /// Load a table with CDF Enabled
     #[cfg(feature = "datafusion")]
     #[must_use]
     pub fn load_cdf(self) -> CdfLoadBuilder {
-        CdfLoadBuilder::new(self.0.log_store, self.0.state)
+        CdfLoadBuilder::new(self.0.log_store, self.0.state.unwrap())
     }
 
     /// Write data to Delta table

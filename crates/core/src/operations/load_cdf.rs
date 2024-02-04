@@ -1,8 +1,7 @@
 use datafusion::physical_plan::SendableRecordBatchStream;
 use futures::future::BoxFuture;
 
-use crate::delta_datafusion::cdf::scan::DeltaCdfScan;
-use crate::DeltaTableError;
+use crate::delta_datafusion::cdf::DeltaCdfScan;
 use crate::errors::DeltaResult;
 use crate::logstore::LogStoreRef;
 use crate::table::state::DeltaTableState;
@@ -51,7 +50,6 @@ impl std::future::IntoFuture for CdfLoadBuilder {
 
         Box::pin(async move {
             let partition_cols = this.snapshot.metadata()
-                .ok_or(DeltaTableError::NoMetadata)?
                 .clone()
                 .partition_columns
                 .clone();

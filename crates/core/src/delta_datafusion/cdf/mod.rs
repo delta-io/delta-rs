@@ -1,22 +1,29 @@
+//! Logical operators and physical executions for CDF
+
 use crate::kernel::{Add, AddCDCFile, CommitInfo, Remove};
 use std::collections::HashMap;
 
-pub mod scan;
+
+mod scan;
 mod scan_utils;
 
 pub use scan::DeltaCdfScan;
 
 #[derive(Debug)]
-pub struct CdcDataSpec<F: FileAction> {
+struct CdcDataSpec<F: FileAction> {
     version: i64,
     timestamp: i64,
     actions: Vec<F>,
     commit_info: Option<CommitInfo>,
 }
 
+/// This trait defines a generic set of operations used by CDF Reader
 pub trait FileAction {
+    /// Adds partition values
     fn partition_values(&self) -> HashMap<String, Option<String>>;
+    /// Physical Path to the data
     fn path(&self) -> String;
+    /// Byte size of the physical file
     fn size(&self) -> usize;
 }
 

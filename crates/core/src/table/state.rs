@@ -140,8 +140,8 @@ impl DeltaTableState {
     }
 
     /// Full list of all of the CDC files added as part of the changeDataFeed feature
-    pub fn cdc_files(&self) -> &Vec<AddCDCFile> {
-        self.cdc_files.as_ref()
+    pub fn cdc_files(&self) -> DeltaResult<Vec<AddCDCFile>> {
+        Ok(self.snapshot.cdc_files()?.collect())
     }
 
     /// Returns an iterator of file names present in the loaded state
