@@ -1,11 +1,12 @@
 //! Main writer API to write json messages to delta table
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::sync::Arc;
 
 use arrow::datatypes::{Schema as ArrowSchema, SchemaRef as ArrowSchemaRef};
 use arrow::record_batch::*;
 use bytes::Bytes;
+use indexmap::IndexMap;
 use object_store::path::Path;
 use object_store::ObjectStore;
 use parquet::{
@@ -45,7 +46,7 @@ pub(crate) struct DataArrowWriter {
     writer_properties: WriterProperties,
     buffer: ShareableBuffer,
     arrow_writer: ArrowWriter<ShareableBuffer>,
-    partition_values: BTreeMap<String, Scalar>,
+    partition_values: IndexMap<String, Scalar>,
     buffered_record_batch_count: usize,
 }
 
@@ -153,7 +154,7 @@ impl DataArrowWriter {
             writer_properties.clone(),
         )?;
 
-        let partition_values = BTreeMap::new();
+        let partition_values = IndexMap::new();
         let buffered_record_batch_count = 0;
 
         Ok(Self {
@@ -397,8 +398,8 @@ fn quarantine_failed_parquet_rows(
 fn extract_partition_values(
     partition_cols: &[String],
     record_batch: &RecordBatch,
-) -> Result<BTreeMap<String, Scalar>, DeltaWriterError> {
-    let mut partition_values = BTreeMap::new();
+) -> Result<IndexMap<String, Scalar>, DeltaWriterError> {
+    let mut partition_values = IndexMap::new();
 
     for col_name in partition_cols.iter() {
         let arrow_schema = record_batch.schema();
@@ -499,7 +500,7 @@ mod tests {
                 &record_batch
             )
             .unwrap(),
-            BTreeMap::from([
+            IndexMap::from([
                 (String::from("col1"), Scalar::Integer(1)),
                 (String::from("col2"), Scalar::Integer(2)),
                 (String::from("col3"), Scalar::Null(DataType::INTEGER)),
@@ -507,7 +508,7 @@ mod tests {
         );
         assert_eq!(
             extract_partition_values(&[String::from("col1")], &record_batch).unwrap(),
-            BTreeMap::from([(String::from("col1"), Scalar::Integer(1)),])
+            IndexMap::from([(String::from("col1"), Scalar::Integer(1)),])
         );
         assert!(extract_partition_values(&[String::from("col4")], &record_batch).is_err())
     }

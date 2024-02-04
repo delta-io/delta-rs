@@ -25,6 +25,8 @@ pub enum MetadataValue {
     Number(i32),
     /// A string value
     String(String),
+    /// A Boolean value
+    Boolean(bool),
 }
 
 impl From<String> for MetadataValue {
@@ -42,6 +44,12 @@ impl From<&String> for MetadataValue {
 impl From<i32> for MetadataValue {
     fn from(value: i32) -> Self {
         Self::Number(value)
+    }
+}
+
+impl From<bool> for MetadataValue {
+    fn from(value: bool) -> Self {
+        Self::Boolean(value)
     }
 }
 
@@ -184,6 +192,7 @@ impl StructField {
         let phys_name = self.get_config_value(&ColumnMetadataKey::ColumnMappingPhysicalName);
         match phys_name {
             None => Ok(&self.name),
+            Some(MetadataValue::Boolean(_)) => Ok(&self.name),
             Some(MetadataValue::String(s)) => Ok(s),
             Some(MetadataValue::Number(_)) => Err(Error::MetadataError(
                 "Unexpected type for physical name".to_string(),
@@ -849,5 +858,12 @@ mod tests {
             invariants[0],
             Invariant::new("a_map.value.element.d", "a_map.value.element.d < 4")
         );
+    }
+
+    /// <https://github.com/delta-io/delta-rs/issues/2152>
+    #[test]
+    fn test_identity_columns() {
+        let buf = r#"{"type":"struct","fields":[{"name":"ID_D_DATE","type":"long","nullable":true,"metadata":{"delta.identity.start":1,"delta.identity.step":1,"delta.identity.allowExplicitInsert":false}},{"name":"TXT_DateKey","type":"string","nullable":true,"metadata":{}}]}"#;
+        let _schema: StructType = serde_json::from_str(buf).expect("Failed to load");
     }
 }

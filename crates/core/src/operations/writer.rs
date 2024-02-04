@@ -1,11 +1,12 @@
 //! Abstractions and implementations for writing data to delta tables
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 
 use arrow::datatypes::SchemaRef as ArrowSchemaRef;
 use arrow::error::ArrowError;
 use arrow::record_batch::RecordBatch;
 use bytes::Bytes;
+use indexmap::IndexMap;
 use object_store::{path::Path, ObjectStore};
 use parquet::arrow::ArrowWriter;
 use parquet::basic::Compression;
@@ -155,7 +156,7 @@ impl DeltaWriter {
     pub async fn write_partition(
         &mut self,
         record_batch: RecordBatch,
-        partition_values: &BTreeMap<String, Scalar>,
+        partition_values: &IndexMap<String, Scalar>,
     ) -> DeltaResult<()> {
         let partition_key = Path::parse(partition_values.hive_partition_path())?;
 
@@ -217,7 +218,7 @@ pub(crate) struct PartitionWriterConfig {
     /// Prefix applied to all paths
     prefix: Path,
     /// Values for all partition columns
-    partition_values: BTreeMap<String, Scalar>,
+    partition_values: IndexMap<String, Scalar>,
     /// Properties passed to underlying parquet writer
     writer_properties: WriterProperties,
     /// Size above which we will write a buffered parquet file to disk.
@@ -230,7 +231,7 @@ pub(crate) struct PartitionWriterConfig {
 impl PartitionWriterConfig {
     pub fn try_new(
         file_schema: ArrowSchemaRef,
-        partition_values: BTreeMap<String, Scalar>,
+        partition_values: IndexMap<String, Scalar>,
         writer_properties: Option<WriterProperties>,
         target_file_size: Option<usize>,
         write_batch_size: Option<usize>,
@@ -484,7 +485,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_do_not_write_empty_file_on_close() {
-        let base_int = Arc::new(Int32Array::from((0..10000 as i32).collect::<Vec<i32>>()));
+        let base_int = Arc::new(Int32Array::from((0..10000_i32).collect::<Vec<i32>>()));
         let base_str = Arc::new(StringArray::from(vec!["A"; 10000]));
         let schema = Arc::new(ArrowSchema::new(vec![
             Field::new("id", DataType::Utf8, true),
@@ -514,7 +515,7 @@ mod tests {
     ) -> PartitionWriter {
         let config = PartitionWriterConfig::try_new(
             batch.schema(),
-            BTreeMap::new(),
+            IndexMap::new(),
             writer_properties,
             target_file_size,
             write_batch_size,

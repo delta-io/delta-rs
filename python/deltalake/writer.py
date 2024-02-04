@@ -118,7 +118,35 @@ def write_deltalake(
     *,
     schema: Optional[Union[pa.Schema, DeltaSchema]] = ...,
     partition_by: Optional[Union[List[str], str]] = ...,
-    mode: Literal["error", "append", "overwrite", "ignore"] = ...,
+    mode: Literal["error", "append", "ignore"] = ...,
+    name: Optional[str] = ...,
+    description: Optional[str] = ...,
+    configuration: Optional[Mapping[str, Optional[str]]] = ...,
+    overwrite_schema: bool = ...,
+    storage_options: Optional[Dict[str, str]] = ...,
+    large_dtypes: bool = ...,
+    engine: Literal["rust"],
+    writer_properties: WriterProperties = ...,
+    custom_metadata: Optional[Dict[str, str]] = ...,
+) -> None:
+    ...
+
+
+@overload
+def write_deltalake(
+    table_or_uri: Union[str, Path, DeltaTable],
+    data: Union[
+        "pd.DataFrame",
+        ds.Dataset,
+        pa.Table,
+        pa.RecordBatch,
+        Iterable[pa.RecordBatch],
+        RecordBatchReader,
+    ],
+    *,
+    schema: Optional[Union[pa.Schema, DeltaSchema]] = ...,
+    partition_by: Optional[Union[List[str], str]] = ...,
+    mode: Literal["overwrite"],
     name: Optional[str] = ...,
     description: Optional[str] = ...,
     configuration: Optional[Mapping[str, Optional[str]]] = ...,

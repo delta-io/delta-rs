@@ -531,8 +531,11 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+    use crate::kernel::Format;
     use crate::kernel::StructType;
+    use crate::operations::transaction::CommitBuilder;
     use crate::operations::DeltaOps;
+    use crate::protocol::Metadata;
     use crate::writer::test_utils::get_delta_schema;
 
     #[tokio::test]
@@ -563,6 +566,81 @@ mod tests {
             .expect("Failed to get bytes for _last_checkpoint");
         let last_checkpoint: CheckPoint = serde_json::from_slice(&last_checkpoint).expect("Fail");
         assert_eq!(last_checkpoint.version, 0);
+    }
+
+    /// This test validates that a checkpoint can be written and re-read with the minimum viable
+    /// Metadata. There was a bug which didn't handle the optionality of createdTime.
+    #[tokio::test]
+    async fn test_create_checkpoint_with_metadata() {
+        let table_schema = get_delta_schema();
+
+        let mut table = DeltaOps::new_in_memory()
+            .create()
+            .with_columns(table_schema.fields().clone())
+            .with_save_mode(crate::protocol::SaveMode::Ignore)
+            .await
+            .unwrap();
+        assert_eq!(table.version(), 0);
+        assert_eq!(table.get_schema().unwrap(), &table_schema);
+
+        let part_cols: Vec<String> = vec![];
+        let metadata = Metadata::try_new(table_schema, part_cols, HashMap::new()).unwrap();
+        let actions = vec![Action::Metadata(metadata)];
+
+        let epoch_id = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("Time went backwards")
+            .as_millis() as i64;
+
+        let operation = crate::protocol::DeltaOperation::StreamingUpdate {
+            output_mode: crate::protocol::OutputMode::Append,
+            query_id: "test".into(),
+            epoch_id,
+        };
+        let v = CommitBuilder::default()
+            .with_actions(&actions)
+            .with_maybe_snapshot(table.state.as_ref().map(|t| t.snapshot()))
+            .build(table.log_store(), operation)
+            .unwrap()
+            .await
+            .unwrap();
+
+        assert_eq!(1, v, "Expected the commit to create table version 1");
+        table.load().await.expect("Failed to reload table");
+        assert_eq!(
+            table.version(),
+            1,
+            "The loaded version of the table is not up to date"
+        );
+
+        let res = create_checkpoint_for(
+            table.version(),
+            table.state.as_ref().unwrap(),
+            table.log_store.as_ref(),
+        )
+        .await;
+        assert!(res.is_ok());
+
+        // Look at the "files" and verify that the _last_checkpoint has the right version
+        let path = Path::from("_delta_log/_last_checkpoint");
+        let last_checkpoint = table
+            .object_store()
+            .get(&path)
+            .await
+            .expect("Failed to get the _last_checkpoint")
+            .bytes()
+            .await
+            .expect("Failed to get bytes for _last_checkpoint");
+        let last_checkpoint: CheckPoint = serde_json::from_slice(&last_checkpoint).expect("Fail");
+        assert_eq!(last_checkpoint.version, 1);
+
+        // If the regression exists, this will fail
+        table.load().await.expect("Failed to reload the table, this likely means that the optional createdTime was not actually optional");
+        assert_eq!(
+            1,
+            table.version(),
+            "The reloaded table doesn't have the right version"
+        );
     }
 
     #[tokio::test]

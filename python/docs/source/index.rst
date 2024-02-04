@@ -16,7 +16,7 @@ Pandas_, DuckDB_, and Polars_.
    It is not yet as feature-complete as the PySpark implementation of Delta
    Lake. If you encounter a bug, please let us know in our `GitHub repo`_.
 
-.. _delta-spark: https://docs.delta.io/latest/api/python/index.html
+.. _delta-spark: https://docs.delta.io/latest/api/python/spark/index.html
 .. _Delta Lake: https://delta.io/
 .. _Apache Arrow: https://arrow.apache.org/
 .. _Pandas: https://pandas.pydata.org/

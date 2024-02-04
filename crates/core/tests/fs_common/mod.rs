@@ -141,6 +141,7 @@ impl std::fmt::Display for SlowStore {
 }
 
 impl SlowStore {
+    #[allow(dead_code)]
     pub fn new(
         location: Url,
         _options: impl Into<deltalake_core::storage::StorageOptions> + Clone,
