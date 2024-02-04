@@ -37,8 +37,6 @@ from pyarrow.dataset import (
 if TYPE_CHECKING:
     import os
 
-    import pandas
-
 from deltalake._internal import DeltaDataChecker as _DeltaDataChecker
 from deltalake._internal import RawDeltaTable
 from deltalake._internal import create_deltalake as _create_deltalake
@@ -47,6 +45,13 @@ from deltalake.data_catalog import DataCatalog
 from deltalake.exceptions import DeltaProtocolError
 from deltalake.fs import DeltaStorageHandler
 from deltalake.schema import Schema as DeltaSchema
+
+try:
+    import pandas as pd  # noqa: F811
+except ModuleNotFoundError:
+    _has_pandas = False
+else:
+    _has_pandas = True
 
 MAX_SUPPORTED_READER_VERSION = 1
 MAX_SUPPORTED_WRITER_VERSION = 2
@@ -892,7 +897,7 @@ class DeltaTable:
             pyarrow.RecordBatch,
             pyarrow.RecordBatchReader,
             ds.Dataset,
-            "pandas.DataFrame",
+            "pd.DataFrame",
         ],
         predicate: str,
         source_alias: Optional[str] = None,
@@ -937,7 +942,7 @@ class DeltaTable:
             source = convert_pyarrow_table(source, large_dtypes)
         elif isinstance(source, ds.Dataset):
             source = convert_pyarrow_dataset(source, large_dtypes)
-        elif isinstance(source, pandas.DataFrame):
+        elif _has_pandas and isinstance(source, pd.DataFrame):
             source = convert_pyarrow_table(
                 pyarrow.Table.from_pandas(source), large_dtypes
             )
@@ -1094,7 +1099,7 @@ class DeltaTable:
         columns: Optional[List[str]] = None,
         filesystem: Optional[Union[str, pa_fs.FileSystem]] = None,
         filters: Optional[FilterType] = None,
-    ) -> "pandas.DataFrame":
+    ) -> "pd.DataFrame":
         """
         Build a pandas dataframe using data from the DeltaTable.
 
@@ -1879,7 +1884,7 @@ class TableOptimizer:
 
         Args:
             columns: the columns to use for Z-ordering. There must be at least one column.
-                        partition_filters: the partition filters that will be used for getting the matched files
+            partition_filters: the partition filters that will be used for getting the matched files
             target_size: desired file size after bin-packing files, in bytes. If not
                             provided, will attempt to read the table configuration value ``delta.targetFileSize``.
                             If that value isn't set, will use default value of 256MB.
