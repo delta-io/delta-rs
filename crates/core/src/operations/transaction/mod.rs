@@ -343,11 +343,7 @@ impl<'a> std::future::IntoFuture for PreparedCommit<'a> {
             let mut attempt_number = 1;
             while attempt_number <= this.max_retries {
                 let version = read_snapshot.version() + attempt_number as i64;
-                match this
-                    .log_store
-                    .write_commit_entry(version, tmp_commit)
-                    .await
-                {
+                match this.log_store.write_commit_entry(version, tmp_commit).await {
                     Ok(()) => return Ok(FinalizedCommit { version }),
                     Err(TransactionError::VersionAlreadyExists(version)) => {
                         let summary = WinningCommitSummary::try_new(
