@@ -10,7 +10,8 @@ use deltalake_aws::storage::S3StorageOptions;
 use deltalake_aws::{CommitEntry, DynamoDbConfig, DynamoDbLockClient};
 use deltalake_core::kernel::{Action, Add, DataType, PrimitiveType, StructField, StructType};
 use deltalake_core::logstore::LogStore;
-use deltalake_core::operations::transaction::{commit, prepare_commit};
+use deltalake_core::operations::transaction::{prepare_commit, CommitBuilder};
+use deltalake_core::parquet::file::metadata;
 use deltalake_core::protocol::{DeltaOperation, SaveMode};
 use deltalake_core::storage::commit_uri_from_version;
 use deltalake_core::storage::StorageOptions;
@@ -266,7 +267,7 @@ async fn create_incomplete_commit_entry(
             predicate: None,
         },
         &actions,
-        None,
+        &HashMap::new(),
     )
     .await?;
     let commit_entry = CommitEntry::new(version, temp_path);
@@ -331,15 +332,12 @@ async fn append_to_table(
         predicate: None,
     };
     let actions = vec![add_action(name)];
-    let version = commit(
-        table.log_store().as_ref(),
-        &actions,
-        operation,
-        Some(table.snapshot()?),
-        metadata,
-    )
-    .await
-    .unwrap();
+    let version = CommitBuilder::default()
+        .with_actions(&actions)
+        .with_snapshot(table.snapshot()?.snapshot())
+        .with_app_metadata(metadata.unwrap_or_default())
+        .build(table.log_store(), operation)?
+        .await?;
     Ok(version)
 }
 

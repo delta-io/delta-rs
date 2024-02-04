@@ -186,7 +186,10 @@ pub struct CommitProperties {
 
 impl Default for CommitProperties {
     fn default() -> Self {
-        Self { app_metadata: Default::default(), max_retries: DEFAULT_RETRIES}
+        Self {
+            app_metadata: Default::default(),
+            max_retries: DEFAULT_RETRIES,
+        }
     }
 }
 

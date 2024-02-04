@@ -305,20 +305,17 @@ impl VacuumPlan {
             status: String::from("COMPLETED"), // Maybe this should be FAILED when vacuum has error during the files, not sure how to check for this
         };
 
-        let start_metrics = serde_json::to_value(VacuumStartOperationMetrics {
+        let start_metrics = VacuumStartOperationMetrics {
             num_files_to_delete: self.files_to_delete.len() as i64,
             size_of_data_to_delete: self.file_sizes.iter().sum(),
-        });
+        };
 
         // Begin VACUUM START COMMIT
         let mut start_props = CommitProperties::default();
-        if let Ok(map) = start_metrics {
-            start_props
-                .app_metadata
-                .insert("operationMetrics".to_owned(), map);
-        }
-        let mut start_props = CommitProperties::default();
         start_props.app_metadata = commit_properties.app_metadata.clone();
+        start_props
+            .app_metadata
+            .insert("operationMetrics".to_owned(), serde_json::to_value(start_metrics)?);
 
         CommitBuilder::from(start_props)
             .with_snapshot(&snapshot.snapshot)
@@ -342,17 +339,15 @@ impl VacuumPlan {
             .await?;
 
         // Create end metadata
-        let end_metrics = serde_json::to_value(VacuumEndOperationMetrics {
+        let end_metrics = VacuumEndOperationMetrics {
             num_deleted_files: files_deleted.len() as i64,
             num_vacuumed_directories: 0, // Set to zero since we only remove files not dirs
-        });
+        };
 
         // Begin VACUUM END COMMIT
-        if let Ok(map) = end_metrics {
-            commit_properties
-                .app_metadata
-                .insert("operationMetrics".to_owned(), map);
-        }
+        commit_properties
+            .app_metadata
+            .insert("operationMetrics".to_owned(), serde_json::to_value(end_metrics)?);
         CommitBuilder::from(commit_properties)
             .with_snapshot(&snapshot.snapshot)
             .build(store.clone(), end_operation)?
