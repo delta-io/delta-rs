@@ -25,6 +25,7 @@ mod state;
 pub(crate) mod test_utils;
 
 const DELTA_LOG_FOLDER: &str = "_delta_log";
+const DEFAULT_RETRIES: usize = 15;
 
 /// Error raised while commititng transaction
 #[derive(thiserror::Error, Debug)]
@@ -176,11 +177,17 @@ pub async fn prepare_commit<'a>(
     Ok(path)
 }
 
-#[derive(Default, Clone, Debug)]
+#[derive(Clone, Debug)]
 /// Control commit behaviour and modify metadata information that is comitted during an operation
 pub struct CommitProperties {
     pub(crate) app_metadata: HashMap<String, Value>,
     max_retries: usize,
+}
+
+impl Default for CommitProperties {
+    fn default() -> Self {
+        Self { app_metadata: Default::default(), max_retries: DEFAULT_RETRIES}
+    }
 }
 
 impl<'a> From<CommitProperties> for CommitBuilder<'a> {
@@ -218,7 +225,7 @@ impl<'a> Default for CommitBuilder<'a> {
             actions: &[],
             read_snapshot: None,
             app_metadata: HashMap::new(),
-            max_retries: 15,
+            max_retries: DEFAULT_RETRIES,
         }
     }
 }
