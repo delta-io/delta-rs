@@ -72,7 +72,7 @@ impl ConstraintBuilder {
     }
 
     /// Additional metadata to be added to commit info
-    pub fn commit_properties(mut self, commit_properties: CommitProperties) -> Self {
+    pub fn with_commit_properties(mut self, commit_properties: CommitProperties) -> Self {
         self.commit_properties = commit_properties;
         self
     }
@@ -174,30 +174,10 @@ impl std::future::IntoFuture for ConstraintBuilder {
                 writer_features: old_protocol.writer_features.clone(),
             };
 
-            /*
-            let operational_parameters = HashMap::from_iter([
-                ("name".to_string(), json!(&name)),
-                ("expr".to_string(), json!(&expr_str)),
-            ]);
-            */
-
             let operations = DeltaOperation::AddConstraint {
                 name: name.clone(),
                 expr: expr_str.clone(),
             };
-
-            /* why here?
-            let commit_info = CommitInfo {
-                timestamp: Some(Utc::now().timestamp_millis()),
-                operation: Some(operations.name().to_string()),
-                operation_parameters: Some(operational_parameters),
-                read_version: Some(this.snapshot.version()),
-                isolation_level: Some(IsolationLevel::Serializable),
-                is_blind_append: Some(false),
-                info: app_metadata,
-                ..Default::default()
-            };
-            */
 
             let actions = vec![metadata.into(), protocol.into()];
 

@@ -177,7 +177,7 @@ pub async fn prepare_commit<'a>(
 }
 
 #[derive(Default, Clone, Debug)]
-/// Control commit behaviour and modify metadata information that is comitted during an operation */
+/// Control commit behaviour and modify metadata information that is comitted during an operation
 pub struct CommitProperties {
     pub(crate) app_metadata: HashMap<String, Value>,
     max_retries: usize,

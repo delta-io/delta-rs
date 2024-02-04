@@ -33,7 +33,7 @@ use deltalake::operations::filesystem_check::FileSystemCheckBuilder;
 use deltalake::operations::merge::MergeBuilder;
 use deltalake::operations::optimize::{OptimizeBuilder, OptimizeType};
 use deltalake::operations::restore::RestoreBuilder;
-use deltalake::operations::transaction::commit;
+use deltalake::operations::transaction::{CommitBuilder, CommitProperties};
 use deltalake::operations::update::UpdateBuilder;
 use deltalake::operations::vacuum::VacuumBuilder;
 use deltalake::parquet::basic::Compression;
@@ -278,7 +278,8 @@ impl RawDeltaTable {
         if let Some(metadata) = custom_metadata {
             let json_metadata: Map<String, Value> =
                 metadata.into_iter().map(|(k, v)| (k, v.into())).collect();
-            cmd = cmd.with_metadata(json_metadata);
+            cmd = cmd
+                .with_commit_properties(CommitProperties::default().with_metadata(json_metadata));
         };
 
         let (table, metrics) = rt()?
@@ -321,7 +322,8 @@ impl RawDeltaTable {
         if let Some(metadata) = custom_metadata {
             let json_metadata: Map<String, Value> =
                 metadata.into_iter().map(|(k, v)| (k, v.into())).collect();
-            cmd = cmd.with_metadata(json_metadata);
+            cmd = cmd
+                .with_commit_properties(CommitProperties::default().with_metadata(json_metadata));
         };
 
         let (table, metrics) = rt()?
@@ -370,7 +372,8 @@ impl RawDeltaTable {
         if let Some(metadata) = custom_metadata {
             let json_metadata: Map<String, Value> =
                 metadata.into_iter().map(|(k, v)| (k, v.into())).collect();
-            cmd = cmd.with_metadata(json_metadata);
+            cmd = cmd
+                .with_commit_properties(CommitProperties::default().with_metadata(json_metadata));
         };
 
         let converted_filters = convert_partition_filters(partition_filters.unwrap_or_default())
@@ -428,7 +431,8 @@ impl RawDeltaTable {
         if let Some(metadata) = custom_metadata {
             let json_metadata: Map<String, Value> =
                 metadata.into_iter().map(|(k, v)| (k, v.into())).collect();
-            cmd = cmd.with_metadata(json_metadata);
+            cmd = cmd
+                .with_commit_properties(CommitProperties::default().with_metadata(json_metadata));
         };
 
         let converted_filters = convert_partition_filters(partition_filters.unwrap_or_default())
@@ -460,7 +464,8 @@ impl RawDeltaTable {
         if let Some(metadata) = custom_metadata {
             let json_metadata: Map<String, Value> =
                 metadata.into_iter().map(|(k, v)| (k, v.into())).collect();
-            cmd = cmd.with_metadata(json_metadata);
+            cmd = cmd
+                .with_commit_properties(CommitProperties::default().with_metadata(json_metadata));
         };
 
         let table = rt()?
@@ -543,7 +548,9 @@ impl RawDeltaTable {
             if let Some(metadata) = custom_metadata {
                 let json_metadata: Map<String, Value> =
                     metadata.into_iter().map(|(k, v)| (k, v.into())).collect();
-                cmd = cmd.with_metadata(json_metadata);
+                cmd = cmd.with_commit_properties(
+                    CommitProperties::default().with_metadata(json_metadata),
+                );
             };
 
             if let Some(mu_updates) = matched_update_updates {
@@ -932,19 +939,27 @@ impl RawDeltaTable {
             predicate: None,
         };
 
-        let app_metadata =
-            custom_metadata.map(|md| md.into_iter().map(|(k, v)| (k, v.into())).collect());
-
-        let store = self._table.log_store();
-
         rt()?
-            .block_on(commit(
-                &*store,
-                &actions,
-                operation,
-                Some(self._table.snapshot().map_err(PythonError::from)?),
-                app_metadata,
-            ))
+            .block_on(
+                CommitBuilder::from(
+                    CommitProperties::default().with_metadata(
+                        custom_metadata
+                            .unwrap_or_default()
+                            .into_iter()
+                            .map(|(k, v)| (k, v.into())),
+                    ),
+                )
+                .with_actions(&actions)
+                .with_snapshot(
+                    self._table
+                        .snapshot()
+                        .map_err(PythonError::from)?
+                        .snapshot(),
+                )
+                .build(self._table.log_store(), operation)
+                .map_err(|err| PythonError::from(DeltaTableError::from(err)))?
+                .into_future(),
+            )
             .map_err(PythonError::from)?;
 
         Ok(())
@@ -1010,7 +1025,8 @@ impl RawDeltaTable {
         if let Some(metadata) = custom_metadata {
             let json_metadata: Map<String, Value> =
                 metadata.into_iter().map(|(k, v)| (k, v.into())).collect();
-            cmd = cmd.with_metadata(json_metadata);
+            cmd = cmd
+                .with_commit_properties(CommitProperties::default().with_metadata(json_metadata));
         };
 
         let (table, metrics) = rt()?
@@ -1037,7 +1053,8 @@ impl RawDeltaTable {
         if let Some(metadata) = custom_metadata {
             let json_metadata: Map<String, Value> =
                 metadata.into_iter().map(|(k, v)| (k, v.into())).collect();
-            cmd = cmd.with_metadata(json_metadata);
+            cmd = cmd
+                .with_commit_properties(CommitProperties::default().with_metadata(json_metadata));
         };
 
         let (table, metrics) = rt()?
@@ -1397,7 +1414,8 @@ fn write_to_deltalake(
     if let Some(metadata) = custom_metadata {
         let json_metadata: Map<String, Value> =
             metadata.into_iter().map(|(k, v)| (k, v.into())).collect();
-        builder = builder.with_metadata(json_metadata);
+        builder = builder
+            .with_commit_properties(CommitProperties::default().with_metadata(json_metadata));
     };
 
     rt()?

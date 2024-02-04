@@ -685,7 +685,7 @@ mod tests {
         let setup_actions = setup.unwrap_or_else(|| init_table_actions(None));
         let state = DeltaTableState::from_actions(setup_actions).unwrap();
         let snapshot = state.snapshot();
-        let transaction_info = TransactionInfo::new(&snapshot, reads, &actions, read_whole_table);
+        let transaction_info = TransactionInfo::new(snapshot, reads, &actions, read_whole_table);
         let summary = WinningCommitSummary {
             actions: concurrent,
             commit_info: None,
