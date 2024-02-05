@@ -174,21 +174,21 @@ impl std::future::IntoFuture for ConstraintBuilder {
                 writer_features: old_protocol.writer_features.clone(),
             };
 
-            let operations = DeltaOperation::AddConstraint {
+            let operation = DeltaOperation::AddConstraint {
                 name: name.clone(),
                 expr: expr_str.clone(),
             };
 
             let actions = vec![metadata.into(), protocol.into()];
 
-            let version = CommitBuilder::from(this.commit_properties)
-                .with_actions(&actions)
+            let commit = CommitBuilder::from(this.commit_properties)
+                .with_actions(actions)
                 .with_snapshot(&this.snapshot.snapshot)
-                .build(this.log_store.clone(), operations.clone())?
-                .await?
-                .version();
+                .build(this.log_store.clone(), operation)?
+                .await?;
 
-            this.snapshot.merge(actions, &operations, version)?;
+            this.snapshot
+                .merge(commit.data.actions, &commit.data.operation, commit.version)?;
             Ok(DeltaTable::new_with_state(this.log_store, this.snapshot))
         })
     }

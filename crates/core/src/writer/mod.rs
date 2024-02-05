@@ -149,7 +149,7 @@ pub trait DeltaWriter<T> {
         };
         let version = CommitBuilder::default()
             .with_snapshot(&snapshot.snapshot)
-            .with_actions(&adds)
+            .with_actions(adds)
             .build(table.log_store.clone(), operation)?
             .await?
             .version();

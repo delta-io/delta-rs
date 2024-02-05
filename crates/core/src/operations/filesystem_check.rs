@@ -183,7 +183,7 @@ impl FileSystemCheckPlan {
         );
 
         CommitBuilder::from(commit_properties)
-            .with_actions(&actions)
+            .with_actions(actions)
             .with_snapshot(&snapshot.snapshot)
             .build(self.log_store.clone(), DeltaOperation::FileSystemCheck {})?
             .await?;

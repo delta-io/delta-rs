@@ -740,7 +740,7 @@ impl MergePlan {
                 //// optimized partition was updated then abort the commit. Requires (#593).
 
                 CommitBuilder::from(properties)
-                    .with_actions(&actions)
+                    .with_actions(actions)
                     .with_snapshot(&snapshot.snapshot)
                     .build(
                         log_store.clone(),

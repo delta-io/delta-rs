@@ -1379,8 +1379,6 @@ async fn execute(
         }
     }
 
-    let mut version = snapshot.version();
-
     let source_count_metrics = source_count.metrics().unwrap();
     let target_count_metrics = op_count.metrics().unwrap();
     fn get_metric(metrics: &MetricsSet, name: &str) -> usize {
@@ -1411,16 +1409,24 @@ async fn execute(
         not_matched_predicates: not_match_target_operations,
         not_matched_by_source_predicates: not_match_source_operations,
     };
-    if !actions.is_empty() {
-        version = CommitBuilder::from(commit_properties)
-            .with_actions(&actions)
-            .with_snapshot(&snapshot.snapshot)
-            .build(log_store.clone(), operation.clone())?
-            .await?
-            .version();
+
+    if actions.is_empty() {
+        return Ok(((actions, snapshot.version(), None), metrics));
     }
-    let op = (!actions.is_empty()).then_some(operation);
-    Ok(((actions, version, op), metrics))
+
+    let commit = CommitBuilder::from(commit_properties)
+        .with_actions(actions)
+        .with_snapshot(&snapshot.snapshot)
+        .build(log_store.clone(), operation)?
+        .await?;
+    Ok((
+        (
+            commit.data.actions,
+            commit.version,
+            Some(commit.data.operation),
+        ),
+        metrics,
+    ))
 }
 
 // TODO: Abstract MergePlanner into DeltaPlanner to support other delta operations in the future.

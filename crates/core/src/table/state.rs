@@ -15,6 +15,7 @@ use crate::kernel::{
     StructType,
 };
 use crate::logstore::LogStore;
+use crate::operations::transaction::CommitData;
 use crate::partitions::{DeltaTablePartition, PartitionFilter};
 use crate::protocol::DeltaOperation;
 use crate::{DeltaResult, DeltaTableError};
@@ -186,8 +187,13 @@ impl DeltaTableState {
         operation: &DeltaOperation,
         version: i64,
     ) -> Result<(), DeltaTableError> {
-        let commit_infos = vec![(actions, operation.clone(), HashMap::new())];
-        let new_version = self.snapshot.advance(&commit_infos)?;
+        // TODO: Maybe change this interface to just use CommitData..
+        let commit_data = CommitData {
+            actions: actions,
+            operation: operation.clone(),
+            app_metadata: HashMap::new(),
+        };
+        let new_version = self.snapshot.advance(&vec![commit_data])?;
         if new_version != version {
             return Err(DeltaTableError::Generic("Version mismatch".to_string()));
         }

@@ -252,16 +252,23 @@ async fn execute(
     let operation = DeltaOperation::Delete {
         predicate: Some(fmt_expr_to_sql(&predicate)?),
     };
-    if !actions.is_empty() {
-        version = CommitBuilder::from(commit_properties)
-            .with_actions(&actions)
-            .with_snapshot(&snapshot.snapshot)
-            .build(log_store, operation.clone())?
-            .await?
-            .version();
+    if actions.is_empty() {
+        return Ok(((actions, snapshot.version(), None), metrics));
     }
-    let op = (!actions.is_empty()).then_some(operation);
-    Ok(((actions, version, op), metrics))
+
+    let commit = CommitBuilder::from(commit_properties)
+        .with_actions(actions)
+        .with_snapshot(&snapshot.snapshot)
+        .build(log_store, operation)?
+        .await?;
+    Ok((
+        (
+            commit.data.actions,
+            commit.version,
+            Some(commit.data.operation),
+        ),
+        metrics,
+    ))
 }
 
 impl std::future::IntoFuture for DeleteBuilder {

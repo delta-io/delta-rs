@@ -412,14 +412,16 @@ async fn execute(
         serde_json::to_value(&metrics)?,
     );
 
-    version = CommitBuilder::from(commit_properties)
-        .with_actions(&actions)
+    let commit = CommitBuilder::from(commit_properties)
+        .with_actions(actions)
         .with_snapshot(&snapshot.snapshot)
-        .build(log_store, operation.clone())?
-        .await?
-        .version();
+        .build(log_store, operation)?
+        .await?;
 
-    Ok(((actions, version, Some(operation)), metrics))
+    Ok((
+        (commit.data.actions, version, Some(commit.data.operation)),
+        metrics,
+    ))
 }
 
 impl std::future::IntoFuture for UpdateBuilder {

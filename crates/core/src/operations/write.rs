@@ -702,18 +702,17 @@ impl std::future::IntoFuture for WriteBuilder {
                 },
                 predicate: predicate_str,
             };
-            let version = CommitBuilder::from(this.commit_properties)
-                .with_actions(&actions)
+            let commit = CommitBuilder::from(this.commit_properties)
+                .with_actions(actions)
                 .with_maybe_snapshot(this.snapshot.as_ref().map(|t| t.snapshot()))
                 .build(this.log_store.clone(), operation.clone())?
-                .await?
-                .version();
+                .await?;
 
             // TODO we do not have the table config available, but since we are merging only our newly
             // created actions, it may be safe to assume, that we want to include all actions.
             // then again, having only some tombstones may be misleading.
             if let Some(mut snapshot) = this.snapshot {
-                snapshot.merge(actions, &operation, version)?;
+                snapshot.merge(commit.data.actions, &commit.data.operation, commit.version)?;
                 Ok(DeltaTable::new_with_state(this.log_store, snapshot))
             } else {
                 let mut table = DeltaTable::new(this.log_store, Default::default());

@@ -89,9 +89,6 @@ pub enum TransactionError {
         source: Box<dyn std::error::Error + Send + Sync + 'static>,
     },
 }
-/// Error raised while commititng transaction
-#[derive(thiserror::Error, Debug)]
-pub enum CommitBuilderError {}
 
 impl From<TransactionError> for DeltaTableError {
     fn from(err: TransactionError) -> Self {
@@ -108,71 +105,50 @@ impl From<TransactionError> for DeltaTableError {
     }
 }
 
+/// Error raised while commititng transaction
+#[derive(thiserror::Error, Debug)]
+pub enum CommitBuilderError {}
+
 impl From<CommitBuilderError> for DeltaTableError {
     fn from(err: CommitBuilderError) -> Self {
         DeltaTableError::CommitValidation { source: err }
     }
 }
-
-// Convert actions to their json representation
-fn log_entry_from_actions<'a>(
-    actions: impl IntoIterator<Item = &'a Action>,
-) -> Result<String, TransactionError> {
-    let mut jsons = Vec::<String>::new();
-    for action in actions {
-        let json = serde_json::to_string(action)
-            .map_err(|e| TransactionError::SerializeLogJson { json_err: e })?;
-        jsons.push(json);
-    }
-    Ok(jsons.join("\n"))
+/// Data that was actually written to the log store.
+pub struct CommitData {
+    /// The actions
+    pub actions: Vec<Action>,
+    /// The Operation
+    pub operation: DeltaOperation,
+    /// The Metadata
+    pub app_metadata: HashMap<String, Value>,
 }
 
-pub(crate) fn get_commit_bytes(
-    operation: &DeltaOperation,
-    actions: &[Action],
-    app_metadata: &HashMap<String, Value>,
-) -> Result<bytes::Bytes, TransactionError> {
-    if !actions.iter().any(|a| matches!(a, Action::CommitInfo(..))) {
-        let mut extra_info = HashMap::<String, Value>::new();
-        let mut commit_info = operation.get_commit_info();
-        commit_info.timestamp = Some(Utc::now().timestamp_millis());
-        extra_info.insert(
-            "clientVersion".to_string(),
-            Value::String(format!("delta-rs.{}", crate_version())),
-        );
-        if !app_metadata.is_empty() {
-            extra_info.extend(app_metadata.to_owned())
+impl CommitData {
+    // Convert actions to their json representation
+    fn log_entry_from_actions<'a>(
+        actions: impl IntoIterator<Item = &'a Action>,
+    ) -> Result<String, TransactionError> {
+        let mut jsons = Vec::<String>::new();
+        for action in actions {
+            let json = serde_json::to_string(action)
+                .map_err(|e| TransactionError::SerializeLogJson { json_err: e })?;
+            jsons.push(json);
         }
-        commit_info.info = extra_info;
-        Ok(bytes::Bytes::from(log_entry_from_actions(
-            actions
-                .iter()
-                .chain(std::iter::once(&Action::CommitInfo(commit_info))),
-        )?))
-    } else {
-        Ok(bytes::Bytes::from(log_entry_from_actions(actions)?))
+        Ok(jsons.join("\n"))
     }
-}
 
-/// Represents a inflight commit with a temporary commit marker on the log store
-pub struct PreparedCommit<'a> {
-    path: Path,
-    log_store: LogStoreRef,
-    actions: &'a [Action],
-    operation: DeltaOperation,
-    read_snapshot: Option<&'a EagerSnapshot>,
-    max_retries: usize,
-}
-
-impl<'a> PreparedCommit<'a> {
-    /// The temporary commit file created
-    pub fn path(&self) -> &Path {
-        &self.path
+    /// Obtain the byte representation of the commit.
+    pub fn get_bytes(&self) -> Result<bytes::Bytes, TransactionError> {
+        // Data MUST be read from the passed `CommitData`. Don't add data that is not sourced from there.
+        let actions = &self.actions;
+        Ok(bytes::Bytes::from(Self::log_entry_from_actions(actions)?))
     }
 }
 
 #[derive(Clone, Debug)]
-/// Control commit behaviour and modify metadata information that is comitted during an operation
+/// End user facing interface to be used by operations on the table.
+/// Enable controling commit behaviour and modifying metadata that is written during a commit.
 pub struct CommitProperties {
     pub(crate) app_metadata: HashMap<String, Value>,
     max_retries: usize,
@@ -183,16 +159,6 @@ impl Default for CommitProperties {
         Self {
             app_metadata: Default::default(),
             max_retries: DEFAULT_RETRIES,
-        }
-    }
-}
-
-impl<'a> From<CommitProperties> for CommitBuilder<'a> {
-    fn from(value: CommitProperties) -> Self {
-        CommitBuilder {
-            max_retries: value.max_retries,
-            app_metadata: value.app_metadata,
-            ..Default::default()
         }
     }
 }
@@ -208,9 +174,19 @@ impl CommitProperties {
     }
 }
 
+impl<'a> From<CommitProperties> for CommitBuilder<'a> {
+    fn from(value: CommitProperties) -> Self {
+        CommitBuilder {
+            max_retries: value.max_retries,
+            app_metadata: value.app_metadata,
+            ..Default::default()
+        }
+    }
+}
+
 /// TODO
 pub struct CommitBuilder<'a> {
-    actions: &'a [Action],
+    actions: Vec<Action>,
     read_snapshot: Option<&'a EagerSnapshot>,
     app_metadata: HashMap<String, Value>,
     max_retries: usize,
@@ -219,7 +195,7 @@ pub struct CommitBuilder<'a> {
 impl<'a> Default for CommitBuilder<'a> {
     fn default() -> Self {
         CommitBuilder {
-            actions: &[],
+            actions: Vec::new(),
             read_snapshot: None,
             app_metadata: HashMap::new(),
             max_retries: DEFAULT_RETRIES,
@@ -229,7 +205,7 @@ impl<'a> Default for CommitBuilder<'a> {
 
 impl<'a> CommitBuilder<'a> {
     /// Actions to be included in the commit
-    pub fn with_actions(mut self, actions: &'a [Action]) -> Self {
+    pub fn with_actions(mut self, actions: Vec<Action>) -> Self {
         self.actions = actions;
         self
     }
@@ -273,21 +249,20 @@ impl<'a> CommitBuilder<'a> {
 pub struct PreCommit<'a> {
     log_store: LogStoreRef,
     read_snapshot: Option<&'a EagerSnapshot>,
-    actions: &'a [Action],
+    actions: Vec<Action>,
     operation: DeltaOperation,
     app_metadata: HashMap<String, Value>,
     max_retries: usize,
 }
 
-/// A commit that successfully completed
-pub struct FinalizedCommit {
-    version: i64,
-}
+impl<'a> std::future::IntoFuture for PreCommit<'a> {
+    type Output = DeltaResult<FinalizedCommit>;
+    type IntoFuture = BoxFuture<'a, Self::Output>;
 
-impl FinalizedCommit {
-    /// The materialized version of the commit
-    pub fn version(&self) -> i64 {
-        self.version
+    fn into_future(self) -> Self::IntoFuture {
+        let this = self;
+
+        Box::pin(async move { this.into_prepared_commit_future().await?.await })
     }
 }
 
@@ -298,11 +273,33 @@ impl<'a> PreCommit<'a> {
 
         Box::pin(async move {
             if let Some(read_snapshot) = &this.read_snapshot {
-                PROTOCOL.can_commit(read_snapshot, this.actions, &this.operation)?;
+                PROTOCOL.can_commit(read_snapshot, &this.actions, &this.operation)?;
+            }
+
+            let mut data = CommitData {
+                actions: this.actions.to_owned(),
+                app_metadata: this.app_metadata,
+                operation: this.operation,
+            };
+
+            if !data
+                .actions
+                .iter()
+                .any(|a| matches!(a, Action::CommitInfo(..)))
+            {
+                let mut commit_info = data.operation.get_commit_info();
+                commit_info.timestamp = Some(Utc::now().timestamp_millis());
+                data.app_metadata.insert(
+                    "clientVersion".to_string(),
+                    Value::String(format!("delta-rs.{}", crate_version())),
+                );
+                data.app_metadata.extend(commit_info.info);
+                commit_info.info = data.app_metadata.clone();
+                data.actions.push(Action::CommitInfo(commit_info))
             }
 
             // Serialize all actions that are part of this log entry.
-            let log_entry = get_commit_bytes(&this.operation, &this.actions, &this.app_metadata)?;
+            let log_entry = data.get_bytes()?;
 
             // Write delta log entry as temporary file to storage. For the actual commit,
             // the temporary file is moved (atomic rename) to the delta log folder within `commit` function.
@@ -316,10 +313,25 @@ impl<'a> PreCommit<'a> {
                 log_store: this.log_store,
                 read_snapshot: this.read_snapshot,
                 max_retries: this.max_retries,
-                actions: this.actions,
-                operation: this.operation,
+                data: data,
             })
         })
+    }
+}
+
+/// Represents a inflight commit with a temporary commit marker on the log store
+pub struct PreparedCommit<'a> {
+    path: Path,
+    log_store: LogStoreRef,
+    data: CommitData,
+    read_snapshot: Option<&'a EagerSnapshot>,
+    max_retries: usize,
+}
+
+impl<'a> PreparedCommit<'a> {
+    /// The temporary commit file created
+    pub fn path(&self) -> &Path {
+        &self.path
     }
 }
 
@@ -335,7 +347,10 @@ impl<'a> std::future::IntoFuture for PreparedCommit<'a> {
 
             if this.read_snapshot.is_none() {
                 this.log_store.write_commit_entry(0, tmp_commit).await?;
-                return Ok(FinalizedCommit { version: 0 });
+                return Ok(FinalizedCommit {
+                    version: 0,
+                    data: this.data,
+                });
             }
 
             let read_snapshot = this.read_snapshot.as_ref().unwrap();
@@ -344,7 +359,12 @@ impl<'a> std::future::IntoFuture for PreparedCommit<'a> {
             while attempt_number <= this.max_retries {
                 let version = read_snapshot.version() + attempt_number as i64;
                 match this.log_store.write_commit_entry(version, tmp_commit).await {
-                    Ok(()) => return Ok(FinalizedCommit { version }),
+                    Ok(()) => {
+                        return Ok(FinalizedCommit {
+                            version,
+                            data: this.data,
+                        })
+                    }
                     Err(TransactionError::VersionAlreadyExists(version)) => {
                         let summary = WinningCommitSummary::try_new(
                             this.log_store.as_ref(),
@@ -354,13 +374,16 @@ impl<'a> std::future::IntoFuture for PreparedCommit<'a> {
                         .await?;
                         let transaction_info = TransactionInfo::try_new(
                             read_snapshot,
-                            this.operation.read_predicate(),
-                            this.actions,
+                            this.data.operation.read_predicate(),
+                            &this.data.actions,
                             // TODO allow tainting whole table
                             false,
                         )?;
-                        let conflict_checker =
-                            ConflictChecker::new(transaction_info, summary, Some(&this.operation));
+                        let conflict_checker = ConflictChecker::new(
+                            transaction_info,
+                            summary,
+                            Some(&this.data.operation),
+                        );
                         match conflict_checker.check_conflicts() {
                             Ok(_) => {
                                 attempt_number += 1;
@@ -383,14 +406,23 @@ impl<'a> std::future::IntoFuture for PreparedCommit<'a> {
     }
 }
 
-impl<'a> std::future::IntoFuture for PreCommit<'a> {
-    type Output = DeltaResult<FinalizedCommit>;
-    type IntoFuture = BoxFuture<'a, Self::Output>;
+/// A commit that successfully completed
+pub struct FinalizedCommit {
+    /// The winning version number of the commit
+    pub version: i64,
+    /// The data that was comitted to the log store
+    pub data: CommitData,
+}
 
-    fn into_future(self) -> Self::IntoFuture {
-        let this = self;
+impl FinalizedCommit {
+    /// The materialized version of the commit
+    pub fn version(&self) -> i64 {
+        self.version
+    }
 
-        Box::pin(async move { this.into_prepared_commit_future().await?.await })
+    /// Data used to write the commit
+    pub fn data(&self) -> &CommitData {
+        &self.data
     }
 }
 
