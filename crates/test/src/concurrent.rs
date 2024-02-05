@@ -140,7 +140,7 @@ impl Worker {
         let snapshot = self.table.snapshot().unwrap().snapshot();
 
         let version = CommitBuilder::default()
-            .with_actions(&actions)
+            .with_actions(actions)
             .with_snapshot(snapshot)
             .build(self.table.log_store(), operation)
             .unwrap()

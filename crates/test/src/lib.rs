@@ -150,7 +150,7 @@ pub async fn add_file(
         let snapshot = table.snapshot().unwrap().snapshot();
 
         CommitBuilder::default()
-            .with_actions(&actions)
+            .with_actions(actions)
             .with_snapshot(snapshot)
             .build(table.log_store(), operation)
             .unwrap()

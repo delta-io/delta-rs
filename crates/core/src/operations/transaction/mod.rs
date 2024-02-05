@@ -277,7 +277,7 @@ impl<'a> PreCommit<'a> {
             }
 
             let mut data = CommitData {
-                actions: this.actions.to_owned(),
+                actions: this.actions,
                 app_metadata: this.app_metadata,
                 operation: this.operation,
             };
