@@ -272,13 +272,13 @@ async fn execute(
 
     let commit_version = snapshot.version() + 1;
     let commit = prepared_commit.path();
-    match log_store.write_commit_entry(commit_version, &commit).await {
+    match log_store.write_commit_entry(commit_version, commit).await {
         Ok(_) => {}
         Err(err @ TransactionError::VersionAlreadyExists(_)) => {
             return Err(err.into());
         }
         Err(err) => {
-            log_store.object_store().delete(&commit).await?;
+            log_store.object_store().delete(commit).await?;
             return Err(err.into());
         }
     }

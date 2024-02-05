@@ -219,7 +219,6 @@ async fn execute(
         .as_millis() as i64;
 
     let mut actions: Vec<Action> = add.into_iter().map(Action::Add).collect();
-    let mut version = snapshot.version();
     metrics.num_removed_files = remove.len();
     metrics.num_added_files = actions.len();
 

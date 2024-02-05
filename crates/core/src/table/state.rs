@@ -74,7 +74,7 @@ impl DeltaTableState {
             })
             .ok_or(DeltaTableError::NotInitialized)?;
 
-        let commit_data = [(
+        let commit_data = [CommitData::new(
             actions,
             DeltaOperation::Create {
                 mode: SaveMode::Append,
@@ -83,7 +83,9 @@ impl DeltaTableState {
                 metadata: metadata.clone(),
             },
             HashMap::new(),
-        )];
+        )
+        .unwrap()];
+
         let snapshot = EagerSnapshot::new_test(&commit_data).unwrap();
         Ok(Self {
             app_transaction_version: Default::default(),
@@ -189,7 +191,7 @@ impl DeltaTableState {
     ) -> Result<(), DeltaTableError> {
         // TODO: Maybe change this interface to just use CommitData..
         let commit_data = CommitData {
-            actions: actions,
+            actions,
             operation: operation.clone(),
             app_metadata: HashMap::new(),
         };

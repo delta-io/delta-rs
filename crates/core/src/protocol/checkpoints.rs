@@ -597,7 +597,7 @@ mod tests {
             epoch_id,
         };
         let v = CommitBuilder::default()
-            .with_actions(&actions)
+            .with_actions(actions)
             .with_maybe_snapshot(table.state.as_ref().map(|t| t.snapshot()))
             .build(table.log_store(), operation)
             .unwrap()

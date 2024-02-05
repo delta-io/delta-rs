@@ -10,7 +10,7 @@ use deltalake_aws::storage::S3StorageOptions;
 use deltalake_aws::{CommitEntry, DynamoDbConfig, DynamoDbLockClient};
 use deltalake_core::kernel::{Action, Add, DataType, PrimitiveType, StructField, StructType};
 use deltalake_core::logstore::LogStore;
-use deltalake_core::operations::transaction::{prepare_commit, CommitBuilder, PreparedCommit};
+use deltalake_core::operations::transaction::{CommitBuilder, PreparedCommit};
 use deltalake_core::parquet::file::metadata;
 use deltalake_core::protocol::{DeltaOperation, SaveMode};
 use deltalake_core::storage::commit_uri_from_version;
@@ -266,12 +266,12 @@ async fn create_incomplete_commit_entry(
     };
     let prepared = CommitBuilder::default()
         .with_actions(actions)
-        .with_snapshot(table)
+        .with_snapshot(table.snapshot()?.snapshot())
         .build(table.log_store(), operation)?
         .into_prepared_commit_future()
         .await?;
 
-    let commit_entry = CommitEntry::new(version, prepared.path());
+    let commit_entry = CommitEntry::new(version, prepared.path().to_owned());
     make_client()?
         .put_commit_entry(&table.table_uri(), &commit_entry)
         .await?;
@@ -334,11 +334,12 @@ async fn append_to_table(
     };
     let actions = vec![add_action(name)];
     let version = CommitBuilder::default()
-        .with_actions(&actions)
+        .with_actions(actions)
         .with_snapshot(table.snapshot()?.snapshot())
         .with_app_metadata(metadata.unwrap_or_default())
         .build(table.log_store(), operation)?
-        .await?;
+        .await?
+        .version();
     Ok(version)
 }
 

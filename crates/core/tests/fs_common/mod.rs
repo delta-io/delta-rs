@@ -120,7 +120,7 @@ pub async fn commit_actions(
     operation: DeltaOperation,
 ) -> i64 {
     let version = CommitBuilder::default()
-        .with_actions(&actions)
+        .with_actions(actions)
         .with_snapshot(table.snapshot().unwrap().snapshot())
         .build(table.log_store().clone(), operation)
         .unwrap()

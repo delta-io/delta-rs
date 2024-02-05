@@ -571,6 +571,8 @@ mod datafusion {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use chrono::Utc;
     use deltalake_test::utils::*;
     use futures::TryStreamExt;
@@ -751,15 +753,13 @@ mod tests {
             })
             .collect_vec();
 
-        let actions = vec![(
-            removes,
-            DeltaOperation::Write {
-                mode: SaveMode::Append,
-                partition_by: None,
-                predicate: None,
-            },
-            std::collections::HashMap::new(),
-        )];
+        let operation = DeltaOperation::Write {
+            mode: SaveMode::Append,
+            partition_by: None,
+            predicate: None,
+        };
+
+        let actions = vec![CommitData::new(removes, operation, HashMap::new()).unwrap()];
 
         let new_version = snapshot.advance(&actions)?;
         assert_eq!(new_version, version + 1);

@@ -163,7 +163,7 @@ pub async fn create_initialized_table(
     };
     let actions = init_table_actions(None);
     CommitBuilder::default()
-        .with_actions(&actions)
+        .with_actions(actions)
         .build(log_store.clone(), operation)
         .unwrap()
         .await

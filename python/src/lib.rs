@@ -950,7 +950,7 @@ impl RawDeltaTable {
                             .map(|(k, v)| (k, v.into())),
                     ),
                 )
-                .with_actions(&actions)
+                .with_actions(actions)
                 .with_snapshot(
                     self._table
                         .snapshot()

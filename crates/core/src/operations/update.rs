@@ -185,7 +185,7 @@ async fn execute(
 
     let exec_start = Instant::now();
     let mut metrics = UpdateMetrics::default();
-    let mut version = snapshot.version();
+    let version = snapshot.version();
 
     if updates.is_empty() {
         return Ok(((Vec::new(), version, None), metrics));
@@ -419,7 +419,11 @@ async fn execute(
         .await?;
 
     Ok((
-        (commit.data.actions, version, Some(commit.data.operation)),
+        (
+            commit.data.actions,
+            commit.version,
+            Some(commit.data.operation),
+        ),
         metrics,
     ))
 }

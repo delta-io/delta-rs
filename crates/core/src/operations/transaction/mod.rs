@@ -125,8 +125,32 @@ pub struct CommitData {
 }
 
 impl CommitData {
-    // Convert actions to their json representation
-    fn log_entry_from_actions<'a>(
+    /// Create new data to be comitted
+    pub fn new(
+        mut actions: Vec<Action>,
+        operation: DeltaOperation,
+        mut app_metadata: HashMap<String, Value>,
+    ) -> Result<Self, CommitBuilderError> {
+        if !actions.iter().any(|a| matches!(a, Action::CommitInfo(..))) {
+            let mut commit_info = operation.get_commit_info();
+            commit_info.timestamp = Some(Utc::now().timestamp_millis());
+            app_metadata.insert(
+                "clientVersion".to_string(),
+                Value::String(format!("delta-rs.{}", crate_version())),
+            );
+            app_metadata.extend(commit_info.info);
+            commit_info.info = app_metadata.clone();
+            actions.push(Action::CommitInfo(commit_info))
+        }
+        Ok(CommitData {
+            actions,
+            operation,
+            app_metadata,
+        })
+    }
+
+    /// Convert actions to their json representation
+    pub fn log_entry_from_actions<'a>(
         actions: impl IntoIterator<Item = &'a Action>,
     ) -> Result<String, TransactionError> {
         let mut jsons = Vec::<String>::new();
@@ -234,13 +258,12 @@ impl<'a> CommitBuilder<'a> {
         log_store: LogStoreRef,
         operation: DeltaOperation,
     ) -> Result<PreCommit<'a>, CommitBuilderError> {
+        let data = CommitData::new(self.actions, operation, self.app_metadata)?;
         Ok(PreCommit {
             log_store,
-            actions: self.actions,
-            operation,
-            app_metadata: self.app_metadata,
             read_snapshot: self.read_snapshot,
             max_retries: self.max_retries,
+            data,
         })
     }
 }
@@ -249,9 +272,7 @@ impl<'a> CommitBuilder<'a> {
 pub struct PreCommit<'a> {
     log_store: LogStoreRef,
     read_snapshot: Option<&'a EagerSnapshot>,
-    actions: Vec<Action>,
-    operation: DeltaOperation,
-    app_metadata: HashMap<String, Value>,
+    data: CommitData,
     max_retries: usize,
 }
 
@@ -273,33 +294,11 @@ impl<'a> PreCommit<'a> {
 
         Box::pin(async move {
             if let Some(read_snapshot) = &this.read_snapshot {
-                PROTOCOL.can_commit(read_snapshot, &this.actions, &this.operation)?;
-            }
-
-            let mut data = CommitData {
-                actions: this.actions,
-                app_metadata: this.app_metadata,
-                operation: this.operation,
-            };
-
-            if !data
-                .actions
-                .iter()
-                .any(|a| matches!(a, Action::CommitInfo(..)))
-            {
-                let mut commit_info = data.operation.get_commit_info();
-                commit_info.timestamp = Some(Utc::now().timestamp_millis());
-                data.app_metadata.insert(
-                    "clientVersion".to_string(),
-                    Value::String(format!("delta-rs.{}", crate_version())),
-                );
-                data.app_metadata.extend(commit_info.info);
-                commit_info.info = data.app_metadata.clone();
-                data.actions.push(Action::CommitInfo(commit_info))
+                PROTOCOL.can_commit(read_snapshot, &this.data.actions, &this.data.operation)?;
             }
 
             // Serialize all actions that are part of this log entry.
-            let log_entry = data.get_bytes()?;
+            let log_entry = this.data.get_bytes()?;
 
             // Write delta log entry as temporary file to storage. For the actual commit,
             // the temporary file is moved (atomic rename) to the delta log folder within `commit` function.
@@ -313,7 +312,7 @@ impl<'a> PreCommit<'a> {
                 log_store: this.log_store,
                 read_snapshot: this.read_snapshot,
                 max_retries: this.max_retries,
-                data: data,
+                data: this.data,
             })
         })
     }
@@ -450,7 +449,7 @@ mod tests {
     #[test]
     fn test_log_entry_from_actions() {
         let actions = init_table_actions(None);
-        let entry = log_entry_from_actions(&actions).unwrap();
+        let entry = CommitData::log_entry_from_actions(&actions).unwrap();
         let lines: Vec<_> = entry.lines().collect();
         // writes every action to a line
         assert_eq!(actions.len(), lines.len())
