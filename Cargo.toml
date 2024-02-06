@@ -7,6 +7,18 @@ members = [
 exclude = ["proofs"]
 resolver = "2"
 
+[workspace.package]
+authors = ["Qingping Hou <dave2008713@gmail.com>"]
+rust-version = "1.72"
+keywords = ["deltalake", "delta", "datalake"]
+readme = "README.md"
+edition = "2021"
+description = "Native Delta Lake implementation in Rust"
+homepage = "https://github.com/delta-io/delta.rs"
+license = "Apache-2.0"
+documentation = "https://docs.rs/deltalake"
+repository = "https://github.com/delta-io/delta.rs"
+
 [profile.release-with-debug]
 inherits = "release"
 debug = true

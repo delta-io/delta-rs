@@ -1,16 +1,15 @@
 [package]
 name = "deltalake-core"
 version = "0.17.0"
-rust-version = "1.64"
-authors = ["Qingping Hou <dave2008713@gmail.com>"]
-homepage = "https://github.com/delta-io/delta.rs"
-license = "Apache-2.0"
-keywords = ["deltalake", "delta", "datalake"]
-description = "Native Delta Lake implementation in Rust"
-documentation = "https://docs.rs/deltalake"
-repository = "https://github.com/delta-io/delta.rs"
-readme = "README.md"
-edition = "2021"
+authors.workspace = true
+keywords.workspace = true
+readme.workspace = true
+edition.workspace = true
+homepage.workspace = true
+description.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
 
 [package.metadata.docs.rs]
 # We cannot use all_features because TLS features are mutually exclusive.
