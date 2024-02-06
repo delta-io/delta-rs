@@ -666,7 +666,8 @@ def get_file_stats_from_metadata(
 
     def iter_groups(metadata: Any) -> Iterator[Any]:
         for i in range(metadata.num_row_groups):
-            yield metadata.row_group(i)
+            if metadata.row_group(i).num_rows > 0:
+                yield metadata.row_group(i)
 
     for column_idx in range(metadata.num_columns):
         name = metadata.row_group(0).column(column_idx).path_in_schema
