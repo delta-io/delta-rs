@@ -1251,3 +1251,25 @@ def test_with_deltalake_schema(tmp_path: pathlib.Path, sample_data: pa.Table):
     )
     delta_table = DeltaTable(tmp_path)
     assert delta_table.schema().to_pyarrow() == sample_data.schema
+
+
+def test_write_stats_empty_rowgroups(tmp_path: pathlib.Path):
+    # https://github.com/delta-io/delta-rs/issues/2169
+    data = pa.table(
+        {
+            "data": pa.array(["B"] * 1024 * 33),
+        }
+    )
+    write_deltalake(
+        tmp_path,
+        data,
+        max_rows_per_file=1024 * 32,
+        max_rows_per_group=1024 * 16,
+        min_rows_per_group=8 * 1024,
+        mode="overwrite",
+    )
+    dt = DeltaTable(tmp_path)
+    assert (
+        dt.to_pyarrow_dataset().to_table(filter=(pc.field("data") == "B")).shape[0]
+        == 33792
+    )
