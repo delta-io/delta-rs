@@ -1253,7 +1253,8 @@ def test_with_deltalake_schema(tmp_path: pathlib.Path, sample_data: pa.Table):
     assert delta_table.schema().to_pyarrow() == sample_data.schema
 
 
-def test_write_stats_empty_rowgroups_2169(tmp_path: pathlib.Path):
+def test_write_stats_empty_rowgroups(tmp_path: pathlib.Path):
+    # https://github.com/delta-io/delta-rs/issues/2169
     data = pa.table(
         {
             "data": pa.array(["B"] * 1024 * 33),
