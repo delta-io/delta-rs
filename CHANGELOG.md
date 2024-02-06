@@ -4,6 +4,23 @@
 
 :warning: The release of 0.17.0 **removes** the legacy dynamodb lock functionality, AWS users must read these release notes! :warning:
 
+### File handlers
+
+The 0.17.0 release moves storage implementations into their own crates, such as
+`deltalake-aws`. A consequence of that refactoring is that custom storage and
+file scheme handlers must be registered/initialized at runtime. Storage
+subcrates conventionally define a `register_handlers` function which performs
+that task. Users may see errors such as:
+```
+thread 'main' panicked at /home/ubuntu/.cargo/registry/src/index.crates.io-6f17d22bba15001f/deltalake-core-0.17.0/src/table/builder.rs:189:48:
+The specified table_uri is not valid: InvalidTableLocation("Unknown scheme: s3")
+```
+
+* Users of the meta-crate (`deltalake`) can call the storage crate via: `deltalake::aws::register_handlers(None);` at the entrypoint for their code.
+* Users who adopt `core` and storage crates independently (e.g. `deltalake-aws`) can register via `deltalake_aws::register_handlers(None);`.
+
+The AWS, Azure, and GCP crates must all have their custom file schemes registered in this fashion.
+
 
 ### dynamodblock to S3DynamoDbLogStore
 
