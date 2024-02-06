@@ -50,7 +50,7 @@ serde_json = { workspace = true }
 # "stdlib"
 bytes = { workspace = true }
 chrono = { workspace = true, default-features = false, features = ["clock"] }
-hashbrown = "*"
+hashbrown = "0.14.3"
 regex = { workspace = true }
 thiserror = { workspace = true }
 uuid = { workspace = true, features = ["serde", "v4"] }
