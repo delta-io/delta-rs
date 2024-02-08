@@ -1,4 +1,6 @@
 python:
   DeltaTable: PYTHON_API_URL/delta_table
+  replaceWhere: https://delta-io.github.io/delta-rs/api/delta_writer/
 rust:
   DeltaTable: https://docs.rs/deltalake/latest/deltalake/table/struct.DeltaTable.html
+  replaceWhere: https://docs.rs/deltalake/latest/deltalake/operations/write/struct.WriteBuilder.html#method.with_replace_where 
