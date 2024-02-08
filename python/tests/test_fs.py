@@ -159,20 +159,6 @@ def test_roundtrip_s3_direct(s3_localstack_creds, sample_data: pa.Table):
     table = dt.to_pyarrow_table()
     assert table == sample_data
 
-    # TODO: Refactor so DeltaTable can be instantiated with a storage backend
-    # Can provide S3Filesystem from pyarrow
-    # pa_s3fs = S3FileSystem(
-    #     access_key=s3_localstack_creds["AWS_ACCESS_KEY_ID"],
-    #     secret_key=s3_localstack_creds["AWS_SECRET_ACCESS_KEY"],
-    #     endpoint_override=s3_localstack_creds["AWS_ENDPOINT_URL"],
-    #     scheme="http",
-    # )
-
-    # write_deltalake(table_path, sample_data, filesystem=pa_s3fs, mode="overwrite")
-    # assert dt.version() == 2
-    # table = dt.to_pyarrow_table()
-    # assert table == sample_data
-
 
 @pytest.mark.azure
 @pytest.mark.integration

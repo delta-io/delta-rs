@@ -869,6 +869,8 @@ def test_replace_where_overwrite(
     value_type: pa.DataType,
     filter_string: str,
 ):
+    table_path = tmp_path
+
     sample_data = pa.table(
         {
             "p1": pa.array(["1", "1", "2", "2"], pa.string()),
@@ -876,9 +878,9 @@ def test_replace_where_overwrite(
             "val": pa.array([1, 1, 1, 1], pa.int64()),
         }
     )
-    write_deltalake(tmp_path, sample_data, mode="overwrite", partition_by=["p1", "p2"])
+    write_deltalake(table_path, sample_data, mode="overwrite")
 
-    delta_table = DeltaTable(tmp_path)
+    delta_table = DeltaTable(table_path)
     assert (
         delta_table.to_pyarrow_table().sort_by(
             [("p1", "ascending"), ("p2", "ascending")]
@@ -890,36 +892,101 @@ def test_replace_where_overwrite(
         {
             "p1": pa.array(["1", "1"], pa.string()),
             "p2": pa.array([value_2, value_1], value_type),
-            "val": pa.array([2, 2], pa.int64()),
+            "val": pa.array([2, 3], pa.int64()),
         }
     )
     expected_data = pa.table(
         {
             "p1": pa.array(["1", "1", "2", "2"], pa.string()),
             "p2": pa.array([value_1, value_2, value_1, value_2], value_type),
-            "val": pa.array([2, 2, 1, 1], pa.int64()),
+            "val": pa.array([3, 2, 1, 1], pa.int64()),
         }
     )
 
-    with pytest.raises(
-        DeltaError,
-        match="Generic DeltaTable error: Overwriting data based on predicate is not yet implemented",
-    ):
-        write_deltalake(
-            tmp_path,
-            sample_data,
-            mode="overwrite",
-            predicate="`p1` = 1",
-            engine="rust",
-        )
+    write_deltalake(
+        table_path,
+        sample_data,
+        mode="overwrite",
+        predicate="p1 = '1'",
+        engine="rust",
+    )
 
-        delta_table.update_incremental()
-        assert (
-            delta_table.to_pyarrow_table().sort_by(
-                [("p1", "ascending"), ("p2", "ascending")]
-            )
-            == expected_data
+    delta_table.update_incremental()
+    assert (
+        delta_table.to_pyarrow_table().sort_by(
+            [("p1", "ascending"), ("p2", "ascending")]
         )
+        == expected_data
+    )
+
+
+@pytest.mark.parametrize(
+    "value_1,value_2,value_type,filter_string",
+    [
+        (1, 2, pa.int64(), "1"),
+        (False, True, pa.bool_(), "false"),
+        (date(2022, 1, 1), date(2022, 1, 2), pa.date32(), "2022-01-01"),
+    ],
+)
+def test_replace_where_overwrite_partitioned(
+    tmp_path: pathlib.Path,
+    value_1: Any,
+    value_2: Any,
+    value_type: pa.DataType,
+    filter_string: str,
+):
+    table_path = tmp_path
+
+    sample_data = pa.table(
+        {
+            "p1": pa.array(["1", "1", "2", "2"], pa.string()),
+            "p2": pa.array([value_1, value_2, value_1, value_2], value_type),
+            "val": pa.array([1, 1, 1, 1], pa.int64()),
+        }
+    )
+    write_deltalake(
+        table_path, sample_data, mode="overwrite", partition_by=["p1", "p2"]
+    )
+
+    delta_table = DeltaTable(table_path)
+    assert (
+        delta_table.to_pyarrow_table().sort_by(
+            [("p1", "ascending"), ("p2", "ascending")]
+        )
+        == sample_data
+    )
+
+    replace_data = pa.table(
+        {
+            "p1": pa.array(["1", "1"], pa.string()),
+            "p2": pa.array([value_2, value_1], value_type),
+            "val": pa.array([2, 3], pa.int64()),
+        }
+    )
+    expected_data = pa.table(
+        {
+            "p1": pa.array(["1", "1", "2", "2"], pa.string()),
+            "p2": pa.array([value_1, value_2, value_1, value_2], value_type),
+            "val": pa.array([3, 2, 1, 1], pa.int64()),
+        }
+    )
+
+    write_deltalake(
+        table_path,
+        replace_data,
+        mode="overwrite",
+        partition_by=["p1", "p2"],
+        predicate="p1 = '1'",
+        engine="rust",
+    )
+
+    delta_table.update_incremental()
+    assert (
+        delta_table.to_pyarrow_table().sort_by(
+            [("p1", "ascending"), ("p2", "ascending")]
+        )
+        == expected_data
+    )
 
 
 def test_partition_overwrite_with_new_partition(
@@ -1184,3 +1251,25 @@ def test_with_deltalake_schema(tmp_path: pathlib.Path, sample_data: pa.Table):
     )
     delta_table = DeltaTable(tmp_path)
     assert delta_table.schema().to_pyarrow() == sample_data.schema
+
+
+def test_write_stats_empty_rowgroups(tmp_path: pathlib.Path):
+    # https://github.com/delta-io/delta-rs/issues/2169
+    data = pa.table(
+        {
+            "data": pa.array(["B"] * 1024 * 33),
+        }
+    )
+    write_deltalake(
+        tmp_path,
+        data,
+        max_rows_per_file=1024 * 32,
+        max_rows_per_group=1024 * 16,
+        min_rows_per_group=8 * 1024,
+        mode="overwrite",
+    )
+    dt = DeltaTable(tmp_path)
+    assert (
+        dt.to_pyarrow_dataset().to_table(filter=(pc.field("data") == "B")).shape[0]
+        == 33792
+    )
