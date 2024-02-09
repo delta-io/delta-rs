@@ -336,7 +336,7 @@ def write_deltalake(
             current_version = table.version()
 
             if partition_by:
-                assert partition_by == table.metadata().partition_columns
+                assert partition_by == table.metadata().partition_columns,f"Partition columns should be {table.metadata().partition_columns} but is {partition_by}"
             else:
                 partition_by = table.metadata().partition_columns
 
