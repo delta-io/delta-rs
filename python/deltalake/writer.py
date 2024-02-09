@@ -100,7 +100,8 @@ def write_deltalake(
     large_dtypes: bool = ...,
     engine: Literal["pyarrow"] = ...,
     custom_metadata: Optional[Dict[str, str]] = ...,
-) -> None: ...
+) -> None:
+    ...
 
 
 @overload
@@ -127,7 +128,8 @@ def write_deltalake(
     engine: Literal["rust"],
     writer_properties: WriterProperties = ...,
     custom_metadata: Optional[Dict[str, str]] = ...,
-) -> None: ...
+) -> None:
+    ...
 
 
 @overload
@@ -155,7 +157,8 @@ def write_deltalake(
     engine: Literal["rust"],
     writer_properties: WriterProperties = ...,
     custom_metadata: Optional[Dict[str, str]] = ...,
-) -> None: ...
+) -> None:
+    ...
 
 
 def write_deltalake(
@@ -414,12 +417,12 @@ def write_deltalake(
             ) -> None:
                 if table is None:
                     return
-                existed_partitions: FrozenSet[FrozenSet[Tuple[str, Optional[str]]]] = (
-                    table._table.get_active_partitions()
-                )
-                allowed_partitions: FrozenSet[FrozenSet[Tuple[str, Optional[str]]]] = (
-                    table._table.get_active_partitions(partition_filters)
-                )
+                existed_partitions: FrozenSet[
+                    FrozenSet[Tuple[str, Optional[str]]]
+                ] = table._table.get_active_partitions()
+                allowed_partitions: FrozenSet[
+                    FrozenSet[Tuple[str, Optional[str]]]
+                ] = table._table.get_active_partitions(partition_filters)
                 partition_values = pa.RecordBatch.from_arrays(
                     [
                         batch.column(column_name)
