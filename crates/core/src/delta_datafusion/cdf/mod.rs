@@ -7,14 +7,26 @@ use std::collections::HashMap;
 mod scan;
 mod scan_utils;
 
-pub use scan::DeltaCdfScan;
+pub(crate) use scan::*;
+pub(crate) use scan_utils::*;
 
 #[derive(Debug)]
-struct CdcDataSpec<F: FileAction> {
+pub(crate) struct CdcDataSpec<F: FileAction> {
     version: i64,
     timestamp: i64,
     actions: Vec<F>,
     commit_info: Option<CommitInfo>,
+}
+
+impl<F: FileAction> CdcDataSpec<F> {
+    pub fn new(version: i64, timestamp: i64, actions: Vec<F>, commit_info: Option<CommitInfo>) -> Self {
+        Self {
+            version,
+            timestamp,
+            actions,
+            commit_info
+        }
+    }
 }
 
 /// This trait defines a generic set of operations used by CDF Reader

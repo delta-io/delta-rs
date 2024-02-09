@@ -163,10 +163,10 @@ impl MergeBuilder {
     ///
     /// The update expressions can specify both source and target columns.
     ///
-    /// Multiple match clasues can be specified and their predicates are
+    /// Multiple match clauses can be specified and their predicates are
     /// evaluated to determine if the corresponding operation are performed.
-    /// Only the first clause that results in an satisfy predicate is executed.
-    /// Ther order of match clauses matter.
+    /// Only the first clause that results in a satisfy predicate is executed.
+    /// The order of match clauses matter.
     ///
     /// #Example
     /// ```rust ignore
@@ -201,10 +201,10 @@ impl MergeBuilder {
 
     /// Delete a target record when it matches with a source record
     ///
-    /// Multiple match clasues can be specified and their predicates are
+    /// Multiple match clauses can be specified and their predicates are
     /// evaluated to determine if the corresponding operation are performed.
-    /// Only the first clause that results in an satisfy predicate is executed.
-    /// Ther order of match clauses matter.
+    /// Only the first clause that results in a satisfy predicate is executed.
+    /// The order of match clauses matter.
     ///
     /// #Example
     /// ```rust ignore
@@ -234,10 +234,10 @@ impl MergeBuilder {
 
     /// Insert a source record when it does not match with a target record
     ///
-    /// Multiple not match clasues can be specified and their predicates are
+    /// Multiple not match clauses can be specified and their predicates are
     /// evaluated to determine if the corresponding operation are performed.
-    /// Only the first clause that results in an satisfy predicate is executed.
-    /// Ther order of not match clauses matter.
+    /// Only the first clause that results in a satisfy predicate is executed.
+    /// The order of not match clauses matter.
     ///
     /// #Example
     /// ```rust ignore
@@ -269,10 +269,10 @@ impl MergeBuilder {
     ///
     /// The update expressions can specify only target columns.
     ///
-    /// Multiple source not match clasues can be specified and their predicates
+    /// Multiple source not match clauses can be specified and their predicates
     /// are evaluated to determine if the corresponding operation are performed.
-    /// Only the first clause that results in an satisfy predicate is executed.
-    /// Ther order of source not match clauses matter.
+    /// Only the first clause that results in a satisfy predicate is executed.
+    /// The order of source not match clauses matter.
     ///
     /// #Example
     /// ```rust ignore
@@ -301,10 +301,10 @@ impl MergeBuilder {
 
     /// Delete a target record when it does not match with a source record
     ///
-    /// Multiple source not match clasues can be specified and their predicates
-    /// are evaluated to determine if the corresponding operation are performed.
-    /// Only the first clause that results in an satisfy predicate is executed.
-    /// Ther order of source not match clauses matter.
+    /// Multiple source "not match" clauses can be specified and their predicates
+    /// are evaluated to determine if the corresponding operations are performed.
+    /// Only the first clause that results in a satisfy predicate is executed.
+    /// The order of source "not match" clauses matter.
     ///
     /// #Example
     /// ```rust ignore
@@ -684,9 +684,9 @@ impl ExtensionPlanner for MergeMetricExtensionPlanner {
 /// `$date = target.date and frob > 42`
 ///
 /// This leaves us with a predicate that we can push into delta scan after expanding it out to
-/// a conjunction between the disinct partitions in the source input.
+/// a conjunction between the distinct partitions in the source input.
 ///
-/// TODO: A futher improvement here might be for non-partition columns to be replaced with min/max
+/// TODO: A further improvement here might be for non-partition columns to be replaced with min/max
 /// checks, so the above example could become:
 ///
 /// `$date = target.date and target.id between 12345 and 99999 and frob > 42`
