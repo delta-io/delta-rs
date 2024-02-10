@@ -308,9 +308,9 @@ def write_deltalake(
             description=description,
             configuration=configuration,
             storage_options=storage_options,
-            writer_properties=writer_properties._to_dict()
-            if writer_properties
-            else None,
+            writer_properties=(
+                writer_properties._to_dict() if writer_properties else None
+            ),
             custom_metadata=custom_metadata,
         )
         if table:
@@ -336,7 +336,9 @@ def write_deltalake(
             current_version = table.version()
 
             if partition_by:
-                assert partition_by == table.metadata().partition_columns
+                assert (
+                    partition_by == table.metadata().partition_columns
+                ), f"Partition columns should be {table.metadata().partition_columns} but is {partition_by}"
             else:
                 partition_by = table.metadata().partition_columns
 
