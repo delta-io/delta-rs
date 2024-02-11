@@ -14,8 +14,8 @@ pub(crate) mod extract;
 pub(crate) mod json;
 
 const MAP_ROOT_DEFAULT: &str = "entries";
-const MAP_KEY_DEFAULT: &str = "keys";
-const MAP_VALUE_DEFAULT: &str = "values";
+const MAP_KEY_DEFAULT: &str = "key";
+const MAP_VALUE_DEFAULT: &str = "value";
 const LIST_ROOT_DEFAULT: &str = "item";
 
 impl TryFrom<ActionType> for ArrowField {
