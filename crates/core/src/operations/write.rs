@@ -43,7 +43,9 @@ use futures::StreamExt;
 use parquet::file::properties::WriterProperties;
 
 use super::datafusion_utils::Expression;
-use super::transaction::{CommitBuilder, CommitProperties, PROTOCOL};
+use super::transaction::{
+    CommitBuilder, CommitProperties, TableData, UninitializedTable, PROTOCOL,
+};
 use super::writer::{DeltaWriter, WriterConfig};
 use super::CreateBuilder;
 use crate::delta_datafusion::expr::fmt_expr_to_sql;
@@ -702,10 +704,15 @@ impl std::future::IntoFuture for WriteBuilder {
                 },
                 predicate: predicate_str,
             };
+
+            let table_data: &(dyn TableData + Send + Sync) = this
+                .snapshot
+                .as_ref()
+                .map(|f| f as &(dyn TableData + Send + Sync))
+                .unwrap_or(&UninitializedTable::default());
             let commit = CommitBuilder::from(this.commit_properties)
                 .with_actions(actions)
-                .with_maybe_snapshot(this.snapshot.as_ref().map(|t| t.snapshot()))
-                .build(this.log_store.clone(), operation.clone())?
+                .build(table_data, this.log_store.clone(), operation.clone())?
                 .await?;
 
             // TODO we do not have the table config available, but since we are merging only our newly

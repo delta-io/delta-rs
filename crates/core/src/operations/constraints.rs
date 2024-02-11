@@ -183,8 +183,7 @@ impl std::future::IntoFuture for ConstraintBuilder {
 
             let commit = CommitBuilder::from(this.commit_properties)
                 .with_actions(actions)
-                .with_snapshot(&this.snapshot.snapshot)
-                .build(this.log_store.clone(), operation)?
+                .build(&this.snapshot.snapshot, this.log_store.clone(), operation)?
                 .await?;
 
             this.snapshot

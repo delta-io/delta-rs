@@ -9,11 +9,14 @@ use object_store::{Error as ObjectStoreError, ObjectStore};
 use serde_json::Value;
 
 use self::conflict_checker::{CommitConflictError, TransactionInfo, WinningCommitSummary};
-use crate::crate_version;
 use crate::errors::{DeltaResult, DeltaTableError};
-use crate::kernel::{Action, CommitInfo, EagerSnapshot, ReaderFeatures, WriterFeatures};
+use crate::kernel::{
+    Action, CommitInfo, EagerSnapshot, Metadata, Protocol, ReaderFeatures, WriterFeatures,
+};
 use crate::logstore::LogStoreRef;
 use crate::protocol::DeltaOperation;
+use crate::table::state::DeltaTableState;
+use crate::{crate_version, DeltaTableConfig};
 
 pub use self::protocol::INSTANCE as PROTOCOL;
 
@@ -114,6 +117,96 @@ impl From<CommitBuilderError> for DeltaTableError {
         DeltaTableError::CommitValidation { source: err }
     }
 }
+
+#[derive(Default)]
+pub(crate) struct UninitializedTable {
+    config: DeltaTableConfig,
+    protocol: Protocol,
+    metadata: Metadata,
+}
+
+/// TODO: Better name...
+pub trait TableData {
+    /// Well known table configuration
+    fn config(&self) -> &DeltaTableConfig;
+
+    /// Get the table protocol of the snapshot
+    fn protocol(&self) -> &Protocol;
+
+    /// Get the table metadata of the snapshot
+    fn metadata(&self) -> &Metadata;
+
+    fn eager_snapshot(&self) -> Option<&EagerSnapshot>;
+
+    fn materialized(&self) -> bool;
+}
+
+impl TableData for EagerSnapshot {
+    fn protocol(&self) -> &Protocol {
+        EagerSnapshot::protocol(self)
+    }
+
+    fn metadata(&self) -> &Metadata {
+        EagerSnapshot::metadata(self)
+    }
+
+    fn materialized(&self) -> bool {
+        true
+    }
+
+    fn config(&self) -> &DeltaTableConfig {
+        EagerSnapshot::config(&self)
+    }
+
+    fn eager_snapshot(&self) -> Option<&EagerSnapshot> {
+        Some(self)
+    }
+}
+
+impl TableData for UninitializedTable {
+    fn config(&self) -> &DeltaTableConfig {
+        &self.config
+    }
+
+    fn protocol(&self) -> &Protocol {
+        &self.protocol
+    }
+
+    fn metadata(&self) -> &Metadata {
+        &self.metadata
+    }
+
+    fn eager_snapshot(&self) -> Option<&EagerSnapshot> {
+        None
+    }
+
+    fn materialized(&self) -> bool {
+        false
+    }
+}
+
+impl TableData for DeltaTableState {
+    fn config(&self) -> &DeltaTableConfig {
+        self.snapshot.config()
+    }
+
+    fn protocol(&self) -> &Protocol {
+        self.snapshot.protocol()
+    }
+
+    fn metadata(&self) -> &Metadata {
+        self.snapshot.metadata()
+    }
+
+    fn eager_snapshot(&self) -> Option<&EagerSnapshot> {
+        Some(&self.snapshot)
+    }
+
+    fn materialized(&self) -> bool {
+        true
+    }
+}
+
 /// Data that was actually written to the log store.
 pub struct CommitData {
     /// The actions
@@ -234,18 +327,6 @@ impl<'a> CommitBuilder<'a> {
         self
     }
 
-    /// The snapshot of the Delta table used to perform the commit
-    pub fn with_snapshot(mut self, snapshot: &'a EagerSnapshot) -> Self {
-        self.read_snapshot = Some(snapshot);
-        self
-    }
-
-    /// An optional snapshot of the Delta table used to perform the commit
-    pub fn with_maybe_snapshot(mut self, snapshot: Option<&'a EagerSnapshot>) -> Self {
-        self.read_snapshot = snapshot;
-        self
-    }
-
     /// Metadata for the operation performed like metrics, user, and notebook
     pub fn with_app_metadata(mut self, app_metadata: HashMap<String, Value>) -> Self {
         self.app_metadata = app_metadata;
@@ -255,13 +336,14 @@ impl<'a> CommitBuilder<'a> {
     /// Prepare a Commit operation using the configured builder
     pub fn build(
         self,
+        table_data: &(dyn TableData + Send + Sync),
         log_store: LogStoreRef,
         operation: DeltaOperation,
     ) -> Result<PreCommit<'a>, CommitBuilderError> {
         let data = CommitData::new(self.actions, operation, self.app_metadata)?;
         Ok(PreCommit {
             log_store,
-            read_snapshot: self.read_snapshot,
+            table_data,
             max_retries: self.max_retries,
             data,
         })
@@ -271,7 +353,7 @@ impl<'a> CommitBuilder<'a> {
 /// Represents a commit that has not yet started but all details are finalized
 pub struct PreCommit<'a> {
     log_store: LogStoreRef,
-    read_snapshot: Option<&'a EagerSnapshot>,
+    table_data: &'a (dyn TableData + Send + Sync),
     data: CommitData,
     max_retries: usize,
 }
@@ -293,9 +375,7 @@ impl<'a> PreCommit<'a> {
         let this = self;
 
         Box::pin(async move {
-            if let Some(read_snapshot) = &this.read_snapshot {
-                PROTOCOL.can_commit(read_snapshot, &this.data.actions, &this.data.operation)?;
-            }
+            PROTOCOL.can_commit(this.table_data, &this.data.actions, &this.data.operation)?;
 
             // Serialize all actions that are part of this log entry.
             let log_entry = this.data.get_bytes()?;
@@ -310,7 +390,7 @@ impl<'a> PreCommit<'a> {
             Ok(PreparedCommit {
                 path,
                 log_store: this.log_store,
-                read_snapshot: this.read_snapshot,
+                table_data: this.table_data,
                 max_retries: this.max_retries,
                 data: this.data,
             })
@@ -323,7 +403,7 @@ pub struct PreparedCommit<'a> {
     path: Path,
     log_store: LogStoreRef,
     data: CommitData,
-    read_snapshot: Option<&'a EagerSnapshot>,
+    table_data: &'a (dyn TableData + Sync + Send),
     max_retries: usize,
 }
 
@@ -344,7 +424,7 @@ impl<'a> std::future::IntoFuture for PreparedCommit<'a> {
         Box::pin(async move {
             let tmp_commit = &this.path;
 
-            if this.read_snapshot.is_none() {
+            if !this.table_data.materialized() {
                 this.log_store.write_commit_entry(0, tmp_commit).await?;
                 return Ok(FinalizedCommit {
                     version: 0,
@@ -352,7 +432,12 @@ impl<'a> std::future::IntoFuture for PreparedCommit<'a> {
                 });
             }
 
-            let read_snapshot = this.read_snapshot.as_ref().unwrap();
+            let read_snapshot =
+                self.table_data
+                    .eager_snapshot()
+                    .ok_or(DeltaTableError::Generic(
+                        "Expected an instance of EagerSnapshot".to_owned(),
+                    ))?;
 
             let mut attempt_number = 1;
             while attempt_number <= this.max_retries {

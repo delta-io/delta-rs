@@ -3,7 +3,7 @@ use std::collections::HashSet;
 use lazy_static::lazy_static;
 use once_cell::sync::Lazy;
 
-use super::TransactionError;
+use super::{TableData, TransactionError};
 use crate::{
     kernel::{Action, EagerSnapshot, ReaderFeatures, WriterFeatures},
     protocol::DeltaOperation,
@@ -79,7 +79,7 @@ impl ProtocolChecker {
     }
 
     /// Check if delta-rs can read form the given delta table.
-    pub fn can_read_from(&self, snapshot: &EagerSnapshot) -> Result<(), TransactionError> {
+    pub fn can_read_from(&self, snapshot: &dyn TableData) -> Result<(), TransactionError> {
         let required_features: Option<&HashSet<ReaderFeatures>> =
             match snapshot.protocol().min_reader_version {
                 0 | 1 => None,
@@ -98,7 +98,7 @@ impl ProtocolChecker {
     }
 
     /// Check if delta-rs can write to the given delta table.
-    pub fn can_write_to(&self, snapshot: &EagerSnapshot) -> Result<(), TransactionError> {
+    pub fn can_write_to(&self, snapshot: &dyn TableData) -> Result<(), TransactionError> {
         // NOTE: writers must always support all required reader features
         self.can_read_from(snapshot)?;
 
@@ -126,7 +126,7 @@ impl ProtocolChecker {
 
     pub fn can_commit(
         &self,
-        snapshot: &EagerSnapshot,
+        snapshot: &dyn TableData,
         actions: &[Action],
         operation: &DeltaOperation,
     ) -> Result<(), TransactionError> {
