@@ -1,5 +1,6 @@
 //! Delta Table partition handling logic.
 //!
+use serde::{Serialize, Serializer};
 use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::convert::TryFrom;
@@ -124,6 +125,28 @@ impl PartitionFilter {
     }
 }
 
+/// Create desired string representation for PartitionFilter.
+/// Used in places like predicate in operationParameters, etc.
+impl Serialize for PartitionFilter {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let s = match &self.value {
+            PartitionValue::Equal(value) => format!("{} = '{}'", self.key, value),
+            PartitionValue::NotEqual(value) => format!("{} != '{}'", self.key, value),
+            PartitionValue::GreaterThan(value) => format!("{} > '{}'", self.key, value),
+            PartitionValue::GreaterThanOrEqual(value) => format!("{} >= '{}'", self.key, value),
+            PartitionValue::LessThan(value) => format!("{} < '{}'", self.key, value),
+            PartitionValue::LessThanOrEqual(value) => format!("{} <= '{}'", self.key, value),
+            // used upper case for IN and NOT similar to SQL
+            PartitionValue::In(values) => format!("{} IN ({})", self.key, values.join(", ")),
+            PartitionValue::NotIn(values) => format!("{} NOT IN ({})", self.key, values.join(", ")),
+        };
+        serializer.serialize_str(&s)
+    }
+}
+
 /// Create a PartitionFilter from a filter Tuple with the structure (key, operation, value).
 impl TryFrom<(&str, &str, &str)> for PartitionFilter {
     type Error = DeltaTableError;
@@ -205,5 +228,59 @@ impl DeltaTablePartition {
             key: k.to_owned(),
             value: v.to_owned(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn check_json_serialize(filter: PartitionFilter, expected_json: &str) {
+        println!("Debug: {filter:?}");
+        println!("Json: {}", serde_json::to_string(&filter).unwrap());
+        assert_eq!(serde_json::to_value(&filter).unwrap(), json!(expected_json))
+    }
+
+    #[test]
+    fn test_serialize_partition_filter() {
+        check_json_serialize(
+            PartitionFilter::try_from(("date", "=", "2022-05-22")).unwrap(),
+            "date = '2022-05-22'",
+        );
+        check_json_serialize(
+            PartitionFilter::try_from(("date", "!=", "2022-05-22")).unwrap(),
+            "date != '2022-05-22'",
+        );
+        check_json_serialize(
+            PartitionFilter::try_from(("date", ">", "2022-05-22")).unwrap(),
+            "date > '2022-05-22'",
+        );
+        check_json_serialize(
+            PartitionFilter::try_from(("date", ">=", "2022-05-22")).unwrap(),
+            "date >= '2022-05-22'",
+        );
+        check_json_serialize(
+            PartitionFilter::try_from(("date", "<", "2022-05-22")).unwrap(),
+            "date < '2022-05-22'",
+        );
+        check_json_serialize(
+            PartitionFilter::try_from(("date", "<=", "2022-05-22")).unwrap(),
+            "date <= '2022-05-22'",
+        );
+        check_json_serialize(
+            PartitionFilter::try_from(("date", "in", vec!["2023-11-04", "2023-06-07"].as_slice()))
+                .unwrap(),
+            "date IN ('2023-11-04', '2023-06-07')",
+        );
+        check_json_serialize(
+            PartitionFilter::try_from((
+                "date",
+                "not in",
+                vec!["2023-11-04", "2023-06-07"].as_slice(),
+            ))
+            .unwrap(),
+            "date NOT IN ('2023-11-04', '2023-06-07')",
+        );
     }
 }
