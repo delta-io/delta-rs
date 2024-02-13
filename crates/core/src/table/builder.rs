@@ -186,7 +186,7 @@ impl DeltaTableBuilder {
             ensure_file_location_exists(PathBuf::from(table_uri.as_ref()))?;
         }
 
-        let url = ensure_table_uri(&table_uri).expect("The specified table_uri is not valid");
+        let url = ensure_table_uri(&table_uri)?;
         debug!("creating table builder with {url}");
 
         Ok(Self {
@@ -553,5 +553,12 @@ mod tests {
         let expected = Url::from_directory_path(path).unwrap();
         let url = ensure_table_uri(&expected).unwrap();
         assert_eq!(expected.as_str().trim_end_matches('/'), url.as_str());
+    }
+
+    #[test]
+    fn test_invalid_uri() {
+        // Urls should round trips as-is
+        DeltaTableBuilder::from_valid_uri("this://is.nonsense")
+            .expect_err("this should be an error");
     }
 }
