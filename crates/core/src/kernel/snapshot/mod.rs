@@ -284,45 +284,20 @@ impl Snapshot {
 
     /// Get the statistics schema of the snapshot
     pub fn stats_schema(&self) -> DeltaResult<StructType> {
-        let stats_fields = if let Some(stats_cols) = self.table_config().stats_columns() {
-            stats_cols
-                .iter()
-                .map(|col| match self.schema().field_with_name(col) {
-                    Ok(field) => match field.data_type() {
-                        DataType::Map(_) | DataType::Array(_) | &DataType::BINARY => {
-                            Err(DeltaTableError::Generic(format!(
-                                "Stats column {} has unsupported type {}",
-                                col,
-                                field.data_type()
-                            )))
-                        }
-                        _ => Ok(StructField::new(
-                            field.name(),
-                            field.data_type().clone(),
-                            true,
-                        )),
-                    },
-                    _ => Err(DeltaTableError::Generic(format!(
-                        "Stats column {} not found in schema",
-                        col
-                    ))),
-                })
-                .collect::<Result<Vec<_>, _>>()?
-        } else {
-            let num_indexed_cols = self.table_config().num_indexed_cols();
-            self.schema()
-                .fields
-                .iter()
-                .enumerate()
-                .filter_map(|(idx, f)| match f.data_type() {
-                    DataType::Map(_) | DataType::Array(_) | &DataType::BINARY => None,
-                    _ if num_indexed_cols < 0 || (idx as i32) < num_indexed_cols => {
-                        Some(StructField::new(f.name(), f.data_type().clone(), true))
-                    }
-                    _ => None,
-                })
-                .collect()
-        };
+        let num_indexed_cols = self.table_config().num_indexed_cols();
+        let stats_fields: Vec<_> = self.schema()
+            .fields
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, f)| match f.data_type() {
+                DataType::Map(_) | DataType::Array(_) | &DataType::BINARY => None,
+                _ if num_indexed_cols < 0 || (idx as i32) < num_indexed_cols => {
+                    Some(StructField::new(f.name(), f.data_type().clone(), true))
+                }
+                _ => None,
+            })
+            .collect();
+
         Ok(StructType::new(vec![
             StructField::new("numRecords", DataType::LONG, true),
             StructField::new("minValues", StructType::new(stats_fields.clone()), true),
