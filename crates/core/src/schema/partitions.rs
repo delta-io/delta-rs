@@ -140,8 +140,16 @@ impl Serialize for PartitionFilter {
             PartitionValue::LessThan(value) => format!("{} < '{}'", self.key, value),
             PartitionValue::LessThanOrEqual(value) => format!("{} <= '{}'", self.key, value),
             // used upper case for IN and NOT similar to SQL
-            PartitionValue::In(values) => format!("{} IN ({})", self.key, values.join(", ")),
-            PartitionValue::NotIn(values) => format!("{} NOT IN ({})", self.key, values.join(", ")),
+            PartitionValue::In(values) => {
+                let quoted_values: Vec<String> =
+                    values.iter().map(|v| format!("'{}'", v)).collect();
+                format!("{} IN ({})", self.key, quoted_values.join(", "))
+            }
+            PartitionValue::NotIn(values) => {
+                let quoted_values: Vec<String> =
+                    values.iter().map(|v| format!("'{}'", v)).collect();
+                format!("{} NOT IN ({})", self.key, quoted_values.join(", "))
+            }
         };
         serializer.serialize_str(&s)
     }
@@ -237,8 +245,6 @@ mod tests {
     use serde_json::json;
 
     fn check_json_serialize(filter: PartitionFilter, expected_json: &str) {
-        println!("Debug: {filter:?}");
-        println!("Json: {}", serde_json::to_string(&filter).unwrap());
         assert_eq!(serde_json::to_value(&filter).unwrap(), json!(expected_json))
     }
 
