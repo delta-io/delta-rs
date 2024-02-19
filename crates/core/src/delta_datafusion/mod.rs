@@ -87,6 +87,8 @@ pub mod expr;
 pub mod logical;
 pub mod physical;
 
+mod find_files;
+
 impl From<DeltaTableError> for DataFusionError {
     fn from(err: DeltaTableError) -> Self {
         match err {
@@ -1145,6 +1147,7 @@ impl TreeNodeVisitor for FindFilesExprProperties {
     }
 }
 
+#[derive(Debug, Hash, Eq, PartialEq)]
 /// Representing the result of the [find_files] function.
 pub struct FindFiles {
     /// A list of `Add` objects that match the given predicate
@@ -1198,7 +1201,7 @@ fn join_batches_with_add_actions(
     Ok(files)
 }
 
-/// Determine which files contain a record that statisfies the predicate
+/// Determine which files contain a record that satisfies the predicate
 pub(crate) async fn find_files_scan<'a>(
     snapshot: &DeltaTableState,
     log_store: LogStoreRef,
