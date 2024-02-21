@@ -58,7 +58,8 @@ You can read in specific versions of Delta tables by specifying a `version` numb
 ddf = ddt.read_deltalake(delta_path, version=3)
 
 # with specific datetime
-ddt.read_deltalake(delta_path, datetime="2018-12-19T16:39:57-08:00")```
+ddt.read_deltalake(delta_path, datetime="2018-12-19T16:39:57-08:00")
+```
 
 `dask-deltatable` also supports reading from remote sources like S3 with:
 
