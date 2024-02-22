@@ -271,7 +271,8 @@ impl ConvertToDeltaBuilder {
         let mut arrow_schemas = Vec::new();
         let mut actions = Vec::new();
         // partition columns that were defined by caller and are expected to apply on this table
-        let mut expected_partitions: HashMap<String, StructField> = self.partition_schema
+        let mut expected_partitions: HashMap<String, StructField> = self
+            .partition_schema
             .clone()
             .into_iter()
             .map(|field| (field.name.clone(), field))
