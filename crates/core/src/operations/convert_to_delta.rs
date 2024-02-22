@@ -297,7 +297,6 @@ impl ConvertToDeltaBuilder {
 
                 if partition_columns.insert(key.to_string()) {
                     if let Some(schema) = expected_partitions.remove(key) {
-                    // if let Some(schema) = self.partition_schema.take(key) {
                         partition_schema_fields.insert(key.to_string(), schema);
                     } else {
                         // Return an error if the schema of a partition column is not provided by user
