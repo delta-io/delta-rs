@@ -1,9 +1,9 @@
 use std::sync::Arc;
 
-use arrow_array::{RecordBatch, StringArray};
 use arrow_array::cast::AsArray;
-use arrow_schema::{DataType, Field, Schema};
+use arrow_array::{RecordBatch, StringArray};
 use arrow_schema::SchemaBuilder;
+use arrow_schema::{DataType, Field, Schema};
 use async_trait::async_trait;
 use datafusion::execution::context::{QueryPlanner, SessionState};
 use datafusion::physical_plan::ExecutionPlan;
@@ -40,14 +40,10 @@ impl ExtensionPlanner for FindFilesPlannerExtension {
         _physical_inputs: &[Arc<dyn ExecutionPlan>],
         _session_state: &SessionState,
     ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
-        if let Some(node) = node.as_any().downcast_ref::<FindFilesNode>() {
-            dbg!(&node.files, &node.predicates);
-            let schema = Arc::new(Schema::from(node.schema.as_ref()));
-
+        if let Some(find_files_node) = node.as_any().downcast_ref::<FindFilesNode>() {
             return Ok(Some(Arc::new(FindFilesExec::new(
-                node.files.clone(),
-                node.predicates[0].clone(),
-                schema,
+                find_files_node.files(),
+                find_files_node.predicate().clone(),
             )?)));
         }
         Ok(None)
@@ -97,15 +93,14 @@ pub mod tests {
     use arrow_cast::pretty::print_batches;
     use arrow_schema::{DataType, Field, Fields, Schema, SchemaBuilder};
     use datafusion::prelude::{DataFrame, SessionContext};
-    use datafusion_common::ToDFSchema;
-    use datafusion_expr::{col, Extension, lit, LogicalPlan, LogicalPlanBuilder};
+    use datafusion_expr::{col, lit, Extension, LogicalPlan};
 
-    use crate::{DeltaOps, DeltaResult};
-    use crate::delta_datafusion::find_files::FindFilesPlanner;
     use crate::delta_datafusion::find_files::logical::FindFilesNode;
+    use crate::delta_datafusion::find_files::FindFilesPlanner;
     use crate::delta_datafusion::PATH_COLUMN;
     use crate::operations::collect_sendable_stream;
     use crate::writer::test_utils::{create_bare_table, get_record_batch};
+    use crate::{DeltaOps, DeltaResult};
 
     #[inline]
     fn find_files_schema(fields: &Fields) -> Arc<Schema> {
@@ -132,18 +127,13 @@ pub mod tests {
             .state()
             .with_query_planner(Arc::new(FindFilesPlanner {}));
         let table = make_table().await;
-        let files = table.0.get_file_uris()?.collect::<Vec<String>>();
-        let plan = LogicalPlanBuilder::empty(false).build()?;
-
-        let schema = find_files_schema(table.0.snapshot()?.arrow_schema()?.fields()).to_dfschema_ref()?;
+        table.0.get_file_uris()?.for_each(|f| println!("{:?}", f));
         let find_files_node = LogicalPlan::Extension(Extension {
-            node: Arc::new(FindFilesNode {
-                id: "my_cool_id".to_string(),
-                input: plan,
-                predicates: vec![col("id").eq(lit("A"))],
-                files,
-                schema,
-            }),
+            node: Arc::new(FindFilesNode::new(
+                "my_cool_plan".into(),
+                table.0.snapshot()?.snapshot.clone(),
+                col("id").eq(lit("A")),
+            )?),
         });
         let df = DataFrame::new(state.clone(), find_files_node);
         let p = state

@@ -19,18 +19,13 @@ use futures::{Stream, StreamExt, TryStreamExt};
 use crate::delta_datafusion::find_files::{only_file_path_schema, scan_memory_table_batch};
 
 pub struct FindFilesExec {
-    schema: SchemaRef,
     files: Vec<String>,
     predicate: Expr,
 }
 
 impl FindFilesExec {
-    pub fn new(files: Vec<String>, predicate: Expr, schema: SchemaRef) -> Result<Self> {
-        Ok(Self {
-            schema,
-            files,
-            predicate,
-        })
+    pub fn new(files: Vec<String>, predicate: Expr) -> Result<Self> {
+        Ok(Self { files, predicate })
     }
 }
 
@@ -60,21 +55,13 @@ impl<'a> Stream for FindFilesStream<'a> {
 
 impl Debug for FindFilesExec {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "FindFilesExec[schema={:?}, files={:?}]",
-            self.schema, self.files
-        )
+        write!(f, "FindFilesExec[schema={:?}, files={:?}]", 1, 2)
     }
 }
 
 impl DisplayAs for FindFilesExec {
     fn fmt_as(&self, _t: DisplayFormatType, f: &mut Formatter) -> std::fmt::Result {
-        write!(
-            f,
-            "FindFilesExec[schema={:?}, files={:?}]",
-            self.schema, self.files
-        )
+        write!(f, "FindFilesExec[schema={:?}, files={:?}]", 1, 2)
     }
 }
 
@@ -84,7 +71,7 @@ impl ExecutionPlan for FindFilesExec {
     }
 
     fn schema(&self) -> SchemaRef {
-        self.schema.clone()
+        only_file_path_schema()
     }
 
     fn output_partitioning(&self) -> Partitioning {
