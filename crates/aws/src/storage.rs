@@ -25,7 +25,21 @@ pub struct S3ObjectStoreFactory {}
 
 impl S3ObjectStoreFactory {
     fn with_env_s3(&self, options: &StorageOptions) -> StorageOptions {
-        let mut options = options.clone();
+        let mut options = StorageOptions(
+            options
+                .0
+                .clone()
+                .into_iter()
+                .map(|(k, v)| {
+                    if let Ok(config_key) = AmazonS3ConfigKey::from_str(&k.to_ascii_lowercase()) {
+                        (config_key.as_ref().to_string(), v)
+                    } else {
+                        (k, v)
+                    }
+                })
+                .collect(),
+        );
+
         for (os_key, os_value) in std::env::vars_os() {
             if let (Some(key), Some(value)) = (os_key.to_str(), os_value.to_str()) {
                 if let Ok(config_key) = AmazonS3ConfigKey::from_str(&key.to_ascii_lowercase()) {
@@ -605,5 +619,46 @@ mod tests {
             "web_identity_session_name",
             std::env::var(s3_constants::AWS_ROLE_SESSION_NAME).unwrap()
         );
+    }
+
+    #[test]
+    #[serial]
+    fn when_merging_with_env_unsupplied_options_are_added() {
+        let raw_options = hashmap! {};
+
+        std::env::set_var(s3_constants::AWS_ACCESS_KEY_ID, "env_key");
+        std::env::set_var(s3_constants::AWS_ENDPOINT_URL, "env_key");
+        std::env::set_var(s3_constants::AWS_SECRET_ACCESS_KEY, "env_key");
+        std::env::set_var(s3_constants::AWS_REGION, "env_key");
+
+        let combined_options = S3ObjectStoreFactory {}.with_env_s3(&StorageOptions(raw_options));
+
+        assert_eq!(combined_options.0.len(), 4);
+
+        for v in combined_options.0.values() {
+            assert_eq!(v, "env_key");
+        }
+    }
+
+    #[test]
+    #[serial]
+    fn when_merging_with_env_supplied_options_take_precedence() {
+        let raw_options = hashmap! {
+            "AWS_ACCESS_KEY_ID".to_string() => "options_key".to_string(),
+            "AWS_ENDPOINT_URL".to_string() => "options_key".to_string(),
+            "AWS_SECRET_ACCESS_KEY".to_string() => "options_key".to_string(),
+            "AWS_REGION".to_string() => "options_key".to_string()
+        };
+
+        std::env::set_var("aws_access_key_id", "env_key");
+        std::env::set_var("aws_endpoint", "env_key");
+        std::env::set_var("aws_secret_access_key", "env_key");
+        std::env::set_var("aws_region", "env_key");
+
+        let combined_options = S3ObjectStoreFactory {}.with_env_s3(&StorageOptions(raw_options));
+
+        for v in combined_options.0.values() {
+            assert_eq!(v, "options_key");
+        }
     }
 }
