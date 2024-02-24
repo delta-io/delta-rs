@@ -705,10 +705,7 @@ fn generalize_filter(
     }
     impl ReferenceTableCheck {
         fn has_reference(&self) -> bool {
-            match self {
-                ReferenceTableCheck::HasReference(_) => true,
-                _ => false,
-            }
+            matches!(self, ReferenceTableCheck::HasReference(_))
         }
     }
     fn references_table(expr: &Expr, table: &TableReference) -> ReferenceTableCheck {
@@ -735,7 +732,7 @@ fn generalize_filter(
                     ReferenceTableCheck::Unknown
                 }
             }
-            Expr::IsNull(inner) => references_table(&inner, table),
+            Expr::IsNull(inner) => references_table(inner, table),
             Expr::Literal(_) => ReferenceTableCheck::NoReference,
             _ => ReferenceTableCheck::Unknown,
         };
@@ -808,7 +805,7 @@ fn generalize_filter(
                 placeholders,
             );
 
-            let res = match (left, right) {
+            match (left, right) {
                 (None, None) => None,
                 (None, Some(one_side)) | (Some(one_side), None) => {
                     // in the case of an AND clause, it's safe to generalize the filter down to just one side of the AND.
@@ -828,8 +825,7 @@ fn generalize_filter(
                     right: r.into(),
                 })
                 .into(),
-            };
-            res
+            }
         }
         other => match references_table(&other, source_name) {
             ReferenceTableCheck::HasReference(col) => {
