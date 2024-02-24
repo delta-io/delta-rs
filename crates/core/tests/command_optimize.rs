@@ -258,7 +258,6 @@ async fn test_optimize_with_partitions() -> Result<(), Box<dyn Error>> {
 }
 
 #[tokio::test]
-#[ignore]
 /// Validate that optimize fails when a remove action occurs
 async fn test_conflict_for_remove_actions() -> Result<(), Box<dyn Error>> {
     let context = setup_test(true).await?;
@@ -311,6 +310,7 @@ async fn test_conflict_for_remove_actions() -> Result<(), Box<dyn Error>> {
         .await;
 
     assert!(maybe_metrics.is_err());
+    dt.update().await?;
     assert_eq!(dt.version(), version + 1);
     Ok(())
 }

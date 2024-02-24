@@ -167,6 +167,8 @@ pub async fn prepare_commit<'a>(
     Ok(path)
 }
 
+pub const DEFAULT_MAX_RETRIES: usize = 15;
+
 /// Commit a transaction, with up to 15 retries. This is higher-level transaction API.
 ///
 /// Will error early if the a concurrent transaction has already been committed
@@ -184,7 +186,7 @@ pub async fn commit(
         operation,
         read_snapshot,
         app_metadata,
-        15,
+        DEFAULT_MAX_RETRIES,
     )
     .await
 }

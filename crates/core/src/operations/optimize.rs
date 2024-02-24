@@ -44,6 +44,7 @@ use super::writer::{PartitionWriter, PartitionWriterConfig};
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::{Action, PartitionsExt, Remove, Scalar};
 use crate::logstore::LogStoreRef;
+use crate::operations::transaction::{commit_with_retries, DEFAULT_MAX_RETRIES};
 use crate::protocol::DeltaOperation;
 use crate::storage::ObjectStoreRef;
 use crate::table::state::DeltaTableState;
@@ -700,6 +701,7 @@ impl MergePlan {
         let mut total_metrics = orig_metrics.clone();
 
         let mut last_commit = Instant::now();
+        let mut commits_made = 0;
         loop {
             let next = stream.next().await.transpose()?;
 
@@ -735,18 +737,18 @@ impl MergePlan {
                     app_metadata.insert("operationMetrics".to_owned(), map);
                 }
 
-                table.update().await?;
                 debug!("committing {} actions", actions.len());
-                //// TODO: Check for remove actions on optimized partitions. If a
-                //// optimized partition was updated then abort the commit. Requires (#593).
-                commit(
+                commit_with_retries(
                     table.log_store.as_ref(),
                     &actions,
                     self.task_parameters.input_parameters.clone().into(),
                     Some(table.snapshot()?),
                     Some(app_metadata.clone()),
+                    DEFAULT_MAX_RETRIES + commits_made,
                 )
                 .await?;
+
+                commits_made += 1;
             }
 
             if end {
