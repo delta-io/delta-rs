@@ -203,7 +203,7 @@ impl DeltaOps {
     }
 
     /// Drops constraints from a table
-   #[cfg(feature = "datafusion")]
+    #[cfg(feature = "datafusion")]
     #[must_use]
     pub fn drop_constraints(self) -> DropConstraintBuilder {
         DropConstraintBuilder::new(self.0.log_store, self.0.state.unwrap())
