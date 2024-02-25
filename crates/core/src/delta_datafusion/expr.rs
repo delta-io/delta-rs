@@ -372,8 +372,9 @@ impl<'a> fmt::Display for ScalarValueFormat<'a> {
 mod test {
     use arrow_schema::DataType as ArrowDataType;
     use datafusion::prelude::SessionContext;
-    use datafusion_common::{Column, DFSchema, ScalarValue};
-    use datafusion_expr::{cardinality, col, decode, lit, substring, Cast, Expr, ExprSchemable};
+    use datafusion_common::{Column, DFSchema, ExprSchema, ScalarValue};
+    use datafusion_expr::{cardinality, col, lit, substring, Cast, Expr, ExprSchemable};
+    use datafusion_functions::expr_fn::decode;
 
     use crate::delta_datafusion::DeltaSessionContext;
     use crate::kernel::{ArrayType, DataType, PrimitiveType, StructField, StructType};
@@ -577,17 +578,18 @@ mod test {
             ),
             simple!(
                 col("value")
-                    .cast_to::<DFSchema>(
+                    .cast_to(
                         &arrow_schema::DataType::Utf8,
-                        &table
-                            .snapshot()
-                            .unwrap()
-                            .input_schema()
-                            .unwrap()
-                            .as_ref()
-                            .to_owned()
-                            .try_into()
-                            .unwrap()
+                        &DFSchema::try_from(
+                            table
+                                .snapshot()
+                                .unwrap()
+                                .input_schema()
+                                .unwrap()
+                                .as_ref()
+                                .to_owned()
+                        )
+                        .unwrap() as &dyn ExprSchema
                     )
                     .unwrap()
                     .eq(lit("1")),
