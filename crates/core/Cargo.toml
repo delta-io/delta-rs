@@ -42,7 +42,7 @@ datafusion-common = { workspace = true, optional = true }
 datafusion-proto = { workspace = true, optional = true }
 datafusion-sql = { workspace = true, optional = true }
 datafusion-physical-expr = { workspace = true, optional = true }
-
+ 
 # serde
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
@@ -100,6 +100,7 @@ reqwest = { version = "0.11.18", default-features = false, features = [
 sqlparser = { version = "0.43.1", optional = true }
 
 [dev-dependencies]
+datafusion-functions  = { workspace = true }
 criterion = "0.5"
 ctor = "0"
 deltalake-test = { path = "../test", features = ["datafusion"] }

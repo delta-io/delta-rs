@@ -52,6 +52,7 @@ datafusion-common = { version = "36" }
 datafusion-proto = { version = "36" }
 datafusion-sql = { version = "36" }
 datafusion-physical-expr = { version = "36" }
+datafusion-functions = { version = "36"}
 
 # serde
 serde = { version = "1.0.194", features = ["derive"] }
