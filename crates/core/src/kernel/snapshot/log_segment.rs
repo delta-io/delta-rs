@@ -515,7 +515,7 @@ pub(super) async fn list_log_files(
 
 #[cfg(test)]
 pub(super) mod tests {
-    use std::{path::PathBuf, str::FromStr};
+    use std::str::FromStr;
 
     use deltalake_test::utils::*;
 
