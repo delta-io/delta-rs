@@ -77,7 +77,7 @@ write_deltalake("./data/delta", df)
 dt = DeltaTable("./data/delta")
 df2 = dt.to_pandas()
 
-assert df == df2
+assert df.equals(df2)
 ```
 
 The same table can also be loaded using the core Rust crate:
@@ -91,7 +91,7 @@ async fn main() -> Result<(), DeltaTableError> {
     let table = open_table("./data/delta").await?;
 
     // show all active files in the table
-    let files = table.get_files();
+    let files: Vec<_> = table.get_file_uris()?.collect();
     println!("{:?}", files);
 
     Ok(())

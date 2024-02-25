@@ -26,7 +26,7 @@ const LAST_CHECKPOINT_FILE_NAME: &str = "_last_checkpoint";
 lazy_static! {
     static ref CHECKPOINT_FILE_PATTERN: Regex =
         Regex::new(r"\d+\.checkpoint(\.\d+\.\d+)?\.parquet").unwrap();
-    static ref DELTA_FILE_PATTERN: Regex = Regex::new(r"\d+\.json").unwrap();
+    static ref DELTA_FILE_PATTERN: Regex = Regex::new(r"^\d+\.json$").unwrap();
     pub(super) static ref COMMIT_SCHEMA: StructType = StructType::new(vec![
         ActionType::Add.schema_field().clone(),
         ActionType::Remove.schema_field().clone(),
@@ -511,6 +511,8 @@ pub(super) async fn list_log_files(
 
 #[cfg(test)]
 pub(super) mod tests {
+    use std::str::FromStr;
+
     use deltalake_test::utils::*;
 
     use super::*;
@@ -612,5 +614,22 @@ pub(super) mod tests {
         assert_eq!(protocol, expected);
 
         Ok(())
+    }
+
+    #[test]
+    pub fn is_commit_file_only_matches_commits() {
+        for path in [0, 1, 5, 10, 100, i64::MAX]
+            .into_iter()
+            .map(crate::storage::commit_uri_from_version)
+        {
+            assert!(path.is_commit_file());
+        }
+
+        let not_commits = ["_delta_log/_commit_2132c4fe-4077-476c-b8f5-e77fea04f170.json.tmp"];
+
+        for not_commit in not_commits {
+            let path = Path::from(not_commit);
+            assert!(!path.is_commit_file());
+        }
     }
 }
