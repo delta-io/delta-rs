@@ -758,7 +758,6 @@ impl RawDeltaTable {
             })
             .map(|(path, f)| {
                 let expression = filestats_to_expression_next(py, &schema, f)?;
-                println!("path: {:?}", path);
                 Ok((path, expression))
             })
             .collect()
@@ -1136,7 +1135,6 @@ fn scalar_to_py(value: &Scalar, py_date: &PyAny, py: Python) -> PyResult<PyObjec
         // but we need to consider timezones when doing timezone ntz.
         Timestamp(_) => {
             let value = value.serialize();
-            println!("timestamp: {}", value);
             value.to_object(py)
         }
         // NOTE: PyArrow 13.0.0 lost the ability to cast from string to date32, so
@@ -1195,7 +1193,6 @@ fn filestats_to_expression_next<'py>(
     };
 
     if let Ok(partitions_values) = file_info.partition_values() {
-        println!("partition_values: {:?}", partitions_values);
         for (column, value) in partitions_values.iter() {
             let column = column.to_string();
             if !value.is_null() {

@@ -1,4 +1,3 @@
-//! Used to write [RecordBatch]es into a delta table.
 //!
 //! New Table Semantics
 //!  - The schema of the [RecordBatch] is used to initialize the table.
