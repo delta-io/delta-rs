@@ -669,23 +669,22 @@ mod tests {
     fn when_merging_with_env_unsupplied_options_are_added() {
         ScopedEnv::run(|| {
             let raw_options = hashmap! {};
-            let keys_under_test = vec![
-                AmazonS3ConfigKey::Endpoint,
-                AmazonS3ConfigKey::SecretAccessKey,
-                AmazonS3ConfigKey::Region,
-                AmazonS3ConfigKey::AccessKeyId,
-            ];
 
-            for k in keys_under_test.iter() {
-                std::env::set_var(k.as_ref(), "env_key");
-            }
+            std::env::set_var(s3_constants::AWS_ACCESS_KEY_ID, "env_key");
+            std::env::set_var(s3_constants::AWS_ENDPOINT_URL, "env_key");
+            std::env::set_var(s3_constants::AWS_SECRET_ACCESS_KEY, "env_key");
+            std::env::set_var(s3_constants::AWS_REGION, "env_key");
+            std::env::remove_var(s3_constants::AWS_S3_POOL_IDLE_TIMEOUT_SECONDS);
+            std::env::remove_var(s3_constants::AWS_STS_POOL_IDLE_TIMEOUT_SECONDS);
+            std::env::remove_var(s3_constants::AWS_S3_GET_INTERNAL_SERVER_ERROR_RETRIES);
 
             let combined_options =
                 S3ObjectStoreFactory {}.with_env_s3(&StorageOptions(raw_options));
 
-            for k in keys_under_test.iter() {
-                assert!(combined_options.0.contains_key(k.as_ref()));
-                assert_eq!(&combined_options.0[k.as_ref()], "env_key");
+            assert_eq!(combined_options.0.len(), 4);
+
+            for v in combined_options.0.values() {
+                assert_eq!(v, "env_key");
             }
         })
     }
@@ -694,28 +693,26 @@ mod tests {
     #[serial]
     fn when_merging_with_env_supplied_options_take_precedence() {
         ScopedEnv::run(|| {
-            let keys_under_test = vec![
-                AmazonS3ConfigKey::Endpoint,
-                AmazonS3ConfigKey::SecretAccessKey,
-                AmazonS3ConfigKey::Region,
-                AmazonS3ConfigKey::AccessKeyId,
-            ];
+            let raw_options = hashmap! {
+                "AWS_ACCESS_KEY_ID".to_string() => "options_key".to_string(),
+                "AWS_ENDPOINT_URL".to_string() => "options_key".to_string(),
+                "AWS_SECRET_ACCESS_KEY".to_string() => "options_key".to_string(),
+                "AWS_REGION".to_string() => "options_key".to_string()
+            };
 
-            let raw_options = keys_under_test
-                .iter()
-                .map(|k| (k.as_ref().to_string(), "options_key".to_string()))
-                .collect();
-
-            for k in keys_under_test.iter() {
-                std::env::set_var(k.as_ref(), "env_key");
-            }
+            std::env::set_var("aws_access_key_id", "env_key");
+            std::env::set_var("aws_endpoint", "env_key");
+            std::env::set_var("aws_secret_access_key", "env_key");
+            std::env::set_var("aws_region", "env_key");
+            std::env::remove_var(s3_constants::AWS_S3_POOL_IDLE_TIMEOUT_SECONDS);
+            std::env::remove_var(s3_constants::AWS_STS_POOL_IDLE_TIMEOUT_SECONDS);
+            std::env::remove_var(s3_constants::AWS_S3_GET_INTERNAL_SERVER_ERROR_RETRIES);
 
             let combined_options =
                 S3ObjectStoreFactory {}.with_env_s3(&StorageOptions(raw_options));
 
-            for k in keys_under_test.iter() {
-                assert!(combined_options.0.contains_key(k.as_ref()));
-                assert_eq!(&combined_options.0[k.as_ref()], "options_key");
+            for v in combined_options.0.values() {
+                assert_eq!(v, "options_key");
             }
         });
     }
