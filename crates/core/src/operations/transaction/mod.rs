@@ -330,7 +330,7 @@ impl From<CommitProperties> for CommitBuilder {
     }
 }
 
-/// TODO
+/// Prepare data to be committed to the Delta log and control how the commit is performed
 pub struct CommitBuilder {
     actions: Vec<Action>,
     app_metadata: HashMap<String, Value>,
