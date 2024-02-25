@@ -275,13 +275,18 @@ impl<'a> Display for SqlFormat<'a> {
                 datafusion_expr::GetFieldAccess::ListIndex { key } => {
                     write!(f, "{}[{}]", SqlFormat { expr }, SqlFormat { expr: key })
                 }
-                datafusion_expr::GetFieldAccess::ListRange { start, stop } => {
+                datafusion_expr::GetFieldAccess::ListRange {
+                    start,
+                    stop,
+                    stride,
+                } => {
                     write!(
                         f,
-                        "{}[{}:{}]",
+                        "{}[{}:{}:{}]",
                         SqlFormat { expr },
                         SqlFormat { expr: start },
-                        SqlFormat { expr: stop }
+                        SqlFormat { expr: stop },
+                        SqlFormat { expr: stride }
                     )
                 }
             },

@@ -466,7 +466,7 @@ mod datafusion {
     use arrow_arith::aggregate::sum;
     use arrow_array::Int64Array;
     use arrow_schema::DataType as ArrowDataType;
-    use datafusion_common::scalar::ScalarValue;
+    use datafusion_common::scalar::{ScalarStructBuilder, ScalarValue};
     use datafusion_common::stats::{ColumnStatistics, Precision, Statistics};
     use datafusion_expr::AggregateFunction;
     use datafusion_physical_expr::aggregate::AggregateExpr;
@@ -549,7 +549,13 @@ mod datafusion {
                             _ => None,
                         })
                         .collect::<Option<Vec<_>>>()
-                        .map(|o| Precision::Exact(ScalarValue::Struct(Some(o), fields.clone())))
+                        .map(|o| {
+                            let mut s1 = ScalarStructBuilder::new();
+                            for (scalar_value, col) in o.iter().zip(fields.iter()) {
+                                s1 = s1.with_scalar(col, scalar_value.to_owned())
+                            }
+                            Precision::Exact(s1.build().unwrap())
+                        })
                         .unwrap_or(Precision::Absent);
                 }
                 _ => Precision::Absent,
