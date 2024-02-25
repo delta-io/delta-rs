@@ -1,4 +1,70 @@
-//! Delta transactions
+//! Add a commit entry to the Delta Table.
+//! This module provides a unified interface for modifying commit behavior and attributes
+//!
+//! `CommitProperties` provides an unified client interface for
+//!  all Delta opeartions. Internally this is used to initialize a `CommitBuilder`
+//!  
+//!  For advanced use cases `CommitBuilder` can be used which allows
+//!  finer control over the commit process. The builder can be converted
+//! into a future the yield either a `PreparedCommit` or a `FinalizedCommit`.
+//!
+//! A `PreparedCommit` represents a temporary commit marker written to storage.
+//! To convert to a `FinalizedCommit` an atomic rename is attempted. If the rename fails
+//! then conflict resolution is performed and the atomic rename is tried for the latest version.
+//!
+//!
+//!                                          Client Interface
+//!        ┌─────────────────────────────┐                    
+//!        │      Commit Properties      │                    
+//!        │                             │                    
+//!        │ Public commit interface for │                    
+//!        │     all Delta Operations    │                    
+//!        │                             │                    
+//!        └─────────────┬───────────────┘                    
+//!                      │                                    
+//! ─────────────────────┼────────────────────────────────────
+//!                      │                                    
+//!                      ▼                  Advanced Interface
+//!        ┌─────────────────────────────┐                    
+//!        │       Commit Builder        │                    
+//!        │                             │                    
+//!        │   Advanced entry point for  │                    
+//!        │     creating a commit       │                    
+//!        └─────────────┬───────────────┘                    
+//!                      │                                    
+//!                      ▼                                    
+//!     ┌───────────────────────────────────┐                 
+//!     │                                   │                 
+//!     │ ┌───────────────────────────────┐ │                 
+//!     │ │        Prepared Commit        │ │                 
+//!     │ │                               │ │                 
+//!     │ │     Represents a temporary    │ │                 
+//!     │ │   commit marker written to    │ │                 
+//!     │ │           storage             │ │                 
+//!     │ └──────────────┬────────────────┘ │                 
+//!     │                │                  │                 
+//!     │                ▼                  │                 
+//!     │ ┌───────────────────────────────┐ │                 
+//!     │ │       Finalize Commit         │ │                 
+//!     │ │                               │ │                 
+//!     │ │   Convert the commit marker   │ │                 
+//!     │ │   to a commit using atomic    │ │                 
+//!     │ │         operations            │ │                 
+//!     │ │                               │ │                 
+//!     │ └───────────────────────────────┘ │                 
+//!     │                                   │                 
+//!     └────────────────┬──────────────────┘                 
+//!                      │                                    
+//!                      ▼                                    
+//!       ┌───────────────────────────────┐                   
+//!       │        Finalized Commit       │                   
+//!       │                               │                   
+//!       │ Commit that was materialized  │                   
+//!       │         to storage            │                   
+//!       │                               │                   
+//!       └───────────────────────────────┘                   
+//!
+
 use std::collections::HashMap;
 
 use chrono::Utc;
@@ -9,14 +75,15 @@ use object_store::{Error as ObjectStoreError, ObjectStore};
 use serde_json::Value;
 
 use self::conflict_checker::{CommitConflictError, TransactionInfo, WinningCommitSummary};
-use crate::errors::{DeltaResult, DeltaTableError};
+use crate::errors::DeltaTableError;
 use crate::kernel::{
     Action, CommitInfo, EagerSnapshot, Metadata, Protocol, ReaderFeatures, WriterFeatures,
 };
 use crate::logstore::LogStoreRef;
 use crate::protocol::DeltaOperation;
+use crate::table::config::TableConfig;
 use crate::table::state::DeltaTableState;
-use crate::{crate_version, DeltaTableConfig};
+use crate::{crate_version, DeltaResult};
 
 pub use self::protocol::INSTANCE as PROTOCOL;
 
@@ -118,17 +185,10 @@ impl From<CommitBuilderError> for DeltaTableError {
     }
 }
 
-#[derive(Default)]
-pub(crate) struct UninitializedTable {
-    config: DeltaTableConfig,
-    protocol: Protocol,
-    metadata: Metadata,
-}
-
-/// TODO: Better name...
-pub trait TableData {
+/// Reference to some structure that contains mandatory attributes for performing a commit.
+pub trait TableReference: Send + Sync {
     /// Well known table configuration
-    fn config(&self) -> &DeltaTableConfig;
+    fn config(&self) -> TableConfig;
 
     /// Get the table protocol of the snapshot
     fn protocol(&self) -> &Protocol;
@@ -136,12 +196,11 @@ pub trait TableData {
     /// Get the table metadata of the snapshot
     fn metadata(&self) -> &Metadata;
 
+    /// Try to cast this table reference to a `EagerSnapshot`
     fn eager_snapshot(&self) -> Option<&EagerSnapshot>;
-
-    fn materialized(&self) -> bool;
 }
 
-impl TableData for EagerSnapshot {
+impl TableReference for EagerSnapshot {
     fn protocol(&self) -> &Protocol {
         EagerSnapshot::protocol(self)
     }
@@ -150,12 +209,8 @@ impl TableData for EagerSnapshot {
         EagerSnapshot::metadata(self)
     }
 
-    fn materialized(&self) -> bool {
-        true
-    }
-
-    fn config(&self) -> &DeltaTableConfig {
-        EagerSnapshot::config(&self)
+    fn config(&self) -> TableConfig {
+        self.table_config()
     }
 
     fn eager_snapshot(&self) -> Option<&EagerSnapshot> {
@@ -163,30 +218,8 @@ impl TableData for EagerSnapshot {
     }
 }
 
-impl TableData for UninitializedTable {
-    fn config(&self) -> &DeltaTableConfig {
-        &self.config
-    }
-
-    fn protocol(&self) -> &Protocol {
-        &self.protocol
-    }
-
-    fn metadata(&self) -> &Metadata {
-        &self.metadata
-    }
-
-    fn eager_snapshot(&self) -> Option<&EagerSnapshot> {
-        None
-    }
-
-    fn materialized(&self) -> bool {
-        false
-    }
-}
-
-impl TableData for DeltaTableState {
-    fn config(&self) -> &DeltaTableConfig {
+impl TableReference for DeltaTableState {
+    fn config(&self) -> TableConfig {
         self.snapshot.config()
     }
 
@@ -200,10 +233,6 @@ impl TableData for DeltaTableState {
 
     fn eager_snapshot(&self) -> Option<&EagerSnapshot> {
         Some(&self.snapshot)
-    }
-
-    fn materialized(&self) -> bool {
-        true
     }
 }
 
@@ -291,7 +320,7 @@ impl CommitProperties {
     }
 }
 
-impl<'a> From<CommitProperties> for CommitBuilder<'a> {
+impl From<CommitProperties> for CommitBuilder {
     fn from(value: CommitProperties) -> Self {
         CommitBuilder {
             max_retries: value.max_retries,
@@ -302,25 +331,23 @@ impl<'a> From<CommitProperties> for CommitBuilder<'a> {
 }
 
 /// TODO
-pub struct CommitBuilder<'a> {
+pub struct CommitBuilder {
     actions: Vec<Action>,
-    read_snapshot: Option<&'a EagerSnapshot>,
     app_metadata: HashMap<String, Value>,
     max_retries: usize,
 }
 
-impl<'a> Default for CommitBuilder<'a> {
+impl Default for CommitBuilder {
     fn default() -> Self {
         CommitBuilder {
             actions: Vec::new(),
-            read_snapshot: None,
             app_metadata: HashMap::new(),
             max_retries: DEFAULT_RETRIES,
         }
     }
 }
 
-impl<'a> CommitBuilder<'a> {
+impl<'a> CommitBuilder {
     /// Actions to be included in the commit
     pub fn with_actions(mut self, actions: Vec<Action>) -> Self {
         self.actions = actions;
@@ -336,7 +363,7 @@ impl<'a> CommitBuilder<'a> {
     /// Prepare a Commit operation using the configured builder
     pub fn build(
         self,
-        table_data: &(dyn TableData + Send + Sync),
+        table_data: Option<&'a dyn TableReference>,
         log_store: LogStoreRef,
         operation: DeltaOperation,
     ) -> Result<PreCommit<'a>, CommitBuilderError> {
@@ -353,7 +380,7 @@ impl<'a> CommitBuilder<'a> {
 /// Represents a commit that has not yet started but all details are finalized
 pub struct PreCommit<'a> {
     log_store: LogStoreRef,
-    table_data: &'a (dyn TableData + Send + Sync),
+    table_data: Option<&'a dyn TableReference>,
     data: CommitData,
     max_retries: usize,
 }
@@ -375,7 +402,9 @@ impl<'a> PreCommit<'a> {
         let this = self;
 
         Box::pin(async move {
-            PROTOCOL.can_commit(this.table_data, &this.data.actions, &this.data.operation)?;
+            if let Some(table_reference) = this.table_data {
+                PROTOCOL.can_commit(table_reference, &this.data.actions, &this.data.operation)?;
+            }
 
             // Serialize all actions that are part of this log entry.
             let log_entry = this.data.get_bytes()?;
@@ -403,7 +432,7 @@ pub struct PreparedCommit<'a> {
     path: Path,
     log_store: LogStoreRef,
     data: CommitData,
-    table_data: &'a (dyn TableData + Sync + Send),
+    table_data: Option<&'a dyn TableReference>,
     max_retries: usize,
 }
 
@@ -424,7 +453,7 @@ impl<'a> std::future::IntoFuture for PreparedCommit<'a> {
         Box::pin(async move {
             let tmp_commit = &this.path;
 
-            if !this.table_data.materialized() {
+            if this.table_data.is_none() {
                 this.log_store.write_commit_entry(0, tmp_commit).await?;
                 return Ok(FinalizedCommit {
                     version: 0,
@@ -432,8 +461,10 @@ impl<'a> std::future::IntoFuture for PreparedCommit<'a> {
                 });
             }
 
+            //unwrap() is safe here due to the above check
             let read_snapshot =
-                self.table_data
+                this.table_data
+                    .unwrap()
                     .eager_snapshot()
                     .ok_or(DeltaTableError::Generic(
                         "Expected an instance of EagerSnapshot".to_owned(),

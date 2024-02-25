@@ -121,8 +121,11 @@ pub async fn commit_actions(
 ) -> i64 {
     let version = CommitBuilder::default()
         .with_actions(actions)
-        .with_snapshot(table.snapshot().unwrap().snapshot())
-        .build(table.log_store().clone(), operation)
+        .build(
+            Some(table.snapshot().unwrap()),
+            table.log_store().clone(),
+            operation,
+        )
         .unwrap()
         .await
         .unwrap()

@@ -951,13 +951,11 @@ impl RawDeltaTable {
                     ),
                 )
                 .with_actions(actions)
-                .with_snapshot(
-                    self._table
-                        .snapshot()
-                        .map_err(PythonError::from)?
-                        .snapshot(),
+                .build(
+                    Some(self._table.snapshot().map_err(PythonError::from)?),
+                    self._table.log_store(),
+                    operation,
                 )
-                .build(self._table.log_store(), operation)
                 .map_err(|err| PythonError::from(DeltaTableError::from(err)))?
                 .into_future(),
             )

@@ -741,8 +741,8 @@ impl MergePlan {
 
                 CommitBuilder::from(properties)
                     .with_actions(actions)
-                    .with_snapshot(&snapshot.snapshot)
                     .build(
+                        Some(snapshot),
                         log_store.clone(),
                         self.task_parameters.input_parameters.clone().into(),
                     )?

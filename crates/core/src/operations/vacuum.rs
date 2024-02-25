@@ -319,8 +319,7 @@ impl VacuumPlan {
         );
 
         CommitBuilder::from(start_props)
-            .with_snapshot(&snapshot.snapshot)
-            .build(store.clone(), start_operation)?
+            .build(Some(snapshot), store.clone(), start_operation)?
             .await?;
         // Finish VACUUM START COMMIT
 
@@ -351,8 +350,7 @@ impl VacuumPlan {
             serde_json::to_value(end_metrics)?,
         );
         CommitBuilder::from(commit_properties)
-            .with_snapshot(&snapshot.snapshot)
-            .build(store.clone(), end_operation)?
+            .build(Some(snapshot), store.clone(), end_operation)?
             .await?;
         // Finish VACUUM END COMMIT
 

@@ -293,8 +293,7 @@ async fn test_conflict_for_remove_actions() -> Result<(), Box<dyn Error>> {
     let operation = DeltaOperation::Delete { predicate: None };
     CommitBuilder::default()
         .with_actions(vec![Action::Remove(remove)])
-        .with_snapshot(other_dt.snapshot()?.snapshot())
-        .build(other_dt.log_store(), operation)?
+        .build(Some(other_dt.snapshot()?), other_dt.log_store(), operation)?
         .await?;
 
     let maybe_metrics = plan

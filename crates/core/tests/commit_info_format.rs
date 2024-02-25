@@ -22,8 +22,7 @@ async fn test_operational_parameters() -> Result<(), Box<dyn Error>> {
 
     CommitBuilder::default()
         .with_actions(actions)
-        .with_snapshot(table.snapshot()?.snapshot())
-        .build(table.log_store(), operation)?
+        .build(Some(table.snapshot()?), table.log_store(), operation)?
         .await?;
     table.update().await?;
 

@@ -532,7 +532,7 @@ mod tests {
 
     use super::*;
     use crate::kernel::StructType;
-    use crate::operations::transaction::CommitBuilder;
+    use crate::operations::transaction::{CommitBuilder, TableReference};
     use crate::operations::DeltaOps;
     use crate::protocol::Metadata;
     use crate::writer::test_utils::get_delta_schema;
@@ -598,8 +598,11 @@ mod tests {
         };
         let v = CommitBuilder::default()
             .with_actions(actions)
-            .with_maybe_snapshot(table.state.as_ref().map(|t| t.snapshot()))
-            .build(table.log_store(), operation)
+            .build(
+                table.state.as_ref().map(|f| f as &dyn TableReference),
+                table.log_store(),
+                operation,
+            )
             .unwrap()
             .await
             .unwrap()

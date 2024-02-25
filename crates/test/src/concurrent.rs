@@ -141,8 +141,7 @@ impl Worker {
 
         let version = CommitBuilder::default()
             .with_actions(actions)
-            .with_snapshot(snapshot)
-            .build(self.table.log_store(), operation)
+            .build(Some(snapshot), self.table.log_store(), operation)
             .unwrap()
             .await
             .unwrap()
