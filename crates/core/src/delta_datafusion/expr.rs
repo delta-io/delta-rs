@@ -34,10 +34,10 @@ use datafusion_expr::{
     expr::InList, AggregateUDF, Between, BinaryExpr, Cast, Expr, GetIndexedField, Like, TableSource,
 };
 use datafusion_sql::planner::{ContextProvider, SqlToRel};
-use sqlparser::ast::escape_quoted_string;
-use sqlparser::dialect::GenericDialect;
-use sqlparser::parser::Parser;
-use sqlparser::tokenizer::Tokenizer;
+use datafusion_sql::sqlparser::ast::escape_quoted_string;
+use datafusion_sql::sqlparser::dialect::GenericDialect;
+use datafusion_sql::sqlparser::parser::Parser;
+use datafusion_sql::sqlparser::tokenizer::Tokenizer;
 
 use crate::{DeltaResult, DeltaTableError};
 
@@ -609,7 +609,7 @@ mod test {
             ),
             simple!(
                 cardinality(col("_list").range(col("value"), lit(10_i64))),
-                "cardinality(_list[value:10])".to_string()
+                "cardinality(_list[value:10:1])".to_string()
             ),
         ];
 
