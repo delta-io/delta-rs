@@ -632,7 +632,7 @@ pub(super) mod tests {
         let not_commits = ["_delta_log/_commit_2132c4fe-4077-476c-b8f5-e77fea04f170.json.tmp"];
 
         for not_commit in not_commits {
-            let path = object_store::path::Path::from(not_commit);
+            let path = Path::from(not_commit);
             assert!(!path.is_commit_file());
         }
     }
