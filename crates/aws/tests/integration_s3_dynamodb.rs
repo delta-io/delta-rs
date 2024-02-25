@@ -334,8 +334,8 @@ async fn append_to_table(
     let actions = vec![add_action(name)];
     let version = CommitBuilder::default()
         .with_actions(actions)
-        .with_app_metadata(Some(table.snapshot()?), metadata.unwrap_or_default())
-        .build(table.log_store(), operation)?
+        .with_app_metadata(metadata.unwrap_or_default())
+        .build(Some(table.snapshot()?), table.log_store(), operation)?
         .await?
         .version();
     Ok(version)
