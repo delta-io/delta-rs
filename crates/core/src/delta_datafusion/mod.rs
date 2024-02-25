@@ -229,17 +229,11 @@ fn _arrow_schema(snapshot: &Snapshot, wrap_partitions: bool) -> DeltaResult<Arro
 
 pub(crate) trait DataFusionFileMixins {
     /// Iterate over all files in the log matching a predicate
-    fn files_matching_predicate<'a>(
-        &'a self,
-        filters: &'a [Expr],
-    ) -> DeltaResult<impl Iterator<Item = Add>>;
+    fn files_matching_predicate(&self, filters: &[Expr]) -> DeltaResult<impl Iterator<Item = Add>>;
 }
 
 impl DataFusionFileMixins for EagerSnapshot {
-    fn files_matching_predicate<'a>(
-        &'a self,
-        filters: &'a [Expr],
-    ) -> DeltaResult<impl Iterator<Item = Add>> {
+    fn files_matching_predicate(&self, filters: &[Expr]) -> DeltaResult<impl Iterator<Item = Add>> {
         files_matching_predicate(self, filters)
     }
 }

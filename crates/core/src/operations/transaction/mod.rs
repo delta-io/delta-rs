@@ -461,7 +461,8 @@ impl<'a> std::future::IntoFuture for PreparedCommit<'a> {
                 });
             }
 
-            //unwrap() is safe here due to the above check
+            // unwrap() is safe here due to the above check
+            // TODO: refactor to only depend on TableReference Trait
             let read_snapshot =
                 this.table_data
                     .unwrap()
