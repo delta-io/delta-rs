@@ -39,12 +39,11 @@ use parquet::file::properties::WriterProperties;
 use serde::{Deserialize, Serialize};
 use tracing::debug;
 
-use super::transaction::{commit, PROTOCOL};
+use super::transaction::{commit_with_retries, DEFAULT_MAX_RETRIES, PROTOCOL};
 use super::writer::{PartitionWriter, PartitionWriterConfig};
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::{Action, PartitionsExt, Remove, Scalar};
 use crate::logstore::LogStoreRef;
-use crate::operations::transaction::{commit_with_retries, DEFAULT_MAX_RETRIES};
 use crate::protocol::DeltaOperation;
 use crate::storage::ObjectStoreRef;
 use crate::table::state::DeltaTableState;

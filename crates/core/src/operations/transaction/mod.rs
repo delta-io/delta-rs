@@ -167,6 +167,8 @@ pub async fn prepare_commit<'a>(
     Ok(path)
 }
 
+/// The number of times that [`commit`] will re-try the commit before failing
+/// with [`TransactionError::MaxCommitAttempts`].
 pub const DEFAULT_MAX_RETRIES: usize = 15;
 
 /// Commit a transaction, with up to 15 retries. This is higher-level transaction API.
