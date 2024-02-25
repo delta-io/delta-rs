@@ -1,18 +1,18 @@
 //! Add a commit entry to the Delta Table.
 //! This module provides a unified interface for modifying commit behavior and attributes
 //!
-//! `CommitProperties` provides an unified client interface for
-//!  all Delta opeartions. Internally this is used to initialize a `CommitBuilder`
+//! [`CommitProperties`] provides an unified client interface for
+//!  all Delta opeartions. Internally this is used to initialize a [`CommitBuilder`]
 //!  
-//!  For advanced use cases `CommitBuilder` can be used which allows
+//!  For advanced use cases [`CommitBuilder`] can be used which allows
 //!  finer control over the commit process. The builder can be converted
-//! into a future the yield either a `PreparedCommit` or a `FinalizedCommit`.
+//! into a future the yield either a [`PreparedCommit`] or a [`FinalizedCommit`].
 //!
-//! A `PreparedCommit` represents a temporary commit marker written to storage.
-//! To convert to a `FinalizedCommit` an atomic rename is attempted. If the rename fails
+//! A [`PreparedCommit`] represents a temporary commit marker written to storage.
+//! To convert to a [`FinalizedCommit`] an atomic rename is attempted. If the rename fails
 //! then conflict resolution is performed and the atomic rename is tried for the latest version.
 //!
-//!
+//!<pre>
 //!                                          Client Interface
 //!        ┌─────────────────────────────┐                    
 //!        │      Commit Properties      │                    
@@ -63,7 +63,7 @@
 //!       │         to storage            │                   
 //!       │                               │                   
 //!       └───────────────────────────────┘                   
-//!
+//!</pre>
 
 use std::collections::HashMap;
 
