@@ -16,7 +16,7 @@ use datafusion_physical_expr::{Partitioning, PhysicalSortExpr};
 use futures::stream::BoxStream;
 use futures::{Stream, StreamExt, TryStreamExt};
 
-use crate::delta_datafusion::find_files::{only_file_path_schema, scan_memory_table_batch};
+use crate::delta_datafusion::find_files::{scan_memory_table_batch, ONLY_FILES_SCHEMA};
 
 pub struct FindFilesExec {
     files: Vec<String>,
@@ -41,7 +41,7 @@ impl<'a> FindFilesStream<'a> {
 
 impl<'a> RecordBatchStream for FindFilesStream<'a> {
     fn schema(&self) -> SchemaRef {
-        only_file_path_schema()
+        ONLY_FILES_SCHEMA.clone()
     }
 }
 
@@ -71,11 +71,11 @@ impl ExecutionPlan for FindFilesExec {
     }
 
     fn schema(&self) -> SchemaRef {
-        only_file_path_schema()
+        ONLY_FILES_SCHEMA.clone()
     }
 
     fn output_partitioning(&self) -> Partitioning {
-        Partitioning::UnknownPartitioning(0)
+        Partitioning::RoundRobinBatch(num_cpus::get())
     }
 
     fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
@@ -99,10 +99,10 @@ impl ExecutionPlan for FindFilesExec {
         _context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         let array = Arc::new(StringArray::from(self.files.clone()));
-        let record_batch = RecordBatch::try_new(only_file_path_schema(), vec![array])?;
+        let record_batch = RecordBatch::try_new(ONLY_FILES_SCHEMA.clone(), vec![array])?;
         let predicate = self.predicate.clone();
         let mem_stream =
-            MemoryStream::try_new(vec![record_batch.clone()], only_file_path_schema(), None)?
+            MemoryStream::try_new(vec![record_batch.clone()], ONLY_FILES_SCHEMA.clone(), None)?
                 .and_then(move |batch| scan_memory_table_batch(batch, predicate.clone()))
                 .boxed();
 

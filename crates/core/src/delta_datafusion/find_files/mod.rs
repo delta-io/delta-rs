@@ -9,8 +9,9 @@ use datafusion::execution::context::{QueryPlanner, SessionState};
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_planner::{DefaultPhysicalPlanner, ExtensionPlanner, PhysicalPlanner};
 use datafusion::prelude::{ParquetReadOptions, SessionContext};
-use datafusion_common::Result;
+use datafusion_common::{DFSchemaRef, Result, ToDFSchema};
 use datafusion_expr::{Expr, LogicalPlan, UserDefinedLogicalNode};
+use lazy_static::lazy_static;
 
 use crate::delta_datafusion::find_files::logical::FindFilesNode;
 use crate::delta_datafusion::find_files::physical::FindFilesExec;
@@ -19,11 +20,14 @@ use crate::delta_datafusion::PATH_COLUMN;
 pub mod logical;
 pub mod physical;
 
-#[inline]
-fn only_file_path_schema() -> Arc<Schema> {
-    let mut builder = SchemaBuilder::new();
-    builder.push(Field::new(PATH_COLUMN, DataType::Utf8, false));
-    Arc::new(builder.finish())
+lazy_static! {
+    static ref ONLY_FILES_SCHEMA: Arc<Schema> = {
+        let mut builder = SchemaBuilder::new();
+        builder.push(Field::new(PATH_COLUMN, DataType::Utf8, false));
+        Arc::new(builder.finish())
+    };
+    static ref ONLY_FILES_DF_SCHEMA: DFSchemaRef =
+        ONLY_FILES_SCHEMA.clone().to_dfschema_ref().unwrap();
 }
 
 struct FindFilesPlannerExtension {}
@@ -69,6 +73,11 @@ impl QueryPlanner for FindFilesPlanner {
 async fn scan_memory_table_batch(batch: RecordBatch, predicate: Expr) -> Result<RecordBatch> {
     let ctx = SessionContext::new();
     let mut batches = vec![];
+    let columns = predicate
+        .to_columns()?
+        .into_iter()
+        .map(Expr::Column)
+        .collect::<Vec<_>>();
 
     if let Some(column) = batch.column_by_name(PATH_COLUMN) {
         let mut column_iter = column.as_string::<i32>().into_iter();
@@ -76,14 +85,16 @@ async fn scan_memory_table_batch(batch: RecordBatch, predicate: Expr) -> Result<
             let df = ctx
                 .read_parquet(row, ParquetReadOptions::default())
                 .await?
-                .filter(predicate.to_owned())?;
+                .select(columns.clone())?
+                .filter(predicate.clone())?
+                .limit(0, Some(1))?;
             if df.count().await? > 0 {
                 batches.push(row);
             }
         }
     }
     let str_array = Arc::new(StringArray::from(batches));
-    RecordBatch::try_new(only_file_path_schema(), vec![str_array]).map_err(Into::into)
+    RecordBatch::try_new(ONLY_FILES_SCHEMA.clone(), vec![str_array]).map_err(Into::into)
 }
 
 #[cfg(test)]
@@ -91,25 +102,14 @@ pub mod tests {
     use std::sync::Arc;
 
     use arrow_cast::pretty::print_batches;
-    use arrow_schema::{DataType, Field, Fields, Schema, SchemaBuilder};
     use datafusion::prelude::{DataFrame, SessionContext};
     use datafusion_expr::{col, lit, Extension, LogicalPlan};
 
     use crate::delta_datafusion::find_files::logical::FindFilesNode;
     use crate::delta_datafusion::find_files::FindFilesPlanner;
-    use crate::delta_datafusion::PATH_COLUMN;
     use crate::operations::collect_sendable_stream;
     use crate::writer::test_utils::{create_bare_table, get_record_batch};
     use crate::{DeltaOps, DeltaResult};
-
-    #[inline]
-    fn find_files_schema(fields: &Fields) -> Arc<Schema> {
-        let mut builder = SchemaBuilder::from(fields);
-        builder.reverse();
-        builder.push(Field::new(PATH_COLUMN, DataType::Utf8, false));
-        builder.reverse();
-        Arc::new(builder.finish())
-    }
 
     async fn make_table() -> DeltaOps {
         let batch = get_record_batch(None, false);
@@ -127,11 +127,11 @@ pub mod tests {
             .state()
             .with_query_planner(Arc::new(FindFilesPlanner {}));
         let table = make_table().await;
-        table.0.get_file_uris()?.for_each(|f| println!("{:?}", f));
         let find_files_node = LogicalPlan::Extension(Extension {
             node: Arc::new(FindFilesNode::new(
                 "my_cool_plan".into(),
-                table.0.snapshot()?.snapshot.clone(),
+                table.0.snapshot()?.clone(),
+                table.0.log_store.clone(),
                 col("id").eq(lit("A")),
             )?),
         });

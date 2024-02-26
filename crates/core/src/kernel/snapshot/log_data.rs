@@ -345,7 +345,6 @@ impl<'a> FileStatsAccessor<'a> {
         schema: &'a StructType,
     ) -> DeltaResult<Self> {
         let paths = extract_and_cast::<StringArray>(data, "add.path")?;
-        dbg!(&paths);
         let sizes = extract_and_cast::<Int64Array>(data, "add.size")?;
         let modification_times = extract_and_cast::<Int64Array>(data, "add.modificationTime")?;
         let stats = extract_and_cast::<StructArray>(data, "add.stats_parsed")?;

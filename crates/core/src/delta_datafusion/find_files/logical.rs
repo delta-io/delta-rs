@@ -1,11 +1,11 @@
 use std::collections::HashSet;
-use std::path::Path;
 
-use datafusion_common::{DFSchemaRef, ToDFSchema};
+use datafusion_common::DFSchemaRef;
 use datafusion_expr::{Expr, LogicalPlan, UserDefinedLogicalNodeCore};
 
-use crate::delta_datafusion::find_files::only_file_path_schema;
-use crate::kernel::EagerSnapshot;
+use crate::delta_datafusion::find_files::ONLY_FILES_DF_SCHEMA;
+use crate::logstore::LogStoreRef;
+use crate::table::state::DeltaTableState;
 
 #[derive(Debug, Hash, Eq, PartialEq, Clone)]
 pub struct FindFilesNode {
@@ -13,25 +13,27 @@ pub struct FindFilesNode {
     predicate: Expr,
     files: Vec<String>,
     schema: DFSchemaRef,
+    version: i64,
 }
 
 impl FindFilesNode {
     pub fn new(
         id: String,
-        eager_snapshot: EagerSnapshot,
+        eager_snapshot: DeltaTableState,
+        log_store: LogStoreRef,
         predicate: Expr,
     ) -> datafusion_common::Result<Self> {
         let files: Vec<String> = eager_snapshot
-            .files()
-            .map(|f| f.object_store_path().to_string())
+            .file_paths_iter()
+            .map(|f| log_store.to_uri(&f))
             .collect();
-
 
         Ok(Self {
             id,
             predicate,
             files,
-            schema: only_file_path_schema().to_dfschema_ref()?,
+            schema: ONLY_FILES_DF_SCHEMA.clone(),
+            version: eager_snapshot.version(),
         })
     }
 
@@ -68,8 +70,8 @@ impl UserDefinedLogicalNodeCore for FindFilesNode {
     fn fmt_for_explain(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         write!(
             f,
-            "FindFiles id={}, predicate={:?}, files={:?}",
-            &self.id, self.predicate, self.files
+            "FindFiles id={}, predicate={:?}, version={:?}",
+            &self.id, self.predicate, self.version
         )
     }
 
