@@ -434,7 +434,7 @@ mod tests {
         }
 
         pub fn run<T>(mut f: impl FnMut() -> T) -> T {
-            let env_scope = Self::new();
+            let _env_scope = Self::new();
             f()
         }
     }
@@ -454,10 +454,26 @@ mod tests {
         }
     }
 
+    fn clear_env_of_aws_keys() {
+        let keys_to_clear = std::env::vars().filter_map(|(k, _v)| {
+            if let Ok(_) = AmazonS3ConfigKey::from_str(&k.to_ascii_lowercase()) {
+                Some(k)
+            } else {
+                None
+            }
+        });
+
+        for k in keys_to_clear {
+            std::env::remove_var(k);
+        }
+    }
+
     #[test]
     #[serial]
     fn storage_options_default_test() {
         ScopedEnv::run(|| {
+            clear_env_of_aws_keys();
+
             std::env::set_var(s3_constants::AWS_ENDPOINT_URL, "http://localhost");
             std::env::set_var(s3_constants::AWS_REGION, "us-west-1");
             std::env::set_var(s3_constants::AWS_PROFILE, "default");
@@ -470,9 +486,6 @@ mod tests {
             );
             std::env::set_var(s3_constants::AWS_S3_ROLE_SESSION_NAME, "session_name");
             std::env::set_var(s3_constants::AWS_WEB_IDENTITY_TOKEN_FILE, "token_file");
-            std::env::remove_var(s3_constants::AWS_S3_POOL_IDLE_TIMEOUT_SECONDS);
-            std::env::remove_var(s3_constants::AWS_STS_POOL_IDLE_TIMEOUT_SECONDS);
-            std::env::remove_var(s3_constants::AWS_S3_GET_INTERNAL_SERVER_ERROR_RETRIES);
 
             let options = S3StorageOptions::default();
 
@@ -507,6 +520,7 @@ mod tests {
     #[serial]
     fn storage_options_with_only_region_and_credentials() {
         ScopedEnv::run(|| {
+            clear_env_of_aws_keys();
             std::env::remove_var(s3_constants::AWS_ENDPOINT_URL);
             let options = S3StorageOptions::from_map(&hashmap! {
                 s3_constants::AWS_REGION.to_string() => "eu-west-1".to_string(),
@@ -531,6 +545,7 @@ mod tests {
     #[serial]
     fn storage_options_from_map_test() {
         ScopedEnv::run(|| {
+            clear_env_of_aws_keys();
             let options = S3StorageOptions::from_map(&hashmap! {
                 s3_constants::AWS_ENDPOINT_URL.to_string() => "http://localhost:1234".to_string(),
                 s3_constants::AWS_REGION.to_string() => "us-west-2".to_string(),
@@ -582,6 +597,7 @@ mod tests {
     #[serial]
     fn storage_options_mixed_test() {
         ScopedEnv::run(|| {
+            clear_env_of_aws_keys();
             std::env::set_var(s3_constants::AWS_ENDPOINT_URL, "http://localhost");
             std::env::set_var(s3_constants::AWS_REGION, "us-west-1");
             std::env::set_var(s3_constants::AWS_PROFILE, "default");
@@ -635,6 +651,7 @@ mod tests {
     #[serial]
     fn storage_options_web_identity_test() {
         ScopedEnv::run(|| {
+            clear_env_of_aws_keys();
             let _options = S3StorageOptions::from_map(&hashmap! {
                 s3_constants::AWS_REGION.to_string() => "eu-west-1".to_string(),
                 s3_constants::AWS_WEB_IDENTITY_TOKEN_FILE.to_string() => "web_identity_token_file".to_string(),
@@ -668,15 +685,13 @@ mod tests {
     #[serial]
     fn when_merging_with_env_unsupplied_options_are_added() {
         ScopedEnv::run(|| {
+            clear_env_of_aws_keys();
             let raw_options = hashmap! {};
 
             std::env::set_var(s3_constants::AWS_ACCESS_KEY_ID, "env_key");
             std::env::set_var(s3_constants::AWS_ENDPOINT_URL, "env_key");
             std::env::set_var(s3_constants::AWS_SECRET_ACCESS_KEY, "env_key");
             std::env::set_var(s3_constants::AWS_REGION, "env_key");
-            std::env::remove_var(s3_constants::AWS_S3_POOL_IDLE_TIMEOUT_SECONDS);
-            std::env::remove_var(s3_constants::AWS_STS_POOL_IDLE_TIMEOUT_SECONDS);
-            std::env::remove_var(s3_constants::AWS_S3_GET_INTERNAL_SERVER_ERROR_RETRIES);
 
             let combined_options =
                 S3ObjectStoreFactory {}.with_env_s3(&StorageOptions(raw_options));
@@ -693,6 +708,7 @@ mod tests {
     #[serial]
     fn when_merging_with_env_supplied_options_take_precedence() {
         ScopedEnv::run(|| {
+            clear_env_of_aws_keys();
             let raw_options = hashmap! {
                 "AWS_ACCESS_KEY_ID".to_string() => "options_key".to_string(),
                 "AWS_ENDPOINT_URL".to_string() => "options_key".to_string(),
@@ -704,9 +720,6 @@ mod tests {
             std::env::set_var("aws_endpoint", "env_key");
             std::env::set_var("aws_secret_access_key", "env_key");
             std::env::set_var("aws_region", "env_key");
-            std::env::remove_var(s3_constants::AWS_S3_POOL_IDLE_TIMEOUT_SECONDS);
-            std::env::remove_var(s3_constants::AWS_STS_POOL_IDLE_TIMEOUT_SECONDS);
-            std::env::remove_var(s3_constants::AWS_S3_GET_INTERNAL_SERVER_ERROR_RETRIES);
 
             let combined_options =
                 S3ObjectStoreFactory {}.with_env_s3(&StorageOptions(raw_options));
