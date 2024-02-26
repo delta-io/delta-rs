@@ -1223,7 +1223,6 @@ async fn execute(
             Expr::Column(Column::from_qualified_name_ignore_case(name.clone()))
                 .alias(delta_field.name()),
         );
-        //new_columns = new_columns.with_column(&name, case)?;
         new_columns.push((name, case));
     }
 
