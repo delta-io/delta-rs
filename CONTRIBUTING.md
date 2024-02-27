@@ -1,6 +1,6 @@
 # Contributing to delta-rs
 
-Development on this project is mostly driven by volunteer contributors. We welcome new contributors, including not only those who develop new features, but also those who are able to help with documentation and provide detailed bug reports. 
+Development on this project is mostly driven by volunteer contributors. We welcome new contributors, including not only those who develop new features, but also those who are able to help with documentation and provide detailed bug reports.
 
 Please take note of our [code of conduct](CODE_OF_CONDUCT.md).
 
@@ -31,7 +31,7 @@ python -m pytest tests/test_writer.py -s -k "test_with_deltalake_schema"
 - Run some Rust code, e.g. run an example
 ```
 cd crates/deltalake
-cargo run --examples basic_operations
+cargo run --example basic_operations --features="datafusion"
 ```
 
 ## Run the docs locally
