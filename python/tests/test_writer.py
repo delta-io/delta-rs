@@ -172,7 +172,6 @@ def test_update_schema_rust_writer(existing_table: DeltaTable):
             overwrite_schema=False,
             engine="rust",
         )
-    # TODO(ion): Remove this once we add schema overwrite support
     write_deltalake(
         existing_table,
         new_data,
@@ -1273,3 +1272,36 @@ def test_write_stats_empty_rowgroups(tmp_path: pathlib.Path):
         dt.to_pyarrow_dataset().to_table(filter=(pc.field("data") == "B")).shape[0]
         == 33792
     )
+
+
+@pytest.mark.parametrize("engine", ["pyarrow", "rust"])
+def test_schema_cols_diff_order(tmp_path: pathlib.Path, engine):
+    data = pa.table(
+        {
+            "foo": pa.array(["B"] * 10),
+            "bar": pa.array([1] * 10),
+            "baz": pa.array([2.0] * 10),
+        }
+    )
+    write_deltalake(tmp_path, data, mode="append", engine=engine)
+
+    data = pa.table(
+        {
+            "baz": pa.array([2.0] * 10),
+            "bar": pa.array([1] * 10),
+            "foo": pa.array(["B"] * 10),
+        }
+    )
+    write_deltalake(tmp_path, data, mode="append", engine=engine)
+    dt = DeltaTable(tmp_path)
+    assert dt.version() == 1
+
+    expected = pa.table(
+        {
+            "baz": pa.array([2.0] * 20),
+            "bar": pa.array([1] * 20),
+            "foo": pa.array(["B"] * 20),
+        }
+    )
+
+    assert dt.to_pyarrow_table(columns=["baz", "bar", "foo"]) == expected
