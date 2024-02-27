@@ -1,6 +1,6 @@
 [package]
 name = "deltalake"
-version = "0.17.0"
+version = "0.17.1"
 authors.workspace = true
 keywords.workspace = true
 readme.workspace = true
@@ -11,8 +11,13 @@ license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 
+[package.metadata.docs.rs]
+# We cannot use all_features because TLS features are mutually exclusive.
+# We cannot use hdfs feature because it requires Java to be installed.
+features = ["azure", "datafusion", "gcs", "hdfs", "json", "python", "s3", "unity-experimental"]
+
 [dependencies]
-deltalake-core = { version = "0.17.0", path = "../core" }
+deltalake-core = { version = "0.17.1", path = "../core" }
 deltalake-aws = { version = "0.1.0", path = "../aws", default-features = false, optional = true }
 deltalake-azure = { version = "0.1.0", path = "../azure", optional = true }
 deltalake-gcp = { version = "0.1.0", path = "../gcp", optional = true }
