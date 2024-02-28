@@ -79,6 +79,30 @@ def test_z_order_optimize(
     assert dt.version() == old_version + 1
     assert len(dt.file_uris()) == 1
 
+def test_optimize_deferred_write(
+    tmp_path: pathlib.Path,
+    sample_data: pa.Table,
+):
+    write_deltalake(tmp_path, sample_data, partition_by="utf8", mode="append")
+    write_deltalake(tmp_path, sample_data, partition_by="utf8", mode="append")
+    write_deltalake(tmp_path, sample_data, partition_by="utf8", mode="append")
+
+    dt = DeltaTable(tmp_path)
+    old_version = dt.version()
+
+    dt.optimize.compact(commit_writes=False)
+
+    last_action = dt.history(1)[0]
+
+    # OPTIMIZE operation has not yet been committed
+    assert last_action["operation"] == "WRITE"
+    assert dt.version() == old_version
+
+    dt.optimize.commit()
+
+    assert dt.version() == old_version + 1
+    last_action = dt.history(1)[0]
+    assert last_action["operation"] == "OPTIMIZE"
 
 def test_optimize_min_commit_interval(
     tmp_path: pathlib.Path,
