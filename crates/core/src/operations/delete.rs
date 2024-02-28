@@ -17,6 +17,7 @@
 //!     .await?;
 //! ````
 
+use core::panic;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
@@ -36,6 +37,7 @@ use serde_json::Value;
 
 use super::datafusion_utils::Expression;
 use super::transaction::PROTOCOL;
+use super::write::SchemaWriteMode;
 use crate::delta_datafusion::expr::fmt_expr_to_sql;
 use crate::delta_datafusion::{find_files, register_store, DeltaScanBuilder, DeltaSessionContext};
 use crate::errors::DeltaResult;
@@ -167,9 +169,14 @@ async fn excute_non_empty_expr(
         None,
         writer_properties,
         false,
-        false,
+        SchemaWriteMode::None,
     )
-    .await?;
+    .await?
+    .into_iter().map(|a| match a {
+        Action::Add(a) => a,
+        _ => panic!("Expected Add action"),
+    
+    }).collect::<Vec<Add>>();
 
     let read_records = scan.parquet_scan.metrics().and_then(|m| m.output_rows());
     let filter_records = filter.metrics().and_then(|m| m.output_rows());

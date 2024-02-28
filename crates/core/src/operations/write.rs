@@ -25,12 +25,13 @@
 //! ````
 
 use std::collections::HashMap;
+use std::str::FromStr;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use arrow_array::RecordBatch;
 use arrow_cast::can_cast_types;
-use arrow_schema::{DataType, Fields, SchemaRef as ArrowSchemaRef};
+use arrow_schema::{DataType, Fields, SchemaRef as ArrowSchemaRef, Schema as ArrowSchema};
 use datafusion::execution::context::{SessionContext, SessionState, TaskContext};
 use datafusion::physical_expr::create_physical_expr;
 use datafusion::physical_plan::filter::FilterExec;
@@ -50,7 +51,7 @@ use crate::delta_datafusion::expr::parse_predicate_expression;
 use crate::delta_datafusion::DeltaDataChecker;
 use crate::delta_datafusion::{find_files, register_store, DeltaScanBuilder};
 use crate::errors::{DeltaResult, DeltaTableError};
-use crate::kernel::{Action, Add, PartitionsExt, Remove, StructType};
+use crate::kernel::{Action, Add, Metadata, PartitionsExt, Remove, StructType};
 use crate::logstore::LogStoreRef;
 use crate::protocol::{DeltaOperation, SaveMode};
 use crate::storage::ObjectStoreRef;
@@ -87,6 +88,35 @@ impl From<WriteError> for DeltaTableError {
     }
 }
 
+///Specifies how to handle schema drifts
+#[derive(PartialEq)]
+pub enum SchemaWriteMode {
+    /// Use existing schema and fail if it does not match the new schema
+    None,
+    /// Overwrite the schema with the new schema
+    Overwrite,
+    /// Append the new schema to the existing schema
+    Merge,
+}
+
+
+impl FromStr for SchemaWriteMode {
+    type Err = DeltaTableError;
+
+    fn from_str(s: &str) -> DeltaResult<Self> {
+        match s.to_ascii_lowercase().as_str() {
+            "none" => Ok(SchemaWriteMode::None),
+            "overwrite" => Ok(SchemaWriteMode::Overwrite),
+            "merge" => Ok(SchemaWriteMode::Merge),
+            _ => Err(DeltaTableError::Generic(format!(
+                "Invalid schema write mode provided: {}, only these are supported: ['none', 'overwrite', 'merge']",
+                s
+            ))),
+        }
+    }
+}
+
+
 /// Write data into a DeltaTable
 pub struct WriteBuilder {
     /// A snapshot of the to-be-loaded table's state
@@ -109,8 +139,8 @@ pub struct WriteBuilder {
     write_batch_size: Option<usize>,
     /// RecordBatches to be written into the table
     batches: Option<Vec<RecordBatch>>,
-    /// whether to overwrite the schema
-    overwrite_schema: bool,
+    /// whether to overwrite the schema or to merge it
+    schema_write_mode: SchemaWriteMode,
     /// how to handle cast failures, either return NULL (safe=true) or return ERR (safe=false)
     safe_cast: bool,
     /// Parquet writer properties
@@ -140,7 +170,7 @@ impl WriteBuilder {
             write_batch_size: None,
             batches: None,
             safe_cast: false,
-            overwrite_schema: false,
+            schema_write_mode: SchemaWriteMode::None,
             writer_properties: None,
             app_metadata: None,
             name: None,
@@ -155,9 +185,9 @@ impl WriteBuilder {
         self
     }
 
-    /// Add overwrite_schema
-    pub fn with_overwrite_schema(mut self, overwrite_schema: bool) -> Self {
-        self.overwrite_schema = overwrite_schema;
+    /// Add Schema Write Mode
+    pub fn with_schema_write_mode(mut self, schema_write_mode: SchemaWriteMode) -> Self {
+        self.schema_write_mode = schema_write_mode;
         self
     }
 
@@ -311,12 +341,34 @@ async fn write_execution_plan_with_predicate(
     write_batch_size: Option<usize>,
     writer_properties: Option<WriterProperties>,
     safe_cast: bool,
-    overwrite_schema: bool,
-) -> DeltaResult<Vec<Add>> {
+    schema_write_mode: SchemaWriteMode,
+) -> DeltaResult<Vec<Action>> {
+    let mut schema_action: Option<Action> = None;
     // Use input schema to prevent wrapping partitions columns into a dictionary.
-    let schema: ArrowSchemaRef = if overwrite_schema {
+    let schema: ArrowSchemaRef = if schema_write_mode == SchemaWriteMode::Overwrite {
         plan.schema()
-    } else {
+    }  
+    else if schema_write_mode == SchemaWriteMode::Merge {
+        let original_schema = snapshot
+            .and_then(|s| s.input_schema().ok())
+            .unwrap_or(plan.schema());
+        if original_schema == plan.schema() {
+            original_schema
+        }
+        else {
+            let new_schema= Arc::new(arrow_schema::Schema::try_merge(vec![original_schema.as_ref().clone(), plan.schema().as_ref().clone()])?);
+            let schema_struct: StructType = new_schema.clone().try_into()?;
+            schema_action = Some(Action::Metadata(Metadata::try_new(schema_struct, match snapshot {
+                Some(sn) => sn.metadata().partition_columns.clone(),
+                None => vec![],
+            }, match snapshot {
+                Some(sn) => sn.metadata().configuration.clone(),
+                None => HashMap::new(),
+            })?));
+            new_schema.into()
+        }
+    }    
+    else {
         snapshot
             .and_then(|s| s.input_schema().ok())
             .unwrap_or(plan.schema())
@@ -352,7 +404,7 @@ async fn write_execution_plan_with_predicate(
         let mut writer = DeltaWriter::new(object_store.clone(), config);
         let checker_stream = checker.clone();
         let mut stream = inner_plan.execute(i, task_ctx)?;
-        let handle: tokio::task::JoinHandle<DeltaResult<Vec<Add>>> =
+        let handle: tokio::task::JoinHandle<DeltaResult<Vec<Action>>> =
             tokio::task::spawn(async move {
                 while let Some(maybe_batch) = stream.next().await {
                     let batch = maybe_batch?;
@@ -361,14 +413,16 @@ async fn write_execution_plan_with_predicate(
                         super::cast::cast_record_batch(&batch, inner_schema.clone(), safe_cast)?;
                     writer.write(&arr).await?;
                 }
-                writer.close().await
+                let add_actions = writer.close().await;
+                match add_actions {
+                    Ok(actions) => Ok(actions.into_iter().map(Action::Add).collect::<Vec<_>>()),
+                    Err(err) => Err(err.into()),
+                }
             });
 
         tasks.push(handle);
     }
-
-    // Collect add actions to add to commit
-    Ok(futures::future::join_all(tasks)
+    let mut actions = futures::future::join_all(tasks)
         .await
         .into_iter()
         .collect::<Result<Vec<_>, _>>()
@@ -377,8 +431,14 @@ async fn write_execution_plan_with_predicate(
         .collect::<Result<Vec<_>, _>>()?
         .concat()
         .into_iter()
-        .collect::<Vec<_>>())
+        .collect::<Vec<_>>();
+    if schema_action.is_some() {
+        actions.push(schema_action.unwrap());
+    }
+    // Collect add actions to add to commit
+    Ok(actions)
 }
+
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn write_execution_plan(
@@ -391,8 +451,8 @@ pub(crate) async fn write_execution_plan(
     write_batch_size: Option<usize>,
     writer_properties: Option<WriterProperties>,
     safe_cast: bool,
-    overwrite_schema: bool,
-) -> DeltaResult<Vec<Add>> {
+    schema_write_mode: SchemaWriteMode,
+) -> DeltaResult<Vec<Action>> {
     write_execution_plan_with_predicate(
         None,
         snapshot,
@@ -404,7 +464,7 @@ pub(crate) async fn write_execution_plan(
         write_batch_size,
         writer_properties,
         safe_cast,
-        overwrite_schema,
+        schema_write_mode,
     )
     .await
 }
@@ -417,7 +477,7 @@ async fn execute_non_empty_expr(
     expression: &Expr,
     rewrite: &[Add],
     writer_properties: Option<WriterProperties>,
-) -> DeltaResult<Vec<Add>> {
+) -> DeltaResult<Vec<Action>> {
     // For each identified file perform a parquet scan + filter + limit (1) + count.
     // If returned count is not zero then append the file to be rewritten and removed from the log. Otherwise do nothing to the file.
 
@@ -452,7 +512,7 @@ async fn execute_non_empty_expr(
         None,
         writer_properties,
         false,
-        false,
+        SchemaWriteMode::None,
     )
     .await?;
 
@@ -488,7 +548,7 @@ async fn prepare_predicate_actions(
     };
     let remove = candidates.candidates;
 
-    let mut actions: Vec<Action> = add.into_iter().map(Action::Add).collect();
+    let mut actions: Vec<Action> = add.into_iter().collect();
 
     for action in remove {
         actions.push(Action::Remove(Remove {
@@ -563,7 +623,7 @@ impl std::future::IntoFuture for WriteBuilder {
                             .unwrap_or(schema.clone());
 
                         if !can_cast_batch(schema.fields(), table_schema.fields())
-                            && !(this.overwrite_schema && matches!(this.mode, SaveMode::Overwrite))
+                            && (this.schema_write_mode == SchemaWriteMode::None && !matches!(this.mode, SaveMode::Overwrite))
                         {
                             return Err(DeltaTableError::Generic(
                                 "Schema of data does not match table schema".to_string(),
@@ -641,10 +701,10 @@ impl std::future::IntoFuture for WriteBuilder {
                 this.write_batch_size,
                 this.writer_properties.clone(),
                 this.safe_cast,
-                this.overwrite_schema,
+                this.schema_write_mode,
             )
             .await?;
-            actions.extend(add_actions.into_iter().map(Action::Add));
+            actions.extend(add_actions);
 
             // Collect remove actions if we are overwriting the table
             if let Some(snapshot) = &this.snapshot {

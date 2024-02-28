@@ -74,7 +74,7 @@ use crate::delta_datafusion::{
 use crate::kernel::Action;
 use crate::logstore::LogStoreRef;
 use crate::operations::merge::barrier::find_barrier_node;
-use crate::operations::write::write_execution_plan;
+use crate::operations::write::{write_execution_plan, SchemaWriteMode};
 use crate::protocol::{DeltaOperation, MergePredicate};
 use crate::table::state::DeltaTableState;
 use crate::{DeltaResult, DeltaTable, DeltaTableError};
@@ -1379,13 +1379,13 @@ async fn execute(
         None,
         writer_properties,
         safe_cast,
-        false,
+        SchemaWriteMode::None,
     )
     .await?;
 
     metrics.rewrite_time_ms = Instant::now().duration_since(rewrite_start).as_millis() as u64;
 
-    let mut actions: Vec<Action> = add_actions.into_iter().map(Action::Add).collect();
+    let mut actions: Vec<Action> = add_actions.clone();
     metrics.num_target_files_added = actions.len();
 
     let survivors = barrier
