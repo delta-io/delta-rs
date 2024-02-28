@@ -29,6 +29,7 @@ use super::utils::{
 use super::{DeltaWriter, DeltaWriterError, WriteMode};
 use crate::errors::DeltaTableError;
 use crate::kernel::{Action, Add, PartitionsExt, Scalar, StructType};
+use crate::operations::cast::merge_schema;
 use crate::storage::ObjectStoreRetryExt;
 use crate::table::builder::DeltaTableBuilder;
 use crate::DeltaTable;
@@ -305,10 +306,10 @@ impl PartitionWriter {
                 WriteMode::MergeSchema => {
                     debug!("The writer and record batch schemas do not match, merging");
 
-                    let merged = ArrowSchema::try_merge(vec![
+                    let merged = merge_schema(
                         self.arrow_schema.as_ref().clone(),
                         record_batch.schema().as_ref().clone(),
-                    ])?;
+                    )?;
                     self.arrow_schema = Arc::new(merged);
 
                     let mut cols = vec![];
