@@ -20,6 +20,11 @@
 //! let (table, metrics) = OptimizeBuilder::new(table.object_store(), table.state).await?;
 //! ````
 
+use uuid::Uuid;
+use serde_json::{self, Value};
+use std::fs;
+use std::error::Error;
+use std::fs::File;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -37,7 +42,7 @@ use parquet::basic::{Compression, ZstdLevel};
 use parquet::errors::ParquetError;
 use parquet::file::properties::WriterProperties;
 use serde::{Deserialize, Serialize};
-use tracing::debug;
+use tracing::{debug, warn};
 
 use super::transaction::{commit, PROTOCOL};
 use super::writer::{PartitionWriter, PartitionWriterConfig};
@@ -74,8 +79,17 @@ pub struct Metrics {
     pub preserve_insertion_order: bool,
 }
 
+#[derive(Serialize)]
 /// Statistics on files for a particular operation
 /// Operation can be remove or add
+pub struct OptimizeWithoutCommitResult {
+    pub actions: String,
+    pub app_metadata: String,
+    pub snapshot: String,
+    pub task_params: String,
+    pub metrics: Metrics
+}
+
 #[derive(Debug, PartialEq, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MetricDetails {
@@ -253,8 +267,44 @@ impl<'a> OptimizeBuilder<'a> {
     }
 }
 
+fn generate_file_path() -> String {
+    let uuid = Uuid::new_v4();
+    format!("/tmp/{}.json", uuid)
+}
+
+impl<'a> OptimizeBuilder<'a> {
+    pub async fn commit(
+        self,
+        actions: String,
+        task_parameters: String,
+        snapshot: String,
+        app_metadata: String,
+    ) -> () {
+
+        let snapshot_string = fs::read_to_string(snapshot).expect("Failed to find {snapshot}");
+        let actions_string = fs::read_to_string(actions).expect("Failed to find {actions}");
+        let task_parameters = fs::read_to_string(task_parameters).expect("Failed to find {task_parameters}");
+        let app_metadata = fs::read_to_string(app_metadata).expect("Failed to find {app_metadata}");
+
+        let snapshot: DeltaTableState = serde_json::from_str(&snapshot_string).expect("Failed to deserialize snapshot");
+        let actions: Vec<Action> = serde_json::from_str(&actions_string).expect("Failed to deserialize actions");
+        let app_metadata: HashMap<String, serde_json::Value> = serde_json::from_str(&app_metadata).expect("Failed to deserialize app metadata");
+        let input_parameters: OptimizeInput = serde_json::from_str(&task_parameters).expect("Failed to deserialize inputparams");
+
+        let this = self;
+
+        commit(
+           this.log_store.clone().as_ref(),
+           &actions,
+           input_parameters.clone().into(),
+           Some(snapshot).as_ref(),
+           Some(app_metadata.clone()),
+        ).await;
+    }
+}
+
 impl<'a> std::future::IntoFuture for OptimizeBuilder<'a> {
-    type Output = DeltaResult<(DeltaTable, Metrics)>;
+    type Output = DeltaResult<(DeltaTable, OptimizeWithoutCommitResult)>;
     type IntoFuture = BoxFuture<'a, Self::Output>;
 
     fn into_future(self) -> Self::IntoFuture {
@@ -293,7 +343,7 @@ impl<'a> std::future::IntoFuture for OptimizeBuilder<'a> {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 struct OptimizeInput {
     target_size: i64,
     predicate: Option<String>,
@@ -599,19 +649,18 @@ impl MergePlan {
         Ok(stream)
     }
 
-    /// Perform the operations outlined in the plan.
-    pub async fn execute(
-        mut self,
-        log_store: LogStoreRef,
-        snapshot: &DeltaTableState,
-        max_concurrent_tasks: usize,
+        /// Perform the operations outlined in the plan.
+        pub async fn execute(
+            mut self,
+            log_store: LogStoreRef,
+            snapshot: &DeltaTableState,
+            max_concurrent_tasks: usize,
         #[allow(unused_variables)] // used behind a feature flag
         max_spill_size: usize,
         min_commit_interval: Option<Duration>,
         app_metadata: Option<HashMap<String, serde_json::Value>>,
-    ) -> Result<Metrics, DeltaTableError> {
+    ) -> Result<OptimizeWithoutCommitResult, DeltaTableError> {
         let operations = std::mem::take(&mut self.operations);
-
         let stream = match operations {
             OptimizeOperations::Compact(bins) => futures::stream::iter(bins)
                 .flat_map(|(_, (partition, bins))| {
@@ -692,12 +741,19 @@ impl MergePlan {
 
         // Actions buffered so far. These will be flushed either at the end
         // or when we reach the commit interval.
-        let mut actions = vec![];
+        let mut actions: Vec<Action> = vec![];
 
         // Each time we commit, we'll reset buffered_metrics to orig_metrics.
         let orig_metrics = std::mem::take(&mut self.metrics);
         let mut buffered_metrics = orig_metrics.clone();
-        let mut total_metrics = orig_metrics.clone();
+
+        let mut ret = OptimizeWithoutCommitResult {
+            actions: "".to_string(),
+            app_metadata: "".to_string(),
+            snapshot: "".to_string(),
+            task_params: "".to_string(),
+            metrics: orig_metrics.clone()
+        };
 
         let mut last_commit = Instant::now();
         loop {
@@ -709,7 +765,7 @@ impl MergePlan {
                 debug!("Recording metrics for a completed partition");
                 actions.extend(partial_actions);
                 buffered_metrics.add(&partial_metrics);
-                total_metrics.add(&partial_metrics);
+                ret.metrics.add(&partial_metrics);
             }
 
             let now = Instant::now();
@@ -729,24 +785,48 @@ impl MergePlan {
                 app_metadata.insert("readVersion".to_owned(), self.read_table_version.into());
                 let maybe_map_metrics = serde_json::to_value(std::mem::replace(
                     &mut buffered_metrics,
+
                     orig_metrics.clone(),
                 ));
+
                 if let Ok(map) = maybe_map_metrics {
                     app_metadata.insert("operationMetrics".to_owned(), map);
                 }
 
                 table.update().await?;
-                debug!("committing {} actions", actions.len());
-                //// TODO: Check for remove actions on optimized partitions. If a
-                //// optimized partition was updated then abort the commit. Requires (#593).
-                commit(
-                    table.log_store.as_ref(),
-                    &actions,
-                    self.task_parameters.input_parameters.clone().into(),
-                    Some(table.snapshot()?),
-                    Some(app_metadata.clone()),
-                )
-                .await?;
+
+                let input_params_serialized = serde_json::to_string(&self.task_parameters.input_parameters)
+                    .expect("Failed to serialize the object");
+
+                let input_params_path = generate_file_path();
+
+                fs::write(&input_params_path, input_params_serialized);
+
+                let actions_serialized = serde_json::to_string(&actions)
+                    .expect("Failed to serialize JSON array");
+
+                let actions_path = generate_file_path();
+
+                fs::write(&actions_path, actions_serialized);
+
+                let snapshot_serialized = serde_json::to_string(&table.snapshot().unwrap())
+                    .expect("Failed to serialize the object");
+
+                let snapshot_path = generate_file_path();
+
+                fs::write(&snapshot_path, snapshot_serialized);
+
+                let app_metadata_ser = serde_json::to_string(&app_metadata)
+                    .expect("Failed to serialize the object");
+
+                let app_metadata_path = generate_file_path();
+
+                fs::write(&app_metadata_path, app_metadata_ser);
+
+                ret.actions = actions_path.to_string();
+                ret.app_metadata = app_metadata_path.to_string();
+                ret.snapshot = snapshot_path.to_string();
+                ret.task_params = input_params_path.to_string();
             }
 
             if end {
@@ -754,15 +834,12 @@ impl MergePlan {
             }
         }
 
-        total_metrics.preserve_insertion_order = true;
-        if total_metrics.num_files_added == 0 {
-            total_metrics.files_added.min = 0;
-        }
-        if total_metrics.num_files_removed == 0 {
-            total_metrics.files_removed.min = 0;
+        ret.metrics.preserve_insertion_order = true;
+        if ret.metrics.num_files_removed == 0 {
+            ret.metrics.files_removed.min = 0;
         }
 
-        Ok(total_metrics)
+        Ok(ret)
     }
 }
 

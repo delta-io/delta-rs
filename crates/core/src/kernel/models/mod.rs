@@ -14,7 +14,7 @@ mod schema;
 pub use actions::*;
 pub use schema::*;
 
-#[derive(Debug)]
+#[derive(Debug, Deserialize)]
 /// The type of action that was performed on the table
 pub enum ActionType {
     /// modify the data in a table by adding individual logical files

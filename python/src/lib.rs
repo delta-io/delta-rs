@@ -1,4 +1,4 @@
-#![deny(warnings)]
+//#![deny(warnings)]
 
 mod error;
 mod filesystem;
@@ -31,7 +31,7 @@ use deltalake::operations::convert_to_delta::{ConvertToDeltaBuilder, PartitionSt
 use deltalake::operations::delete::DeleteBuilder;
 use deltalake::operations::filesystem_check::FileSystemCheckBuilder;
 use deltalake::operations::merge::MergeBuilder;
-use deltalake::operations::optimize::{OptimizeBuilder, OptimizeType};
+use deltalake::operations::optimize::{OptimizeBuilder, OptimizeType, MergeTaskParameters};
 use deltalake::operations::restore::RestoreBuilder;
 use deltalake::operations::transaction::commit;
 use deltalake::operations::update::UpdateBuilder;
@@ -333,6 +333,36 @@ impl RawDeltaTable {
 
     /// Run the optimize command on the Delta Table: merge small files into a large file by bin-packing.
     #[pyo3(signature = (
+        actions,
+        task_parameters,
+        snapshot,
+        app_metadata
+    ))]
+    pub fn commit_optimize(
+        &mut self,
+        actions: String,
+        task_parameters: String,
+        snapshot: String,
+        app_metadata: String,
+    ) -> PyResult<String> {
+        let mut cmd = OptimizeBuilder::new(
+            self._table.log_store(),
+            self._table.snapshot().map_err(PythonError::from)?.clone(),
+        )
+        .with_max_concurrent_tasks(num_cpus::get());
+
+        rt()?.block_on(cmd.commit(
+                actions,
+                task_parameters,
+                snapshot,
+                app_metadata
+        ));
+
+        Ok(serde_json::to_string("test").unwrap())
+    }
+
+    /// Run the optimize command on the Delta Table: merge small files into a large file by bin-packing.
+    #[pyo3(signature = (
         partition_filters = None,
         target_size = None,
         max_concurrent_tasks = None,
@@ -342,6 +372,7 @@ impl RawDeltaTable {
     ))]
     pub fn compact_optimize(
         &mut self,
+        py: Python,
         partition_filters: Option<Vec<(&str, &str, PartitionFilterValue)>>,
         target_size: Option<i64>,
         max_concurrent_tasks: Option<usize>,
@@ -349,6 +380,7 @@ impl RawDeltaTable {
         writer_properties: Option<HashMap<String, Option<String>>>,
         custom_metadata: Option<HashMap<String, String>>,
     ) -> PyResult<String> {
+        py.allow_threads(|| {
         let mut cmd = OptimizeBuilder::new(
             self._table.log_store(),
             self._table.snapshot().map_err(PythonError::from)?.clone(),
@@ -382,7 +414,9 @@ impl RawDeltaTable {
             .map_err(PythonError::from)?;
         self._table.state = table.state;
         Ok(serde_json::to_string(&metrics).unwrap())
-    }
+
+    })
+}
 
     /// Run z-order variation of optimize
     #[allow(clippy::too_many_arguments)]

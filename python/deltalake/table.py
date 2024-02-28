@@ -157,7 +157,7 @@ class WriterProperties:
 
         if compression_level is not None and compression is None:
             raise ValueError(
-                """Providing a compression level without the compression type is not possible, 
+                """Providing a compression level without the compression type is not possible,
                              please provide the compression as well."""
             )
         if isinstance(compression, str):
@@ -1769,7 +1769,7 @@ class TableAlterer:
         """
         if len(constraints.keys()) > 1:
             raise ValueError(
-                """add_constraints is limited to a single constraint addition at once for now. 
+                """add_constraints is limited to a single constraint addition at once for now.
                 Please execute add_constraints multiple times with each time a different constraint."""
             )
 
@@ -1800,6 +1800,20 @@ class TableOptimizer:
         )
 
         return self.compact(partition_filters, target_size, max_concurrent_tasks)
+
+    def commit(
+        self,
+        actions: str,
+        task_parameters: str,
+        snapshot: str,
+        app_metadata: str
+    ) -> Dict[str, Any]:
+        self.table._table.commit_optimize(
+            actions,
+            task_parameters,
+            snapshot,
+            app_metadata
+        )
 
     def compact(
         self,
