@@ -162,7 +162,7 @@ class WriterProperties:
 
         if compression_level is not None and compression is None:
             raise ValueError(
-                """Providing a compression level without the compression type is not possible, 
+                """Providing a compression level without the compression type is not possible,
                              please provide the compression as well."""
             )
         if isinstance(compression, str):
@@ -1791,7 +1791,7 @@ class TableAlterer:
         """
         if len(constraints.keys()) > 1:
             raise ValueError(
-                """add_constraints is limited to a single constraint addition at once for now. 
+                """add_constraints is limited to a single constraint addition at once for now.
                 Please execute add_constraints multiple times with each time a different constraint."""
             )
 
@@ -1857,6 +1857,11 @@ class TableOptimizer:
 
         return self.compact(partition_filters, target_size, max_concurrent_tasks)
 
+    def commit(
+        self
+    ) -> Dict[str, Any]:
+        self.table._table.commit_optimize()
+
     def compact(
         self,
         partition_filters: Optional[FilterType] = None,
@@ -1865,6 +1870,7 @@ class TableOptimizer:
         min_commit_interval: Optional[Union[int, timedelta]] = None,
         writer_properties: Optional[WriterProperties] = None,
         custom_metadata: Optional[Dict[str, str]] = None,
+        commit_writes: bool = True
     ) -> Dict[str, Any]:
         """
         Compacts small files to reduce the total number of files in the table.
@@ -1918,6 +1924,7 @@ class TableOptimizer:
             min_commit_interval,
             writer_properties._to_dict() if writer_properties else None,
             custom_metadata,
+            commit_writes
         )
         self.table.update_incremental()
         return json.loads(metrics)

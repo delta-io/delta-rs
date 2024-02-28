@@ -32,7 +32,7 @@ use deltalake::operations::delete::DeleteBuilder;
 use deltalake::operations::drop_constraints::DropConstraintBuilder;
 use deltalake::operations::filesystem_check::FileSystemCheckBuilder;
 use deltalake::operations::merge::MergeBuilder;
-use deltalake::operations::optimize::{OptimizeBuilder, OptimizeType};
+use deltalake::operations::optimize::{CommitContext, OptimizeBuilder, OptimizeType};
 use deltalake::operations::restore::RestoreBuilder;
 use deltalake::operations::transaction::commit;
 use deltalake::operations::update::UpdateBuilder;
@@ -70,6 +70,8 @@ struct RawDeltaTable {
     _table: deltalake::DeltaTable,
     // storing the config additionally on the table helps us make pickling work.
     _config: FsConfig,
+    // commit
+    _commit: Option<CommitContext>,
 }
 
 #[pyclass]
@@ -125,6 +127,7 @@ impl RawDeltaTable {
                 root_url: table_uri.into(),
                 options,
             },
+            _commit: None,
         })
     }
 
@@ -353,6 +356,31 @@ impl RawDeltaTable {
         Ok(serde_json::to_string(&metrics).unwrap())
     }
 
+
+    #[pyo3(signature = ())]
+    pub fn commit_optimize(&mut self) -> PyResult<()> {
+        let cmd = OptimizeBuilder::new(
+            self._table.log_store(),
+            self._table.snapshot().map_err(PythonError::from)?.clone(),
+        )
+        .with_max_concurrent_tasks(num_cpus::get());
+
+        if self._commit.is_none() {
+            return Err(PyValueError::new_err("Cannot commit optimization, nothing to commit."))
+        }
+
+        let table = rt()?.block_on(
+            cmd.commit_writes(
+                self._commit.take().unwrap()
+            )
+        ).map_err(PythonError::from)?;
+
+        self._table.state = table.state;
+        self._commit = None;
+
+        Ok(())
+    }
+
     /// Run the optimize command on the Delta Table: merge small files into a large file by bin-packing.
     #[pyo3(signature = (
         partition_filters = None,
@@ -361,49 +389,64 @@ impl RawDeltaTable {
         min_commit_interval = None,
         writer_properties=None,
         custom_metadata=None,
+        commit_writes=true
     ))]
+    #[allow(clippy::too_many_arguments)]
     pub fn compact_optimize(
         &mut self,
+        py: Python,
         partition_filters: Option<Vec<(&str, &str, PartitionFilterValue)>>,
         target_size: Option<i64>,
         max_concurrent_tasks: Option<usize>,
         min_commit_interval: Option<u64>,
         writer_properties: Option<HashMap<String, Option<String>>>,
         custom_metadata: Option<HashMap<String, String>>,
+        commit_writes: bool,
     ) -> PyResult<String> {
-        let mut cmd = OptimizeBuilder::new(
-            self._table.log_store(),
-            self._table.snapshot().map_err(PythonError::from)?.clone(),
-        )
-        .with_max_concurrent_tasks(max_concurrent_tasks.unwrap_or_else(num_cpus::get));
-        if let Some(size) = target_size {
-            cmd = cmd.with_target_size(size);
-        }
-        if let Some(commit_interval) = min_commit_interval {
-            cmd = cmd.with_min_commit_interval(time::Duration::from_secs(commit_interval));
-        }
+        py.allow_threads(|| {
+            let mut cmd = OptimizeBuilder::new(
+                self._table.log_store(),
+                self._table.snapshot().map_err(PythonError::from)?.clone(),
+            )
+            .with_max_concurrent_tasks(max_concurrent_tasks.unwrap_or_else(num_cpus::get));
+            if let Some(size) = target_size {
+                cmd = cmd.with_target_size(size);
+            }
 
-        if let Some(writer_props) = writer_properties {
-            cmd = cmd.with_writer_properties(
-                set_writer_properties(writer_props).map_err(PythonError::from)?,
-            );
-        }
+            if let Some(commit_interval) = min_commit_interval {
+                cmd = cmd.with_min_commit_interval(time::Duration::from_secs(commit_interval));
+            }
 
-        if let Some(metadata) = custom_metadata {
-            let json_metadata: Map<String, Value> =
-                metadata.into_iter().map(|(k, v)| (k, v.into())).collect();
-            cmd = cmd.with_metadata(json_metadata);
-        };
+            cmd = cmd.with_commit_writes(commit_writes);
 
-        let converted_filters = convert_partition_filters(partition_filters.unwrap_or_default())
-            .map_err(PythonError::from)?;
-        cmd = cmd.with_filters(&converted_filters);
+            if let Some(writer_props) = writer_properties {
+                cmd = cmd.with_writer_properties(
+                    set_writer_properties(writer_props).map_err(PythonError::from)?,
+                );
+            }
 
-        let (table, metrics) = rt()?
-            .block_on(cmd.into_future())
-            .map_err(PythonError::from)?;
-        self._table.state = table.state;
-        Ok(serde_json::to_string(&metrics).unwrap())
+            if let Some(metadata) = custom_metadata {
+                let json_metadata: Map<String, Value> =
+                    metadata.into_iter().map(|(k, v)| (k, v.into())).collect();
+                cmd = cmd.with_metadata(json_metadata);
+            };
+
+            let converted_filters = convert_partition_filters(partition_filters.unwrap_or_default())
+                .map_err(PythonError::from)?;
+            cmd = cmd.with_filters(&converted_filters);
+
+            let (table, metrics, commit_info) = rt()?
+                .block_on(cmd.into_future())
+                .map_err(PythonError::from)?;
+
+            self._table.state = table.state;
+
+            if commit_info.is_some() {
+                self._commit = commit_info
+            }
+
+            Ok(serde_json::to_string(&metrics).unwrap())
+        })
     }
 
     /// Run z-order variation of optimize
@@ -457,7 +500,7 @@ impl RawDeltaTable {
             .map_err(PythonError::from)?;
         cmd = cmd.with_filters(&converted_filters);
 
-        let (table, metrics) = rt()?
+        let (table, metrics, _commit_info) = rt()?
             .block_on(cmd.into_future())
             .map_err(PythonError::from)?;
         self._table.state = table.state;

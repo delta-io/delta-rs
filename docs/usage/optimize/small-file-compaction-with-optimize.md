@@ -299,7 +299,29 @@ Delta tables can accumulate small files for a variety of reasons:
 
 * User error: users can accidentally write files that are too small.  Users should sometimes repartition in memory before writing to disk to avoid appending files that are too small.
 * Frequent appends: systems that append more often tend to append more smaller files.  A pipeline that appends every minute will generally generate ten times as many small files compared to a system that appends every ten minutes.
-* Appending to partitioned data lakes with high cardinality columns can also cause small files.  If you append every hour to a table that’s partitioned on a column with 1,000 distinct values, then every append could create 1,000 new files.  Partitioning by date avoids this problem because the data isn’t split up across partitions in this manner.  
+* Appending to partitioned data lakes with high cardinality columns can also cause small files.  If you append every hour to a table that’s partitioned on a column with 1,000 distinct values, then every append could create 1,000 new files.  Partitioning by date avoids this problem because the data isn’t split up across partitions in this manner.
+
+
+## Deferring commits while optimizing
+`delta-rs` also supports **deferred commits** for compaction. This means that you can run your compaction and commit later.
+
+This is useful when you have separate writer and compaction threads. Compaction can run in the background while the writer continues to append small files. However, commits for the writer and compactor must occur in sequence. Simultaneous commits may result in a race condition.
+
+When compaction is complete, the python client can wait for the writer to stop (likely by acquiring a lock) before committing the compaction operation.
+
+An example of two threads writing and optimizing simultaneously:
+
+```python
+# Thread 1
+with lock:
+    dt.write_deltalake(...)
+
+# Thread 2
+dt.optimize.compact(commit_writes=False)
+
+with lock:
+    dt.optimize.commit()
+```
 
 ## Conclusion
 
