@@ -31,7 +31,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use arrow_array::RecordBatch;
 use arrow_cast::can_cast_types;
-use arrow_schema::{DataType, Fields, SchemaRef as ArrowSchemaRef, Schema as ArrowSchema};
+use arrow_schema::{DataType, Fields, SchemaRef as ArrowSchemaRef};
 use datafusion::execution::context::{SessionContext, SessionState, TaskContext};
 use datafusion::physical_expr::create_physical_expr;
 use datafusion::physical_plan::filter::FilterExec;
@@ -99,7 +99,6 @@ pub enum SchemaWriteMode {
     Merge,
 }
 
-
 impl FromStr for SchemaWriteMode {
     type Err = DeltaTableError;
 
@@ -115,7 +114,6 @@ impl FromStr for SchemaWriteMode {
         }
     }
 }
-
 
 /// Write data into a DeltaTable
 pub struct WriteBuilder {
@@ -347,28 +345,32 @@ async fn write_execution_plan_with_predicate(
     // Use input schema to prevent wrapping partitions columns into a dictionary.
     let schema: ArrowSchemaRef = if schema_write_mode == SchemaWriteMode::Overwrite {
         plan.schema()
-    }  
-    else if schema_write_mode == SchemaWriteMode::Merge {
+    } else if schema_write_mode == SchemaWriteMode::Merge {
         let original_schema = snapshot
             .and_then(|s| s.input_schema().ok())
             .unwrap_or(plan.schema());
         if original_schema == plan.schema() {
             original_schema
-        }
-        else {
-            let new_schema= Arc::new(arrow_schema::Schema::try_merge(vec![original_schema.as_ref().clone(), plan.schema().as_ref().clone()])?);
+        } else {
+            let new_schema = Arc::new(arrow_schema::Schema::try_merge(vec![
+                original_schema.as_ref().clone(),
+                plan.schema().as_ref().clone(),
+            ])?);
             let schema_struct: StructType = new_schema.clone().try_into()?;
-            schema_action = Some(Action::Metadata(Metadata::try_new(schema_struct, match snapshot {
-                Some(sn) => sn.metadata().partition_columns.clone(),
-                None => vec![],
-            }, match snapshot {
-                Some(sn) => sn.metadata().configuration.clone(),
-                None => HashMap::new(),
-            })?));
-            new_schema.into()
+            schema_action = Some(Action::Metadata(Metadata::try_new(
+                schema_struct,
+                match snapshot {
+                    Some(sn) => sn.metadata().partition_columns.clone(),
+                    None => vec![],
+                },
+                match snapshot {
+                    Some(sn) => sn.metadata().configuration.clone(),
+                    None => HashMap::new(),
+                },
+            )?));
+            new_schema
         }
-    }    
-    else {
+    } else {
         snapshot
             .and_then(|s| s.input_schema().ok())
             .unwrap_or(plan.schema())
@@ -416,7 +418,7 @@ async fn write_execution_plan_with_predicate(
                 let add_actions = writer.close().await;
                 match add_actions {
                     Ok(actions) => Ok(actions.into_iter().map(Action::Add).collect::<Vec<_>>()),
-                    Err(err) => Err(err.into()),
+                    Err(err) => Err(err),
                 }
             });
 
@@ -432,13 +434,12 @@ async fn write_execution_plan_with_predicate(
         .concat()
         .into_iter()
         .collect::<Vec<_>>();
-    if schema_action.is_some() {
-        actions.push(schema_action.unwrap());
+    if let Some(schema_action) = schema_action {
+        actions.push(schema_action);
     }
     // Collect add actions to add to commit
     Ok(actions)
 }
-
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn write_execution_plan(
@@ -623,7 +624,8 @@ impl std::future::IntoFuture for WriteBuilder {
                             .unwrap_or(schema.clone());
 
                         if !can_cast_batch(schema.fields(), table_schema.fields())
-                            && (this.schema_write_mode == SchemaWriteMode::None && !matches!(this.mode, SaveMode::Overwrite))
+                            && (this.schema_write_mode == SchemaWriteMode::None
+                                && !matches!(this.mode, SaveMode::Overwrite))
                         {
                             return Err(DeltaTableError::Generic(
                                 "Schema of data does not match table schema".to_string(),

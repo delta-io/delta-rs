@@ -172,11 +172,12 @@ async fn excute_non_empty_expr(
         SchemaWriteMode::None,
     )
     .await?
-    .into_iter().map(|a| match a {
+    .into_iter()
+    .map(|a| match a {
         Action::Add(a) => a,
         _ => panic!("Expected Add action"),
-    
-    }).collect::<Vec<Add>>();
+    })
+    .collect::<Vec<Add>>();
 
     let read_records = scan.parquet_scan.metrics().and_then(|m| m.output_rows());
     let filter_records = filter.metrics().and_then(|m| m.output_rows());

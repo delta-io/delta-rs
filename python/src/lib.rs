@@ -1392,7 +1392,8 @@ fn write_to_deltalake(
         .with_save_mode(save_mode)
         .with_write_batch_size(max_rows_per_group as usize);
     if let Some(schema_write_mode) = schema_write_mode {
-        builder = builder.with_schema_write_mode(schema_write_mode.parse().map_err(PythonError::from)?);
+        builder =
+            builder.with_schema_write_mode(schema_write_mode.parse().map_err(PythonError::from)?);
     }
     if let Some(partition_columns) = partition_by {
         builder = builder.with_partition_columns(partition_columns);
