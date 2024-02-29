@@ -621,7 +621,7 @@ impl std::future::IntoFuture for WriteBuilder {
                             .unwrap_or(schema.clone());
 
                         if !can_cast_batch(schema.fields(), table_schema.fields())
-                            && (this.schema_mode == None
+                            && (this.schema_mode.is_none()
                                 && !matches!(this.mode, SaveMode::Overwrite))
                         {
                             return Err(DeltaTableError::Generic(

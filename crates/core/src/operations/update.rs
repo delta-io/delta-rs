@@ -45,7 +45,7 @@ use serde_json::Value;
 
 use super::transaction::{commit, PROTOCOL};
 use super::write::write_execution_plan;
-use super::{datafusion_utils::Expression, write::SchemaMode};
+use super::datafusion_utils::Expression;
 use crate::delta_datafusion::{
     expr::fmt_expr_to_sql, physical::MetricObserverExec, DeltaColumn, DeltaSessionContext,
 };

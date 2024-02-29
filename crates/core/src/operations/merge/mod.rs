@@ -74,7 +74,7 @@ use crate::delta_datafusion::{
 use crate::kernel::Action;
 use crate::logstore::LogStoreRef;
 use crate::operations::merge::barrier::find_barrier_node;
-use crate::operations::write::{write_execution_plan, SchemaMode};
+use crate::operations::write::write_execution_plan;
 use crate::protocol::{DeltaOperation, MergePredicate};
 use crate::table::state::DeltaTableState;
 use crate::{DeltaResult, DeltaTable, DeltaTableError};
