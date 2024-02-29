@@ -1320,7 +1320,7 @@ async fn execute(
         build_case(copy_when, copy_then)?,
     ));
 
-    let mut new_columns = {
+    let new_columns = {
         let plan = projection.into_unoptimized_plan();
         let mut fields: Vec<Expr> = plan
             .schema()

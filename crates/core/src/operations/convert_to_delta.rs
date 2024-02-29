@@ -226,7 +226,7 @@ impl ConvertToDeltaBuilder {
     }
 
     /// Consume self into CreateBuilder with corresponding add actions, schemas and operation meta
-    async fn into_create_builder(mut self) -> Result<CreateBuilder, Error> {
+    async fn into_create_builder(self) -> Result<CreateBuilder, Error> {
         // Use the specified log store. If a log store is not provided, create a new store from the specified path.
         // Return an error if neither log store nor path is provided
         let log_store = if let Some(log_store) = self.log_store {
