@@ -95,6 +95,7 @@ def write_deltalake(
     description: Optional[str] = ...,
     configuration: Optional[Mapping[str, Optional[str]]] = ...,
     overwrite_schema: bool = ...,
+    schema_mode: Optional[Literal["overwrite"]] = ...,
     storage_options: Optional[Dict[str, str]] = ...,
     partition_filters: Optional[List[Tuple[str, str, Any]]] = ...,
     large_dtypes: bool = ...,
@@ -123,6 +124,7 @@ def write_deltalake(
     description: Optional[str] = ...,
     configuration: Optional[Mapping[str, Optional[str]]] = ...,
     overwrite_schema: bool = ...,
+    schema_mode: Optional[Literal[ "merge", "overwrite"]] = ...,
     storage_options: Optional[Dict[str, str]] = ...,
     large_dtypes: bool = ...,
     engine: Literal["rust"],
@@ -151,6 +153,7 @@ def write_deltalake(
     description: Optional[str] = ...,
     configuration: Optional[Mapping[str, Optional[str]]] = ...,
     overwrite_schema: bool = ...,
+    schema_mode: Optional[Literal[ "merge", "overwrite"]] = ...,
     storage_options: Optional[Dict[str, str]] = ...,
     predicate: Optional[str] = ...,
     large_dtypes: bool = ...,
@@ -185,7 +188,7 @@ def write_deltalake(
     description: Optional[str] = None,
     configuration: Optional[Mapping[str, Optional[str]]] = None,
     overwrite_schema: bool = False,
-    schema_write_mode: Literal["none", "merge", "overwrite"] = "none",
+    schema_mode: Optional[Literal[ "merge", "overwrite"]] = None,
     storage_options: Optional[Dict[str, str]] = None,
     partition_filters: Optional[List[Tuple[str, str, Any]]] = None,
     predicate: Optional[str] = None,
@@ -239,8 +242,8 @@ def write_deltalake(
         name: User-provided identifier for this table.
         description: User-provided description for this table.
         configuration: A map containing configuration options for the metadata action.
-        overwrite_schema: Deprecated, use schema_write_mode instead.
-        schema_write_mode: If set to "overwrite", allows replacing the schema of the table. Set to "merge" to merge with existing schema.
+        overwrite_schema: Deprecated, use schema_mode instead.
+        schema_mode: If set to "overwrite", allows replacing the schema of the table. Set to "merge" to merge with existing schema.
         storage_options: options passed to the native delta filesystem.
         predicate: When using `Overwrite` mode, replace data that matches a predicate. Only used in rust engine.
         partition_filters: the partition filters that will be used for partition overwrite. Only used in pyarrow engine.
@@ -259,11 +262,10 @@ def write_deltalake(
 
     __enforce_append_only(table=table, configuration=configuration, mode=mode)
     if overwrite_schema:
-        assert schema_write_mode in ["none", "overwrite"] # none is default, overwrite would at least match
-        schema_write_mode = "overwrite"
+        schema_mode = "overwrite"
         
         warnings.warn(
-            "overwrite_schema is deprecated, use schema_write_mode instead. ",
+            "overwrite_schema is deprecated, use schema_mode instead. ",
             category=DeprecationWarning,
             stacklevel=2,
         )
@@ -312,7 +314,7 @@ def write_deltalake(
             partition_by=partition_by,
             mode=mode,
             max_rows_per_group=max_rows_per_group,
-            schema_write_mode=schema_write_mode,
+            schema_mode=schema_mode,
             predicate=predicate,
             name=name,
             description=description,
@@ -337,7 +339,7 @@ def write_deltalake(
         if table:  # already exists
             if sort_arrow_schema(schema) != sort_arrow_schema(
                 table.schema().to_pyarrow(as_large_types=large_dtypes)
-            ) and not (mode == "overwrite" and schema_write_mode == "overwrite"):
+            ) and not (mode == "overwrite" and schema_mode == "overwrite"):
                 raise ValueError(
                     "Schema of data does not match table schema\n"
                     f"Data schema:\n{schema}\nTable Schema:\n{table.schema().to_pyarrow(as_large_types=large_dtypes)}"

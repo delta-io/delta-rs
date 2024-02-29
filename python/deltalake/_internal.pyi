@@ -174,7 +174,7 @@ def write_to_deltalake(
     partition_by: Optional[List[str]],
     mode: str,
     max_rows_per_group: int,
-    schema_write_mode: Optional[str],
+    schema_mode: Optional[str],
     predicate: Optional[str],
     name: Optional[str],
     description: Optional[str],

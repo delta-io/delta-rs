@@ -45,7 +45,7 @@ use serde_json::Value;
 
 use super::transaction::{commit, PROTOCOL};
 use super::write::write_execution_plan;
-use super::{datafusion_utils::Expression, write::SchemaWriteMode};
+use super::{datafusion_utils::Expression, write::SchemaMode};
 use crate::delta_datafusion::{
     expr::fmt_expr_to_sql, physical::MetricObserverExec, DeltaColumn, DeltaSessionContext,
 };
@@ -357,7 +357,7 @@ async fn execute(
         None,
         writer_properties,
         safe_cast,
-        SchemaWriteMode::None,
+        None,
     )
     .await?;
 

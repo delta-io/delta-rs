@@ -90,23 +90,20 @@ impl From<WriteError> for DeltaTableError {
 
 ///Specifies how to handle schema drifts
 #[derive(PartialEq)]
-pub enum SchemaWriteMode {
-    /// Use existing schema and fail if it does not match the new schema
-    None,
+pub enum SchemaMode {
     /// Overwrite the schema with the new schema
     Overwrite,
     /// Append the new schema to the existing schema
     Merge,
 }
 
-impl FromStr for SchemaWriteMode {
+impl FromStr for SchemaMode {
     type Err = DeltaTableError;
 
     fn from_str(s: &str) -> DeltaResult<Self> {
         match s.to_ascii_lowercase().as_str() {
-            "none" => Ok(SchemaWriteMode::None),
-            "overwrite" => Ok(SchemaWriteMode::Overwrite),
-            "merge" => Ok(SchemaWriteMode::Merge),
+            "overwrite" => Ok(SchemaMode::Overwrite),
+            "merge" => Ok(SchemaMode::Merge),
             _ => Err(DeltaTableError::Generic(format!(
                 "Invalid schema write mode provided: {}, only these are supported: ['none', 'overwrite', 'merge']",
                 s
@@ -137,8 +134,8 @@ pub struct WriteBuilder {
     write_batch_size: Option<usize>,
     /// RecordBatches to be written into the table
     batches: Option<Vec<RecordBatch>>,
-    /// whether to overwrite the schema or to merge it
-    schema_write_mode: SchemaWriteMode,
+    /// whether to overwrite the schema or to merge it. None means to fail on schmema drift
+    schema_mode: Option<SchemaMode>,
     /// how to handle cast failures, either return NULL (safe=true) or return ERR (safe=false)
     safe_cast: bool,
     /// Parquet writer properties
@@ -168,7 +165,7 @@ impl WriteBuilder {
             write_batch_size: None,
             batches: None,
             safe_cast: false,
-            schema_write_mode: SchemaWriteMode::None,
+            schema_mode: None,
             writer_properties: None,
             app_metadata: None,
             name: None,
@@ -184,8 +181,8 @@ impl WriteBuilder {
     }
 
     /// Add Schema Write Mode
-    pub fn with_schema_write_mode(mut self, schema_write_mode: SchemaWriteMode) -> Self {
-        self.schema_write_mode = schema_write_mode;
+    pub fn with_schema_mode(mut self, schema_mode: SchemaMode) -> Self {
+        self.schema_mode = Some(schema_mode);
         self
     }
 
@@ -339,13 +336,13 @@ async fn write_execution_plan_with_predicate(
     write_batch_size: Option<usize>,
     writer_properties: Option<WriterProperties>,
     safe_cast: bool,
-    schema_write_mode: SchemaWriteMode,
+    schema_mode: Option<SchemaMode>,
 ) -> DeltaResult<Vec<Action>> {
     let mut schema_action: Option<Action> = None;
     // Use input schema to prevent wrapping partitions columns into a dictionary.
-    let schema: ArrowSchemaRef = if schema_write_mode == SchemaWriteMode::Overwrite {
+    let schema: ArrowSchemaRef = if schema_mode == Some(SchemaMode::Overwrite) {
         plan.schema()
-    } else if schema_write_mode == SchemaWriteMode::Merge {
+    } else if schema_mode == Some(SchemaMode::Merge) {
         let original_schema = snapshot
             .and_then(|s| s.input_schema().ok())
             .unwrap_or(plan.schema());
@@ -452,7 +449,7 @@ pub(crate) async fn write_execution_plan(
     write_batch_size: Option<usize>,
     writer_properties: Option<WriterProperties>,
     safe_cast: bool,
-    schema_write_mode: SchemaWriteMode,
+    schema_mode: Option<SchemaMode>,
 ) -> DeltaResult<Vec<Action>> {
     write_execution_plan_with_predicate(
         None,
@@ -465,7 +462,7 @@ pub(crate) async fn write_execution_plan(
         write_batch_size,
         writer_properties,
         safe_cast,
-        schema_write_mode,
+        schema_mode,
     )
     .await
 }
@@ -513,7 +510,7 @@ async fn execute_non_empty_expr(
         None,
         writer_properties,
         false,
-        SchemaWriteMode::None,
+        None,
     )
     .await?;
 
@@ -624,7 +621,7 @@ impl std::future::IntoFuture for WriteBuilder {
                             .unwrap_or(schema.clone());
 
                         if !can_cast_batch(schema.fields(), table_schema.fields())
-                            && (this.schema_write_mode == SchemaWriteMode::None
+                            && (this.schema_mode == None
                                 && !matches!(this.mode, SaveMode::Overwrite))
                         {
                             return Err(DeltaTableError::Generic(
@@ -703,7 +700,7 @@ impl std::future::IntoFuture for WriteBuilder {
                 this.write_batch_size,
                 this.writer_properties.clone(),
                 this.safe_cast,
-                this.schema_write_mode,
+                this.schema_mode,
             )
             .await?;
             actions.extend(add_actions);

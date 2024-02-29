@@ -1367,7 +1367,7 @@ fn write_to_deltalake(
     data: PyArrowType<ArrowArrayStreamReader>,
     mode: String,
     max_rows_per_group: i64,
-    schema_write_mode: Option<String>,
+    schema_mode: Option<String>,
     partition_by: Option<Vec<String>>,
     predicate: Option<String>,
     name: Option<String>,
@@ -1391,9 +1391,8 @@ fn write_to_deltalake(
         .write(batches)
         .with_save_mode(save_mode)
         .with_write_batch_size(max_rows_per_group as usize);
-    if let Some(schema_write_mode) = schema_write_mode {
-        builder =
-            builder.with_schema_write_mode(schema_write_mode.parse().map_err(PythonError::from)?);
+    if let Some(schema_mode) = schema_mode {
+        builder = builder.with_schema_mode(schema_mode.parse().map_err(PythonError::from)?);
     }
     if let Some(partition_columns) = partition_by {
         builder = builder.with_partition_columns(partition_columns);

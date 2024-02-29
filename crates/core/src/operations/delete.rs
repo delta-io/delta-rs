@@ -37,7 +37,7 @@ use serde_json::Value;
 
 use super::datafusion_utils::Expression;
 use super::transaction::PROTOCOL;
-use super::write::SchemaWriteMode;
+use super::write::SchemaMode;
 use crate::delta_datafusion::expr::fmt_expr_to_sql;
 use crate::delta_datafusion::{find_files, register_store, DeltaScanBuilder, DeltaSessionContext};
 use crate::errors::DeltaResult;
@@ -169,7 +169,7 @@ async fn excute_non_empty_expr(
         None,
         writer_properties,
         false,
-        SchemaWriteMode::None,
+        None,
     )
     .await?
     .into_iter()
