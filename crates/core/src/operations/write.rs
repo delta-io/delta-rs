@@ -307,8 +307,8 @@ async fn write_execution_plan_with_predicate(
     plan: Arc<dyn ExecutionPlan>,
     partition_columns: Vec<String>,
     object_store: ObjectStoreRef,
-    target_file_size: Option<usize>,
-    write_batch_size: Option<usize>,
+    target_file_size: Option<usize>,  // TODO: Implement this in Record Batch Writer
+    write_batch_size: Option<usize>, // TODO: Implement this in Record Batch Writer
     writer_properties: Option<WriterProperties>,
     safe_cast: bool,
     overwrite_schema: bool,
@@ -643,7 +643,7 @@ impl std::future::IntoFuture for WriteBuilder {
                 this.overwrite_schema,
             )
             .await?;
-            actions.extend(add_actions.into_iter());
+            actions.extend(add_actions);
 
             // Collect remove actions if we are overwriting the table
             if let Some(snapshot) = &this.snapshot {

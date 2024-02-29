@@ -451,7 +451,6 @@ impl MergePlan {
             Some(
                 partition_values
                     .keys()
-                    .into_iter()
                     .map(|s| s.to_owned())
                     .collect_vec(),
             ),

@@ -24,7 +24,7 @@ use super::utils::{
 };
 use super::{DeltaWriter, DeltaWriterError, WriteMode};
 use crate::errors::DeltaTableError;
-use crate::kernel::{Action, Add, PartitionsExt, Scalar, StructType};
+use crate::kernel::{Action, PartitionsExt, Scalar, StructType};
 use crate::table::builder::DeltaTableBuilder;
 use crate::writer::utils::ShareableBuffer;
 use crate::DeltaTable;
@@ -469,7 +469,15 @@ mod tests {
 
         writer.write(vec![data]).await.unwrap();
         let add_actions = writer.flush().await.unwrap();
-        let add = &add_actions[0];
+        let action = &add_actions[0];
+        let add = match action {
+            Action::Add(add) => {
+                add
+            }
+            _ => {
+                assert!(false, "Expected Add action");
+            }
+        };
         let path = table_dir.path().join(&add.path);
 
         let file = File::open(path.as_path()).unwrap();

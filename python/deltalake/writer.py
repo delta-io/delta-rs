@@ -311,8 +311,7 @@ def write_deltalake(
             writer_properties=(
                 writer_properties._to_dict() if writer_properties else None
             ),
-            custom_metadata=custom_metadata,
-            data_arrow_schema=schema
+            custom_metadata=custom_metadata
         )
         if table:
             table.update_incremental()

@@ -7,7 +7,7 @@ use parquet::errors::ParquetError;
 use serde_json::Value;
 
 use crate::errors::DeltaTableError;
-use crate::kernel::{Action, Add};
+use crate::kernel::{Action};
 use crate::operations::transaction::commit;
 use crate::protocol::{ColumnCountStat, DeltaOperation, SaveMode};
 use crate::DeltaTable;
