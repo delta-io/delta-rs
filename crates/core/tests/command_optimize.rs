@@ -416,7 +416,6 @@ async fn test_commit_interval() -> Result<(), Box<dyn Error>> {
 }
 
 #[tokio::test]
-#[ignore]
 /// Validate that bin packing is idempotent.
 async fn test_idempotent() -> Result<(), Box<dyn Error>> {
     //TODO: Compression makes it hard to get the target file size...
