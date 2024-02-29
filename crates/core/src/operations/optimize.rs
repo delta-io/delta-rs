@@ -40,7 +40,6 @@ use serde::{Deserialize, Serialize};
 use tracing::debug;
 
 use super::transaction::{commit, PROTOCOL};
-use super::writer::{PartitionWriter, PartitionWriterConfig};
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::{Action, PartitionsExt, Remove, Scalar};
 use crate::logstore::LogStoreRef;
@@ -48,6 +47,7 @@ use crate::protocol::DeltaOperation;
 use crate::storage::ObjectStoreRef;
 use crate::table::state::DeltaTableState;
 use crate::writer::utils::arrow_schema_without_partitions;
+use crate::writer::{DeltaWriter, RecordBatchWriter};
 use crate::{crate_version, DeltaTable, ObjectMeta, PartitionFilter};
 
 /// Metrics from Optimize
@@ -443,14 +443,9 @@ impl MergePlan {
         };
 
         // Next, initialize the writer
-        let writer_config = PartitionWriterConfig::try_new(
-            task_parameters.file_schema.clone(),
-            partition_values.clone(),
-            Some(task_parameters.writer_properties.clone()),
-            Some(task_parameters.input_parameters.target_size as usize),
-            None,
-        )?;
-        let mut writer = PartitionWriter::try_with_config(object_store, writer_config)?;
+        // TODO: task_parameters.input_parameters.target_size in RecordBatchWriter::for_storage
+        let mut writer = RecordBatchWriter::for_storage(object_store, task_parameters.writer_properties.clone(), 
+        task_parameters.file_schema.clone(), Some(partition_values.keys().into_iter().map(|s|s.to_owned()).collect_vec()))?;
 
         let mut read_stream = read_stream.await?;
 
@@ -460,21 +455,25 @@ impl MergePlan {
             batch =
                 super::cast::cast_record_batch(&batch, task_parameters.file_schema.clone(), false)?;
             partial_metrics.num_batches += 1;
-            writer.write(&batch).await.map_err(DeltaTableError::from)?;
+            writer.write(batch).await.map_err(DeltaTableError::from)?;
         }
 
-        let add_actions = writer.close().await?.into_iter().map(|mut add| {
-            add.data_change = false;
-
-            let size = add.size;
-
-            partial_metrics.num_files_added += 1;
-            partial_metrics.files_added.total_files += 1;
-            partial_metrics.files_added.total_size += size;
-            partial_metrics.files_added.max = std::cmp::max(partial_metrics.files_added.max, size);
-            partial_metrics.files_added.min = std::cmp::min(partial_metrics.files_added.min, size);
-
-            Action::Add(add)
+        let add_actions = writer.flush().await?.into_iter().map(|mut action| {
+            match &mut action {
+                Action::Add(add) => {
+                    // add.partition_values = partition_values.into(); TODO: Required?
+                    add.data_change = false;
+                    let size = add.size;
+        
+                    partial_metrics.num_files_added += 1;
+                    partial_metrics.files_added.total_files += 1;
+                    partial_metrics.files_added.total_size += size;
+                    partial_metrics.files_added.max = std::cmp::max(partial_metrics.files_added.max, size);
+                    partial_metrics.files_added.min = std::cmp::min(partial_metrics.files_added.min, size);
+                    Action::Add(add.clone())
+                }
+                o => o.clone()
+            }
         });
         partial_actions.extend(add_actions);
 

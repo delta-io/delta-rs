@@ -42,6 +42,7 @@ use deltalake::parquet::errors::ParquetError;
 use deltalake::parquet::file::properties::WriterProperties;
 use deltalake::partitions::PartitionFilter;
 use deltalake::protocol::{DeltaOperation, SaveMode};
+use deltalake::writer::RecordBatchWriter;
 use deltalake::DeltaTableBuilder;
 use deltalake::{DeltaOps, DeltaResult};
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
@@ -1376,8 +1377,12 @@ fn write_to_deltalake(
     storage_options: Option<HashMap<String, String>>,
     writer_properties: Option<HashMap<String, Option<String>>>,
     custom_metadata: Option<HashMap<String, String>>,
+    data_arrow_schema: PyArrowType<ArrowSchema>
 ) -> PyResult<()> {
     let batches = data.0.map(|batch| batch.unwrap()).collect::<Vec<_>>();
+
+
+
     let save_mode = mode.parse().map_err(PythonError::from)?;
 
     let options = storage_options.clone().unwrap_or_default();

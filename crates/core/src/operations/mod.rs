@@ -50,7 +50,6 @@ pub mod merge;
 pub mod update;
 #[cfg(feature = "datafusion")]
 pub mod write;
-pub mod writer;
 
 // TODO make ops consume a snapshot ...
 

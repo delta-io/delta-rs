@@ -24,7 +24,7 @@ use super::utils::{
 };
 use super::{DeltaWriter, DeltaWriterError, WriteMode};
 use crate::errors::DeltaTableError;
-use crate::kernel::{Add, PartitionsExt, Scalar, StructType};
+use crate::kernel::{Action, Add, PartitionsExt, Scalar, StructType};
 use crate::table::builder::DeltaTableBuilder;
 use crate::writer::utils::ShareableBuffer;
 use crate::DeltaTable;
@@ -347,7 +347,7 @@ impl DeltaWriter<Vec<Value>> for JsonWriter {
     }
 
     /// Writes the existing parquet bytes to storage and resets internal state to handle another file.
-    async fn flush(&mut self) -> Result<Vec<Add>, DeltaTableError> {
+    async fn flush(&mut self) -> Result<Vec<Action>, DeltaTableError> {
         let writers = std::mem::take(&mut self.arrow_writers);
         let mut actions = Vec::new();
 
@@ -362,12 +362,12 @@ impl DeltaWriter<Vec<Value>> for JsonWriter {
             let file_size = obj_bytes.len() as i64;
             self.storage.put(&path, obj_bytes).await?;
 
-            actions.push(create_add(
+            actions.push(Action::Add(create_add(
                 &writer.partition_values,
                 path.to_string(),
                 file_size,
                 &metadata,
-            )?);
+            )?));
         }
         Ok(actions)
     }

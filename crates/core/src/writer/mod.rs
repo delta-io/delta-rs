@@ -146,12 +146,12 @@ pub trait DeltaWriter<T> {
 
     /// Flush the internal write buffers to files in the delta table folder structure.
     /// The corresponding delta [`Add`] actions are returned and should be committed via a transaction.
-    async fn flush(&mut self) -> Result<Vec<Add>, DeltaTableError>;
+    async fn flush(&mut self) -> Result<Vec<Action>, DeltaTableError>;
 
     /// Flush the internal write buffers to files in the delta table folder structure.
     /// and commit the changes to the Delta log, creating a new table version.
     async fn flush_and_commit(&mut self, table: &mut DeltaTable) -> Result<i64, DeltaTableError> {
-        let adds: Vec<_> = self.flush().await?.drain(..).map(Action::Add).collect();
+        let adds: Vec<_> = self.flush().await?.drain(..).collect();
         flush_and_commit(adds, table).await
     }
 }

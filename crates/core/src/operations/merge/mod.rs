@@ -1385,7 +1385,7 @@ async fn execute(
 
     metrics.rewrite_time_ms = Instant::now().duration_since(rewrite_start).as_millis() as u64;
 
-    let mut actions: Vec<Action> = add_actions.into_iter().map(Action::Add).collect();
+    let mut actions: Vec<Action> = add_actions.clone();
     metrics.num_target_files_added = actions.len();
 
     let survivors = barrier

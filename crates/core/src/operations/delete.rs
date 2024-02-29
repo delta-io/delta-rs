@@ -131,7 +131,7 @@ async fn excute_non_empty_expr(
     metrics: &mut DeleteMetrics,
     rewrite: &[Add],
     writer_properties: Option<WriterProperties>,
-) -> DeltaResult<Vec<Add>> {
+) -> DeltaResult<Vec<Action>> {
     // For each identified file perform a parquet scan + filter + limit (1) + count.
     // If returned count is not zero then append the file to be rewritten and removed from the log. Otherwise do nothing to the file.
 
@@ -222,7 +222,7 @@ async fn execute(
         .unwrap()
         .as_millis() as i64;
 
-    let mut actions: Vec<Action> = add.into_iter().map(Action::Add).collect();
+    let mut actions: Vec<Action> = add.clone();
     let mut version = snapshot.version();
     metrics.num_removed_files = remove.len();
     metrics.num_added_files = actions.len();

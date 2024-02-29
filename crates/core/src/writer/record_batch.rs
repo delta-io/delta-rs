@@ -79,6 +79,23 @@ impl RecordBatchWriter {
         })
     }
 
+    pub fn for_storage(
+        storage: Arc<dyn ObjectStore>,
+        writer_properties: WriterProperties,
+        schema: ArrowSchemaRef,
+        partition_columns: Option<Vec<String>>,
+    ) -> Result<Self, DeltaTableError> {
+        Ok(Self {
+            storage,
+            arrow_schema_ref: schema.clone(),
+            original_schema_ref: schema,
+            writer_properties,
+            partition_columns: partition_columns.unwrap_or_default(),
+            should_evolve: false,
+            arrow_writers: HashMap::new(),
+        })
+    }
+
     /// Creates a [`RecordBatchWriter`] to write data to provided Delta Table
     pub fn for_table(table: &DeltaTable) -> Result<Self, DeltaTableError> {
         // Initialize an arrow schema ref from the delta table schema
@@ -204,9 +221,10 @@ impl DeltaWriter<RecordBatch> for RecordBatchWriter {
     }
 
     /// Writes the existing parquet bytes to storage and resets internal state to handle another file.
-    async fn flush(&mut self) -> Result<Vec<Add>, DeltaTableError> {
+    async fn flush(&mut self) -> Result<Vec<Action>, DeltaTableError> {
+        use crate::kernel::{Metadata, StructType};
         let writers = std::mem::take(&mut self.arrow_writers);
-        let mut actions = Vec::new();
+        let mut actions: Vec<Action> = Vec::new();
 
         for (_, writer) in writers {
             let metadata = writer.arrow_writer.close()?;
@@ -217,32 +235,25 @@ impl DeltaWriter<RecordBatch> for RecordBatchWriter {
             let file_size = obj_bytes.len() as i64;
             self.storage.put(&path, obj_bytes).await?;
 
-            actions.push(create_add(
+            actions.push(Action::Add(create_add(
                 &writer.partition_values,
                 path.to_string(),
                 file_size,
                 &metadata,
-            )?);
+            )?));
         }
-        Ok(actions)
-    }
-
-    /// Flush the internal write buffers to files in the delta table folder structure.
-    /// and commit the changes to the Delta log, creating a new table version.
-    async fn flush_and_commit(&mut self, table: &mut DeltaTable) -> Result<i64, DeltaTableError> {
-        use crate::kernel::{Metadata, StructType};
-        let mut adds: Vec<Action> = self.flush().await?.drain(..).map(Action::Add).collect();
-
+        
         if self.arrow_schema_ref != self.original_schema_ref && self.should_evolve {
             let schema: StructType = self.arrow_schema_ref.clone().try_into()?;
             // TODO: Handle partition columns somehow? Can we even evolve partition columns? Maybe
             // this should just propagate the existing columns in the new action
             let part_cols: Vec<String> = vec![];
             let metadata = Metadata::try_new(schema, part_cols, HashMap::new())?;
-            adds.push(Action::Metadata(metadata));
+            actions.push(Action::Metadata(metadata));
         }
-        super::flush_and_commit(adds, table).await
+        Ok(actions)
     }
+
 }
 
 /// Helper container for partitioned record batches

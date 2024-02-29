@@ -43,7 +43,6 @@ use parquet::file::properties::WriterProperties;
 
 use super::datafusion_utils::Expression;
 use super::transaction::PROTOCOL;
-use super::writer::{DeltaWriter, WriterConfig};
 use super::{transaction::commit, CreateBuilder};
 use crate::delta_datafusion::expr::fmt_expr_to_sql;
 use crate::delta_datafusion::expr::parse_predicate_expression;
@@ -57,6 +56,7 @@ use crate::storage::ObjectStoreRef;
 use crate::table::state::DeltaTableState;
 use crate::table::Constraint as DeltaConstraint;
 use crate::writer::record_batch::divide_by_partition_values;
+use crate::writer::{DeltaWriter, RecordBatchWriter};
 use crate::DeltaTable;
 
 #[derive(thiserror::Error, Debug)]
@@ -312,7 +312,7 @@ async fn write_execution_plan_with_predicate(
     writer_properties: Option<WriterProperties>,
     safe_cast: bool,
     overwrite_schema: bool,
-) -> DeltaResult<Vec<Add>> {
+) -> DeltaResult<Vec<Action>> {
     // Use input schema to prevent wrapping partitions columns into a dictionary.
     let schema: ArrowSchemaRef = if overwrite_schema {
         plan.schema()
@@ -342,26 +342,21 @@ async fn write_execution_plan_with_predicate(
         let inner_plan = plan.clone();
         let inner_schema = schema.clone();
         let task_ctx = Arc::new(TaskContext::from(&state));
-        let config = WriterConfig::new(
-            inner_schema.clone(),
-            partition_columns.clone(),
-            writer_properties.clone(),
-            target_file_size,
-            write_batch_size,
-        );
-        let mut writer = DeltaWriter::new(object_store.clone(), config);
+        
+        let mut writer = RecordBatchWriter::for_storage(object_store.clone(), 
+            writer_properties.clone().unwrap_or_default(), inner_schema.clone(), Some(partition_columns.clone()))?;
         let checker_stream = checker.clone();
         let mut stream = inner_plan.execute(i, task_ctx)?;
-        let handle: tokio::task::JoinHandle<DeltaResult<Vec<Add>>> =
+        let handle: tokio::task::JoinHandle<DeltaResult<Vec<Action>>> =
             tokio::task::spawn(async move {
                 while let Some(maybe_batch) = stream.next().await {
                     let batch = maybe_batch?;
                     checker_stream.check_batch(&batch).await?;
                     let arr =
                         super::cast::cast_record_batch(&batch, inner_schema.clone(), safe_cast)?;
-                    writer.write(&arr).await?;
+                    writer.write(arr).await?;
                 }
-                writer.close().await
+                writer.flush().await
             });
 
         tasks.push(handle);
@@ -392,7 +387,7 @@ pub(crate) async fn write_execution_plan(
     writer_properties: Option<WriterProperties>,
     safe_cast: bool,
     overwrite_schema: bool,
-) -> DeltaResult<Vec<Add>> {
+) -> DeltaResult<Vec<Action>> {
     write_execution_plan_with_predicate(
         None,
         snapshot,
@@ -417,7 +412,7 @@ async fn execute_non_empty_expr(
     expression: &Expr,
     rewrite: &[Add],
     writer_properties: Option<WriterProperties>,
-) -> DeltaResult<Vec<Add>> {
+) -> DeltaResult<Vec<Action>> {
     // For each identified file perform a parquet scan + filter + limit (1) + count.
     // If returned count is not zero then append the file to be rewritten and removed from the log. Otherwise do nothing to the file.
 
@@ -488,7 +483,7 @@ async fn prepare_predicate_actions(
     };
     let remove = candidates.candidates;
 
-    let mut actions: Vec<Action> = add.into_iter().map(Action::Add).collect();
+    let mut actions: Vec<Action> = add.clone();
 
     for action in remove {
         actions.push(Action::Remove(Remove {
@@ -644,7 +639,7 @@ impl std::future::IntoFuture for WriteBuilder {
                 this.overwrite_schema,
             )
             .await?;
-            actions.extend(add_actions.into_iter().map(Action::Add));
+            actions.extend(add_actions.into_iter());
 
             // Collect remove actions if we are overwriting the table
             if let Some(snapshot) = &this.snapshot {
