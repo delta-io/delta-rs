@@ -79,6 +79,7 @@ impl RecordBatchWriter {
         })
     }
 
+    /// Create a new [`RecordBatchWriter`] instance for a given storage and writer_properties
     pub fn for_storage(
         storage: Arc<dyn ObjectStore>,
         writer_properties: WriterProperties,
