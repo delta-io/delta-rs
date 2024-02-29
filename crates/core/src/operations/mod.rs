@@ -18,6 +18,7 @@ use std::collections::HashMap;
 pub mod cast;
 pub mod convert_to_delta;
 pub mod create;
+pub mod drop_constraints;
 pub mod filesystem_check;
 pub mod optimize;
 pub mod restore;
@@ -27,7 +28,8 @@ pub mod vacuum;
 #[cfg(feature = "datafusion")]
 use self::{
     constraints::ConstraintBuilder, datafusion_utils::Expression, delete::DeleteBuilder,
-    load::LoadBuilder, merge::MergeBuilder, update::UpdateBuilder, write::WriteBuilder,
+    drop_constraints::DropConstraintBuilder, load::LoadBuilder, merge::MergeBuilder,
+    update::UpdateBuilder, write::WriteBuilder,
 };
 #[cfg(feature = "datafusion")]
 pub use ::datafusion::physical_plan::common::collect as collect_sendable_stream;
@@ -198,6 +200,13 @@ impl DeltaOps {
     #[must_use]
     pub fn add_constraint(self) -> ConstraintBuilder {
         ConstraintBuilder::new(self.0.log_store, self.0.state.unwrap())
+    }
+
+    /// Drops constraints from a table
+    #[cfg(feature = "datafusion")]
+    #[must_use]
+    pub fn drop_constraints(self) -> DropConstraintBuilder {
+        DropConstraintBuilder::new(self.0.log_store, self.0.state.unwrap())
     }
 }
 

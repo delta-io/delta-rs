@@ -261,7 +261,7 @@ def write_deltalake(
         partition_by = [partition_by]
 
     if isinstance(schema, DeltaSchema):
-        schema = schema.to_pyarrow()
+        schema = schema.to_pyarrow(as_large_types=True)
 
     if isinstance(data, RecordBatchReader):
         data = convert_pyarrow_recordbatchreader(data, large_dtypes)
@@ -320,9 +320,13 @@ def write_deltalake(
         # We need to write against the latest table version
         filesystem = pa_fs.PyFileSystem(DeltaStorageHandler(table_uri, storage_options))
 
+        def sort_arrow_schema(schema: pa.schema) -> pa.schema:
+            sorted_cols = sorted(iter(schema), key=lambda x: (x.name, str(x.type)))
+            return pa.schema(sorted_cols)
+
         if table:  # already exists
-            if schema != table.schema().to_pyarrow(
-                as_large_types=large_dtypes
+            if sort_arrow_schema(schema) != sort_arrow_schema(
+                table.schema().to_pyarrow(as_large_types=large_dtypes)
             ) and not (mode == "overwrite" and overwrite_schema):
                 raise ValueError(
                     "Schema of data does not match table schema\n"
