@@ -342,9 +342,13 @@ async fn write_execution_plan_with_predicate(
         let inner_plan = plan.clone();
         let inner_schema = schema.clone();
         let task_ctx = Arc::new(TaskContext::from(&state));
-        
-        let mut writer = RecordBatchWriter::for_storage(object_store.clone(), 
-            writer_properties.clone().unwrap_or_default(), inner_schema.clone(), Some(partition_columns.clone()))?;
+
+        let mut writer = RecordBatchWriter::for_storage(
+            object_store.clone(),
+            writer_properties.clone().unwrap_or_default(),
+            inner_schema.clone(),
+            Some(partition_columns.clone()),
+        )?;
         let checker_stream = checker.clone();
         let mut stream = inner_plan.execute(i, task_ctx)?;
         let handle: tokio::task::JoinHandle<DeltaResult<Vec<Action>>> =

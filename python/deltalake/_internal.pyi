@@ -181,8 +181,7 @@ def write_to_deltalake(
     configuration: Optional[Mapping[str, Optional[str]]],
     storage_options: Optional[Dict[str, str]],
     writer_properties: Optional[Dict[str, Optional[str]]],
-    custom_metadata: Optional[Dict[str, str]],
-    data_arrow_schema: pyarrow.Schema
+    custom_metadata: Optional[Dict[str, str]]
 ) -> None: ...
 def convert_to_deltalake(
     uri: str,

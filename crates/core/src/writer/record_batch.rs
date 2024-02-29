@@ -243,7 +243,7 @@ impl DeltaWriter<RecordBatch> for RecordBatchWriter {
                 &metadata,
             )?));
         }
-        
+
         if self.arrow_schema_ref != self.original_schema_ref && self.should_evolve {
             let schema: StructType = self.arrow_schema_ref.clone().try_into()?;
             // TODO: Handle partition columns somehow? Can we even evolve partition columns? Maybe
@@ -254,7 +254,6 @@ impl DeltaWriter<RecordBatch> for RecordBatchWriter {
         }
         Ok(actions)
     }
-
 }
 
 /// Helper container for partitioned record batches

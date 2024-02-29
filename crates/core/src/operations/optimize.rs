@@ -444,8 +444,18 @@ impl MergePlan {
 
         // Next, initialize the writer
         // TODO: task_parameters.input_parameters.target_size in RecordBatchWriter::for_storage
-        let mut writer = RecordBatchWriter::for_storage(object_store, task_parameters.writer_properties.clone(), 
-        task_parameters.file_schema.clone(), Some(partition_values.keys().into_iter().map(|s|s.to_owned()).collect_vec()))?;
+        let mut writer = RecordBatchWriter::for_storage(
+            object_store,
+            task_parameters.writer_properties.clone(),
+            task_parameters.file_schema.clone(),
+            Some(
+                partition_values
+                    .keys()
+                    .into_iter()
+                    .map(|s| s.to_owned())
+                    .collect_vec(),
+            ),
+        )?;
 
         let mut read_stream = read_stream.await?;
 
@@ -464,15 +474,17 @@ impl MergePlan {
                     // add.partition_values = partition_values.into(); TODO: Required?
                     add.data_change = false;
                     let size = add.size;
-        
+
                     partial_metrics.num_files_added += 1;
                     partial_metrics.files_added.total_files += 1;
                     partial_metrics.files_added.total_size += size;
-                    partial_metrics.files_added.max = std::cmp::max(partial_metrics.files_added.max, size);
-                    partial_metrics.files_added.min = std::cmp::min(partial_metrics.files_added.min, size);
+                    partial_metrics.files_added.max =
+                        std::cmp::max(partial_metrics.files_added.max, size);
+                    partial_metrics.files_added.min =
+                        std::cmp::min(partial_metrics.files_added.min, size);
                     Action::Add(add.clone())
                 }
-                o => o.clone()
+                o => o.clone(),
             }
         });
         partial_actions.extend(add_actions);

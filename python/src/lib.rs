@@ -1375,11 +1375,9 @@ fn write_to_deltalake(
     configuration: Option<HashMap<String, Option<String>>>,
     storage_options: Option<HashMap<String, String>>,
     writer_properties: Option<HashMap<String, Option<String>>>,
-    custom_metadata: Option<HashMap<String, String>>
+    custom_metadata: Option<HashMap<String, String>>,
 ) -> PyResult<()> {
     let batches = data.0.map(|batch| batch.unwrap()).collect::<Vec<_>>();
-
-
 
     let save_mode = mode.parse().map_err(PythonError::from)?;
 
