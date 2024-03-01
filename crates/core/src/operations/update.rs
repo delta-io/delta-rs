@@ -43,9 +43,9 @@ use parquet::file::properties::WriterProperties;
 use serde::Serialize;
 use serde_json::Value;
 
+use super::datafusion_utils::Expression;
 use super::transaction::{commit, PROTOCOL};
 use super::write::write_execution_plan;
-use super::datafusion_utils::Expression;
 use crate::delta_datafusion::{
     expr::fmt_expr_to_sql, physical::MetricObserverExec, DeltaColumn, DeltaSessionContext,
 };

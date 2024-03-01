@@ -408,8 +408,12 @@ async fn write_execution_plan_with_predicate(
                 while let Some(maybe_batch) = stream.next().await {
                     let batch = maybe_batch?;
                     checker_stream.check_batch(&batch).await?;
-                    let arr =
-                        super::cast::cast_record_batch(&batch, inner_schema.clone(), safe_cast, schema_mode == Some(SchemaMode::Merge))?;
+                    let arr = super::cast::cast_record_batch(
+                        &batch,
+                        inner_schema.clone(),
+                        safe_cast,
+                        schema_mode == Some(SchemaMode::Merge),
+                    )?;
                     writer.write(&arr).await?;
                 }
                 let add_actions = writer.close().await;
@@ -1072,11 +1076,7 @@ mod tests {
                 new_schema_builder.push(field.clone());
             }
         }
-        new_schema_builder.push(Field::new(
-            "inserted_by",
-            DataType::Utf8,
-            true,
-        ));
+        new_schema_builder.push(Field::new("inserted_by", DataType::Utf8, true));
         let new_schema = new_schema_builder.finish();
         let new_fields = new_schema.fields();
         let new_names = new_fields.iter().map(|f| f.name()).collect::<Vec<_>>();
@@ -1101,8 +1101,9 @@ mod tests {
                 Arc::new(batch.column_by_name("value").unwrap().clone()),
                 Arc::new(inserted_by),
             ],
-        ).unwrap();
-        
+        )
+        .unwrap();
+
         let table = DeltaOps(table)
             .write(vec![new_batch])
             .with_save_mode(SaveMode::Append)
