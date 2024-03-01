@@ -29,7 +29,7 @@ pub(crate) fn merge_schema(
                 }
                 if let Dictionary(_, value_type) = field.data_type()  {
                     if value_type.equals_datatype(right_field.data_type()) {
-                        return Ok(right_field.as_ref().clone());
+                        return Ok(right_field.clone());
                     }
                 }
                 let mut new_field = field.as_ref().clone();

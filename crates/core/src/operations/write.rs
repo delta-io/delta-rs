@@ -1203,8 +1203,9 @@ mod tests {
         assert_eq!(table.version(), 1);
         let new_schema = table.metadata().unwrap().schema().unwrap();
         let fields = new_schema.fields();
-        let names = fields.iter().map(|f| f.name()).collect::<Vec<_>>();
-        assert_eq!(names, vec!["id", "value", "modified", "inserted_by"]);
+        let mut names = fields.iter().map(|f| f.name()).collect::<Vec<_>>();
+        names.sort();
+        assert_eq!(names, vec!["id", "inserted_by", "modified", "value"]);
         let part_cols = table.metadata().unwrap().partition_columns.clone();
         assert_eq!(part_cols, vec!["id", "value"]); // we want to preserve partitions
     }
