@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use crate::DeltaResult;
 
-fn merge_schema(left: ArrowSchemaRef, right: ArrowSchemaRef) -> DeltaResult<ArrowSchemaRef> {
+pub (crate) fn merge_schema(left: ArrowSchemaRef, right: ArrowSchemaRef) -> DeltaResult<ArrowSchemaRef> {
     let fields = left
         .fields()
         .iter()
