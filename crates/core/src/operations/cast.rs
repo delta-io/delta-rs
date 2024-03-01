@@ -18,15 +18,14 @@ fn cast_struct(
         .iter()
         .map(|field| {
             let col_or_not = struct_array.column_by_name(field.name());
-            match col_or_not {                
-                None => 
-                    match add_missing {
-                        true => Ok(new_null_array(field.data_type(), struct_array.len())),
-                        false => Err(arrow_schema::ArrowError::SchemaError(format!(
-                            "Could not find column {0}",
-                            field.name()
-                        ))),
-                    }
+            match col_or_not {
+                None => match add_missing {
+                    true => Ok(new_null_array(field.data_type(), struct_array.len())),
+                    false => Err(arrow_schema::ArrowError::SchemaError(format!(
+                        "Could not find column {0}",
+                        field.name()
+                    ))),
+                },
                 Some(col) => {
                     if let (DataType::Struct(_), DataType::Struct(child_fields)) =
                         (col.data_type(), field.data_type())

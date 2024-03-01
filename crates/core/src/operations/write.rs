@@ -337,7 +337,7 @@ async fn write_execution_plan_with_predicate(
     write_batch_size: Option<usize>,
     writer_properties: Option<WriterProperties>,
     safe_cast: bool,
-    schema_mode: Option<SchemaMode>
+    schema_mode: Option<SchemaMode>,
 ) -> DeltaResult<Vec<Action>> {
     let schema: ArrowSchemaRef = if schema_mode == Some(SchemaMode::Overwrite) {
         plan.schema()
@@ -424,7 +424,7 @@ pub(crate) async fn write_execution_plan(
     write_batch_size: Option<usize>,
     writer_properties: Option<WriterProperties>,
     safe_cast: bool,
-    schema_mode: Option<SchemaMode>
+    schema_mode: Option<SchemaMode>,
 ) -> DeltaResult<Vec<Action>> {
     write_execution_plan_with_predicate(
         None,
@@ -437,7 +437,7 @@ pub(crate) async fn write_execution_plan(
         write_batch_size,
         writer_properties,
         safe_cast,
-        schema_mode
+        schema_mode,
     )
     .await
 }
@@ -579,10 +579,9 @@ impl std::future::IntoFuture for WriteBuilder {
             } else {
                 Ok(this.partition_columns.unwrap_or_default())
             }?;
-            
-            
+
             let plan = if let Some(plan) = this.input {
-                if this.schema_mode == Some(SchemaMode::Merge)  {
+                if this.schema_mode == Some(SchemaMode::Merge) {
                     return Err(DeltaTableError::Generic(
                         "Schema merge not supported yet for Datafusion".to_string(),
                     ));
@@ -593,7 +592,7 @@ impl std::future::IntoFuture for WriteBuilder {
                     Err(WriteError::MissingData)
                 } else {
                     let schema = batches[0].schema();
-                    
+
                     let mut new_schema = None;
                     if let Some(snapshot) = &this.snapshot {
                         let table_schema = snapshot
@@ -601,7 +600,7 @@ impl std::future::IntoFuture for WriteBuilder {
                             .await
                             .or_else(|_| snapshot.arrow_schema())
                             .unwrap_or(schema.clone());
-                        if this.schema_mode == Some(SchemaMode::Merge)  {
+                        if this.schema_mode == Some(SchemaMode::Merge) {
                             new_schema = Some(Arc::new(arrow_schema::Schema::try_merge(vec![
                                 table_schema.as_ref().clone(),
                                 schema.as_ref().clone(),
@@ -627,7 +626,7 @@ impl std::future::IntoFuture for WriteBuilder {
                                 }
                                 None => batch,
                             };
-                            
+
                             println!("before divide_by_partition_values {:?}", schema);
                             let divided = divide_by_partition_values(
                                 schema.clone(),
@@ -658,7 +657,9 @@ impl std::future::IntoFuture for WriteBuilder {
                 Err(WriteError::MissingData)
             }?;
             let schema = plan.schema();
-            if this.schema_mode == Some(SchemaMode::Merge) ||  (this.schema_mode == Some(SchemaMode::Overwrite) && this.mode != SaveMode::Overwrite)
+            if this.schema_mode == Some(SchemaMode::Merge)
+                || (this.schema_mode == Some(SchemaMode::Overwrite)
+                    && this.mode != SaveMode::Overwrite)
             {
                 if let Some(snapshot) = &this.snapshot {
                     let table_schema = snapshot
@@ -714,7 +715,7 @@ impl std::future::IntoFuture for WriteBuilder {
                 this.write_batch_size,
                 this.writer_properties.clone(),
                 this.safe_cast,
-                this.schema_mode
+                this.schema_mode,
             )
             .await?;
             actions.extend(add_actions);
