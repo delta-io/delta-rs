@@ -4,9 +4,9 @@ use arrow_array::{new_null_array, Array, ArrayRef, RecordBatch, StructArray};
 use arrow_cast::{cast_with_options, CastOptions};
 use arrow_schema::{
     ArrowError, DataType, Field as ArrowField, Fields, Schema as ArrowSchema,
-    SchemaRef as ArrowSchemaRef,
+    SchemaRef as ArrowSchemaRef
 };
-
+use arrow::datatypes::DataType::Dictionary;
 use std::sync::Arc;
 
 use crate::DeltaResult;
@@ -21,8 +21,16 @@ pub(crate) fn merge_schema(
         .map(|field| {
             let right_field = right.field_with_name(field.name());
             if let Ok(right_field) = right_field {
+                if let Dictionary(_, value_type) = right_field.data_type()  {
+                    if value_type.equals_datatype(field.data_type()) {
+                        return Ok(field.as_ref().clone());
+                    }
+                }
                 let mut new_field = field.as_ref().clone();
-                new_field.try_merge(right_field)?;
+                let merge_res = new_field.try_merge(right_field);
+                if let Err(e) = merge_res {
+                    return Err(e);
+                }
                 Ok(new_field)
             } else {
                 Ok(field.as_ref().clone())
