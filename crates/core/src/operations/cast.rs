@@ -2,13 +2,19 @@
 //!
 use arrow_array::{new_null_array, Array, ArrayRef, RecordBatch, StructArray};
 use arrow_cast::{cast_with_options, CastOptions};
-use arrow_schema::{ArrowError, Field as ArrowField, DataType, Fields, Schema as ArrowSchema, SchemaRef as ArrowSchemaRef};
+use arrow_schema::{
+    ArrowError, DataType, Field as ArrowField, Fields, Schema as ArrowSchema,
+    SchemaRef as ArrowSchemaRef,
+};
 
 use std::sync::Arc;
 
 use crate::DeltaResult;
 
-pub (crate) fn merge_schema(left: ArrowSchema, right: ArrowSchema) -> Result<ArrowSchema, ArrowError> {
+pub(crate) fn merge_schema(
+    left: ArrowSchema,
+    right: ArrowSchema,
+) -> Result<ArrowSchema, ArrowError> {
     let left_fields: Result<Vec<ArrowField>, ArrowError> = left
         .fields()
         .iter()
@@ -16,13 +22,11 @@ pub (crate) fn merge_schema(left: ArrowSchema, right: ArrowSchema) -> Result<Arr
             let right_field = right.field_with_name(field.name());
             if let Ok(right_field) = right_field {
                 let mut new_field = field.as_ref().clone();
-                new_field.try_merge(right_field)?;                
+                new_field.try_merge(right_field)?;
                 Ok(new_field)
-            } 
-            else {
-                Ok(field.as_ref().clone())           
+            } else {
+                Ok(field.as_ref().clone())
             }
-            
         })
         .collect();
     let mut fields = left_fields?;
