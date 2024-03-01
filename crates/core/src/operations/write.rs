@@ -89,7 +89,7 @@ impl From<WriteError> for DeltaTableError {
 }
 
 ///Specifies how to handle schema drifts
-#[derive(PartialEq)]
+#[derive(PartialEq, Clone, Copy)]
 pub enum SchemaMode {
     /// Overwrite the schema with the new schema
     Overwrite,
@@ -409,7 +409,7 @@ async fn write_execution_plan_with_predicate(
                     let batch = maybe_batch?;
                     checker_stream.check_batch(&batch).await?;
                     let arr =
-                        super::cast::cast_record_batch(&batch, inner_schema.clone(), safe_cast)?;
+                        super::cast::cast_record_batch(&batch, inner_schema.clone(), safe_cast, schema_mode == Some(SchemaMode::Merge))?;
                     writer.write(&arr).await?;
                 }
                 let add_actions = writer.close().await;
@@ -1054,6 +1054,67 @@ mod tests {
             .unwrap();
         assert_eq!(table.version(), 0);
         assert_eq!(table.get_files_count(), 4)
+    }
+
+    #[tokio::test]
+    async fn test_merge_schema() {
+        let batch = get_record_batch(None, false);
+        let table = DeltaOps::new_in_memory()
+            .write(vec![batch.clone()])
+            .with_save_mode(SaveMode::ErrorIfExists)
+            .await
+            .unwrap();
+        assert_eq!(table.version(), 0);
+
+        let mut new_schema_builder = arrow_schema::SchemaBuilder::new();
+        for field in batch.schema().fields() {
+            if field.name() != "modified" {
+                new_schema_builder.push(field.clone());
+            }
+        }
+        new_schema_builder.push(Field::new(
+            "inserted_by",
+            DataType::Utf8,
+            true,
+        ));
+        let new_schema = new_schema_builder.finish();
+        let new_fields = new_schema.fields();
+        let new_names = new_fields.iter().map(|f| f.name()).collect::<Vec<_>>();
+        assert_eq!(new_names, vec!["id", "value", "inserted_by"]);
+        let inserted_by = StringArray::from(vec![
+            Some("A1"),
+            Some("B1"),
+            None,
+            Some("B2"),
+            Some("A3"),
+            Some("A4"),
+            None,
+            None,
+            Some("B4"),
+            Some("A5"),
+            Some("A7"),
+        ]);
+        let new_batch = RecordBatch::try_new(
+            Arc::new(new_schema),
+            vec![
+                Arc::new(batch.column_by_name("id").unwrap().clone()),
+                Arc::new(batch.column_by_name("value").unwrap().clone()),
+                Arc::new(inserted_by),
+            ],
+        ).unwrap();
+        
+        let table = DeltaOps(table)
+            .write(vec![new_batch])
+            .with_save_mode(SaveMode::Append)
+            .with_schema_mode(SchemaMode::Merge)
+            .await
+            .unwrap();
+
+        assert_eq!(table.version(), 1);
+        let new_schema = table.metadata().unwrap().schema().unwrap();
+        let fields = new_schema.fields();
+        let names = fields.iter().map(|f| f.name()).collect::<Vec<_>>();
+        assert_eq!(names, vec!["id", "value", "modified", "inserted_by"]);
     }
 
     #[tokio::test]

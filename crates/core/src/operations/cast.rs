@@ -1,6 +1,6 @@
 //! Provide common cast functionality for callers
 //!
-use arrow_array::{Array, ArrayRef, RecordBatch, StructArray};
+use arrow_array::{new_null_array, Array, ArrayRef, RecordBatch, StructArray};
 use arrow_cast::{cast_with_options, CastOptions};
 use arrow_schema::{DataType, Fields, SchemaRef as ArrowSchemaRef};
 
@@ -12,25 +12,40 @@ fn cast_struct(
     struct_array: &StructArray,
     fields: &Fields,
     cast_options: &CastOptions,
+    add_missing: bool,
 ) -> Result<Vec<Arc<(dyn Array)>>, arrow_schema::ArrowError> {
     fields
         .iter()
         .map(|field| {
-            let col = struct_array.column_by_name(field.name()).unwrap();
-            if let (DataType::Struct(_), DataType::Struct(child_fields)) =
-                (col.data_type(), field.data_type())
-            {
-                let child_struct = StructArray::from(col.into_data());
-                let s = cast_struct(&child_struct, child_fields, cast_options)?;
-                Ok(Arc::new(StructArray::new(
-                    child_fields.clone(),
-                    s,
-                    child_struct.nulls().map(ToOwned::to_owned),
-                )) as ArrayRef)
-            } else if is_cast_required(col.data_type(), field.data_type()) {
-                cast_with_options(col, field.data_type(), cast_options)
-            } else {
-                Ok(col.clone())
+            let col_or_not = struct_array.column_by_name(field.name());
+            if col_or_not.is_none() {
+                if !add_missing {
+                    return Err(arrow_schema::ArrowError::SchemaError(format!(
+                        "Could not find column {0}",
+                        field.name()
+                    )));
+                }
+            }
+            match col_or_not {
+                Some(col) => {
+                    if let (DataType::Struct(_), DataType::Struct(child_fields)) =
+                        (col.data_type(), field.data_type())
+                    {
+                        let child_struct = StructArray::from(col.into_data());
+                        let s =
+                            cast_struct(&child_struct, child_fields, cast_options, add_missing)?;
+                        Ok(Arc::new(StructArray::new(
+                            child_fields.clone(),
+                            s,
+                            child_struct.nulls().map(ToOwned::to_owned),
+                        )) as ArrayRef)
+                    } else if is_cast_required(col.data_type(), field.data_type()) {
+                        cast_with_options(col, field.data_type(), cast_options)
+                    } else {
+                        Ok(col.clone())
+                    }
+                }
+                None => Ok(new_null_array(field.data_type(), struct_array.len())),
             }
         })
         .collect::<Result<Vec<_>, _>>()
@@ -51,6 +66,7 @@ pub fn cast_record_batch(
     batch: &RecordBatch,
     target_schema: ArrowSchemaRef,
     safe: bool,
+    add_missing: bool,
 ) -> DeltaResult<RecordBatch> {
     let cast_options = CastOptions {
         safe,
@@ -62,8 +78,7 @@ pub fn cast_record_batch(
         batch.columns().to_owned(),
         None,
     );
-
-    let columns = cast_struct(&s, target_schema.fields(), &cast_options)?;
+    let columns = cast_struct(&s, target_schema.fields(), &cast_options, add_missing)?;
     Ok(RecordBatch::try_new(target_schema, columns)?)
 }
 
@@ -93,7 +108,7 @@ mod tests {
         )]);
         let target_schema = Arc::new(Schema::new(fields)) as SchemaRef;
 
-        let result = cast_record_batch(&record_batch, target_schema, false);
+        let result = cast_record_batch(&record_batch, target_schema, false, false);
 
         let schema = result.unwrap().schema();
         let field = schema.column_with_name("list_column").unwrap().1;
