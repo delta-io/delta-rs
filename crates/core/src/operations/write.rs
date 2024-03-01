@@ -53,7 +53,7 @@ use crate::delta_datafusion::{find_files, register_store, DeltaScanBuilder};
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::{Action, Add, Metadata, PartitionsExt, Remove, StructType};
 use crate::logstore::LogStoreRef;
-use crate::operations::cast::{cast_record}_batch, merge_schema};
+use crate::operations::cast::{cast_record_batch, merge_schema};
 use crate::protocol::{DeltaOperation, SaveMode};
 use crate::storage::ObjectStoreRef;
 use crate::table::state::DeltaTableState;
@@ -608,11 +608,10 @@ impl std::future::IntoFuture for WriteBuilder {
                                 new_schema = None // we overwrite anyway, so no need to cast
                             } else if this.schema_mode == Some(SchemaMode::Merge) {
                                 println!("table. {:?} \r\n batch: {:?}", table_schema, schema);
-                                new_schema =
-                                    Some(merge_schema(
-                                        table_schema.as_ref().clone(),
-                                        schema.as_ref().clone(),
-                                    )?));
+                                new_schema = Some(merge_schema(
+                                    table_schema.as_ref().clone(),
+                                    schema.as_ref().clone(),
+                                )?);
                             } else {
                                 return Err(DeltaTableError::Generic(
                                     "Schema of data does not match table schema".to_string(),
@@ -668,8 +667,11 @@ impl std::future::IntoFuture for WriteBuilder {
                         }
                     };
 
-                    Ok(Arc::new(MemoryExec::try_new(&data, new_schema.unwrap_or(schema).clone(), None)?)
-                        as Arc<dyn ExecutionPlan>)
+                    Ok(Arc::new(MemoryExec::try_new(
+                        &data,
+                        new_schema.unwrap_or(schema).clone(),
+                        None,
+                    )?) as Arc<dyn ExecutionPlan>)
                 }
             } else {
                 Err(WriteError::MissingData)
@@ -1156,7 +1158,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(table.version(), 0);
-        
+
         let mut new_schema_builder = arrow_schema::SchemaBuilder::new();
         for field in batch.schema().fields() {
             if field.name() != "modified" {
@@ -1204,7 +1206,7 @@ mod tests {
         let names = fields.iter().map(|f| f.name()).collect::<Vec<_>>();
         assert_eq!(names, vec!["id", "value", "modified", "inserted_by"]);
         let part_cols = table.metadata().unwrap().partition_columns.clone();
-        assert_eq!(part_cols, vec!["id", "value"]); // we want to preserve partitions 
+        assert_eq!(part_cols, vec!["id", "value"]); // we want to preserve partitions
     }
 
     #[tokio::test]
