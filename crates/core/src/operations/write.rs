@@ -399,7 +399,7 @@ async fn write_execution_plan_with_predicate(
 
         tasks.push(handle);
     }
-    let mut actions = futures::future::join_all(tasks)
+    let actions = futures::future::join_all(tasks)
         .await
         .into_iter()
         .collect::<Result<Vec<_>, _>>()
