@@ -21,9 +21,15 @@ pub(crate) fn merge_schema(
         .map(|field| {
             let right_field = right.field_with_name(field.name());
             if let Ok(right_field) = right_field {
+                // Allow Dictionary to be merged with non-Dictionary
                 if let Dictionary(_, value_type) = right_field.data_type()  {
                     if value_type.equals_datatype(field.data_type()) {
                         return Ok(field.as_ref().clone());
+                    }
+                }
+                if let Dictionary(_, value_type) = field.data_type()  {
+                    if value_type.equals_datatype(right_field.data_type()) {
+                        return Ok(right_field.as_ref().clone());
                     }
                 }
                 let mut new_field = field.as_ref().clone();
