@@ -53,7 +53,7 @@ use crate::delta_datafusion::{find_files, register_store, DeltaScanBuilder};
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::{Action, Add, Metadata, PartitionsExt, Remove, StructType};
 use crate::logstore::LogStoreRef;
-use crate::operations::cast::cast_record_batch;
+use crate::operations::cast::{cast_record}_batch, merge_schema};
 use crate::protocol::{DeltaOperation, SaveMode};
 use crate::storage::ObjectStoreRef;
 use crate::table::state::DeltaTableState;
@@ -600,36 +600,40 @@ impl std::future::IntoFuture for WriteBuilder {
                             .await
                             .or_else(|_| snapshot.arrow_schema())
                             .unwrap_or(schema.clone());
-                        if this.schema_mode == Some(SchemaMode::Merge) {
-                            new_schema = Some(Arc::new(arrow_schema::Schema::try_merge(vec![
-                                table_schema.as_ref().clone(),
-                                schema.as_ref().clone(),
-                            ])?));
+
+                        if !can_cast_batch(schema.fields(), table_schema.fields()) {
+                            if this.mode == SaveMode::Overwrite {
+                                new_schema = None // we overwrite anyway, so no need to cast
+                            } else if this.schema_mode == Some(SchemaMode::Overwrite) {
+                                new_schema = None // we overwrite anyway, so no need to cast
+                            } else if this.schema_mode == Some(SchemaMode::Merge) {
+                                println!("table. {:?} \r\n batch: {:?}", table_schema, schema);
+                                new_schema =
+                                    Some(merge_schema(
+                                        table_schema.as_ref().clone(),
+                                        schema.as_ref().clone(),
+                                    )?));
+                            } else {
+                                return Err(DeltaTableError::Generic(
+                                    "Schema of data does not match table schema".to_string(),
+                                ));
+                            }
                         }
-                        if !can_cast_batch(schema.fields(), table_schema.fields())
-                            && (this.schema_mode.is_none()
-                                && !matches!(this.mode, SaveMode::Overwrite))
-                        {
-                            return Err(DeltaTableError::Generic(
-                                "Schema of data does not match table schema".to_string(),
-                            ));
-                        };
                     }
 
                     let data = if !partition_columns.is_empty() {
                         // TODO partitioning should probably happen in its own plan ...
                         let mut partitions: HashMap<String, Vec<RecordBatch>> = HashMap::new();
                         for batch in batches {
-                            let real_batch = match new_schema {
-                                Some(ref new_schema) => {
-                                    cast_record_batch(&batch, new_schema.clone(), false, true)?
+                            let real_batch = match new_schema.clone() {
+                                Some(new_schema) => {
+                                    cast_record_batch(&batch, new_schema, false, true)?
                                 }
                                 None => batch,
                             };
 
-                            println!("before divide_by_partition_values {:?}", schema);
                             let divided = divide_by_partition_values(
-                                schema.clone(),
+                                new_schema.clone().unwrap_or(schema.clone()),
                                 partition_columns.clone(),
                                 &real_batch,
                             )?;
@@ -647,10 +651,24 @@ impl std::future::IntoFuture for WriteBuilder {
                         }
                         partitions.into_values().collect::<Vec<_>>()
                     } else {
-                        vec![batches]
+                        match new_schema {
+                            Some(ref new_schema) => {
+                                let mut new_batches = vec![];
+                                for batch in batches {
+                                    new_batches.push(cast_record_batch(
+                                        &batch,
+                                        new_schema.clone(),
+                                        false,
+                                        true,
+                                    )?);
+                                }
+                                vec![new_batches]
+                            }
+                            None => vec![batches],
+                        }
                     };
 
-                    Ok(Arc::new(MemoryExec::try_new(&data, schema.clone(), None)?)
+                    Ok(Arc::new(MemoryExec::try_new(&data, new_schema.unwrap_or(schema).clone(), None)?)
                         as Arc<dyn ExecutionPlan>)
                 }
             } else {
@@ -678,7 +696,6 @@ impl std::future::IntoFuture for WriteBuilder {
                     }
                 }
             }
-            println!("{:?}", schema);
             let state = match this.state {
                 Some(state) => state,
                 None => {
@@ -1130,7 +1147,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_merge_schema_with_missing_partitions() {
+    async fn test_merge_schema_with_partitions() {
         let batch = get_record_batch(None, false);
         let table = DeltaOps::new_in_memory()
             .write(vec![batch.clone()])
@@ -1139,25 +1156,55 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(table.version(), 0);
-        let mut new_batch = batch.clone();
-        new_batch.remove_column(0);
-        let new_schema = new_batch.schema().clone();
+        
+        let mut new_schema_builder = arrow_schema::SchemaBuilder::new();
+        for field in batch.schema().fields() {
+            if field.name() != "modified" {
+                new_schema_builder.push(field.clone());
+            }
+        }
+        new_schema_builder.push(Field::new("inserted_by", DataType::Utf8, true));
+        let new_schema = new_schema_builder.finish();
         let new_fields = new_schema.fields();
-        let new_names = new_fields
-            .iter()
-            .map(|f| f.name().to_owned())
-            .collect::<Vec<_>>();
-        assert_eq!(new_names, vec!["value", "modified"]);
-        println!("Merge now with {:?}", new_names);
-        let mut table = DeltaOps(table)
+        let new_names = new_fields.iter().map(|f| f.name()).collect::<Vec<_>>();
+        assert_eq!(new_names, vec!["id", "value", "inserted_by"]);
+        let inserted_by = StringArray::from(vec![
+            Some("A1"),
+            Some("B1"),
+            None,
+            Some("B2"),
+            Some("A3"),
+            Some("A4"),
+            None,
+            None,
+            Some("B4"),
+            Some("A5"),
+            Some("A7"),
+        ]);
+        let new_batch = RecordBatch::try_new(
+            Arc::new(new_schema),
+            vec![
+                Arc::new(batch.column_by_name("id").unwrap().clone()),
+                Arc::new(batch.column_by_name("value").unwrap().clone()),
+                Arc::new(inserted_by),
+            ],
+        )
+        .unwrap();
+        println!("new_batch: {:?}", new_batch.schema());
+        let table = DeltaOps(table)
             .write(vec![new_batch])
             .with_save_mode(SaveMode::Append)
             .with_schema_mode(SchemaMode::Merge)
             .await
             .unwrap();
-        table.load().await.unwrap();
+
+        assert_eq!(table.version(), 1);
+        let new_schema = table.metadata().unwrap().schema().unwrap();
+        let fields = new_schema.fields();
+        let names = fields.iter().map(|f| f.name()).collect::<Vec<_>>();
+        assert_eq!(names, vec!["id", "value", "modified", "inserted_by"]);
         let part_cols = table.metadata().unwrap().partition_columns.clone();
-        assert_eq!(part_cols, vec!["id", "value"]); // we want to preserve partitions even if null
+        assert_eq!(part_cols, vec!["id", "value"]); // we want to preserve partitions 
     }
 
     #[tokio::test]

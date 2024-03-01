@@ -2,11 +2,29 @@
 //!
 use arrow_array::{new_null_array, Array, ArrayRef, RecordBatch, StructArray};
 use arrow_cast::{cast_with_options, CastOptions};
-use arrow_schema::{DataType, Fields, SchemaRef as ArrowSchemaRef};
+use arrow_schema::{DataType, Fields, SchemaRef as ArrowSchemaRef, Schema as ArrowSchema};
 
 use std::sync::Arc;
 
 use crate::DeltaResult;
+
+fn merge_schema(
+    left: ArrowSchemaRef,
+    right: ArrowSchemaRef,
+) -> DeltaResult<ArrowSchemaRef> {
+    let fields = left
+        .fields()
+        .iter()
+        .map(|field| {
+            let right_field = right.field_with_name(field.name());
+            match right_field {
+                Some(right_field) => field.try_merge(right_field)?,
+                None => Ok(field.clone())
+            }
+        })
+        .collect();
+    Ok(ArrowSchemaRef::new(ArrowSchema::new(fields)))
+}
 
 fn cast_struct(
     struct_array: &StructArray,
