@@ -29,6 +29,7 @@ use super::utils::{
 use super::{DeltaWriter, DeltaWriterError, WriteMode};
 use crate::errors::DeltaTableError;
 use crate::kernel::{Action, Add, PartitionsExt, Scalar, StructType};
+use crate::operations::cast::merge_schema;
 use crate::table::builder::DeltaTableBuilder;
 use crate::DeltaTable;
 

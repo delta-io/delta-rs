@@ -2,25 +2,37 @@
 //!
 use arrow_array::{new_null_array, Array, ArrayRef, RecordBatch, StructArray};
 use arrow_cast::{cast_with_options, CastOptions};
-use arrow_schema::{ArrowError, DataType, Fields, Schema as ArrowSchema, SchemaRef as ArrowSchemaRef};
+use arrow_schema::{ArrowError, Field as ArrowField, DataType, Fields, Schema as ArrowSchema, SchemaRef as ArrowSchemaRef};
 
 use std::sync::Arc;
 
 use crate::DeltaResult;
 
-pub (crate) fn merge_schema(left: ArrowSchemaRef, right: ArrowSchemaRef) -> Result<ArrowSchemaRef, ArrowError> {
-    let fields = left
+pub (crate) fn merge_schema(left: ArrowSchema, right: ArrowSchema) -> Result<ArrowSchema, ArrowError> {
+    let left_fields: Result<Vec<ArrowField>, ArrowError> = left
         .fields()
         .iter()
         .map(|field| {
             let right_field = right.field_with_name(field.name());
-            match right_field {
-                Ok(right_field) => field.try_merge(right_field)?,
-                _ => Ok(field.clone()),
+            if let Ok(right_field) = right_field {
+                let mut new_field = field.as_ref().clone();
+                new_field.try_merge(right_field)?;                
+                Ok(new_field)
+            } 
+            else {
+                Ok(field.as_ref().clone())           
             }
+            
         })
         .collect();
-    Ok(ArrowSchemaRef::new(ArrowSchema::new(fields)))
+    let mut fields = left_fields?;
+    for field in right.fields() {
+        if !left.field_with_name(field.name()).is_ok() {
+            fields.push(field.as_ref().clone());
+        }
+    }
+
+    Ok(ArrowSchema::new(fields))
 }
 
 fn cast_struct(

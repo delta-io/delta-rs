@@ -608,10 +608,10 @@ impl std::future::IntoFuture for WriteBuilder {
                                 new_schema = None // we overwrite anyway, so no need to cast
                             } else if this.schema_mode == Some(SchemaMode::Merge) {
                                 println!("table. {:?} \r\n batch: {:?}", table_schema, schema);
-                                new_schema = Some(merge_schema(
+                                new_schema = Some(Arc::new(merge_schema(
                                     table_schema.as_ref().clone(),
                                     schema.as_ref().clone(),
-                                )?);
+                                )?));
                             } else {
                                 return Err(DeltaTableError::Generic(
                                     "Schema of data does not match table schema".to_string(),
