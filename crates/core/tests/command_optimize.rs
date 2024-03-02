@@ -180,6 +180,12 @@ async fn test_optimize_non_partitioned_table() -> Result<(), Box<dyn Error>> {
     assert_eq!(metrics.partitions_optimized, 1);
     assert_eq!(dt.get_files_count(), 2);
 
+    let commit_info = dt.history(None).await?;
+    let last_commit = &commit_info[0];
+    let parameters = last_commit.operation_parameters.clone().unwrap();
+    assert_eq!(parameters["targetSize"], json!("2000000"));
+    assert_eq!(parameters["predicate"], "[]");
+
     Ok(())
 }
 
@@ -613,8 +619,7 @@ async fn test_commit_info() -> Result<(), Box<dyn Error>> {
     assert_eq!(last_commit.read_version, Some(version));
     let parameters = last_commit.operation_parameters.clone().unwrap();
     assert_eq!(parameters["targetSize"], json!("2000000"));
-    // TODO: Requires a string representation for PartitionFilter
-    // assert_eq!(parameters["predicate"], None);
+    assert_eq!(parameters["predicate"], "[\"date = '2022-05-22'\"]");
 
     Ok(())
 }

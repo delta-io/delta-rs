@@ -14,8 +14,8 @@ pub(crate) mod extract;
 pub(crate) mod json;
 
 const MAP_ROOT_DEFAULT: &str = "entries";
-const MAP_KEY_DEFAULT: &str = "keys";
-const MAP_VALUE_DEFAULT: &str = "values";
+const MAP_KEY_DEFAULT: &str = "key";
+const MAP_VALUE_DEFAULT: &str = "value";
 const LIST_ROOT_DEFAULT: &str = "item";
 
 impl TryFrom<ActionType> for ArrowField {
@@ -846,9 +846,9 @@ mod tests {
             let entry_offsets_buffer = Buffer::from(entry_offsets.to_byte_slice());
             let keys_data = StringArray::from_iter_values(keys);
 
-            let keys_field = Arc::new(Field::new("keys", ArrowDataType::Utf8, false));
+            let keys_field = Arc::new(Field::new("key", ArrowDataType::Utf8, false));
             let values_field = Arc::new(Field::new(
-                "values",
+                "value",
                 values.data_type().clone(),
                 values.null_count() > 0,
             ));
