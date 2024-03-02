@@ -1,4 +1,5 @@
 use std::collections::HashSet;
+use std::hash::{Hash, Hasher};
 
 use datafusion_common::DFSchemaRef;
 use datafusion_expr::{Expr, LogicalPlan, UserDefinedLogicalNodeCore};
@@ -7,42 +8,58 @@ use crate::delta_datafusion::find_files::ONLY_FILES_DF_SCHEMA;
 use crate::logstore::LogStoreRef;
 use crate::table::state::DeltaTableState;
 
-#[derive(Debug, Hash, Eq, PartialEq, Clone)]
+#[derive(Debug, Clone)]
 pub struct FindFilesNode {
     id: String,
     predicate: Expr,
-    files: Vec<String>,
-    schema: DFSchemaRef,
+    table_state: DeltaTableState,
+    log_store: LogStoreRef,
     version: i64,
 }
 
 impl FindFilesNode {
     pub fn new(
         id: String,
-        eager_snapshot: DeltaTableState,
+        table_state: DeltaTableState,
         log_store: LogStoreRef,
         predicate: Expr,
     ) -> datafusion_common::Result<Self> {
-        let files: Vec<String> = eager_snapshot
-            .file_paths_iter()
-            .map(|f| log_store.to_uri(&f))
-            .collect();
-
+        let version = table_state.version();
         Ok(Self {
             id,
             predicate,
-            files,
-            schema: ONLY_FILES_DF_SCHEMA.clone(),
-            version: eager_snapshot.version(),
+            log_store,
+            table_state,
+
+            version,
         })
     }
 
-    pub fn predicate(&self) -> &Expr {
-        &self.predicate
+    pub fn predicate(&self) -> Expr {
+        self.predicate.clone()
     }
 
-    pub fn files(&self) -> Vec<String> {
-        self.files.clone()
+    pub fn state(&self) -> DeltaTableState {
+        self.table_state.clone()
+    }
+
+    pub fn log_store(&self) -> LogStoreRef {
+        self.log_store.clone()
+    }
+}
+
+impl Eq for FindFilesNode {}
+
+impl PartialEq<Self> for FindFilesNode {
+    fn eq(&self, other: &Self) -> bool {
+        self.id == other.id
+    }
+}
+
+impl Hash for FindFilesNode {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        state.write(self.id.as_bytes());
+        state.finish();
     }
 }
 
@@ -56,7 +73,7 @@ impl UserDefinedLogicalNodeCore for FindFilesNode {
     }
 
     fn schema(&self) -> &DFSchemaRef {
-        &self.schema
+        &ONLY_FILES_DF_SCHEMA
     }
 
     fn expressions(&self) -> Vec<Expr> {
@@ -70,8 +87,8 @@ impl UserDefinedLogicalNodeCore for FindFilesNode {
     fn fmt_for_explain(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         write!(
             f,
-            "FindFiles id={}, predicate={:?}, version={:?}",
-            &self.id, self.predicate, self.version
+            "FindFiles[id={}, predicate=\"{}\", version={}]",
+            &self.id, self.predicate, self.version,
         )
     }
 

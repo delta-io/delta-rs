@@ -1,31 +1,42 @@
 use std::any::Any;
 use std::fmt::{Debug, Formatter};
-
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use arrow_array::{RecordBatch, StringArray};
+use arrow_array::RecordBatch;
 use arrow_schema::SchemaRef;
 use datafusion::error::Result;
 use datafusion::execution::{RecordBatchStream, SendableRecordBatchStream, TaskContext};
 use datafusion::physical_plan::memory::MemoryStream;
 use datafusion::physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan};
+use datafusion::prelude::SessionContext;
+use datafusion_common::tree_node::TreeNode;
 use datafusion_expr::Expr;
 use datafusion_physical_expr::{Partitioning, PhysicalSortExpr};
 use futures::stream::BoxStream;
-use futures::{Stream, StreamExt, TryStreamExt};
+use futures::{FutureExt, Stream, StreamExt, TryStreamExt};
 
-use crate::delta_datafusion::find_files::{scan_memory_table_batch, ONLY_FILES_SCHEMA};
+use crate::delta_datafusion::find_files::{
+    scan_table_by_files, scan_table_by_partitions, ONLY_FILES_SCHEMA,
+};
+use crate::delta_datafusion::FindFilesExprProperties;
+use crate::logstore::LogStoreRef;
+use crate::table::state::DeltaTableState;
 
 pub struct FindFilesExec {
-    files: Vec<String>,
     predicate: Expr,
+    state: DeltaTableState,
+    log_store: LogStoreRef,
 }
 
 impl FindFilesExec {
-    pub fn new(files: Vec<String>, predicate: Expr) -> Result<Self> {
-        Ok(Self { files, predicate })
+    pub fn new(state: DeltaTableState, log_store: LogStoreRef, predicate: Expr) -> Result<Self> {
+        Ok(Self {
+            predicate,
+            log_store,
+            state,
+        })
     }
 }
 
@@ -55,13 +66,13 @@ impl<'a> Stream for FindFilesStream<'a> {
 
 impl Debug for FindFilesExec {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "FindFilesExec[schema={:?}, files={:?}]", 1, 2)
+        write!(f, "FindFilesExec[predicate=\"{}\"]", self.predicate)
     }
 }
 
 impl DisplayAs for FindFilesExec {
     fn fmt_as(&self, _t: DisplayFormatType, f: &mut Formatter) -> std::fmt::Result {
-        write!(f, "FindFilesExec[schema={:?}, files={:?}]", 1, 2)
+        write!(f, "FindFilesExec[predicate=\"{}\"]", self.predicate)
     }
 }
 
@@ -98,14 +109,36 @@ impl ExecutionPlan for FindFilesExec {
         _partition: usize,
         _context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        let array = Arc::new(StringArray::from(self.files.clone()));
-        let record_batch = RecordBatch::try_new(ONLY_FILES_SCHEMA.clone(), vec![array])?;
-        let predicate = self.predicate.clone();
-        let mem_stream =
-            MemoryStream::try_new(vec![record_batch.clone()], ONLY_FILES_SCHEMA.clone(), None)?
-                .and_then(move |batch| scan_memory_table_batch(batch, predicate.clone()))
-                .boxed();
+        let current_metadata = self.state.metadata();
+        let mut expr_properties = FindFilesExprProperties {
+            partition_only: true,
+            partition_columns: current_metadata.partition_columns.clone(),
+            result: Ok(()),
+        };
 
-        Ok(Box::pin(FindFilesStream::new(mem_stream)?))
+        TreeNode::visit(&self.predicate, &mut expr_properties)?;
+        expr_properties.result?;
+
+        if expr_properties.partition_only {
+            let actions_table = self.state.add_actions_table(true)?;
+            let predicate = self.predicate.clone();
+            let schema = actions_table.schema();
+            let mem_stream =
+                MemoryStream::try_new(vec![actions_table.clone()], schema.clone(), None)?
+                    .and_then(move |batch| scan_table_by_partitions(batch, predicate.clone()))
+                    .boxed();
+
+            Ok(Box::pin(FindFilesStream::new(mem_stream)?))
+        } else {
+            let ctx = SessionContext::new();
+            let state = ctx.state();
+            let table_state = self.state.clone();
+            let predicate = self.predicate.clone();
+            let output_files =
+                scan_table_by_files(table_state, self.log_store.clone(), state, predicate);
+
+            let mem_stream = output_files.into_stream().boxed();
+            Ok(Box::pin(FindFilesStream::new(mem_stream)?))
+        }
     }
 }
