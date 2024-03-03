@@ -1170,6 +1170,10 @@ fn scalar_to_py(value: &Scalar, py_date: &PyAny, py: Python) -> PyResult<PyObjec
             let value = value.serialize();
             value.to_object(py)
         }
+        TimestampNtz(_) => {
+            let value = value.serialize();
+            value.to_object(py)
+        }
         // NOTE: PyArrow 13.0.0 lost the ability to cast from string to date32, so
         // we have to implement that manually.
         Date(_) => {

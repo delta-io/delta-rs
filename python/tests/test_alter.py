@@ -20,7 +20,7 @@ def test_add_constraint(tmp_path: pathlib.Path, sample_table: pa.Table):
     assert dt.metadata().configuration == {
         "delta.constraints.check_price": "price >= 0"
     }
-    assert dt.protocol().min_writer_version == 3
+    assert dt.protocol().min_writer_version == 7
 
     with pytest.raises(DeltaError):
         # Invalid constraint
@@ -69,13 +69,13 @@ def test_drop_constraint(tmp_path: pathlib.Path, sample_table: pa.Table):
     dt = DeltaTable(tmp_path)
 
     dt.alter.add_constraint({"check_price": "price >= 0"})
-    assert dt.protocol().min_writer_version == 3
+    assert dt.protocol().min_writer_version == 7
     dt.alter.drop_constraint(name="check_price")
     last_action = dt.history(1)[0]
     assert last_action["operation"] == "DROP CONSTRAINT"
     assert dt.version() == 2
     assert dt.metadata().configuration == {}
-    assert dt.protocol().min_writer_version == 3
+    assert dt.protocol().min_writer_version == 7
 
 
 def test_drop_constraint_invalid(tmp_path: pathlib.Path, sample_table: pa.Table):
@@ -90,7 +90,7 @@ def test_drop_constraint_invalid(tmp_path: pathlib.Path, sample_table: pa.Table)
     assert dt.metadata().configuration == {
         "delta.constraints.check_price": "price >= 0"
     }
-    assert dt.protocol().min_writer_version == 3
+    assert dt.protocol().min_writer_version == 7
 
 
 def test_drop_constraint_invalid_ignore(tmp_path: pathlib.Path, sample_table: pa.Table):

@@ -46,7 +46,10 @@ impl Scalar {
             Double(val) => Arc::new(Float64Array::from_value(*val, num_rows)),
             String(val) => Arc::new(StringArray::from(vec![val.clone(); num_rows])),
             Boolean(val) => Arc::new(BooleanArray::from(vec![*val; num_rows])),
-            Timestamp(val) => Arc::new(TimestampMicrosecondArray::from_value(*val, num_rows)),
+            Timestamp(val) => {
+                Arc::new(TimestampMicrosecondArray::from_value(*val, num_rows).with_timezone_utc())
+            }
+            TimestampNtz(val) => Arc::new(TimestampMicrosecondArray::from_value(*val, num_rows)),
             Date(val) => Arc::new(Date32Array::from_value(*val, num_rows)),
             Binary(val) => Arc::new(BinaryArray::from(vec![val.as_slice(); num_rows])),
             Decimal(val, precision, scale) => Arc::new(
@@ -64,7 +67,7 @@ impl Scalar {
                     PrimitiveType::String => Arc::new(StringArray::new_null(num_rows)),
                     PrimitiveType::Boolean => Arc::new(BooleanArray::new_null(num_rows)),
                     PrimitiveType::Timestamp => {
-                        Arc::new(TimestampMicrosecondArray::new_null(num_rows).with_timezone("UTC"))
+                        Arc::new(TimestampMicrosecondArray::new_null(num_rows).with_timezone_utc())
                     }
                     PrimitiveType::TimestampNtz => {
                         Arc::new(TimestampMicrosecondArray::new_null(num_rows))
