@@ -1163,14 +1163,16 @@ fn scalar_to_py(value: &Scalar, py_date: &PyAny, py: Python) -> PyResult<PyObjec
         Long(val) => val.to_object(py),
         Float(val) => val.to_object(py),
         Double(val) => val.to_object(py),
-        // TODO: Since PyArrow 13.0.0, casting string -> timestamp fails if it ends with "Z"
-        // and the target type is timezone naive. The serialization does not produce "Z",
-        // but we need to consider timezones when doing timezone ntz.
-        Timestamp(_) | TimestampNtz(_) => {
+        Timestamp(_) => {
+            // We need to manually append 'Z' add to end so that pyarrow can cast the
+            // the scalar value to pa.timestamp("us","UTC")
+            let value = value.serialize();
+            format!("{}Z", value).to_object(py)
+        }
+        TimestampNtz(_) => {
             let value = value.serialize();
             value.to_object(py)
         }
-
         // NOTE: PyArrow 13.0.0 lost the ability to cast from string to date32, so
         // we have to implement that manually.
         Date(_) => {

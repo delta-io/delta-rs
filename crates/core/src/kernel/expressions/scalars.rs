@@ -91,13 +91,9 @@ impl Scalar {
                     "false".to_string()
                 }
             }
-            Self::TimestampNtz(ts) => {
+            Self::TimestampNtz(ts) | Self::Timestamp(ts) => {
                 let ts = Utc.timestamp_micros(*ts).single().unwrap();
                 ts.format("%Y-%m-%d %H:%M:%S%.6f").to_string()
-            }
-            Self::Timestamp(ts) => {
-                let ts = Utc.timestamp_micros(*ts).single().unwrap();
-                ts.format("%Y-%m-%d %H:%M:%S%.6fZ").to_string()
             }
             Self::Date(days) => {
                 let date = Utc.from_utc_datetime(

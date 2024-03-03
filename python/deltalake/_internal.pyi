@@ -232,6 +232,7 @@ class PrimitiveType:
      * "binary",
      * "date",
      * "timestamp",
+     * "timestampNtz",
      * "decimal(<precision>, <scale>)"
 
     Args:
