@@ -494,8 +494,8 @@ pub enum PrimitiveType {
     /// Microsecond precision timestamp, adjusted to UTC.
     Timestamp,
     /// Micrsoecond precision timestamp with no timezone
+    #[serde(alias = "timestampNTZ")]
     TimestampNtz,
-    // TODO: timestamp without timezone
     #[serde(
         serialize_with = "serialize_decimal",
         deserialize_with = "deserialize_decimal",
