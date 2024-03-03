@@ -88,6 +88,8 @@ struct RawDeltaTableMetaData {
     configuration: HashMap<String, Option<String>>,
 }
 
+type StringVec = Vec<String>;
+
 #[pymethods]
 impl RawDeltaTable {
     #[new]
@@ -146,16 +148,35 @@ impl RawDeltaTable {
         })
     }
 
-    pub fn protocol_versions(&self) -> PyResult<(i32, i32)> {
+    pub fn protocol_versions(&self) -> PyResult<(i32, i32, Option<StringVec>, Option<StringVec>)> {
+        let table_protocol = self._table.protocol().map_err(PythonError::from)?;
         Ok((
-            self._table
-                .protocol()
-                .map_err(PythonError::from)?
-                .min_reader_version,
-            self._table
-                .protocol()
-                .map_err(PythonError::from)?
-                .min_writer_version,
+            table_protocol.min_reader_version,
+            table_protocol.min_writer_version,
+            table_protocol
+                .writer_features
+                .as_ref()
+                .and_then(|features| {
+                    let empty_set = !features.is_empty();
+                    empty_set.then(|| {
+                        features
+                            .iter()
+                            .map(|v| v.to_string())
+                            .collect::<Vec<String>>()
+                    })
+                }),
+            table_protocol
+                .reader_features
+                .as_ref()
+                .and_then(|features| {
+                    let empty_set = !features.is_empty();
+                    empty_set.then(|| {
+                        features
+                            .iter()
+                            .map(|v| v.to_string())
+                            .collect::<Vec<String>>()
+                    })
+                }),
         ))
     }
 
