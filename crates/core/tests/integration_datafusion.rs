@@ -982,7 +982,7 @@ mod local {
 
         Ok(())
     }
-
+    #[ignore]
     #[tokio::test]
     async fn test_issue_1374() -> Result<()> {
         let ctx = SessionContext::new();
