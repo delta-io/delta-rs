@@ -97,15 +97,11 @@ impl ProtocolChecker {
             if !table_features.contains(&WriterFeatures::TimestampWithoutTimezone)
                 && contains_timestampntz
             {
-                println!("didn't find feature, but did find timestamp with no tz");
-                dbg!(table_features.contains(&WriterFeatures::TimestampWithoutTimezone));
-                dbg!(contains_timestampntz);
                 return Err(TransactionError::WriterFeaturesRequired(
                     WriterFeatures::TimestampWithoutTimezone,
                 ));
             }
         } else if contains_timestampntz {
-            println!("didn't find any features, but did find timestamp with no tz");
             return Err(TransactionError::WriterFeaturesRequired(
                 WriterFeatures::TimestampWithoutTimezone,
             ));
