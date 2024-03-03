@@ -175,7 +175,7 @@ pub enum ReaderFeatures {
     /// Deletion vectors for merge, update, delete
     DeletionVectors,
     /// timestamps without timezone support
-    #[serde(alias = "timestampNtz")]
+    #[serde(rename = "timestampNtz")]
     TimestampWithoutTimezone,
     /// version 2 of checkpointing
     V2Checkpoint,
@@ -259,7 +259,7 @@ pub enum WriterFeatures {
     /// Row tracking on tables
     RowTracking,
     /// timestamps without timezone support
-    #[serde(alias = "timestampNtz")]
+    #[serde(rename = "timestampNtz")]
     TimestampWithoutTimezone,
     /// domain specific metadata
     DomainMetadata,
