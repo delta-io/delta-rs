@@ -47,7 +47,9 @@ def test_read_table_with_edge_timestamps():
         "SOME_VALUE": [1, 2],
     }
     # Can push down filters to these timestamps.
-    predicate = ds.field("BIG_DATE") == datetime(9999, 12, 31, 0, 0, 0)
+    predicate = ds.field("BIG_DATE") == datetime(
+        9999, 12, 31, 0, 0, 0, tzinfo=timezone.utc
+    )
     assert len(list(dataset.get_fragments(predicate))) == 1
 
 

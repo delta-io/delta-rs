@@ -1166,14 +1166,11 @@ fn scalar_to_py(value: &Scalar, py_date: &PyAny, py: Python) -> PyResult<PyObjec
         // TODO: Since PyArrow 13.0.0, casting string -> timestamp fails if it ends with "Z"
         // and the target type is timezone naive. The serialization does not produce "Z",
         // but we need to consider timezones when doing timezone ntz.
-        Timestamp(_) => {
+        Timestamp(_) | TimestampNtz(_) => {
             let value = value.serialize();
             value.to_object(py)
         }
-        TimestampNtz(_) => {
-            let value = value.serialize();
-            value.to_object(py)
-        }
+
         // NOTE: PyArrow 13.0.0 lost the ability to cast from string to date32, so
         // we have to implement that manually.
         Date(_) => {
@@ -1271,9 +1268,11 @@ fn filestats_to_expression_next<'py>(
                 // TODO: Handle nested field statistics.
                 Scalar::Struct(_, _) => {}
                 _ => {
+                    dbg!(field.name());
                     let maybe_minimum =
                         cast_to_type(field.name(), scalar_to_py(value, py_date, py)?, &schema.0);
                     if let Ok(minimum) = maybe_minimum {
+                        dbg!(minimum.str().unwrap());
                         let field_expr = py_field.call1((field.name(),))?;
                         let expr = field_expr.call_method1("__ge__", (minimum,));
                         let expr = if has_nulls_set.contains(field.name()) {
