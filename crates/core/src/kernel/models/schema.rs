@@ -468,7 +468,7 @@ fn default_true() -> bool {
 }
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Clone, Eq, Hash)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "snake_case")]
 /// Primitive types supported by Delta
 pub enum PrimitiveType {
     /// UTF-8 encoded string of characters
