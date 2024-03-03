@@ -293,7 +293,7 @@ impl WriteBuilder {
                     let schema: StructType = (batches[0].schema()).try_into()?;
                     PROTOCOL.check_can_write_timestampn_ntz(snapshot, &schema)?;
                 }
-                
+
                 match self.mode {
                     SaveMode::ErrorIfExists => {
                         Err(WriteError::AlreadyExists(self.log_store.root_uri()).into())

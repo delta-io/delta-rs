@@ -77,30 +77,33 @@ impl ProtocolChecker {
     }
 
     /// Check append-only at the high level (operation level)
-    pub fn check_can_write_timestampn_ntz(&self, snapshot: &DeltaTableState, schema: &Schema) -> Result<(), TransactionError> {
-        
-        let contains_timestampntz = schema.fields()
+    pub fn check_can_write_timestampn_ntz(
+        &self,
+        snapshot: &DeltaTableState,
+        schema: &Schema,
+    ) -> Result<(), TransactionError> {
+        let contains_timestampntz = schema
+            .fields()
             .into_iter()
-            .any(|f|
-                f.data_type().eq(&DataType::TIMESTAMPNTZ)
-            );
+            .any(|f| f.data_type().eq(&DataType::TIMESTAMPNTZ));
 
         let required_features: Option<&HashSet<WriterFeatures>> =
             match snapshot.protocol().min_writer_version {
                 0 | 1 | 2 | 3 | 4 | 5 | 6 => None,
                 _ => snapshot.protocol().writer_features.as_ref(),
             };
-        
+
         if let Some(table_features) = required_features {
-            if !table_features.contains(&WriterFeatures::TimestampWithoutTimezone) && contains_timestampntz {
-                return Err(TransactionError::WriterFeaturesRequired)
+            if !table_features.contains(&WriterFeatures::TimestampWithoutTimezone)
+                && contains_timestampntz
+            {
+                return Err(TransactionError::WriterFeaturesRequired);
             }
         } else if contains_timestampntz == true {
-            return Err(TransactionError::WriterFeaturesRequired)
-        } 
+            return Err(TransactionError::WriterFeaturesRequired);
+        }
         Ok(())
     }
-
 
     /// Check if delta-rs can read form the given delta table.
     pub fn can_read_from(&self, snapshot: &DeltaTableState) -> Result<(), TransactionError> {
