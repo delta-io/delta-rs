@@ -50,7 +50,7 @@ from .schema import (
     convert_pyarrow_recordbatchreader,
     convert_pyarrow_table,
 )
-from .table import MAX_SUPPORTED_WRITER_VERSION, DeltaTable, WriterProperties
+from .table import MAX_SUPPORTED_PYARROW_WRITER_VERSION, DeltaTable, WriterProperties
 
 try:
     import pandas as pd  # noqa: F811
@@ -421,7 +421,10 @@ def write_deltalake(
         if table is not None:
             # We don't currently provide a way to set invariants
             # (and maybe never will), so only enforce if already exist.
-            if table.protocol().min_writer_version > MAX_SUPPORTED_WRITER_VERSION:
+            if (
+                table.protocol().min_writer_version
+                > MAX_SUPPORTED_PYARROW_WRITER_VERSION
+            ):
                 raise DeltaProtocolError(
                     "This table's min_writer_version is "
                     f"{table.protocol().min_writer_version}, "
