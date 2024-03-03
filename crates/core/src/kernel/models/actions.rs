@@ -189,7 +189,9 @@ impl From<&parquet::record::Field> for ReaderFeatures {
         match value {
             parquet::record::Field::Str(feature) => match feature.as_str() {
                 "columnMapping" => ReaderFeatures::ColumnMapping,
-                "deletionVectors" => ReaderFeatures::DeletionVectors,
+                "deletionVectors" | "delta.enableDeletionVectors" => {
+                    ReaderFeatures::DeletionVectors
+                }
                 "timestampNtz" => ReaderFeatures::TimestampWithoutTimezone,
                 "v2Checkpoint" => ReaderFeatures::V2Checkpoint,
                 f => ReaderFeatures::Other(f.to_string()),
@@ -281,15 +283,15 @@ impl From<String> for WriterFeatures {
 impl From<&str> for WriterFeatures {
     fn from(value: &str) -> Self {
         match value {
-            "appendOnly" => WriterFeatures::AppendOnly,
-            "invariants" => WriterFeatures::Invariants,
-            "checkConstraints" => WriterFeatures::CheckConstraints,
-            "changeDataFeed" => WriterFeatures::ChangeDataFeed,
+            "appendOnly" | "delta.appendOnly" => WriterFeatures::AppendOnly,
+            "invariants" | "delta.invariants" => WriterFeatures::Invariants,
+            "checkConstraints" | "delta.checkConstraints" => WriterFeatures::CheckConstraints,
+            "changeDataFeed" | "delta.enableChangeDataFeed" => WriterFeatures::ChangeDataFeed,
             "generatedColumns" => WriterFeatures::GeneratedColumns,
             "columnMapping" => WriterFeatures::ColumnMapping,
             "identityColumns" => WriterFeatures::IdentityColumns,
-            "deletionVectors" => WriterFeatures::DeletionVectors,
-            "rowTracking" => WriterFeatures::RowTracking,
+            "deletionVectors" | "delta.enableDeletionVectors" => WriterFeatures::DeletionVectors,
+            "rowTracking" | "delta.enableRowTracking" => WriterFeatures::RowTracking,
             "timestampNtz" => WriterFeatures::TimestampWithoutTimezone,
             "domainMetadata" => WriterFeatures::DomainMetadata,
             "v2Checkpoint" => WriterFeatures::V2Checkpoint,

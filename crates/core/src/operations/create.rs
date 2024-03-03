@@ -1,10 +1,11 @@
 //! Command for creating a new delta table
 // https://github.com/delta-io/delta/blob/master/core/src/main/scala/org/apache/spark/sql/delta/commands/CreateDeltaTableCommand.scala
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use futures::future::BoxFuture;
+use futures::io::Read;
 use maplit::hashset;
 use serde_json::Value;
 
@@ -236,12 +237,36 @@ impl CreateBuilder {
             )
         };
 
+        let mut converted_writer_features = self
+            .configuration
+            .iter()
+            .map(|(key, _)| key.clone().into())
+            .filter(|v| match v {
+                WriterFeatures::Other(_) => false,
+                _ => true,
+            })
+            .collect::<HashSet<WriterFeatures>>();
+
+        let mut converted_reader_features = self
+            .configuration
+            .iter()
+            .map(|(key, _)| key.clone().into())
+            .filter(|v| match v {
+                ReaderFeatures::Other(_) => false,
+                _ => true,
+            })
+            .collect::<HashSet<ReaderFeatures>>();
+
         let contains_timestampntz = &self
             .columns
             .iter()
             .any(|f| f.data_type() == &DataType::TIMESTAMPNTZ);
         // TODO configure more permissive versions based on configuration. Also how should this ideally be handled?
         // We set the lowest protocol we can, and if subsequent writes use newer features we update metadata?
+        if contains_timestampntz.clone() {
+            converted_writer_features.insert(WriterFeatures::TimestampWithoutTimezone);
+            converted_reader_features.insert(ReaderFeatures::TimestampWithoutTimezone);
+        }
         let protocol = self
             .actions
             .iter()
@@ -253,10 +278,8 @@ impl CreateBuilder {
             .unwrap_or_else(|| Protocol {
                 min_reader_version: PROTOCOL.default_reader_version(),
                 min_writer_version: PROTOCOL.default_writer_version(),
-                writer_features: contains_timestampntz
-                    .then(|| hashset! {WriterFeatures::TimestampWithoutTimezone}),
-                reader_features: contains_timestampntz
-                    .then(|| hashset! {ReaderFeatures::TimestampWithoutTimezone}),
+                writer_features: Some(converted_writer_features),
+                reader_features: Some(converted_reader_features),
             });
 
         let mut metadata = Metadata::try_new(
