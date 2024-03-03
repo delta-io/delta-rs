@@ -775,16 +775,25 @@ mod tests {
         let timestamp_field = DataType::Primitive(PrimitiveType::Timestamp);
         assert_eq!(
             <ArrowDataType as TryFrom<&DataType>>::try_from(&timestamp_field).unwrap(),
+            ArrowDataType::Timestamp(TimeUnit::Microsecond, Some("UTC".to_string().into()))
+        );
+    }
+
+    #[test]
+    fn test_arrow_from_delta_timestampntz_type() {
+        let timestamp_field = DataType::Primitive(PrimitiveType::TimestampNtz);
+        assert_eq!(
+            <ArrowDataType as TryFrom<&DataType>>::try_from(&timestamp_field).unwrap(),
             ArrowDataType::Timestamp(TimeUnit::Microsecond, None)
         );
     }
 
     #[test]
-    fn test_delta_from_arrow_timestamp_type() {
+    fn test_delta_from_arrow_timestamp_type_no_tz() {
         let timestamp_field = ArrowDataType::Timestamp(TimeUnit::Microsecond, None);
         assert_eq!(
             <DataType as TryFrom<&ArrowDataType>>::try_from(&timestamp_field).unwrap(),
-            DataType::Primitive(PrimitiveType::Timestamp)
+            DataType::Primitive(PrimitiveType::TimestampNtz)
         );
     }
 

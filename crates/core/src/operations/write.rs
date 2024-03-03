@@ -1055,23 +1055,25 @@ mod tests {
 
         let schema = Arc::new(ArrowSchema::new(vec![Field::new(
             "value",
-            DataType::Timestamp(TimeUnit::Microsecond, None),
+            DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".to_string().into())),
             true,
         )]));
         let batch = RecordBatch::try_new(
             Arc::clone(&schema),
-            vec![Arc::new(TimestampMicrosecondArray::from(vec![Some(10000)]))],
+            vec![Arc::new(
+                TimestampMicrosecondArray::from(vec![Some(10000)]).with_timezone("UTC"),
+            )],
         )
         .unwrap();
 
         let _res = DeltaOps::from(table).write(vec![batch]).await.unwrap();
         let expected = [
-            "+-------------------------+",
-            "| value                   |",
-            "+-------------------------+",
-            "| 1970-01-01T00:00:00.010 |",
-            "| 2023-06-03 15:35:00     |",
-            "+-------------------------+",
+            "+--------------------------+",
+            "| value                    |",
+            "+--------------------------+",
+            "| 1970-01-01T00:00:00.010Z |",
+            "| 2023-06-03 15:35:00      |",
+            "+--------------------------+",
         ];
         let actual = get_data(&_res).await;
         assert_batches_sorted_eq!(&expected, &actual);

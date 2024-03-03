@@ -233,7 +233,7 @@ impl Scalar {
                 Some(tz_str) if tz_str.as_ref() == "UTC" => arr
                     .as_any()
                     .downcast_ref::<TimestampMicrosecondArray>()
-                    .map(|v| Self::Timestamp(v.clone().with_timezone_utc().value(index))),
+                    .map(|v| Self::Timestamp(v.clone().with_timezone("UTC").value(index))),
                 _ => None,
             },
             Struct(fields) => {

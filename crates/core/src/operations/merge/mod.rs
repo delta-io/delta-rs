@@ -1574,6 +1574,7 @@ mod tests {
         table
     }
 
+    // TODO(ion): property keys are not passed through or translated as table features.. fix this as well
     #[tokio::test]
     async fn test_merge_when_delta_table_is_append_only() {
         let schema = get_arrow_schema(&None);
