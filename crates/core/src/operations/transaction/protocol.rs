@@ -61,11 +61,11 @@ impl ProtocolChecker {
     }
 
     pub fn default_reader_version(&self) -> i32 {
-        1
+        3
     }
 
     pub fn default_writer_version(&self) -> i32 {
-        2
+        7
     }
 
     /// Check append-only at the high level (operation level)
@@ -77,19 +77,19 @@ impl ProtocolChecker {
     }
 
     /// Check append-only at the high level (operation level)
-    pub fn check_can_write_timestampn_ntz(
+    pub fn check_can_write_timestamp_ntz(
         &self,
         snapshot: &DeltaTableState,
         schema: &Schema,
     ) -> Result<(), TransactionError> {
         let contains_timestampntz = schema
             .fields()
-            .into_iter()
-            .any(|f| f.data_type().eq(&DataType::TIMESTAMPNTZ));
+            .iter()
+            .any(|f| f.data_type() == &DataType::TIMESTAMPNTZ);
 
         let required_features: Option<&HashSet<WriterFeatures>> =
             match snapshot.protocol().min_writer_version {
-                0 | 1 | 2 | 3 | 4 | 5 | 6 => None,
+                0..=6 => None,
                 _ => snapshot.protocol().writer_features.as_ref(),
             };
 
@@ -97,10 +97,18 @@ impl ProtocolChecker {
             if !table_features.contains(&WriterFeatures::TimestampWithoutTimezone)
                 && contains_timestampntz
             {
-                return Err(TransactionError::WriterFeaturesRequired);
+                println!("didn't find feature, but did find timestamp with no tz");
+                dbg!(table_features.contains(&WriterFeatures::TimestampWithoutTimezone));
+                dbg!(contains_timestampntz);
+                return Err(TransactionError::WriterFeaturesRequired(
+                    WriterFeatures::TimestampWithoutTimezone,
+                ));
             }
-        } else if contains_timestampntz == true {
-            return Err(TransactionError::WriterFeaturesRequired);
+        } else if contains_timestampntz {
+            println!("didn't find any features, but did find timestamp with no tz");
+            return Err(TransactionError::WriterFeaturesRequired(
+                WriterFeatures::TimestampWithoutTimezone,
+            ));
         }
         Ok(())
     }
@@ -168,7 +176,9 @@ impl ProtocolChecker {
                 .protocol()
                 .writer_features
                 .as_ref()
-                .ok_or(TransactionError::WriterFeaturesRequired)?
+                .ok_or(TransactionError::WriterFeaturesRequired(
+                    WriterFeatures::AppendOnly,
+                ))?
                 .contains(&WriterFeatures::AppendOnly)
                 && snapshot.table_config().append_only()
         };

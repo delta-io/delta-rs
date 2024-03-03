@@ -5,11 +5,14 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use futures::future::BoxFuture;
+use maplit::hashset;
 use serde_json::Value;
 
 use super::transaction::{commit, PROTOCOL};
 use crate::errors::{DeltaResult, DeltaTableError};
-use crate::kernel::{Action, DataType, Metadata, Protocol, StructField, StructType};
+use crate::kernel::{
+    Action, DataType, Metadata, Protocol, ReaderFeatures, StructField, StructType, WriterFeatures,
+};
 use crate::logstore::{LogStore, LogStoreRef};
 use crate::protocol::{DeltaOperation, SaveMode};
 use crate::table::builder::ensure_table_uri;
@@ -233,6 +236,10 @@ impl CreateBuilder {
             )
         };
 
+        let contains_timestampntz = &self
+            .columns
+            .iter()
+            .any(|f| f.data_type() == &DataType::TIMESTAMPNTZ);
         // TODO configure more permissive versions based on configuration. Also how should this ideally be handled?
         // We set the lowest protocol we can, and if subsequent writes use newer features we update metadata?
         let protocol = self
@@ -246,8 +253,10 @@ impl CreateBuilder {
             .unwrap_or_else(|| Protocol {
                 min_reader_version: PROTOCOL.default_reader_version(),
                 min_writer_version: PROTOCOL.default_writer_version(),
-                writer_features: None,
-                reader_features: None,
+                writer_features: contains_timestampntz
+                    .then(|| hashset! {WriterFeatures::TimestampWithoutTimezone}),
+                reader_features: contains_timestampntz
+                    .then(|| hashset! {ReaderFeatures::TimestampWithoutTimezone}),
             });
 
         let mut metadata = Metadata::try_new(

@@ -288,10 +288,10 @@ impl WriteBuilder {
 
                 if let Some(plan) = &self.input {
                     let schema: StructType = (plan.schema()).try_into()?;
-                    PROTOCOL.check_can_write_timestampn_ntz(snapshot, &schema)?;
+                    PROTOCOL.check_can_write_timestamp_ntz(snapshot, &schema)?;
                 } else if let Some(batches) = &self.batches {
                     let schema: StructType = (batches[0].schema()).try_into()?;
-                    PROTOCOL.check_can_write_timestampn_ntz(snapshot, &schema)?;
+                    PROTOCOL.check_can_write_timestamp_ntz(snapshot, &schema)?;
                 }
 
                 match self.mode {
