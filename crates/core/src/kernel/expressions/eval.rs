@@ -64,6 +64,9 @@ impl Scalar {
                     PrimitiveType::String => Arc::new(StringArray::new_null(num_rows)),
                     PrimitiveType::Boolean => Arc::new(BooleanArray::new_null(num_rows)),
                     PrimitiveType::Timestamp => {
+                        Arc::new(TimestampMicrosecondArray::new_null(num_rows).with_timezone("UTC"))
+                    },
+                    PrimitiveType::TimestampNtz => {
                         Arc::new(TimestampMicrosecondArray::new_null(num_rows))
                     }
                     PrimitiveType::Date => Arc::new(Date32Array::new_null(num_rows)),

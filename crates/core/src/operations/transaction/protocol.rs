@@ -4,7 +4,7 @@ use lazy_static::lazy_static;
 use once_cell::sync::Lazy;
 
 use super::TransactionError;
-use crate::kernel::{Action, ReaderFeatures, WriterFeatures};
+use crate::kernel::{Action, DataType, ReaderFeatures, Schema, WriterFeatures};
 use crate::table::state::DeltaTableState;
 
 lazy_static! {
@@ -75,6 +75,32 @@ impl ProtocolChecker {
         }
         Ok(())
     }
+
+    /// Check append-only at the high level (operation level)
+    pub fn check_can_write_timestampn_ntz(&self, snapshot: &DeltaTableState, schema: &Schema) -> Result<(), TransactionError> {
+        
+        let contains_timestampntz = schema.fields()
+            .into_iter()
+            .any(|f|
+                f.data_type().eq(&DataType::TIMESTAMPNTZ)
+            );
+
+        let required_features: Option<&HashSet<WriterFeatures>> =
+            match snapshot.protocol().min_writer_version {
+                0 | 1 | 2 | 3 | 4 | 5 | 6 => None,
+                _ => snapshot.protocol().writer_features.as_ref(),
+            };
+        
+        if let Some(table_features) = required_features {
+            if !table_features.contains(&WriterFeatures::TimestampWithoutTimezone) && contains_timestampntz {
+                return Err(TransactionError::WriterFeaturesRequired)
+            }
+        } else if contains_timestampntz == true {
+            return Err(TransactionError::WriterFeaturesRequired)
+        } 
+        Ok(())
+    }
+
 
     /// Check if delta-rs can read form the given delta table.
     pub fn can_read_from(&self, snapshot: &DeltaTableState) -> Result<(), TransactionError> {
@@ -164,11 +190,13 @@ impl ProtocolChecker {
 /// As we implement new features, we need to update this instance accordingly.
 /// resulting version support is determined by the supported table feature set.
 pub static INSTANCE: Lazy<ProtocolChecker> = Lazy::new(|| {
-    let reader_features = HashSet::new();
+    let mut reader_features = HashSet::new();
+    reader_features.insert(ReaderFeatures::TimestampWithoutTimezone);
     // reader_features.insert(ReaderFeatures::ColumnMapping);
 
     let mut writer_features = HashSet::new();
     writer_features.insert(WriterFeatures::AppendOnly);
+    writer_features.insert(WriterFeatures::TimestampWithoutTimezone);
     #[cfg(feature = "datafusion")]
     {
         writer_features.insert(WriterFeatures::Invariants);

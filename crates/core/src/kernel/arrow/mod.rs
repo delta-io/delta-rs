@@ -135,7 +135,9 @@ impl TryFrom<&DataType> for ArrowDataType {
                         Ok(ArrowDataType::Date32)
                     }
                     PrimitiveType::Timestamp => {
-                        // Issue: https://github.com/delta-io/delta/issues/643
+                        Ok(ArrowDataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into())))
+                    },
+                    PrimitiveType::TimestampNtz => {
                         Ok(ArrowDataType::Timestamp(TimeUnit::Microsecond, None))
                     }
                 }
@@ -217,7 +219,7 @@ impl TryFrom<&ArrowDataType> for DataType {
             ArrowDataType::Date32 => Ok(DataType::Primitive(PrimitiveType::Date)),
             ArrowDataType::Date64 => Ok(DataType::Primitive(PrimitiveType::Date)),
             ArrowDataType::Timestamp(TimeUnit::Microsecond, None) => {
-                Ok(DataType::Primitive(PrimitiveType::Timestamp))
+                Ok(DataType::Primitive(PrimitiveType::TimestampNtz))
             }
             ArrowDataType::Timestamp(TimeUnit::Microsecond, Some(tz))
                 if tz.eq_ignore_ascii_case("utc") =>

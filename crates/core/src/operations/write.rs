@@ -285,6 +285,15 @@ impl WriteBuilder {
         match &self.snapshot {
             Some(snapshot) => {
                 PROTOCOL.can_write_to(snapshot)?;
+
+                if let Some(plan) = &self.input {
+                    let schema: StructType = (plan.schema()).try_into()?;
+                    PROTOCOL.check_can_write_timestampn_ntz(snapshot, &schema)?;
+                } else if let Some(batches) = &self.batches {
+                    let schema: StructType = (batches[0].schema()).try_into()?;
+                    PROTOCOL.check_can_write_timestampn_ntz(snapshot, &schema)?;
+                }
+                
                 match self.mode {
                     SaveMode::ErrorIfExists => {
                         Err(WriteError::AlreadyExists(self.log_store.root_uri()).into())

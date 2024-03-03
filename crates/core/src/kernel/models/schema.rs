@@ -493,6 +493,8 @@ pub enum PrimitiveType {
     Date,
     /// Microsecond precision timestamp, adjusted to UTC.
     Timestamp,
+    /// Micrsoecond precision timestamp with no timezone
+    TimestampNtz,
     // TODO: timestamp without timezone
     #[serde(
         serialize_with = "serialize_decimal",
@@ -554,6 +556,7 @@ impl Display for PrimitiveType {
             PrimitiveType::Binary => write!(f, "binary"),
             PrimitiveType::Date => write!(f, "date"),
             PrimitiveType::Timestamp => write!(f, "timestamp"),
+            PrimitiveType::TimestampNtz => write!(f, "timestampNTZ"),
             PrimitiveType::Decimal(precision, scale) => {
                 write!(f, "decimal({},{})", precision, scale)
             }
@@ -608,6 +611,7 @@ impl DataType {
     pub const BINARY: Self = DataType::Primitive(PrimitiveType::Binary);
     pub const DATE: Self = DataType::Primitive(PrimitiveType::Date);
     pub const TIMESTAMP: Self = DataType::Primitive(PrimitiveType::Timestamp);
+    pub const TIMESTAMPNTZ: Self = DataType::Primitive(PrimitiveType::TimestampNtz);
 
     pub fn decimal(precision: u8, scale: i8) -> Self {
         DataType::Primitive(PrimitiveType::Decimal(precision, scale))
