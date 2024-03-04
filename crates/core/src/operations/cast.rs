@@ -1,23 +1,23 @@
 //! Provide common cast functionality for callers
 //!
+use arrow::datatypes::DataType::Dictionary;
 use arrow_array::{new_null_array, Array, ArrayRef, RecordBatch, StructArray};
 use arrow_cast::{cast_with_options, CastOptions};
 use arrow_schema::{
     ArrowError, DataType, Field as ArrowField, Fields, Schema as ArrowSchema,
-    SchemaRef as ArrowSchemaRef
+    SchemaRef as ArrowSchemaRef,
 };
-use arrow::datatypes::DataType::Dictionary;
 use std::sync::Arc;
 
 use crate::DeltaResult;
 
-pub (crate) fn merge_field(left: &ArrowField, right: &ArrowField) -> Result<ArrowField, ArrowError> {
-    if let Dictionary(_, value_type) = right.data_type()  {
+pub(crate) fn merge_field(left: &ArrowField, right: &ArrowField) -> Result<ArrowField, ArrowError> {
+    if let Dictionary(_, value_type) = right.data_type() {
         if value_type.equals_datatype(left.data_type()) {
             return Ok(left.clone());
         }
     }
-    if let Dictionary(_, value_type) = left.data_type()  {
+    if let Dictionary(_, value_type) = left.data_type() {
         if value_type.equals_datatype(right.data_type()) {
             return Ok(right.clone());
         }
@@ -30,7 +30,10 @@ pub (crate) fn merge_field(left: &ArrowField, right: &ArrowField) -> Result<Arro
     Ok(new_field)
 }
 
-pub(crate) fn is_compatible_for_merge(schema: ArrowSchema, other: ArrowSchema) -> Result<(), ArrowError> {
+pub(crate) fn is_compatible_for_merge(
+    schema: ArrowSchema,
+    other: ArrowSchema,
+) -> Result<(), ArrowError> {
     for f in schema.fields() {
         if let Ok(other_field) = other.field_with_name(f.name()) {
             if let Err(e) = merge_field(f.as_ref(), other_field) {
@@ -66,7 +69,6 @@ pub(crate) fn merge_schema(
 
     Ok(ArrowSchema::new(fields))
 }
-
 
 fn cast_struct(
     struct_array: &StructArray,

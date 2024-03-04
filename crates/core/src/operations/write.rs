@@ -54,7 +54,7 @@ use crate::delta_datafusion::{find_files, register_store, DeltaScanBuilder};
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::{Action, Add, Metadata, PartitionsExt, Remove, StructType};
 use crate::logstore::LogStoreRef;
-use crate::operations::cast::{cast_record_batch, merge_schema, is_compatible_for_merge};
+use crate::operations::cast::{cast_record_batch, is_compatible_for_merge, merge_schema};
 use crate::protocol::{DeltaOperation, SaveMode};
 use crate::storage::ObjectStoreRef;
 use crate::table::state::DeltaTableState;
@@ -340,7 +340,7 @@ async fn write_execution_plan_with_predicate(
     safe_cast: bool,
     schema_mode: Option<SchemaMode>,
 ) -> DeltaResult<Vec<Action>> {
-    let schema: ArrowSchemaRef = if let Some(_)  = schema_mode {
+    let schema: ArrowSchemaRef = if let Some(_) = schema_mode {
         plan.schema()
     } else {
         snapshot
@@ -610,7 +610,9 @@ impl std::future::IntoFuture for WriteBuilder {
                                     table_schema.as_ref().clone(),
                                     schema.as_ref().clone(),
                                 ) {
-                                    return Err(DeltaTableError::InvalidData { violations: vec!(format!("{:?}", err)) });
+                                    return Err(DeltaTableError::InvalidData {
+                                        violations: vec![format!("{:?}", err)],
+                                    });
                                 }
                                 new_schema = None // we overwrite anyway, so no need to cast
                             } else if this.schema_mode == Some(SchemaMode::Merge) {
@@ -1215,8 +1217,6 @@ mod tests {
         let part_cols = table.metadata().unwrap().partition_columns.clone();
         assert_eq!(part_cols, vec!["id", "value"]); // we want to preserve partitions
     }
-
-    
 
     #[tokio::test]
     async fn test_overwrite_schema() {
