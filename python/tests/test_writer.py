@@ -179,7 +179,7 @@ def test_merge_schema(existing_table: DeltaTable):
     )
     print(repr(read_data.to_pylist()))
     concated = pa.concat_tables(
-        [old_table_data, new_data], promote_options="permissive"
+        [old_table_data, new_data]
     )
     print(repr(concated.to_pylist()))
     assert read_data == concated
@@ -218,7 +218,7 @@ def test_overwrite_schema(existing_table: DeltaTable):
     )
     print(repr(read_data.to_pylist()))
     concated = pa.concat_tables(
-        [old_table_data, new_data], promote_options="permissive"
+        [old_table_data, new_data]
     )
     print(repr(concated.to_pylist()))
     assert read_data == concated
