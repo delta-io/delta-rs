@@ -1277,9 +1277,9 @@ class TableMerger:
         self.not_matched_insert_updates: Optional[List[Dict[str, str]]] = None
         self.not_matched_insert_predicate: Optional[List[Optional[str]]] = None
         self.not_matched_by_source_update_updates: Optional[List[Dict[str, str]]] = None
-        self.not_matched_by_source_update_predicate: Optional[
-            List[Optional[str]]
-        ] = None
+        self.not_matched_by_source_update_predicate: Optional[List[Optional[str]]] = (
+            None
+        )
         self.not_matched_by_source_delete_predicate: Optional[List[str]] = None
         self.not_matched_by_source_delete_all: Optional[bool] = None
 
