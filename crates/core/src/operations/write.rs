@@ -1289,7 +1289,7 @@ mod tests {
         assert_eq!(table.version(), 0);
 
         let mut new_schema_builder = arrow_schema::SchemaBuilder::new();
-        
+
         new_schema_builder.push(Field::new("inserted_by", DataType::Utf8, true));
         let new_schema = new_schema_builder.finish();
         let new_fields = new_schema.fields();
@@ -1308,13 +1308,8 @@ mod tests {
             Some("A5"),
             Some("A7"),
         ]);
-        let new_batch = RecordBatch::try_new(
-            Arc::new(new_schema),
-            vec![
-                Arc::new(inserted_by),
-            ],
-        )
-        .unwrap();
+        let new_batch =
+            RecordBatch::try_new(Arc::new(new_schema), vec![Arc::new(inserted_by)]).unwrap();
 
         let table = DeltaOps(table)
             .write(vec![new_batch])

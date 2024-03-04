@@ -136,7 +136,9 @@ def test_update_schema(existing_table: DeltaTable):
     new_data = pa.table({"x": pa.array([1, 2, 3])})
 
     with pytest.raises(ValueError):
-        write_deltalake(existing_table, new_data, mode="append", schema_mode="overwrite")
+        write_deltalake(
+            existing_table, new_data, mode="append", schema_mode="overwrite"
+        )
 
     write_deltalake(existing_table, new_data, mode="overwrite", schema_mode="overwrite")
 
@@ -245,6 +247,7 @@ def test_overwrite_schema_error(existing_table: DeltaTable):
             engine="rust",
         )
 
+
 def test_update_schema_rust_writer_append(existing_table: DeltaTable):
     with pytest.raises(DeltaError):
         # It's illegal to do schema drift without correct schema_mode
@@ -270,6 +273,7 @@ def test_update_schema_rust_writer_append(existing_table: DeltaTable):
         engine="rust",
     )
 
+
 def test_update_schema_rust_writer_invalid(existing_table: DeltaTable):
     new_data = pa.table({"x5": pa.array([1, 2, 3])})
     with pytest.raises(DeltaError):
@@ -280,7 +284,7 @@ def test_update_schema_rust_writer_invalid(existing_table: DeltaTable):
             schema_mode=None,
             engine="rust",
         )
-    
+
     write_deltalake(
         existing_table,
         new_data,
@@ -770,8 +774,10 @@ def test_writer_with_options(tmp_path: pathlib.Path):
 
 def test_try_get_table_and_table_uri(tmp_path: pathlib.Path):
     from typing import TypeVar
+
     T = TypeVar("T")
-    def _normalize_path(t: tuple[T, str]): # who does not love Windows? ;)
+
+    def _normalize_path(t: tuple[T, str]):  # who does not love Windows? ;)
         return t[0], t[1].replace("\\", "/") if t[1] else t[1]
 
     data = pa.table({"vals": pa.array(["1", "2", "3"])})
@@ -780,30 +786,50 @@ def test_try_get_table_and_table_uri(tmp_path: pathlib.Path):
     delta_table = DeltaTable(table_or_uri)
 
     # table_or_uri as DeltaTable
-    assert _normalize_path(try_get_table_and_table_uri(delta_table, None)) == _normalize_path((
-        delta_table,
-        str(tmp_path / "delta_table") + "/",
-    ))
+    assert _normalize_path(
+        try_get_table_and_table_uri(delta_table, None)
+    ) == _normalize_path(
+        (
+            delta_table,
+            str(tmp_path / "delta_table") + "/",
+        )
+    )
 
     # table_or_uri as str
-    assert _normalize_path(try_get_table_and_table_uri(str(tmp_path / "delta_table"), None)) == _normalize_path((
-        delta_table,
-        str(tmp_path / "delta_table"),
-    ))
-    assert _normalize_path(try_get_table_and_table_uri(str(tmp_path / "str"), None)) == _normalize_path((
-        None,
-        str(tmp_path / "str"),
-    ))
+    assert _normalize_path(
+        try_get_table_and_table_uri(str(tmp_path / "delta_table"), None)
+    ) == _normalize_path(
+        (
+            delta_table,
+            str(tmp_path / "delta_table"),
+        )
+    )
+    assert _normalize_path(
+        try_get_table_and_table_uri(str(tmp_path / "str"), None)
+    ) == _normalize_path(
+        (
+            None,
+            str(tmp_path / "str"),
+        )
+    )
 
     # table_or_uri as Path
-    assert _normalize_path(try_get_table_and_table_uri(tmp_path / "delta_table", None)) == _normalize_path((
-        delta_table,
-        str(tmp_path / "delta_table"),
-    ))
-    assert _normalize_path(try_get_table_and_table_uri(tmp_path / "Path", None)) == _normalize_path((
-        None,
-        str(tmp_path / "Path"),
-    ))
+    assert _normalize_path(
+        try_get_table_and_table_uri(tmp_path / "delta_table", None)
+    ) == _normalize_path(
+        (
+            delta_table,
+            str(tmp_path / "delta_table"),
+        )
+    )
+    assert _normalize_path(
+        try_get_table_and_table_uri(tmp_path / "Path", None)
+    ) == _normalize_path(
+        (
+            None,
+            str(tmp_path / "Path"),
+        )
+    )
 
     # table_or_uri with invalid parameter type
     with pytest.raises(ValueError):
