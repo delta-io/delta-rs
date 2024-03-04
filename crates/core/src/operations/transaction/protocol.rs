@@ -61,11 +61,11 @@ impl ProtocolChecker {
     }
 
     pub fn default_reader_version(&self) -> i32 {
-        3
+        1
     }
 
     pub fn default_writer_version(&self) -> i32 {
-        7
+        2
     }
 
     /// Check append-only at the high level (operation level)
@@ -76,7 +76,7 @@ impl ProtocolChecker {
         Ok(())
     }
 
-    /// Check append-only at the high level (operation level)
+    /// Check can write_timestamp_ntz
     pub fn check_can_write_timestamp_ntz(
         &self,
         snapshot: &DeltaTableState,

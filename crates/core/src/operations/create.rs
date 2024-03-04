@@ -237,36 +237,51 @@ impl CreateBuilder {
             )
         };
 
-        let mut converted_writer_features = self
-            .configuration
-            .iter()
-            .map(|(key, _)| key.clone().into())
-            .filter(|v| match v {
-                WriterFeatures::Other(_) => false,
-                _ => true,
-            })
-            .collect::<HashSet<WriterFeatures>>();
-
-        let mut converted_reader_features = self
-            .configuration
-            .iter()
-            .map(|(key, _)| key.clone().into())
-            .filter(|v| match v {
-                ReaderFeatures::Other(_) => false,
-                _ => true,
-            })
-            .collect::<HashSet<ReaderFeatures>>();
-
         let contains_timestampntz = &self
             .columns
             .iter()
             .any(|f| f.data_type() == &DataType::TIMESTAMPNTZ);
+
         // TODO configure more permissive versions based on configuration. Also how should this ideally be handled?
         // We set the lowest protocol we can, and if subsequent writes use newer features we update metadata?
-        if contains_timestampntz.clone() {
-            converted_writer_features.insert(WriterFeatures::TimestampWithoutTimezone);
-            converted_reader_features.insert(ReaderFeatures::TimestampWithoutTimezone);
-        }
+
+        let (min_reader_version, min_writer_version, writer_features, reader_features) =
+            if contains_timestampntz.clone() {
+                let mut converted_writer_features = self
+                    .configuration
+                    .iter()
+                    .map(|(key, _)| key.clone().into())
+                    .filter(|v| match v {
+                        WriterFeatures::Other(_) => false,
+                        _ => true,
+                    })
+                    .collect::<HashSet<WriterFeatures>>();
+
+                let mut converted_reader_features = self
+                    .configuration
+                    .iter()
+                    .map(|(key, _)| key.clone().into())
+                    .filter(|v| match v {
+                        ReaderFeatures::Other(_) => false,
+                        _ => true,
+                    })
+                    .collect::<HashSet<ReaderFeatures>>();
+                converted_writer_features.insert(WriterFeatures::TimestampWithoutTimezone);
+                converted_reader_features.insert(ReaderFeatures::TimestampWithoutTimezone);
+                (
+                    3,
+                    7,
+                    Some(converted_writer_features),
+                    Some(converted_reader_features),
+                )
+            } else {
+                (
+                    PROTOCOL.default_reader_version(),
+                    PROTOCOL.default_writer_version(),
+                    None,
+                    None,
+                )
+            };
         let protocol = self
             .actions
             .iter()
@@ -276,10 +291,10 @@ impl CreateBuilder {
                 _ => unreachable!(),
             })
             .unwrap_or_else(|| Protocol {
-                min_reader_version: PROTOCOL.default_reader_version(),
-                min_writer_version: PROTOCOL.default_writer_version(),
-                writer_features: Some(converted_writer_features),
-                reader_features: Some(converted_reader_features),
+                min_reader_version: min_reader_version,
+                min_writer_version: min_writer_version,
+                writer_features: writer_features,
+                reader_features: reader_features,
             });
 
         let mut metadata = Metadata::try_new(
