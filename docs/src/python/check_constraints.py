@@ -13,8 +13,10 @@ def add_constraint():
 
 def add_data():
     # --8<-- [start:add_data]
-    from deltalake import write_deltalake
+    from deltalake import write_deltalake, DeltaTable
     import pandas as pd
+
+    dt = DeltaTable("../rust/tests/data/simple_table")
 
     df = pd.DataFrame({"id": [-1]})
     write_deltalake(dt, df, mode="append", engine="rust")
