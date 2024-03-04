@@ -841,17 +841,15 @@ fn try_cast_batch(from_fields: &Fields, to_fields: &Fields) -> Result<(), ArrowE
                     (f.data_type(), target_field.data_type())
                 {
                     try_cast_batch(fields0, fields1)
+                } else if !can_cast_types(f.data_type(), target_field.data_type()) {
+                    Err(ArrowError::SchemaError(format!(
+                        "Cannot cast field {} from {} to {}",
+                        f.name(),
+                        f.data_type(),
+                        target_field.data_type()
+                    )))
                 } else {
-                    if !can_cast_types(f.data_type(), target_field.data_type()) {
-                        Err(ArrowError::SchemaError(format!(
-                            "Cannot cast field {} from {} to {}",
-                            f.name(),
-                            f.data_type(),
-                            target_field.data_type()
-                        )))
-                    } else {
-                        Ok(())
-                    }
+                    Ok(())
                 }
             } else {
                 Err(ArrowError::SchemaError(format!(
