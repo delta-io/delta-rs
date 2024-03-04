@@ -329,6 +329,8 @@ def write_deltalake(
             table.update_incremental()
 
     elif engine == "pyarrow":
+        if schema_mode == "merge":
+            raise ValueError("schema_mode 'merge' is not supported in pyarrow engine. Use engine=rust")
         # We need to write against the latest table version
         filesystem = pa_fs.PyFileSystem(DeltaStorageHandler(table_uri, storage_options))
 

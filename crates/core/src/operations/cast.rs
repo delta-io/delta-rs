@@ -11,6 +11,36 @@ use std::sync::Arc;
 
 use crate::DeltaResult;
 
+pub (crate) fn merge_field(left: &ArrowField, right: &ArrowField) -> Result<ArrowField, ArrowError> {
+    if let Dictionary(_, value_type) = right.data_type()  {
+        if value_type.equals_datatype(left.data_type()) {
+            return Ok(left.clone());
+        }
+    }
+    if let Dictionary(_, value_type) = left.data_type()  {
+        if value_type.equals_datatype(right.data_type()) {
+            return Ok(right.clone());
+        }
+    }
+    let mut new_field = left.clone();
+    let merge_res = new_field.try_merge(right);
+    if let Err(e) = merge_res {
+        return Err(e);
+    }
+    Ok(new_field)
+}
+
+pub(crate) fn is_compatible_for_merge(schema: ArrowSchema, other: ArrowSchema) -> Result<(), ArrowError> {
+    for f in schema.fields() {
+        if let Ok(other_field) = other.field_with_name(f.name()) {
+            if let Err(e) = merge_field(f.as_ref(), other_field) {
+                return Err(e);
+            }
+        }
+    }
+    Ok(())
+}
+
 pub(crate) fn merge_schema(
     left: ArrowSchema,
     right: ArrowSchema,
@@ -21,23 +51,7 @@ pub(crate) fn merge_schema(
         .map(|field| {
             let right_field = right.field_with_name(field.name());
             if let Ok(right_field) = right_field {
-                // Allow Dictionary to be merged with non-Dictionary
-                if let Dictionary(_, value_type) = right_field.data_type()  {
-                    if value_type.equals_datatype(field.data_type()) {
-                        return Ok(field.as_ref().clone());
-                    }
-                }
-                if let Dictionary(_, value_type) = field.data_type()  {
-                    if value_type.equals_datatype(right_field.data_type()) {
-                        return Ok(right_field.clone());
-                    }
-                }
-                let mut new_field = field.as_ref().clone();
-                let merge_res = new_field.try_merge(right_field);
-                if let Err(e) = merge_res {
-                    return Err(e);
-                }
-                Ok(new_field)
+                merge_field(field.as_ref(), right_field)
             } else {
                 Ok(field.as_ref().clone())
             }
@@ -52,6 +66,7 @@ pub(crate) fn merge_schema(
 
     Ok(ArrowSchema::new(fields))
 }
+
 
 fn cast_struct(
     struct_array: &StructArray,

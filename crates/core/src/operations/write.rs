@@ -28,6 +28,7 @@ use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
+use std::vec;
 
 use arrow_array::RecordBatch;
 use arrow_cast::can_cast_types;
@@ -53,7 +54,7 @@ use crate::delta_datafusion::{find_files, register_store, DeltaScanBuilder};
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::{Action, Add, Metadata, PartitionsExt, Remove, StructType};
 use crate::logstore::LogStoreRef;
-use crate::operations::cast::{cast_record_batch, merge_schema};
+use crate::operations::cast::{cast_record_batch, merge_schema, is_compatible_for_merge};
 use crate::protocol::{DeltaOperation, SaveMode};
 use crate::storage::ObjectStoreRef;
 use crate::table::state::DeltaTableState;
@@ -339,7 +340,7 @@ async fn write_execution_plan_with_predicate(
     safe_cast: bool,
     schema_mode: Option<SchemaMode>,
 ) -> DeltaResult<Vec<Action>> {
-    let schema: ArrowSchemaRef = if schema_mode == Some(SchemaMode::Overwrite) {
+    let schema: ArrowSchemaRef = if let Some(_)  = schema_mode {
         plan.schema()
     } else {
         snapshot
@@ -605,9 +606,14 @@ impl std::future::IntoFuture for WriteBuilder {
                             if this.mode == SaveMode::Overwrite {
                                 new_schema = None // we overwrite anyway, so no need to cast
                             } else if this.schema_mode == Some(SchemaMode::Overwrite) {
+                                if let Err(err) = is_compatible_for_merge(
+                                    table_schema.as_ref().clone(),
+                                    schema.as_ref().clone(),
+                                ) {
+                                    return Err(DeltaTableError::InvalidData { violations: vec!(format!("{:?}", err)) });
+                                }
                                 new_schema = None // we overwrite anyway, so no need to cast
                             } else if this.schema_mode == Some(SchemaMode::Merge) {
-                                println!("table. {:?} \r\n batch: {:?}", table_schema, schema);
                                 new_schema = Some(Arc::new(merge_schema(
                                     table_schema.as_ref().clone(),
                                     schema.as_ref().clone(),
@@ -1134,13 +1140,13 @@ mod tests {
         )
         .unwrap();
 
-        let table = DeltaOps(table)
+        let mut table = DeltaOps(table)
             .write(vec![new_batch])
             .with_save_mode(SaveMode::Append)
             .with_schema_mode(SchemaMode::Merge)
             .await
             .unwrap();
-
+        table.load().await.unwrap();
         assert_eq!(table.version(), 1);
         let new_schema = table.metadata().unwrap().schema().unwrap();
         let fields = new_schema.fields();
@@ -1208,6 +1214,66 @@ mod tests {
         assert_eq!(names, vec!["id", "inserted_by", "modified", "value"]);
         let part_cols = table.metadata().unwrap().partition_columns.clone();
         assert_eq!(part_cols, vec!["id", "value"]); // we want to preserve partitions
+    }
+
+    
+
+    #[tokio::test]
+    async fn test_overwrite_schema() {
+        let batch = get_record_batch(None, false);
+        let table = DeltaOps::new_in_memory()
+            .write(vec![batch.clone()])
+            .with_save_mode(SaveMode::ErrorIfExists)
+            .await
+            .unwrap();
+        assert_eq!(table.version(), 0);
+
+        let mut new_schema_builder = arrow_schema::SchemaBuilder::new();
+        for field in batch.schema().fields() {
+            if field.name() != "modified" {
+                new_schema_builder.push(field.clone());
+            }
+        }
+        new_schema_builder.push(Field::new("inserted_by", DataType::Utf8, true));
+        let new_schema = new_schema_builder.finish();
+        let new_fields = new_schema.fields();
+        let new_names = new_fields.iter().map(|f| f.name()).collect::<Vec<_>>();
+        assert_eq!(new_names, vec!["id", "value", "inserted_by"]);
+        let inserted_by = StringArray::from(vec![
+            Some("A1"),
+            Some("B1"),
+            None,
+            Some("B2"),
+            Some("A3"),
+            Some("A4"),
+            None,
+            None,
+            Some("B4"),
+            Some("A5"),
+            Some("A7"),
+        ]);
+        let new_batch = RecordBatch::try_new(
+            Arc::new(new_schema),
+            vec![
+                Arc::new(batch.column_by_name("id").unwrap().clone()),
+                Arc::new(batch.column_by_name("value").unwrap().clone()),
+                Arc::new(inserted_by),
+            ],
+        )
+        .unwrap();
+
+        let table = DeltaOps(table)
+            .write(vec![new_batch])
+            .with_save_mode(SaveMode::Append)
+            .with_schema_mode(SchemaMode::Overwrite)
+            .await
+            .unwrap();
+
+        assert_eq!(table.version(), 1);
+        let new_schema = table.metadata().unwrap().schema().unwrap();
+        let fields = new_schema.fields();
+        let names = fields.iter().map(|f| f.name()).collect::<Vec<_>>();
+        assert_eq!(names, vec!["id", "value", "inserted_by"]);
     }
 
     #[tokio::test]
