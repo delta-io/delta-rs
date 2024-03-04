@@ -603,7 +603,7 @@ impl std::future::IntoFuture for WriteBuilder {
                             .unwrap_or(schema.clone());
 
                         if !can_cast_batch(schema.fields(), table_schema.fields()) {
-                            if this.mode == SaveMode::Overwrite {
+                            if this.mode == SaveMode::Overwrite && this.schema_mode.is_some() {
                                 new_schema = None // we overwrite anyway, so no need to cast
                             } else if this.schema_mode == Some(SchemaMode::Overwrite) {
                                 if let Err(err) = is_compatible_for_merge(
@@ -621,6 +621,7 @@ impl std::future::IntoFuture for WriteBuilder {
                                     schema.as_ref().clone(),
                                 )?));
                             } else {
+                                // this is a feature! Unless you specify a schema_mode explicity, we want to check the schema!
                                 return Err(DeltaTableError::Generic(
                                     "Schema of data does not match table schema".to_string(),
                                 ));
@@ -1274,6 +1275,52 @@ mod tests {
         let fields = new_schema.fields();
         let names = fields.iter().map(|f| f.name()).collect::<Vec<_>>();
         assert_eq!(names, vec!["id", "value", "inserted_by"]);
+    }
+
+    #[tokio::test]
+    async fn test_overwrite_check() {
+        // If you do not pass a schema mode, we want to check the schema
+        let batch = get_record_batch(None, false);
+        let table = DeltaOps::new_in_memory()
+            .write(vec![batch.clone()])
+            .with_save_mode(SaveMode::ErrorIfExists)
+            .await
+            .unwrap();
+        assert_eq!(table.version(), 0);
+
+        let mut new_schema_builder = arrow_schema::SchemaBuilder::new();
+        
+        new_schema_builder.push(Field::new("inserted_by", DataType::Utf8, true));
+        let new_schema = new_schema_builder.finish();
+        let new_fields = new_schema.fields();
+        let new_names = new_fields.iter().map(|f| f.name()).collect::<Vec<_>>();
+        assert_eq!(new_names, vec!["inserted_by"]);
+        let inserted_by = StringArray::from(vec![
+            Some("A1"),
+            Some("B1"),
+            None,
+            Some("B2"),
+            Some("A3"),
+            Some("A4"),
+            None,
+            None,
+            Some("B4"),
+            Some("A5"),
+            Some("A7"),
+        ]);
+        let new_batch = RecordBatch::try_new(
+            Arc::new(new_schema),
+            vec![
+                Arc::new(inserted_by),
+            ],
+        )
+        .unwrap();
+
+        let table = DeltaOps(table)
+            .write(vec![new_batch])
+            .with_save_mode(SaveMode::Append)
+            .await;
+        assert!(table.is_err());
     }
 
     #[tokio::test]
