@@ -31,6 +31,8 @@ if sys.version_info >= (3, 8):
 else:
     from typing_extensions import Literal
 
+import warnings
+
 import pyarrow as pa
 import pyarrow.dataset as ds
 import pyarrow.fs as pa_fs
@@ -49,7 +51,7 @@ from .schema import (
     convert_pyarrow_table,
 )
 from .table import MAX_SUPPORTED_WRITER_VERSION, DeltaTable, WriterProperties
-import warnings
+
 try:
     import pandas as pd  # noqa: F811
 except ModuleNotFoundError:
@@ -101,8 +103,7 @@ def write_deltalake(
     large_dtypes: bool = ...,
     engine: Literal["pyarrow"] = ...,
     custom_metadata: Optional[Dict[str, str]] = ...,
-) -> None:
-    ...
+) -> None: ...
 
 
 @overload
@@ -124,14 +125,13 @@ def write_deltalake(
     description: Optional[str] = ...,
     configuration: Optional[Mapping[str, Optional[str]]] = ...,
     overwrite_schema: bool = ...,
-    schema_mode: Optional[Literal[ "merge", "overwrite"]] = ...,
+    schema_mode: Optional[Literal["merge", "overwrite"]] = ...,
     storage_options: Optional[Dict[str, str]] = ...,
     large_dtypes: bool = ...,
     engine: Literal["rust"],
     writer_properties: WriterProperties = ...,
     custom_metadata: Optional[Dict[str, str]] = ...,
-) -> None:
-    ...
+) -> None: ...
 
 
 @overload
@@ -153,15 +153,14 @@ def write_deltalake(
     description: Optional[str] = ...,
     configuration: Optional[Mapping[str, Optional[str]]] = ...,
     overwrite_schema: bool = ...,
-    schema_mode: Optional[Literal[ "merge", "overwrite"]] = ...,
+    schema_mode: Optional[Literal["merge", "overwrite"]] = ...,
     storage_options: Optional[Dict[str, str]] = ...,
     predicate: Optional[str] = ...,
     large_dtypes: bool = ...,
     engine: Literal["rust"],
     writer_properties: WriterProperties = ...,
     custom_metadata: Optional[Dict[str, str]] = ...,
-) -> None:
-    ...
+) -> None: ...
 
 
 def write_deltalake(
@@ -188,7 +187,7 @@ def write_deltalake(
     description: Optional[str] = None,
     configuration: Optional[Mapping[str, Optional[str]]] = None,
     overwrite_schema: bool = False,
-    schema_mode: Optional[Literal[ "merge", "overwrite"]] = None,
+    schema_mode: Optional[Literal["merge", "overwrite"]] = None,
     storage_options: Optional[Dict[str, str]] = None,
     partition_filters: Optional[List[Tuple[str, str, Any]]] = None,
     predicate: Optional[str] = None,
@@ -263,7 +262,7 @@ def write_deltalake(
     __enforce_append_only(table=table, configuration=configuration, mode=mode)
     if overwrite_schema:
         schema_mode = "overwrite"
-        
+
         warnings.warn(
             "overwrite_schema is deprecated, use schema_mode instead. ",
             category=DeprecationWarning,
@@ -330,7 +329,9 @@ def write_deltalake(
 
     elif engine == "pyarrow":
         if schema_mode == "merge":
-            raise ValueError("schema_mode 'merge' is not supported in pyarrow engine. Use engine=rust")
+            raise ValueError(
+                "schema_mode 'merge' is not supported in pyarrow engine. Use engine=rust"
+            )
         # We need to write against the latest table version
         filesystem = pa_fs.PyFileSystem(DeltaStorageHandler(table_uri, storage_options))
 
@@ -435,12 +436,12 @@ def write_deltalake(
             ) -> None:
                 if table is None:
                     return
-                existed_partitions: FrozenSet[
-                    FrozenSet[Tuple[str, Optional[str]]]
-                ] = table._table.get_active_partitions()
-                allowed_partitions: FrozenSet[
-                    FrozenSet[Tuple[str, Optional[str]]]
-                ] = table._table.get_active_partitions(partition_filters)
+                existed_partitions: FrozenSet[FrozenSet[Tuple[str, Optional[str]]]] = (
+                    table._table.get_active_partitions()
+                )
+                allowed_partitions: FrozenSet[FrozenSet[Tuple[str, Optional[str]]]] = (
+                    table._table.get_active_partitions(partition_filters)
+                )
                 partition_values = pa.RecordBatch.from_arrays(
                     [
                         batch.column(column_name)

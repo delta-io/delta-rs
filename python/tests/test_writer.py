@@ -148,22 +148,37 @@ def test_update_schema(existing_table: DeltaTable):
 def test_merge_schema(existing_table: DeltaTable):
     print(existing_table._table.table_uri())
     old_table_data = existing_table.to_pyarrow_table()
-    new_data = pa.table({"new_x": pa.array([1, 2, 3], pa.int32()), "new_y": pa.array([1, 2, 3], pa.int32())})
+    new_data = pa.table(
+        {
+            "new_x": pa.array([1, 2, 3], pa.int32()),
+            "new_y": pa.array([1, 2, 3], pa.int32()),
+        }
+    )
 
-    write_deltalake(existing_table, new_data, mode="append", schema_mode="merge", engine="rust")
+    write_deltalake(
+        existing_table, new_data, mode="append", schema_mode="merge", engine="rust"
+    )
     # adjust schema of old_table_data and new_data to match each other
-    
+
     for i in range(old_table_data.num_columns):
         col = old_table_data.schema.field(i)
         new_data = new_data.add_column(i, col, pa.nulls(new_data.num_rows, col.type))
 
-    old_table_data=old_table_data.append_column(pa.field("new_x", pa.int32()), pa.nulls(old_table_data.num_rows, pa.int32()))
-    old_table_data=old_table_data.append_column(pa.field("new_y", pa.int32()), pa.nulls(old_table_data.num_rows, pa.int32()))
-    
+    old_table_data = old_table_data.append_column(
+        pa.field("new_x", pa.int32()), pa.nulls(old_table_data.num_rows, pa.int32())
+    )
+    old_table_data = old_table_data.append_column(
+        pa.field("new_y", pa.int32()), pa.nulls(old_table_data.num_rows, pa.int32())
+    )
+
     # define sort order
-    read_data = existing_table.to_pyarrow_table().sort_by([("utf8", "ascending"), ("new_x", "ascending")])
+    read_data = existing_table.to_pyarrow_table().sort_by(
+        [("utf8", "ascending"), ("new_x", "ascending")]
+    )
     print(repr(read_data.to_pylist()))
-    concated = pa.concat_tables([old_table_data, new_data], promote_options="permissive")
+    concated = pa.concat_tables(
+        [old_table_data, new_data], promote_options="permissive"
+    )
     print(repr(concated.to_pylist()))
     assert read_data == concated
 
@@ -175,18 +190,34 @@ def test_merge_schema(existing_table: DeltaTable):
 def test_overwrite_schema(existing_table: DeltaTable):
     print(existing_table._table.table_uri())
     old_table_data = existing_table.to_pyarrow_table()
-    new_data = pa.table({"utf8": pa.array(['bla', 'bli', 'blubb']), "new_x": pa.array([1, 2, 3], pa.int32()), "new_y": pa.array([1, 2, 3], pa.int32())})
+    new_data = pa.table(
+        {
+            "utf8": pa.array(["bla", "bli", "blubb"]),
+            "new_x": pa.array([1, 2, 3], pa.int32()),
+            "new_y": pa.array([1, 2, 3], pa.int32()),
+        }
+    )
 
-    write_deltalake(existing_table, new_data, mode="append", schema_mode="overwrite", engine="rust")
+    write_deltalake(
+        existing_table, new_data, mode="append", schema_mode="overwrite", engine="rust"
+    )
     # adjust schema of old_table_data and new_data to match each other
     old_table_data = old_table_data.select(["utf8"])
-    old_table_data=old_table_data.append_column(pa.field("new_x", pa.int32()), pa.nulls(old_table_data.num_rows, pa.int32()))
-    old_table_data=old_table_data.append_column(pa.field("new_y", pa.int32()), pa.nulls(old_table_data.num_rows, pa.int32()))
-    
+    old_table_data = old_table_data.append_column(
+        pa.field("new_x", pa.int32()), pa.nulls(old_table_data.num_rows, pa.int32())
+    )
+    old_table_data = old_table_data.append_column(
+        pa.field("new_y", pa.int32()), pa.nulls(old_table_data.num_rows, pa.int32())
+    )
+
     # define sort order
-    read_data = existing_table.to_pyarrow_table().sort_by([("utf8", "ascending"), ("new_x", "ascending")])
+    read_data = existing_table.to_pyarrow_table().sort_by(
+        [("utf8", "ascending"), ("new_x", "ascending")]
+    )
     print(repr(read_data.to_pylist()))
-    concated = pa.concat_tables([old_table_data, new_data], promote_options="permissive")
+    concated = pa.concat_tables(
+        [old_table_data, new_data], promote_options="permissive"
+    )
     print(repr(concated.to_pylist()))
     assert read_data == concated
 
@@ -194,13 +225,25 @@ def test_overwrite_schema(existing_table: DeltaTable):
 
     assert existing_table.schema().to_pyarrow() == new_data.schema
 
+
 def test_overwrite_schema_error(existing_table: DeltaTable):
     print(existing_table._table.table_uri())
-    new_data = pa.table({"utf8": pa.array([1235, 546, 5645]), "new_x": pa.array([1, 2, 3], pa.int32()), "new_y": pa.array([1, 2, 3], pa.int32())})
-    
+    new_data = pa.table(
+        {
+            "utf8": pa.array([1235, 546, 5645]),
+            "new_x": pa.array([1, 2, 3], pa.int32()),
+            "new_y": pa.array([1, 2, 3], pa.int32()),
+        }
+    )
+
     with pytest.raises(DeltaError):
-        write_deltalake(existing_table, new_data, mode="append", schema_mode="overwrite", engine="rust")
-    
+        write_deltalake(
+            existing_table,
+            new_data,
+            mode="append",
+            schema_mode="overwrite",
+            engine="rust",
+        )
 
 
 def test_update_schema_rust_writer(existing_table: DeltaTable):
