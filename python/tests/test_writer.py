@@ -769,11 +769,7 @@ def test_writer_with_options(tmp_path: pathlib.Path):
 
 
 def test_try_get_table_and_table_uri(tmp_path: pathlib.Path):
-    from typing import TypeVar
-
-    T = TypeVar("T")
-
-    def _normalize_path(t: tuple[T, str]):  # who does not love Windows? ;)
+    def _normalize_path(t):  # who does not love Windows? ;)
         return t[0], t[1].replace("\\", "/") if t[1] else t[1]
 
     data = pa.table({"vals": pa.array(["1", "2", "3"])})
