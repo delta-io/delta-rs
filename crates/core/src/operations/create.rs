@@ -5,8 +5,6 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use futures::future::BoxFuture;
-use futures::io::Read;
-use maplit::hashset;
 use serde_json::Value;
 
 use super::transaction::{commit, PROTOCOL};
@@ -246,25 +244,19 @@ impl CreateBuilder {
         // We set the lowest protocol we can, and if subsequent writes use newer features we update metadata?
 
         let (min_reader_version, min_writer_version, writer_features, reader_features) =
-            if contains_timestampntz.clone() {
+            if *contains_timestampntz {
                 let mut converted_writer_features = self
                     .configuration
-                    .iter()
-                    .map(|(key, _)| key.clone().into())
-                    .filter(|v| match v {
-                        WriterFeatures::Other(_) => false,
-                        _ => true,
-                    })
+                    .keys()
+                    .map(|key| key.clone().into())
+                    .filter(|v| !matches!(v, WriterFeatures::Other(_)))
                     .collect::<HashSet<WriterFeatures>>();
 
                 let mut converted_reader_features = self
                     .configuration
-                    .iter()
-                    .map(|(key, _)| key.clone().into())
-                    .filter(|v| match v {
-                        ReaderFeatures::Other(_) => false,
-                        _ => true,
-                    })
+                    .keys()
+                    .map(|key| key.clone().into())
+                    .filter(|v| !matches!(v, ReaderFeatures::Other(_)))
                     .collect::<HashSet<ReaderFeatures>>();
                 converted_writer_features.insert(WriterFeatures::TimestampWithoutTimezone);
                 converted_reader_features.insert(ReaderFeatures::TimestampWithoutTimezone);
@@ -291,10 +283,10 @@ impl CreateBuilder {
                 _ => unreachable!(),
             })
             .unwrap_or_else(|| Protocol {
-                min_reader_version: min_reader_version,
-                min_writer_version: min_writer_version,
-                writer_features: writer_features,
-                reader_features: reader_features,
+                min_reader_version,
+                min_writer_version,
+                writer_features,
+                reader_features,
             });
 
         let mut metadata = Metadata::try_new(
