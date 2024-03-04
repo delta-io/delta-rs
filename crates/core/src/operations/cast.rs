@@ -23,10 +23,7 @@ pub(crate) fn merge_field(left: &ArrowField, right: &ArrowField) -> Result<Arrow
         }
     }
     let mut new_field = left.clone();
-    let merge_res = new_field.try_merge(right);
-    if let Err(e) = merge_res {
-        return Err(e);
-    }
+    new_field.try_merge(right)?;
     Ok(new_field)
 }
 
@@ -36,9 +33,7 @@ pub(crate) fn is_compatible_for_merge(
 ) -> Result<(), ArrowError> {
     for f in schema.fields() {
         if let Ok(other_field) = other.field_with_name(f.name()) {
-            if let Err(e) = merge_field(f.as_ref(), other_field) {
-                return Err(e);
-            }
+            merge_field(f.as_ref(), other_field)?;
         }
     }
     Ok(())

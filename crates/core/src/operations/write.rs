@@ -340,7 +340,7 @@ async fn write_execution_plan_with_predicate(
     safe_cast: bool,
     schema_mode: Option<SchemaMode>,
 ) -> DeltaResult<Vec<Action>> {
-    let schema: ArrowSchemaRef = if let Some(_) = schema_mode {
+    let schema: ArrowSchemaRef = if schema_mode.is_some() {
         plan.schema()
     } else {
         snapshot
