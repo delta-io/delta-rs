@@ -25,7 +25,7 @@ of Spark's `pyspark.sql.DataFrameWriter.saveAsTable` DataFrame method. To overwr
 passed to it differs from the existing table's schema. If you wish to
 alter the schema as part of an overwrite pass in `schema_mode="overwrite"` or `schema_mode="merge"`.
 `schema_mode="overwrite"` will completely overwrite the schema, even if columns are dropped; merge will append the new columns
-and fill missing columns with `null`.
+and fill missing columns with `null`. `schema_mode="merge"` is also supported on append operations.
 
 ## Overwriting a partition
 

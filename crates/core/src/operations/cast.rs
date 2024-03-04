@@ -7,6 +7,7 @@ use arrow_schema::{
     ArrowError, DataType, Field as ArrowField, Fields, Schema as ArrowSchema,
     SchemaRef as ArrowSchemaRef,
 };
+use futures::SinkExt;
 use std::sync::Arc;
 
 use crate::DeltaResult;
@@ -27,42 +28,45 @@ pub(crate) fn merge_field(left: &ArrowField, right: &ArrowField) -> Result<Arrow
     Ok(new_field)
 }
 
-pub(crate) fn is_compatible_for_merge(
-    schema: ArrowSchema,
-    other: ArrowSchema,
-) -> Result<(), ArrowError> {
-    for f in schema.fields() {
-        if let Ok(other_field) = other.field_with_name(f.name()) {
-            merge_field(f.as_ref(), other_field)?;
-        }
-    }
-    Ok(())
-}
-
 pub(crate) fn merge_schema(
     left: ArrowSchema,
     right: ArrowSchema,
 ) -> Result<ArrowSchema, ArrowError> {
-    let left_fields: Result<Vec<ArrowField>, ArrowError> = left
+    let mut errors = Vec::with_capacity(left.fields().len());
+    let merged_fields: Result<Vec<ArrowField>, ArrowError> = left
         .fields()
         .iter()
         .map(|field| {
             let right_field = right.field_with_name(field.name());
             if let Ok(right_field) = right_field {
-                merge_field(field.as_ref(), right_field)
+                let field_or_not = merge_field(field.as_ref(), right_field);
+                match field_or_not {
+                    Err(e) => {
+                        errors.push(e.to_string());
+                        Err(e)
+                    }
+                    Ok(f) => Ok(f),
+                }
             } else {
                 Ok(field.as_ref().clone())
             }
         })
         .collect();
-    let mut fields = left_fields?;
-    for field in right.fields() {
-        if !left.field_with_name(field.name()).is_ok() {
-            fields.push(field.as_ref().clone());
+    match merged_fields {
+        Ok(mut fields) => {
+            for field in right.fields() {
+                if !left.field_with_name(field.name()).is_ok() {
+                    fields.push(field.as_ref().clone());
+                }
+            }
+
+            Ok(ArrowSchema::new(fields))
+        }
+        Err(e) => {
+            errors.push(e.to_string());
+            Err(ArrowError::SchemaError(errors.join("\n")))
         }
     }
-
-    Ok(ArrowSchema::new(fields))
 }
 
 fn cast_struct(

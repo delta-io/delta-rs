@@ -55,6 +55,7 @@ fn arrow_to_py(err: ArrowError) -> PyErr {
         ArrowError::DivideByZero => PyValueError::new_err("division by zero"),
         ArrowError::InvalidArgumentError(msg) => PyValueError::new_err(msg),
         ArrowError::NotYetImplemented(msg) => PyNotImplementedError::new_err(msg),
+        ArrowError::SchemaError(msg) => PyValueError::new_err(msg),
         other => PyException::new_err(other.to_string()),
     }
 }
