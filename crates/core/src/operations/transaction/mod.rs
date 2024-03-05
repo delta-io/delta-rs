@@ -72,12 +72,12 @@ pub enum TransactionError {
     UnsupportedWriterFeatures(Vec<WriterFeatures>),
 
     /// Error returned when writer features are required but not specified
-    #[error("Writer features must be specified for writerversion >= 7")]
-    WriterFeaturesRequired,
+    #[error("Writer features must be specified for writerversion >= 7, please specify: {0:?}")]
+    WriterFeaturesRequired(WriterFeatures),
 
     /// Error returned when reader features are required but not specified
-    #[error("Reader features must be specified for reader version >= 3")]
-    ReaderFeaturesRequired,
+    #[error("Reader features must be specified for reader version >= 3, please specify: {0:?}")]
+    ReaderFeaturesRequired(ReaderFeatures),
 
     /// The transaction failed to commit due to an error in an implementation-specific layer.
     /// Currently used by DynamoDb-backed S3 log store when database operations fail.

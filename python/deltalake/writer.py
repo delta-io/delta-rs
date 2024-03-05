@@ -50,7 +50,13 @@ from .schema import (
     convert_pyarrow_recordbatchreader,
     convert_pyarrow_table,
 )
-from .table import MAX_SUPPORTED_WRITER_VERSION, DeltaTable, WriterProperties
+from .table import (
+    MAX_SUPPORTED_PYARROW_WRITER_VERSION,
+    NOT_SUPPORTED_PYARROW_WRITER_VERSIONS,
+    SUPPORTED_WRITER_FEATURES,
+    DeltaTable,
+    WriterProperties,
+)
 
 try:
     import pandas as pd  # noqa: F811
@@ -421,12 +427,29 @@ def write_deltalake(
         if table is not None:
             # We don't currently provide a way to set invariants
             # (and maybe never will), so only enforce if already exist.
-            if table.protocol().min_writer_version > MAX_SUPPORTED_WRITER_VERSION:
+            table_protocol = table.protocol()
+            if (
+                table_protocol.min_writer_version > MAX_SUPPORTED_PYARROW_WRITER_VERSION
+                or table_protocol.min_writer_version
+                in NOT_SUPPORTED_PYARROW_WRITER_VERSIONS
+            ):
                 raise DeltaProtocolError(
                     "This table's min_writer_version is "
-                    f"{table.protocol().min_writer_version}, "
-                    "but this method only supports version 2."
+                    f"{table_protocol.min_writer_version}, "
+                    f"""but this method only supports version 2 or 7 with at max these features {SUPPORTED_WRITER_FEATURES} enabled. 
+                    Try engine='rust' instead which supports more features and writer versions."""
                 )
+            if (
+                table_protocol.min_writer_version >= 7
+                and table_protocol.writer_features is not None
+            ):
+                missing_features = {*table_protocol.writer_features}.difference(
+                    SUPPORTED_WRITER_FEATURES
+                )
+                if len(missing_features) > 0:
+                    raise DeltaProtocolError(
+                        f"The table has set these writer features: {missing_features} but these are not supported by the pyarrow writer. Please use engine='rust'."
+                    )
 
             invariants = table.schema().invariants
             checker = _DeltaDataChecker(invariants)
