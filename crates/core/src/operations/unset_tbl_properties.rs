@@ -101,9 +101,6 @@ impl std::future::IntoFuture for UnsetTablePropertiesBuilder {
                     "table properties with names: {:?} don't exists",
                     incorrect_config_names
                 )));
-            } else if !this.raise_if_not_exists && incorrect_config_names.len() == properties.len()
-            {
-                return Ok(DeltaTable::new_with_state(this.log_store, this.snapshot));
             }
 
             for key in &properties {

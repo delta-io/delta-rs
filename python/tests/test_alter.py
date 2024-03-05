@@ -80,6 +80,15 @@ def test_unset_table_properties(tmp_path: pathlib.Path, sample_table: pa.Table):
     assert dt.version() == 1
     assert dt.metadata().configuration == {"delta.appendOnly": "true"}
 
+    dt.alter.unset_table_properties(
+        "delta.checkpointInterval", raise_if_not_exists=False
+    )
+
+    last_action = dt.history(1)[0]
+    assert last_action["operation"] == "UNSET TBLPROPERTIES"
+    assert dt.version() == 2
+    assert dt.metadata().configuration == {"delta.appendOnly": "true"}
+
     with pytest.raises(DeltaError):
         # Invalid properties
         dt.alter.unset_table_properties("invalid_property")
