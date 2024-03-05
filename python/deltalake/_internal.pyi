@@ -795,6 +795,11 @@ class DeltaProtocolError(DeltaError):
 
     pass
 
+class SchemaMismatchError(DeltaError):
+    """Raised when a schema mismatch is detected."""
+
+    pass
+
 FilterLiteralType = Tuple[str, str, Any]
 FilterConjunctionType = List[FilterLiteralType]
 FilterDNFType = List[FilterConjunctionType]
