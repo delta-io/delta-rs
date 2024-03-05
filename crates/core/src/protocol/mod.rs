@@ -1314,15 +1314,21 @@ mod tests {
                 ),
                 (
                     "min.timestamp",
-                    Arc::new(array::TimestampMicrosecondArray::from(vec![
-                        TimestampMicrosecondType::parse("2022-10-24T22:59:32.846Z"),
-                    ])),
+                    Arc::new(
+                        array::TimestampMicrosecondArray::from(vec![
+                            TimestampMicrosecondType::parse("2022-10-24T22:59:32.846Z"),
+                        ])
+                        .with_timezone("UTC"),
+                    ),
                 ),
                 (
                     "max.timestamp",
-                    Arc::new(array::TimestampMicrosecondArray::from(vec![
-                        TimestampMicrosecondType::parse("2022-10-24T22:59:32.846Z"),
-                    ])),
+                    Arc::new(
+                        array::TimestampMicrosecondArray::from(vec![
+                            TimestampMicrosecondType::parse("2022-10-24T22:59:32.846Z"),
+                        ])
+                        .with_timezone("UTC"),
+                    ),
                 ),
                 (
                     "null_count.struct.struct_element",

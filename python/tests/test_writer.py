@@ -704,7 +704,7 @@ def test_writer_fails_on_protocol(
     sample_data: pa.Table,
     engine: Literal["pyarrow", "rust"],
 ):
-    existing_table.protocol = Mock(return_value=ProtocolVersions(1, 3))
+    existing_table.protocol = Mock(return_value=ProtocolVersions(1, 3, None, None))
     with pytest.raises(DeltaProtocolError):
         write_deltalake(existing_table, sample_data, mode="overwrite", engine=engine)
 
