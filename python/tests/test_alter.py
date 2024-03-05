@@ -116,7 +116,7 @@ def test_unset_unallowed_table_properties(
     dt = DeltaTable(tmp_path)
     with pytest.raises(
         DeltaError,
-        match="Generic DeltaTable error: Unsetting table property delta.columnMappingMode is not allowed.",
+        match="Generic DeltaTable error: Unsetting table property delta.columnMapping.mode is not allowed.",
     ):
         # Invalid properties
         dt.alter.unset_table_properties("delta.columnMapping.mode")
