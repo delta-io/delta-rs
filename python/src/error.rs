@@ -10,6 +10,7 @@ create_exception!(_internal, DeltaError, PyException);
 create_exception!(_internal, TableNotFoundError, DeltaError);
 create_exception!(_internal, DeltaProtocolError, DeltaError);
 create_exception!(_internal, CommitFailedError, DeltaError);
+create_exception!(_internal, SchemaMismatchError, DeltaError);
 
 fn inner_to_py_err(err: DeltaTableError) -> PyErr {
     match err {
@@ -55,6 +56,7 @@ fn arrow_to_py(err: ArrowError) -> PyErr {
         ArrowError::DivideByZero => PyValueError::new_err("division by zero"),
         ArrowError::InvalidArgumentError(msg) => PyValueError::new_err(msg),
         ArrowError::NotYetImplemented(msg) => PyNotImplementedError::new_err(msg),
+        ArrowError::SchemaError(msg) => SchemaMismatchError::new_err(msg),
         other => PyException::new_err(other.to_string()),
     }
 }
