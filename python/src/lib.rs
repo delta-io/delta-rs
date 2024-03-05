@@ -1624,7 +1624,7 @@ impl PyDeltaDataChecker {
 #[pymodule]
 // module name need to match project name
 fn _internal(py: Python, m: &PyModule) -> PyResult<()> {
-    use crate::error::{CommitFailedError, DeltaError, TableNotFoundError};
+    use crate::error::{CommitFailedError, DeltaError, SchemaMismatchError, TableNotFoundError};
 
     deltalake::aws::register_handlers(None);
     deltalake::azure::register_handlers(None);
@@ -1634,6 +1634,7 @@ fn _internal(py: Python, m: &PyModule) -> PyResult<()> {
     m.add("CommitFailedError", py.get_type::<CommitFailedError>())?;
     m.add("DeltaProtocolError", py.get_type::<DeltaProtocolError>())?;
     m.add("TableNotFoundError", py.get_type::<TableNotFoundError>())?;
+    m.add("SchemaMismatchError", py.get_type::<SchemaMismatchError>())?;
 
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn")).init();
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;

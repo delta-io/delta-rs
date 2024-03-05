@@ -17,7 +17,12 @@ from pyarrow.dataset import ParquetFileFormat, ParquetReadOptions
 from pyarrow.lib import RecordBatchReader
 
 from deltalake import DeltaTable, Schema, write_deltalake
-from deltalake.exceptions import CommitFailedError, DeltaError, DeltaProtocolError
+from deltalake.exceptions import (
+    CommitFailedError,
+    DeltaError,
+    DeltaProtocolError,
+    SchemaMismatchError,
+)
 from deltalake.table import ProtocolVersions
 from deltalake.writer import try_get_table_and_table_uri
 
@@ -124,11 +129,17 @@ def test_enforce_schema(existing_table: DeltaTable, mode: str):
 def test_enforce_schema_rust_writer(existing_table: DeltaTable, mode: str):
     bad_data = pa.table({"x": pa.array([1, 2, 3])})
 
-    with pytest.raises(ValueError):
+    with pytest.raises(
+        SchemaMismatchError,
+        match=".*Cannot cast schema, number of fields does not match.*",
+    ):
         write_deltalake(existing_table, bad_data, mode=mode, engine="rust")
 
     table_uri = existing_table._table.table_uri()
-    with pytest.raises(ValueError):
+    with pytest.raises(
+        SchemaMismatchError,
+        match=".*Cannot cast schema, number of fields does not match.*",
+    ):
         write_deltalake(table_uri, bad_data, mode=mode, engine="rust")
 
 
@@ -227,7 +238,9 @@ def test_overwrite_schema(existing_table: DeltaTable):
 
 
 def test_update_schema_rust_writer_append(existing_table: DeltaTable):
-    with pytest.raises(ValueError):
+    with pytest.raises(
+        SchemaMismatchError, match="Cannot cast schema, number of fields does not match"
+    ):
         # It's illegal to do schema drift without correct schema_mode
         write_deltalake(
             existing_table,
@@ -237,14 +250,17 @@ def test_update_schema_rust_writer_append(existing_table: DeltaTable):
             engine="rust",
         )
     with pytest.raises(DeltaError):
-        write_deltalake(
+        write_deltalake(  # schema_mode overwrite is illegal with append
             existing_table,
             pa.table({"x1": pa.array([1, 2, 3])}),
             mode="append",
             schema_mode="overwrite",
             engine="rust",
         )
-    with pytest.raises(ValueError):
+    with pytest.raises(
+        SchemaMismatchError,
+        match="Schema error: Fail to merge schema field 'utf8' because the from data_type = Int64 does not equal Utf8",
+    ):
         write_deltalake(
             existing_table,
             pa.table({"utf8": pa.array([1, 2, 3])}),
@@ -263,7 +279,9 @@ def test_update_schema_rust_writer_append(existing_table: DeltaTable):
 
 def test_update_schema_rust_writer_invalid(existing_table: DeltaTable):
     new_data = pa.table({"x5": pa.array([1, 2, 3])})
-    with pytest.raises(ValueError):
+    with pytest.raises(
+        SchemaMismatchError, match="Cannot cast schema, number of fields does not match"
+    ):
         write_deltalake(
             existing_table,
             new_data,
