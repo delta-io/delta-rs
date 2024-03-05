@@ -7,7 +7,6 @@ use arrow_schema::{
     ArrowError, DataType, Field as ArrowField, Fields, Schema as ArrowSchema,
     SchemaRef as ArrowSchemaRef,
 };
-use futures::SinkExt;
 use std::sync::Arc;
 
 use crate::DeltaResult;
