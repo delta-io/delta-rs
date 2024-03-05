@@ -27,8 +27,8 @@ pandas = [
     "pandas"
 ]
 devel = [
-    "mypy",
-    "ruff>=0.1.5",
+    "mypy~=1.8.0",
+    "ruff~=0.3.0",
     "packaging>=20",
     "pytest",
     "pytest-mock",

@@ -100,8 +100,7 @@ def write_deltalake(
     large_dtypes: bool = ...,
     engine: Literal["pyarrow"] = ...,
     custom_metadata: Optional[Dict[str, str]] = ...,
-) -> None:
-    ...
+) -> None: ...
 
 
 @overload
@@ -128,8 +127,7 @@ def write_deltalake(
     engine: Literal["rust"],
     writer_properties: WriterProperties = ...,
     custom_metadata: Optional[Dict[str, str]] = ...,
-) -> None:
-    ...
+) -> None: ...
 
 
 @overload
@@ -157,8 +155,7 @@ def write_deltalake(
     engine: Literal["rust"],
     writer_properties: WriterProperties = ...,
     custom_metadata: Optional[Dict[str, str]] = ...,
-) -> None:
-    ...
+) -> None: ...
 
 
 def write_deltalake(
@@ -261,7 +258,7 @@ def write_deltalake(
         partition_by = [partition_by]
 
     if isinstance(schema, DeltaSchema):
-        schema = schema.to_pyarrow()
+        schema = schema.to_pyarrow(as_large_types=True)
 
     if isinstance(data, RecordBatchReader):
         data = convert_pyarrow_recordbatchreader(data, large_dtypes)
@@ -320,9 +317,13 @@ def write_deltalake(
         # We need to write against the latest table version
         filesystem = pa_fs.PyFileSystem(DeltaStorageHandler(table_uri, storage_options))
 
+        def sort_arrow_schema(schema: pa.schema) -> pa.schema:
+            sorted_cols = sorted(iter(schema), key=lambda x: (x.name, str(x.type)))
+            return pa.schema(sorted_cols)
+
         if table:  # already exists
-            if schema != table.schema().to_pyarrow(
-                as_large_types=large_dtypes
+            if sort_arrow_schema(schema) != sort_arrow_schema(
+                table.schema().to_pyarrow(as_large_types=large_dtypes)
             ) and not (mode == "overwrite" and overwrite_schema):
                 raise ValueError(
                     "Schema of data does not match table schema\n"
@@ -417,12 +418,12 @@ def write_deltalake(
             ) -> None:
                 if table is None:
                     return
-                existed_partitions: FrozenSet[
-                    FrozenSet[Tuple[str, Optional[str]]]
-                ] = table._table.get_active_partitions()
-                allowed_partitions: FrozenSet[
-                    FrozenSet[Tuple[str, Optional[str]]]
-                ] = table._table.get_active_partitions(partition_filters)
+                existed_partitions: FrozenSet[FrozenSet[Tuple[str, Optional[str]]]] = (
+                    table._table.get_active_partitions()
+                )
+                allowed_partitions: FrozenSet[FrozenSet[Tuple[str, Optional[str]]]] = (
+                    table._table.get_active_partitions(partition_filters)
+                )
                 partition_values = pa.RecordBatch.from_arrays(
                     [
                         batch.column(column_name)

@@ -1277,9 +1277,9 @@ class TableMerger:
         self.not_matched_insert_updates: Optional[List[Dict[str, str]]] = None
         self.not_matched_insert_predicate: Optional[List[Optional[str]]] = None
         self.not_matched_by_source_update_updates: Optional[List[Dict[str, str]]] = None
-        self.not_matched_by_source_update_predicate: Optional[
-            List[Optional[str]]
-        ] = None
+        self.not_matched_by_source_update_predicate: Optional[List[Optional[str]]] = (
+            None
+        )
         self.not_matched_by_source_delete_predicate: Optional[List[str]] = None
         self.not_matched_by_source_delete_all: Optional[bool] = None
 
@@ -1795,7 +1795,40 @@ class TableAlterer:
         self.table._table.unset_table_properties(
             properties, raise_if_not_exists, custom_metadata
         )
+			
+    def drop_constraint(
+        self,
+        name: str,
+        raise_if_not_exists: bool = True,
+        custom_metadata: Optional[Dict[str, str]] = None,
+    ) -> None:
+        """
+        Drop constraints from a table. Limited to `single constraint` at once.
 
+        Args:
+            name: constraint name which to drop.
+            raise_if_not_exists: set if should raise if not exists.
+            custom_metadata: custom metadata that will be added to the transaction commit.
+        Example:
+            ```python
+            from deltalake import DeltaTable
+            dt = DeltaTable("test_table_constraints")
+            dt.metadata().configuration
+            {'delta.constraints.value_gt_5': 'value > 5'}
+            ```
+
+            **Drop the constraint**
+            ```python
+            dt.alter.drop_constraint(name = "value_gt_5")
+            ```
+
+            **Configuration after dropping**
+            ```python
+            dt.metadata().configuration
+            {}
+            ```
+        """
+        self.table._table.drop_constraints(name, raise_if_not_exists, custom_metadata)
 
 class TableOptimizer:
     """API for various table optimization commands."""

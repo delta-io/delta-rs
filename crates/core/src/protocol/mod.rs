@@ -371,6 +371,12 @@ pub enum DeltaOperation {
         expr: String,
     },
 
+    /// Drops constraints from a table
+    DropConstraint {
+        /// Constraints name
+        name: String,
+    },
+
     /// Merge data with a source data with the following predicate
     #[serde(rename_all = "camelCase")]
     Merge {
@@ -465,6 +471,7 @@ impl DeltaOperation {
             DeltaOperation::VacuumEnd { .. } => "VACUUM END",
             DeltaOperation::AddConstraint { .. } => "ADD CONSTRAINT",
             DeltaOperation::UnsetTableProperties { .. } => "UNSET TBLPROPERTIES",
+            DeltaOperation::DropConstraint { .. } => "DROP CONSTRAINT",
         }
     }
 
@@ -505,6 +512,7 @@ impl DeltaOperation {
             | Self::VacuumEnd { .. }
             | Self::AddConstraint { .. }
             | Self::UnsetTableProperties { .. } => false,
+            | Self::DropConstraint { .. } => false,
             Self::Create { .. }
             | Self::FileSystemCheck {}
             | Self::StreamingUpdate { .. }

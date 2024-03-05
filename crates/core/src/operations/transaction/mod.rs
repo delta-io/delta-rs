@@ -13,6 +13,7 @@ use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::{Action, CommitInfo, ReaderFeatures, WriterFeatures};
 use crate::logstore::LogStore;
 use crate::protocol::DeltaOperation;
+use crate::storage::ObjectStoreRetryExt;
 use crate::table::state::DeltaTableState;
 
 pub use self::protocol::INSTANCE as PROTOCOL;
@@ -242,13 +243,19 @@ pub async fn commit_with_retries(
                         attempt_number += 1;
                     }
                     Err(err) => {
-                        log_store.object_store().delete(&tmp_commit).await?;
+                        log_store
+                            .object_store()
+                            .delete_with_retries(&tmp_commit, 15)
+                            .await?;
                         return Err(TransactionError::CommitConflict(err).into());
                     }
                 };
             }
             Err(err) => {
-                log_store.object_store().delete(&tmp_commit).await?;
+                log_store
+                    .object_store()
+                    .delete_with_retries(&tmp_commit, 15)
+                    .await?;
                 return Err(err.into());
             }
         }
