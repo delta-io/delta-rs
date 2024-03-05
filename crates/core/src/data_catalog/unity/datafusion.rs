@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use dashmap::DashMap;
 use datafusion::catalog::schema::SchemaProvider;
-use datafusion::catalog::{CatalogList, CatalogProvider};
+use datafusion::catalog::{CatalogProvider, CatalogProviderList};
 use datafusion::datasource::TableProvider;
 use tracing::error;
 
@@ -49,7 +49,7 @@ impl UnityCatalogList {
     }
 }
 
-impl CatalogList for UnityCatalogList {
+impl CatalogProviderList for UnityCatalogList {
     fn as_any(&self) -> &dyn Any {
         self
     }

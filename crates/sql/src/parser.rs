@@ -164,7 +164,7 @@ impl<'a> DeltaParser<'a> {
     }
 
     pub fn parse_vacuum(&mut self) -> Result<Statement, ParserError> {
-        let table_name = self.parser.parse_object_name()?;
+        let table_name = self.parser.parse_object_name(false)?;
         match self.parser.peek_token().token {
             Token::Word(w) => match w.keyword {
                 Keyword::RETAIN => {
