@@ -618,13 +618,7 @@ impl std::future::IntoFuture for WriteBuilder {
                                     merge_schema(
                                         table_schema.as_ref().clone(),
                                         schema.as_ref().clone(),
-                                    )
-                                    .map_err(|e| {
-                                        DeltaTableError::Generic(format!(
-                                            "Error merging schema {:?}",
-                                            e
-                                        ))
-                                    })?,
+                                    )?,
                                 ));
                             } else {
                                 return Err(schema_err.into());
@@ -827,7 +821,7 @@ impl std::future::IntoFuture for WriteBuilder {
 fn try_cast_batch(from_fields: &Fields, to_fields: &Fields) -> Result<(), ArrowError> {
     if from_fields.len() != to_fields.len() {
         return Err(ArrowError::SchemaError(format!(
-            "Cannot schema, number of fields does not match: {} vs {}",
+            "Cannot cast schema, number of fields does not match: {} vs {}",
             from_fields.len(),
             to_fields.len()
         )));

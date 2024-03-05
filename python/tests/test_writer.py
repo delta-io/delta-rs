@@ -124,11 +124,11 @@ def test_enforce_schema(existing_table: DeltaTable, mode: str):
 def test_enforce_schema_rust_writer(existing_table: DeltaTable, mode: str):
     bad_data = pa.table({"x": pa.array([1, 2, 3])})
 
-    with pytest.raises(DeltaError):
+    with pytest.raises(ValueError):
         write_deltalake(existing_table, bad_data, mode=mode, engine="rust")
 
     table_uri = existing_table._table.table_uri()
-    with pytest.raises(DeltaError):
+    with pytest.raises(ValueError):
         write_deltalake(table_uri, bad_data, mode=mode, engine="rust")
 
 
@@ -227,7 +227,7 @@ def test_overwrite_schema(existing_table: DeltaTable):
 
 
 def test_update_schema_rust_writer_append(existing_table: DeltaTable):
-    with pytest.raises(DeltaError):
+    with pytest.raises(ValueError):
         # It's illegal to do schema drift without correct schema_mode
         write_deltalake(
             existing_table,
@@ -244,7 +244,7 @@ def test_update_schema_rust_writer_append(existing_table: DeltaTable):
             schema_mode="overwrite",
             engine="rust",
         )
-    with pytest.raises(DeltaError):
+    with pytest.raises(ValueError):
         write_deltalake(
             existing_table,
             pa.table({"utf8": pa.array([1, 2, 3])}),
@@ -263,7 +263,7 @@ def test_update_schema_rust_writer_append(existing_table: DeltaTable):
 
 def test_update_schema_rust_writer_invalid(existing_table: DeltaTable):
     new_data = pa.table({"x5": pa.array([1, 2, 3])})
-    with pytest.raises(DeltaError):
+    with pytest.raises(ValueError):
         write_deltalake(
             existing_table,
             new_data,
