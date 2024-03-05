@@ -206,12 +206,11 @@ impl DeltaOps {
         ConstraintBuilder::new(self.0.log_store, self.0.state.unwrap())
     }
 
-
     /// Unset table properties
     pub fn unset_tbl_properties(self) -> UnsetTablePropertiesBuilder {
         UnsetTablePropertiesBuilder::new(self.0.log_store, self.0.state.unwrap())
     }
-  
+
     /// Drops constraints from a table
     #[cfg(feature = "datafusion")]
     #[must_use]

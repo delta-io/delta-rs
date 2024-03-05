@@ -1795,7 +1795,7 @@ class TableAlterer:
         self.table._table.unset_table_properties(
             properties, raise_if_not_exists, custom_metadata
         )
-			
+
     def drop_constraint(
         self,
         name: str,
@@ -1829,6 +1829,7 @@ class TableAlterer:
             ```
         """
         self.table._table.drop_constraints(name, raise_if_not_exists, custom_metadata)
+
 
 class TableOptimizer:
     """API for various table optimization commands."""

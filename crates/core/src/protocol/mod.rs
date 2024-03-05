@@ -512,7 +512,7 @@ impl DeltaOperation {
             | Self::VacuumEnd { .. }
             | Self::AddConstraint { .. }
             | Self::UnsetTableProperties { .. } => false,
-            | Self::DropConstraint { .. } => false,
+            Self::DropConstraint { .. } => false,
             Self::Create { .. }
             | Self::FileSystemCheck {}
             | Self::StreamingUpdate { .. }

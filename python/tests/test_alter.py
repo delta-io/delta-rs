@@ -63,7 +63,6 @@ def test_add_constraint_roundtrip_metadata(
     assert dt.history(1)[0]["userName"] == "John Doe"
 
 
-
 def test_unset_table_properties(tmp_path: pathlib.Path, sample_table: pa.Table):
     write_deltalake(
         tmp_path,
@@ -90,6 +89,7 @@ def test_unset_table_properties(tmp_path: pathlib.Path, sample_table: pa.Table):
         dt.alter.unset_table_properties(
             ["delta.checkpointInterval", "invalid_property"]
         )
+
 
 def test_drop_constraint(tmp_path: pathlib.Path, sample_table: pa.Table):
     write_deltalake(tmp_path, sample_table)
