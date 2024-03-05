@@ -88,6 +88,8 @@ struct RawDeltaTableMetaData {
     configuration: HashMap<String, Option<String>>,
 }
 
+type StringVec = Vec<String>;
+
 #[pymethods]
 impl RawDeltaTable {
     #[new]
@@ -146,16 +148,35 @@ impl RawDeltaTable {
         })
     }
 
-    pub fn protocol_versions(&self) -> PyResult<(i32, i32)> {
+    pub fn protocol_versions(&self) -> PyResult<(i32, i32, Option<StringVec>, Option<StringVec>)> {
+        let table_protocol = self._table.protocol().map_err(PythonError::from)?;
         Ok((
-            self._table
-                .protocol()
-                .map_err(PythonError::from)?
-                .min_reader_version,
-            self._table
-                .protocol()
-                .map_err(PythonError::from)?
-                .min_writer_version,
+            table_protocol.min_reader_version,
+            table_protocol.min_writer_version,
+            table_protocol
+                .writer_features
+                .as_ref()
+                .and_then(|features| {
+                    let empty_set = !features.is_empty();
+                    empty_set.then(|| {
+                        features
+                            .iter()
+                            .map(|v| v.to_string())
+                            .collect::<Vec<String>>()
+                    })
+                }),
+            table_protocol
+                .reader_features
+                .as_ref()
+                .and_then(|features| {
+                    let empty_set = !features.is_empty();
+                    empty_set.then(|| {
+                        features
+                            .iter()
+                            .map(|v| v.to_string())
+                            .collect::<Vec<String>>()
+                    })
+                }),
         ))
     }
 
@@ -1142,10 +1163,13 @@ fn scalar_to_py(value: &Scalar, py_date: &PyAny, py: Python) -> PyResult<PyObjec
         Long(val) => val.to_object(py),
         Float(val) => val.to_object(py),
         Double(val) => val.to_object(py),
-        // TODO: Since PyArrow 13.0.0, casting string -> timestamp fails if it ends with "Z"
-        // and the target type is timezone naive. The serialization does not produce "Z",
-        // but we need to consider timezones when doing timezone ntz.
         Timestamp(_) => {
+            // We need to manually append 'Z' add to end so that pyarrow can cast the
+            // the scalar value to pa.timestamp("us","UTC")
+            let value = value.serialize();
+            format!("{}Z", value).to_object(py)
+        }
+        TimestampNtz(_) => {
             let value = value.serialize();
             value.to_object(py)
         }
