@@ -1399,7 +1399,7 @@ fn write_to_deltalake(
     data: PyArrowType<ArrowArrayStreamReader>,
     mode: String,
     max_rows_per_group: i64,
-    overwrite_schema: bool,
+    schema_mode: Option<String>,
     partition_by: Option<Vec<String>>,
     predicate: Option<String>,
     name: Option<String>,
@@ -1422,9 +1422,10 @@ fn write_to_deltalake(
     let mut builder = table
         .write(batches)
         .with_save_mode(save_mode)
-        .with_overwrite_schema(overwrite_schema)
         .with_write_batch_size(max_rows_per_group as usize);
-
+    if let Some(schema_mode) = schema_mode {
+        builder = builder.with_schema_mode(schema_mode.parse().map_err(PythonError::from)?);
+    }
     if let Some(partition_columns) = partition_by {
         builder = builder.with_partition_columns(partition_columns);
     }
@@ -1655,7 +1656,7 @@ impl PyDeltaDataChecker {
 #[pymodule]
 // module name need to match project name
 fn _internal(py: Python, m: &PyModule) -> PyResult<()> {
-    use crate::error::{CommitFailedError, DeltaError, TableNotFoundError};
+    use crate::error::{CommitFailedError, DeltaError, SchemaMismatchError, TableNotFoundError};
 
     deltalake::aws::register_handlers(None);
     deltalake::azure::register_handlers(None);
@@ -1665,6 +1666,7 @@ fn _internal(py: Python, m: &PyModule) -> PyResult<()> {
     m.add("CommitFailedError", py.get_type::<CommitFailedError>())?;
     m.add("DeltaProtocolError", py.get_type::<DeltaProtocolError>())?;
     m.add("TableNotFoundError", py.get_type::<TableNotFoundError>())?;
+    m.add("SchemaMismatchError", py.get_type::<SchemaMismatchError>())?;
 
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn")).init();
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;

@@ -643,7 +643,7 @@ mod tests {
     use super::*;
     use serde_json;
     use serde_json::json;
-    use std::hash::DefaultHasher;
+    use std::collections::hash_map::DefaultHasher;
 
     #[test]
     fn test_serde_data_types() {

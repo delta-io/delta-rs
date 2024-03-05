@@ -180,7 +180,7 @@ def write_to_deltalake(
     partition_by: Optional[List[str]],
     mode: str,
     max_rows_per_group: int,
-    overwrite_schema: bool,
+    schema_mode: Optional[str],
     predicate: Optional[str],
     name: Optional[str],
     description: Optional[str],
@@ -798,6 +798,11 @@ class CommitFailedError(DeltaError):
 
 class DeltaProtocolError(DeltaError):
     """Raised when a violation with the Delta protocol specs ocurred."""
+
+    pass
+
+class SchemaMismatchError(DeltaError):
+    """Raised when a schema mismatch is detected."""
 
     pass
 

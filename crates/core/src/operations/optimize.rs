@@ -457,8 +457,12 @@ impl MergePlan {
         while let Some(maybe_batch) = read_stream.next().await {
             let mut batch = maybe_batch?;
 
-            batch =
-                super::cast::cast_record_batch(&batch, task_parameters.file_schema.clone(), false)?;
+            batch = super::cast::cast_record_batch(
+                &batch,
+                task_parameters.file_schema.clone(),
+                false,
+                false,
+            )?;
             partial_metrics.num_batches += 1;
             writer.write(&batch).await.map_err(DeltaTableError::from)?;
         }
