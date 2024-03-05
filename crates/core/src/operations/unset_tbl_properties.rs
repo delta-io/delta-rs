@@ -81,6 +81,18 @@ impl std::future::IntoFuture for UnsetTablePropertiesBuilder {
         let mut this = self;
 
         Box::pin(async move {
+            // Disallow unsetting these table properties:
+            // - delta.columnMapping.mode  for ref: https://docs.delta.io/latest/delta-column-mapping.html
+            if this
+                .properties
+                .iter()
+                .any(|f| f == &DeltaConfigKey::ColumnMappingMode)
+            {
+                return Err(DeltaTableError::Generic(format!(
+                    "Unsetting table property delta.columnMapping.mode is not allowed."
+                )));
+            };
+
             let properties = this
                 .properties
                 .iter()

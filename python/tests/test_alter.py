@@ -100,6 +100,28 @@ def test_unset_table_properties(tmp_path: pathlib.Path, sample_table: pa.Table):
         )
 
 
+def test_unset_unallowed_table_properties(
+    tmp_path: pathlib.Path, sample_table: pa.Table
+):
+    write_deltalake(
+        tmp_path,
+        sample_table,
+        mode="append",
+        configuration={
+            "delta.minReaderVersion": "2",
+            "delta.minWriterVersion": "5",
+            "delta.columnMapping.mode": "name",
+        },
+    )
+    dt = DeltaTable(tmp_path)
+    with pytest.raises(
+        DeltaError,
+        match="Generic DeltaTable error: Unsetting table property delta.columnMappingMode is not allowed.",
+    ):
+        # Invalid properties
+        dt.alter.unset_table_properties("delta.columnMapping.mode")
+
+
 def test_drop_constraint(tmp_path: pathlib.Path, sample_table: pa.Table):
     write_deltalake(tmp_path, sample_table)
 
