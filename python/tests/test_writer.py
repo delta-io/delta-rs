@@ -1446,3 +1446,11 @@ def test_schema_cols_diff_order(tmp_path: pathlib.Path, engine):
     )
 
     assert dt.to_pyarrow_table(columns=["baz", "bar", "foo"]) == expected
+
+
+@pytest.mark.parametrize("engine", ["pyarrow", "rust"])
+def test_empty(existing_table: DeltaTable, engine):
+    with pytest.raises(DeltaError):
+        write_deltalake(existing_table, pa.table([]), mode="append", engine=engine)
+    with pytest.raises(DeltaError):
+        write_deltalake(existing_table, pa.table([]), mode="append", engine=engine)
