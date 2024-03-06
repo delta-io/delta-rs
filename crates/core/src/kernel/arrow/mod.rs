@@ -134,8 +134,11 @@ impl TryFrom<&DataType> for ArrowDataType {
                         // timezone. Stored as 4 bytes integer representing days since 1970-01-01
                         Ok(ArrowDataType::Date32)
                     }
-                    PrimitiveType::Timestamp => {
-                        // Issue: https://github.com/delta-io/delta/issues/643
+                    PrimitiveType::Timestamp => Ok(ArrowDataType::Timestamp(
+                        TimeUnit::Microsecond,
+                        Some("UTC".into()),
+                    )),
+                    PrimitiveType::TimestampNtz => {
                         Ok(ArrowDataType::Timestamp(TimeUnit::Microsecond, None))
                     }
                 }
@@ -217,7 +220,7 @@ impl TryFrom<&ArrowDataType> for DataType {
             ArrowDataType::Date32 => Ok(DataType::Primitive(PrimitiveType::Date)),
             ArrowDataType::Date64 => Ok(DataType::Primitive(PrimitiveType::Date)),
             ArrowDataType::Timestamp(TimeUnit::Microsecond, None) => {
-                Ok(DataType::Primitive(PrimitiveType::Timestamp))
+                Ok(DataType::Primitive(PrimitiveType::TimestampNtz))
             }
             ArrowDataType::Timestamp(TimeUnit::Microsecond, Some(tz))
                 if tz.eq_ignore_ascii_case("utc") =>
@@ -772,16 +775,25 @@ mod tests {
         let timestamp_field = DataType::Primitive(PrimitiveType::Timestamp);
         assert_eq!(
             <ArrowDataType as TryFrom<&DataType>>::try_from(&timestamp_field).unwrap(),
+            ArrowDataType::Timestamp(TimeUnit::Microsecond, Some("UTC".to_string().into()))
+        );
+    }
+
+    #[test]
+    fn test_arrow_from_delta_timestampntz_type() {
+        let timestamp_field = DataType::Primitive(PrimitiveType::TimestampNtz);
+        assert_eq!(
+            <ArrowDataType as TryFrom<&DataType>>::try_from(&timestamp_field).unwrap(),
             ArrowDataType::Timestamp(TimeUnit::Microsecond, None)
         );
     }
 
     #[test]
-    fn test_delta_from_arrow_timestamp_type() {
+    fn test_delta_from_arrow_timestamp_type_no_tz() {
         let timestamp_field = ArrowDataType::Timestamp(TimeUnit::Microsecond, None);
         assert_eq!(
             <DataType as TryFrom<&ArrowDataType>>::try_from(&timestamp_field).unwrap(),
-            DataType::Primitive(PrimitiveType::Timestamp)
+            DataType::Primitive(PrimitiveType::TimestampNtz)
         );
     }
 
