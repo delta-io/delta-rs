@@ -290,6 +290,9 @@ impl WriteBuilder {
                     let schema: StructType = (plan.schema()).try_into()?;
                     PROTOCOL.check_can_write_timestamp_ntz(snapshot, &schema)?;
                 } else if let Some(batches) = &self.batches {
+                    if batches.is_empty() {
+                        return Err(WriteError::MissingData.into());
+                    }
                     let schema: StructType = (batches[0].schema()).try_into()?;
                     PROTOCOL.check_can_write_timestamp_ntz(snapshot, &schema)?;
                 }
