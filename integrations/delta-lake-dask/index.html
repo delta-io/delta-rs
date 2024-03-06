@@ -1401,6 +1401,41 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#what-can-i-do-with-a-dask-deltatable" class="md-nav__link">
+    What can I do with a Dask Deltatable?
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#perform-dask-operations" class="md-nav__link">
+    Perform Dask Operations
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#map-functions-over-partitions" class="md-nav__link">
+    Map Functions over Partitions
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#write-to-delta-lake" class="md-nav__link">
+    Write to Delta Lake
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#contribute-to-dask-deltalake" class="md-nav__link">
+    Contribute to dask-deltalake
+  </a>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -1633,6 +1668,41 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#what-can-i-do-with-a-dask-deltatable" class="md-nav__link">
+    What can I do with a Dask Deltatable?
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#perform-dask-operations" class="md-nav__link">
+    Perform Dask Operations
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#map-functions-over-partitions" class="md-nav__link">
+    Map Functions over Partitions
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#write-to-delta-lake" class="md-nav__link">
+    Write to Delta Lake
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#contribute-to-dask-deltalake" class="md-nav__link">
+    Contribute to dask-deltalake
+  </a>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -1687,301 +1757,95 @@
 </span><span id="__span-2-9"><a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a>|  1 | Soraya       | Jala        | Germany   | NaN         |
 </span></code></pre></div>
 <p>You can read in specific versions of Delta tables by specifying a <code>version</code> number or a timestamp:</p>
-<p><div class="language-text highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a># with specific version
+<div class="language-text highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a># with specific version
 </span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>ddf = ddt.read_deltalake(delta_path, version=3)
 </span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>
 </span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a># with specific datetime
-</span><span id="__span-3-5"><a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a>ddt.read_deltalake(delta_path, datetime=&quot;2018-12-19T16:39:57-08:00&quot;)```
-</span><span id="__span-3-6"><a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a>
-</span><span id="__span-3-7"><a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a>`dask-deltatable` also supports reading from remote sources like S3 with:
+</span><span id="__span-3-5"><a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a>ddt.read_deltalake(delta_path, datetime=&quot;2018-12-19T16:39:57-08:00&quot;)
 </span></code></pre></div>
-ddt.read_deltalake("s3://bucket_name/delta_path", version=3)
-<div class="language-text highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>&gt; To read data from remote sources you&#39;ll need to make sure the credentials are properly configured in environment variables or config files. Refer to your cloud provider documentation to configure these.
-</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>
-</span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a>## What can I do with a Dask Deltatable?
-</span><span id="__span-4-4"><a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a>
-</span><span id="__span-4-5"><a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a>Reading a Delta Lake in with `dask-deltatable` returns a regular Dask DataFrame. You can perform [all the regular Dask operations](https://docs.dask.org/en/stable/dataframe.html) on this DataFrame.
-</span><span id="__span-4-6"><a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a>
-</span><span id="__span-4-7"><a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a>Let&#39;s take a look at the first few rows:
-</span></code></pre></div></p>
+<p><code>dask-deltatable</code> also supports reading from remote sources like S3 with:</p>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>ddt.read_deltalake(&quot;s3://bucket_name/delta_path&quot;, version=3)
+</span></code></pre></div>
 <blockquote>
-<p>ddf.head(n=3)</p>
+<p>To read data from remote sources you'll need to make sure the credentials are properly configured in environment variables or config files. Refer to your cloud provider documentation to configure these.</p>
 </blockquote>
-<table>
-<thead>
-<tr>
-<th style="text-align: right;"></th>
-<th style="text-align: left;">first_name</th>
-<th style="text-align: left;">last_name</th>
-<th style="text-align: left;">country</th>
-<th style="text-align: right;">continent</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td style="text-align: right;">0</td>
-<td style="text-align: left;">Ernesto</td>
-<td style="text-align: left;">Guevara</td>
-<td style="text-align: left;">Argentina</td>
-<td style="text-align: right;">nan</td>
-</tr>
-<tr>
-<td style="text-align: right;"><div class="language-text highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>`dask.dataframe.head()` shows you the first rows of the first partition in the dataframe. In this case, the first partition only has 1 row.
+<h2 id="what-can-i-do-with-a-dask-deltatable">What can I do with a Dask Deltatable?</h2>
+<p>Reading a Delta Lake in with <code>dask-deltatable</code> returns a regular Dask DataFrame. You can perform <a href="https://docs.dask.org/en/stable/dataframe.html">all the regular Dask operations</a> on this DataFrame.</p>
+<p>Let's take a look at the first few rows:</p>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>&gt; ddf.head(n=3)
 </span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>
-</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a>This is because the Delta Lake has been partitioned by country:
-</span></code></pre></div></td>
-<td style="text-align: left;"></td>
-<td style="text-align: left;"></td>
-<td style="text-align: left;"></td>
-<td style="text-align: right;"></td>
-</tr>
-<tr>
-<td style="text-align: right;">&gt; !ls ../../data/people_countries_delta_dask</td>
-<td style="text-align: left;"></td>
-<td style="text-align: left;"></td>
-<td style="text-align: left;"></td>
-<td style="text-align: right;"></td>
-</tr>
-<tr>
-<td style="text-align: right;">_delta_log        country=Argentina country=China     country=Germany</td>
-<td style="text-align: left;"></td>
-<td style="text-align: left;"></td>
-<td style="text-align: left;"></td>
-<td style="text-align: right;"></td>
-</tr>
-<tr>
-<td style="text-align: right;"><div class="language-text highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>`dask-deltatable` neatly reads in the partitioned Delta Lake into corresponding Dask DataFrame partitions:
-</span></code></pre></div></td>
-<td style="text-align: left;"></td>
-<td style="text-align: left;"></td>
-<td style="text-align: left;"></td>
-<td style="text-align: right;"></td>
-</tr>
-<tr>
-<td style="text-align: right;">&gt; # see number of partitions</td>
-<td style="text-align: left;"></td>
-<td style="text-align: left;"></td>
-<td style="text-align: left;"></td>
-<td style="text-align: right;"></td>
-</tr>
-<tr>
-<td style="text-align: right;">&gt; ddf.npartitions</td>
-<td style="text-align: left;"></td>
-<td style="text-align: left;"></td>
-<td style="text-align: left;"></td>
-<td style="text-align: right;"></td>
-</tr>
-<tr>
-<td style="text-align: right;">3</td>
-<td style="text-align: left;"></td>
-<td style="text-align: left;"></td>
-<td style="text-align: left;"></td>
-<td style="text-align: right;"></td>
-</tr>
-<tr>
-<td style="text-align: right;"><div class="language-text highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>You can inspect a single partition using `dask.dataframe.get_partition()`:
-</span></code></pre></div></td>
-<td style="text-align: left;"></td>
-<td style="text-align: left;"></td>
-<td style="text-align: left;"></td>
-<td style="text-align: right;"></td>
-</tr>
-<tr>
-<td style="text-align: right;">&gt; ddf.get_partition(n=1).compute()</td>
-<td style="text-align: left;"></td>
-<td style="text-align: left;"></td>
-<td style="text-align: left;"></td>
-<td style="text-align: right;"></td>
-</tr>
-</tbody>
-</table>
-<table>
-<thead>
-<tr>
-<th style="text-align: right;"></th>
-<th style="text-align: left;">first_name</th>
-<th style="text-align: left;">last_name</th>
-<th style="text-align: left;">country</th>
-<th style="text-align: left;">continent</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td style="text-align: right;">0</td>
-<td style="text-align: left;">Bruce</td>
-<td style="text-align: left;">Lee</td>
-<td style="text-align: left;">China</td>
-<td style="text-align: left;">Asia</td>
-</tr>
-<tr>
-<td style="text-align: right;">1</td>
-<td style="text-align: left;">Jack</td>
-<td style="text-align: left;">Ma</td>
-<td style="text-align: left;">China</td>
-<td style="text-align: left;">Asia</td>
-</tr>
-<tr>
-<td style="text-align: right;"><div class="language-text highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>## Perform Dask Operations
+</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a>|    | first_name   | last_name   | country   |   continent |
+</span><span id="__span-5-4"><a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a>|---:|:-------------|:------------|:----------|------------:|
+</span><span id="__span-5-5"><a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a>|  0 | Ernesto      | Guevara     | Argentina |         nan |
+</span></code></pre></div>
+<p><code>dask.dataframe.head()</code> shows you the first rows of the first partition in the dataframe. In this case, the first partition only has 1 row.</p>
+<p>This is because the Delta Lake has been partitioned by country:</p>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>&gt; !ls ../../data/people_countries_delta_dask
+</span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>_delta_log        country=Argentina country=China     country=Germany
+</span></code></pre></div>
+<p><code>dask-deltatable</code> neatly reads in the partitioned Delta Lake into corresponding Dask DataFrame partitions:</p>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>&gt; # see number of partitions
+</span><span id="__span-7-2"><a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a>&gt; ddf.npartitions
+</span><span id="__span-7-3"><a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a>3
+</span></code></pre></div>
+<p>You can inspect a single partition using <code>dask.dataframe.get_partition()</code>:</p>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>&gt; ddf.get_partition(n=1).compute()
 </span><span id="__span-8-2"><a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a>
-</span><span id="__span-8-3"><a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a>Let&#39;s perform some basic computations over the Delta Lake data that&#39;s now stored in our Dask DataFrame. 
-</span><span id="__span-8-4"><a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a>
-</span><span id="__span-8-5"><a id="__codelineno-8-5" name="__codelineno-8-5" href="#__codelineno-8-5"></a>Suppose you want to group the dataset by the `country` column:
-</span></code></pre></div></td>
-<td style="text-align: left;"></td>
-<td style="text-align: left;"></td>
-<td style="text-align: left;"></td>
-<td style="text-align: left;"></td>
-</tr>
-<tr>
-<td style="text-align: right;">&gt; ddf.groupby(['country']).count().compute()</td>
-<td style="text-align: left;"></td>
-<td style="text-align: left;"></td>
-<td style="text-align: left;"></td>
-<td style="text-align: left;"></td>
-</tr>
-</tbody>
-</table>
-<table>
-<thead>
-<tr>
-<th style="text-align: left;">country</th>
-<th style="text-align: right;">first_name</th>
-<th style="text-align: right;">last_name</th>
-<th style="text-align: right;">continent</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td style="text-align: left;">Argentina</td>
-<td style="text-align: right;">1</td>
-<td style="text-align: right;">1</td>
-<td style="text-align: right;">1</td>
-</tr>
-<tr>
-<td style="text-align: left;">China</td>
-<td style="text-align: right;">2</td>
-<td style="text-align: right;">2</td>
-<td style="text-align: right;">2</td>
-</tr>
-<tr>
-<td style="text-align: left;">Germany</td>
-<td style="text-align: right;">2</td>
-<td style="text-align: right;">2</td>
-<td style="text-align: right;">2</td>
-</tr>
-<tr>
-<td style="text-align: left;"><div class="language-text highlight"><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a>Dask executes this `groupby` operation in parallel across all available cores. 
+</span><span id="__span-8-3"><a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a>|    | first_name   | last_name   | country   | continent   |
+</span><span id="__span-8-4"><a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a>|---:|:-------------|:------------|:----------|:------------|
+</span><span id="__span-8-5"><a id="__codelineno-8-5" name="__codelineno-8-5" href="#__codelineno-8-5"></a>|  0 | Bruce        | Lee         | China     | Asia        |
+</span><span id="__span-8-6"><a id="__codelineno-8-6" name="__codelineno-8-6" href="#__codelineno-8-6"></a>|  1 | Jack         | Ma          | China     | Asia        |
+</span></code></pre></div>
+<h2 id="perform-dask-operations">Perform Dask Operations</h2>
+<p>Let's perform some basic computations over the Delta Lake data that's now stored in our Dask DataFrame. </p>
+<p>Suppose you want to group the dataset by the <code>country</code> column:</p>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a>&gt; ddf.groupby([&#39;country&#39;]).count().compute()
 </span><span id="__span-9-2"><a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a>
-</span><span id="__span-9-3"><a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a>## Map Functions over Partitions
-</span><span id="__span-9-4"><a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a>
-</span><span id="__span-9-5"><a id="__codelineno-9-5" name="__codelineno-9-5" href="#__codelineno-9-5"></a>You can also use Dask&#39;s `map_partitions` method to map a custom Python function over all the partitions. 
-</span><span id="__span-9-6"><a id="__codelineno-9-6" name="__codelineno-9-6" href="#__codelineno-9-6"></a>
-</span><span id="__span-9-7"><a id="__codelineno-9-7" name="__codelineno-9-7" href="#__codelineno-9-7"></a>Let&#39;s write a function that will replace the missing `continent` values with the right continent names.
-</span></code></pre></div></td>
-<td style="text-align: right;"></td>
-<td style="text-align: right;"></td>
-<td style="text-align: right;"></td>
-</tr>
-<tr>
-<td style="text-align: left;"># define custom python function</td>
-<td style="text-align: right;"></td>
-<td style="text-align: right;"></td>
-<td style="text-align: right;"></td>
-</tr>
-</tbody>
-</table>
-<h1 id="get-na_string">get na_string</h1>
-<p>df = ddf.get_partition(0).compute()
-na_string = df.iloc[0].continent
-na_string</p>
-<h1 id="define-function">define function</h1>
-<p>def replace_proper(partition, na_string):
-    if [partition.country == "Argentina"]:
-        partition.loc[partition.country=="Argentina"] = partition.loc[partition.country=="Argentina"].replace(na_string, "South America")
-    if [partition.country == "Germany"]:
-        partition.loc[partition.country=="Germany"] = partition.loc[partition.country=="Germany"].replace(na_string, "Europe")
-    else:
-        pass
-    return partition      <br />
-<div class="language-text highlight"><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a>Now map this over all partitions in the Dask DataFrame:
-</span></code></pre></div></p>
-<h1 id="define-metadata-and-map-function-over-partitions">define metadata and map function over partitions</h1>
-<blockquote>
-<p>meta = dict(ddf.dtypes)
-ddf3 = ddf.map_partitions(replace_proper, na_string, meta=meta)
-ddf3.compute()</p>
-</blockquote>
-<table>
-<thead>
-<tr>
-<th style="text-align: right;"></th>
-<th style="text-align: left;">first_name</th>
-<th style="text-align: left;">last_name</th>
-<th style="text-align: left;">country</th>
-<th style="text-align: left;">continent</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td style="text-align: right;">0</td>
-<td style="text-align: left;">Ernesto</td>
-<td style="text-align: left;">Guevara</td>
-<td style="text-align: left;">Argentina</td>
-<td style="text-align: left;">South America</td>
-</tr>
-<tr>
-<td style="text-align: right;">0</td>
-<td style="text-align: left;">Bruce</td>
-<td style="text-align: left;">Lee</td>
-<td style="text-align: left;">China</td>
-<td style="text-align: left;">Asia</td>
-</tr>
-<tr>
-<td style="text-align: right;">1</td>
-<td style="text-align: left;">Jack</td>
-<td style="text-align: left;">Ma</td>
-<td style="text-align: left;">China</td>
-<td style="text-align: left;">Asia</td>
-</tr>
-<tr>
-<td style="text-align: right;">0</td>
-<td style="text-align: left;">Wolfgang</td>
-<td style="text-align: left;">Manche</td>
-<td style="text-align: left;">Germany</td>
-<td style="text-align: left;">Europe</td>
-</tr>
-<tr>
-<td style="text-align: right;">1</td>
-<td style="text-align: left;">Soraya</td>
-<td style="text-align: left;">Jala</td>
-<td style="text-align: left;">Germany</td>
-<td style="text-align: left;">Europe</td>
-</tr>
-<tr>
-<td style="text-align: right;"><div class="language-text highlight"><pre><span></span><code><span id="__span-11-1"><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a>## Write to Delta Lake
-</span><span id="__span-11-2"><a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a>After doing your data processing in Dask, you can write the data back out to Delta Lake using `to_deltalake`:
-</span></code></pre></div></td>
-<td style="text-align: left;"></td>
-<td style="text-align: left;"></td>
-<td style="text-align: left;"></td>
-<td style="text-align: left;"></td>
-</tr>
-<tr>
-<td style="text-align: right;">ddt.to_deltalake(ddf, "tmp/test_write")</td>
-<td style="text-align: left;"></td>
-<td style="text-align: left;"></td>
-<td style="text-align: left;"></td>
-<td style="text-align: left;"></td>
-</tr>
-<tr>
-<td style="text-align: right;">```</td>
-<td style="text-align: left;"></td>
-<td style="text-align: left;"></td>
-<td style="text-align: left;"></td>
-<td style="text-align: left;"></td>
-</tr>
-</tbody>
-</table>
+</span><span id="__span-9-3"><a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a>| country   |   first_name |   last_name |   continent |
+</span><span id="__span-9-4"><a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a>|:----------|-------------:|------------:|------------:|
+</span><span id="__span-9-5"><a id="__codelineno-9-5" name="__codelineno-9-5" href="#__codelineno-9-5"></a>| Argentina |            1 |           1 |           1 |
+</span><span id="__span-9-6"><a id="__codelineno-9-6" name="__codelineno-9-6" href="#__codelineno-9-6"></a>| China     |            2 |           2 |           2 |
+</span><span id="__span-9-7"><a id="__codelineno-9-7" name="__codelineno-9-7" href="#__codelineno-9-7"></a>| Germany   |            2 |           2 |           2 |
+</span></code></pre></div>
+<p>Dask executes this <code>groupby</code> operation in parallel across all available cores. </p>
+<h2 id="map-functions-over-partitions">Map Functions over Partitions</h2>
+<p>You can also use Dask's <code>map_partitions</code> method to map a custom Python function over all the partitions. </p>
+<p>Let's write a function that will replace the missing <code>continent</code> values with the right continent names.</p>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a># define custom python function
+</span><span id="__span-10-2"><a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a>
+</span><span id="__span-10-3"><a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a># get na_string
+</span><span id="__span-10-4"><a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a>df = ddf.get_partition(0).compute()
+</span><span id="__span-10-5"><a id="__codelineno-10-5" name="__codelineno-10-5" href="#__codelineno-10-5"></a>na_string = df.iloc[0].continent
+</span><span id="__span-10-6"><a id="__codelineno-10-6" name="__codelineno-10-6" href="#__codelineno-10-6"></a>na_string
+</span><span id="__span-10-7"><a id="__codelineno-10-7" name="__codelineno-10-7" href="#__codelineno-10-7"></a>
+</span><span id="__span-10-8"><a id="__codelineno-10-8" name="__codelineno-10-8" href="#__codelineno-10-8"></a># define function
+</span><span id="__span-10-9"><a id="__codelineno-10-9" name="__codelineno-10-9" href="#__codelineno-10-9"></a>def replace_proper(partition, na_string):
+</span><span id="__span-10-10"><a id="__codelineno-10-10" name="__codelineno-10-10" href="#__codelineno-10-10"></a>    if [partition.country == &quot;Argentina&quot;]:
+</span><span id="__span-10-11"><a id="__codelineno-10-11" name="__codelineno-10-11" href="#__codelineno-10-11"></a>        partition.loc[partition.country==&quot;Argentina&quot;] = partition.loc[partition.country==&quot;Argentina&quot;].replace(na_string, &quot;South America&quot;)
+</span><span id="__span-10-12"><a id="__codelineno-10-12" name="__codelineno-10-12" href="#__codelineno-10-12"></a>    if [partition.country == &quot;Germany&quot;]:
+</span><span id="__span-10-13"><a id="__codelineno-10-13" name="__codelineno-10-13" href="#__codelineno-10-13"></a>        partition.loc[partition.country==&quot;Germany&quot;] = partition.loc[partition.country==&quot;Germany&quot;].replace(na_string, &quot;Europe&quot;)
+</span><span id="__span-10-14"><a id="__codelineno-10-14" name="__codelineno-10-14" href="#__codelineno-10-14"></a>    else:
+</span><span id="__span-10-15"><a id="__codelineno-10-15" name="__codelineno-10-15" href="#__codelineno-10-15"></a>        pass
+</span><span id="__span-10-16"><a id="__codelineno-10-16" name="__codelineno-10-16" href="#__codelineno-10-16"></a>    return partition        
+</span></code></pre></div>
+<p>Now map this over all partitions in the Dask DataFrame:</p>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-11-1"><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a># define metadata and map function over partitions
+</span><span id="__span-11-2"><a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a>&gt; meta = dict(ddf.dtypes)
+</span><span id="__span-11-3"><a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a>&gt; ddf3 = ddf.map_partitions(replace_proper, na_string, meta=meta)
+</span><span id="__span-11-4"><a id="__codelineno-11-4" name="__codelineno-11-4" href="#__codelineno-11-4"></a>&gt; ddf3.compute()
+</span><span id="__span-11-5"><a id="__codelineno-11-5" name="__codelineno-11-5" href="#__codelineno-11-5"></a>
+</span><span id="__span-11-6"><a id="__codelineno-11-6" name="__codelineno-11-6" href="#__codelineno-11-6"></a>|    | first_name   | last_name   | country   | continent     |
+</span><span id="__span-11-7"><a id="__codelineno-11-7" name="__codelineno-11-7" href="#__codelineno-11-7"></a>|---:|:-------------|:------------|:----------|:--------------|
+</span><span id="__span-11-8"><a id="__codelineno-11-8" name="__codelineno-11-8" href="#__codelineno-11-8"></a>|  0 | Ernesto      | Guevara     | Argentina | South America |
+</span><span id="__span-11-9"><a id="__codelineno-11-9" name="__codelineno-11-9" href="#__codelineno-11-9"></a>|  0 | Bruce        | Lee         | China     | Asia          |
+</span><span id="__span-11-10"><a id="__codelineno-11-10" name="__codelineno-11-10" href="#__codelineno-11-10"></a>|  1 | Jack         | Ma          | China     | Asia          |
+</span><span id="__span-11-11"><a id="__codelineno-11-11" name="__codelineno-11-11" href="#__codelineno-11-11"></a>|  0 | Wolfgang     | Manche      | Germany   | Europe        |
+</span><span id="__span-11-12"><a id="__codelineno-11-12" name="__codelineno-11-12" href="#__codelineno-11-12"></a>|  1 | Soraya       | Jala        | Germany   | Europe        |
+</span></code></pre></div>
+<h2 id="write-to-delta-lake">Write to Delta Lake</h2>
+<p>After doing your data processing in Dask, you can write the data back out to Delta Lake using <code>to_deltalake</code>:</p>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-12-1"><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a>ddt.to_deltalake(ddf, &quot;tmp/test_write&quot;)
+</span></code></pre></div>
 <h2 id="contribute-to-dask-deltalake">Contribute to <code>dask-deltalake</code></h2>
 <p>To contribute, go to the <a href="https://github.com/rrpelgrim/dask-deltatable"><code>dask-deltalake</code> Github repository</a>.</p>
 

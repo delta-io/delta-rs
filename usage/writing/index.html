@@ -1614,7 +1614,9 @@ of Spark's <code>pyspark.sql.DataFrameWriter.saveAsTable</code> DataFrame method
 </span></code></pre></div>
 <p><code>write_deltalake</code> will raise <code>ValueError</code> if the schema of the data
 passed to it differs from the existing table's schema. If you wish to
-alter the schema as part of an overwrite pass in <code>overwrite_schema=True</code>.</p>
+alter the schema as part of an overwrite pass in <code>schema_mode="overwrite"</code> or <code>schema_mode="merge"</code>.
+<code>schema_mode="overwrite"</code> will completely overwrite the schema, even if columns are dropped; merge will append the new columns
+and fill missing columns with <code>null</code>. <code>schema_mode="merge"</code> is also supported on append operations.</p>
 <h2 id="overwriting-a-partition">Overwriting a partition</h2>
 <p>You can overwrite a specific partition by using <code>mode="overwrite"</code>
 together with <code>partition_filters</code>. This will remove all files within the

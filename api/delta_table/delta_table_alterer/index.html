@@ -1214,6 +1214,13 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#deltalake.table.TableAlterer.drop_constraint" class="md-nav__link">
+    drop_constraint
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -1640,6 +1647,13 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#deltalake.table.TableAlterer.drop_constraint" class="md-nav__link">
+    drop_constraint
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -1767,6 +1781,102 @@
 ```
 dt.metadata().configuration
 {&#39;delta.constraints.value_gt_5&#39;: &#39;value &gt; 5&#39;}
+```
+</code></pre></div>
+
+  </div>
+
+</div>
+
+
+<div class="doc doc-object doc-function">
+
+
+
+<h4 id="deltalake.table.TableAlterer.drop_constraint" class="doc doc-heading">
+          <span class="doc doc-object-name doc-function-name">drop_constraint</span>
+
+
+</h4>
+<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">drop_constraint</span><span class="p">(</span><span class="n">name</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">raise_if_not_exists</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span> <span class="n">custom_metadata</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span>
+</span></code></pre></div>
+
+  <div class="doc doc-contents ">
+  
+      <p>Drop constraints from a table. Limited to <code>single constraint</code> at once.</p>
+
+
+
+  <p><strong>Parameters:</strong></p>
+  <table>
+    <thead>
+      <tr>
+        <th>Name</th>
+        <th>Type</th>
+        <th>Description</th>
+        <th>Default</th>
+      </tr>
+    </thead>
+    <tbody>
+        <tr>
+          <td><code>name</code></td>
+          <td>
+                <code>str</code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>constraint name which to drop.</p>
+            </div>
+          </td>
+          <td>
+              <em>required</em>
+          </td>
+        </tr>
+        <tr>
+          <td><code>raise_if_not_exists</code></td>
+          <td>
+                <code>bool</code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>set if should raise if not exists.</p>
+            </div>
+          </td>
+          <td>
+                <code>True</code>
+          </td>
+        </tr>
+        <tr>
+          <td><code>custom_metadata</code></td>
+          <td>
+                <code><span title="typing.Optional">Optional</span>[<span title="typing.Dict">Dict</span>[str, str]]</code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>custom metadata that will be added to the transaction commit.</p>
+            </div>
+          </td>
+          <td>
+                <code>None</code>
+          </td>
+        </tr>
+    </tbody>
+  </table>
+      <p>Example:
+    <div class="language-python highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="kn">from</span> <span class="nn">deltalake</span> <span class="kn">import</span> <span class="n">DeltaTable</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="n">dt</span> <span class="o">=</span> <span class="n">DeltaTable</span><span class="p">(</span><span class="s2">&quot;test_table_constraints&quot;</span><span class="p">)</span>
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="n">dt</span><span class="o">.</span><span class="n">metadata</span><span class="p">()</span><span class="o">.</span><span class="n">configuration</span>
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="p">{</span><span class="s1">&#39;delta.constraints.value_gt_5&#39;</span><span class="p">:</span> <span class="s1">&#39;value &gt; 5&#39;</span><span class="p">}</span>
+</span></code></pre></div></p>
+<div class="language-text highlight"><pre><span></span><code>**Drop the constraint**
+```python
+dt.alter.drop_constraint(name = &quot;value_gt_5&quot;)
+```
+
+**Configuration after dropping**
+```python
+dt.metadata().configuration
+{}
 ```
 </code></pre></div>
 
