@@ -249,7 +249,7 @@ impl<'a> TableConfig<'a> {
         (
             "true to enable deletion vectors and predictive I/O for updates.",
             DeltaConfigKey::EnableDeletionVectors,
-            enable_deletio0n_vectors,
+            enable_deletion_vectors,
             bool,
             // in databricks the default is dependent on the workspace settings and runtime version
             // https://learn.microsoft.com/en-us/azure/databricks/administration-guide/workspace-settings/deletion-vectors
