@@ -1387,6 +1387,7 @@ impl From<&PyAddAction> for Add {
 #[pyfunction]
 #[allow(clippy::too_many_arguments)]
 fn write_to_deltalake(
+    py: Python,
     table_uri: String,
     data: PyArrowType<ArrowArrayStreamReader>,
     mode: String,
