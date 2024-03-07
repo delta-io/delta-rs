@@ -316,6 +316,7 @@ def write_deltalake(
         write_deltalake_rust(
             table_uri=table_uri,
             data=data,
+            data_schema=schema,
             partition_by=partition_by,
             mode=mode,
             max_rows_per_group=max_rows_per_group,

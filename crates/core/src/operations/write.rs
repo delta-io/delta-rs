@@ -21,9 +21,10 @@
 //! let ids = arrow::array::Int32Array::from(vec![1, 2, 3, 4, 5]);
 //! let batch = RecordBatch::try_new(schema, vec![Arc::new(ids)])?;
 //! let ops = DeltaOps::try_from_uri("../path/to/empty/dir").await?;
-//! let table = ops.write(vec![batch]).await?;
+//! let table = ops.write(vec![batch], batch.schema()).await?;
 //! ````
 
+use std::borrow::BorrowMut;
 use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -41,6 +42,7 @@ use datafusion_common::DFSchema;
 use datafusion_expr::Expr;
 use futures::future::BoxFuture;
 use futures::StreamExt;
+use itertools::Itertools;
 use parquet::file::properties::WriterProperties;
 
 use super::datafusion_utils::Expression;
@@ -135,7 +137,9 @@ pub struct WriteBuilder {
     /// Number of records to be written in single batch to underlying writer
     write_batch_size: Option<usize>,
     /// RecordBatches to be written into the table
-    batches: Option<Vec<RecordBatch>>,
+    batches: Option<Box<dyn Iterator<Item = RecordBatch> + Send + Sync>>,
+    /// The schema of the batches to be written
+    input_schema: Option<ArrowSchemaRef>,
     /// whether to overwrite the schema or to merge it. None means to fail on schmema drift
     schema_mode: Option<SchemaMode>,
     /// how to handle cast failures, either return NULL (safe=true) or return ERR (safe=false)
@@ -172,6 +176,7 @@ impl WriteBuilder {
             app_metadata: None,
             name: None,
             description: None,
+            input_schema: None,
             configuration: Default::default(),
         }
     }
@@ -217,10 +222,17 @@ impl WriteBuilder {
     }
 
     /// Execution plan that produces the data to be written to the delta table
-    pub fn with_input_batches(mut self, batches: impl IntoIterator<Item = RecordBatch>) -> Self {
-        self.batches = Some(batches.into_iter().collect());
+    pub fn with_input_batches(mut self, batches: impl Iterator<Item = RecordBatch> + Send + Sync) -> Self {
+        self.batches = Some(Box::new(batches));
         self
     }
+
+    /// Schema of the 
+    pub fn with_input_schema(mut self, schema: ArrowSchemaRef) -> Self {
+        self.input_schema = Some(schema);
+        self
+    }
+
 
     /// Specify the target file size for data files written to the delta table.
     pub fn with_target_file_size(mut self, target_file_size: usize) -> Self {
@@ -289,8 +301,8 @@ impl WriteBuilder {
                 if let Some(plan) = &self.input {
                     let schema: StructType = (plan.schema()).try_into()?;
                     PROTOCOL.check_can_write_timestamp_ntz(snapshot, &schema)?;
-                } else if let Some(batches) = &self.batches {
-                    let schema: StructType = (batches[0].schema()).try_into()?;
+                } else if let Some(schema) = &self.input_schema {
+                    let schema: StructType = schema.as_ref().try_into()?;
                     PROTOCOL.check_can_write_timestamp_ntz(snapshot, &schema)?;
                 }
 
@@ -304,11 +316,8 @@ impl WriteBuilder {
             None => {
                 let schema: StructType = if let Some(plan) = &self.input {
                     Ok(plan.schema().try_into()?)
-                } else if let Some(batches) = &self.batches {
-                    if batches.is_empty() {
-                        return Err(WriteError::MissingData.into());
-                    }
-                    Ok(batches[0].schema().try_into()?)
+                } else if let Some(schema) = &self.input_schema {
+                    Ok(schema.as_ref().try_into()?)
                 } else {
                     Err(WriteError::MissingData)
                 }?;
@@ -595,44 +604,82 @@ impl std::future::IntoFuture for WriteBuilder {
                 Ok(this.partition_columns.unwrap_or_default())
             }?;
             let mut schema_drift = false;
-            let plan = if let Some(plan) = this.input {
-                if this.schema_mode == Some(SchemaMode::Merge) {
-                    return Err(DeltaTableError::Generic(
-                        "Schema merge not supported yet for Datafusion".to_string(),
-                    ));
-                }
-                Ok(plan)
-            } else if let Some(batches) = this.batches {
-                if batches.is_empty() {
-                    Err(WriteError::MissingData)
-                } else {
-                    let schema = batches[0].schema();
+            let input_schema = if let Some(plan) = this.input {
+                plan.schema()
+            } else if let Some(schema) = this.input_schema {
+                schema
+            } else {
+                return Err(WriteError::MissingData.into());
+            };
+            
+            let mut new_schema = None;
+            if let Some(snapshot) = &this.snapshot {
+                let table_schema = snapshot
+                    .physical_arrow_schema(this.log_store.object_store().clone())
+                    .await
+                    .or_else(|_| snapshot.arrow_schema())
+                    .unwrap_or(input_schema.clone());
 
-                    let mut new_schema = None;
-                    if let Some(snapshot) = &this.snapshot {
-                        let table_schema = snapshot
-                            .physical_arrow_schema(this.log_store.object_store().clone())
-                            .await
-                            .or_else(|_| snapshot.arrow_schema())
-                            .unwrap_or(schema.clone());
-
-                        if let Err(schema_err) =
-                            try_cast_batch(schema.fields(), table_schema.fields())
-                        {
-                            schema_drift = true;
-                            if this.mode == SaveMode::Overwrite && this.schema_mode.is_some() {
-                                new_schema = None // we overwrite anyway, so no need to cast
-                            } else if this.schema_mode == Some(SchemaMode::Merge) {
-                                new_schema = Some(Arc::new(merge_schema(
-                                    table_schema.as_ref().clone(),
-                                    schema.as_ref().clone(),
-                                )?));
-                            } else {
-                                return Err(schema_err.into());
-                            }
-                        }
+                if let Err(schema_err) =
+                    try_cast_batch(input_schema.fields(), table_schema.fields())
+                {
+                    schema_drift = true;
+                    if this.mode == SaveMode::Overwrite && this.schema_mode.is_some() {
+                        new_schema = None // we overwrite anyway, so no need to cast
+                    } else if this.schema_mode == Some(SchemaMode::Merge) {
+                        new_schema = Some(Arc::new(merge_schema(
+                            table_schema.as_ref().clone(),
+                            input_schema.as_ref().clone(),
+                        )?));
+                    } else {
+                        return Err(schema_err.into());
                     }
+                }
+            }
+            let target_schema = new_schema.clone().unwrap_or(input_schema.clone());
+            
+            let state = match this.state {
+                Some(state) => state,
+                None => {
+                    let ctx = SessionContext::new();
+                    register_store(this.log_store.clone(), ctx.runtime_env());
+                    ctx.state()
+                }
+            };
 
+            let (predicate_str, predicate) = match this.predicate {
+                Some(predicate) => {
+                    let pred = match predicate {
+                        Expression::DataFusion(expr) => expr,
+                        Expression::String(s) => {
+                            let df_schema = DFSchema::try_from(target_schema.as_ref().to_owned())?;
+                            parse_predicate_expression(&df_schema, s, &state)?
+                            // this.snapshot.unwrap().parse_predicate_expression(s, &state)?
+                        }
+                    };
+                    (Some(fmt_expr_to_sql(&pred)?), Some(pred))
+                }
+                _ => (None, None),
+            };
+
+            if let Some(plan) = this.input {                
+                let add_actions = write_execution_plan_with_predicate(
+                    predicate.clone(),
+                    this.snapshot.as_ref(),
+                    state.clone(),
+                    plan,
+                    partition_columns.clone(),
+                    this.log_store.object_store().clone(),
+                    this.target_file_size,
+                    this.write_batch_size,
+                    this.writer_properties.clone(),
+                    this.safe_cast,
+                    this.schema_mode,
+                )
+                .await?;
+                actions.extend(add_actions);
+            } else if let Some(input_batches) = this.batches {
+                for batches in chunks(input_batches, 10) {
                     let data = if !partition_columns.is_empty() {
                         // TODO partitioning should probably happen in its own plan ...
                         let mut partitions: HashMap<String, Vec<RecordBatch>> = HashMap::new();
@@ -645,7 +692,7 @@ impl std::future::IntoFuture for WriteBuilder {
                             };
 
                             let divided = divide_by_partition_values(
-                                new_schema.clone().unwrap_or(schema.clone()),
+                                target_schema.clone(),
                                 partition_columns.clone(),
                                 &real_batch,
                             )?;
@@ -680,19 +727,38 @@ impl std::future::IntoFuture for WriteBuilder {
                         }
                     };
 
-                    Ok(Arc::new(MemoryExec::try_new(
+                    let plan = Arc::new(MemoryExec::try_new(
                         &data,
-                        new_schema.unwrap_or(schema).clone(),
+                        target_schema.clone(),
                         None,
-                    )?) as Arc<dyn ExecutionPlan>)
+                    )?);
+                                    
+                    let add_actions = write_execution_plan_with_predicate(
+                        predicate.clone(),
+                        this.snapshot.as_ref(),
+                        state.clone(),
+                        plan,
+                        partition_columns.clone(),
+                        this.log_store.object_store().clone(),
+                        this.target_file_size,
+                        this.write_batch_size,
+                        this.writer_properties.clone(),
+                        this.safe_cast,
+                        this.schema_mode,
+                    )
+                    .await?;
+                    actions.extend(add_actions);
                 }
+                
             } else {
-                Err(WriteError::MissingData)
-            }?;
-            let schema = plan.schema();
+                return Err(WriteError::MissingData.into())
+            };
+            // Here we need to validate if the new data conforms to a predicate if one is provided
+            
+            
             if this.schema_mode == Some(SchemaMode::Merge) && schema_drift {
                 if let Some(snapshot) = &this.snapshot {
-                    let schema_struct: StructType = schema.clone().try_into()?;
+                    let schema_struct: StructType = target_schema.clone().try_into()?;
                     let schema_action = Action::Metadata(Metadata::try_new(
                         schema_struct,
                         partition_columns.clone(),
@@ -701,47 +767,6 @@ impl std::future::IntoFuture for WriteBuilder {
                     actions.push(schema_action);
                 }
             }
-            let state = match this.state {
-                Some(state) => state,
-                None => {
-                    let ctx = SessionContext::new();
-                    register_store(this.log_store.clone(), ctx.runtime_env());
-                    ctx.state()
-                }
-            };
-
-            let (predicate_str, predicate) = match this.predicate {
-                Some(predicate) => {
-                    let pred = match predicate {
-                        Expression::DataFusion(expr) => expr,
-                        Expression::String(s) => {
-                            let df_schema = DFSchema::try_from(schema.as_ref().to_owned())?;
-                            parse_predicate_expression(&df_schema, s, &state)?
-                            // this.snapshot.unwrap().parse_predicate_expression(s, &state)?
-                        }
-                    };
-                    (Some(fmt_expr_to_sql(&pred)?), Some(pred))
-                }
-                _ => (None, None),
-            };
-
-            // Here we need to validate if the new data conforms to a predicate if one is provided
-            let add_actions = write_execution_plan_with_predicate(
-                predicate.clone(),
-                this.snapshot.as_ref(),
-                state.clone(),
-                plan,
-                partition_columns.clone(),
-                this.log_store.object_store().clone(),
-                this.target_file_size,
-                this.write_batch_size,
-                this.writer_properties.clone(),
-                this.safe_cast,
-                this.schema_mode,
-            )
-            .await?;
-            actions.extend(add_actions);
-
             // Collect remove actions if we are overwriting the table
             if let Some(snapshot) = &this.snapshot {
                 if matches!(this.mode, SaveMode::Overwrite) {
@@ -750,11 +775,11 @@ impl std::future::IntoFuture for WriteBuilder {
                         .physical_arrow_schema(this.log_store.object_store().clone())
                         .await
                         .or_else(|_| snapshot.arrow_schema())
-                        .unwrap_or(schema.clone());
+                        .unwrap_or(target_schema.clone());
 
-                    if schema != table_schema {
+                    if target_schema != table_schema {
                         let mut metadata = snapshot.metadata().clone();
-                        let delta_schema: StructType = schema.as_ref().try_into()?;
+                        let delta_schema: StructType = target_schema.as_ref().try_into()?;
                         metadata.schema_string = serde_json::to_string(&delta_schema)?;
                         actions.push(Action::Metadata(metadata));
                     }
@@ -825,6 +850,27 @@ impl std::future::IntoFuture for WriteBuilder {
     }
 }
 
+fn chunks(
+    mut iter: Box<dyn Iterator<Item = RecordBatch> + Send + Sync>,
+    chunk_size: usize,
+) -> Box<dyn Iterator<Item = Vec<RecordBatch>> + Send> {
+    Box::new(std::iter::from_fn(move || {
+        let mut chunk = Vec::with_capacity(chunk_size);
+        for _ in 0..chunk_size {
+            if let Some(batch) = iter.next() {
+                chunk.push(batch);
+            } else {
+                if chunk.is_empty() {
+                    return None;
+                } else {
+                    return Some(chunk);
+                }
+            }
+        }
+        Some(chunk)
+    }))
+}
+
 fn try_cast_batch(from_fields: &Fields, to_fields: &Fields) -> Result<(), ArrowError> {
     if from_fields.len() != to_fields.len() {
         return Err(ArrowError::SchemaError(format!(
@@ -891,7 +937,7 @@ mod tests {
         let table = write_batch(table, batch.clone()).await;
         // Overwrite
         let _err = DeltaOps(table)
-            .write(vec![batch])
+            .write(vec![batch].into_iter(), batch.schema())
             .with_save_mode(SaveMode::Overwrite)
             .await
             .expect_err("Remove action is included when Delta table is append-only. Should error");
@@ -913,7 +959,7 @@ mod tests {
         // write some data
         let metadata = HashMap::from_iter(vec![("k1".to_string(), json!("v1.1"))]);
         let mut table = DeltaOps(table)
-            .write(vec![batch.clone()])
+            .write(vec![batch].clone(), batch.schema())
             .with_save_mode(SaveMode::Append)
             .with_metadata(metadata.clone())
             .await
@@ -936,7 +982,7 @@ mod tests {
         let metadata: HashMap<String, Value> =
             HashMap::from_iter(vec![("k1".to_string(), json!("v1.2"))]);
         let mut table = DeltaOps(table)
-            .write(vec![batch.clone()])
+            .write(vec![batch].clone(), batch.schema())
             .with_save_mode(SaveMode::Append)
             .with_metadata(metadata.clone())
             .await
@@ -959,7 +1005,7 @@ mod tests {
         let metadata: HashMap<String, Value> =
             HashMap::from_iter(vec![("k2".to_string(), json!("v2.1"))]);
         let mut table = DeltaOps(table)
-            .write(vec![batch])
+            .write(vec![batch], batch.schema())
             .with_save_mode(SaveMode::Overwrite)
             .with_metadata(metadata.clone())
             .await
@@ -995,7 +1041,7 @@ mod tests {
             vec![Arc::new(Int32Array::from(vec![Some(0), None]))],
         )
         .unwrap();
-        let table = DeltaOps::new_in_memory().write(vec![batch]).await.unwrap();
+        let table = DeltaOps::new_in_memory().write(vec![batch], batch.schema()).await.unwrap();
 
         let schema = Arc::new(ArrowSchema::new(vec![Field::new(
             "value",
@@ -1015,7 +1061,7 @@ mod tests {
 
         // Test cast options
         let table = DeltaOps::from(table)
-            .write(vec![batch.clone()])
+            .write(vec![batch].clone(), batch.schema())
             .with_cast_safety(true)
             .await
             .unwrap();
@@ -1034,7 +1080,7 @@ mod tests {
         let actual = get_data(&table).await;
         assert_batches_sorted_eq!(&expected, &actual);
 
-        let res = DeltaOps::from(table).write(vec![batch]).await;
+        let res = DeltaOps::from(table).write(vec![batch], batch.schema()).await;
         assert!(res.is_err());
 
         // Validate the datetime -> string behavior
@@ -1051,7 +1097,7 @@ mod tests {
             )]))],
         )
         .unwrap();
-        let table = DeltaOps::new_in_memory().write(vec![batch]).await.unwrap();
+        let table = DeltaOps::new_in_memory().write(vec![batch], batch.schema()).await.unwrap();
 
         let schema = Arc::new(ArrowSchema::new(vec![Field::new(
             "value",
@@ -1066,7 +1112,7 @@ mod tests {
         )
         .unwrap();
 
-        let _res = DeltaOps::from(table).write(vec![batch]).await.unwrap();
+        let _res = DeltaOps::from(table).write(vec![batch], batch.schema()).await.unwrap();
         let expected = [
             "+--------------------------+",
             "| value                    |",
@@ -1083,7 +1129,7 @@ mod tests {
     async fn test_write_nonexistent() {
         let batch = get_record_batch(None, false);
         let table = DeltaOps::new_in_memory()
-            .write(vec![batch])
+            .write(vec![batch], batch.schema())
             .with_save_mode(SaveMode::ErrorIfExists)
             .await
             .unwrap();
@@ -1095,7 +1141,7 @@ mod tests {
     async fn test_write_partitioned() {
         let batch = get_record_batch(None, false);
         let table = DeltaOps::new_in_memory()
-            .write(vec![batch.clone()])
+            .write(vec![batch].clone(), batch.schema())
             .with_save_mode(SaveMode::ErrorIfExists)
             .with_partition_columns(["modified"])
             .await
@@ -1104,7 +1150,7 @@ mod tests {
         assert_eq!(table.get_files_count(), 2);
 
         let table = DeltaOps::new_in_memory()
-            .write(vec![batch])
+            .write(vec![batch], batch.schema())
             .with_save_mode(SaveMode::ErrorIfExists)
             .with_partition_columns(["modified", "id"])
             .await
@@ -1117,7 +1163,7 @@ mod tests {
     async fn test_merge_schema() {
         let batch = get_record_batch(None, false);
         let table = DeltaOps::new_in_memory()
-            .write(vec![batch.clone()])
+            .write(vec![batch].clone(), batch.schema())
             .with_save_mode(SaveMode::ErrorIfExists)
             .await
             .unwrap();
@@ -1158,7 +1204,7 @@ mod tests {
         .unwrap();
 
         let mut table = DeltaOps(table)
-            .write(vec![new_batch])
+            .write(vec![new_batch], new_batch.schema())
             .with_save_mode(SaveMode::Append)
             .with_schema_mode(SchemaMode::Merge)
             .await
@@ -1175,7 +1221,7 @@ mod tests {
     async fn test_merge_schema_with_partitions() {
         let batch = get_record_batch(None, false);
         let table = DeltaOps::new_in_memory()
-            .write(vec![batch.clone()])
+            .write(vec![batch].clone(), batch.schema())
             .with_partition_columns(vec!["id", "value"])
             .with_save_mode(SaveMode::ErrorIfExists)
             .await
@@ -1217,7 +1263,7 @@ mod tests {
         .unwrap();
         println!("new_batch: {:?}", new_batch.schema());
         let table = DeltaOps(table)
-            .write(vec![new_batch])
+            .write(vec![new_batch], new_batch.schema())
             .with_save_mode(SaveMode::Append)
             .with_schema_mode(SchemaMode::Merge)
             .await
@@ -1237,7 +1283,7 @@ mod tests {
     async fn test_overwrite_schema() {
         let batch = get_record_batch(None, false);
         let table = DeltaOps::new_in_memory()
-            .write(vec![batch.clone()])
+            .write(vec![batch].clone(), batch.schema())
             .with_save_mode(SaveMode::ErrorIfExists)
             .await
             .unwrap();
@@ -1278,7 +1324,7 @@ mod tests {
         .unwrap();
 
         let table = DeltaOps(table)
-            .write(vec![new_batch])
+            .write(vec![new_batch], new_batch.schema())
             .with_save_mode(SaveMode::Append)
             .with_schema_mode(SchemaMode::Overwrite)
             .await;
@@ -1290,7 +1336,7 @@ mod tests {
         // If you do not pass a schema mode, we want to check the schema
         let batch = get_record_batch(None, false);
         let table = DeltaOps::new_in_memory()
-            .write(vec![batch.clone()])
+            .write(vec![batch].clone(), batch.schema())
             .with_save_mode(SaveMode::ErrorIfExists)
             .await
             .unwrap();
@@ -1320,7 +1366,7 @@ mod tests {
             RecordBatch::try_new(Arc::new(new_schema), vec![Arc::new(inserted_by)]).unwrap();
 
         let table = DeltaOps(table)
-            .write(vec![new_batch])
+            .write(vec![new_batch], new_batch.schema())
             .with_save_mode(SaveMode::Append)
             .await;
         assert!(table.is_err());
@@ -1348,7 +1394,7 @@ mod tests {
             .unwrap();
         assert_eq!(table.version(), 0);
 
-        let table = DeltaOps(table).write(vec![batch.clone()]).await.unwrap();
+        let table = DeltaOps(table).write(vec![batch].clone(), batch.schema()).await.unwrap();
         assert_eq!(table.version(), 1);
 
         let schema: StructType = serde_json::from_value(json!({
@@ -1370,7 +1416,7 @@ mod tests {
             .unwrap();
         assert_eq!(table.version(), 0);
 
-        let table = DeltaOps(table).write(vec![batch.clone()]).await;
+        let table = DeltaOps(table).write(vec![batch].clone(), batch.schema()).await;
         assert!(table.is_err())
     }
 
@@ -1387,7 +1433,7 @@ mod tests {
         assert_eq!(table.version(), 0);
 
         let table = DeltaOps(table)
-            .write(vec![batch.clone()])
+            .write(vec![batch].clone(), batch.schema())
             .with_save_mode(SaveMode::Append)
             .await
             .unwrap();
@@ -1468,7 +1514,7 @@ mod tests {
         .unwrap();
 
         let table = DeltaOps::new_in_memory()
-            .write(vec![batch])
+            .write(vec![batch], batch.schema())
             .with_save_mode(SaveMode::Append)
             .await
             .unwrap();
@@ -1524,7 +1570,7 @@ mod tests {
         .unwrap();
 
         let table = DeltaOps::new_in_memory()
-            .write(vec![batch])
+            .write(vec![batch], batch.schema())
             .with_save_mode(SaveMode::Append)
             .await
             .unwrap();
@@ -1565,7 +1611,7 @@ mod tests {
         let batch = get_record_batch(None, false);
 
         let table = DeltaOps::new_in_memory()
-            .write(vec![batch])
+            .write(vec![batch], batch.schema())
             .with_partition_columns(["id", "value"])
             .with_save_mode(SaveMode::Append)
             .await
