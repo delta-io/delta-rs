@@ -1,7 +1,15 @@
 [package]
 name = "deltalake-catalog-glue"
 version = "0.1.0"
-edition = "2021"
+authors.workspace = true
+keywords.workspace = true
+readme.workspace = true
+edition.workspace = true
+homepage.workspace = true
+description.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
 
 [dependencies]
 async-trait = { workspace = true }

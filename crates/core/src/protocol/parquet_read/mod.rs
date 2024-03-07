@@ -433,12 +433,10 @@ impl Metadata {
                         .map_err(|_| gen_action_type_error("metaData", "schemaString", "string"))?
                         .clone();
                 }
-                "createdTime" => {
-                    re.created_time =
-                        Some(record.get_long(i).map_err(|_| {
-                            gen_action_type_error("metaData", "createdTime", "long")
-                        })?);
-                }
+                "createdTime" => match record.get_long(i) {
+                    Ok(s) => re.created_time = Some(s),
+                    _ => re.created_time = None,
+                },
                 "configuration" => {
                     let configuration_map = record
                         .get_map(i)

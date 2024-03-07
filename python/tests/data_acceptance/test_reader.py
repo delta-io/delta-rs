@@ -46,6 +46,7 @@ for path in reader_case_path.iterdir():
 failing_cases = {
     "multi_partitioned_2": "Waiting for PyArrow 11.0.0 for decimal cast support (#1078)",
     "multi_partitioned": "Test case handles binary poorly",
+    "all_primitive_types": "The parquet table written with PySpark incorrectly wrote a timestamp primitive without Timezone information.",
 }
 
 

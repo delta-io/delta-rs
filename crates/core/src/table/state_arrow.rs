@@ -737,8 +737,8 @@ fn json_value_to_array_general<'a>(
                 .map(|value| value.and_then(|value| value.as_str().map(|value| value.as_bytes())))
                 .collect_vec(),
         ))),
-        DataType::Timestamp(TimeUnit::Microsecond, None) => {
-            Ok(Arc::new(TimestampMicrosecondArray::from(
+        DataType::Timestamp(TimeUnit::Microsecond, tz) => match tz {
+            None => Ok(Arc::new(TimestampMicrosecondArray::from(
                 values
                     .map(|value| {
                         value.and_then(|value| {
@@ -746,13 +746,32 @@ fn json_value_to_array_general<'a>(
                         })
                     })
                     .collect_vec(),
-            )))
-        }
+            ))),
+            Some(tz_str) if tz_str.as_ref() == "UTC" => Ok(Arc::new(
+                TimestampMicrosecondArray::from(
+                    values
+                        .map(|value| {
+                            value.and_then(|value| {
+                                value.as_str().and_then(TimestampMicrosecondType::parse)
+                            })
+                        })
+                        .collect_vec(),
+                )
+                .with_timezone("UTC"),
+            )),
+            _ => Err(DeltaTableError::Generic(format!(
+                "Invalid datatype {}",
+                datatype
+            ))),
+        },
         DataType::Date32 => Ok(Arc::new(Date32Array::from(
             values
                 .map(|value| value.and_then(|value| value.as_str().and_then(Date32Type::parse)))
                 .collect_vec(),
         ))),
-        _ => Err(DeltaTableError::Generic("Invalid datatype".to_string())),
+        _ => Err(DeltaTableError::Generic(format!(
+            "Invalid datatype {}",
+            datatype
+        ))),
     }
 }

@@ -17,7 +17,7 @@ use crate::delta_datafusion::expr::fmt_expr_to_sql;
 use crate::delta_datafusion::{
     register_store, DeltaDataChecker, DeltaScanBuilder, DeltaSessionContext,
 };
-use crate::kernel::{CommitInfo, IsolationLevel, Protocol};
+use crate::kernel::{CommitInfo, IsolationLevel, Protocol, WriterFeatures};
 use crate::logstore::LogStoreRef;
 use crate::operations::datafusion_utils::Expression;
 use crate::operations::transaction::commit;
@@ -177,7 +177,17 @@ impl std::future::IntoFuture for ConstraintBuilder {
                     3
                 },
                 reader_features: old_protocol.reader_features.clone(),
-                writer_features: old_protocol.writer_features.clone(),
+                writer_features: if old_protocol.min_writer_version < 7 {
+                    old_protocol.writer_features.clone()
+                } else {
+                    let current_features = old_protocol.writer_features.clone();
+                    if let Some(mut features) = current_features {
+                        features.insert(WriterFeatures::CheckConstraints);
+                        Some(features)
+                    } else {
+                        current_features
+                    }
+                },
             };
 
             let operational_parameters = HashMap::from_iter([
@@ -190,10 +200,7 @@ impl std::future::IntoFuture for ConstraintBuilder {
                 expr: expr_str.clone(),
             };
 
-            let app_metadata = match this.app_metadata {
-                Some(metadata) => metadata,
-                None => HashMap::default(),
-            };
+            let app_metadata = this.app_metadata.unwrap_or_default();
 
             let commit_info = CommitInfo {
                 timestamp: Some(Utc::now().timestamp_millis()),

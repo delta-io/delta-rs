@@ -210,7 +210,7 @@ impl Snapshot {
             &log_segment::CHECKPOINT_SCHEMA,
             &self.config,
         );
-        ReplayStream::try_new(log_stream, checkpoint_stream, &self)
+        ReplayStream::try_new(log_stream, checkpoint_stream, self)
     }
 
     /// Get the commit infos in the snapshot
