@@ -201,7 +201,7 @@ async fn execute(
 
     let scan_start = Instant::now();
     let candidates = find_files(snapshot, log_store.clone(), &state, predicate.clone()).await?;
-    metrics.scan_time_ms = Instant::now().duration_since(scan_start).as_micros();
+    metrics.scan_time_ms = Instant::now().duration_since(scan_start).as_millis();
 
     let predicate = predicate.unwrap_or(Expr::Literal(ScalarValue::Boolean(Some(true))));
 
@@ -249,7 +249,7 @@ async fn execute(
         }))
     }
 
-    metrics.execution_time_ms = Instant::now().duration_since(exec_start).as_micros();
+    metrics.execution_time_ms = Instant::now().duration_since(exec_start).as_millis();
 
     let mut app_metadata = match app_metadata {
         Some(meta) => meta,
