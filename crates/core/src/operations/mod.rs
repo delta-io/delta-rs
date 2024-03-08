@@ -137,8 +137,13 @@ impl DeltaOps {
     /// Write data to Delta table
     #[cfg(feature = "datafusion")]
     #[must_use]
-    pub fn write(self) -> WriteBuilder {
+    pub fn write(
+        self,
+        batches: Box<dyn Iterator<Item = RecordBatch> + Send>,
+        schema: arrow_schema::SchemaRef,
+    ) -> WriteBuilder {
         WriteBuilder::new(self.0.log_store, self.0.state)
+            .with_data(write::WriteData::RecordBatches((batches, schema)))
     }
 
     /// Vacuum stale files from delta table

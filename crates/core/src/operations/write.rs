@@ -117,18 +117,13 @@ impl FromStr for SchemaMode {
 /// Data you want to write to the file
 pub enum WriteData {
     /// A record batch with schema
-    RecordBatches(
-        (
-            Box<dyn Iterator<Item = RecordBatch> + Send>,
-            ArrowSchemaRef,
-        ),
-    ),
+    RecordBatches((Box<dyn Iterator<Item = RecordBatch> + Send>, ArrowSchemaRef)),
     /// A Datafusion Execution plan
     DataFusionPlan(Arc<dyn ExecutionPlan>),
 }
 
-/// Write data into a DeltaTable
-pub struct WriteBuilder {
+/// Configuration for writing data to a DeltaTable
+pub struct WriteBuilderConfig {
     /// A snapshot of the to-be-loaded table's state
     snapshot: Option<DeltaTableState>,
     /// Delta object store for handling data files
@@ -161,43 +156,60 @@ pub struct WriteBuilder {
     configuration: HashMap<String, Option<String>>,
 }
 
+/// Write data into a DeltaTable
+pub struct WriteBuilder {
+    /// Basic config for the write operation
+    config: WriteBuilderConfig,
+    /// The data to actually write
+    data: Option<WriteData>,
+}
+
 impl WriteBuilder {
     /// Create a new [`WriteBuilder`]
     pub fn new(log_store: LogStoreRef, snapshot: Option<DeltaTableState>) -> Self {
         Self {
-            snapshot,
-            log_store,
-            state: None,
-            mode: SaveMode::Append,
-            partition_columns: None,
-            predicate: None,
-            target_file_size: None,
-            write_batch_size: None,
-            safe_cast: false,
-            schema_mode: None,
-            writer_properties: None,
-            app_metadata: None,
-            name: None,
-            description: None,
-            configuration: Default::default(),
+            config: WriteBuilderConfig {
+                snapshot,
+                log_store,
+                state: None,
+                mode: SaveMode::Append,
+                partition_columns: None,
+                predicate: None,
+                target_file_size: None,
+                write_batch_size: None,
+                safe_cast: false,
+                schema_mode: None,
+                writer_properties: None,
+                app_metadata: None,
+                name: None,
+                description: None,
+                configuration: Default::default(),
+            },
+            data: None,
         }
+    }
+
+    /// Specify the data to use to write this
+    pub fn with_data(mut self, data: WriteData) -> Self {
+        self.data = Some(data);
+        self
     }
 
     /// Specify the behavior when a table exists at location
     pub fn with_save_mode(mut self, save_mode: SaveMode) -> Self {
-        self.mode = save_mode;
+        self.config.mode = save_mode;
         self
     }
 
     /// Add Schema Write Mode
     pub fn with_schema_mode(mut self, schema_mode: SchemaMode) -> Self {
-        self.schema_mode = Some(schema_mode);
+        self.config.schema_mode = Some(schema_mode);
         self
     }
 
     /// When using `Overwrite` mode, replace data that matches a predicate
     pub fn with_replace_where(mut self, predicate: impl Into<Expression>) -> Self {
-        self.predicate = Some(predicate.into());
+        self.config.predicate = Some(predicate.into());
         self
     }
 
@@ -207,39 +219,39 @@ impl WriteBuilder {
         mut self,
         partition_columns: impl IntoIterator<Item = impl Into<String>>,
     ) -> Self {
-        self.partition_columns = Some(partition_columns.into_iter().map(|s| s.into()).collect());
+        self.config.partition_columns =
+            Some(partition_columns.into_iter().map(|s| s.into()).collect());
         self
     }
 
     /// A session state accompanying a given input plan, containing e.g. registered object stores
     pub fn with_input_session_state(mut self, state: SessionState) -> Self {
-        self.state = Some(state);
+        self.config.state = Some(state);
         self
     }
 
-
     /// Specify the target file size for data files written to the delta table.
     pub fn with_target_file_size(mut self, target_file_size: usize) -> Self {
-        self.target_file_size = Some(target_file_size);
+        self.config.target_file_size = Some(target_file_size);
         self
     }
 
     /// Specify the target batch size for row groups written to parquet files.
     pub fn with_write_batch_size(mut self, write_batch_size: usize) -> Self {
-        self.write_batch_size = Some(write_batch_size);
+        self.config.write_batch_size = Some(write_batch_size);
         self
     }
 
     /// Specify the safety of the casting operation
     /// how to handle cast failures, either return NULL (safe=true) or return ERR (safe=false)
     pub fn with_cast_safety(mut self, safe: bool) -> Self {
-        self.safe_cast = safe;
+        self.config.safe_cast = safe;
         self
     }
 
     /// Specify the writer properties to use when writing a parquet file
     pub fn with_writer_properties(mut self, writer_properties: WriterProperties) -> Self {
-        self.writer_properties = Some(writer_properties);
+        self.config.writer_properties = Some(writer_properties);
         self
     }
 
@@ -248,20 +260,20 @@ impl WriteBuilder {
         mut self,
         metadata: impl IntoIterator<Item = (String, serde_json::Value)>,
     ) -> Self {
-        self.app_metadata = Some(HashMap::from_iter(metadata));
+        self.config.app_metadata = Some(HashMap::from_iter(metadata));
         self
     }
 
     /// Specify the table name. Optionally qualified with
     /// a database name [database_name.] table_name.
     pub fn with_table_name(mut self, name: impl Into<String>) -> Self {
-        self.name = Some(name.into());
+        self.config.name = Some(name.into());
         self
     }
 
     /// Comment to describe the table.
     pub fn with_description(mut self, description: impl Into<String>) -> Self {
-        self.description = Some(description.into());
+        self.config.description = Some(description.into());
         self
     }
 
@@ -270,7 +282,7 @@ impl WriteBuilder {
         mut self,
         configuration: impl IntoIterator<Item = (impl Into<String>, Option<impl Into<String>>)>,
     ) -> Self {
-        self.configuration = configuration
+        self.config.configuration = configuration
             .into_iter()
             .map(|(k, v)| (k.into(), v.map(|s| s.into())))
             .collect();
@@ -279,7 +291,7 @@ impl WriteBuilder {
 }
 
 async fn check_preconditions(
-    builder: &WriteBuilder,
+    builder: &WriteBuilderConfig,
     schema: ArrowSchemaRef,
 ) -> DeltaResult<Vec<Action>> {
     match &builder.snapshot {
@@ -534,9 +546,13 @@ async fn prepare_predicate_actions(
     Ok(actions)
 }
 
-impl WriteBuilder {
-    fn execute(self, input_data: WriteData) -> BoxFuture<'static, DeltaResult<DeltaTable>> {
-        let this = self;
+impl std::future::IntoFuture for WriteBuilder {
+    type Output = DeltaResult<DeltaTable>;
+    type IntoFuture = BoxFuture<'static, Self::Output>;
+
+    fn into_future(self) -> Self::IntoFuture {
+        let this = self.config;
+        let input_data = self.data;
 
         Box::pin(async move {
             if this.mode == SaveMode::Overwrite {
@@ -550,12 +566,13 @@ impl WriteBuilder {
                 ));
             }
             let input_schema = match input_data {
-                WriteData::RecordBatches((_, schema)) => schema.clone(),
-                WriteData::DataFusionPlan(plan) => plan.as_ref().schema().clone(),
+                Some(WriteData::RecordBatches((_, ref schema))) => schema.clone(),
+                Some(WriteData::DataFusionPlan(ref plan)) => plan.as_ref().schema().clone(),
+                None => return Err(WriteError::MissingData.into()),
             };
 
             // Create table actions to initialize table in case it does not yet exist and should be created
-            let mut actions = check_preconditions(&this, input_schema).await?;
+            let mut actions = check_preconditions(&this, input_schema.clone()).await?;
 
             let active_partitions = this
                 .snapshot
@@ -632,7 +649,8 @@ impl WriteBuilder {
             };
 
             match input_data {
-                WriteData::DataFusionPlan(plan) => {
+                None => return Err(WriteError::MissingData.into()),
+                Some(WriteData::DataFusionPlan(plan)) => {
                     let add_actions = write_execution_plan_with_predicate(
                         predicate.clone(),
                         this.snapshot.as_ref(),
@@ -649,7 +667,7 @@ impl WriteBuilder {
                     .await?;
                     actions.extend(add_actions);
                 }
-                WriteData::RecordBatches((input_batches, _)) => {
+                Some(WriteData::RecordBatches((input_batches, _))) => {
                     for batches in ChunksIterator::new(input_batches, 10) {
                         let data = if !partition_columns.is_empty() {
                             // TODO partitioning should probably happen in its own plan ...

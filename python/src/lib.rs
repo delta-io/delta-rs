@@ -1413,7 +1413,7 @@ fn write_to_deltalake(
         .map_err(PythonError::from)?;
 
     let mut builder = table
-        .write()
+        .write(Box::new(batches), Arc::new(data_schema.0))
         .with_save_mode(save_mode)
         .with_write_batch_size(max_rows_per_group as usize);
     if let Some(schema_mode) = schema_mode {
@@ -1452,7 +1452,7 @@ fn write_to_deltalake(
     };
 
     rt()?
-        .block_on(builder.execte(batches, Arc::new(data_schema.0)))
+        .block_on(builder.into_future())
         .map_err(PythonError::from)?;
 
     Ok(())

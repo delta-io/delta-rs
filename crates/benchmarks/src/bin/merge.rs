@@ -71,10 +71,13 @@ pub async fn convert_tpcds_web_returns(input_path: String, table_path: String) -
         .await
         .unwrap();
 
+    let tbl = table.collect().await.unwrap();
+    let schema = tbl[0].schema().clone();
+
     DeltaOps::try_from_uri(table_path)
         .await
         .unwrap()
-        .write(table.collect().await.unwrap())
+        .write(Box::new(tbl.into_iter()), schema)
         .with_partition_columns(vec!["wr_returned_date_sk"])
         .await
         .unwrap();
@@ -565,7 +568,7 @@ async fn main() {
             DeltaOps::try_from_uri(output)
                 .await
                 .unwrap()
-                .write(vec![batch])
+                .write(Box::new(vec![batch].into_iter()), schema.clone())
                 .with_save_mode(SaveMode::Append)
                 .await
                 .unwrap();
