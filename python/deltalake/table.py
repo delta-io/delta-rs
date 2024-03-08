@@ -1857,9 +1857,7 @@ class TableOptimizer:
 
         return self.compact(partition_filters, target_size, max_concurrent_tasks)
 
-    def commit(
-        self
-    ) -> Dict[str, Any]:
+    def commit(self) -> None:
         self.table._table.commit_optimize()
 
     def compact(
@@ -1870,7 +1868,7 @@ class TableOptimizer:
         min_commit_interval: Optional[Union[int, timedelta]] = None,
         writer_properties: Optional[WriterProperties] = None,
         custom_metadata: Optional[Dict[str, str]] = None,
-        commit_writes: bool = True
+        commit_writes: bool = True,
     ) -> Dict[str, Any]:
         """
         Compacts small files to reduce the total number of files in the table.
@@ -1924,7 +1922,7 @@ class TableOptimizer:
             min_commit_interval,
             writer_properties._to_dict() if writer_properties else None,
             custom_metadata,
-            commit_writes
+            commit_writes,
         )
         self.table.update_incremental()
         return json.loads(metrics)

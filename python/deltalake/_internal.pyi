@@ -59,9 +59,7 @@ class RawDeltaTable:
         enforce_retention_duration: bool,
         custom_metadata: Optional[Dict[str, str]],
     ) -> List[str]: ...
-    def commit_optimize(
-        self
-    ) -> None: ...
+    def commit_optimize(self) -> None: ...
     def compact_optimize(
         self,
         partition_filters: Optional[FilterType],
@@ -70,7 +68,7 @@ class RawDeltaTable:
         min_commit_interval: Optional[int],
         writer_properties: Optional[Dict[str, Optional[str]]],
         custom_metadata: Optional[Dict[str, str]],
-        commit_writes: bool
+        commit_writes: bool,
     ) -> str: ...
     def z_order_optimize(
         self,

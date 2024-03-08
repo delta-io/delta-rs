@@ -240,7 +240,10 @@ async fn test_optimize_non_partitioned_table_deferred_commit() -> Result<(), Box
     let version = dt.version();
     assert_eq!(dt.get_files_count(), 5);
 
-    let optimize = DeltaOps(dt).optimize().with_target_size(2_000_000).with_commit_writes(false);
+    let optimize = DeltaOps(dt)
+        .optimize()
+        .with_target_size(2_000_000)
+        .with_commit_writes(false);
     let (dt, metrics, commit_context) = optimize.await?;
 
     // Still have same version, and file count,
@@ -255,9 +258,10 @@ async fn test_optimize_non_partitioned_table_deferred_commit() -> Result<(), Box
     let commit_info = dt.history(None).await?;
     assert_eq!(commit_info.len(), 6);
 
-    let dt_commit = DeltaOps(dt).optimize().commit_writes(
-            commit_context.unwrap()
-        ).await?;
+    let dt_commit = DeltaOps(dt)
+        .optimize()
+        .commit_writes(commit_context.unwrap())
+        .await?;
 
     assert_eq!(version + 1, dt_commit.version());
 
@@ -309,7 +313,10 @@ async fn test_optimize_with_partitions_deferred_commit() -> Result<(), Box<dyn E
     let version = dt.version();
     let filter = vec![PartitionFilter::try_from(("date", "=", "2022-05-22"))?];
 
-    let optimize = DeltaOps(dt).optimize().with_filters(&filter).with_commit_writes(false);
+    let optimize = DeltaOps(dt)
+        .optimize()
+        .with_filters(&filter)
+        .with_commit_writes(false);
     let (dt, metrics, commit_context) = optimize.await?;
 
     // optimize is not committed, so we have 4 files.
@@ -321,9 +328,10 @@ async fn test_optimize_with_partitions_deferred_commit() -> Result<(), Box<dyn E
     let commit_info = dt.history(None).await?;
     assert_eq!(commit_info.len(), 5);
 
-    let dt_commit = DeltaOps(dt).optimize().commit_writes(
-            commit_context.unwrap()
-        ).await?;
+    let dt_commit = DeltaOps(dt)
+        .optimize()
+        .commit_writes(commit_context.unwrap())
+        .await?;
 
     assert_eq!(version + 1, dt_commit.version());
 
@@ -544,7 +552,7 @@ async fn test_commit_interval() -> Result<(), Box<dyn Error>> {
             20,
             Some(Duration::from_secs(0)), // this will cause as many commits as num_files_added
             None,
-            true
+            true,
         )
         .await?;
     assert_eq!(metrics.num_files_added, 2);

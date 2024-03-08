@@ -366,14 +366,14 @@ impl RawDeltaTable {
         .with_max_concurrent_tasks(num_cpus::get());
 
         if self._commit.is_none() {
-            return Err(PyValueError::new_err("Cannot commit optimization, nothing to commit."))
+            return Err(PyValueError::new_err(
+                PyValueError::new_err("Cannot commit optimization, nothing to commit."
+            ));
         }
 
-        let table = rt()?.block_on(
-            cmd.commit_writes(
-                self._commit.take().unwrap()
-            )
-        ).map_err(PythonError::from)?;
+        let table = rt()?
+            .block_on(cmd.commit_writes(self._commit.take().unwrap()))
+            .map_err(PythonError::from)?;
 
         self._table.state = table.state;
         self._commit = None;
@@ -431,8 +431,9 @@ impl RawDeltaTable {
                 cmd = cmd.with_metadata(json_metadata);
             };
 
-            let converted_filters = convert_partition_filters(partition_filters.unwrap_or_default())
-                .map_err(PythonError::from)?;
+            let converted_filters =
+                convert_partition_filters(partition_filters.unwrap_or_default())
+                    .map_err(PythonError::from)?;
             cmd = cmd.with_filters(&converted_filters);
 
             let (table, metrics, commit_info) = rt()?

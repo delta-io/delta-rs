@@ -79,6 +79,7 @@ def test_z_order_optimize(
     assert dt.version() == old_version + 1
     assert len(dt.file_uris()) == 1
 
+
 def test_optimize_deferred_write(
     tmp_path: pathlib.Path,
     sample_data: pa.Table,
@@ -103,6 +104,7 @@ def test_optimize_deferred_write(
     assert dt.version() == old_version + 1
     last_action = dt.history(1)[0]
     assert last_action["operation"] == "OPTIMIZE"
+
 
 def test_optimize_min_commit_interval(
     tmp_path: pathlib.Path,
