@@ -14,7 +14,7 @@ def test_create_roundtrip_metadata(tmp_path: pathlib.Path, sample_data: pa.Table
         name="test_name",
         description="test_desc",
         configuration={
-            "delta.appendOnly": "false",
+            "delta.appendOnly": "true",
             "delta.logRetentionDuration": "interval 2 days",
         },
         custom_metadata={"userName": "John Doe"},
@@ -25,10 +25,12 @@ def test_create_roundtrip_metadata(tmp_path: pathlib.Path, sample_data: pa.Table
     assert metadata.name == "test_name"
     assert metadata.description == "test_desc"
     assert metadata.configuration == {
-        "delta.appendOnly": "false",
+        "delta.appendOnly": "true",
         "delta.logRetentionDuration": "interval 2 days",
     }
     assert dt.history()[0]["userName"] == "John Doe"
+
+    assert {*dt.protocol().writer_features} == {"appendOnly", "timestampNtz"}  # type: ignore
 
 
 def test_create_modes(tmp_path: pathlib.Path, sample_data: pa.Table):
@@ -65,6 +67,7 @@ def test_create_schema(tmp_path: pathlib.Path, sample_data: pa.Table):
 def test_create_with_deletion_vectors_enabled(
     tmp_path: pathlib.Path, sample_table: pa.Table
 ):
+    """append only is set to false so shouldn't be converted to a feature"""
     dt = DeltaTable.create(
         tmp_path,
         sample_table.schema,
@@ -87,7 +90,7 @@ def test_create_with_deletion_vectors_enabled(
     }
     assert protocol.min_reader_version == 3
     assert protocol.min_writer_version == 7
-    assert set(protocol.writer_features) == {"deletionVectors", "appendOnly"}  # type: ignore
+    assert protocol.writer_features == ["deletionVectors"]  # type: ignore
     assert protocol.reader_features == ["deletionVectors"]
     assert dt.history()[0]["userName"] == "John Doe"
 
