@@ -554,7 +554,7 @@ async fn main() {
             ]));
 
             let batch = RecordBatch::try_new(
-                schema,
+                schema.clone(),
                 vec![
                     Arc::new(StringArray::from(group_ids)),
                     Arc::new(StringArray::from(name)),
