@@ -24,7 +24,6 @@
 //! let table = ops.write(vec![batch], batch.schema()).await?;
 //! ````
 
-use std::borrow::BorrowMut;
 use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -42,7 +41,6 @@ use datafusion_common::DFSchema;
 use datafusion_expr::Expr;
 use futures::future::BoxFuture;
 use futures::StreamExt;
-use itertools::Itertools;
 use parquet::file::properties::WriterProperties;
 
 use super::datafusion_utils::Expression;
@@ -116,14 +114,25 @@ impl FromStr for SchemaMode {
     }
 }
 
+/// Data you want to write to the file
+pub enum WriteData {
+    /// A record batch with schema
+    RecordBatches(
+        (
+            Box<dyn Iterator<Item = RecordBatch> + Send>,
+            ArrowSchemaRef,
+        ),
+    ),
+    /// A Datafusion Execution plan
+    DataFusionPlan(Arc<dyn ExecutionPlan>),
+}
+
 /// Write data into a DeltaTable
 pub struct WriteBuilder {
     /// A snapshot of the to-be-loaded table's state
     snapshot: Option<DeltaTableState>,
     /// Delta object store for handling data files
     log_store: LogStoreRef,
-    /// The input plan
-    input: Option<Arc<dyn ExecutionPlan>>,
     /// Datafusion session state relevant for executing the input plan
     state: Option<SessionState>,
     /// SaveMode defines how to treat data already written to table location
@@ -136,10 +145,6 @@ pub struct WriteBuilder {
     target_file_size: Option<usize>,
     /// Number of records to be written in single batch to underlying writer
     write_batch_size: Option<usize>,
-    /// RecordBatches to be written into the table
-    batches: Option<Box<dyn Iterator<Item = RecordBatch> + Send + Sync>>,
-    /// The schema of the batches to be written
-    input_schema: Option<ArrowSchemaRef>,
     /// whether to overwrite the schema or to merge it. None means to fail on schmema drift
     schema_mode: Option<SchemaMode>,
     /// how to handle cast failures, either return NULL (safe=true) or return ERR (safe=false)
@@ -162,21 +167,18 @@ impl WriteBuilder {
         Self {
             snapshot,
             log_store,
-            input: None,
             state: None,
             mode: SaveMode::Append,
             partition_columns: None,
             predicate: None,
             target_file_size: None,
             write_batch_size: None,
-            batches: None,
             safe_cast: false,
             schema_mode: None,
             writer_properties: None,
             app_metadata: None,
             name: None,
             description: None,
-            input_schema: None,
             configuration: Default::default(),
         }
     }
@@ -209,27 +211,9 @@ impl WriteBuilder {
         self
     }
 
-    /// Execution plan that produces the data to be written to the delta table
-    pub fn with_input_execution_plan(mut self, plan: Arc<dyn ExecutionPlan>) -> Self {
-        self.input = Some(plan);
-        self
-    }
-
     /// A session state accompanying a given input plan, containing e.g. registered object stores
     pub fn with_input_session_state(mut self, state: SessionState) -> Self {
         self.state = Some(state);
-        self
-    }
-
-    /// Execution plan that produces the data to be written to the delta table
-    pub fn with_input_batches(mut self, batches: impl Iterator<Item = RecordBatch> + Send + Sync) -> Self {
-        self.batches = Some(Box::new(batches));
-        self
-    }
-
-    /// Schema of the 
-    pub fn with_input_schema(mut self, schema: ArrowSchemaRef) -> Self {
-        self.input_schema = Some(schema);
         self
     }
 
@@ -292,54 +276,45 @@ impl WriteBuilder {
             .collect();
         self
     }
+}
 
-    async fn check_preconditions(&self) -> DeltaResult<Vec<Action>> {
-        match &self.snapshot {
-            Some(snapshot) => {
-                PROTOCOL.can_write_to(snapshot)?;
+async fn check_preconditions(
+    builder: &WriteBuilder,
+    schema: ArrowSchemaRef,
+) -> DeltaResult<Vec<Action>> {
+    match &builder.snapshot {
+        Some(snapshot) => {
+            PROTOCOL.can_write_to(snapshot)?;
 
-                if let Some(plan) = &self.input {
-                    let schema: StructType = (plan.schema()).try_into()?;
-                    PROTOCOL.check_can_write_timestamp_ntz(snapshot, &schema)?;
-                } else if let Some(schema) = &self.input_schema {
-                    let schema: StructType = schema.as_ref().try_into()?;
-                    PROTOCOL.check_can_write_timestamp_ntz(snapshot, &schema)?;
+            let schema: StructType = schema.try_into()?;
+            PROTOCOL.check_can_write_timestamp_ntz(snapshot, &schema)?;
+            match builder.mode {
+                SaveMode::ErrorIfExists => {
+                    Err(WriteError::AlreadyExists(builder.log_store.root_uri()).into())
                 }
-
-                match self.mode {
-                    SaveMode::ErrorIfExists => {
-                        Err(WriteError::AlreadyExists(self.log_store.root_uri()).into())
-                    }
-                    _ => Ok(vec![]),
-                }
+                _ => Ok(vec![]),
             }
-            None => {
-                let schema: StructType = if let Some(plan) = &self.input {
-                    Ok(plan.schema().try_into()?)
-                } else if let Some(schema) = &self.input_schema {
-                    Ok(schema.as_ref().try_into()?)
-                } else {
-                    Err(WriteError::MissingData)
-                }?;
-                let mut builder = CreateBuilder::new()
-                    .with_log_store(self.log_store.clone())
-                    .with_columns(schema.fields().clone())
-                    .with_configuration(self.configuration.clone());
-                if let Some(partition_columns) = self.partition_columns.as_ref() {
-                    builder = builder.with_partition_columns(partition_columns.clone())
-                }
-
-                if let Some(name) = self.name.as_ref() {
-                    builder = builder.with_table_name(name.clone());
-                };
-
-                if let Some(desc) = self.description.as_ref() {
-                    builder = builder.with_comment(desc.clone());
-                };
-
-                let (_, actions, _) = builder.into_table_and_actions()?;
-                Ok(actions)
+        }
+        None => {
+            let schema: StructType = schema.try_into()?;
+            let mut create_builder = CreateBuilder::new()
+                .with_log_store(builder.log_store.clone())
+                .with_columns(schema.fields().clone())
+                .with_configuration(builder.configuration.clone());
+            if let Some(partition_columns) = builder.partition_columns.as_ref() {
+                create_builder = create_builder.with_partition_columns(partition_columns.clone())
             }
+
+            if let Some(name) = builder.name.as_ref() {
+                create_builder = create_builder.with_table_name(name.clone());
+            };
+
+            if let Some(desc) = builder.description.as_ref() {
+                create_builder = create_builder.with_comment(desc.clone());
+            };
+
+            let (_, actions, _) = create_builder.into_table_and_actions()?;
+            Ok(actions)
         }
     }
 }
@@ -559,11 +534,8 @@ async fn prepare_predicate_actions(
     Ok(actions)
 }
 
-impl std::future::IntoFuture for WriteBuilder {
-    type Output = DeltaResult<DeltaTable>;
-    type IntoFuture = BoxFuture<'static, Self::Output>;
-
-    fn into_future(self) -> Self::IntoFuture {
+impl WriteBuilder {
+    fn execute(self, input_data: WriteData) -> BoxFuture<'static, DeltaResult<DeltaTable>> {
         let this = self;
 
         Box::pin(async move {
@@ -577,9 +549,13 @@ impl std::future::IntoFuture for WriteBuilder {
                     "Schema overwrite not supported for Append".to_string(),
                 ));
             }
+            let input_schema = match input_data {
+                WriteData::RecordBatches((_, schema)) => schema.clone(),
+                WriteData::DataFusionPlan(plan) => plan.as_ref().schema().clone(),
+            };
 
             // Create table actions to initialize table in case it does not yet exist and should be created
-            let mut actions = this.check_preconditions().await?;
+            let mut actions = check_preconditions(&this, input_schema).await?;
 
             let active_partitions = this
                 .snapshot
@@ -604,14 +580,7 @@ impl std::future::IntoFuture for WriteBuilder {
                 Ok(this.partition_columns.unwrap_or_default())
             }?;
             let mut schema_drift = false;
-            let input_schema = if let Some(plan) = this.input {
-                plan.schema()
-            } else if let Some(schema) = this.input_schema {
-                schema
-            } else {
-                return Err(WriteError::MissingData.into());
-            };
-            
+
             let mut new_schema = None;
             if let Some(snapshot) = &this.snapshot {
                 let table_schema = snapshot
@@ -637,7 +606,7 @@ impl std::future::IntoFuture for WriteBuilder {
                 }
             }
             let target_schema = new_schema.clone().unwrap_or(input_schema.clone());
-            
+
             let state = match this.state {
                 Some(state) => state,
                 None => {
@@ -662,77 +631,8 @@ impl std::future::IntoFuture for WriteBuilder {
                 _ => (None, None),
             };
 
-            if let Some(plan) = this.input {                
-                let add_actions = write_execution_plan_with_predicate(
-                    predicate.clone(),
-                    this.snapshot.as_ref(),
-                    state.clone(),
-                    plan,
-                    partition_columns.clone(),
-                    this.log_store.object_store().clone(),
-                    this.target_file_size,
-                    this.write_batch_size,
-                    this.writer_properties.clone(),
-                    this.safe_cast,
-                    this.schema_mode,
-                )
-                .await?;
-                actions.extend(add_actions);
-            } else if let Some(input_batches) = this.batches {
-                for batches in chunks(input_batches, 10) {
-                    let data = if !partition_columns.is_empty() {
-                        // TODO partitioning should probably happen in its own plan ...
-                        let mut partitions: HashMap<String, Vec<RecordBatch>> = HashMap::new();
-                        for batch in batches {
-                            let real_batch = match new_schema.clone() {
-                                Some(new_schema) => {
-                                    cast_record_batch(&batch, new_schema, false, true)?
-                                }
-                                None => batch,
-                            };
-
-                            let divided = divide_by_partition_values(
-                                target_schema.clone(),
-                                partition_columns.clone(),
-                                &real_batch,
-                            )?;
-                            for part in divided {
-                                let key = part.partition_values.hive_partition_path();
-                                match partitions.get_mut(&key) {
-                                    Some(part_batches) => {
-                                        part_batches.push(part.record_batch);
-                                    }
-                                    None => {
-                                        partitions.insert(key, vec![part.record_batch]);
-                                    }
-                                }
-                            }
-                        }
-                        partitions.into_values().collect::<Vec<_>>()
-                    } else {
-                        match new_schema {
-                            Some(ref new_schema) => {
-                                let mut new_batches = vec![];
-                                for batch in batches {
-                                    new_batches.push(cast_record_batch(
-                                        &batch,
-                                        new_schema.clone(),
-                                        false,
-                                        true,
-                                    )?);
-                                }
-                                vec![new_batches]
-                            }
-                            None => vec![batches],
-                        }
-                    };
-
-                    let plan = Arc::new(MemoryExec::try_new(
-                        &data,
-                        target_schema.clone(),
-                        None,
-                    )?);
-                                    
+            match input_data {
+                WriteData::DataFusionPlan(plan) => {
                     let add_actions = write_execution_plan_with_predicate(
                         predicate.clone(),
                         this.snapshot.as_ref(),
@@ -749,13 +649,78 @@ impl std::future::IntoFuture for WriteBuilder {
                     .await?;
                     actions.extend(add_actions);
                 }
-                
-            } else {
-                return Err(WriteError::MissingData.into())
-            };
+                WriteData::RecordBatches((input_batches, _)) => {
+                    for batches in ChunksIterator::new(input_batches, 10) {
+                        let data = if !partition_columns.is_empty() {
+                            // TODO partitioning should probably happen in its own plan ...
+                            let mut partitions: HashMap<String, Vec<RecordBatch>> = HashMap::new();
+                            for batch in batches {
+                                let real_batch = match new_schema.clone() {
+                                    Some(new_schema) => {
+                                        cast_record_batch(&batch, new_schema, false, true)?
+                                    }
+                                    None => batch,
+                                };
+
+                                let divided = divide_by_partition_values(
+                                    target_schema.clone(),
+                                    partition_columns.clone(),
+                                    &real_batch,
+                                )?;
+                                for part in divided {
+                                    let key = part.partition_values.hive_partition_path();
+                                    match partitions.get_mut(&key) {
+                                        Some(part_batches) => {
+                                            part_batches.push(part.record_batch);
+                                        }
+                                        None => {
+                                            partitions.insert(key, vec![part.record_batch]);
+                                        }
+                                    }
+                                }
+                            }
+                            partitions.into_values().collect::<Vec<_>>()
+                        } else {
+                            match new_schema {
+                                Some(ref new_schema) => {
+                                    let mut new_batches = vec![];
+                                    for batch in batches {
+                                        new_batches.push(cast_record_batch(
+                                            &batch,
+                                            new_schema.clone(),
+                                            false,
+                                            true,
+                                        )?);
+                                    }
+                                    vec![new_batches]
+                                }
+                                None => vec![batches],
+                            }
+                        };
+
+                        let plan =
+                            Arc::new(MemoryExec::try_new(&data, target_schema.clone(), None)?);
+
+                        let add_actions = write_execution_plan_with_predicate(
+                            predicate.clone(),
+                            this.snapshot.as_ref(),
+                            state.clone(),
+                            plan,
+                            partition_columns.clone(),
+                            this.log_store.object_store().clone(),
+                            this.target_file_size,
+                            this.write_batch_size,
+                            this.writer_properties.clone(),
+                            this.safe_cast,
+                            this.schema_mode,
+                        )
+                        .await?;
+                        actions.extend(add_actions);
+                    }
+                }
+            }
             // Here we need to validate if the new data conforms to a predicate if one is provided
-            
-            
+
             if this.schema_mode == Some(SchemaMode::Merge) && schema_drift {
                 if let Some(snapshot) = &this.snapshot {
                     let schema_struct: StructType = target_schema.clone().try_into()?;
@@ -850,14 +815,22 @@ impl std::future::IntoFuture for WriteBuilder {
     }
 }
 
-fn chunks(
-    mut iter: Box<dyn Iterator<Item = RecordBatch> + Send + Sync>,
+struct ChunksIterator {
+    iter: Box<dyn Iterator<Item = RecordBatch> + Send>,
     chunk_size: usize,
-) -> Box<dyn Iterator<Item = Vec<RecordBatch>> + Send> {
-    Box::new(std::iter::from_fn(move || {
-        let mut chunk = Vec::with_capacity(chunk_size);
-        for _ in 0..chunk_size {
-            if let Some(batch) = iter.next() {
+}
+impl ChunksIterator {
+    fn new(iter: Box<dyn Iterator<Item = RecordBatch> + Send>, chunk_size: usize) -> Self {
+        Self { iter, chunk_size }
+    }
+}
+impl Iterator for ChunksIterator {
+    type Item = Vec<RecordBatch>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let mut chunk = Vec::with_capacity(self.chunk_size);
+        for _ in 0..self.chunk_size {
+            if let Some(batch) = self.iter.next() {
                 chunk.push(batch);
             } else {
                 if chunk.is_empty() {
@@ -868,7 +841,7 @@ fn chunks(
             }
         }
         Some(chunk)
-    }))
+    }
 }
 
 fn try_cast_batch(from_fields: &Fields, to_fields: &Fields) -> Result<(), ArrowError> {
@@ -1041,7 +1014,10 @@ mod tests {
             vec![Arc::new(Int32Array::from(vec![Some(0), None]))],
         )
         .unwrap();
-        let table = DeltaOps::new_in_memory().write(vec![batch], batch.schema()).await.unwrap();
+        let table = DeltaOps::new_in_memory()
+            .write(vec![batch], batch.schema())
+            .await
+            .unwrap();
 
         let schema = Arc::new(ArrowSchema::new(vec![Field::new(
             "value",
@@ -1080,7 +1056,9 @@ mod tests {
         let actual = get_data(&table).await;
         assert_batches_sorted_eq!(&expected, &actual);
 
-        let res = DeltaOps::from(table).write(vec![batch], batch.schema()).await;
+        let res = DeltaOps::from(table)
+            .write(vec![batch], batch.schema())
+            .await;
         assert!(res.is_err());
 
         // Validate the datetime -> string behavior
@@ -1097,7 +1075,10 @@ mod tests {
             )]))],
         )
         .unwrap();
-        let table = DeltaOps::new_in_memory().write(vec![batch], batch.schema()).await.unwrap();
+        let table = DeltaOps::new_in_memory()
+            .write(vec![batch], batch.schema())
+            .await
+            .unwrap();
 
         let schema = Arc::new(ArrowSchema::new(vec![Field::new(
             "value",
@@ -1112,7 +1093,10 @@ mod tests {
         )
         .unwrap();
 
-        let _res = DeltaOps::from(table).write(vec![batch], batch.schema()).await.unwrap();
+        let _res = DeltaOps::from(table)
+            .write(vec![batch], batch.schema())
+            .await
+            .unwrap();
         let expected = [
             "+--------------------------+",
             "| value                    |",
@@ -1394,7 +1378,10 @@ mod tests {
             .unwrap();
         assert_eq!(table.version(), 0);
 
-        let table = DeltaOps(table).write(vec![batch].clone(), batch.schema()).await.unwrap();
+        let table = DeltaOps(table)
+            .write(vec![batch].clone(), batch.schema())
+            .await
+            .unwrap();
         assert_eq!(table.version(), 1);
 
         let schema: StructType = serde_json::from_value(json!({
@@ -1416,7 +1403,9 @@ mod tests {
             .unwrap();
         assert_eq!(table.version(), 0);
 
-        let table = DeltaOps(table).write(vec![batch].clone(), batch.schema()).await;
+        let table = DeltaOps(table)
+            .write(vec![batch].clone(), batch.schema())
+            .await;
         assert!(table.is_err())
     }
 
@@ -1472,7 +1461,7 @@ mod tests {
             .unwrap();
 
         let _table = ops
-            .write([batch.clone()])
+            .write([batch.clone()], batch.schema())
             .with_partition_columns(["string"])
             .await
             .unwrap();
@@ -1531,7 +1520,7 @@ mod tests {
         .unwrap();
 
         let table = DeltaOps(table)
-            .write(vec![batch_add])
+            .write(vec![batch_add], batch_add.schema())
             .with_save_mode(SaveMode::Overwrite)
             .with_replace_where(col("id").eq(lit("C")))
             .await
@@ -1593,7 +1582,7 @@ mod tests {
         .unwrap();
 
         let table = DeltaOps(table)
-            .write(vec![batch_fail])
+            .write(vec![batch_fail], batch_fail.schema())
             .with_save_mode(SaveMode::Overwrite)
             .with_replace_where(col("id").eq(lit("C")))
             .await;
@@ -1633,7 +1622,7 @@ mod tests {
         .unwrap();
 
         let table = DeltaOps(table)
-            .write(vec![batch_add])
+            .write(vec![batch_add], batch_add.schema())
             .with_save_mode(SaveMode::Overwrite)
             .with_replace_where(col("id").eq(lit("A")))
             .await
