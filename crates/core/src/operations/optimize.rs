@@ -185,7 +185,7 @@ pub struct OptimizeBuilder<'a> {
     optimize_type: OptimizeType,
     min_commit_interval: Option<Duration>,
     /// Indicates whether the writes should be committed
-    commit_writes: bool
+    commit_writes: bool,
 }
 
 impl<'a> OptimizeBuilder<'a> {
@@ -273,17 +273,15 @@ impl<'a> OptimizeBuilder<'a> {
 
 impl<'a> OptimizeBuilder<'a> {
     /// Commit writes after processing
-    pub async fn commit_writes(
-        self,
-        commit_info: CommitContext
-    ) -> DeltaResult<DeltaTable> {
+    pub async fn commit_writes(self, commit_info: CommitContext) -> DeltaResult<DeltaTable> {
         commit(
-           self.log_store.as_ref(),
-           &commit_info.actions,
-           commit_info.operation.clone().into(),
-           commit_info.snapshot.as_ref(),
-           commit_info.app_metadata.clone()
-       ).await?;
+            self.log_store.as_ref(),
+            &commit_info.actions,
+            commit_info.operation.clone().into(),
+            commit_info.snapshot.as_ref(),
+            commit_info.app_metadata.clone(),
+        )
+        .await?;
 
         let mut table = DeltaTable::new_with_state(self.log_store, self.snapshot);
 
@@ -324,7 +322,7 @@ impl<'a> std::future::IntoFuture for OptimizeBuilder<'a> {
                     this.max_spill_size,
                     this.min_commit_interval,
                     this.app_metadata,
-                    this.commit_writes
+                    this.commit_writes,
                 )
                 .await?;
 
@@ -657,9 +655,8 @@ impl MergePlan {
         max_spill_size: usize,
         min_commit_interval: Option<Duration>,
         app_metadata: Option<HashMap<String, serde_json::Value>>,
-        commit_writes: bool
+        commit_writes: bool,
     ) -> Result<(Metrics, Option<CommitContext>), DeltaTableError> {
-
         let operations = std::mem::take(&mut self.operations);
         let stream = match operations {
             OptimizeOperations::Compact(bins) => futures::stream::iter(bins)
@@ -794,7 +791,6 @@ impl MergePlan {
                 table.update().await?;
 
                 if commit_writes {
-
                     debug!("committing {} actions", actions.len());
                     //// TODO: Check for remove actions on optimized partitions. If a
                     //// optimized partition was updated then abort the commit. Requires (#593).
@@ -806,12 +802,10 @@ impl MergePlan {
                         Some(app_metadata.clone()),
                     )
                     .await?;
-
                 } else {
                     // Save the actions buffer so the client can commit later
                     total_actions.extend(actions)
                 }
-
             }
 
             if end {
@@ -820,12 +814,12 @@ impl MergePlan {
         }
 
         let commit_context = if !commit_writes {
-                Some(CommitContext{
-                        actions: total_actions,
-                        app_metadata,
-                        snapshot: Some(snapshot.clone()), // using original table snapshot as all commits are added at once
-                        operation: self.task_parameters.input_parameters.clone()
-                })
+            Some(CommitContext {
+                actions: total_actions,
+                app_metadata,
+                snapshot: Some(snapshot.clone()), // using original table snapshot as all commits are added at once
+                operation: self.task_parameters.input_parameters.clone(),
+            })
         } else {
             None
         };
@@ -837,7 +831,6 @@ impl MergePlan {
         if total_metrics.num_files_removed == 0 {
             total_metrics.files_removed.min = 0;
         }
-
 
         Ok((total_metrics, commit_context))
     }
