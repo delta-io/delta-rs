@@ -59,9 +59,6 @@ class RawDeltaTable:
         enforce_retention_duration: bool,
         custom_metadata: Optional[Dict[str, str]],
     ) -> List[str]: ...
-    def commit_optimize(
-        self
-    ) -> None: ...
     def compact_optimize(
         self,
         partition_filters: Optional[FilterType],
@@ -70,7 +67,6 @@ class RawDeltaTable:
         min_commit_interval: Optional[int],
         writer_properties: Optional[Dict[str, Optional[str]]],
         custom_metadata: Optional[Dict[str, str]],
-        commit_writes: bool
     ) -> str: ...
     def z_order_optimize(
         self,
@@ -299,11 +295,11 @@ class ArrayType:
     """
 
     element_type: DataType
-    """ The type of the element, of type:
+    """ The type of the element, of type: 
         Union[
-            [PrimitiveType][deltalake.schema.PrimitiveType],
-            [ArrayType][deltalake.schema.ArrayType],
-            [MapType][deltalake.schema.MapType],
+            [PrimitiveType][deltalake.schema.PrimitiveType], 
+            [ArrayType][deltalake.schema.ArrayType], 
+            [MapType][deltalake.schema.MapType], 
             [StructType][deltalake.schema.StructType]
         ]
     """
@@ -381,21 +377,21 @@ class MapType:
     ) -> None: ...
     type: Literal["map"]
     key_type: DataType
-    """ The type of the keys, of type:
+    """ The type of the keys, of type: 
         Union[
-            [PrimitiveType][deltalake.schema.PrimitiveType],
-            [ArrayType][deltalake.schema.ArrayType],
-            [MapType][deltalake.schema.MapType],
+            [PrimitiveType][deltalake.schema.PrimitiveType], 
+            [ArrayType][deltalake.schema.ArrayType], 
+            [MapType][deltalake.schema.MapType], 
             [StructType][deltalake.schema.StructType]
         ]
     """
 
     value_type: DataType
-    """The type of the values, of type:
+    """The type of the values, of type: 
         Union[
-            [PrimitiveType][deltalake.schema.PrimitiveType],
-            [ArrayType][deltalake.schema.ArrayType],
-            [MapType][deltalake.schema.MapType],
+            [PrimitiveType][deltalake.schema.PrimitiveType], 
+            [ArrayType][deltalake.schema.ArrayType], 
+            [MapType][deltalake.schema.MapType], 
             [StructType][deltalake.schema.StructType]
         ]
     """
@@ -483,11 +479,11 @@ class Field:
     """
 
     type: DataType
-    """ The type of the field, of type:
+    """ The type of the field, of type: 
         Union[
-            [PrimitiveType][deltalake.schema.PrimitiveType],
-            [ArrayType][deltalake.schema.ArrayType],
-            [MapType][deltalake.schema.MapType],
+            [PrimitiveType][deltalake.schema.PrimitiveType], 
+            [ArrayType][deltalake.schema.ArrayType], 
+            [MapType][deltalake.schema.MapType], 
             [StructType][deltalake.schema.StructType]
         ]
     """
