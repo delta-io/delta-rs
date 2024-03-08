@@ -92,7 +92,7 @@ class RawDeltaTable:
     ) -> None: ...
     def set_table_properties(
         self,
-        properties: Dict[str,str],
+        properties: Dict[str, str],
         raise_if_not_exists: bool,
         custom_metadata: Optional[Dict[str, str]],
     ) -> None: ...

@@ -64,7 +64,9 @@ impl SetTablePropertiesBuilder {
     }
 }
 
-fn apply_properties_to_protocol(
+/// Will apply the properties to the protocol by either bumping the version or setting
+/// features
+pub fn apply_properties_to_protocol(
     current_protocol: &Protocol,
     new_properties: &HashMap<String, String>,
     raise_if_not_exists: bool,
@@ -159,7 +161,7 @@ fn apply_properties_to_protocol(
             Ok(false) => {}
             _ => {
                 return Err(DeltaTableError::Generic(format!(
-                    "delta.enableChangeDataFeed = '{}' is invalid, valid values are ['enable']",
+                    "delta.enableChangeDataFeed = '{}' is invalid, valid values are ['true']",
                     enable_cdf
                 )))
             }
@@ -192,7 +194,7 @@ fn apply_properties_to_protocol(
             Ok(false) => {}
             _ => {
                 return Err(DeltaTableError::Generic(format!(
-                    "delta.enableDeletionVectors = '{}' is invalid, valid values are ['enable']",
+                    "delta.enableDeletionVectors = '{}' is invalid, valid values are ['true']",
                     enable_dv
                 )))
             }
@@ -200,6 +202,50 @@ fn apply_properties_to_protocol(
     }
 
     Ok(new_protocol)
+}
+
+/// Converts existing properties into features if the reader_version is >=3 or writer_version >=3
+pub fn convert_properties_to_features(
+    mut new_protocol: Protocol,
+    configuration: &HashMap<String, Option<String>>,
+) -> Protocol {
+    if new_protocol.min_writer_version >= 7 {
+        let mut converted_writer_features = configuration
+            .keys()
+            .map(|key| key.clone().into())
+            .filter(|v| !matches!(v, WriterFeatures::Other(_)))
+            .collect::<HashSet<WriterFeatures>>();
+
+        if configuration
+            .keys()
+            .any(|v| v.contains("delta.constraints."))
+        {
+            converted_writer_features.insert(WriterFeatures::CheckConstraints);
+        }
+
+        match new_protocol.writer_features {
+            Some(mut features) => {
+                features.extend(converted_writer_features);
+                new_protocol.writer_features = Some(features);
+            }
+            None => new_protocol.writer_features = Some(converted_writer_features),
+        }
+    }
+    if new_protocol.min_reader_version >= 3 {
+        let converted_reader_features = configuration
+            .keys()
+            .map(|key| key.clone().into())
+            .filter(|v| !matches!(v, ReaderFeatures::Other(_)))
+            .collect::<HashSet<ReaderFeatures>>();
+        match new_protocol.reader_features {
+            Some(mut features) => {
+                features.extend(converted_reader_features);
+                new_protocol.reader_features = Some(features);
+            }
+            None => new_protocol.reader_features = Some(converted_reader_features),
+        }
+    }
+    new_protocol
 }
 
 impl std::future::IntoFuture for SetTablePropertiesBuilder {
@@ -216,7 +262,7 @@ impl std::future::IntoFuture for SetTablePropertiesBuilder {
             let current_protocol = this.snapshot.protocol();
             let properties = this.properties;
 
-            let mut new_protocol = apply_properties_to_protocol(
+            let new_protocol = apply_properties_to_protocol(
                 current_protocol,
                 &properties,
                 this.raise_if_not_exists,
@@ -230,42 +276,13 @@ impl std::future::IntoFuture for SetTablePropertiesBuilder {
                     .collect::<HashMap<String, Option<String>>>(),
             );
 
-            if new_protocol.min_writer_version >= 7 {
-                let converted_writer_features = properties
-                    .keys()
-                    .map(|key| key.clone().into())
-                    .filter(|v| !matches!(v, WriterFeatures::Other(_)))
-                    .collect::<HashSet<WriterFeatures>>();
-
-                match new_protocol.writer_features {
-                    Some(mut features) => {
-                        features.extend(converted_writer_features);
-                        new_protocol.writer_features = Some(features);
-                    }
-                    None => new_protocol.writer_features = Some(converted_writer_features),
-                }
-            }
-            if new_protocol.min_reader_version >= 3 {
-                let converted_reader_features = properties
-                    .keys()
-                    .map(|key| key.clone().into())
-                    .filter(|v| !matches!(v, ReaderFeatures::Other(_)))
-                    .collect::<HashSet<ReaderFeatures>>();
-                match new_protocol.reader_features {
-                    Some(mut features) => {
-                        features.extend(converted_reader_features);
-                        new_protocol.reader_features = Some(features);
-                    }
-                    None => new_protocol.reader_features = Some(converted_reader_features),
-                }
-            }
+            let final_protocol =
+                convert_properties_to_features(new_protocol, &metadata.configuration);
 
             let operational_parameters =
                 HashMap::from_iter([("properties".to_string(), json!(&properties))]);
 
-            let operations = DeltaOperation::SetTableProperties {
-                properties: properties,
-            };
+            let operations = DeltaOperation::SetTableProperties { properties };
 
             let app_metadata = this.app_metadata.unwrap_or_default();
 
@@ -282,8 +299,8 @@ impl std::future::IntoFuture for SetTablePropertiesBuilder {
 
             let mut actions = vec![Action::CommitInfo(commit_info), Action::Metadata(metadata)];
 
-            if current_protocol.ne(&new_protocol) {
-                actions.push(Action::Protocol(new_protocol));
+            if current_protocol.ne(&final_protocol) {
+                actions.push(Action::Protocol(final_protocol));
             }
 
             let version = commit(
