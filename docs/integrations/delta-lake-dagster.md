@@ -217,18 +217,18 @@ To read and write data to Delta Lake using pandas, use the `DeltaLakePolarsIOMan
 You will need to install it using:
 
 ```
-pip install dagster-polars
+pip install dagster-deltalake-polars
 ```
 
 In your `Definitions` object, change the `io_manager` to `DeltaLakePolarsIOManager()`:
 
 ```
-from dagster_polars import PolarsDeltaIOManager
+from dagster_polars import DeltaLakePolarsIOManager
 
 defs = Definitions(
    assets=all_assets,
    resources={
-        "io_manager": PolarsDeltaIOManager(
+        "io_manager": DeltaLakePolarsIOManager(
             root_uri="path/to/deltalake",
             storage_options=LocalConfig(),
             schema="dagster_deltalake",
