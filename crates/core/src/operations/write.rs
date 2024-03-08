@@ -850,12 +850,10 @@ impl Iterator for ChunksIterator {
         for _ in 0..self.chunk_size {
             if let Some(batch) = self.iter.next() {
                 chunk.push(batch);
+            } else if chunk.is_empty() {
+                return None;
             } else {
-                if chunk.is_empty() {
-                    return None;
-                } else {
-                    return Some(chunk);
-                }
+                return Some(chunk);
             }
         }
         Some(chunk)

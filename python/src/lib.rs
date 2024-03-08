@@ -1402,7 +1402,7 @@ fn write_to_deltalake(
     writer_properties: Option<HashMap<String, Option<String>>>,
     custom_metadata: Option<HashMap<String, String>>,
 ) -> PyResult<()> {
-    let batches = data.0.map(|batch| batch.unwrap()).into_iter();
+    let batches = data.0.map(|batch| batch.unwrap());
     let save_mode = mode.parse().map_err(PythonError::from)?;
 
     let options = storage_options.clone().unwrap_or_default();
