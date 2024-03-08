@@ -224,7 +224,6 @@ impl WriteBuilder {
         self
     }
 
-    
     /// Execution plan that produces the data to be written to the delta table
     pub fn with_input_execution_plan(mut self, plan: Arc<dyn ExecutionPlan>) -> Self {
         self.data = Some(WriteData::DataFusionPlan(plan));
