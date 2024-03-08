@@ -404,6 +404,13 @@ pub enum DeltaOperation {
         epoch_id: i64,
     },
 
+    /// Set table properties operations
+    #[serde(rename_all = "camelCase")]
+    SetTableProperties {
+        /// Table properties that were added
+        properties: HashMap<String, String>,
+    },
+
     #[serde(rename_all = "camelCase")]
     /// Represents a `Optimize` operation
     Optimize {
@@ -458,6 +465,7 @@ impl DeltaOperation {
             DeltaOperation::Update { .. } => "UPDATE",
             DeltaOperation::Merge { .. } => "MERGE",
             DeltaOperation::StreamingUpdate { .. } => "STREAMING UPDATE",
+            DeltaOperation::SetTableProperties { .. } => "SET TBLPROPERTIES",
             DeltaOperation::Optimize { .. } => "OPTIMIZE",
             DeltaOperation::FileSystemCheck { .. } => "FSCK",
             DeltaOperation::Restore { .. } => "RESTORE",
@@ -501,6 +509,7 @@ impl DeltaOperation {
     pub fn changes_data(&self) -> bool {
         match self {
             Self::Optimize { .. }
+            | Self::SetTableProperties { .. }
             | Self::VacuumStart { .. }
             | Self::VacuumEnd { .. }
             | Self::AddConstraint { .. }
