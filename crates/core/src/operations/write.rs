@@ -224,6 +224,13 @@ impl WriteBuilder {
         self
     }
 
+    
+    /// Execution plan that produces the data to be written to the delta table
+    pub fn with_input_execution_plan(mut self, plan: Arc<dyn ExecutionPlan>) -> Self {
+        self.data = Some(WriteData::DataFusionPlan(plan));
+        self
+    }
+
     /// A session state accompanying a given input plan, containing e.g. registered object stores
     pub fn with_input_session_state(mut self, state: SessionState) -> Self {
         self.config.state = Some(state);
