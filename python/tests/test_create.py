@@ -13,7 +13,10 @@ def test_create_roundtrip_metadata(tmp_path: pathlib.Path, sample_data: pa.Table
         sample_data.schema,
         name="test_name",
         description="test_desc",
-        configuration={"delta.appendOnly": "false", "foo": "bar"},
+        configuration={
+            "delta.appendOnly": "false",
+            "delta.logRetentionDuration": "interval 2 days",
+        },
         custom_metadata={"userName": "John Doe"},
     )
 
@@ -21,7 +24,10 @@ def test_create_roundtrip_metadata(tmp_path: pathlib.Path, sample_data: pa.Table
 
     assert metadata.name == "test_name"
     assert metadata.description == "test_desc"
-    assert metadata.configuration == {"delta.appendOnly": "false", "foo": "bar"}
+    assert metadata.configuration == {
+        "delta.appendOnly": "false",
+        "delta.logRetentionDuration": "interval 2 days",
+    }
     assert dt.history()[0]["userName"] == "John Doe"
 
 
