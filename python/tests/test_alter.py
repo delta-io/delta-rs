@@ -113,3 +113,64 @@ def test_drop_constraint_roundtrip_metadata(
     dt.alter.drop_constraint("check_price2", custom_metadata={"userName": "John Doe"})
 
     assert dt.history(1)[0]["userName"] == "John Doe"
+
+
+@pytest.mark.parametrize("min_writer_version", ['2','3','4','5','6','7'])
+def test_set_table_properties_min_writer_version(
+    tmp_path: pathlib.Path, sample_table: pa.Table, min_writer_version:str,
+):
+    write_deltalake(tmp_path, sample_table, mode="append", engine="rust")
+    dt = DeltaTable(tmp_path)
+    
+    configuration = {"delta.minWriterVersion":min_writer_version}
+    dt.alter.set_table_properties(configuration)
+    
+    protocol = dt.protocol()
+    
+    assert dt.metadata().configuration == configuration
+    assert protocol.min_reader_version == 1
+    assert protocol.min_writer_version == int(min_writer_version)
+        
+        
+def test_set_table_properties_invalid_min_writer_version(
+    tmp_path: pathlib.Path, sample_table: pa.Table
+):
+    write_deltalake(tmp_path, sample_table, mode="append", engine="rust")
+    dt = DeltaTable(tmp_path)
+    with pytest.raises(DeltaError):
+        dt.alter.set_table_properties({"delta.minWriterVersion":"8"})
+    
+    protocol = dt.protocol()
+    assert dt.metadata().configuration == {}
+    assert protocol.min_reader_version == 1
+    assert protocol.min_writer_version == 2
+    
+        
+@pytest.mark.parametrize("min_reader_version", ['1','2','3'])
+def test_set_table_properties_min_reader_version(
+    tmp_path: pathlib.Path, sample_table: pa.Table, min_reader_version:str,
+):
+    write_deltalake(tmp_path, sample_table, mode="append", engine="rust")
+    dt = DeltaTable(tmp_path)
+    configuration = {"delta.minReaderVersion":min_reader_version}
+    dt.alter.set_table_properties(configuration)
+
+    protocol = dt.protocol()
+    assert dt.metadata().configuration == configuration
+    assert protocol.min_reader_version == int(min_reader_version)
+    assert protocol.min_writer_version == 2
+        
+        
+def test_set_table_properties_invalid_min_reader_version(
+    tmp_path: pathlib.Path, sample_table: pa.Table
+):
+    write_deltalake(tmp_path, sample_table, mode="append", engine="rust")
+    dt = DeltaTable(tmp_path)
+    with pytest.raises(DeltaError):
+        dt.alter.set_table_properties({"delta.minReaderVersion":"8"})
+        
+    protocol = dt.protocol()
+    assert dt.metadata().configuration == {}
+    assert protocol.min_reader_version == 1
+    assert protocol.min_writer_version == 2
+    
