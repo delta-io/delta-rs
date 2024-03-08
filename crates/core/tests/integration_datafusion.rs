@@ -605,7 +605,7 @@ mod local {
         async fn append_to_table(table: DeltaTable, batch: RecordBatch) -> DeltaTable {
             let schema = batch.schema().clone();
             DeltaOps(table)
-                .write(vec![batch].into_iter(), schema)
+                .write(Box::new(vec![batch].into_iter()), schema)
                 .with_save_mode(SaveMode::Append)
                 .await
                 .unwrap()
