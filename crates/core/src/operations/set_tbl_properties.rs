@@ -205,14 +205,22 @@ pub fn apply_properties_to_protocol(
 }
 
 /// Converts existing properties into features if the reader_version is >=3 or writer_version >=3
+/// only converts features that are "true"
 pub fn convert_properties_to_features(
     mut new_protocol: Protocol,
     configuration: &HashMap<String, Option<String>>,
 ) -> Protocol {
     if new_protocol.min_writer_version >= 7 {
         let mut converted_writer_features = configuration
+            .iter()
+            .filter(|(_, value)| {
+                value.as_ref().map_or(false, |v| {
+                    v.to_ascii_lowercase().parse::<bool>().is_ok_and(|v| v)
+                })
+            })
+            .collect::<HashMap<&String, &Option<String>>>()
             .keys()
-            .map(|key| key.clone().into())
+            .map(|key| (*key).clone().into())
             .filter(|v| !matches!(v, WriterFeatures::Other(_)))
             .collect::<HashSet<WriterFeatures>>();
 
@@ -233,8 +241,13 @@ pub fn convert_properties_to_features(
     }
     if new_protocol.min_reader_version >= 3 {
         let converted_reader_features = configuration
-            .keys()
-            .map(|key| key.clone().into())
+            .iter()
+            .filter(|(_, value)| {
+                value.as_ref().map_or(false, |v| {
+                    v.to_ascii_lowercase().parse::<bool>().is_ok_and(|v| v)
+                })
+            })
+            .map(|(key, _)| (*key).clone().into())
             .filter(|v| !matches!(v, ReaderFeatures::Other(_)))
             .collect::<HashSet<ReaderFeatures>>();
         match new_protocol.reader_features {
