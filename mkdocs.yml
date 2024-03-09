@@ -49,6 +49,7 @@ nav:
     - Home: index.md
     - Why Use Delta Lake: why-use-delta-lake.md
     - Delta Lake for big and small data: delta-lake-big-data-small-data.md
+    - Best practices: delta-lake-best-practices.md
   - Usage:
     - Installation: usage/installation.md
     - Overview: usage/overview.md
@@ -80,6 +81,8 @@ nav:
     - api/exceptions.md
   - Integrations:
     - Arrow: integrations/delta-lake-arrow.md
+    - Dagster: integrations/delta-lake-dagster.md
+    - Dask: integrations/delta-lake-dask.md
     - DataFusion: integrations/delta-lake-datafusion.md
     - pandas: integrations/delta-lake-pandas.md
     - Polars: integrations/delta-lake-polars.md

@@ -481,7 +481,7 @@ to append pass in ``mode='append'``:
 
 :py:meth:`write_deltalake` will raise :py:exc:`ValueError` if the schema of
 the data passed to it differs from the existing table's schema. If you wish to
-alter the schema as part of an overwrite pass in ``overwrite_schema=True``.
+alter the schema as part of an overwrite pass in ``schema_mode="overwrite"``.
 
 Writing to s3
 ~~~~~~~~~~~~~

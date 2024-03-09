@@ -38,9 +38,9 @@ def html_page_context(app, pagename, templatename, context, doctree):
     context["display_github"] = True
     context["github_user"] = app.config.edit_on_github_project.split("/")[0]
     context["github_repo"] = app.config.edit_on_github_project.split("/")[1]
-    context[
-        "github_version"
-    ] = f"{app.config.edit_on_github_branch}/{app.config.page_source_prefix}/"
+    context["github_version"] = (
+        f"{app.config.edit_on_github_branch}/{app.config.page_source_prefix}/"
+    )
 
 
 def setup(app):

@@ -7,6 +7,18 @@ members = [
 exclude = ["proofs"]
 resolver = "2"
 
+[workspace.package]
+authors = ["Qingping Hou <dave2008713@gmail.com>"]
+rust-version = "1.72"
+keywords = ["deltalake", "delta", "datalake"]
+readme = "README.md"
+edition = "2021"
+description = "Native Delta Lake implementation in Rust"
+homepage = "https://github.com/delta-io/delta.rs"
+license = "Apache-2.0"
+documentation = "https://docs.rs/deltalake"
+repository = "https://github.com/delta-io/delta.rs"
+
 [profile.release-with-debug]
 inherits = "release"
 debug = true
@@ -30,7 +42,7 @@ arrow-ord = { version = "50" }
 arrow-row = { version = "50" }
 arrow-schema = { version = "50" }
 arrow-select = { version = "50" }
-object_store = { version = "0.9" }
+object_store = { version = "=0.9.0" }
 parquet = { version = "50" }
 
 # datafusion
@@ -47,7 +59,7 @@ serde_json = "1"
 
 # "stdlib"
 bytes = { version = "1" }
-chrono = { version = "0.4.31", default-features = false, features = ["clock"] }
+chrono = { version = "=0.4.34", default-features = false, features = ["clock"] }
 tracing = { version = "0.1", features = ["log"] }
 regex = { version = "1" }
 thiserror = { version = "1" }

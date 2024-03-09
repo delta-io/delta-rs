@@ -531,7 +531,6 @@ mod tests {
     use serde_json::json;
 
     use super::*;
-    use crate::kernel::Format;
     use crate::kernel::StructType;
     use crate::operations::DeltaOps;
     use crate::protocol::Metadata;

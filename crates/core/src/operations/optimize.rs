@@ -296,13 +296,14 @@ impl<'a> std::future::IntoFuture for OptimizeBuilder<'a> {
 #[derive(Debug, Clone)]
 struct OptimizeInput {
     target_size: i64,
+    predicate: Option<String>,
 }
 
 impl From<OptimizeInput> for DeltaOperation {
     fn from(opt_input: OptimizeInput) -> Self {
         DeltaOperation::Optimize {
             target_size: opt_input.target_size,
-            predicate: None,
+            predicate: opt_input.predicate,
         }
     }
 }
@@ -456,8 +457,12 @@ impl MergePlan {
         while let Some(maybe_batch) = read_stream.next().await {
             let mut batch = maybe_batch?;
 
-            batch =
-                super::cast::cast_record_batch(&batch, task_parameters.file_schema.clone(), false)?;
+            batch = super::cast::cast_record_batch(
+                &batch,
+                task_parameters.file_schema.clone(),
+                false,
+                false,
+            )?;
             partial_metrics.num_batches += 1;
             writer.write(&batch).await.map_err(DeltaTableError::from)?;
         }
@@ -783,7 +788,10 @@ pub fn create_merge_plan(
         }
     };
 
-    let input_parameters = OptimizeInput { target_size };
+    let input_parameters = OptimizeInput {
+        target_size,
+        predicate: serde_json::to_string(filters).ok(),
+    };
     let file_schema =
         arrow_schema_without_partitions(&Arc::new(snapshot.schema().try_into()?), partitions_keys);
 

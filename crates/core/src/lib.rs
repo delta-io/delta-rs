@@ -47,7 +47,7 @@
 //! # Querying Delta Tables with Datafusion
 //!
 //! Querying from local filesystem:
-//! ```ignore
+//! ```
 //! use std::sync::Arc;
 //! use datafusion::prelude::SessionContext;
 //!

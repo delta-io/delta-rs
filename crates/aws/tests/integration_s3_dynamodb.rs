@@ -5,6 +5,8 @@
 use std::collections::HashMap;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use aws_config::SdkConfig;
+use aws_sdk_dynamodb::types::BillingMode;
 use deltalake_aws::logstore::{RepairLogEntryResult, S3DynamoDbLogStore};
 use deltalake_aws::storage::S3StorageOptions;
 use deltalake_aws::{CommitEntry, DynamoDbConfig, DynamoDbLockClient};
@@ -31,17 +33,16 @@ lazy_static! {
     static ref OPTIONS: HashMap<String, String> = maplit::hashmap! {
         "allow_http".to_owned() => "true".to_owned(),
     };
-    static ref S3_OPTIONS: S3StorageOptions = S3StorageOptions::from_map(&OPTIONS);
+    static ref S3_OPTIONS: S3StorageOptions = S3StorageOptions::from_map(&OPTIONS).unwrap();
 }
 
 fn make_client() -> TestResult<DynamoDbLockClient> {
-    let options: S3StorageOptions = S3StorageOptions::default();
+    let options: S3StorageOptions = S3StorageOptions::try_default().unwrap();
     Ok(DynamoDbLockClient::try_new(
+        &options.sdk_config,
         None,
         None,
         None,
-        options.region.clone(),
-        false,
     )?)
 }
 
@@ -62,13 +63,13 @@ fn client_configs_via_env_variables() -> TestResult<()> {
     );
     let client = make_client()?;
     let config = client.get_dynamodb_config();
+    let options: S3StorageOptions = S3StorageOptions::try_default().unwrap();
     assert_eq!(
         DynamoDbConfig {
-            billing_mode: deltalake_aws::BillingMode::PayPerRequest,
+            billing_mode: BillingMode::PayPerRequest,
             lock_table_name: "some_table".to_owned(),
             max_elapsed_request_time: Duration::from_secs(64),
-            use_web_identity: false,
-            region: config.region.clone(),
+            sdk_config: options.sdk_config,
         },
         *config,
     );
@@ -208,7 +209,9 @@ async fn test_concurrent_writers() -> TestResult<()> {
     for f in futures {
         map.extend(f.await?);
     }
+
     validate_lock_table_state(&table, WORKERS * COMMITS).await?;
+
     Ok(())
 }
 

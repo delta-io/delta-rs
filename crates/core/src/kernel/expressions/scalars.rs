@@ -33,6 +33,8 @@ pub enum Scalar {
     Boolean(bool),
     /// Microsecond precision timestamp, adjusted to UTC.
     Timestamp(i64),
+    /// Microsecond precision timestamp, with no timezone.
+    TimestampNtz(i64),
     /// Date stored as a signed 32bit int days since UNIX epoch 1970-01-01
     Date(i32),
     /// Binary data
@@ -58,6 +60,7 @@ impl Scalar {
             Self::String(_) => DataType::Primitive(PrimitiveType::String),
             Self::Boolean(_) => DataType::Primitive(PrimitiveType::Boolean),
             Self::Timestamp(_) => DataType::Primitive(PrimitiveType::Timestamp),
+            Self::TimestampNtz(_) => DataType::Primitive(PrimitiveType::TimestampNtz),
             Self::Date(_) => DataType::Primitive(PrimitiveType::Date),
             Self::Binary(_) => DataType::Primitive(PrimitiveType::Binary),
             Self::Decimal(_, precision, scale) => DataType::decimal(*precision, *scale),
@@ -88,7 +91,7 @@ impl Scalar {
                     "false".to_string()
                 }
             }
-            Self::Timestamp(ts) => {
+            Self::TimestampNtz(ts) | Self::Timestamp(ts) => {
                 let ts = Utc.timestamp_micros(*ts).single().unwrap();
                 ts.format("%Y-%m-%d %H:%M:%S%.6f").to_string()
             }
@@ -222,10 +225,17 @@ impl Scalar {
                 .downcast_ref::<Date32Array>()
                 .map(|v| Self::Date(v.value(index))),
             // TODO handle timezones when implementing timestamp ntz feature.
-            Timestamp(TimeUnit::Microsecond, None) => arr
-                .as_any()
-                .downcast_ref::<TimestampMicrosecondArray>()
-                .map(|v| Self::Timestamp(v.value(index))),
+            Timestamp(TimeUnit::Microsecond, tz) => match tz {
+                None => arr
+                    .as_any()
+                    .downcast_ref::<TimestampMicrosecondArray>()
+                    .map(|v| Self::Timestamp(v.value(index))),
+                Some(tz_str) if tz_str.as_ref() == "UTC" => arr
+                    .as_any()
+                    .downcast_ref::<TimestampMicrosecondArray>()
+                    .map(|v| Self::Timestamp(v.clone().with_timezone("UTC").value(index))),
+                _ => None,
+            },
             Struct(fields) => {
                 let struct_fields = fields
                     .iter()
@@ -283,6 +293,7 @@ impl PartialOrd for Scalar {
             (String(a), String(b)) => a.partial_cmp(b),
             (Boolean(a), Boolean(b)) => a.partial_cmp(b),
             (Timestamp(a), Timestamp(b)) => a.partial_cmp(b),
+            (TimestampNtz(a), TimestampNtz(b)) => a.partial_cmp(b),
             (Date(a), Date(b)) => a.partial_cmp(b),
             (Binary(a), Binary(b)) => a.partial_cmp(b),
             (Decimal(a, _, _), Decimal(b, _, _)) => a.partial_cmp(b),
@@ -308,6 +319,7 @@ impl Display for Scalar {
             Self::String(s) => write!(f, "'{}'", s),
             Self::Boolean(b) => write!(f, "{}", b),
             Self::Timestamp(ts) => write!(f, "{}", ts),
+            Self::TimestampNtz(ts) => write!(f, "{}", ts),
             Self::Date(d) => write!(f, "{}", d),
             Self::Binary(b) => write!(f, "{:?}", b),
             Self::Decimal(value, _, scale) => match scale.cmp(&0) {
@@ -432,6 +444,16 @@ impl PrimitiveType {
                     .num_microseconds()
                     .ok_or(self.parse_error(raw))?;
                 Ok(Scalar::Timestamp(micros))
+            }
+            TimestampNtz => {
+                let timestamp = NaiveDateTime::parse_from_str(raw, "%Y-%m-%d %H:%M:%S%.f")
+                    .map_err(|_| self.parse_error(raw))?;
+                let timestamp = Utc.from_utc_datetime(&timestamp);
+                let micros = timestamp
+                    .signed_duration_since(*UNIX_EPOCH)
+                    .num_microseconds()
+                    .ok_or(self.parse_error(raw))?;
+                Ok(Scalar::TimestampNtz(micros))
             }
             Binary => {
                 let bytes = parse_escaped_binary_string(raw).map_err(|_| self.parse_error(raw))?;

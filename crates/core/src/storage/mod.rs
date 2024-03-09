@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 use url::Url;
 
 pub mod file;
+pub mod retry_ext;
 pub mod utils;
 
 use crate::{DeltaResult, DeltaTableError};
@@ -22,6 +23,7 @@ pub use object_store::{
     DynObjectStore, Error as ObjectStoreError, GetResult, ListResult, MultipartId, ObjectMeta,
     ObjectStore, Result as ObjectStoreResult,
 };
+pub use retry_ext::ObjectStoreRetryExt;
 pub use utils::*;
 
 lazy_static! {

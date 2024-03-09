@@ -1,5 +1,178 @@
 # Changelog
 
+## [rust-v0.17.0](https://github.com/delta-io/delta-rs/tree/rust-v0.17.0) (2024-02-06)
+
+:warning: The release of 0.17.0 **removes** the legacy dynamodb lock functionality, AWS users must read these release notes! :warning:
+
+### File handlers
+
+The 0.17.0 release moves storage implementations into their own crates, such as
+`deltalake-aws`. A consequence of that refactoring is that custom storage and
+file scheme handlers must be registered/initialized at runtime. Storage
+subcrates conventionally define a `register_handlers` function which performs
+that task. Users may see errors such as:
+```
+thread 'main' panicked at /home/ubuntu/.cargo/registry/src/index.crates.io-6f17d22bba15001f/deltalake-core-0.17.0/src/table/builder.rs:189:48:
+The specified table_uri is not valid: InvalidTableLocation("Unknown scheme: s3")
+```
+
+* Users of the meta-crate (`deltalake`) can call the storage crate via: `deltalake::aws::register_handlers(None);` at the entrypoint for their code.
+* Users who adopt `core` and storage crates independently (e.g. `deltalake-aws`) can register via `deltalake_aws::register_handlers(None);`.
+
+The AWS, Azure, and GCP crates must all have their custom file schemes registered in this fashion.
+
+
+### dynamodblock to S3DynamoDbLogStore
+
+The locking mechanism is fundamentally different between `deltalake` v0.16.x and v0.17.0, starting with this release the `deltalake` and `deltalake-aws` crates this library now relies on the same [protocol for concurrent writes on AWS](https://docs.delta.io/latest/delta-storage.html#setup-configuration-s3-multi-cluster) as the Delta Lake/Spark implementation.
+
+Fundamentally the DynamoDB table structure changes, [which is documented here](https://docs.delta.io/latest/delta-storage.html#setup-configuration-s3-multi-cluster). The configuration of a Rust process should continue to use the `AWS_S3_LOCKING_PROVIDER` environment value of `dynamodb`.  The new table must be specified with the `DELTA_DYNAMO_TABLE_NAME` environment or configuration variable, and that should name the _new_ `S3DynamoDbLogStore` compatible DynamoDB table.
+
+Because locking is required to ensure safe cconsistent writes, **there is no iterative migration**, 0.16 and 0.17 writers **cannot** safely coexist. The following steps should be taken when upgrading:
+
+1. Stop all 0.16.x writers
+2. Ensure writes are completed, and lock table is empty.
+3. Deploy 0.17.0 writers
+
+
+
+[Full Changelog](https://github.com/delta-io/delta-rs/compare/rust-v0.16.5...rust-v0.17.0)
+
+**Implemented enhancements:**
+
+- Expose the ability to compile DataFusion with SIMD [\#2118](https://github.com/delta-io/delta-rs/issues/2118)
+- Updating Table log retention configuration with `write_deltalake` silently changes nothing [\#2108](https://github.com/delta-io/delta-rs/issues/2108)
+- ALTER table, ALTER Column, Add/Modify Comment, Add/remove/rename partitions, Set Tags, Set location, Set TBLProperties [\#2088](https://github.com/delta-io/delta-rs/issues/2088)
+- Docs: Update docs for check constraints [\#2063](https://github.com/delta-io/delta-rs/issues/2063)
+- Don't `ensure_table_uri` when creating a table `with_log_store` [\#2036](https://github.com/delta-io/delta-rs/issues/2036)
+- Exposing custom\_metadata in merge operation [\#2031](https://github.com/delta-io/delta-rs/issues/2031)
+- Support custom table properties via TableAlterer and write/merge [\#2022](https://github.com/delta-io/delta-rs/issues/2022)
+- Remove parquet2 crate support [\#2004](https://github.com/delta-io/delta-rs/issues/2004)
+- Merge operation that only touches necessary partitions [\#1991](https://github.com/delta-io/delta-rs/issues/1991)
+- store userMetadata on write operations [\#1990](https://github.com/delta-io/delta-rs/issues/1990)
+- Create Dask integration page [\#1956](https://github.com/delta-io/delta-rs/issues/1956)
+- Merge: Filtering on partitions [\#1918](https://github.com/delta-io/delta-rs/issues/1918)
+- Rethink the load\_version and load\_with\_datetime interfaces [\#1910](https://github.com/delta-io/delta-rs/issues/1910)
+- docs: Delta Lake + Arrow Integration [\#1908](https://github.com/delta-io/delta-rs/issues/1908)
+- docs: Delta Lake + Polars integration [\#1906](https://github.com/delta-io/delta-rs/issues/1906)
+- Rethink decision to expose the public interface in namespaces [\#1900](https://github.com/delta-io/delta-rs/issues/1900)
+- Add documentation on how to build and run documentation locally [\#1893](https://github.com/delta-io/delta-rs/issues/1893)
+- Add API to create an empty Delta Lake table [\#1892](https://github.com/delta-io/delta-rs/issues/1892)
+- Implementing CHECK constraints  [\#1881](https://github.com/delta-io/delta-rs/issues/1881)
+- Check Invariants are respecting table features for write paths  [\#1880](https://github.com/delta-io/delta-rs/issues/1880)
+- Organize docs with single lefthand sidebar [\#1873](https://github.com/delta-io/delta-rs/issues/1873)
+- Make sure invariants are handled properly throughout the codebase [\#1870](https://github.com/delta-io/delta-rs/issues/1870)
+- Unable to use deltalake `Schema` in `write_deltalake` [\#1862](https://github.com/delta-io/delta-rs/issues/1862)
+- Add a Rust-backed engine for write\_deltalake [\#1861](https://github.com/delta-io/delta-rs/issues/1861)
+- Run doctest in CI for Python API examples [\#1783](https://github.com/delta-io/delta-rs/issues/1783)
+- \[RFC\] Use arrow for checkpoint reading and state handling [\#1776](https://github.com/delta-io/delta-rs/issues/1776)
+- Expose Python exceptions in public module [\#1771](https://github.com/delta-io/delta-rs/issues/1771)
+- Expose cleanup\_metadata or create\_checkpoint\_from\_table\_uri\_and\_cleanup to the Python API [\#1768](https://github.com/delta-io/delta-rs/issues/1768)
+- Expose convert\_to\_delta to Python API [\#1767](https://github.com/delta-io/delta-rs/issues/1767)
+- Add high-level checking for append-only tables [\#1759](https://github.com/delta-io/delta-rs/issues/1759)
+
+**Fixed bugs:**
+
+- Row order no longer preserved after merge operation [\#2165](https://github.com/delta-io/delta-rs/issues/2165)
+- Error when reading delta table with IDENTITY column [\#2152](https://github.com/delta-io/delta-rs/issues/2152)
+- Merge on IS NULL condition doesn't work for empty table [\#2148](https://github.com/delta-io/delta-rs/issues/2148)
+- JsonWriter converts structured parsing error into plain string [\#2143](https://github.com/delta-io/delta-rs/issues/2143)
+- Pandas import error when merging tables  [\#2112](https://github.com/delta-io/delta-rs/issues/2112)
+-   test\_repair\_on\_update broken in main [\#2109](https://github.com/delta-io/delta-rs/issues/2109)
+- `WriteBuilder::with_input_execution_plan` does not apply the schema to the log's metadata fields [\#2105](https://github.com/delta-io/delta-rs/issues/2105)
+- MERGE logical plan vs execution plan schema mismatch [\#2104](https://github.com/delta-io/delta-rs/issues/2104)
+- Partitions not pushed down [\#2090](https://github.com/delta-io/delta-rs/issues/2090)
+- Cant create empty table with write\_deltalake [\#2086](https://github.com/delta-io/delta-rs/issues/2086)
+- Unexpected high costs on Google Cloud Storage [\#2085](https://github.com/delta-io/delta-rs/issues/2085)
+- Unable to read s3 table: `Unknown scheme: s3` [\#2065](https://github.com/delta-io/delta-rs/issues/2065)
+- write\_deltalake not respecting writer\_properties [\#2064](https://github.com/delta-io/delta-rs/issues/2064)
+- Unable to read/write tables with the "gs" schema in the table\_uri in 0.15.1 [\#2060](https://github.com/delta-io/delta-rs/issues/2060)
+- LockClient requiered error for S3 backend in 0.15.1 python [\#2057](https://github.com/delta-io/delta-rs/issues/2057)
+- Error while writing Pandas DataFrame to Delta Lake \(S3\) [\#2051](https://github.com/delta-io/delta-rs/issues/2051)
+- Error with dynamo locking provider on 0.15 [\#2034](https://github.com/delta-io/delta-rs/issues/2034)
+- Conda version 0.15.0 is missing files [\#2021](https://github.com/delta-io/delta-rs/issues/2021)
+- Rust panicking through Python library when a delete predicate uses a nullable field [\#2019](https://github.com/delta-io/delta-rs/issues/2019)
+- No snapshot or version 0 found, perhaps /Users/watsy0007/resources/test\_table/ is an empty dir? [\#2016](https://github.com/delta-io/delta-rs/issues/2016)
+- Generic DeltaTable error: type\_coercion in Struct column in merge operation [\#1998](https://github.com/delta-io/delta-rs/issues/1998)
+- Constraint expr not formatted during commit action [\#1971](https://github.com/delta-io/delta-rs/issues/1971)
+- .load\_with\_datetime\(\) is incorrectly rounding to nearest second [\#1967](https://github.com/delta-io/delta-rs/issues/1967)
+- vacuuming log files [\#1965](https://github.com/delta-io/delta-rs/issues/1965)
+- Unable to merge uppercase column names [\#1960](https://github.com/delta-io/delta-rs/issues/1960)
+- Schema error: Invalid data type for Delta Lake: Null [\#1946](https://github.com/delta-io/delta-rs/issues/1946)
+- Python v0.14 wheel files not up to date [\#1945](https://github.com/delta-io/delta-rs/issues/1945)
+- python Release 0.14 is missing Windows wheels [\#1942](https://github.com/delta-io/delta-rs/issues/1942)
+- CI integration test fails randomly:  test\_restore\_by\_datetime [\#1925](https://github.com/delta-io/delta-rs/issues/1925)
+- Merge data freezes indefenetely [\#1920](https://github.com/delta-io/delta-rs/issues/1920)
+- Load DeltaTable from non-existing folder causing empty folder creation [\#1916](https://github.com/delta-io/delta-rs/issues/1916)
+- Reoptimizes merge bins with only 1 file, even though they have no effect. [\#1901](https://github.com/delta-io/delta-rs/issues/1901)
+- The Python Docs link in README.MD points to old docs [\#1898](https://github.com/delta-io/delta-rs/issues/1898)
+- optimize.compact\(\) fails with bad schema after updating to pyarrow 8.0 [\#1889](https://github.com/delta-io/delta-rs/issues/1889)
+- Python build is broken on main [\#1856](https://github.com/delta-io/delta-rs/issues/1856)
+- Checkpoint error with Azure Synapse [\#1847](https://github.com/delta-io/delta-rs/issues/1847)
+- merge very slow compared to delete + append on larger dataset [\#1846](https://github.com/delta-io/delta-rs/issues/1846)
+- get\_add\_actions fails with deltalake 0.13 [\#1835](https://github.com/delta-io/delta-rs/issues/1835)
+- Handle PyArrow CVE-2023-47248 [\#1834](https://github.com/delta-io/delta-rs/issues/1834)
+- Delta-rs writer hangs with to many file handles open \(Azure\) [\#1832](https://github.com/delta-io/delta-rs/issues/1832)
+- Encountering NotATable\("No snapshot or version 0 found, perhaps xxx is an empty dir?"\) [\#1831](https://github.com/delta-io/delta-rs/issues/1831)
+- write\_deltalake is not creating checkpoints [\#1815](https://github.com/delta-io/delta-rs/issues/1815)
+- Problem writing tables in directory named with char `~` [\#1806](https://github.com/delta-io/delta-rs/issues/1806)
+- DeltaTable Merge throws in merging if there are uppercase in Schema. [\#1797](https://github.com/delta-io/delta-rs/issues/1797)
+- rust merge error - datafusion panics [\#1790](https://github.com/delta-io/delta-rs/issues/1790)
+- expose use\_dictionary=False when writing Delta Table and running optimize [\#1772](https://github.com/delta-io/delta-rs/issues/1772)
+
+**Closed issues:**
+
+- Is this print necessary? Can we remove this. [\#2110](https://github.com/delta-io/delta-rs/issues/2110)
+- Azure concurrent writes [\#2069](https://github.com/delta-io/delta-rs/issues/2069)
+- Fix docs deployment [\#1867](https://github.com/delta-io/delta-rs/issues/1867)
+- Add a header in old docs and direct users to new docs [\#1865](https://github.com/delta-io/delta-rs/issues/1865)
+
+## [rust-v0.16.5](https://github.com/delta-io/delta-rs/tree/rust-v0.16.5) (2023-11-15)
+
+[Full Changelog](https://github.com/delta-io/delta-rs/compare/rust-v0.16.4...rust-v0.16.5)
+
+**Implemented enhancements:**
+
+- When will upgrade object\_store to 0.8? [\#1858](https://github.com/delta-io/delta-rs/issues/1858)
+- No Official Help [\#1849](https://github.com/delta-io/delta-rs/issues/1849)
+- Auto assign GitHub issues with a "take" message [\#1791](https://github.com/delta-io/delta-rs/issues/1791)
+
+**Fixed bugs:**
+
+- cargo clippy fails on core in main [\#1843](https://github.com/delta-io/delta-rs/issues/1843)
+
+## [rust-v0.16.4](https://github.com/delta-io/delta-rs/tree/rust-v0.16.4) (2023-11-12)
+
+[Full Changelog](https://github.com/delta-io/delta-rs/compare/rust-v0.16.3...rust-v0.16.4)
+
+**Implemented enhancements:**
+
+- Unable to add deltalake git dependency to cargo.toml [\#1821](https://github.com/delta-io/delta-rs/issues/1821)
+
+## [rust-v0.16.3](https://github.com/delta-io/delta-rs/tree/rust-v0.16.3) (2023-11-08)
+
+[Full Changelog](https://github.com/delta-io/delta-rs/compare/rust-v0.16.2...rust-v0.16.3)
+
+**Implemented enhancements:**
+
+- Docs: add release GitHub action [\#1799](https://github.com/delta-io/delta-rs/issues/1799)
+- Use bulk deletes where possible [\#1761](https://github.com/delta-io/delta-rs/issues/1761)
+
+**Fixed bugs:**
+
+- Code Owners no longer valid [\#1794](https://github.com/delta-io/delta-rs/issues/1794)
+- `MERGE` works incorrectly with partitioned table if the data column order is not same as table column order [\#1787](https://github.com/delta-io/delta-rs/issues/1787)
+- errors when using pyarrow dataset as a source [\#1779](https://github.com/delta-io/delta-rs/issues/1779)
+- Write to Microsoft OneLake failed. [\#1764](https://github.com/delta-io/delta-rs/issues/1764)
+
+## [rust-v0.16.2](https://github.com/delta-io/delta-rs/tree/rust-v0.16.2) (2023-10-21)
+
+[Full Changelog](https://github.com/delta-io/delta-rs/compare/rust-v0.16.1...rust-v0.16.2)
+
+## [rust-v0.16.1](https://github.com/delta-io/delta-rs/tree/rust-v0.16.1) (2023-10-21)
+
+[Full Changelog](https://github.com/delta-io/delta-rs/compare/rust-v0.16.0...rust-v0.16.1)
+
 ## [rust-v0.16.0](https://github.com/delta-io/delta-rs/tree/rust-v0.16.0) (2023-09-27)
 
 [Full Changelog](https://github.com/delta-io/delta-rs/compare/rust-v0.15.0...rust-v0.16.0)

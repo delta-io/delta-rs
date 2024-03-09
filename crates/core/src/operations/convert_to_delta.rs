@@ -226,7 +226,7 @@ impl ConvertToDeltaBuilder {
     }
 
     /// Consume self into CreateBuilder with corresponding add actions, schemas and operation meta
-    async fn into_create_builder(mut self) -> Result<CreateBuilder, Error> {
+    async fn into_create_builder(self) -> Result<CreateBuilder, Error> {
         // Use the specified log store. If a log store is not provided, create a new store from the specified path.
         // Return an error if neither log store nor path is provided
         let log_store = if let Some(log_store) = self.log_store {
@@ -270,6 +270,13 @@ impl ConvertToDeltaBuilder {
         // Iterate over the parquet files. Parse partition columns, generate add actions and collect parquet file schemas
         let mut arrow_schemas = Vec::new();
         let mut actions = Vec::new();
+        // partition columns that were defined by caller and are expected to apply on this table
+        let mut expected_partitions: HashMap<String, StructField> = self
+            .partition_schema
+            .clone()
+            .into_iter()
+            .map(|field| (field.name.clone(), field))
+            .collect();
         // A HashSet of all unique partition columns in a Parquet table
         let mut partition_columns = HashSet::new();
         // A vector of StructField of all unique partition columns in a Parquet table
@@ -290,7 +297,7 @@ impl ConvertToDeltaBuilder {
                     .ok_or(Error::MissingPartitionSchema)?;
 
                 if partition_columns.insert(key.to_string()) {
-                    if let Some(schema) = self.partition_schema.take(key) {
+                    if let Some(schema) = expected_partitions.remove(key) {
                         partition_schema_fields.insert(key.to_string(), schema);
                     } else {
                         // Return an error if the schema of a partition column is not provided by user
@@ -360,7 +367,7 @@ impl ConvertToDeltaBuilder {
             arrow_schemas.push(arrow_schema);
         }
 
-        if !self.partition_schema.is_empty() {
+        if !expected_partitions.is_empty() {
             // Partition column provided by the user does not exist in the parquet files
             return Err(Error::PartitionColumnNotExist(self.partition_schema));
         }

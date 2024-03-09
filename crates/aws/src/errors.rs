@@ -2,27 +2,45 @@
 
 use std::num::ParseIntError;
 
-use rusoto_core::RusotoError;
-use rusoto_dynamodb::{CreateTableError, GetItemError, PutItemError, QueryError, UpdateItemError};
+use aws_credential_types::provider::error::CredentialsError;
+use aws_sdk_dynamodb::{
+    error::SdkError,
+    operation::{
+        create_table::CreateTableError, get_item::GetItemError, put_item::PutItemError,
+        query::QueryError, update_item::UpdateItemError,
+    },
+};
+use aws_smithy_runtime_api::client::result::ServiceError;
 
-#[derive(thiserror::Error, Debug, PartialEq)]
+macro_rules! impl_from_service_error {
+    ($error_type:ty) => {
+        impl<R> From<SdkError<$error_type, R>> for LockClientError
+        where
+            R: Send + Sync + std::fmt::Debug + 'static,
+        {
+            fn from(err: SdkError<$error_type, R>) -> Self {
+                match err {
+                    SdkError::ServiceError(e) => e.into(),
+                    _ => LockClientError::GenericDynamoDb {
+                        source: Box::new(err),
+                    },
+                }
+            }
+        }
+
+        impl<R> From<ServiceError<$error_type, R>> for LockClientError
+        where
+            R: Send + Sync + std::fmt::Debug + 'static,
+        {
+            fn from(value: ServiceError<$error_type, R>) -> Self {
+                value.into_err().into()
+            }
+        }
+    };
+}
+
+#[derive(thiserror::Error, Debug)]
 pub enum DynamoDbConfigError {
-    /// Error raised creating http client
-    #[error("Failed to create request dispatcher: {source}")]
-    HttpClient {
-        /// The underlying Rusoto TlsError
-        #[from]
-        source: rusoto_core::request::TlsError,
-    },
-
-    /// Error raised getting credentials
-    #[error("Failed to retrieve AWS credentials: {source}")]
-    Credentials {
-        /// The underlying Rusoto CredentialsError
-        #[from]
-        source: rusoto_credential::CredentialsError,
-    },
-
     /// Billing mode string invalid
     #[error("Invalid billing mode : {0}, supported values : ['provided', 'pay_per_request']")]
     InvalidBillingMode(String),
@@ -33,6 +51,9 @@ pub enum DynamoDbConfigError {
         // config_value: String,
         source: ParseIntError,
     },
+    /// Cannot initialize DynamoDbConfiguration due to some sort of threading issue
+    #[error("Cannot initialize dynamodb lock configuration")]
+    InitializationError,
 }
 
 /// Errors produced by `DynamoDbLockClient`
@@ -44,7 +65,7 @@ pub enum LockClientError {
     #[error("Lock table '{name}': creation failed: {source}")]
     LockTableCreateFailure {
         name: String,
-        source: RusotoError<CreateTableError>,
+        source: Box<CreateTableError>,
     },
 
     #[error("Log entry for table '{table_path}' and version '{version}' already exists")]
@@ -60,12 +81,8 @@ pub enum LockClientError {
     GenericDynamoDb {
         source: Box<dyn std::error::Error + Send + Sync + 'static>,
     },
-
     #[error("configuration error: {source}")]
-    Credentials {
-        source: rusoto_credential::CredentialsError,
-    },
-
+    Credentials { source: CredentialsError },
     #[error(
         "Atomic rename requires a LockClient for S3 backends. \
          Either configure the LockClient, or set AWS_S3_ALLOW_UNSAFE_RENAME=true \
@@ -77,12 +94,14 @@ pub enum LockClientError {
 impl From<GetItemError> for LockClientError {
     fn from(err: GetItemError) -> Self {
         match err {
-            GetItemError::InternalServerError(_) => err.into(),
-            GetItemError::ProvisionedThroughputExceeded(_) => {
+            GetItemError::ProvisionedThroughputExceededException(_) => {
                 LockClientError::ProvisionedThroughputExceeded
             }
             GetItemError::RequestLimitExceeded(_) => LockClientError::ProvisionedThroughputExceeded,
-            GetItemError::ResourceNotFound(_) => LockClientError::LockTableNotFound,
+            GetItemError::ResourceNotFoundException(_) => LockClientError::LockTableNotFound,
+            _ => LockClientError::GenericDynamoDb {
+                source: Box::new(err),
+            },
         }
     }
 }
@@ -90,12 +109,14 @@ impl From<GetItemError> for LockClientError {
 impl From<QueryError> for LockClientError {
     fn from(err: QueryError) -> Self {
         match err {
-            QueryError::InternalServerError(_) => err.into(),
-            QueryError::ProvisionedThroughputExceeded(_) => {
+            QueryError::ProvisionedThroughputExceededException(_) => {
                 LockClientError::ProvisionedThroughputExceeded
             }
             QueryError::RequestLimitExceeded(_) => LockClientError::ProvisionedThroughputExceeded,
-            QueryError::ResourceNotFound(_) => LockClientError::LockTableNotFound,
+            QueryError::ResourceNotFoundException(_) => LockClientError::LockTableNotFound,
+            _ => LockClientError::GenericDynamoDb {
+                source: Box::new(err),
+            },
         }
     }
 }
@@ -103,17 +124,19 @@ impl From<QueryError> for LockClientError {
 impl From<PutItemError> for LockClientError {
     fn from(err: PutItemError) -> Self {
         match err {
-            PutItemError::ConditionalCheckFailed(_) => {
+            PutItemError::ConditionalCheckFailedException(_) => {
                 unreachable!("error must be handled explicitely")
             }
-            PutItemError::InternalServerError(_) => err.into(),
-            PutItemError::ProvisionedThroughputExceeded(_) => {
+            PutItemError::ProvisionedThroughputExceededException(_) => {
                 LockClientError::ProvisionedThroughputExceeded
             }
             PutItemError::RequestLimitExceeded(_) => LockClientError::ProvisionedThroughputExceeded,
-            PutItemError::ResourceNotFound(_) => LockClientError::LockTableNotFound,
-            PutItemError::ItemCollectionSizeLimitExceeded(_) => err.into(),
-            PutItemError::TransactionConflict(_) => err.into(),
+            PutItemError::ResourceNotFoundException(_) => LockClientError::LockTableNotFound,
+            PutItemError::ItemCollectionSizeLimitExceededException(_) => err.into(),
+            PutItemError::TransactionConflictException(_) => err.into(),
+            _ => LockClientError::GenericDynamoDb {
+                source: Box::new(err),
+            },
         }
     }
 }
@@ -121,34 +144,27 @@ impl From<PutItemError> for LockClientError {
 impl From<UpdateItemError> for LockClientError {
     fn from(err: UpdateItemError) -> Self {
         match err {
-            UpdateItemError::ConditionalCheckFailed(_) => {
+            UpdateItemError::ConditionalCheckFailedException(_) => {
                 unreachable!("condition check failure in update is not an error")
             }
             UpdateItemError::InternalServerError(_) => err.into(),
-            UpdateItemError::ProvisionedThroughputExceeded(_) => {
+            UpdateItemError::ProvisionedThroughputExceededException(_) => {
                 LockClientError::ProvisionedThroughputExceeded
             }
             UpdateItemError::RequestLimitExceeded(_) => {
                 LockClientError::ProvisionedThroughputExceeded
             }
-            UpdateItemError::ResourceNotFound(_) => LockClientError::LockTableNotFound,
-            UpdateItemError::ItemCollectionSizeLimitExceeded(_) => err.into(),
-            UpdateItemError::TransactionConflict(_) => err.into(),
-        }
-    }
-}
-
-impl<E> From<RusotoError<E>> for LockClientError
-where
-    E: Into<LockClientError> + std::error::Error + Send + Sync + 'static,
-{
-    fn from(err: RusotoError<E>) -> Self {
-        match err {
-            RusotoError::Service(e) => e.into(),
-            RusotoError::Credentials(e) => LockClientError::Credentials { source: e },
+            UpdateItemError::ResourceNotFoundException(_) => LockClientError::LockTableNotFound,
+            UpdateItemError::ItemCollectionSizeLimitExceededException(_) => err.into(),
+            UpdateItemError::TransactionConflictException(_) => err.into(),
             _ => LockClientError::GenericDynamoDb {
                 source: Box::new(err),
             },
         }
     }
 }
+
+impl_from_service_error!(GetItemError);
+impl_from_service_error!(PutItemError);
+impl_from_service_error!(QueryError);
+impl_from_service_error!(UpdateItemError);

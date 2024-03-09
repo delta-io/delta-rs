@@ -13,6 +13,7 @@ use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::{Action, CommitInfo, ReaderFeatures, WriterFeatures};
 use crate::logstore::LogStore;
 use crate::protocol::DeltaOperation;
+use crate::storage::ObjectStoreRetryExt;
 use crate::table::state::DeltaTableState;
 
 pub use self::protocol::INSTANCE as PROTOCOL;
@@ -71,12 +72,12 @@ pub enum TransactionError {
     UnsupportedWriterFeatures(Vec<WriterFeatures>),
 
     /// Error returned when writer features are required but not specified
-    #[error("Writer features must be specified for writerversion >= 7")]
-    WriterFeaturesRequired,
+    #[error("Writer features must be specified for writerversion >= 7, please specify: {0:?}")]
+    WriterFeaturesRequired(WriterFeatures),
 
     /// Error returned when reader features are required but not specified
-    #[error("Reader features must be specified for reader version >= 3")]
-    ReaderFeaturesRequired,
+    #[error("Reader features must be specified for reader version >= 3, please specify: {0:?}")]
+    ReaderFeaturesRequired(ReaderFeatures),
 
     /// The transaction failed to commit due to an error in an implementation-specific layer.
     /// Currently used by DynamoDb-backed S3 log store when database operations fail.
@@ -242,13 +243,19 @@ pub async fn commit_with_retries(
                         attempt_number += 1;
                     }
                     Err(err) => {
-                        log_store.object_store().delete(&tmp_commit).await?;
+                        log_store
+                            .object_store()
+                            .delete_with_retries(&tmp_commit, 15)
+                            .await?;
                         return Err(TransactionError::CommitConflict(err).into());
                     }
                 };
             }
             Err(err) => {
-                log_store.object_store().delete(&tmp_commit).await?;
+                log_store
+                    .object_store()
+                    .delete_with_retries(&tmp_commit, 15)
+                    .await?;
                 return Err(err.into());
             }
         }

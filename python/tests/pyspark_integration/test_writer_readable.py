@@ -1,4 +1,5 @@
 """Test that pyspark can read tables written by deltalake(delta-rs)."""
+
 import pathlib
 
 import pyarrow as pa

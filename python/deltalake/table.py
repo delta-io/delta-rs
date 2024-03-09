@@ -53,8 +53,13 @@ except ModuleNotFoundError:
 else:
     _has_pandas = True
 
-MAX_SUPPORTED_READER_VERSION = 1
-MAX_SUPPORTED_WRITER_VERSION = 2
+MAX_SUPPORTED_PYARROW_WRITER_VERSION = 7
+NOT_SUPPORTED_PYARROW_WRITER_VERSIONS = [3, 4, 5, 6]
+SUPPORTED_WRITER_FEATURES = {"appendOnly", "invariants", "timestampNtz"}
+
+MAX_SUPPORTED_READER_VERSION = 3
+NOT_SUPPORTED_READER_VERSION = 2
+SUPPORTED_READER_FEATURES = {"timestampNtz"}
 
 
 class Compression(Enum):
@@ -242,6 +247,8 @@ class Metadata:
 class ProtocolVersions(NamedTuple):
     min_reader_version: int
     min_writer_version: int
+    writer_features: Optional[List[str]]
+    reader_features: Optional[List[str]]
 
 
 FilterLiteralType = Tuple[str, str, Any]
@@ -1025,11 +1032,26 @@ class DeltaTable:
         Returns:
             the PyArrow dataset in PyArrow
         """
-        if self.protocol().min_reader_version > MAX_SUPPORTED_READER_VERSION:
+        table_protocol = self.protocol()
+        if (
+            table_protocol.min_reader_version > MAX_SUPPORTED_READER_VERSION
+            or table_protocol.min_reader_version == NOT_SUPPORTED_READER_VERSION
+        ):
             raise DeltaProtocolError(
-                f"The table's minimum reader version is {self.protocol().min_reader_version} "
-                f"but deltalake only supports up to version {MAX_SUPPORTED_READER_VERSION}."
+                f"The table's minimum reader version is {table_protocol.min_reader_version} "
+                f"but deltalake only supports version 1 or {MAX_SUPPORTED_READER_VERSION} with these reader features: {SUPPORTED_READER_FEATURES}"
             )
+        if (
+            table_protocol.min_reader_version >= 3
+            and table_protocol.reader_features is not None
+        ):
+            missing_features = {*table_protocol.reader_features}.difference(
+                SUPPORTED_READER_FEATURES
+            )
+            if len(missing_features) > 0:
+                raise DeltaProtocolError(
+                    f"The table has set these reader features: {missing_features} but these are not yet supported by the deltalake reader."
+                )
 
         if not filesystem:
             file_sizes = self.get_add_actions().to_pydict()
@@ -1277,9 +1299,9 @@ class TableMerger:
         self.not_matched_insert_updates: Optional[List[Dict[str, str]]] = None
         self.not_matched_insert_predicate: Optional[List[Optional[str]]] = None
         self.not_matched_by_source_update_updates: Optional[List[Dict[str, str]]] = None
-        self.not_matched_by_source_update_predicate: Optional[
-            List[Optional[str]]
-        ] = None
+        self.not_matched_by_source_update_predicate: Optional[List[Optional[str]]] = (
+            None
+        )
         self.not_matched_by_source_delete_predicate: Optional[List[str]] = None
         self.not_matched_by_source_delete_all: Optional[bool] = None
 
@@ -1774,6 +1796,40 @@ class TableAlterer:
             )
 
         self.table._table.add_constraints(constraints, custom_metadata)
+
+    def drop_constraint(
+        self,
+        name: str,
+        raise_if_not_exists: bool = True,
+        custom_metadata: Optional[Dict[str, str]] = None,
+    ) -> None:
+        """
+        Drop constraints from a table. Limited to `single constraint` at once.
+
+        Args:
+            name: constraint name which to drop.
+            raise_if_not_exists: set if should raise if not exists.
+            custom_metadata: custom metadata that will be added to the transaction commit.
+        Example:
+            ```python
+            from deltalake import DeltaTable
+            dt = DeltaTable("test_table_constraints")
+            dt.metadata().configuration
+            {'delta.constraints.value_gt_5': 'value > 5'}
+            ```
+
+            **Drop the constraint**
+            ```python
+            dt.alter.drop_constraint(name = "value_gt_5")
+            ```
+
+            **Configuration after dropping**
+            ```python
+            dt.metadata().configuration
+            {}
+            ```
+        """
+        self.table._table.drop_constraints(name, raise_if_not_exists, custom_metadata)
 
 
 class TableOptimizer:

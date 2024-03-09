@@ -44,7 +44,7 @@ class RawDeltaTable:
     def version(self) -> int: ...
     def get_latest_version(self) -> int: ...
     def metadata(self) -> RawDeltaTableMetaData: ...
-    def protocol_versions(self) -> List[int]: ...
+    def protocol_versions(self) -> List[Any]: ...
     def load_version(self, version: int) -> None: ...
     def load_with_datetime(self, ds: str) -> None: ...
     def files_by_partitions(
@@ -82,6 +82,12 @@ class RawDeltaTable:
     def add_constraints(
         self,
         constraints: Dict[str, str],
+        custom_metadata: Optional[Dict[str, str]],
+    ) -> None: ...
+    def drop_constraints(
+        self,
+        name: str,
+        raise_if_not_exists: bool,
         custom_metadata: Optional[Dict[str, str]],
     ) -> None: ...
     def restore(
@@ -168,7 +174,7 @@ def write_to_deltalake(
     partition_by: Optional[List[str]],
     mode: str,
     max_rows_per_group: int,
-    overwrite_schema: bool,
+    schema_mode: Optional[str],
     predicate: Optional[str],
     name: Optional[str],
     description: Optional[str],
@@ -226,6 +232,7 @@ class PrimitiveType:
      * "binary",
      * "date",
      * "timestamp",
+     * "timestampNtz",
      * "decimal(<precision>, <scale>)"
 
     Args:
@@ -786,6 +793,11 @@ class CommitFailedError(DeltaError):
 
 class DeltaProtocolError(DeltaError):
     """Raised when a violation with the Delta protocol specs ocurred."""
+
+    pass
+
+class SchemaMismatchError(DeltaError):
+    """Raised when a schema mismatch is detected."""
 
     pass
 
