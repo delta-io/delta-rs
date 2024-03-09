@@ -1320,7 +1320,7 @@ async fn execute(
         build_case(copy_when, copy_then)?,
     ));
 
-    let mut new_columns = {
+    let new_columns = {
         let plan = projection.into_unoptimized_plan();
         let mut fields: Vec<Expr> = plan
             .schema()
@@ -1379,13 +1379,13 @@ async fn execute(
         None,
         writer_properties,
         safe_cast,
-        false,
+        None,
     )
     .await?;
 
     metrics.rewrite_time_ms = Instant::now().duration_since(rewrite_start).as_millis() as u64;
 
-    let mut actions: Vec<Action> = add_actions.into_iter().map(Action::Add).collect();
+    let mut actions: Vec<Action> = add_actions.clone();
     metrics.num_target_files_added = actions.len();
 
     let survivors = barrier
@@ -1574,6 +1574,7 @@ mod tests {
         table
     }
 
+    // TODO(ion): property keys are not passed through or translated as table features.. fix this as well
     #[tokio::test]
     async fn test_merge_when_delta_table_is_append_only() {
         let schema = get_arrow_schema(&None);

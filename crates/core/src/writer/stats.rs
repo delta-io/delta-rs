@@ -645,7 +645,6 @@ mod tests {
         }
     }
 
-    #[ignore]
     #[tokio::test]
     async fn test_delta_stats() {
         let temp_dir = tempfile::tempdir().unwrap();

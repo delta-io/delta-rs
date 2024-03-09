@@ -249,7 +249,7 @@ impl<'a> TableConfig<'a> {
         (
             "true to enable deletion vectors and predictive I/O for updates.",
             DeltaConfigKey::EnableDeletionVectors,
-            enable_deletio0n_vectors,
+            enable_deletion_vectors,
             bool,
             // in databricks the default is dependent on the workspace settings and runtime version
             // https://learn.microsoft.com/en-us/azure/databricks/administration-guide/workspace-settings/deletion-vectors
@@ -289,7 +289,7 @@ impl<'a> TableConfig<'a> {
     ///   than this value. Otherwise, the query may not be able to restart, as it must still read old files.
     pub fn deleted_file_retention_duration(&self) -> Duration {
         lazy_static! {
-            static ref DEFAULT_DURATION: Duration = parse_interval("interval 1 week").unwrap();
+            static ref DEFAULT_DURATION: Duration = parse_interval("interval 1 weeks").unwrap();
         }
         self.0
             .get(DeltaConfigKey::DeletedFileRetentionDuration.as_ref())
@@ -305,7 +305,7 @@ impl<'a> TableConfig<'a> {
     /// constant time. Operations on history are parallel but will become more expensive as the log size increases.
     pub fn log_retention_duration(&self) -> Duration {
         lazy_static! {
-            static ref DEFAULT_DURATION: Duration = parse_interval("interval 30 day").unwrap();
+            static ref DEFAULT_DURATION: Duration = parse_interval("interval 30 days").unwrap();
         }
         self.0
             .get(DeltaConfigKey::LogRetentionDuration.as_ref())
@@ -525,14 +525,14 @@ fn parse_interval(value: &str) -> Result<Duration, DeltaConfigError> {
     let number = number as u64;
 
     let duration = match it.next().ok_or_else(not_an_interval)? {
-        "nanosecond" => Duration::from_nanos(number),
-        "microsecond" => Duration::from_micros(number),
-        "millisecond" => Duration::from_millis(number),
-        "second" => Duration::from_secs(number),
-        "minute" => Duration::from_secs(number * SECONDS_PER_MINUTE),
-        "hour" => Duration::from_secs(number * SECONDS_PER_HOUR),
-        "day" => Duration::from_secs(number * SECONDS_PER_DAY),
-        "week" => Duration::from_secs(number * SECONDS_PER_WEEK),
+        "nanosecond" | "nanoseconds" => Duration::from_nanos(number),
+        "microsecond" | "microseconds" => Duration::from_micros(number),
+        "millisecond" | "milliseconds" => Duration::from_millis(number),
+        "second" | "seconds" => Duration::from_secs(number),
+        "minute" | "minutes" => Duration::from_secs(number * SECONDS_PER_MINUTE),
+        "hour" | "hours" => Duration::from_secs(number * SECONDS_PER_HOUR),
+        "day" | "days" => Duration::from_secs(number * SECONDS_PER_DAY),
+        "week" | "weeks" => Duration::from_secs(number * SECONDS_PER_WEEK),
         unit => {
             return Err(DeltaConfigError::Validation(format!(
                 "Unknown unit '{unit}'"
@@ -621,7 +621,17 @@ mod tests {
         );
 
         assert_eq!(
+            parse_interval("interval 123 nanoseconds").unwrap(),
+            Duration::from_nanos(123)
+        );
+
+        assert_eq!(
             parse_interval("interval 123 microsecond").unwrap(),
+            Duration::from_micros(123)
+        );
+
+        assert_eq!(
+            parse_interval("interval 123 microseconds").unwrap(),
             Duration::from_micros(123)
         );
 
@@ -631,7 +641,17 @@ mod tests {
         );
 
         assert_eq!(
+            parse_interval("interval 123 milliseconds").unwrap(),
+            Duration::from_millis(123)
+        );
+
+        assert_eq!(
             parse_interval("interval 123 second").unwrap(),
+            Duration::from_secs(123)
+        );
+
+        assert_eq!(
+            parse_interval("interval 123 seconds").unwrap(),
             Duration::from_secs(123)
         );
 
@@ -641,13 +661,33 @@ mod tests {
         );
 
         assert_eq!(
+            parse_interval("interval 123 minutes").unwrap(),
+            Duration::from_secs(123 * 60)
+        );
+
+        assert_eq!(
             parse_interval("interval 123 hour").unwrap(),
+            Duration::from_secs(123 * 3600)
+        );
+
+        assert_eq!(
+            parse_interval("interval 123 hours").unwrap(),
             Duration::from_secs(123 * 3600)
         );
 
         assert_eq!(
             parse_interval("interval 123 day").unwrap(),
             Duration::from_secs(123 * 86400)
+        );
+
+        assert_eq!(
+            parse_interval("interval 123 days").unwrap(),
+            Duration::from_secs(123 * 86400)
+        );
+
+        assert_eq!(
+            parse_interval("interval 123 week").unwrap(),
+            Duration::from_secs(123 * 604800)
         );
 
         assert_eq!(
