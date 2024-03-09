@@ -740,3 +740,9 @@ def test_encode_partition_value(input_value: Any, expected: str) -> None:
         assert [encode_partition_value(val) for val in input_value] == expected
     else:
         assert encode_partition_value(input_value) == expected
+
+
+def test_read_table_last_checkpoint_not_updated():
+    dt = DeltaTable("../crates/test/tests/data/table_failed_last_checkpoint_update")
+
+    assert dt.version() == 3
