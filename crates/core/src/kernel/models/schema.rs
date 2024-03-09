@@ -498,6 +498,8 @@ pub enum PrimitiveType {
     Binary,
     /// Date: Calendar date (year, month, day)
     Date,
+    /// Microsecond precision time
+    Time64,
     /// Microsecond precision timestamp, adjusted to UTC.
     Timestamp,
     /// Micrsoecond precision timestamp with no timezone
@@ -567,6 +569,7 @@ impl Display for PrimitiveType {
             PrimitiveType::Boolean => write!(f, "boolean"),
             PrimitiveType::Binary => write!(f, "binary"),
             PrimitiveType::Date => write!(f, "date"),
+            PrimitiveType::Time64 => write!(f, "time64"),
             PrimitiveType::Timestamp => write!(f, "timestamp"),
             PrimitiveType::TimestampNtz => write!(f, "timestampNtz"),
             PrimitiveType::Decimal(precision, scale) => {
@@ -622,6 +625,7 @@ impl DataType {
     pub const BOOLEAN: Self = DataType::Primitive(PrimitiveType::Boolean);
     pub const BINARY: Self = DataType::Primitive(PrimitiveType::Binary);
     pub const DATE: Self = DataType::Primitive(PrimitiveType::Date);
+    pub const TIME64: Self = DataType::Primitive(PrimitiveType::Time64);
     pub const TIMESTAMP: Self = DataType::Primitive(PrimitiveType::Timestamp);
     pub const TIMESTAMPNTZ: Self = DataType::Primitive(PrimitiveType::TimestampNtz);
 
