@@ -224,6 +224,9 @@ impl TryFrom<&ArrowDataType> for DataType {
             }),
             ArrowDataType::Date32 => Ok(DataType::Primitive(PrimitiveType::Date)),
             ArrowDataType::Date64 => Ok(DataType::Primitive(PrimitiveType::Date)),
+            ArrowDataType::Time64(TimeUnit::Microsecond) => {
+                Ok(DataType::Primitive(PrimitiveType::Time64))
+            }
             ArrowDataType::Timestamp(TimeUnit::Microsecond, None) => {
                 Ok(DataType::Primitive(PrimitiveType::TimestampNtz))
             }
@@ -802,6 +805,12 @@ mod tests {
             .unwrap_err(),
             _
         ));
+    fn test_arrow_from_delta_time64_type() {
+        let time_field = DataType::Primitive(PrimitiveType::Time64);
+        assert_eq!(
+            <ArrowDataType as TryFrom<&DataType>>::try_from(&time_field).unwrap(),
+            ArrowDataType::Time64(TimeUnit::Microsecond)
+        );
     }
 
     #[test]
