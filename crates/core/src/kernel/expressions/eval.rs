@@ -9,7 +9,7 @@ use arrow_arith::numeric::{add, div, mul, sub};
 use arrow_array::{
     Array, ArrayRef, BinaryArray, BooleanArray, Date32Array, Datum, Decimal128Array, Float32Array,
     Float64Array, Int16Array, Int32Array, Int64Array, Int8Array, RecordBatch, StringArray,
-    StructArray, TimestampMicrosecondArray,
+    StructArray, Time64MicrosecondArray, TimestampMicrosecondArray,
 };
 use arrow_ord::cmp::{eq, gt, gt_eq, lt, lt_eq, neq};
 use arrow_schema::{ArrowError, Field as ArrowField, Schema as ArrowSchema};
@@ -46,6 +46,7 @@ impl Scalar {
             Double(val) => Arc::new(Float64Array::from_value(*val, num_rows)),
             String(val) => Arc::new(StringArray::from(vec![val.clone(); num_rows])),
             Boolean(val) => Arc::new(BooleanArray::from(vec![*val; num_rows])),
+            Time64(val) => Arc::new(Time64MicrosecondArray::from_value(*val, num_rows)),
             Timestamp(val) => {
                 Arc::new(TimestampMicrosecondArray::from_value(*val, num_rows).with_timezone("UTC"))
             }
@@ -66,6 +67,7 @@ impl Scalar {
                     PrimitiveType::Double => Arc::new(Float64Array::new_null(num_rows)),
                     PrimitiveType::String => Arc::new(StringArray::new_null(num_rows)),
                     PrimitiveType::Boolean => Arc::new(BooleanArray::new_null(num_rows)),
+                    PrimitiveType::Time64 => Arc::new(Time64MicrosecondArray::new_null(num_rows)),
                     PrimitiveType::Timestamp => {
                         Arc::new(TimestampMicrosecondArray::new_null(num_rows).with_timezone("UTC"))
                     }
