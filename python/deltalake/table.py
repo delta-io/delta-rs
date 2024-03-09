@@ -162,7 +162,7 @@ class WriterProperties:
 
         if compression_level is not None and compression is None:
             raise ValueError(
-                """Providing a compression level without the compression type is not possible, 
+                """Providing a compression level without the compression type is not possible,
                              please provide the compression as well."""
             )
         if isinstance(compression, str):
@@ -1299,9 +1299,9 @@ class TableMerger:
         self.not_matched_insert_updates: Optional[List[Dict[str, str]]] = None
         self.not_matched_insert_predicate: Optional[List[Optional[str]]] = None
         self.not_matched_by_source_update_updates: Optional[List[Dict[str, str]]] = None
-        self.not_matched_by_source_update_predicate: Optional[
-            List[Optional[str]]
-        ] = None
+        self.not_matched_by_source_update_predicate: Optional[List[Optional[str]]] = (
+                     None
+                 )
         self.not_matched_by_source_delete_predicate: Optional[List[str]] = None
         self.not_matched_by_source_delete_all: Optional[bool] = None
 
@@ -1819,7 +1819,7 @@ class TableAlterer:
         """
         if len(constraints.keys()) > 1:
             raise ValueError(
-                """add_constraints is limited to a single constraint addition at once for now. 
+                """add_constraints is limited to a single constraint addition at once for now.
                 Please execute add_constraints multiple times with each time a different constraint."""
             )
 

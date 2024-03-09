@@ -109,8 +109,7 @@ def write_deltalake(
     large_dtypes: bool = ...,
     engine: Literal["pyarrow"] = ...,
     custom_metadata: Optional[Dict[str, str]] = ...,
-) -> None:
-    ...
+) -> None: ...
 
 
 @overload
@@ -138,8 +137,7 @@ def write_deltalake(
     engine: Literal["rust"],
     writer_properties: WriterProperties = ...,
     custom_metadata: Optional[Dict[str, str]] = ...,
-) -> None:
-    ...
+) -> None: ...
 
 
 @overload
@@ -168,8 +166,7 @@ def write_deltalake(
     engine: Literal["rust"],
     writer_properties: WriterProperties = ...,
     custom_metadata: Optional[Dict[str, str]] = ...,
-) -> None:
-    ...
+) -> None: ...
 
 
 def write_deltalake(
@@ -439,7 +436,7 @@ def write_deltalake(
                 raise DeltaProtocolError(
                     "This table's min_writer_version is "
                     f"{table_protocol.min_writer_version}, "
-                    f"""but this method only supports version 2 or 7 with at max these features {SUPPORTED_WRITER_FEATURES} enabled. 
+                    f"""but this method only supports version 2 or 7 with at max these features {SUPPORTED_WRITER_FEATURES} enabled.
                     Try engine='rust' instead which supports more features and writer versions."""
                 )
             if (
@@ -462,12 +459,12 @@ def write_deltalake(
             ) -> None:
                 if table is None:
                     return
-                existed_partitions: FrozenSet[
-                    FrozenSet[Tuple[str, Optional[str]]]
-                ] = table._table.get_active_partitions()
-                allowed_partitions: FrozenSet[
-                    FrozenSet[Tuple[str, Optional[str]]]
-                ] = table._table.get_active_partitions(partition_filters)
+                existed_partitions: FrozenSet[FrozenSet[Tuple[str, Optional[str]]]] = (
+                    table._table.get_active_partitions()
+                )
+                allowed_partitions: FrozenSet[FrozenSet[Tuple[str, Optional[str]]]] = (
+                    table._table.get_active_partitions(partition_filters)
+                )
                 partition_values = pa.RecordBatch.from_arrays(
                     [
                         batch.column(column_name)
