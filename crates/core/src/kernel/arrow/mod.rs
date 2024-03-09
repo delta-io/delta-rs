@@ -266,7 +266,7 @@ impl TryFrom<&ArrowDataType> for DataType {
                 }
             }
             s => Err(ArrowError::SchemaError(format!(
-                "Invalid data type for Delta Lake: {s}"
+                "Invalid data type for Delta Lake {s}"
             ))),
         }
     }
