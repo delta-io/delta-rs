@@ -1179,7 +1179,7 @@ fn scalar_to_py(value: &Scalar, py_date: &PyAny, py: Python) -> PyResult<PyObjec
         Long(val) => val.to_object(py),
         Float(val) => val.to_object(py),
         Double(val) => val.to_object(py),
-        Time64(_) => {
+        Time(_) => {
             let value = value.serialize();
             value.to_object(py)
         }

@@ -31,8 +31,8 @@ pub enum Scalar {
     String(String),
     /// true or false value
     Boolean(bool),
-    /// Microseconds since midnight
-    Time64(i64),
+    /// Nanoseconds since midnight
+    Time(i64),
     /// Microsecond precision timestamp, adjusted to UTC.
     Timestamp(i64),
     /// Microsecond precision timestamp, with no timezone.
@@ -61,7 +61,7 @@ impl Scalar {
             Self::Float(_) => DataType::Primitive(PrimitiveType::Float),
             Self::Double(_) => DataType::Primitive(PrimitiveType::Double),
             Self::String(_) => DataType::Primitive(PrimitiveType::String),
-            Self::Time64(_) => DataType::Primitive(PrimitiveType::Time64),
+            Self::Time(_) => DataType::Primitive(PrimitiveType::Time),
             Self::Timestamp(_) => DataType::Primitive(PrimitiveType::Timestamp),
             Self::TimestampNtz(_) => DataType::Primitive(PrimitiveType::TimestampNtz),
             Self::Date(_) => DataType::Primitive(PrimitiveType::Date),
@@ -95,10 +95,10 @@ impl Scalar {
                     "false".to_string()
                 }
             }
-            Self::Time64(t) => {
-                let time_delta = TimeDelta::milliseconds(*t);
-                let time = NaiveTime::from_hms_micro_opt(0, 0, 0, 0).unwrap() + time_delta;
-                time.format("%H:%M:%S%.6f").to_string()
+            Self::Time(t) => {
+                let time_delta = TimeDelta::nanoseconds(*t);
+                let time = NaiveTime::from_hms_nano_opt(0, 0, 0, 0).unwrap() + time_delta;
+                time.format("%H:%M:%S%.9f").to_string()
             }
             Self::TimestampNtz(ts) | Self::Timestamp(ts) => {
                 let ts = Utc.timestamp_micros(*ts).single().unwrap();
@@ -231,10 +231,10 @@ impl Scalar {
                 .as_any()
                 .downcast_ref::<Date32Array>()
                 .map(|v| Self::Date(v.value(index))),
-            Time64(TimeUnit::Microsecond) => arr
+            Time64(TimeUnit::Nanosecond) => arr
                 .as_any()
-                .downcast_ref::<Time64MicrosecondArray>()
-                .map(|v| Self::Time64(v.value(index))),
+                .downcast_ref::<Time64NanosecondArray>()
+                .map(|v| Self::Time(v.value(index))),
             // TODO handle timezones when implementing timestamp ntz feature.
             Timestamp(TimeUnit::Microsecond, tz) => match tz {
                 None => arr
@@ -303,7 +303,7 @@ impl PartialOrd for Scalar {
             (Double(a), Double(b)) => a.partial_cmp(b),
             (String(a), String(b)) => a.partial_cmp(b),
             (Boolean(a), Boolean(b)) => a.partial_cmp(b),
-            (Time64(a), Time64(b)) => a.partial_cmp(b),
+            (Time(a), Time(b)) => a.partial_cmp(b),
             (Timestamp(a), Timestamp(b)) => a.partial_cmp(b),
             (TimestampNtz(a), TimestampNtz(b)) => a.partial_cmp(b),
             (Date(a), Date(b)) => a.partial_cmp(b),
@@ -330,7 +330,7 @@ impl Display for Scalar {
             Self::Double(fl) => write!(f, "{}", fl),
             Self::String(s) => write!(f, "'{}'", s),
             Self::Boolean(b) => write!(f, "{}", b),
-            Self::Time64(t) => write!(f, "{}", t),
+            Self::Time(t) => write!(f, "{}", t),
             Self::Timestamp(ts) => write!(f, "{}", ts),
             Self::TimestampNtz(ts) => write!(f, "{}", ts),
             Self::Date(d) => write!(f, "{}", d),
@@ -448,17 +448,16 @@ impl PrimitiveType {
                 let days = date.signed_duration_since(*UNIX_EPOCH).num_days() as i32;
                 Ok(Scalar::Date(days))
             }
-            Time64 => {
-                const NANOS_IN_MICRO: u32 = 1_000;
-                const MICROS_IN_SEC: u32 = 1_000_000;
+            Time => {
+                const NANOS_IN_SEC: u32 = 1_000_000_000;
 
                 let time = NaiveTime::parse_from_str(raw, "%H:%M:%S%.f")
                     .map_err(|_| self.parse_error(raw))?;
                 let seconds_from_midnight = time.num_seconds_from_midnight();
-                let microseconds = time.nanosecond() / NANOS_IN_MICRO;
-                let total_micros = seconds_from_midnight * MICROS_IN_SEC + microseconds;
+                let nanoseconds_from_midnight =
+                    seconds_from_midnight * NANOS_IN_SEC + time.nanosecond();
 
-                Ok(Scalar::Time64(total_micros as i64))
+                Ok(Scalar::Time(nanoseconds_from_midnight as i64))
             }
             Timestamp => {
                 let timestamp = NaiveDateTime::parse_from_str(raw, "%Y-%m-%d %H:%M:%S%.f")
