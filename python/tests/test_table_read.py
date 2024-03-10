@@ -1,5 +1,5 @@
 import os
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from pathlib import Path
 from threading import Barrier, Thread
 from types import SimpleNamespace
@@ -36,12 +36,20 @@ def test_read_table_with_edge_timestamps():
         parquet_read_options=ParquetReadOptions(coerce_int96_timestamp_unit="ms")
     )
     assert dataset.to_table().to_pydict() == {
-        "BIG_DATE": [datetime(9999, 12, 31, 0, 0, 0), datetime(9999, 12, 30, 0, 0, 0)],
-        "NORMAL_DATE": [datetime(2022, 1, 1, 0, 0, 0), datetime(2022, 2, 1, 0, 0, 0)],
+        "BIG_DATE": [
+            datetime(9999, 12, 31, 0, 0, 0, tzinfo=timezone.utc),
+            datetime(9999, 12, 30, 0, 0, 0, tzinfo=timezone.utc),
+        ],
+        "NORMAL_DATE": [
+            datetime(2022, 1, 1, 0, 0, 0, tzinfo=timezone.utc),
+            datetime(2022, 2, 1, 0, 0, 0, tzinfo=timezone.utc),
+        ],
         "SOME_VALUE": [1, 2],
     }
     # Can push down filters to these timestamps.
-    predicate = ds.field("BIG_DATE") == datetime(9999, 12, 31, 0, 0, 0)
+    predicate = ds.field("BIG_DATE") == datetime(
+        9999, 12, 31, 0, 0, 0, tzinfo=timezone.utc
+    )
     assert len(list(dataset.get_fragments(predicate))) == 1
 
 
@@ -491,7 +499,7 @@ def test_delta_table_with_filters():
 def test_writer_fails_on_protocol():
     table_path = "../crates/test/tests/data/simple_table"
     dt = DeltaTable(table_path)
-    dt.protocol = Mock(return_value=ProtocolVersions(2, 1))
+    dt.protocol = Mock(return_value=ProtocolVersions(2, 1, None, None))
     with pytest.raises(DeltaProtocolError):
         dt.to_pyarrow_dataset()
     with pytest.raises(DeltaProtocolError):
@@ -732,3 +740,9 @@ def test_encode_partition_value(input_value: Any, expected: str) -> None:
         assert [encode_partition_value(val) for val in input_value] == expected
     else:
         assert encode_partition_value(input_value) == expected
+
+
+def test_read_table_last_checkpoint_not_updated():
+    dt = DeltaTable("../crates/test/tests/data/table_failed_last_checkpoint_update")
+
+    assert dt.version() == 3

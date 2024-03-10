@@ -1,5 +1,6 @@
 //! AWS S3 storage backend.
 
+use aws_config::{Region, SdkConfig};
 use bytes::Bytes;
 use deltalake_core::storage::object_store::{
     aws::AmazonS3ConfigKey, parse_url_opts, GetOptions, GetResult, ListResult, MultipartId,
@@ -8,7 +9,7 @@ use deltalake_core::storage::object_store::{
 use deltalake_core::storage::{str_is_truthy, ObjectStoreFactory, ObjectStoreRef, StorageOptions};
 use deltalake_core::{DeltaResult, ObjectStoreError, Path};
 use futures::stream::BoxStream;
-use rusoto_core::Region;
+use futures::Future;
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::ops::Range;
@@ -18,6 +19,10 @@ use std::time::Duration;
 use tokio::io::AsyncWrite;
 use url::Url;
 
+use crate::errors::DynamoDbConfigError;
+#[cfg(feature = "native-tls")]
+use crate::native;
+
 const STORE_NAME: &str = "DeltaS3ObjectStore";
 
 #[derive(Clone, Default, Debug)]
@@ -25,7 +30,21 @@ pub struct S3ObjectStoreFactory {}
 
 impl S3ObjectStoreFactory {
     fn with_env_s3(&self, options: &StorageOptions) -> StorageOptions {
-        let mut options = options.clone();
+        let mut options = StorageOptions(
+            options
+                .0
+                .clone()
+                .into_iter()
+                .map(|(k, v)| {
+                    if let Ok(config_key) = AmazonS3ConfigKey::from_str(&k.to_ascii_lowercase()) {
+                        (config_key.as_ref().to_string(), v)
+                    } else {
+                        (k, v)
+                    }
+                })
+                .collect(),
+        );
+
         for (os_key, os_value) in std::env::vars_os() {
             if let (Some(key), Some(value)) = (os_key.to_str(), os_value.to_str()) {
                 if let Ok(config_key) = AmazonS3ConfigKey::from_str(&key.to_ascii_lowercase()) {
@@ -64,7 +83,7 @@ impl ObjectStoreFactory for S3ObjectStoreFactory {
             return Ok((Arc::from(store), prefix));
         }
 
-        let options = S3StorageOptions::from_map(&options.0);
+        let options = S3StorageOptions::from_map(&options.0)?;
 
         let store = S3StorageBackend::try_new(
             store.into(),
@@ -78,30 +97,38 @@ impl ObjectStoreFactory for S3ObjectStoreFactory {
 /// Options used to configure the [S3StorageBackend].
 ///
 /// Available options are described in [s3_constants].
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug)]
 #[allow(missing_docs)]
 pub struct S3StorageOptions {
-    pub endpoint_url: Option<String>,
-    pub region: Region,
-    pub profile: Option<String>,
-    pub aws_access_key_id: Option<String>,
-    pub aws_secret_access_key: Option<String>,
-    pub aws_session_token: Option<String>,
     pub virtual_hosted_style_request: bool,
     pub locking_provider: Option<String>,
-    pub assume_role_arn: Option<String>,
-    pub assume_role_session_name: Option<String>,
-    pub use_web_identity: bool,
     pub s3_pool_idle_timeout: Duration,
     pub sts_pool_idle_timeout: Duration,
     pub s3_get_internal_server_error_retries: usize,
     pub allow_unsafe_rename: bool,
     pub extra_opts: HashMap<String, String>,
+    pub sdk_config: SdkConfig,
+}
+
+impl Eq for S3StorageOptions {}
+impl PartialEq for S3StorageOptions {
+    fn eq(&self, other: &Self) -> bool {
+        self.virtual_hosted_style_request == other.virtual_hosted_style_request
+            && self.locking_provider == other.locking_provider
+            && self.s3_pool_idle_timeout == other.s3_pool_idle_timeout
+            && self.sts_pool_idle_timeout == other.sts_pool_idle_timeout
+            && self.s3_get_internal_server_error_retries
+                == other.s3_get_internal_server_error_retries
+            && self.allow_unsafe_rename == other.allow_unsafe_rename
+            && self.extra_opts == other.extra_opts
+            && self.sdk_config.endpoint_url() == other.sdk_config.endpoint_url()
+            && self.sdk_config.region() == other.sdk_config.region()
+    }
 }
 
 impl S3StorageOptions {
     /// Creates an instance of S3StorageOptions from the given HashMap.
-    pub fn from_map(options: &HashMap<String, String>) -> S3StorageOptions {
+    pub fn from_map(options: &HashMap<String, String>) -> DeltaResult<S3StorageOptions> {
         let extra_opts = options
             .iter()
             .filter(|(k, _)| !s3_constants::S3_OPTS.contains(&k.as_str()))
@@ -118,18 +145,6 @@ impl S3StorageOptions {
         Self::ensure_env_var(options, s3_constants::AWS_WEB_IDENTITY_TOKEN_FILE);
         Self::ensure_env_var(options, s3_constants::AWS_ROLE_ARN);
         Self::ensure_env_var(options, s3_constants::AWS_ROLE_SESSION_NAME);
-
-        let endpoint_url = str_option(options, s3_constants::AWS_ENDPOINT_URL);
-        let region = if let Some(endpoint_url) = endpoint_url.as_ref() {
-            Region::Custom {
-                name: Self::str_or_default(options, s3_constants::AWS_REGION, "custom".to_string()),
-                endpoint: endpoint_url.to_owned(),
-            }
-        } else {
-            Region::default()
-        };
-        let profile = str_option(options, s3_constants::AWS_PROFILE);
-
         let s3_pool_idle_timeout =
             Self::u64_or_default(options, s3_constants::AWS_S3_POOL_IDLE_TIMEOUT_SECONDS, 15);
         let sts_pool_idle_timeout =
@@ -150,30 +165,43 @@ impl S3StorageOptions {
             .map(|val| str_is_truthy(&val))
             .unwrap_or(false);
 
-        Self {
-            endpoint_url,
-            region,
-            profile,
-            aws_access_key_id: str_option(options, s3_constants::AWS_ACCESS_KEY_ID),
-            aws_secret_access_key: str_option(options, s3_constants::AWS_SECRET_ACCESS_KEY),
-            aws_session_token: str_option(options, s3_constants::AWS_SESSION_TOKEN),
+        #[cfg(feature = "native-tls")]
+        let sdk_config = execute_sdk_future(
+            aws_config::ConfigLoader::default()
+                .http_client(native::use_native_tls_client(
+                    str_option(options, s3_constants::AWS_ALLOW_HTTP)
+                        .map(|val| str_is_truthy(&val))
+                        .unwrap_or(false),
+                ))
+                .load(),
+        )?;
+        #[cfg(feature = "rustls")]
+        let sdk_config = execute_sdk_future(aws_config::load_from_env())?;
+
+        let sdk_config =
+            if let Some(endpoint_url) = str_option(options, s3_constants::AWS_ENDPOINT_URL) {
+                sdk_config.to_builder().endpoint_url(endpoint_url).build()
+            } else {
+                sdk_config
+            };
+        Ok(Self {
             virtual_hosted_style_request,
             locking_provider: str_option(options, s3_constants::AWS_S3_LOCKING_PROVIDER),
-            assume_role_arn: str_option(options, s3_constants::AWS_S3_ASSUME_ROLE_ARN),
-            assume_role_session_name: str_option(options, s3_constants::AWS_S3_ROLE_SESSION_NAME),
-            use_web_identity: std::env::var(s3_constants::AWS_WEB_IDENTITY_TOKEN_FILE).is_ok(),
             s3_pool_idle_timeout: Duration::from_secs(s3_pool_idle_timeout),
             sts_pool_idle_timeout: Duration::from_secs(sts_pool_idle_timeout),
             s3_get_internal_server_error_retries,
             allow_unsafe_rename,
             extra_opts,
-        }
+            sdk_config,
+        })
     }
 
-    fn str_or_default(map: &HashMap<String, String>, key: &str, default: String) -> String {
-        map.get(key)
-            .map(|v| v.to_owned())
-            .unwrap_or_else(|| std::env::var(key).unwrap_or(default))
+    pub fn endpoint_url(&self) -> Option<&str> {
+        self.sdk_config.endpoint_url()
+    }
+
+    pub fn region(&self) -> Option<&Region> {
+        self.sdk_config.region()
     }
 
     fn u64_or_default(map: &HashMap<String, String>, key: &str, default: u64) -> u64 {
@@ -187,12 +215,42 @@ impl S3StorageOptions {
             std::env::set_var(key, val);
         }
     }
+
+    pub fn try_default() -> DeltaResult<Self> {
+        Self::from_map(&HashMap::new())
+    }
 }
 
-impl Default for S3StorageOptions {
-    /// Creates an instance of S3StorageOptions from environment variables.
-    fn default() -> S3StorageOptions {
-        Self::from_map(&HashMap::new())
+fn execute_sdk_future<F: Future<Output = SdkConfig> + Send + 'static>(
+    future: F,
+) -> DeltaResult<SdkConfig> {
+    match tokio::runtime::Handle::try_current() {
+        Ok(handle) => match handle.runtime_flavor() {
+            tokio::runtime::RuntimeFlavor::MultiThread => {
+                Ok(tokio::task::block_in_place(move || handle.block_on(future)))
+            }
+            _ => {
+                let mut cfg: Option<SdkConfig> = None;
+                std::thread::scope(|scope| {
+                    scope.spawn(|| {
+                        cfg = Some(handle.block_on(future));
+                    });
+                });
+                cfg.ok_or(deltalake_core::DeltaTableError::ObjectStore {
+                    source: ObjectStoreError::Generic {
+                        store: STORE_NAME,
+                        source: Box::new(DynamoDbConfigError::InitializationError),
+                    },
+                })
+            }
+        },
+        Err(_) => {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("a tokio runtime is required by the AWS sdk");
+            Ok(runtime.block_on(future))
+        }
     }
 }
 
@@ -409,201 +467,281 @@ mod tests {
     use maplit::hashmap;
     use serial_test::serial;
 
+    struct ScopedEnv {
+        vars: HashMap<std::ffi::OsString, std::ffi::OsString>,
+    }
+
+    impl ScopedEnv {
+        pub fn new() -> Self {
+            let vars = std::env::vars_os().collect();
+            Self { vars }
+        }
+
+        pub fn run<T>(mut f: impl FnMut() -> T) -> T {
+            let _env_scope = Self::new();
+            f()
+        }
+    }
+
+    impl Drop for ScopedEnv {
+        fn drop(&mut self) {
+            let to_remove: Vec<_> = std::env::vars_os()
+                .map(|kv| kv.0)
+                .filter(|k| !self.vars.contains_key(k))
+                .collect();
+            for k in to_remove {
+                std::env::remove_var(k);
+            }
+            for (key, value) in self.vars.drain() {
+                std::env::set_var(key, value);
+            }
+        }
+    }
+
+    fn clear_env_of_aws_keys() {
+        let keys_to_clear = std::env::vars().filter_map(|(k, _v)| {
+            if AmazonS3ConfigKey::from_str(&k.to_ascii_lowercase()).is_ok() {
+                Some(k)
+            } else {
+                None
+            }
+        });
+
+        for k in keys_to_clear {
+            std::env::remove_var(k);
+        }
+    }
+
     #[test]
     #[serial]
     fn storage_options_default_test() {
-        std::env::set_var(s3_constants::AWS_ENDPOINT_URL, "http://localhost");
-        std::env::set_var(s3_constants::AWS_REGION, "us-west-1");
-        std::env::set_var(s3_constants::AWS_PROFILE, "default");
-        std::env::set_var(s3_constants::AWS_ACCESS_KEY_ID, "default_key_id");
-        std::env::set_var(s3_constants::AWS_SECRET_ACCESS_KEY, "default_secret_key");
-        std::env::set_var(s3_constants::AWS_S3_LOCKING_PROVIDER, "dynamodb");
-        std::env::set_var(
-            s3_constants::AWS_S3_ASSUME_ROLE_ARN,
-            "arn:aws:iam::123456789012:role/some_role",
-        );
-        std::env::set_var(s3_constants::AWS_S3_ROLE_SESSION_NAME, "session_name");
-        std::env::set_var(s3_constants::AWS_WEB_IDENTITY_TOKEN_FILE, "token_file");
-        std::env::remove_var(s3_constants::AWS_S3_POOL_IDLE_TIMEOUT_SECONDS);
-        std::env::remove_var(s3_constants::AWS_STS_POOL_IDLE_TIMEOUT_SECONDS);
-        std::env::remove_var(s3_constants::AWS_S3_GET_INTERNAL_SERVER_ERROR_RETRIES);
+        ScopedEnv::run(|| {
+            clear_env_of_aws_keys();
 
-        let options = S3StorageOptions::default();
+            std::env::set_var(s3_constants::AWS_ENDPOINT_URL, "http://localhost");
+            std::env::set_var(s3_constants::AWS_REGION, "us-west-1");
+            std::env::set_var(s3_constants::AWS_PROFILE, "default");
+            std::env::set_var(s3_constants::AWS_ACCESS_KEY_ID, "default_key_id");
+            std::env::set_var(s3_constants::AWS_SECRET_ACCESS_KEY, "default_secret_key");
+            std::env::set_var(s3_constants::AWS_S3_LOCKING_PROVIDER, "dynamodb");
+            std::env::set_var(
+                s3_constants::AWS_S3_ASSUME_ROLE_ARN,
+                "arn:aws:iam::123456789012:role/some_role",
+            );
+            std::env::set_var(s3_constants::AWS_S3_ROLE_SESSION_NAME, "session_name");
+            std::env::set_var(s3_constants::AWS_WEB_IDENTITY_TOKEN_FILE, "token_file");
 
-        assert_eq!(
-            S3StorageOptions {
-                endpoint_url: Some("http://localhost".to_string()),
-                region: Region::Custom {
-                    name: "us-west-1".to_string(),
-                    endpoint: "http://localhost".to_string()
+            let options = S3StorageOptions::try_default().unwrap();
+            assert_eq!(
+                S3StorageOptions {
+                    sdk_config: SdkConfig::builder()
+                        .endpoint_url("http://localhost".to_string())
+                        .region(Region::from_static("us-west-1"))
+                        .build(),
+                    virtual_hosted_style_request: false,
+                    locking_provider: Some("dynamodb".to_string()),
+                    s3_pool_idle_timeout: Duration::from_secs(15),
+                    sts_pool_idle_timeout: Duration::from_secs(10),
+                    s3_get_internal_server_error_retries: 10,
+                    extra_opts: HashMap::new(),
+                    allow_unsafe_rename: false,
                 },
-                profile: Some("default".to_string()),
-                aws_access_key_id: Some("default_key_id".to_string()),
-                aws_secret_access_key: Some("default_secret_key".to_string()),
-                aws_session_token: None,
-                virtual_hosted_style_request: false,
-                assume_role_arn: Some("arn:aws:iam::123456789012:role/some_role".to_string()),
-                assume_role_session_name: Some("session_name".to_string()),
-                use_web_identity: true,
-                locking_provider: Some("dynamodb".to_string()),
-                s3_pool_idle_timeout: Duration::from_secs(15),
-                sts_pool_idle_timeout: Duration::from_secs(10),
-                s3_get_internal_server_error_retries: 10,
-                extra_opts: HashMap::new(),
-                allow_unsafe_rename: false,
-            },
-            options
-        );
+                options
+            );
+        });
     }
 
     #[test]
     #[serial]
     fn storage_options_with_only_region_and_credentials() {
-        std::env::remove_var(s3_constants::AWS_ENDPOINT_URL);
-        let options = S3StorageOptions::from_map(&hashmap! {
-            s3_constants::AWS_REGION.to_string() => "eu-west-1".to_string(),
-            s3_constants::AWS_ACCESS_KEY_ID.to_string() => "test".to_string(),
-            s3_constants::AWS_SECRET_ACCESS_KEY.to_string() => "test_secret".to_string(),
-        });
+        ScopedEnv::run(|| {
+            clear_env_of_aws_keys();
+            std::env::remove_var(s3_constants::AWS_ENDPOINT_URL);
+            let options = S3StorageOptions::from_map(&hashmap! {
+                s3_constants::AWS_REGION.to_string() => "eu-west-1".to_string(),
+                s3_constants::AWS_ACCESS_KEY_ID.to_string() => "test".to_string(),
+                s3_constants::AWS_SECRET_ACCESS_KEY.to_string() => "test_secret".to_string(),
+            })
+            .unwrap();
 
-        assert_eq!(
-            S3StorageOptions {
-                endpoint_url: None,
-                region: Region::default(),
-                aws_access_key_id: Some("test".to_string()),
-                aws_secret_access_key: Some("test_secret".to_string()),
-                ..Default::default()
-            },
-            options
-        );
+            let mut expected = S3StorageOptions::try_default().unwrap();
+            expected.sdk_config = SdkConfig::builder()
+                .region(Region::from_static("eu-west-1"))
+                .build();
+            assert_eq!(expected, options);
+        });
     }
 
     #[test]
     #[serial]
     fn storage_options_from_map_test() {
-        let options = S3StorageOptions::from_map(&hashmap! {
-            s3_constants::AWS_ENDPOINT_URL.to_string() => "http://localhost:1234".to_string(),
-            s3_constants::AWS_REGION.to_string() => "us-west-2".to_string(),
-            s3_constants::AWS_PROFILE.to_string() => "default".to_string(),
-            s3_constants::AWS_S3_ADDRESSING_STYLE.to_string() => "virtual".to_string(),
-            s3_constants::AWS_S3_LOCKING_PROVIDER.to_string() => "another_locking_provider".to_string(),
-            s3_constants::AWS_S3_ASSUME_ROLE_ARN.to_string() => "arn:aws:iam::123456789012:role/another_role".to_string(),
-            s3_constants::AWS_S3_ROLE_SESSION_NAME.to_string() => "another_session_name".to_string(),
-            s3_constants::AWS_WEB_IDENTITY_TOKEN_FILE.to_string() => "another_token_file".to_string(),
-            s3_constants::AWS_S3_POOL_IDLE_TIMEOUT_SECONDS.to_string() => "1".to_string(),
-            s3_constants::AWS_STS_POOL_IDLE_TIMEOUT_SECONDS.to_string() => "2".to_string(),
-            s3_constants::AWS_S3_GET_INTERNAL_SERVER_ERROR_RETRIES.to_string() => "3".to_string(),
-            s3_constants::AWS_ACCESS_KEY_ID.to_string() => "test_id".to_string(),
-            s3_constants::AWS_SECRET_ACCESS_KEY.to_string() => "test_secret".to_string(),
-        });
+        ScopedEnv::run(|| {
+            clear_env_of_aws_keys();
+            let options = S3StorageOptions::from_map(&hashmap! {
+                s3_constants::AWS_ENDPOINT_URL.to_string() => "http://localhost:1234".to_string(),
+                s3_constants::AWS_REGION.to_string() => "us-west-2".to_string(),
+                s3_constants::AWS_PROFILE.to_string() => "default".to_string(),
+                s3_constants::AWS_S3_ADDRESSING_STYLE.to_string() => "virtual".to_string(),
+                s3_constants::AWS_S3_LOCKING_PROVIDER.to_string() => "another_locking_provider".to_string(),
+                s3_constants::AWS_S3_ASSUME_ROLE_ARN.to_string() => "arn:aws:iam::123456789012:role/another_role".to_string(),
+                s3_constants::AWS_S3_ROLE_SESSION_NAME.to_string() => "another_session_name".to_string(),
+                s3_constants::AWS_WEB_IDENTITY_TOKEN_FILE.to_string() => "another_token_file".to_string(),
+                s3_constants::AWS_S3_POOL_IDLE_TIMEOUT_SECONDS.to_string() => "1".to_string(),
+                s3_constants::AWS_STS_POOL_IDLE_TIMEOUT_SECONDS.to_string() => "2".to_string(),
+                s3_constants::AWS_S3_GET_INTERNAL_SERVER_ERROR_RETRIES.to_string() => "3".to_string(),
+                s3_constants::AWS_ACCESS_KEY_ID.to_string() => "test_id".to_string(),
+                s3_constants::AWS_SECRET_ACCESS_KEY.to_string() => "test_secret".to_string(),
+            }).unwrap();
 
-        assert_eq!(
-            S3StorageOptions {
-                endpoint_url: Some("http://localhost:1234".to_string()),
-                region: Region::Custom {
-                    name: "us-west-2".to_string(),
-                    endpoint: "http://localhost:1234".to_string()
+            assert_eq!(
+                S3StorageOptions {
+                    sdk_config: SdkConfig::builder()
+                        .endpoint_url("http://localhost:1234".to_string())
+                        .region(Region::from_static("us-west-2"))
+                        .build(),
+                    virtual_hosted_style_request: true,
+                    locking_provider: Some("another_locking_provider".to_string()),
+                    s3_pool_idle_timeout: Duration::from_secs(1),
+                    sts_pool_idle_timeout: Duration::from_secs(2),
+                    s3_get_internal_server_error_retries: 3,
+                    extra_opts: hashmap! {
+                        s3_constants::AWS_S3_ADDRESSING_STYLE.to_string() => "virtual".to_string()
+                    },
+                    allow_unsafe_rename: false,
                 },
-                profile: Some("default".to_string()),
-                aws_access_key_id: Some("test_id".to_string()),
-                aws_secret_access_key: Some("test_secret".to_string()),
-                aws_session_token: None,
-                virtual_hosted_style_request: true,
-                assume_role_arn: Some("arn:aws:iam::123456789012:role/another_role".to_string()),
-                assume_role_session_name: Some("another_session_name".to_string()),
-                use_web_identity: true,
-                locking_provider: Some("another_locking_provider".to_string()),
-                s3_pool_idle_timeout: Duration::from_secs(1),
-                sts_pool_idle_timeout: Duration::from_secs(2),
-                s3_get_internal_server_error_retries: 3,
-                extra_opts: hashmap! {
-                    s3_constants::AWS_S3_ADDRESSING_STYLE.to_string() => "virtual".to_string()
-                },
-                allow_unsafe_rename: false,
-            },
-            options
-        );
+                options
+            );
+        });
     }
 
     #[test]
     #[serial]
     fn storage_options_mixed_test() {
-        std::env::set_var(s3_constants::AWS_ENDPOINT_URL, "http://localhost");
-        std::env::set_var(s3_constants::AWS_REGION, "us-west-1");
-        std::env::set_var(s3_constants::AWS_PROFILE, "default");
-        std::env::set_var(s3_constants::AWS_ACCESS_KEY_ID, "wrong_key_id");
-        std::env::set_var(s3_constants::AWS_SECRET_ACCESS_KEY, "wrong_secret_key");
-        std::env::set_var(s3_constants::AWS_S3_LOCKING_PROVIDER, "dynamodb");
-        std::env::set_var(
-            s3_constants::AWS_S3_ASSUME_ROLE_ARN,
-            "arn:aws:iam::123456789012:role/some_role",
-        );
-        std::env::set_var(s3_constants::AWS_S3_ROLE_SESSION_NAME, "session_name");
-        std::env::set_var(s3_constants::AWS_WEB_IDENTITY_TOKEN_FILE, "token_file");
+        ScopedEnv::run(|| {
+            clear_env_of_aws_keys();
+            std::env::set_var(s3_constants::AWS_ENDPOINT_URL, "http://localhost");
+            std::env::set_var(s3_constants::AWS_REGION, "us-west-1");
+            std::env::set_var(s3_constants::AWS_PROFILE, "default");
+            std::env::set_var(s3_constants::AWS_ACCESS_KEY_ID, "wrong_key_id");
+            std::env::set_var(s3_constants::AWS_SECRET_ACCESS_KEY, "wrong_secret_key");
+            std::env::set_var(s3_constants::AWS_S3_LOCKING_PROVIDER, "dynamodb");
+            std::env::set_var(
+                s3_constants::AWS_S3_ASSUME_ROLE_ARN,
+                "arn:aws:iam::123456789012:role/some_role",
+            );
+            std::env::set_var(s3_constants::AWS_S3_ROLE_SESSION_NAME, "session_name");
+            std::env::set_var(s3_constants::AWS_WEB_IDENTITY_TOKEN_FILE, "token_file");
 
-        std::env::set_var(s3_constants::AWS_S3_POOL_IDLE_TIMEOUT_SECONDS, "1");
-        std::env::set_var(s3_constants::AWS_STS_POOL_IDLE_TIMEOUT_SECONDS, "2");
-        std::env::set_var(s3_constants::AWS_S3_GET_INTERNAL_SERVER_ERROR_RETRIES, "3");
-        let options = S3StorageOptions::from_map(&hashmap! {
-            s3_constants::AWS_ACCESS_KEY_ID.to_string() => "test_id_mixed".to_string(),
-            s3_constants::AWS_SECRET_ACCESS_KEY.to_string() => "test_secret_mixed".to_string(),
-            s3_constants::AWS_REGION.to_string() => "us-west-2".to_string(),
-            "AWS_S3_GET_INTERNAL_SERVER_ERROR_RETRIES".to_string() => "3".to_string(),
-        });
+            std::env::set_var(s3_constants::AWS_S3_POOL_IDLE_TIMEOUT_SECONDS, "1");
+            std::env::set_var(s3_constants::AWS_STS_POOL_IDLE_TIMEOUT_SECONDS, "2");
+            std::env::set_var(s3_constants::AWS_S3_GET_INTERNAL_SERVER_ERROR_RETRIES, "3");
+            let options = S3StorageOptions::from_map(&hashmap! {
+                s3_constants::AWS_ACCESS_KEY_ID.to_string() => "test_id_mixed".to_string(),
+                s3_constants::AWS_SECRET_ACCESS_KEY.to_string() => "test_secret_mixed".to_string(),
+                s3_constants::AWS_REGION.to_string() => "us-west-2".to_string(),
+                "AWS_S3_GET_INTERNAL_SERVER_ERROR_RETRIES".to_string() => "3".to_string(),
+            })
+            .unwrap();
 
-        assert_eq!(
-            S3StorageOptions {
-                endpoint_url: Some("http://localhost".to_string()),
-                region: Region::Custom {
-                    name: "us-west-2".to_string(),
-                    endpoint: "http://localhost".to_string()
+            assert_eq!(
+                S3StorageOptions {
+                    sdk_config: SdkConfig::builder()
+                        .endpoint_url("http://localhost".to_string())
+                        .region(Region::from_static("us-west-2"))
+                        .build(),
+                    virtual_hosted_style_request: false,
+                    locking_provider: Some("dynamodb".to_string()),
+                    s3_pool_idle_timeout: Duration::from_secs(1),
+                    sts_pool_idle_timeout: Duration::from_secs(2),
+                    s3_get_internal_server_error_retries: 3,
+                    extra_opts: hashmap! {},
+                    allow_unsafe_rename: false,
                 },
-                profile: Some("default".to_string()),
-                aws_access_key_id: Some("test_id_mixed".to_string()),
-                aws_secret_access_key: Some("test_secret_mixed".to_string()),
-                aws_session_token: None,
-                virtual_hosted_style_request: false,
-                assume_role_arn: Some("arn:aws:iam::123456789012:role/some_role".to_string()),
-                assume_role_session_name: Some("session_name".to_string()),
-                use_web_identity: true,
-                locking_provider: Some("dynamodb".to_string()),
-                s3_pool_idle_timeout: Duration::from_secs(1),
-                sts_pool_idle_timeout: Duration::from_secs(2),
-                s3_get_internal_server_error_retries: 3,
-                extra_opts: hashmap! {},
-                allow_unsafe_rename: false,
-            },
-            options
-        );
+                options
+            );
+        });
     }
+
     #[test]
     #[serial]
     fn storage_options_web_identity_test() {
-        let _options = S3StorageOptions::from_map(&hashmap! {
-            s3_constants::AWS_REGION.to_string() => "eu-west-1".to_string(),
-            s3_constants::AWS_WEB_IDENTITY_TOKEN_FILE.to_string() => "web_identity_token_file".to_string(),
-            s3_constants::AWS_ROLE_ARN.to_string() => "arn:aws:iam::123456789012:role/web_identity_role".to_string(),
-            s3_constants::AWS_ROLE_SESSION_NAME.to_string() => "web_identity_session_name".to_string(),
+        ScopedEnv::run(|| {
+            clear_env_of_aws_keys();
+            let _options = S3StorageOptions::from_map(&hashmap! {
+                s3_constants::AWS_REGION.to_string() => "eu-west-1".to_string(),
+                s3_constants::AWS_WEB_IDENTITY_TOKEN_FILE.to_string() => "web_identity_token_file".to_string(),
+                s3_constants::AWS_ROLE_ARN.to_string() => "arn:aws:iam::123456789012:role/web_identity_role".to_string(),
+                s3_constants::AWS_ROLE_SESSION_NAME.to_string() => "web_identity_session_name".to_string(),
+            }).unwrap();
+
+            assert_eq!(
+                "eu-west-1",
+                std::env::var(s3_constants::AWS_REGION).unwrap()
+            );
+
+            assert_eq!(
+                "web_identity_token_file",
+                std::env::var(s3_constants::AWS_WEB_IDENTITY_TOKEN_FILE).unwrap()
+            );
+
+            assert_eq!(
+                "arn:aws:iam::123456789012:role/web_identity_role",
+                std::env::var(s3_constants::AWS_ROLE_ARN).unwrap()
+            );
+
+            assert_eq!(
+                "web_identity_session_name",
+                std::env::var(s3_constants::AWS_ROLE_SESSION_NAME).unwrap()
+            );
         });
+    }
 
-        assert_eq!(
-            "eu-west-1",
-            std::env::var(s3_constants::AWS_REGION).unwrap()
-        );
+    #[test]
+    #[serial]
+    fn when_merging_with_env_unsupplied_options_are_added() {
+        ScopedEnv::run(|| {
+            clear_env_of_aws_keys();
+            let raw_options = hashmap! {};
 
-        assert_eq!(
-            "web_identity_token_file",
-            std::env::var(s3_constants::AWS_WEB_IDENTITY_TOKEN_FILE).unwrap()
-        );
+            std::env::set_var(s3_constants::AWS_ACCESS_KEY_ID, "env_key");
+            std::env::set_var(s3_constants::AWS_ENDPOINT_URL, "env_key");
+            std::env::set_var(s3_constants::AWS_SECRET_ACCESS_KEY, "env_key");
+            std::env::set_var(s3_constants::AWS_REGION, "env_key");
 
-        assert_eq!(
-            "arn:aws:iam::123456789012:role/web_identity_role",
-            std::env::var(s3_constants::AWS_ROLE_ARN).unwrap()
-        );
+            let combined_options =
+                S3ObjectStoreFactory {}.with_env_s3(&StorageOptions(raw_options));
 
-        assert_eq!(
-            "web_identity_session_name",
-            std::env::var(s3_constants::AWS_ROLE_SESSION_NAME).unwrap()
-        );
+            assert_eq!(combined_options.0.len(), 4);
+
+            for v in combined_options.0.values() {
+                assert_eq!(v, "env_key");
+            }
+        });
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn when_merging_with_env_supplied_options_take_precedence() {
+        ScopedEnv::run(|| {
+            clear_env_of_aws_keys();
+            let raw_options = hashmap! {
+                "AWS_ACCESS_KEY_ID".to_string() => "options_key".to_string(),
+                "AWS_ENDPOINT_URL".to_string() => "options_key".to_string(),
+                "AWS_SECRET_ACCESS_KEY".to_string() => "options_key".to_string(),
+                "AWS_REGION".to_string() => "options_key".to_string()
+            };
+
+            std::env::set_var("aws_access_key_id", "env_key");
+            std::env::set_var("aws_endpoint", "env_key");
+            std::env::set_var("aws_secret_access_key", "env_key");
+            std::env::set_var("aws_region", "env_key");
+
+            let combined_options =
+                S3ObjectStoreFactory {}.with_env_s3(&StorageOptions(raw_options));
+
+            for v in combined_options.0.values() {
+                assert_eq!(v, "options_key");
+            }
+        });
     }
 }

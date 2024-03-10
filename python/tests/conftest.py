@@ -251,5 +251,18 @@ def sample_table():
 
 
 @pytest.fixture()
+def sample_table_with_spaces_numbers():
+    nrows = 5
+    return pa.table(
+        {
+            "1id": pa.array(["1", "2", "3", "4", "5"]),
+            "price": pa.array(list(range(nrows)), pa.int64()),
+            "sold items": pa.array(list(range(nrows)), pa.int32()),
+            "deleted": pa.array([False] * nrows),
+        }
+    )
+
+
+@pytest.fixture()
 def writer_properties():
     return WriterProperties(compression="GZIP", compression_level=0)

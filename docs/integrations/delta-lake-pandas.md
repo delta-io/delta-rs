@@ -250,10 +250,10 @@ Schema enforcement protects your table from getting corrupted by appending data 
 
 ## Overwriting schema of table
 
-You can overwrite the table contents and schema by setting the `overwrite_schema` option.  Here's how to overwrite the table contents:
+You can overwrite the table contents and schema by setting the `schema_mode` option.  Here's how to overwrite the table contents:
 
 ```python
-write_deltalake("tmp/some-table", df, mode="overwrite", overwrite_schema=True)
+write_deltalake("tmp/some-table", df, mode="overwrite", schema_mode="overwrite")
 ```
 
 Here are the contents of the table after the values and schema have been overwritten:
@@ -266,6 +266,8 @@ Here are the contents of the table after the values and schema have been overwri
 |     6 | dog      |
 +-------+----------+
 ```
+
+If you want the schema to be merged instead, specify schema_mode="merge".
 
 ## In-memory vs. in-storage data changes
 

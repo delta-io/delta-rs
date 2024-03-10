@@ -53,8 +53,13 @@ except ModuleNotFoundError:
 else:
     _has_pandas = True
 
-MAX_SUPPORTED_READER_VERSION = 1
-MAX_SUPPORTED_WRITER_VERSION = 2
+MAX_SUPPORTED_PYARROW_WRITER_VERSION = 7
+NOT_SUPPORTED_PYARROW_WRITER_VERSIONS = [3, 4, 5, 6]
+SUPPORTED_WRITER_FEATURES = {"appendOnly", "invariants", "timestampNtz"}
+
+MAX_SUPPORTED_READER_VERSION = 3
+NOT_SUPPORTED_READER_VERSION = 2
+SUPPORTED_READER_FEATURES = {"timestampNtz"}
 
 
 class Compression(Enum):
@@ -242,6 +247,8 @@ class Metadata:
 class ProtocolVersions(NamedTuple):
     min_reader_version: int
     min_writer_version: int
+    writer_features: Optional[List[str]]
+    reader_features: Optional[List[str]]
 
 
 FilterLiteralType = Tuple[str, str, Any]
@@ -1025,11 +1032,26 @@ class DeltaTable:
         Returns:
             the PyArrow dataset in PyArrow
         """
-        if self.protocol().min_reader_version > MAX_SUPPORTED_READER_VERSION:
+        table_protocol = self.protocol()
+        if (
+            table_protocol.min_reader_version > MAX_SUPPORTED_READER_VERSION
+            or table_protocol.min_reader_version == NOT_SUPPORTED_READER_VERSION
+        ):
             raise DeltaProtocolError(
-                f"The table's minimum reader version is {self.protocol().min_reader_version} "
-                f"but deltalake only supports up to version {MAX_SUPPORTED_READER_VERSION}."
+                f"The table's minimum reader version is {table_protocol.min_reader_version} "
+                f"but deltalake only supports version 1 or {MAX_SUPPORTED_READER_VERSION} with these reader features: {SUPPORTED_READER_FEATURES}"
             )
+        if (
+            table_protocol.min_reader_version >= 3
+            and table_protocol.reader_features is not None
+        ):
+            missing_features = {*table_protocol.reader_features}.difference(
+                SUPPORTED_READER_FEATURES
+            )
+            if len(missing_features) > 0:
+                raise DeltaProtocolError(
+                    f"The table has set these reader features: {missing_features} but these are not yet supported by the deltalake reader."
+                )
 
         if not filesystem:
             file_sizes = self.get_add_actions().to_pydict()
@@ -1277,9 +1299,9 @@ class TableMerger:
         self.not_matched_insert_updates: Optional[List[Dict[str, str]]] = None
         self.not_matched_insert_predicate: Optional[List[Optional[str]]] = None
         self.not_matched_by_source_update_updates: Optional[List[Dict[str, str]]] = None
-        self.not_matched_by_source_update_predicate: Optional[
-            List[Optional[str]]
-        ] = None
+        self.not_matched_by_source_update_predicate: Optional[List[Optional[str]]] = (
+            None
+        )
         self.not_matched_by_source_delete_predicate: Optional[List[str]] = None
         self.not_matched_by_source_delete_all: Optional[bool] = None
 
@@ -1328,6 +1350,10 @@ class TableMerger:
         """Update a matched table row based on the rules defined by ``updates``.
         If a ``predicate`` is specified, then it must evaluate to true for the row to be updated.
 
+        Note:
+            Column names with special characters, such as numbers or spaces should be encapsulated
+            in backticks: "target.`123column`" or "target.`my column`"
+
         Args:
             updates: a mapping of column name to update SQL expression.
             predicate:  SQL like predicate on when to update.
@@ -1340,10 +1366,10 @@ class TableMerger:
             from deltalake import DeltaTable, write_deltalake
             import pyarrow as pa
 
-            data = pa.table({"x": [1, 2, 3], "y": [4, 5, 6]})
+            data = pa.table({"x": [1, 2, 3], "1y": [4, 5, 6]})
             write_deltalake("tmp", data)
             dt = DeltaTable("tmp")
-            new_data = pa.table({"x": [1], "y": [7]})
+            new_data = pa.table({"x": [1], "1y": [7]})
 
             (
                  dt.merge(
@@ -1351,7 +1377,7 @@ class TableMerger:
                      predicate="target.x = source.x",
                      source_alias="source",
                      target_alias="target")
-                 .when_matched_update(updates={"x": "source.x", "y": "source.y"})
+                 .when_matched_update(updates={"x": "source.x", "`1y`": "source.`1y`"})
                  .execute()
             )
             {'num_source_rows': 1, 'num_target_rows_inserted': 0, 'num_target_rows_updated': 1, 'num_target_rows_deleted': 0, 'num_target_rows_copied': 2, 'num_output_rows': 3, 'num_target_files_added': 1, 'num_target_files_removed': 1, 'execution_time_ms': ..., 'scan_time_ms': ..., 'rewrite_time_ms': ...}
@@ -1376,6 +1402,10 @@ class TableMerger:
     def when_matched_update_all(self, predicate: Optional[str] = None) -> "TableMerger":
         """Updating all source fields to target fields, source and target are required to have the same field names.
         If a ``predicate`` is specified, then it must evaluate to true for the row to be updated.
+
+        Note:
+            Column names with special characters, such as numbers or spaces should be encapsulated
+            in backticks: "target.`123column`" or "target.`my column`"
 
         Args:
             predicate: SQL like predicate on when to update all columns.
@@ -1416,7 +1446,7 @@ class TableMerger:
         trgt_alias = (self.target_alias + ".") if self.target_alias is not None else ""
 
         updates = {
-            f"{trgt_alias}{col.name}": f"{src_alias}{col.name}"
+            f"{trgt_alias}`{col.name}`": f"{src_alias}`{col.name}`"
             for col in self.source.schema
         }
 
@@ -1434,6 +1464,10 @@ class TableMerger:
     def when_matched_delete(self, predicate: Optional[str] = None) -> "TableMerger":
         """Delete a matched row from the table only if the given ``predicate`` (if specified) is
         true for the matched row. If not specified it deletes all matches.
+
+        Note:
+            Column names with special characters, such as numbers or spaces should be encapsulated
+            in backticks: "target.`123column`" or "target.`my column`"
 
         Args:
            predicate (str | None, Optional):  SQL like predicate on when to delete.
@@ -1511,6 +1545,10 @@ class TableMerger:
         """Insert a new row to the target table based on the rules defined by ``updates``. If a
         ``predicate`` is specified, then it must evaluate to true for the new row to be inserted.
 
+        Note:
+            Column names with special characters, such as numbers or spaces should be encapsulated
+            in backticks: "target.`123column`" or "target.`my column`"
+
         Args:
             updates (dict):  a mapping of column name to insert SQL expression.
             predicate (str | None, Optional): SQL like predicate on when to insert.
@@ -1570,6 +1608,10 @@ class TableMerger:
         required to have the same field names. If a ``predicate`` is specified, then it must evaluate to true for
         the new row to be inserted.
 
+        Note:
+            Column names with special characters, such as numbers or spaces should be encapsulated
+            in backticks: "target.`123column`" or "target.`my column`"
+
         Args:
             predicate: SQL like predicate on when to insert.
 
@@ -1609,7 +1651,7 @@ class TableMerger:
         src_alias = (self.source_alias + ".") if self.source_alias is not None else ""
         trgt_alias = (self.target_alias + ".") if self.target_alias is not None else ""
         updates = {
-            f"{trgt_alias}{col.name}": f"{src_alias}{col.name}"
+            f"{trgt_alias}`{col.name}`": f"{src_alias}`{col.name}`"
             for col in self.source.schema
         }
         if isinstance(self.not_matched_insert_updates, list) and isinstance(
@@ -1628,6 +1670,10 @@ class TableMerger:
     ) -> "TableMerger":
         """Update a target row that has no matches in the source based on the rules defined by ``updates``.
         If a ``predicate`` is specified, then it must evaluate to true for the row to be updated.
+
+        Note:
+            Column names with special characters, such as numbers or spaces should be encapsulated
+            in backticks: "target.`123column`" or "target.`my column`"
 
         Args:
             updates: a mapping of column name to update SQL expression.
@@ -1682,6 +1728,10 @@ class TableMerger:
     ) -> "TableMerger":
         """Delete a target row that has no matches in the source from the table only if the given
         ``predicate`` (if specified) is true for the target row.
+
+        Note:
+            Column names with special characters, such as numbers or spaces should be encapsulated
+            in backticks: "target.`123column`" or "target.`my column`"
 
         Args:
             predicate:  SQL like predicate on when to delete when not matched by source.
@@ -1774,6 +1824,40 @@ class TableAlterer:
             )
 
         self.table._table.add_constraints(constraints, custom_metadata)
+
+    def drop_constraint(
+        self,
+        name: str,
+        raise_if_not_exists: bool = True,
+        custom_metadata: Optional[Dict[str, str]] = None,
+    ) -> None:
+        """
+        Drop constraints from a table. Limited to `single constraint` at once.
+
+        Args:
+            name: constraint name which to drop.
+            raise_if_not_exists: set if should raise if not exists.
+            custom_metadata: custom metadata that will be added to the transaction commit.
+        Example:
+            ```python
+            from deltalake import DeltaTable
+            dt = DeltaTable("test_table_constraints")
+            dt.metadata().configuration
+            {'delta.constraints.value_gt_5': 'value > 5'}
+            ```
+
+            **Drop the constraint**
+            ```python
+            dt.alter.drop_constraint(name = "value_gt_5")
+            ```
+
+            **Configuration after dropping**
+            ```python
+            dt.metadata().configuration
+            {}
+            ```
+        """
+        self.table._table.drop_constraints(name, raise_if_not_exists, custom_metadata)
 
 
 class TableOptimizer:

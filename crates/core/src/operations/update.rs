@@ -357,7 +357,7 @@ async fn execute(
         None,
         writer_properties,
         safe_cast,
-        false,
+        None,
     )
     .await?;
 
@@ -377,7 +377,7 @@ async fn execute(
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_millis() as i64;
-    let mut actions: Vec<Action> = add_actions.into_iter().map(Action::Add).collect();
+    let mut actions: Vec<Action> = add_actions.clone();
 
     metrics.num_added_files = actions.len();
     metrics.num_removed_files = candidates.candidates.len();

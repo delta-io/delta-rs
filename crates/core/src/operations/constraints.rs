@@ -14,7 +14,7 @@ use crate::delta_datafusion::expr::fmt_expr_to_sql;
 use crate::delta_datafusion::{
     register_store, DeltaDataChecker, DeltaScanBuilder, DeltaSessionContext,
 };
-use crate::kernel::Protocol;
+use crate::kernel::{CommitInfo, IsolationLevel, Protocol, WriterFeatures};
 use crate::logstore::LogStoreRef;
 use crate::operations::datafusion_utils::Expression;
 use crate::protocol::DeltaOperation;
@@ -171,7 +171,17 @@ impl std::future::IntoFuture for ConstraintBuilder {
                     3
                 },
                 reader_features: old_protocol.reader_features.clone(),
-                writer_features: old_protocol.writer_features.clone(),
+                writer_features: if old_protocol.min_writer_version < 7 {
+                    old_protocol.writer_features.clone()
+                } else {
+                    let current_features = old_protocol.writer_features.clone();
+                    if let Some(mut features) = current_features {
+                        features.insert(WriterFeatures::CheckConstraints);
+                        Some(features)
+                    } else {
+                        current_features
+                    }
+                },
             };
 
             let operation = DeltaOperation::AddConstraint {

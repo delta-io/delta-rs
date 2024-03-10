@@ -4,10 +4,9 @@ use lazy_static::lazy_static;
 use once_cell::sync::Lazy;
 
 use super::{TableReference, TransactionError};
-use crate::{
-    kernel::{Action, EagerSnapshot, ReaderFeatures, WriterFeatures},
-    protocol::DeltaOperation,
-};
+use crate::kernel::{Action, DataType, EagerSnapshot, ReaderFeatures, Schema, WriterFeatures};
+use crate::protocol::DeltaOperation;
+use crate::table::state::DeltaTableState;
 
 lazy_static! {
     static ref READER_V2: HashSet<ReaderFeatures> =
@@ -78,6 +77,39 @@ impl ProtocolChecker {
         Ok(())
     }
 
+    /// Check can write_timestamp_ntz
+    pub fn check_can_write_timestamp_ntz(
+        &self,
+        snapshot: &DeltaTableState,
+        schema: &Schema,
+    ) -> Result<(), TransactionError> {
+        let contains_timestampntz = schema
+            .fields()
+            .iter()
+            .any(|f| f.data_type() == &DataType::TIMESTAMPNTZ);
+
+        let required_features: Option<&HashSet<WriterFeatures>> =
+            match snapshot.protocol().min_writer_version {
+                0..=6 => None,
+                _ => snapshot.protocol().writer_features.as_ref(),
+            };
+
+        if let Some(table_features) = required_features {
+            if !table_features.contains(&WriterFeatures::TimestampWithoutTimezone)
+                && contains_timestampntz
+            {
+                return Err(TransactionError::WriterFeaturesRequired(
+                    WriterFeatures::TimestampWithoutTimezone,
+                ));
+            }
+        } else if contains_timestampntz {
+            return Err(TransactionError::WriterFeaturesRequired(
+                WriterFeatures::TimestampWithoutTimezone,
+            ));
+        }
+        Ok(())
+    }
+
     /// Check if delta-rs can read form the given delta table.
     pub fn can_read_from(&self, snapshot: &dyn TableReference) -> Result<(), TransactionError> {
         let required_features: Option<&HashSet<ReaderFeatures>> =
@@ -142,7 +174,9 @@ impl ProtocolChecker {
                 .protocol()
                 .writer_features
                 .as_ref()
-                .ok_or(TransactionError::WriterFeaturesRequired)?
+                .ok_or(TransactionError::WriterFeaturesRequired(
+                    WriterFeatures::AppendOnly,
+                ))?
                 .contains(&WriterFeatures::AppendOnly)
                 && snapshot.config().append_only()
         };
@@ -172,11 +206,13 @@ impl ProtocolChecker {
 /// As we implement new features, we need to update this instance accordingly.
 /// resulting version support is determined by the supported table feature set.
 pub static INSTANCE: Lazy<ProtocolChecker> = Lazy::new(|| {
-    let reader_features = HashSet::new();
+    let mut reader_features = HashSet::new();
+    reader_features.insert(ReaderFeatures::TimestampWithoutTimezone);
     // reader_features.insert(ReaderFeatures::ColumnMapping);
 
     let mut writer_features = HashSet::new();
     writer_features.insert(WriterFeatures::AppendOnly);
+    writer_features.insert(WriterFeatures::TimestampWithoutTimezone);
     #[cfg(feature = "datafusion")]
     {
         writer_features.insert(WriterFeatures::Invariants);

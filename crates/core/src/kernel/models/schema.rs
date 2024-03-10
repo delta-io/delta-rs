@@ -468,7 +468,7 @@ fn default_true() -> bool {
 }
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Clone, Eq, Hash)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "snake_case")]
 /// Primitive types supported by Delta
 pub enum PrimitiveType {
     /// UTF-8 encoded string of characters
@@ -493,7 +493,9 @@ pub enum PrimitiveType {
     Date,
     /// Microsecond precision timestamp, adjusted to UTC.
     Timestamp,
-    // TODO: timestamp without timezone
+    /// Micrsoecond precision timestamp with no timezone
+    #[serde(alias = "timestampNtz")]
+    TimestampNtz,
     #[serde(
         serialize_with = "serialize_decimal",
         deserialize_with = "deserialize_decimal",
@@ -554,6 +556,7 @@ impl Display for PrimitiveType {
             PrimitiveType::Binary => write!(f, "binary"),
             PrimitiveType::Date => write!(f, "date"),
             PrimitiveType::Timestamp => write!(f, "timestamp"),
+            PrimitiveType::TimestampNtz => write!(f, "timestampNtz"),
             PrimitiveType::Decimal(precision, scale) => {
                 write!(f, "decimal({},{})", precision, scale)
             }
@@ -608,6 +611,7 @@ impl DataType {
     pub const BINARY: Self = DataType::Primitive(PrimitiveType::Binary);
     pub const DATE: Self = DataType::Primitive(PrimitiveType::Date);
     pub const TIMESTAMP: Self = DataType::Primitive(PrimitiveType::Timestamp);
+    pub const TIMESTAMPNTZ: Self = DataType::Primitive(PrimitiveType::TimestampNtz);
 
     pub fn decimal(precision: u8, scale: i8) -> Self {
         DataType::Primitive(PrimitiveType::Decimal(precision, scale))
@@ -643,7 +647,7 @@ mod tests {
     use super::*;
     use serde_json;
     use serde_json::json;
-    use std::hash::DefaultHasher;
+    use std::collections::hash_map::DefaultHasher;
 
     #[test]
     fn test_serde_data_types() {

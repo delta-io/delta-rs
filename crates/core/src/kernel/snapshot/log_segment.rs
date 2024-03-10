@@ -445,7 +445,7 @@ async fn list_log_files_with_checkpoint(
     let checkpoint_files = files
         .iter()
         .filter_map(|f| {
-            if f.location.is_checkpoint_file() {
+            if f.location.is_checkpoint_file() && f.location.commit_version() == Some(cp.version) {
                 Some(f.clone())
             } else {
                 None
@@ -511,8 +511,6 @@ pub(super) async fn list_log_files(
 
 #[cfg(test)]
 pub(super) mod tests {
-    use std::str::FromStr;
-
     use deltalake_test::utils::*;
 
     use super::*;

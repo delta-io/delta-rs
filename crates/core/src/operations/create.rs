@@ -1,7 +1,7 @@
 //! Command for creating a new delta table
 // https://github.com/delta-io/delta/blob/master/core/src/main/scala/org/apache/spark/sql/delta/commands/CreateDeltaTableCommand.scala
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use futures::future::BoxFuture;
@@ -9,7 +9,9 @@ use serde_json::Value;
 
 use super::transaction::{CommitBuilder, TableReference, PROTOCOL};
 use crate::errors::{DeltaResult, DeltaTableError};
-use crate::kernel::{Action, DataType, Metadata, Protocol, StructField, StructType};
+use crate::kernel::{
+    Action, DataType, Metadata, Protocol, ReaderFeatures, StructField, StructType, WriterFeatures,
+};
 use crate::logstore::{LogStore, LogStoreRef};
 use crate::protocol::{DeltaOperation, SaveMode};
 use crate::table::builder::ensure_table_uri;
@@ -233,8 +235,45 @@ impl CreateBuilder {
             )
         };
 
+        let contains_timestampntz = &self
+            .columns
+            .iter()
+            .any(|f| f.data_type() == &DataType::TIMESTAMPNTZ);
+
         // TODO configure more permissive versions based on configuration. Also how should this ideally be handled?
         // We set the lowest protocol we can, and if subsequent writes use newer features we update metadata?
+
+        let (min_reader_version, min_writer_version, writer_features, reader_features) =
+            if *contains_timestampntz {
+                let mut converted_writer_features = self
+                    .configuration
+                    .keys()
+                    .map(|key| key.clone().into())
+                    .filter(|v| !matches!(v, WriterFeatures::Other(_)))
+                    .collect::<HashSet<WriterFeatures>>();
+
+                let mut converted_reader_features = self
+                    .configuration
+                    .keys()
+                    .map(|key| key.clone().into())
+                    .filter(|v| !matches!(v, ReaderFeatures::Other(_)))
+                    .collect::<HashSet<ReaderFeatures>>();
+                converted_writer_features.insert(WriterFeatures::TimestampWithoutTimezone);
+                converted_reader_features.insert(ReaderFeatures::TimestampWithoutTimezone);
+                (
+                    3,
+                    7,
+                    Some(converted_writer_features),
+                    Some(converted_reader_features),
+                )
+            } else {
+                (
+                    PROTOCOL.default_reader_version(),
+                    PROTOCOL.default_writer_version(),
+                    None,
+                    None,
+                )
+            };
         let protocol = self
             .actions
             .iter()
@@ -244,10 +283,10 @@ impl CreateBuilder {
                 _ => unreachable!(),
             })
             .unwrap_or_else(|| Protocol {
-                min_reader_version: PROTOCOL.default_reader_version(),
-                min_writer_version: PROTOCOL.default_writer_version(),
-                writer_features: None,
-                reader_features: None,
+                min_reader_version,
+                min_writer_version,
+                writer_features,
+                reader_features,
             });
 
         let mut metadata = Metadata::try_new(
