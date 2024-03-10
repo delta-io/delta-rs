@@ -801,11 +801,6 @@ impl std::future::IntoFuture for WriteBuilder {
                 predicate: predicate_str,
             };
 
-            //let table_data: &(dyn TableData + Send + Sync) = this
-            //    .snapshot
-            //    .as_ref()
-            //    .map(|f| f as &(dyn TableData + Send + Sync))
-            //    .unwrap_or(&UninitializedTable::default());
             let commit = CommitBuilder::from(this.commit_properties)
                 .with_actions(actions)
                 .build(

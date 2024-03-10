@@ -18,7 +18,6 @@
 //! ````
 
 use core::panic;
-use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 

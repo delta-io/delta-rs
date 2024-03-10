@@ -1,16 +1,12 @@
 //! Drop a constraint from a table
 
-use std::collections::HashMap;
-
-use chrono::Utc;
 use futures::future::BoxFuture;
-use serde_json::json;
 
-use crate::kernel::{Action, CommitInfo, IsolationLevel};
+use super::transaction::{CommitBuilder, CommitProperties};
+use crate::kernel::Action;
 use crate::logstore::LogStoreRef;
 use crate::protocol::DeltaOperation;
 use crate::table::state::DeltaTableState;
-use super::transaction::{CommitBuilder, CommitProperties};
 use crate::DeltaTable;
 use crate::{DeltaResult, DeltaTableError};
 
@@ -93,7 +89,8 @@ impl std::future::IntoFuture for DropConstraintBuilder {
                 .build(Some(&this.snapshot), this.log_store.clone(), operation)?
                 .await?;
 
-            this.snapshot.merge(commit.data.actions, &commit.data.operation, commit.version)?;
+            this.snapshot
+                .merge(commit.data.actions, &commit.data.operation, commit.version)?;
             Ok(DeltaTable::new_with_state(this.log_store, this.snapshot))
         })
     }
