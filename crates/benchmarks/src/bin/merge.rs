@@ -72,7 +72,7 @@ pub async fn convert_tpcds_web_returns(input_path: String, table_path: String) -
         .unwrap();
 
     let tbl = table.collect().await.unwrap();
-    let schema = tbl[0].schema().clone();
+    let _schema = tbl[0].schema().clone();
 
     DeltaOps::try_from_uri(table_path)
         .await

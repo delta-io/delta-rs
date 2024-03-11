@@ -532,6 +532,7 @@ mod tests {
 
     use super::*;
     use crate::kernel::StructType;
+    use crate::operations::write::WriteData;
     use crate::operations::DeltaOps;
     use crate::protocol::Metadata;
     use crate::writer::test_utils::get_delta_schema;
@@ -814,12 +815,12 @@ mod tests {
         let batches = vec![RecordBatch::try_new(schema.clone(), data).unwrap()];
 
         let table = DeltaOps::new_in_memory()
-            .write(batches.clone())
+            .write(WriteData::Vecs(batches.clone()))
             .await
             .unwrap();
 
         DeltaOps(table)
-            .write(batches)
+            .write(WriteData::Vecs(batches))
             .with_save_mode(crate::protocol::SaveMode::Overwrite)
             .await
             .unwrap()

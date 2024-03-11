@@ -475,6 +475,7 @@ mod tests {
     use crate::kernel::PrimitiveType;
     use crate::kernel::StructField;
     use crate::kernel::StructType;
+    use crate::operations::write::WriteData;
     use crate::operations::DeltaOps;
     use crate::writer::test_utils::datafusion::get_data;
     use crate::writer::test_utils::datafusion::write_batch;

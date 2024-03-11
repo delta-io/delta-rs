@@ -1466,6 +1466,7 @@ impl From<Column> for DeltaColumn {
 
 #[cfg(test)]
 mod tests {
+    use crate::operations::write::WriteData;
     use crate::writer::test_utils::get_delta_schema;
     use arrow::array::StructArray;
     use arrow::datatypes::{DataType, Field, Schema};
@@ -1756,7 +1757,7 @@ mod tests {
         .unwrap();
         // write some data
         let table = crate::DeltaOps(table)
-            .write(Box::new(vec![batch.clone()].into_iter()), batch.schema().clone())
+            .write(WriteData::Vecs(vec![batch.clone()]))
             .with_save_mode(crate::protocol::SaveMode::Append)
             .await
             .unwrap();
@@ -1820,7 +1821,7 @@ mod tests {
         .unwrap();
         // write some data
         let table = crate::DeltaOps::new_in_memory()
-            .write(Box::new(vec![batch.clone()].into_iter()), batch.schema().clone())
+            .write(WriteData::Vecs(vec![batch.clone()]))
             .with_save_mode(crate::protocol::SaveMode::Append)
             .await
             .unwrap();

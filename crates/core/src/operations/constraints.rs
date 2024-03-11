@@ -239,6 +239,7 @@ mod tests {
     use arrow_schema::{DataType as ArrowDataType, Field, Schema as ArrowSchema};
     use datafusion_expr::{col, lit};
 
+    use crate::operations::write::WriteData;
     use crate::writer::test_utils::{create_bare_table, get_arrow_schema, get_record_batch};
     use crate::{DeltaOps, DeltaResult, DeltaTable};
 
@@ -271,7 +272,7 @@ mod tests {
     async fn add_constraint_with_invalid_data() -> DeltaResult<()> {
         let batch = get_record_batch(None, false);
         let write = DeltaOps(create_bare_table())
-            .write(Box::new(vec![batch.clone()].into_iter()), batch.schema().clone())
+            .write(WriteData::Vecs(vec![batch.clone()]))
             .await?;
         let table = DeltaOps(write);
 
@@ -287,7 +288,7 @@ mod tests {
     async fn add_valid_constraint() -> DeltaResult<()> {
         let batch = get_record_batch(None, false);
         let write = DeltaOps(create_bare_table())
-            .write(Box::new(vec![batch.clone()].into_iter()), batch.schema().clone())
+            .write(WriteData::Vecs(vec![batch.clone()]))
             .await?;
         let table = DeltaOps(write);
 
@@ -312,7 +313,7 @@ mod tests {
         // Add constraint by providing a datafusion expression.
         let batch = get_record_batch(None, false);
         let write = DeltaOps(create_bare_table())
-            .write(Box::new(vec![batch.clone()].into_iter()), batch.schema().clone())
+            .write(WriteData::Vecs(vec![batch.clone()]))
             .await?;
         let table = DeltaOps(write);
 
@@ -378,7 +379,7 @@ mod tests {
     async fn add_conflicting_named_constraint() -> DeltaResult<()> {
         let batch = get_record_batch(None, false);
         let write = DeltaOps(create_bare_table())
-            .write(Box::new(vec![batch.clone()].into_iter()), batch.schema().clone())
+            .write(WriteData::Vecs(vec![batch.clone()]))
             .await?;
         let table = DeltaOps(write);
 
@@ -400,7 +401,7 @@ mod tests {
     async fn write_data_that_violates_constraint() -> DeltaResult<()> {
         let batch = get_record_batch(None, false);
         let write = DeltaOps(create_bare_table())
-            .write(Box::new(vec![batch.clone()].into_iter()), batch.schema().clone())
+            .write(WriteData::Vecs(vec![batch.clone()]))
             .await?;
 
         let table = DeltaOps(write)
@@ -423,7 +424,7 @@ mod tests {
     async fn write_data_that_does_not_violate_constraint() -> DeltaResult<()> {
         let batch = get_record_batch(None, false);
         let write = DeltaOps(create_bare_table())
-            .write(Box::new(vec![batch.clone()].into_iter()), batch.schema().clone())
+            .write(WriteData::Vecs(vec![batch.clone()]))
             .await?;
         let table = DeltaOps(write);
 

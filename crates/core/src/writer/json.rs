@@ -468,7 +468,7 @@ mod tests {
             }
         );
 
-        writer.write(WriteData::Vecs(vec![data])).await.unwrap();
+        writer.write(vec![data]).await.unwrap();
         let add_actions = writer.flush().await.unwrap();
         let add = &add_actions[0];
         let path = table_dir.path().join(&add.path);
@@ -549,7 +549,7 @@ mod tests {
             }
         );
 
-        let res = writer.write(WriteData::Vecs(vec![data])).await;
+        let res = writer.write(vec![data]).await;
         assert!(matches!(
             res,
             Err(DeltaTableError::Arrow {
@@ -561,6 +561,7 @@ mod tests {
     // The following sets of tests are related to #1386 and mergeSchema support
     // <https://github.com/delta-io/delta-rs/issues/1386>
     mod schema_evolution {
+
         use super::*;
 
         #[tokio::test]
@@ -586,7 +587,7 @@ mod tests {
                 }
             );
 
-            writer.write(WriteData::Vecs(vec![data])).await.unwrap();
+            writer.write(vec![data]).await.unwrap();
             let add_actions = writer.flush().await.unwrap();
             assert_eq!(add_actions.len(), 1);
 
@@ -597,7 +598,7 @@ mod tests {
                 }
             );
 
-            match writer.write(WriteData::Vecs(vec![second_data])).await {
+            match writer.write(vec![second_data]).await {
                 Ok(_) => {
                     assert!(false, "Should not have successfully written");
                 }
@@ -639,7 +640,7 @@ mod tests {
                 }
             );
 
-            writer.write(WriteData::Vecs(vec![data])).await.unwrap();
+            writer.write(vec![data]).await.unwrap();
             let add_actions = writer.flush().await.unwrap();
             assert_eq!(add_actions.len(), 1);
 
@@ -651,7 +652,7 @@ mod tests {
             );
 
             // TODO This should fail because we haven't asked to evolve the schema
-            writer.write(WriteData::Vecs(vec![second_data])).await.unwrap();
+            writer.write(vec![second_data]).await.unwrap();
             writer.flush_and_commit(&mut table).await.unwrap();
             assert_eq!(table.version(), 1);
         }

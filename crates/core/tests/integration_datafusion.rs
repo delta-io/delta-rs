@@ -45,7 +45,7 @@ use std::error::Error;
 
 mod local {
     use datafusion::common::stats::Precision;
-    use deltalake_core::{logstore::default_logstore, writer::JsonWriter};
+    use deltalake_core::{logstore::default_logstore, operations::write::WriteData, writer::JsonWriter};
     use object_store::local::LocalFileSystem;
 
     use super::*;
@@ -113,7 +113,7 @@ mod local {
 
         for batch in batches {
             table = DeltaOps(table)
-                .write(std::iter::once(batch), batch.schema().clone())
+                .write(WriteData::Vecs(vec![batch]))
                 .with_save_mode(save_mode.clone())
                 .await
                 .unwrap();

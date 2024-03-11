@@ -333,6 +333,7 @@ impl std::future::IntoFuture for DeleteBuilder {
 
 #[cfg(test)]
 mod tests {
+    use crate::operations::write::WriteData;
     use crate::operations::DeltaOps;
     use crate::protocol::*;
     use crate::writer::test_utils::datafusion::get_data;
@@ -770,7 +771,7 @@ mod tests {
         ];
         let batches = vec![RecordBatch::try_new(schema.clone(), data).unwrap()];
 
-        let table = DeltaOps::new_in_memory().write(batches).await.unwrap();
+        let table = DeltaOps::new_in_memory().write(WriteData::Vecs(batches)).await.unwrap();
 
         let (table, _metrics) = DeltaOps(table)
             .delete()
