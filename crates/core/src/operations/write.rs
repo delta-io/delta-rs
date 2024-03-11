@@ -21,7 +21,7 @@
 //! let ids = arrow::array::Int32Array::from(vec![1, 2, 3, 4, 5]);
 //! let batch = RecordBatch::try_new(schema, vec![Arc::new(ids)])?;
 //! let ops = DeltaOps::try_from_uri("../path/to/empty/dir").await?;
-//! let table = ops.write(vec![batch], batch.schema()).await?;
+//! let table = ops.write(WriteData::Vecs(vec![batch])).await?;
 //! ````
 
 use std::collections::HashMap;
@@ -122,6 +122,8 @@ pub enum WriteData {
     RecordBatches((Box<dyn Iterator<Item = RecordBatch> + Send>, ArrowSchemaRef)),
     /// A Datafusion Execution plan
     DataFusionPlan(Arc<dyn ExecutionPlan>),
+    /// For convenience, a vector of record batches
+    Vecs(Vec<RecordBatch>),    
 }
 
 /// Configuration for writing data to a DeltaTable
@@ -597,6 +599,12 @@ impl std::future::IntoFuture for WriteBuilder {
             let input_schema = match input_data {
                 Some(WriteData::RecordBatches((_, ref schema))) => schema.clone(),
                 Some(WriteData::DataFusionPlan(ref plan)) => plan.as_ref().schema().clone(),
+                Some(WriteData::Vecs(ref batches)) => {
+                    if batches.is_empty() {
+                        return Err(WriteError::MissingData.into());
+                    }
+                    batches[0].schema()
+                }
                 None => return Err(WriteError::MissingData.into()),
             };
 
@@ -680,6 +688,13 @@ impl std::future::IntoFuture for WriteBuilder {
             let write_data = match input_data {
                 None => return Err(WriteError::MissingData.into()),
                 Some(WriteData::DataFusionPlan(plan)) => plan_to_streams(state.clone(), plan)?,
+                Some(WriteData::Vecs(input_batches)) => {
+                    let stream = futures::stream::iter(input_batches.into_iter().map(Ok));
+                    let rec_batch_stream =
+                        Box::pin(RecordBatchStreamAdapter::new(input_schema.clone(), stream))
+                            as SendableRecordBatchStream;
+                    vec![rec_batch_stream]
+                }
                 Some(WriteData::RecordBatches((input_batches, _))) => {
                     let stream = futures::stream::iter(input_batches.map(Ok));
                     let rec_batch_stream =
@@ -799,32 +814,6 @@ impl std::future::IntoFuture for WriteBuilder {
     }
 }
 
-struct ChunksIterator {
-    iter: Box<dyn Iterator<Item = RecordBatch> + Send>,
-    chunk_size: usize,
-}
-impl ChunksIterator {
-    fn new(iter: Box<dyn Iterator<Item = RecordBatch> + Send>, chunk_size: usize) -> Self {
-        Self { iter, chunk_size }
-    }
-}
-impl Iterator for ChunksIterator {
-    type Item = Vec<RecordBatch>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        let mut chunk = Vec::with_capacity(self.chunk_size);
-        for _ in 0..self.chunk_size {
-            if let Some(batch) = self.iter.next() {
-                chunk.push(batch);
-            } else if chunk.is_empty() {
-                return None;
-            } else {
-                return Some(chunk);
-            }
-        }
-        Some(chunk)
-    }
-}
 
 fn try_cast_batch(from_fields: &Fields, to_fields: &Fields) -> Result<(), ArrowError> {
     if from_fields.len() != to_fields.len() {
@@ -892,7 +881,7 @@ mod tests {
         let table = write_batch(table, batch.clone()).await;
         // Overwrite
         let _err = DeltaOps(table)
-            .write(vec![batch].into_iter(), batch.schema())
+            .write(WriteData::Vecs(vec![batch]))
             .with_save_mode(SaveMode::Overwrite)
             .await
             .expect_err("Remove action is included when Delta table is append-only. Should error");
@@ -914,7 +903,7 @@ mod tests {
         // write some data
         let metadata = HashMap::from_iter(vec![("k1".to_string(), json!("v1.1"))]);
         let mut table = DeltaOps(table)
-            .write(vec![batch].clone(), batch.schema())
+            .write(WriteData::Vecs(vec![batch]))
             .with_save_mode(SaveMode::Append)
             .with_metadata(metadata.clone())
             .await
@@ -937,7 +926,7 @@ mod tests {
         let metadata: HashMap<String, Value> =
             HashMap::from_iter(vec![("k1".to_string(), json!("v1.2"))]);
         let mut table = DeltaOps(table)
-            .write(vec![batch].clone(), batch.schema())
+            .write(WriteData::Vecs(vec![batch]))
             .with_save_mode(SaveMode::Append)
             .with_metadata(metadata.clone())
             .await
@@ -960,7 +949,7 @@ mod tests {
         let metadata: HashMap<String, Value> =
             HashMap::from_iter(vec![("k2".to_string(), json!("v2.1"))]);
         let mut table = DeltaOps(table)
-            .write(vec![batch], batch.schema())
+            .write(WriteData::Vecs(vec![batch]))
             .with_save_mode(SaveMode::Overwrite)
             .with_metadata(metadata.clone())
             .await
@@ -997,7 +986,7 @@ mod tests {
         )
         .unwrap();
         let table = DeltaOps::new_in_memory()
-            .write(vec![batch], batch.schema())
+            .write(WriteData::Vecs(vec![batch]))
             .await
             .unwrap();
 
@@ -1019,7 +1008,7 @@ mod tests {
 
         // Test cast options
         let table = DeltaOps::from(table)
-            .write(vec![batch].clone(), batch.schema())
+            .write(WriteData::Vecs(vec![batch]))
             .with_cast_safety(true)
             .await
             .unwrap();
@@ -1039,7 +1028,7 @@ mod tests {
         assert_batches_sorted_eq!(&expected, &actual);
 
         let res = DeltaOps::from(table)
-            .write(vec![batch], batch.schema())
+            .write(WriteData::Vecs(vec![batch]))
             .await;
         assert!(res.is_err());
 
@@ -1058,7 +1047,7 @@ mod tests {
         )
         .unwrap();
         let table = DeltaOps::new_in_memory()
-            .write(vec![batch], batch.schema())
+            .write(WriteData::Vecs(vec![batch]))
             .await
             .unwrap();
 
@@ -1076,7 +1065,7 @@ mod tests {
         .unwrap();
 
         let _res = DeltaOps::from(table)
-            .write(vec![batch], batch.schema())
+            .write(WriteData::Vecs(vec![batch]))
             .await
             .unwrap();
         let expected = [
@@ -1095,7 +1084,7 @@ mod tests {
     async fn test_write_nonexistent() {
         let batch = get_record_batch(None, false);
         let table = DeltaOps::new_in_memory()
-            .write(vec![batch], batch.schema())
+            .write(WriteData::Vecs(vec![batch]))
             .with_save_mode(SaveMode::ErrorIfExists)
             .await
             .unwrap();
@@ -1107,7 +1096,7 @@ mod tests {
     async fn test_write_partitioned() {
         let batch = get_record_batch(None, false);
         let table = DeltaOps::new_in_memory()
-            .write(vec![batch].clone(), batch.schema())
+            .write(WriteData::Vecs(vec![batch]))
             .with_save_mode(SaveMode::ErrorIfExists)
             .with_partition_columns(["modified"])
             .await
@@ -1116,7 +1105,7 @@ mod tests {
         assert_eq!(table.get_files_count(), 2);
 
         let table = DeltaOps::new_in_memory()
-            .write(vec![batch], batch.schema())
+            .write(WriteData::Vecs(vec![batch]))
             .with_save_mode(SaveMode::ErrorIfExists)
             .with_partition_columns(["modified", "id"])
             .await
@@ -1129,7 +1118,7 @@ mod tests {
     async fn test_merge_schema() {
         let batch = get_record_batch(None, false);
         let table = DeltaOps::new_in_memory()
-            .write(vec![batch].clone(), batch.schema())
+            .write(WriteData::Vecs(vec![batch]))
             .with_save_mode(SaveMode::ErrorIfExists)
             .await
             .unwrap();
@@ -1170,7 +1159,7 @@ mod tests {
         .unwrap();
 
         let mut table = DeltaOps(table)
-            .write(vec![new_batch], new_batch.schema())
+            .write(WriteData::Vecs(vec![new_batch]))
             .with_save_mode(SaveMode::Append)
             .with_schema_mode(SchemaMode::Merge)
             .await
@@ -1187,7 +1176,7 @@ mod tests {
     async fn test_merge_schema_with_partitions() {
         let batch = get_record_batch(None, false);
         let table = DeltaOps::new_in_memory()
-            .write(vec![batch].clone(), batch.schema())
+            .write(WriteData::Vecs(vec![batch]))
             .with_partition_columns(vec!["id", "value"])
             .with_save_mode(SaveMode::ErrorIfExists)
             .await
@@ -1229,7 +1218,7 @@ mod tests {
         .unwrap();
         println!("new_batch: {:?}", new_batch.schema());
         let table = DeltaOps(table)
-            .write(vec![new_batch], new_batch.schema())
+            .write(WriteData::Vecs(vec![new_batch]))
             .with_save_mode(SaveMode::Append)
             .with_schema_mode(SchemaMode::Merge)
             .await
@@ -1249,7 +1238,7 @@ mod tests {
     async fn test_overwrite_schema() {
         let batch = get_record_batch(None, false);
         let table = DeltaOps::new_in_memory()
-            .write(vec![batch].clone(), batch.schema())
+            .write(WriteData::Vecs(vec![batch]))
             .with_save_mode(SaveMode::ErrorIfExists)
             .await
             .unwrap();
@@ -1290,7 +1279,7 @@ mod tests {
         .unwrap();
 
         let table = DeltaOps(table)
-            .write(vec![new_batch], new_batch.schema())
+            .write(WriteData::Vecs(vec![new_batch]))
             .with_save_mode(SaveMode::Append)
             .with_schema_mode(SchemaMode::Overwrite)
             .await;
@@ -1302,7 +1291,7 @@ mod tests {
         // If you do not pass a schema mode, we want to check the schema
         let batch = get_record_batch(None, false);
         let table = DeltaOps::new_in_memory()
-            .write(vec![batch].clone(), batch.schema())
+            .write(WriteData::Vecs(vec![batch]))
             .with_save_mode(SaveMode::ErrorIfExists)
             .await
             .unwrap();
@@ -1332,7 +1321,7 @@ mod tests {
             RecordBatch::try_new(Arc::new(new_schema), vec![Arc::new(inserted_by)]).unwrap();
 
         let table = DeltaOps(table)
-            .write(vec![new_batch], new_batch.schema())
+            .write(WriteData::Vecs(vec![new_batch]))
             .with_save_mode(SaveMode::Append)
             .await;
         assert!(table.is_err());
@@ -1361,7 +1350,7 @@ mod tests {
         assert_eq!(table.version(), 0);
 
         let table = DeltaOps(table)
-            .write(vec![batch].clone(), batch.schema())
+            .write(WriteData::Vecs(vec![batch]))
             .await
             .unwrap();
         assert_eq!(table.version(), 1);
@@ -1386,7 +1375,7 @@ mod tests {
         assert_eq!(table.version(), 0);
 
         let table = DeltaOps(table)
-            .write(vec![batch].clone(), batch.schema())
+            .write(WriteData::Vecs(vec![batch]))
             .await;
         assert!(table.is_err())
     }
@@ -1404,7 +1393,7 @@ mod tests {
         assert_eq!(table.version(), 0);
 
         let table = DeltaOps(table)
-            .write(vec![batch].clone(), batch.schema())
+            .write(WriteData::Vecs(vec![batch]))
             .with_save_mode(SaveMode::Append)
             .await
             .unwrap();
@@ -1443,7 +1432,7 @@ mod tests {
             .unwrap();
 
         let _table = ops
-            .write([batch.clone()], batch.schema())
+            .write(WriteData::Vecs(vec![batch]))
             .with_partition_columns(["string"])
             .await
             .unwrap();
@@ -1485,7 +1474,7 @@ mod tests {
         .unwrap();
 
         let table = DeltaOps::new_in_memory()
-            .write(vec![batch], batch.schema())
+            .write(WriteData::Vecs(vec![batch]))
             .with_save_mode(SaveMode::Append)
             .await
             .unwrap();
@@ -1502,7 +1491,7 @@ mod tests {
         .unwrap();
 
         let table = DeltaOps(table)
-            .write(vec![batch_add], batch_add.schema())
+            .write(WriteData::Vecs(vec![batch_add]))
             .with_save_mode(SaveMode::Overwrite)
             .with_replace_where(col("id").eq(lit("C")))
             .await
@@ -1541,7 +1530,7 @@ mod tests {
         .unwrap();
 
         let table = DeltaOps::new_in_memory()
-            .write(vec![batch], batch.schema())
+            .write(WriteData::Vecs(vec![batch]))
             .with_save_mode(SaveMode::Append)
             .await
             .unwrap();
@@ -1564,7 +1553,7 @@ mod tests {
         .unwrap();
 
         let table = DeltaOps(table)
-            .write(vec![batch_fail], batch_fail.schema())
+            .write(WriteData::Vecs(vec![batch_fail]))
             .with_save_mode(SaveMode::Overwrite)
             .with_replace_where(col("id").eq(lit("C")))
             .await;
@@ -1582,7 +1571,7 @@ mod tests {
         let batch = get_record_batch(None, false);
 
         let table = DeltaOps::new_in_memory()
-            .write(vec![batch], batch.schema())
+            .write(WriteData::Vecs(vec![batch]))
             .with_partition_columns(["id", "value"])
             .with_save_mode(SaveMode::Append)
             .await
@@ -1604,7 +1593,7 @@ mod tests {
         .unwrap();
 
         let table = DeltaOps(table)
-            .write(Box::new(iter::once(batch_add)), batch_add.schema())
+            .write(WriteData::Vecs(vec![batch_add]))
             .with_save_mode(SaveMode::Overwrite)
             .with_replace_where(col("id").eq(lit("A")))
             .await

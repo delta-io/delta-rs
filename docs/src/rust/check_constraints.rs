@@ -16,7 +16,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Arc::new(Int32Array::from(vec![-10]))
     ];
     let batch = RecordBatch::try_new(schema, invalid_values)?;
-    table.write(vec![batch]).await?;
+    table.write(WriteData::Vecs(vec![batch])).await?;
     // --8<-- [end:add_data]
 
     Ok(())

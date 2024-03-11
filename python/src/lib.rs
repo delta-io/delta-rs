@@ -37,6 +37,7 @@ use deltalake::operations::restore::RestoreBuilder;
 use deltalake::operations::transaction::commit;
 use deltalake::operations::update::UpdateBuilder;
 use deltalake::operations::vacuum::VacuumBuilder;
+use deltalake::operations::write::WriteData;
 use deltalake::parquet::basic::Compression;
 use deltalake::parquet::errors::ParquetError;
 use deltalake::parquet::file::properties::WriterProperties;
@@ -1415,7 +1416,7 @@ fn write_to_deltalake(
             .map_err(PythonError::from)?;
 
         let mut builder = table
-            .write(Box::new(batches), Arc::new(data_schema.0))
+            .write(WriteData::RecordBatches((Box::new(batches), Arc::new(data_schema.0))))
             .with_save_mode(save_mode)
             .with_write_batch_size(max_rows_per_group as usize);
         if let Some(schema_mode) = schema_mode {

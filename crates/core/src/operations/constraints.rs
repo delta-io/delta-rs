@@ -355,7 +355,7 @@ mod tests {
         )
         .unwrap();
 
-        let table = DeltaOps::new_in_memory().write(vec![batch]).await.unwrap();
+        let table = DeltaOps::new_in_memory().write(WriteData::Vecs(vec![batch])).await.unwrap();
 
         let mut table = DeltaOps(table)
             .add_constraint()
@@ -414,7 +414,7 @@ mod tests {
             Arc::new(StringArray::from(vec!["2021-02-02"])),
         ];
         let batch = RecordBatch::try_new(get_arrow_schema(&None), invalid_values)?;
-        let err = table.write(vec![batch]).await;
+        let err = table.write(WriteData::Vecs(vec![batch])).await;
         assert!(err.is_err());
         Ok(())
     }
@@ -427,7 +427,7 @@ mod tests {
             .await?;
         let table = DeltaOps(write);
 
-        let err = table.write(vec![batch]).await;
+        let err = table.write(WriteData::Vecs(vec![batch])).await;
 
         assert!(err.is_ok());
         Ok(())

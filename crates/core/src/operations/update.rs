@@ -525,7 +525,7 @@ mod tests {
         )
         .unwrap();
 
-        DeltaOps::new_in_memory().write(vec![batch]).await.unwrap()
+        DeltaOps::new_in_memory().write(WriteData::Vecs(vec![batch])).await.unwrap()
     }
 
     #[tokio::test]

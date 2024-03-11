@@ -401,7 +401,7 @@ mod tests {
         .unwrap();
         // write some data
         let table = DeltaOps(table)
-            .write(Box::new(vec![batch.clone()].into_iter()), batch.schema().clone())
+            .write(WriteData::Vecs(vec![batch]))
             .with_save_mode(SaveMode::Append)
             .await
             .unwrap();
@@ -463,7 +463,7 @@ mod tests {
 
         // write some data
         let table = DeltaOps(table)
-            .write(vec![batch])
+            .write(WriteData::Vecs(vec![batch]))
             .with_save_mode(SaveMode::Append)
             .await
             .unwrap();
@@ -487,7 +487,7 @@ mod tests {
 
         // write some data
         let table = DeltaOps(table)
-            .write(vec![batch])
+            .write(WriteData::Vecs(vec![batch]))
             .with_save_mode(SaveMode::Append)
             .await
             .unwrap();
@@ -554,7 +554,7 @@ mod tests {
             )
             .unwrap();
 
-            DeltaOps::new_in_memory().write(vec![batch]).await.unwrap()
+            DeltaOps::new_in_memory().write(WriteData::Vecs(vec![batch])).await.unwrap()
         }
 
         // Validate behaviour of greater than
@@ -643,7 +643,7 @@ mod tests {
 
         // write some data
         let table = DeltaOps(table)
-            .write(vec![batch])
+            .write(WriteData::Vecs(vec![batch]))
             .with_save_mode(SaveMode::Append)
             .await
             .unwrap();
@@ -701,7 +701,7 @@ mod tests {
 
         // write some data
         let table = DeltaOps(table)
-            .write(vec![batch])
+            .write(WriteData::Vecs(vec![batch]))
             .with_save_mode(SaveMode::Append)
             .await
             .unwrap();

@@ -3,6 +3,7 @@ use arrow_array::{Int32Array, RecordBatch};
 use arrow_schema::{DataType as ArrowDataType, Field};
 use chrono::{DateTime, NaiveDateTime, TimeZone, Utc};
 use deltalake_core::kernel::{DataType, PrimitiveType, StructField};
+use deltalake_core::operations::write::WriteData;
 use deltalake_core::protocol::SaveMode;
 use deltalake_core::storage::commit_uri_from_version;
 use deltalake_core::{DeltaOps, DeltaTable};
@@ -45,21 +46,21 @@ async fn setup_test() -> Result<Context, Box<dyn Error>> {
     let batch = get_record_batch();
     thread::sleep(Duration::from_secs(1));
     let table = DeltaOps(table)
-        .write(Box::new(vec![batch.clone()].into_iter()), batch.schema().clone())
+        .write(WriteData::Vecs(vec![batch.clone()]))
         .with_save_mode(SaveMode::Append)
         .await
         .unwrap();
 
     thread::sleep(Duration::from_secs(1));
     let table = DeltaOps(table)
-        .write(Box::new(vec![batch.clone()].into_iter()), batch.schema().clone())
+        .write(WriteData::Vecs(vec![batch.clone()]))
         .with_save_mode(SaveMode::Overwrite)
         .await
         .unwrap();
 
     thread::sleep(Duration::from_secs(1));
     let table = DeltaOps(table)
-        .write(Box::new(vec![batch.clone()].into_iter()), batch.schema().clone())
+        .write(WriteData::Vecs(vec![batch.clone()]))
         .with_save_mode(SaveMode::Append)
         .await
         .unwrap();
