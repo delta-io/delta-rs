@@ -370,7 +370,6 @@ impl RawDeltaTable {
     ))]
     pub fn compact_optimize(
         &mut self,
-        py: Python,
         partition_filters: Option<Vec<(&str, &str, PartitionFilterValue)>>,
         target_size: Option<i64>,
         max_concurrent_tasks: Option<usize>,
@@ -378,42 +377,39 @@ impl RawDeltaTable {
         writer_properties: Option<HashMap<String, Option<String>>>,
         custom_metadata: Option<HashMap<String, String>>,
     ) -> PyResult<String> {
-        py.allow_threads(|| {
-            let mut cmd = OptimizeBuilder::new(
-                self._table.log_store(),
-                self._table.snapshot().map_err(PythonError::from)?.clone(),
-            )
-            .with_max_concurrent_tasks(max_concurrent_tasks.unwrap_or_else(num_cpus::get));
-            if let Some(size) = target_size {
-                cmd = cmd.with_target_size(size);
-            }
-            if let Some(commit_interval) = min_commit_interval {
-                cmd = cmd.with_min_commit_interval(time::Duration::from_secs(commit_interval));
-            }
+        let mut cmd = OptimizeBuilder::new(
+            self._table.log_store(),
+            self._table.snapshot().map_err(PythonError::from)?.clone(),
+        )
+        .with_max_concurrent_tasks(max_concurrent_tasks.unwrap_or_else(num_cpus::get));
+        if let Some(size) = target_size {
+            cmd = cmd.with_target_size(size);
+        }
+        if let Some(commit_interval) = min_commit_interval {
+            cmd = cmd.with_min_commit_interval(time::Duration::from_secs(commit_interval));
+        }
 
-            if let Some(writer_props) = writer_properties {
-                cmd = cmd.with_writer_properties(
-                    set_writer_properties(writer_props).map_err(PythonError::from)?,
-                );
-            }
+        if let Some(writer_props) = writer_properties {
+            cmd = cmd.with_writer_properties(
+                set_writer_properties(writer_props).map_err(PythonError::from)?,
+            );
+        }
 
-            if let Some(metadata) = custom_metadata {
-                let json_metadata: Map<String, Value> =
-                    metadata.into_iter().map(|(k, v)| (k, v.into())).collect();
-                cmd = cmd.with_metadata(json_metadata);
-            };
+        if let Some(metadata) = custom_metadata {
+            let json_metadata: Map<String, Value> =
+                metadata.into_iter().map(|(k, v)| (k, v.into())).collect();
+            cmd = cmd.with_metadata(json_metadata);
+        };
 
-            let converted_filters =
-                convert_partition_filters(partition_filters.unwrap_or_default())
-                    .map_err(PythonError::from)?;
-            cmd = cmd.with_filters(&converted_filters);
+        let converted_filters = convert_partition_filters(partition_filters.unwrap_or_default())
+            .map_err(PythonError::from)?;
+        cmd = cmd.with_filters(&converted_filters);
 
-            let (table, metrics) = rt()?
-                .block_on(cmd.into_future())
-                .map_err(PythonError::from)?;
-            self._table.state = table.state;
-            Ok(serde_json::to_string(&metrics).unwrap())
-        })
+        let (table, metrics) = rt()?
+            .block_on(cmd.into_future())
+            .map_err(PythonError::from)?;
+        self._table.state = table.state;
+        Ok(serde_json::to_string(&metrics).unwrap())
     }
 
     /// Run z-order variation of optimize
@@ -915,7 +911,6 @@ impl RawDeltaTable {
 
     fn create_write_transaction(
         &mut self,
-        py: Python,
         add_actions: Vec<PyAddAction>,
         mode: &str,
         partition_by: Vec<String>,
@@ -923,105 +918,102 @@ impl RawDeltaTable {
         partitions_filters: Option<Vec<(&str, &str, PartitionFilterValue)>>,
         custom_metadata: Option<HashMap<String, String>>,
     ) -> PyResult<()> {
-        py.allow_threads(|| {
-            let mode = mode.parse().map_err(PythonError::from)?;
+        let mode = mode.parse().map_err(PythonError::from)?;
 
-            let schema: StructType = (&schema.0).try_into().map_err(PythonError::from)?;
+        let schema: StructType = (&schema.0).try_into().map_err(PythonError::from)?;
 
-            let existing_schema = self._table.get_schema().map_err(PythonError::from)?;
+        let existing_schema = self._table.get_schema().map_err(PythonError::from)?;
 
-            let mut actions: Vec<Action> = add_actions
-                .iter()
-                .map(|add| Action::Add(add.into()))
-                .collect();
+        let mut actions: Vec<Action> = add_actions
+            .iter()
+            .map(|add| Action::Add(add.into()))
+            .collect();
 
-            match mode {
-                SaveMode::Overwrite => {
-                    let converted_filters =
-                        convert_partition_filters(partitions_filters.unwrap_or_default())
-                            .map_err(PythonError::from)?;
-
-                    let add_actions = self
-                        ._table
-                        .snapshot()
-                        .map_err(PythonError::from)?
-                        .get_active_add_actions_by_partitions(&converted_filters)
+        match mode {
+            SaveMode::Overwrite => {
+                let converted_filters =
+                    convert_partition_filters(partitions_filters.unwrap_or_default())
                         .map_err(PythonError::from)?;
 
-                    for old_add in add_actions {
-                        let old_add = old_add.map_err(PythonError::from)?;
-                        let remove_action = Action::Remove(Remove {
-                            path: old_add.path().to_string(),
-                            deletion_timestamp: Some(current_timestamp()),
-                            data_change: true,
-                            extended_file_metadata: Some(true),
-                            partition_values: Some(
-                                old_add
-                                    .partition_values()
-                                    .map_err(PythonError::from)?
-                                    .iter()
-                                    .map(|(k, v)| {
-                                        (
-                                            k.to_string(),
-                                            if v.is_null() {
-                                                None
-                                            } else {
-                                                Some(v.serialize())
-                                            },
-                                        )
-                                    })
-                                    .collect(),
-                            ),
-                            size: Some(old_add.size()),
-                            deletion_vector: None,
-                            tags: None,
-                            base_row_id: None,
-                            default_row_commit_version: None,
-                        });
-                        actions.push(remove_action);
-                    }
+                let add_actions = self
+                    ._table
+                    .snapshot()
+                    .map_err(PythonError::from)?
+                    .get_active_add_actions_by_partitions(&converted_filters)
+                    .map_err(PythonError::from)?;
 
-                    // Update metadata with new schema
-                    if &schema != existing_schema {
-                        let mut metadata =
-                            self._table.metadata().map_err(PythonError::from)?.clone();
-                        metadata.schema_string = serde_json::to_string(&schema)
-                            .map_err(DeltaTableError::from)
-                            .map_err(PythonError::from)?;
-                        actions.push(Action::Metadata(metadata));
-                    }
+                for old_add in add_actions {
+                    let old_add = old_add.map_err(PythonError::from)?;
+                    let remove_action = Action::Remove(Remove {
+                        path: old_add.path().to_string(),
+                        deletion_timestamp: Some(current_timestamp()),
+                        data_change: true,
+                        extended_file_metadata: Some(true),
+                        partition_values: Some(
+                            old_add
+                                .partition_values()
+                                .map_err(PythonError::from)?
+                                .iter()
+                                .map(|(k, v)| {
+                                    (
+                                        k.to_string(),
+                                        if v.is_null() {
+                                            None
+                                        } else {
+                                            Some(v.serialize())
+                                        },
+                                    )
+                                })
+                                .collect(),
+                        ),
+                        size: Some(old_add.size()),
+                        deletion_vector: None,
+                        tags: None,
+                        base_row_id: None,
+                        default_row_commit_version: None,
+                    });
+                    actions.push(remove_action);
                 }
-                _ => {
-                    // This should be unreachable from Python
-                    if &schema != existing_schema {
-                        DeltaProtocolError::new_err("Cannot change schema except in overwrite.");
-                    }
+
+                // Update metadata with new schema
+                if &schema != existing_schema {
+                    let mut metadata = self._table.metadata().map_err(PythonError::from)?.clone();
+                    metadata.schema_string = serde_json::to_string(&schema)
+                        .map_err(DeltaTableError::from)
+                        .map_err(PythonError::from)?;
+                    actions.push(Action::Metadata(metadata));
                 }
             }
+            _ => {
+                // This should be unreachable from Python
+                if &schema != existing_schema {
+                    DeltaProtocolError::new_err("Cannot change schema except in overwrite.");
+                }
+            }
+        }
 
-            let operation = DeltaOperation::Write {
-                mode,
-                partition_by: Some(partition_by),
-                predicate: None,
-            };
+        let operation = DeltaOperation::Write {
+            mode,
+            partition_by: Some(partition_by),
+            predicate: None,
+        };
 
-            let app_metadata =
-                custom_metadata.map(|md| md.into_iter().map(|(k, v)| (k, v.into())).collect());
+        let app_metadata =
+            custom_metadata.map(|md| md.into_iter().map(|(k, v)| (k, v.into())).collect());
 
-            let store = self._table.log_store();
+        let store = self._table.log_store();
 
-            rt()?
-                .block_on(commit(
-                    &*store,
-                    &actions,
-                    operation,
-                    Some(self._table.snapshot().map_err(PythonError::from)?),
-                    app_metadata,
-                ))
-                .map_err(PythonError::from)?;
+        rt()?
+            .block_on(commit(
+                &*store,
+                &actions,
+                operation,
+                Some(self._table.snapshot().map_err(PythonError::from)?),
+                app_metadata,
+            ))
+            .map_err(PythonError::from)?;
 
-            Ok(())
-        })
+        Ok(())
     }
 
     pub fn get_py_storage_backend(&self) -> PyResult<filesystem::DeltaFileSystemHandler> {
