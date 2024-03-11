@@ -48,8 +48,6 @@ impl ObjectStoreFactory for MountFactory {
                 .get(&config::MountConfigKey::AllowUnsafeRename)
                 .unwrap_or(&String::new()),
         );
-        println!("allow_unsafe_rename: {}", allow_unsafe_rename);
-        println!("url: {}", url);
 
         match url.scheme() {
             "dbfs" => {
@@ -57,6 +55,7 @@ impl ObjectStoreFactory for MountFactory {
                     // Just let the user know that they need to set the allow_unsafe_rename option
                     return Err(error::Error::AllowUnsafeRenameNotSpecified.into());
                 }
+                // We need to convert the dbfs url to a file url
                 let new_url = Url::parse(&format!("file:///dbfs{}", url.path())).unwrap();
                 let store = Arc::new(file::MountFileStorageBackend::try_new(
                     new_url.to_file_path().unwrap(),

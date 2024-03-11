@@ -1,4 +1,4 @@
-// #![cfg(feature = "integration_test")]
+#![cfg(feature = "integration_test")]
 
 use deltalake_test::read::read_table_paths;
 use deltalake_test::{test_read_tables, IntegrationContext, TestResult};
