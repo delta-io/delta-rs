@@ -1448,8 +1448,8 @@ def test_schema_cols_diff_order(tmp_path: pathlib.Path, engine):
     assert dt.to_pyarrow_table(columns=["baz", "bar", "foo"]) == expected
 
 
-def test_empty(existing_table: DeltaTable):
+@pytest.mark.parametrize("engine", ["pyarrow", "rust"])
+def test_empty(existing_table: DeltaTable, engine):
     schema = existing_table.schema().to_pyarrow()
     empty_table = pa.Table.from_pylist([], schema=schema)
-    with pytest.raises(DeltaError, match="No data source supplied to write command"):
-        write_deltalake(existing_table, empty_table, mode="append", engine="rust")
+    write_deltalake(existing_table, empty_table, mode="append", engine=engine)
