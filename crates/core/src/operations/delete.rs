@@ -555,7 +555,10 @@ mod tests {
             )
             .unwrap();
 
-            DeltaOps::new_in_memory().write(WriteData::Vecs(vec![batch])).await.unwrap()
+            DeltaOps::new_in_memory()
+                .write(WriteData::Vecs(vec![batch]))
+                .await
+                .unwrap()
         }
 
         // Validate behaviour of greater than
@@ -771,7 +774,10 @@ mod tests {
         ];
         let batches = vec![RecordBatch::try_new(schema.clone(), data).unwrap()];
 
-        let table = DeltaOps::new_in_memory().write(WriteData::Vecs(batches)).await.unwrap();
+        let table = DeltaOps::new_in_memory()
+            .write(WriteData::Vecs(batches))
+            .await
+            .unwrap();
 
         let (table, _metrics) = DeltaOps(table)
             .delete()

@@ -568,7 +568,9 @@ async fn main() {
             DeltaOps::try_from_uri(output)
                 .await
                 .unwrap()
-                .write(deltalake_core::operations::write::WriteData::Vecs(vec![batch]))
+                .write(deltalake_core::operations::write::WriteData::Vecs(vec![
+                    batch,
+                ]))
                 .with_save_mode(SaveMode::Append)
                 .await
                 .unwrap();

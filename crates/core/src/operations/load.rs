@@ -115,7 +115,9 @@ mod tests {
     #[tokio::test]
     async fn test_write_load() -> TestResult {
         let batch = get_record_batch(None, false);
-        let table = DeltaOps::new_in_memory().write(WriteData::Vecs(vec![batch.clone()])).await?;
+        let table = DeltaOps::new_in_memory()
+            .write(WriteData::Vecs(vec![batch.clone()]))
+            .await?;
 
         let (_table, stream) = DeltaOps(table).load().await?;
         let data = collect_sendable_stream(stream).await?;
@@ -146,7 +148,9 @@ mod tests {
     #[tokio::test]
     async fn test_load_with_columns() -> TestResult {
         let batch = get_record_batch(None, false);
-        let table = DeltaOps::new_in_memory().write(WriteData::Vecs(vec![batch.clone()])).await?;
+        let table = DeltaOps::new_in_memory()
+            .write(WriteData::Vecs(vec![batch.clone()]))
+            .await?;
 
         let (_table, stream) = DeltaOps(table).load().with_columns(["id", "value"]).await?;
         let data = collect_sendable_stream(stream).await?;

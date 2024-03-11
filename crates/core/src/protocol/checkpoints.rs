@@ -1014,7 +1014,10 @@ mod tests {
             ("struct_with_list", struct_with_list_array),
         ])
         .unwrap();
-        let table = DeltaOps::new_in_memory().write(crate::operations::write::WriteData::Vecs(vec![batch])).await.unwrap();
+        let table = DeltaOps::new_in_memory()
+            .write(crate::operations::write::WriteData::Vecs(vec![batch]))
+            .await
+            .unwrap();
 
         create_checkpoint(&table).await.unwrap();
     }

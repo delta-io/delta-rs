@@ -56,7 +56,7 @@ use crate::delta_datafusion::{find_files, register_store, DeltaScanBuilder};
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::{Action, Add, Metadata, Remove, StructType};
 use crate::logstore::LogStoreRef;
-use crate::operations::cast::{merge_schema};
+use crate::operations::cast::merge_schema;
 use crate::protocol::{DeltaOperation, SaveMode};
 use crate::storage::ObjectStoreRef;
 use crate::table::state::DeltaTableState;
@@ -123,7 +123,7 @@ pub enum WriteData {
     /// A Datafusion Execution plan
     DataFusionPlan(Arc<dyn ExecutionPlan>),
     /// For convenience, a vector of record batches
-    Vecs(Vec<RecordBatch>),    
+    Vecs(Vec<RecordBatch>),
 }
 
 /// Configuration for writing data to a DeltaTable
@@ -813,7 +813,6 @@ impl std::future::IntoFuture for WriteBuilder {
         })
     }
 }
-
 
 fn try_cast_batch(from_fields: &Fields, to_fields: &Fields) -> Result<(), ArrowError> {
     if from_fields.len() != to_fields.len() {

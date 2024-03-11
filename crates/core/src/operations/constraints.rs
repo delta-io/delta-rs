@@ -356,7 +356,10 @@ mod tests {
         )
         .unwrap();
 
-        let table = DeltaOps::new_in_memory().write(WriteData::Vecs(vec![batch])).await.unwrap();
+        let table = DeltaOps::new_in_memory()
+            .write(WriteData::Vecs(vec![batch]))
+            .await
+            .unwrap();
 
         let mut table = DeltaOps(table)
             .add_constraint()
