@@ -8,13 +8,13 @@
       
       
       
-        <link rel="canonical" href="https://github.com/delta-io/delta-rs/integrations/delta-lake-arrow/">
+        <link rel="canonical" href="https://github.com/delta-io/delta-rs/integrations/delta-lake-dagster/">
       
       
-        <link rel="prev" href="../../api/exceptions/">
+        <link rel="prev" href="../delta-lake-arrow/">
       
       
-        <link rel="next" href="../delta-lake-dagster/">
+        <link rel="next" href="../delta-lake-dask/">
       
       
       <link rel="icon" href="../../delta-rust-no-whitespace.svg">
@@ -22,7 +22,7 @@
     
     
       
-        <title>Arrow - Delta Lake Documentation</title>
+        <title>Dagster - Delta Lake Documentation</title>
       
     
     
@@ -81,7 +81,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#delta-lake-arrow-integrations" class="md-skip">
+        <a href="#using-delta-lake-with-dagster" class="md-skip">
           Skip to content
         </a>
       
@@ -116,7 +116,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              Arrow
+              Dagster
             
           </span>
         </div>
@@ -288,7 +288,7 @@
     
     
       <li class="md-tabs__item md-tabs__item--active">
-        <a href="./" class="md-tabs__link">
+        <a href="../delta-lake-arrow/" class="md-tabs__link">
           
   
     
@@ -1322,6 +1322,26 @@
                 
   
   
+  
+    <li class="md-nav__item">
+      <a href="../delta-lake-arrow/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Arrow
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
     
   
   
@@ -1337,7 +1357,7 @@
           
   
   <span class="md-ellipsis">
-    Arrow
+    Dagster
   </span>
   
 
@@ -1348,7 +1368,7 @@
         
   
   <span class="md-ellipsis">
-    Arrow
+    Dagster
   </span>
   
 
@@ -1370,36 +1390,105 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#delta-lake-to-arrow-dataset" class="md-nav__link">
-    Delta Lake to Arrow Dataset
+  <a href="#dagster-io-managers" class="md-nav__link">
+    Dagster I/O Managers
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#delta-lake-to-arrow-table" class="md-nav__link">
-    Delta Lake to Arrow Table
+  <a href="#the-delta-lake-io-manager" class="md-nav__link">
+    The Delta Lake I/O Manager
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#difference-between-arrow-dataset-and-arrow-table" class="md-nav__link">
-    Difference between Arrow Dataset and Arrow Table
+  <a href="#creating-delta-lake-tables-with-dagster" class="md-nav__link">
+    Creating Delta Lake Tables with Dagster
+  </a>
+  
+    <nav class="md-nav" aria-label="Creating Delta Lake Tables with Dagster">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#overwrites-when-rematerializing-assets" class="md-nav__link">
+    Overwrites when Rematerializing Assets
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#loading-delta-lake-tables-in-downstream-assets" class="md-nav__link">
+    Loading Delta Lake Tables in Downstream Assets
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#multiple-query-engines-can-query-arrow-datasets" class="md-nav__link">
-    Multiple query engines can query Arrow Datasets
+  <a href="#reading-existing-delta-lake-tables-into-dagster" class="md-nav__link">
+    Reading Existing Delta Lake Tables into Dagster
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#conclusion" class="md-nav__link">
-    Conclusion
+  <a href="#column-pruning" class="md-nav__link">
+    Column Pruning
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#working-with-partitioned-assets" class="md-nav__link">
+    Working with Partitioned Assets
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#using-delta-lake-and-dagster-with-pandas" class="md-nav__link">
+    Using Delta Lake and Dagster with Pandas
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#using-delta-lake-and-dagster-with-polars" class="md-nav__link">
+    Using Delta Lake and Dagster with Polars
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#delta-lake-table-resource" class="md-nav__link">
+    Delta Lake Table Resource
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#schema-and-constraint-enforcement" class="md-nav__link">
+    Schema and Constraint Enforcement
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#z-ordering" class="md-nav__link">
+    Z-Ordering
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#contribute" class="md-nav__link">
+    Contribute
   </a>
   
 </li>
@@ -1408,26 +1497,6 @@
   
 </nav>
       
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../delta-lake-dagster/" class="md-nav__link">
-        
-  
-  <span class="md-ellipsis">
-    Dagster
-  </span>
-  
-
-      </a>
     </li>
   
 
@@ -1663,36 +1732,105 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#delta-lake-to-arrow-dataset" class="md-nav__link">
-    Delta Lake to Arrow Dataset
+  <a href="#dagster-io-managers" class="md-nav__link">
+    Dagster I/O Managers
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#delta-lake-to-arrow-table" class="md-nav__link">
-    Delta Lake to Arrow Table
+  <a href="#the-delta-lake-io-manager" class="md-nav__link">
+    The Delta Lake I/O Manager
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#difference-between-arrow-dataset-and-arrow-table" class="md-nav__link">
-    Difference between Arrow Dataset and Arrow Table
+  <a href="#creating-delta-lake-tables-with-dagster" class="md-nav__link">
+    Creating Delta Lake Tables with Dagster
+  </a>
+  
+    <nav class="md-nav" aria-label="Creating Delta Lake Tables with Dagster">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#overwrites-when-rematerializing-assets" class="md-nav__link">
+    Overwrites when Rematerializing Assets
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#loading-delta-lake-tables-in-downstream-assets" class="md-nav__link">
+    Loading Delta Lake Tables in Downstream Assets
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#multiple-query-engines-can-query-arrow-datasets" class="md-nav__link">
-    Multiple query engines can query Arrow Datasets
+  <a href="#reading-existing-delta-lake-tables-into-dagster" class="md-nav__link">
+    Reading Existing Delta Lake Tables into Dagster
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#conclusion" class="md-nav__link">
-    Conclusion
+  <a href="#column-pruning" class="md-nav__link">
+    Column Pruning
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#working-with-partitioned-assets" class="md-nav__link">
+    Working with Partitioned Assets
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#using-delta-lake-and-dagster-with-pandas" class="md-nav__link">
+    Using Delta Lake and Dagster with Pandas
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#using-delta-lake-and-dagster-with-polars" class="md-nav__link">
+    Using Delta Lake and Dagster with Polars
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#delta-lake-table-resource" class="md-nav__link">
+    Delta Lake Table Resource
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#schema-and-constraint-enforcement" class="md-nav__link">
+    Schema and Constraint Enforcement
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#z-ordering" class="md-nav__link">
+    Z-Ordering
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#contribute" class="md-nav__link">
+    Contribute
   </a>
   
 </li>
@@ -1715,79 +1853,215 @@
   
 
 
-<h1 id="delta-lake-arrow-integrations">Delta Lake Arrow Integrations</h1>
-<p>Delta Lake tables can be exposed as Arrow tables and Arrow datasets, which allows for interoperability with a variety of query engines.</p>
-<p>This page shows you how to convert Delta tables to Arrow data structures and teaches you the difference between Arrow tables and Arrow datasets.  Tables are "eager" and datasets are "lazy", which has important performance implications, keep reading to learn more!</p>
-<h2 id="delta-lake-to-arrow-dataset">Delta Lake to Arrow Dataset</h2>
-<p>Delta tables can easily be exposed as Arrow datasets.  This makes it easy for any query engine that can read Arrow datasets to read a Delta table.</p>
-<p>Let's take a look at the h2o groupby dataset that contains 9 columns of data.  Here are three representative rows of data:</p>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>+-------+-------+--------------+-------+-------+--------+------+------+---------+
-</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>| id1   | id2   | id3          |   id4 |   id5 |    id6 |   v1 |   v2 |      v3 |
-</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>|-------+-------+--------------+-------+-------+--------+------+------+---------|
-</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>| id016 | id046 | id0000109363 |    88 |    13 | 146094 |    4 |    6 | 18.8377 |
-</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>| id039 | id087 | id0000466766 |    14 |    30 | 111330 |    4 |   14 | 46.7973 |
-</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>| id047 | id098 | id0000307804 |    85 |    23 | 187639 |    3 |    5 | 47.5773 |
-</span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>+-------+-------+--------------+-------+-------+--------+------+------+---------+
+<h1 id="using-delta-lake-with-dagster">Using Delta Lake with Dagster¶</h1>
+<p>Delta Lake is a great storage format for Dagster workflows. This page will explain why and how to use Delta Lake with Dagster.</p>
+<p>You will learn how to use the Delta Lake I/O Manager to read and write your Dagster Software-Defined Assets (SDAs). You will also learn about the unique advantages Delta Lake offers the Dagster community.</p>
+<p>Here are some of the benefits that Delta Lake provides Dagster users:
+- native PyArrow integration for lazy computation of large datasets,
+- more efficient querying with file skipping via Z Ordering and liquid clustering
+- built-in vacuuming to remove unnecessary files and versions
+- ACID transactions for reliable writes
+- smooth versioning integration so that versions can be use to trigger downstream updates.
+- surfacing table stats based on the file statistics </p>
+<h2 id="dagster-io-managers">Dagster I/O Managers</h2>
+<p>Dagster uses <a href="https://docs.dagster.io/concepts/io-management/io-managers#overview">I/O Managers</a> to simplify data reads and writes. I/O Managers help you reduce boilerplate code by storing Dagster Asset and Op outputs and loading them as inputs to downstream objects. They make it easy to change where and how your data is stored.</p>
+<p>You only need to define your I/O Manager and its settings (such as storage location and schema) once and the I/O Manager will take care of correctly reading and writing all your Dagster Assets automatically.</p>
+<p>If you need lower-level access than the Dagster I/O Managers provide, take a look at the Delta Table Resource.</p>
+<h2 id="the-delta-lake-io-manager">The Delta Lake I/O Manager</h2>
+<p>You can easily read and write Delta Lake Tables from Dagster by using the <code>DeltaLakeIOManager()</code>. </p>
+<p>Install the DeltaLakeIOManager:</p>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>pip install dagster-deltalake
 </span></code></pre></div>
-<p>Here's how to expose the Delta table as a PyArrow dataset and run a query with DuckDB:</p>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="kn">import</span> <span class="nn">duckdb</span>
-</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="kn">from</span> <span class="nn">deltalake</span> <span class="kn">import</span> <span class="n">DeltaTable</span>
-</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>
-</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="n">table</span> <span class="o">=</span> <span class="n">DeltaTable</span><span class="p">(</span><span class="s2">&quot;delta/G1_1e9_1e2_0_0&quot;</span><span class="p">)</span>
-</span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="n">dataset</span> <span class="o">=</span> <span class="n">table</span><span class="o">.</span><span class="n">to_pyarrow_dataset</span><span class="p">()</span>
-</span><span id="__span-1-6"><a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a><span class="n">quack</span> <span class="o">=</span> <span class="n">duckdb</span><span class="o">.</span><span class="n">arrow</span><span class="p">(</span><span class="n">dataset</span><span class="p">)</span>
-</span><span id="__span-1-7"><a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a><span class="n">quack</span><span class="o">.</span><span class="n">filter</span><span class="p">(</span><span class="s2">&quot;id1 = &#39;id016&#39; and v2 &gt; 10&quot;</span><span class="p">)</span>
+<p>Next, configure the following settings in your project’s <code>__init__.py</code> file:
+- <code>io_manager</code>: set this to <code>DeltaLakeIOManager()</code>, this sets the default I/O Manager for all your Assets</p>
+<p>Within the DeltaLakeIOManager, define:
+- <code>root_uri</code>: the root path where your Delta Tables will be created
+- <code>storage_options</code>: configuration for accessing storage location
+- <code>schema</code>: name of schema to use (optional, defaults to public)</p>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>defs = Definitions(
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>   assets=all_assets,
+</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>   resources={
+</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a>        &quot;io_manager&quot;: DeltaLakePyarrowIOManager(
+</span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a>            root_uri=&quot;path/to/deltalake&quot;,
+</span><span id="__span-1-6"><a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a>            storage_options=LocalConfig(),
+</span><span id="__span-1-7"><a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a>            schema=&quot;dagster_deltalake&quot;,
+</span><span id="__span-1-8"><a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a>        ),
+</span><span id="__span-1-9"><a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a>   },
+</span><span id="__span-1-10"><a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a>)
 </span></code></pre></div>
-<p>Here's the result:</p>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>┌─────────┬─────────┬──────────────┬───────┬───────┬─────────┬───────┬───────┬───────────┐
-</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>│   id1   │   id2   │     id3      │  id4  │  id5  │   id6   │  v1   │  v2   │    v3     │
-</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>│ varchar │ varchar │   varchar    │ int32 │ int32 │  int32  │ int32 │ int32 │  double   │
-</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a>├─────────┼─────────┼──────────────┼───────┼───────┼─────────┼───────┼───────┼───────────┤
-</span><span id="__span-2-5"><a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a>│ id016   │ id054   │ id0002309114 │    62 │    95 │ 7180859 │     4 │    13 │  7.750173 │
-</span><span id="__span-2-6"><a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a>│ id016   │ id044   │ id0003968533 │    63 │    98 │ 2356363 │     4 │    14 │  3.942417 │
-</span><span id="__span-2-7"><a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a>│ id016   │ id034   │ id0001082839 │    58 │    73 │ 8039808 │     5 │    12 │ 76.820135 │
-</span><span id="__span-2-8"><a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a>├─────────┴─────────┴──────────────┴───────┴───────┴─────────┴───────┴───────┴───────────┤
-</span><span id="__span-2-9"><a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a>│ ? rows (&gt;9999 rows, 3 shown)                                                 9 columns │
-</span><span id="__span-2-10"><a id="__codelineno-2-10" name="__codelineno-2-10" href="#__codelineno-2-10"></a>└────────────────────────────────────────────────────────────────────────────────────────┘
+<p>Now, when you materialize an Asset, it will be saved as a Delta Lake in a folder <code>dagster_deltalake/asset_name</code> under the root directory <code>path/to/deltalake</code>.</p>
+<p>The default Delta Lake I/O Manager supports Arrow reads and writes. You can also use the Delta Lake I/O Manager with <a href="#using-delta-lake-and-dagster-with-pandas">pandas</a> or <a href="#using-delta-lake-and-dagster-with-polars">polars</a>. </p>
+<h2 id="creating-delta-lake-tables-with-dagster">Creating Delta Lake Tables with Dagster</h2>
+<p>You don’t need to do anything else to store your Dagster Assets as Delta Lake tables. The I/O Manager will handle storing and loading your Assets as Delta Lake tables from now on.</p>
+<p>You can proceed to write Dagster code as you normally would. For example, you can create an Asset that reads in some toy data about animals and writes it out to an Arrow Table:</p>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>import pyarrow as pa
+</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>from pyarrow import csv
+</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>
+</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a>from dagster import asset
+</span><span id="__span-2-5"><a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a>
+</span><span id="__span-2-6"><a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a>@asset
+</span><span id="__span-2-7"><a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a>def raw_dataset() -&gt; pa.Table:
+</span><span id="__span-2-8"><a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a>   n_legs = pa.array([2, 4, None, 100])
+</span><span id="__span-2-9"><a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a>   animals = pa.array([&quot;Flamingo&quot;, &quot;Horse&quot;, &quot;Brittle stars&quot;, &quot;Centipede&quot;])
+</span><span id="__span-2-10"><a id="__codelineno-2-10" name="__codelineno-2-10" href="#__codelineno-2-10"></a>   data = {&#39;n_legs&#39;: n_legs, &#39;animals&#39;: animals}
+</span><span id="__span-2-11"><a id="__codelineno-2-11" name="__codelineno-2-11" href="#__codelineno-2-11"></a>
+</span><span id="__span-2-12"><a id="__codelineno-2-12" name="__codelineno-2-12" href="#__codelineno-2-12"></a>   return pa.Table.from_pydict(data)
 </span></code></pre></div>
-<p>Arrow datasets allow for the predicates to get pushed down to the query engine, so the query is executed quickly.</p>
-<h2 id="delta-lake-to-arrow-table">Delta Lake to Arrow Table</h2>
-<p>You can also run the same query with DuckDB on an Arrow table:</p>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="n">quack</span> <span class="o">=</span> <span class="n">duckdb</span><span class="o">.</span><span class="n">arrow</span><span class="p">(</span><span class="n">table</span><span class="o">.</span><span class="n">to_pyarrow_table</span><span class="p">())</span>
-</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="n">quack</span><span class="o">.</span><span class="n">filter</span><span class="p">(</span><span class="s2">&quot;id1 = &#39;id016&#39; and v2 &gt; 10&quot;</span><span class="p">)</span>
+<p>When you materialize the Asset defined above (using the config settings defined earlier), the Delta Lake I/O Manager will create the table <code>dagster_deltalake/iris_dataset</code> if it doesn’t exist yet.</p>
+<h3 id="overwrites-when-rematerializing-assets">Overwrites when Rematerializing Assets</h3>
+<p>If the table does already exist at the specified location, the Delta Lake I/O Manager will perform an overwrite. Delta Lake’s transaction log maintains a record of all changes to your Delta Lake tables. You can inspect the record of changes to your Delta Lake tables by taking a look at these transaction logs.</p>
+<h2 id="loading-delta-lake-tables-in-downstream-assets">Loading Delta Lake Tables in Downstream Assets</h2>
+<p>You can use Assets stored as Delta Lake tables as input to downstream Assets. Dagster and the Delta Lake I/O Manager make this easy for you.</p>
+<p>You can write Dagster code as you normally would. Pass the upstream Asset as an argument to the downstream object to set up the dependency. Make sure to define the correct data type.</p>
+<p>The Delta Lake I/O Manager will handle reading and writing the data from your Delta Lake.</p>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>import pyarrow as pa
+</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>from dagster import asset
+</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>
+</span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a># ... raw_dataset asset is defined here ...
+</span><span id="__span-3-5"><a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a>
+</span><span id="__span-3-6"><a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a>@asset
+</span><span id="__span-3-7"><a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a>def clean_dataset(raw_dataset: pa.Table) -&gt; pa.Table:
+</span><span id="__span-3-8"><a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a>   return raw_dataset.drop_null()
 </span></code></pre></div>
-<p>This returns the same result, but it runs slower.</p>
-<h2 id="difference-between-arrow-dataset-and-arrow-table">Difference between Arrow Dataset and Arrow Table</h2>
-<p>Arrow Datasets are lazy and allow for full predicate pushdown unlike Arrow tables which are eagerly loaded into memory.</p>
-<p>The previous DuckDB queries were run on a 1 billion row dataset that's roughly 50 GB when stored as an uncompressed CSV file.  Here are the runtimes when the data is stored in a Delta table and the queries are executed on a 2021 Macbook M1 with 64 GB of RAM:</p>
-<ul>
-<li>Arrow table: 17.1 seconds</li>
-<li>Arrow dataset: 0.01 seconds</li>
-</ul>
-<p>The query runs much faster on an Arrow dataset because the predicates can be pushed down to the query engine and lots of data can be skipped.</p>
-<p>Arrow tables are eagerly materialized in memory and don't allow for the same amount of data skipping.</p>
-<h2 id="multiple-query-engines-can-query-arrow-datasets">Multiple query engines can query Arrow Datasets</h2>
-<p>Other query engines like DataFusion can also query Arrow datasets, see the following example:</p>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="kn">from</span> <span class="nn">datafusion</span> <span class="kn">import</span> <span class="n">SessionContext</span>
+<h2 id="reading-existing-delta-lake-tables-into-dagster">Reading Existing Delta Lake Tables into Dagster</h2>
+<p>You can make existing Delta Lake tables (that were not created in Dagster) available to your Dagster assets. Use the <code>SourceAsset</code> object and pass the table name as the key argument: </p>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>from dagster import SourceAsset
 </span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>
-</span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="n">ctx</span> <span class="o">=</span> <span class="n">SessionContext</span><span class="p">()</span>
-</span><span id="__span-4-4"><a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="n">ctx</span><span class="o">.</span><span class="n">register_dataset</span><span class="p">(</span><span class="s2">&quot;my_dataset&quot;</span><span class="p">,</span> <span class="n">table</span><span class="o">.</span><span class="n">to_pyarrow_dataset</span><span class="p">())</span>
-</span><span id="__span-4-5"><a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a><span class="n">ctx</span><span class="o">.</span><span class="n">sql</span><span class="p">(</span><span class="s2">&quot;select * from my_dataset where v2 &gt; 5&quot;</span><span class="p">)</span>
+</span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a>iris_harvest_data = SourceAsset(key=&quot;more_animal_data&quot;)
 </span></code></pre></div>
-<p>Here's the result:</p>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>+-------+-------+--------------+-----+-----+--------+----+----+-----------+
-</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>| id1   | id2   | id3          | id4 | id5 | id6    | v1 | v2 | v3        |
-</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a>+-------+-------+--------------+-----+-----+--------+----+----+-----------+
-</span><span id="__span-5-4"><a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a>| id082 | id049 | id0000022715 | 97  | 55  | 756924 | 2  | 11 | 74.161136 |
-</span><span id="__span-5-5"><a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a>| id053 | id052 | id0000113549 | 19  | 56  | 139048 | 1  | 10 | 95.178444 |
-</span><span id="__span-5-6"><a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a>| id090 | id043 | id0000637409 | 94  | 50  | 12448  | 3  | 12 | 60.21896  |
-</span><span id="__span-5-7"><a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a>+-------+-------+--------------+-----+-----+--------+----+----+-----------+
+<p>This will load a table <code>more_animal_data</code> located at <code>&lt;root_uri&gt;/&lt;schema&gt;</code> as configured in the Definitions object above (see <a href="#the-delta-lake-io-manager">Delta Lake I/O Manager</a> section).</p>
+<h2 id="column-pruning">Column Pruning</h2>
+<p>You can often improve the efficiency of your computations by only loading specific columns of your Delta table. This is called column pruning. </p>
+<p>With the Delta Lake I/O manager, you can select specific columns to load defining the <code>columns</code> in the <code>metadata</code> parameter of the <code>AssetIn</code> that loads the upstream Asset:</p>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>import pyarrow as pa
+</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>from dagster import AssetIn, asset
+</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a>
+</span><span id="__span-5-4"><a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a># this example uses the clean_dataset Asset defined earlier
+</span><span id="__span-5-5"><a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a>
+</span><span id="__span-5-6"><a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a>@asset(
+</span><span id="__span-5-7"><a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a>       ins={
+</span><span id="__span-5-8"><a id="__codelineno-5-8" name="__codelineno-5-8" href="#__codelineno-5-8"></a>           &quot;mammal_bool&quot;: AssetIn(
+</span><span id="__span-5-9"><a id="__codelineno-5-9" name="__codelineno-5-9" href="#__codelineno-5-9"></a>               key=&quot;clean_dataset&quot;,
+</span><span id="__span-5-10"><a id="__codelineno-5-10" name="__codelineno-5-10" href="#__codelineno-5-10"></a>               metadata={&quot;columns&quot;: [&quot;is_mammal&quot;, &quot;animals&quot;]},
+</span><span id="__span-5-11"><a id="__codelineno-5-11" name="__codelineno-5-11" href="#__codelineno-5-11"></a>           )
+</span><span id="__span-5-12"><a id="__codelineno-5-12" name="__codelineno-5-12" href="#__codelineno-5-12"></a>       }
+</span><span id="__span-5-13"><a id="__codelineno-5-13" name="__codelineno-5-13" href="#__codelineno-5-13"></a>)
+</span><span id="__span-5-14"><a id="__codelineno-5-14" name="__codelineno-5-14" href="#__codelineno-5-14"></a>def mammal_data(mammal_bool: pa.Table) -&gt; pa.Table:
+</span><span id="__span-5-15"><a id="__codelineno-5-15" name="__codelineno-5-15" href="#__codelineno-5-15"></a>   mammals = mammal_bool[&quot;is_mammal&quot;].cast(&quot;bool&quot;)
+</span><span id="__span-5-16"><a id="__codelineno-5-16" name="__codelineno-5-16" href="#__codelineno-5-16"></a>   animals = mammal_bool[&quot;animals&quot;]
+</span><span id="__span-5-17"><a id="__codelineno-5-17" name="__codelineno-5-17" href="#__codelineno-5-17"></a>   data = {&quot;mammal_bool&quot;: mammals, &quot;animals&quot;: animals}
+</span><span id="__span-5-18"><a id="__codelineno-5-18" name="__codelineno-5-18" href="#__codelineno-5-18"></a>   return pa.Table.from_pydict(data)
 </span></code></pre></div>
-<p>Any query engine that's capable of reading an Arrow table/dataset can read a Delta table.</p>
-<h2 id="conclusion">Conclusion</h2>
-<p>Delta tables can easily be exposed as Arrow tables/datasets.</p>
-<p>Therefore any query engine that can read an Arrow table/dataset can also read a Delta table.</p>
-<p>Arrow datasets allow for more predicates to be pushed down to the query engine, so they can perform better performance than Arrow tables.</p>
+<p>Here, we select only the <code>sepal_length_cm</code> and <code>sepal_width_cm</code> columns from the <code>iris_dataset</code> table and load them into an <code>AssetIn</code> object called <code>iris_sepal</code>. This AssetIn object is used to create a new Asset <code>sepal_data</code>, containing only the selected columns.</p>
+<h2 id="working-with-partitioned-assets">Working with Partitioned Assets</h2>
+<p>Partitioning is an important feature of Delta Lake that can make your computations more efficient. The Delta Lake I/O manager helps you read and write partitioned data easily. You can work with static partitions, time-based partitions, multi-partitions, and dynamic partitions.</p>
+<p>For example, you can partition the Iris dataset on the <code>species</code> column as follows:</p>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>import pyarrow as pa
+</span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>
+</span><span id="__span-6-3"><a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a>from dagster import StaticPartitionsDefinition, asset
+</span><span id="__span-6-4"><a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a>
+</span><span id="__span-6-5"><a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a>@asset(
+</span><span id="__span-6-6"><a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a>  partitions_def=StaticPartitionsDefinition(
+</span><span id="__span-6-7"><a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a>      [&quot;Human&quot;, &quot;Horse&quot;,]
+</span><span id="__span-6-8"><a id="__codelineno-6-8" name="__codelineno-6-8" href="#__codelineno-6-8"></a>  ),
+</span><span id="__span-6-9"><a id="__codelineno-6-9" name="__codelineno-6-9" href="#__codelineno-6-9"></a>  metadata={&quot;partition_expr&quot;: &quot;n_legs&quot;},
+</span><span id="__span-6-10"><a id="__codelineno-6-10" name="__codelineno-6-10" href="#__codelineno-6-10"></a>)
+</span><span id="__span-6-11"><a id="__codelineno-6-11" name="__codelineno-6-11" href="#__codelineno-6-11"></a>def dataset_partitioned(
+</span><span id="__span-6-12"><a id="__codelineno-6-12" name="__codelineno-6-12" href="#__codelineno-6-12"></a>   context,
+</span><span id="__span-6-13"><a id="__codelineno-6-13" name="__codelineno-6-13" href="#__codelineno-6-13"></a>   clean_dataset: pa.Table,
+</span><span id="__span-6-14"><a id="__codelineno-6-14" name="__codelineno-6-14" href="#__codelineno-6-14"></a>   ) -&gt; pa.Table:
+</span><span id="__span-6-15"><a id="__codelineno-6-15" name="__codelineno-6-15" href="#__codelineno-6-15"></a>   animals = context.asset_partition_key_for_output()
+</span><span id="__span-6-16"><a id="__codelineno-6-16" name="__codelineno-6-16" href="#__codelineno-6-16"></a>   table = clean_dataset
+</span><span id="__span-6-17"><a id="__codelineno-6-17" name="__codelineno-6-17" href="#__codelineno-6-17"></a>
+</span><span id="__span-6-18"><a id="__codelineno-6-18" name="__codelineno-6-18" href="#__codelineno-6-18"></a>   return table.filter(pc.field(&quot;animals&quot;) == animals)
+</span></code></pre></div>
+<p>To partition your data, make sure to include the relevant <code>partitions_def</code> and <code>metadata</code> arguments to the <code>@asset</code> decorator. Refer to the Dagster documentation on <a href="https://docs.dagster.io/concepts/partitions-schedules-sensors/partitioning-assets">partitioning assets</a> for more information.</p>
+<h2 id="using-delta-lake-and-dagster-with-pandas">Using Delta Lake and Dagster with Pandas</h2>
+<p>To read and write data to Delta Lake using pandas, use the <code>DeltaLakePandasIOManager()</code>. </p>
+<p>You will need to install it using:</p>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>pip install dagster-deltalake-pandas
+</span></code></pre></div>
+<p>In your <code>Definitions</code> object, change the <code>io_manager</code> to <code>DeltaLakePandasIOManager()</code>:</p>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>from dagster_deltalake_pandas import DeltaLakePandasIOManager
+</span><span id="__span-8-2"><a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a>
+</span><span id="__span-8-3"><a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a>
+</span><span id="__span-8-4"><a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a>defs = Definitions(
+</span><span id="__span-8-5"><a id="__codelineno-8-5" name="__codelineno-8-5" href="#__codelineno-8-5"></a>   assets=all_assets,
+</span><span id="__span-8-6"><a id="__codelineno-8-6" name="__codelineno-8-6" href="#__codelineno-8-6"></a>   resources={
+</span><span id="__span-8-7"><a id="__codelineno-8-7" name="__codelineno-8-7" href="#__codelineno-8-7"></a>        &quot;io_manager&quot;: DeltaLakePandasIOManager(
+</span><span id="__span-8-8"><a id="__codelineno-8-8" name="__codelineno-8-8" href="#__codelineno-8-8"></a>            root_uri=&quot;path/to/deltalake&quot;,
+</span><span id="__span-8-9"><a id="__codelineno-8-9" name="__codelineno-8-9" href="#__codelineno-8-9"></a>            storage_options=LocalConfig(),
+</span><span id="__span-8-10"><a id="__codelineno-8-10" name="__codelineno-8-10" href="#__codelineno-8-10"></a>            schema=&quot;dagster_deltalake&quot;,
+</span><span id="__span-8-11"><a id="__codelineno-8-11" name="__codelineno-8-11" href="#__codelineno-8-11"></a>        ),
+</span><span id="__span-8-12"><a id="__codelineno-8-12" name="__codelineno-8-12" href="#__codelineno-8-12"></a>   },
+</span><span id="__span-8-13"><a id="__codelineno-8-13" name="__codelineno-8-13" href="#__codelineno-8-13"></a>)
+</span></code></pre></div>
+<p>Now you can read and write Dagster Assets defined as pandas DataFrames in Delta Lake format. For example:</p>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a>import pandas as pd
+</span><span id="__span-9-2"><a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a>from dagster import asset
+</span><span id="__span-9-3"><a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a>
+</span><span id="__span-9-4"><a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a>@asset
+</span><span id="__span-9-5"><a id="__codelineno-9-5" name="__codelineno-9-5" href="#__codelineno-9-5"></a>def iris_dataset() -&gt; pd.DataFrame:
+</span><span id="__span-9-6"><a id="__codelineno-9-6" name="__codelineno-9-6" href="#__codelineno-9-6"></a>   return pd.read_csv(
+</span><span id="__span-9-7"><a id="__codelineno-9-7" name="__codelineno-9-7" href="#__codelineno-9-7"></a>       &quot;https://docs.dagster.io/assets/iris.csv&quot;,
+</span><span id="__span-9-8"><a id="__codelineno-9-8" name="__codelineno-9-8" href="#__codelineno-9-8"></a>       names=[
+</span><span id="__span-9-9"><a id="__codelineno-9-9" name="__codelineno-9-9" href="#__codelineno-9-9"></a>           &quot;sepal_length_cm&quot;,
+</span><span id="__span-9-10"><a id="__codelineno-9-10" name="__codelineno-9-10" href="#__codelineno-9-10"></a>           &quot;sepal_width_cm&quot;,
+</span><span id="__span-9-11"><a id="__codelineno-9-11" name="__codelineno-9-11" href="#__codelineno-9-11"></a>           &quot;petal_length_cm&quot;,
+</span><span id="__span-9-12"><a id="__codelineno-9-12" name="__codelineno-9-12" href="#__codelineno-9-12"></a>           &quot;petal_width_cm&quot;,
+</span><span id="__span-9-13"><a id="__codelineno-9-13" name="__codelineno-9-13" href="#__codelineno-9-13"></a>           &quot;species&quot;,
+</span><span id="__span-9-14"><a id="__codelineno-9-14" name="__codelineno-9-14" href="#__codelineno-9-14"></a>       ],
+</span><span id="__span-9-15"><a id="__codelineno-9-15" name="__codelineno-9-15" href="#__codelineno-9-15"></a>   )
+</span></code></pre></div>
+<h2 id="using-delta-lake-and-dagster-with-polars">Using Delta Lake and Dagster with Polars</h2>
+<p>To read and write data to Delta Lake using pandas, use the <code>DeltaLakePolarsIOManager()</code>. </p>
+<p>You will need to install it using:</p>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a>pip install dagster-deltalake-polars
+</span></code></pre></div>
+<p>In your <code>Definitions</code> object, change the <code>io_manager</code> to <code>DeltaLakePolarsIOManager()</code>:</p>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-11-1"><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a>from dagster_polars import DeltaLakePolarsIOManager
+</span><span id="__span-11-2"><a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a>
+</span><span id="__span-11-3"><a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a>defs = Definitions(
+</span><span id="__span-11-4"><a id="__codelineno-11-4" name="__codelineno-11-4" href="#__codelineno-11-4"></a>   assets=all_assets,
+</span><span id="__span-11-5"><a id="__codelineno-11-5" name="__codelineno-11-5" href="#__codelineno-11-5"></a>   resources={
+</span><span id="__span-11-6"><a id="__codelineno-11-6" name="__codelineno-11-6" href="#__codelineno-11-6"></a>        &quot;io_manager&quot;: DeltaLakePolarsIOManager(
+</span><span id="__span-11-7"><a id="__codelineno-11-7" name="__codelineno-11-7" href="#__codelineno-11-7"></a>            root_uri=&quot;path/to/deltalake&quot;,
+</span><span id="__span-11-8"><a id="__codelineno-11-8" name="__codelineno-11-8" href="#__codelineno-11-8"></a>            storage_options=LocalConfig(),
+</span><span id="__span-11-9"><a id="__codelineno-11-9" name="__codelineno-11-9" href="#__codelineno-11-9"></a>            schema=&quot;dagster_deltalake&quot;,
+</span><span id="__span-11-10"><a id="__codelineno-11-10" name="__codelineno-11-10" href="#__codelineno-11-10"></a>        ),
+</span><span id="__span-11-11"><a id="__codelineno-11-11" name="__codelineno-11-11" href="#__codelineno-11-11"></a>   },
+</span><span id="__span-11-12"><a id="__codelineno-11-12" name="__codelineno-11-12" href="#__codelineno-11-12"></a>)
+</span></code></pre></div>
+<p>Now you can read and write Dagster Assets defined as Polars DataFrames in Delta Lake format. For example:</p>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-12-1"><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a>import polars as pl
+</span><span id="__span-12-2"><a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a>from dagster import asset
+</span><span id="__span-12-3"><a id="__codelineno-12-3" name="__codelineno-12-3" href="#__codelineno-12-3"></a>
+</span><span id="__span-12-4"><a id="__codelineno-12-4" name="__codelineno-12-4" href="#__codelineno-12-4"></a>
+</span><span id="__span-12-5"><a id="__codelineno-12-5" name="__codelineno-12-5" href="#__codelineno-12-5"></a>@asset
+</span><span id="__span-12-6"><a id="__codelineno-12-6" name="__codelineno-12-6" href="#__codelineno-12-6"></a>def iris_dataset() -&gt; pl.DataFrame:
+</span><span id="__span-12-7"><a id="__codelineno-12-7" name="__codelineno-12-7" href="#__codelineno-12-7"></a>   return pl.read_csv(
+</span><span id="__span-12-8"><a id="__codelineno-12-8" name="__codelineno-12-8" href="#__codelineno-12-8"></a>       &quot;https://docs.dagster.io/assets/iris.csv&quot;,
+</span><span id="__span-12-9"><a id="__codelineno-12-9" name="__codelineno-12-9" href="#__codelineno-12-9"></a>       new_columns=[
+</span><span id="__span-12-10"><a id="__codelineno-12-10" name="__codelineno-12-10" href="#__codelineno-12-10"></a>          &quot;sepal_length_cm&quot;,
+</span><span id="__span-12-11"><a id="__codelineno-12-11" name="__codelineno-12-11" href="#__codelineno-12-11"></a>          &quot;sepal_width_cm&quot;,
+</span><span id="__span-12-12"><a id="__codelineno-12-12" name="__codelineno-12-12" href="#__codelineno-12-12"></a>          &quot;petal_length_cm&quot;,
+</span><span id="__span-12-13"><a id="__codelineno-12-13" name="__codelineno-12-13" href="#__codelineno-12-13"></a>          &quot;petal_width_cm&quot;,
+</span><span id="__span-12-14"><a id="__codelineno-12-14" name="__codelineno-12-14" href="#__codelineno-12-14"></a>          &quot;species&quot;,
+</span><span id="__span-12-15"><a id="__codelineno-12-15" name="__codelineno-12-15" href="#__codelineno-12-15"></a>      ],
+</span><span id="__span-12-16"><a id="__codelineno-12-16" name="__codelineno-12-16" href="#__codelineno-12-16"></a>   has_header=False
+</span><span id="__span-12-17"><a id="__codelineno-12-17" name="__codelineno-12-17" href="#__codelineno-12-17"></a>)
+</span></code></pre></div>
+<h2 id="delta-lake-table-resource">Delta Lake Table Resource</h2>
+<p>I/O managers are a helpful tool in many common usage situations. But when you need lower-level access, the I/O Manager might not be the right tool to use. In these cases you may want to use the Delta Lake Table Resource.</p>
+<p>The Delta Lake Table Resource is a low-level access method to the table object. It gives you more fine-grained control and allows for modeling of more complex data. You can also use the Table Resource to run optimization and vacuuming jobs.</p>
+<h2 id="schema-and-constraint-enforcement">Schema and Constraint Enforcement</h2>
+<p>Delta Lake provides built-in checks to ensure schema consistency when appending data to a table, as well as the ability to evolve the schema. This is a great feature for the Dagster community as it prevents bad data from being appended to tables, ensuring data consistency and accuracy. </p>
+<p>Read more about how to add constraints to a table in <a href="https://delta-io.github.io/delta-rs/usage/constraints/">the Delta Lake documentation</a>.</p>
+<h2 id="z-ordering">Z-Ordering</h2>
+<p>Delta Lake offers Z-ordering functionality to colocate similar data in the same files. This can make your Delta Table queries much more efficient via file skipping. Dagster users can now benefit from this great feature through the Delta Lake I/O Manager.</p>
+<p>Read more about Z-Ordering on <a href="https://delta.io/blog/2023-06-03-delta-lake-z-order/">the Delta Lake blog</a>.</p>
+<h2 id="contribute">Contribute</h2>
+<p>To contribute to the Delta Lake and Dagster integration, go to [link]</p>
 
 
 
@@ -1811,7 +2085,7 @@
       <nav class="md-footer__inner md-grid" aria-label="Footer" >
         
           
-          <a href="../../api/exceptions/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Exceptions">
+          <a href="../delta-lake-arrow/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Arrow">
             <div class="md-footer__button md-icon">
               
               <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11h12Z"/></svg>
@@ -1821,20 +2095,20 @@
                 Previous
               </span>
               <div class="md-ellipsis">
-                Exceptions
+                Arrow
               </div>
             </div>
           </a>
         
         
           
-          <a href="../delta-lake-dagster/" class="md-footer__link md-footer__link--next" aria-label="Next: Dagster">
+          <a href="../delta-lake-dask/" class="md-footer__link md-footer__link--next" aria-label="Next: Dask">
             <div class="md-footer__title">
               <span class="md-footer__direction">
                 Next
               </span>
               <div class="md-ellipsis">
-                Dagster
+                Dask
               </div>
             </div>
             <div class="md-footer__button md-icon">
