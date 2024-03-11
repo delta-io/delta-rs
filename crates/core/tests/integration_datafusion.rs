@@ -113,7 +113,7 @@ mod local {
 
         for batch in batches {
             table = DeltaOps(table)
-                .write(vec![batch])
+                .write(std::iter::once(batch), batch.schema().clone())
                 .with_save_mode(save_mode.clone())
                 .await
                 .unwrap();

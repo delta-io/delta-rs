@@ -1013,7 +1013,7 @@ mod tests {
             ("struct_with_list", struct_with_list_array),
         ])
         .unwrap();
-        let table = DeltaOps::new_in_memory().write(vec![batch]).await.unwrap();
+        let table = DeltaOps::new_in_memory().write(Box::new(iter::once(batch)), batch.schema()).await.unwrap();
 
         create_checkpoint(&table).await.unwrap();
     }

@@ -45,21 +45,21 @@ async fn setup_test() -> Result<Context, Box<dyn Error>> {
     let batch = get_record_batch();
     thread::sleep(Duration::from_secs(1));
     let table = DeltaOps(table)
-        .write(vec![batch.clone()])
+        .write(Box::new(vec![batch.clone()].into_iter()), batch.schema().clone())
         .with_save_mode(SaveMode::Append)
         .await
         .unwrap();
 
     thread::sleep(Duration::from_secs(1));
     let table = DeltaOps(table)
-        .write(vec![batch.clone()])
+        .write(Box::new(vec![batch.clone()].into_iter()), batch.schema().clone())
         .with_save_mode(SaveMode::Overwrite)
         .await
         .unwrap();
 
     thread::sleep(Duration::from_secs(1));
     let table = DeltaOps(table)
-        .write(vec![batch.clone()])
+        .write(Box::new(vec![batch.clone()].into_iter()), batch.schema().clone())
         .with_save_mode(SaveMode::Append)
         .await
         .unwrap();

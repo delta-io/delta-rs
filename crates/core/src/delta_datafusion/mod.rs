@@ -1756,7 +1756,7 @@ mod tests {
         .unwrap();
         // write some data
         let table = crate::DeltaOps(table)
-            .write(vec![batch.clone()])
+            .write(Box::new(vec![batch.clone()].into_iter()), batch.schema().clone())
             .with_save_mode(crate::protocol::SaveMode::Append)
             .await
             .unwrap();
@@ -1820,7 +1820,7 @@ mod tests {
         .unwrap();
         // write some data
         let table = crate::DeltaOps::new_in_memory()
-            .write(vec![batch.clone()])
+            .write(Box::new(vec![batch.clone()].into_iter()), batch.schema().clone())
             .with_save_mode(crate::protocol::SaveMode::Append)
             .await
             .unwrap();

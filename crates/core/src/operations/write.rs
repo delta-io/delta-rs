@@ -41,6 +41,7 @@ use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion_common::DFSchema;
 use datafusion_expr::Expr;
+use futures::future::BoxFuture;
 use futures::StreamExt;
 use parquet::file::properties::WriterProperties;
 
@@ -53,14 +54,14 @@ use crate::delta_datafusion::expr::parse_predicate_expression;
 use crate::delta_datafusion::DeltaDataChecker;
 use crate::delta_datafusion::{find_files, register_store, DeltaScanBuilder};
 use crate::errors::{DeltaResult, DeltaTableError};
-use crate::kernel::{Action, Add, Metadata, PartitionsExt, Remove, StructType};
+use crate::kernel::{Action, Add, Metadata, Remove, StructType};
 use crate::logstore::LogStoreRef;
-use crate::operations::cast::{cast_record_batch, merge_schema};
+use crate::operations::cast::{merge_schema};
 use crate::protocol::{DeltaOperation, SaveMode};
 use crate::storage::ObjectStoreRef;
 use crate::table::state::DeltaTableState;
 use crate::table::Constraint as DeltaConstraint;
-use crate::writer::record_batch::divide_by_partition_values;
+
 use crate::DeltaTable;
 
 #[derive(thiserror::Error, Debug)]
@@ -348,7 +349,7 @@ fn plan_to_streams(
         let stream = plan.execute(i, task_ctx.clone())?;
         result.push(stream);
     }
-    return Ok(result);
+    Ok(result)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1603,7 +1604,7 @@ mod tests {
         .unwrap();
 
         let table = DeltaOps(table)
-            .write(vec![batch_add], batch_add.schema())
+            .write(Box::new(iter::once(batch_add)), batch_add.schema())
             .with_save_mode(SaveMode::Overwrite)
             .with_replace_where(col("id").eq(lit("A")))
             .await

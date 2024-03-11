@@ -1609,7 +1609,7 @@ mod tests {
         .unwrap();
         // write some data
         DeltaOps(table)
-            .write(vec![batch.clone()])
+            .write(Box::new(vec![batch.clone()].into_iter()), batch.schema().clone())
             .with_save_mode(SaveMode::Append)
             .await
             .unwrap()
