@@ -116,7 +116,7 @@ mod tests {
     async fn test_write_load() -> TestResult {
         let batch = get_record_batch(None, false);
         let table = DeltaOps::new_in_memory()
-            .write(WriteData::Vecs(vec![batch.clone()]))
+            .write(batch.clone().into())
             .await?;
 
         let (_table, stream) = DeltaOps(table).load().await?;
@@ -149,7 +149,7 @@ mod tests {
     async fn test_load_with_columns() -> TestResult {
         let batch = get_record_batch(None, false);
         let table = DeltaOps::new_in_memory()
-            .write(WriteData::Vecs(vec![batch.clone()]))
+            .write(batch.clone().into())
             .await?;
 
         let (_table, stream) = DeltaOps(table).load().with_columns(["id", "value"]).await?;

@@ -272,7 +272,7 @@ mod tests {
     async fn add_constraint_with_invalid_data() -> DeltaResult<()> {
         let batch = get_record_batch(None, false);
         let write = DeltaOps(create_bare_table())
-            .write(WriteData::Vecs(vec![batch.clone()]))
+            .write(batch.clone().into())
             .await?;
         let table = DeltaOps(write);
 
@@ -288,7 +288,7 @@ mod tests {
     async fn add_valid_constraint() -> DeltaResult<()> {
         let batch = get_record_batch(None, false);
         let write = DeltaOps(create_bare_table())
-            .write(WriteData::Vecs(vec![batch.clone()]))
+            .write(batch.clone().into())
             .await?;
         let table = DeltaOps(write);
 
@@ -313,7 +313,7 @@ mod tests {
         // Add constraint by providing a datafusion expression.
         let batch = get_record_batch(None, false);
         let write = DeltaOps(create_bare_table())
-            .write(WriteData::Vecs(vec![batch.clone()]))
+            .write(batch.clone().into())
             .await?;
         let table = DeltaOps(write);
 
@@ -356,10 +356,7 @@ mod tests {
         )
         .unwrap();
 
-        let table = DeltaOps::new_in_memory()
-            .write(WriteData::Vecs(vec![batch]))
-            .await
-            .unwrap();
+        let table = DeltaOps::new_in_memory().write(batch.into()).await.unwrap();
 
         let mut table = DeltaOps(table)
             .add_constraint()
@@ -382,7 +379,7 @@ mod tests {
     async fn add_conflicting_named_constraint() -> DeltaResult<()> {
         let batch = get_record_batch(None, false);
         let write = DeltaOps(create_bare_table())
-            .write(WriteData::Vecs(vec![batch.clone()]))
+            .write(batch.clone().into())
             .await?;
         let table = DeltaOps(write);
 
@@ -404,7 +401,7 @@ mod tests {
     async fn write_data_that_violates_constraint() -> DeltaResult<()> {
         let batch = get_record_batch(None, false);
         let write = DeltaOps(create_bare_table())
-            .write(WriteData::Vecs(vec![batch.clone()]))
+            .write(batch.clone().into())
             .await?;
 
         let table = DeltaOps(write)
@@ -418,7 +415,7 @@ mod tests {
             Arc::new(StringArray::from(vec!["2021-02-02"])),
         ];
         let batch = RecordBatch::try_new(get_arrow_schema(&None), invalid_values)?;
-        let err = table.write(WriteData::Vecs(vec![batch])).await;
+        let err = table.write(batch.into()).await;
         assert!(err.is_err());
         Ok(())
     }
@@ -427,11 +424,11 @@ mod tests {
     async fn write_data_that_does_not_violate_constraint() -> DeltaResult<()> {
         let batch = get_record_batch(None, false);
         let write = DeltaOps(create_bare_table())
-            .write(WriteData::Vecs(vec![batch.clone()]))
+            .write(batch.clone().into())
             .await?;
         let table = DeltaOps(write);
 
-        let err = table.write(WriteData::Vecs(vec![batch])).await;
+        let err = table.write(batch.into()).await;
 
         assert!(err.is_ok());
         Ok(())

@@ -22,7 +22,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let table = deltalake::open_table("/tmp/my_table").await.unwrap();
     let table = DeltaOps(table)
-        .write(WriteData::Vecs(vec![data]))
+        .write(data.into())
         .with_save_mode(SaveMode::Overwrite)
         .with_replace_where(col("id").eq(lit("1")))
         .await;

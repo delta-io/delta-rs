@@ -115,7 +115,7 @@ mod local {
 
         for batch in batches {
             table = DeltaOps(table)
-                .write(WriteData::Vecs(vec![batch]))
+                .write(batch.into())
                 .with_save_mode(save_mode.clone())
                 .await
                 .unwrap();
@@ -606,7 +606,7 @@ mod local {
 
         async fn append_to_table(table: DeltaTable, batch: RecordBatch) -> DeltaTable {
             DeltaOps(table)
-                .write(WriteData::Vecs(vec![batch]))
+                .write(batch.into())
                 .with_save_mode(SaveMode::Append)
                 .await
                 .unwrap()

@@ -89,9 +89,7 @@ async fn main() -> Result<(), deltalake::errors::DeltaTableError> {
 
     let batch = get_table_batches();
     let table = DeltaOps(table)
-        .write(deltalake::operations::write::WriteData::Vecs(vec![
-            batch.clone()
-        ]))
+        .write(batch.clone().into())
         .with_writer_properties(writer_properties)
         .await?;
 
@@ -103,9 +101,7 @@ async fn main() -> Result<(), deltalake::errors::DeltaTableError> {
 
     // To overwrite instead of append (which is the default), use `.with_save_mode`:
     let table = DeltaOps(table)
-        .write(deltalake::operations::write::WriteData::Vecs(vec![
-            batch.clone()
-        ]))
+        .write(batch.clone().into())
         .with_save_mode(SaveMode::Overwrite)
         .with_writer_properties(writer_properties)
         .await?;

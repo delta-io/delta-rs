@@ -147,7 +147,7 @@ mod tests {
     async fn drop_valid_constraint() -> DeltaResult<()> {
         let batch = get_record_batch(None, false);
         let write = DeltaOps(create_bare_table())
-            .write(WriteData::Vecs(vec![batch.clone()]))
+            .write(batch.clone().into())
             .await?;
         let table = DeltaOps(write);
 
@@ -171,7 +171,7 @@ mod tests {
     async fn drop_invalid_constraint_not_existing() -> DeltaResult<()> {
         let batch = get_record_batch(None, false);
         let write = DeltaOps(create_bare_table())
-            .write(WriteData::Vecs(vec![batch.clone()]))
+            .write(batch.clone().into())
             .await?;
 
         let table = DeltaOps(write)
@@ -187,7 +187,7 @@ mod tests {
     async fn drop_invalid_constraint_ignore() -> DeltaResult<()> {
         let batch = get_record_batch(None, false);
         let write = DeltaOps(create_bare_table())
-            .write(WriteData::Vecs(vec![batch.clone()]))
+            .write(batch.clone().into())
             .await?;
 
         let version = write.version();

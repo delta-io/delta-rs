@@ -348,7 +348,7 @@ pub mod datafusion {
 
     pub async fn write_batch(table: DeltaTable, batch: RecordBatch) -> DeltaTable {
         DeltaOps(table)
-            .write(WriteData::Vecs(vec![batch.clone()]))
+            .write(batch.clone().into())
             .with_save_mode(SaveMode::Append)
             .await
             .expect("Failed to append")
