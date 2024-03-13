@@ -1385,6 +1385,20 @@ impl From<&PyAddAction> for Add {
     }
 }
 
+struct GilIterator {
+    reader: ArrowArrayStreamReader,
+}
+
+impl<'a> Iterator for GilIterator {
+    type Item = RecordBatch;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let reader = &mut self.reader;
+
+        Python::with_gil(|_| reader.next().map_or(None, |v| Some(v.unwrap())))
+    }
+}
+
 #[pyfunction]
 #[allow(clippy::too_many_arguments)]
 fn write_to_deltalake(
@@ -1405,7 +1419,7 @@ fn write_to_deltalake(
     custom_metadata: Option<HashMap<String, String>>,
 ) -> PyResult<()> {
     py.allow_threads(|| {
-        let batches = data.0.map(|batch| batch.unwrap());
+        let batches = GilIterator { reader: data.0 }; // The pyarrow reader can be backed by a python object
         let save_mode = mode.parse().map_err(PythonError::from)?;
 
         let options = storage_options.clone().unwrap_or_default();
