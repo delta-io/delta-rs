@@ -17,6 +17,7 @@
 //!     .await?;
 //! ````
 
+use core::panic;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
@@ -167,9 +168,15 @@ async fn excute_non_empty_expr(
         None,
         writer_properties,
         false,
-        false,
+        None,
     )
-    .await?;
+    .await?
+    .into_iter()
+    .map(|a| match a {
+        Action::Add(a) => a,
+        _ => panic!("Expected Add action"),
+    })
+    .collect::<Vec<Add>>();
 
     let read_records = scan.parquet_scan.metrics().and_then(|m| m.output_rows());
     let filter_records = filter.metrics().and_then(|m| m.output_rows());
@@ -194,7 +201,7 @@ async fn execute(
 
     let scan_start = Instant::now();
     let candidates = find_files(snapshot, log_store.clone(), &state, predicate.clone()).await?;
-    metrics.scan_time_ms = Instant::now().duration_since(scan_start).as_micros();
+    metrics.scan_time_ms = Instant::now().duration_since(scan_start).as_millis();
 
     let predicate = predicate.unwrap_or(Expr::Literal(ScalarValue::Boolean(Some(true))));
 
@@ -242,7 +249,7 @@ async fn execute(
         }))
     }
 
-    metrics.execution_time_ms = Instant::now().duration_since(exec_start).as_micros();
+    metrics.execution_time_ms = Instant::now().duration_since(exec_start).as_millis();
 
     let mut app_metadata = match app_metadata {
         Some(meta) => meta,

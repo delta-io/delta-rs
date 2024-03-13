@@ -29,6 +29,7 @@ use deltalake::kernel::{Action, Add, Invariant, LogicalFile, Remove, Scalar, Str
 use deltalake::operations::constraints::ConstraintBuilder;
 use deltalake::operations::convert_to_delta::{ConvertToDeltaBuilder, PartitionStrategy};
 use deltalake::operations::delete::DeleteBuilder;
+use deltalake::operations::drop_constraints::DropConstraintBuilder;
 use deltalake::operations::filesystem_check::FileSystemCheckBuilder;
 use deltalake::operations::merge::MergeBuilder;
 use deltalake::operations::optimize::{OptimizeBuilder, OptimizeType};
@@ -86,6 +87,8 @@ struct RawDeltaTableMetaData {
     #[pyo3(get)]
     configuration: HashMap<String, Option<String>>,
 }
+
+type StringVec = Vec<String>;
 
 #[pymethods]
 impl RawDeltaTable {
@@ -145,16 +148,35 @@ impl RawDeltaTable {
         })
     }
 
-    pub fn protocol_versions(&self) -> PyResult<(i32, i32)> {
+    pub fn protocol_versions(&self) -> PyResult<(i32, i32, Option<StringVec>, Option<StringVec>)> {
+        let table_protocol = self._table.protocol().map_err(PythonError::from)?;
         Ok((
-            self._table
-                .protocol()
-                .map_err(PythonError::from)?
-                .min_reader_version,
-            self._table
-                .protocol()
-                .map_err(PythonError::from)?
-                .min_writer_version,
+            table_protocol.min_reader_version,
+            table_protocol.min_writer_version,
+            table_protocol
+                .writer_features
+                .as_ref()
+                .and_then(|features| {
+                    let empty_set = !features.is_empty();
+                    empty_set.then(|| {
+                        features
+                            .iter()
+                            .map(|v| v.to_string())
+                            .collect::<Vec<String>>()
+                    })
+                }),
+            table_protocol
+                .reader_features
+                .as_ref()
+                .and_then(|features| {
+                    let empty_set = !features.is_empty();
+                    empty_set.then(|| {
+                        features
+                            .iter()
+                            .map(|v| v.to_string())
+                            .collect::<Vec<String>>()
+                    })
+                }),
         ))
     }
 
@@ -456,6 +478,33 @@ impl RawDeltaTable {
         for (col_name, expression) in constraints {
             cmd = cmd.with_constraint(col_name.clone(), expression.clone());
         }
+
+        if let Some(metadata) = custom_metadata {
+            let json_metadata: Map<String, Value> =
+                metadata.into_iter().map(|(k, v)| (k, v.into())).collect();
+            cmd = cmd.with_metadata(json_metadata);
+        };
+
+        let table = rt()?
+            .block_on(cmd.into_future())
+            .map_err(PythonError::from)?;
+        self._table.state = table.state;
+        Ok(())
+    }
+
+    #[pyo3(signature = (name, raise_if_not_exists, custom_metadata=None))]
+    pub fn drop_constraints(
+        &mut self,
+        name: String,
+        raise_if_not_exists: bool,
+        custom_metadata: Option<HashMap<String, String>>,
+    ) -> PyResult<()> {
+        let mut cmd = DropConstraintBuilder::new(
+            self._table.log_store(),
+            self._table.snapshot().map_err(PythonError::from)?.clone(),
+        )
+        .with_constraint(name)
+        .with_raise_if_not_exists(raise_if_not_exists);
 
         if let Some(metadata) = custom_metadata {
             let json_metadata: Map<String, Value> =
@@ -1114,10 +1163,13 @@ fn scalar_to_py(value: &Scalar, py_date: &PyAny, py: Python) -> PyResult<PyObjec
         Long(val) => val.to_object(py),
         Float(val) => val.to_object(py),
         Double(val) => val.to_object(py),
-        // TODO: Since PyArrow 13.0.0, casting string -> timestamp fails if it ends with "Z"
-        // and the target type is timezone naive. The serialization does not produce "Z",
-        // but we need to consider timezones when doing timezone ntz.
         Timestamp(_) => {
+            // We need to manually append 'Z' add to end so that pyarrow can cast the
+            // the scalar value to pa.timestamp("us","UTC")
+            let value = value.serialize();
+            format!("{}Z", value).to_object(py)
+        }
+        TimestampNtz(_) => {
             let value = value.serialize();
             value.to_object(py)
         }
@@ -1335,11 +1387,12 @@ impl From<&PyAddAction> for Add {
 #[pyfunction]
 #[allow(clippy::too_many_arguments)]
 fn write_to_deltalake(
+    py: Python,
     table_uri: String,
     data: PyArrowType<ArrowArrayStreamReader>,
     mode: String,
     max_rows_per_group: i64,
-    overwrite_schema: bool,
+    schema_mode: Option<String>,
     partition_by: Option<Vec<String>>,
     predicate: Option<String>,
     name: Option<String>,
@@ -1349,59 +1402,62 @@ fn write_to_deltalake(
     writer_properties: Option<HashMap<String, Option<String>>>,
     custom_metadata: Option<HashMap<String, String>>,
 ) -> PyResult<()> {
-    let batches = data.0.map(|batch| batch.unwrap()).collect::<Vec<_>>();
-    let save_mode = mode.parse().map_err(PythonError::from)?;
+    py.allow_threads(|| {
+        let batches = data.0.map(|batch| batch.unwrap()).collect::<Vec<_>>();
+        let save_mode = mode.parse().map_err(PythonError::from)?;
 
-    let options = storage_options.clone().unwrap_or_default();
-    let table = rt()?
-        .block_on(DeltaOps::try_from_uri_with_storage_options(
-            &table_uri, options,
-        ))
-        .map_err(PythonError::from)?;
+        let options = storage_options.clone().unwrap_or_default();
+        let table = rt()?
+            .block_on(DeltaOps::try_from_uri_with_storage_options(
+                &table_uri, options,
+            ))
+            .map_err(PythonError::from)?;
 
-    let mut builder = table
-        .write(batches)
-        .with_save_mode(save_mode)
-        .with_overwrite_schema(overwrite_schema)
-        .with_write_batch_size(max_rows_per_group as usize);
+        let mut builder = table
+            .write(batches)
+            .with_save_mode(save_mode)
+            .with_write_batch_size(max_rows_per_group as usize);
+        if let Some(schema_mode) = schema_mode {
+            builder = builder.with_schema_mode(schema_mode.parse().map_err(PythonError::from)?);
+        }
+        if let Some(partition_columns) = partition_by {
+            builder = builder.with_partition_columns(partition_columns);
+        }
 
-    if let Some(partition_columns) = partition_by {
-        builder = builder.with_partition_columns(partition_columns);
-    }
+        if let Some(writer_props) = writer_properties {
+            builder = builder.with_writer_properties(
+                set_writer_properties(writer_props).map_err(PythonError::from)?,
+            );
+        }
 
-    if let Some(writer_props) = writer_properties {
-        builder = builder.with_writer_properties(
-            set_writer_properties(writer_props).map_err(PythonError::from)?,
-        );
-    }
+        if let Some(name) = &name {
+            builder = builder.with_table_name(name);
+        };
 
-    if let Some(name) = &name {
-        builder = builder.with_table_name(name);
-    };
+        if let Some(description) = &description {
+            builder = builder.with_description(description);
+        };
 
-    if let Some(description) = &description {
-        builder = builder.with_description(description);
-    };
+        if let Some(predicate) = predicate {
+            builder = builder.with_replace_where(predicate);
+        };
 
-    if let Some(predicate) = predicate {
-        builder = builder.with_replace_where(predicate);
-    };
+        if let Some(config) = configuration {
+            builder = builder.with_configuration(config);
+        };
 
-    if let Some(config) = configuration {
-        builder = builder.with_configuration(config);
-    };
+        if let Some(metadata) = custom_metadata {
+            let json_metadata: Map<String, Value> =
+                metadata.into_iter().map(|(k, v)| (k, v.into())).collect();
+            builder = builder.with_metadata(json_metadata);
+        };
 
-    if let Some(metadata) = custom_metadata {
-        let json_metadata: Map<String, Value> =
-            metadata.into_iter().map(|(k, v)| (k, v.into())).collect();
-        builder = builder.with_metadata(json_metadata);
-    };
+        rt()?
+            .block_on(builder.into_future())
+            .map_err(PythonError::from)?;
 
-    rt()?
-        .block_on(builder.into_future())
-        .map_err(PythonError::from)?;
-
-    Ok(())
+        Ok(())
+    })
 }
 
 #[pyfunction]
@@ -1595,7 +1651,7 @@ impl PyDeltaDataChecker {
 #[pymodule]
 // module name need to match project name
 fn _internal(py: Python, m: &PyModule) -> PyResult<()> {
-    use crate::error::{CommitFailedError, DeltaError, TableNotFoundError};
+    use crate::error::{CommitFailedError, DeltaError, SchemaMismatchError, TableNotFoundError};
 
     deltalake::aws::register_handlers(None);
     deltalake::azure::register_handlers(None);
@@ -1605,6 +1661,7 @@ fn _internal(py: Python, m: &PyModule) -> PyResult<()> {
     m.add("CommitFailedError", py.get_type::<CommitFailedError>())?;
     m.add("DeltaProtocolError", py.get_type::<DeltaProtocolError>())?;
     m.add("TableNotFoundError", py.get_type::<TableNotFoundError>())?;
+    m.add("SchemaMismatchError", py.get_type::<SchemaMismatchError>())?;
 
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn")).init();
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;

@@ -1184,7 +1184,7 @@ async fn execute(
 
     let projection = join.with_column(OPERATION_COLUMN, case)?;
 
-    let mut new_columns = projection;
+    let mut new_columns = vec![];
     let mut write_projection = Vec::new();
 
     for delta_field in snapshot.schema().fields() {
@@ -1223,7 +1223,7 @@ async fn execute(
             Expr::Column(Column::from_qualified_name_ignore_case(name.clone()))
                 .alias(delta_field.name()),
         );
-        new_columns = new_columns.with_column(&name, case)?;
+        new_columns.push((name, case));
     }
 
     let mut insert_when = Vec::with_capacity(ops.len());
@@ -1299,18 +1299,40 @@ async fn execute(
         .end()
     }
 
-    new_columns = new_columns.with_column(DELETE_COLUMN, build_case(delete_when, delete_then)?)?;
-    new_columns =
-        new_columns.with_column(TARGET_INSERT_COLUMN, build_case(insert_when, insert_then)?)?;
-    new_columns =
-        new_columns.with_column(TARGET_UPDATE_COLUMN, build_case(update_when, update_then)?)?;
-    new_columns = new_columns.with_column(
-        TARGET_DELETE_COLUMN,
+    new_columns.push((
+        DELETE_COLUMN.to_owned(),
+        build_case(delete_when, delete_then)?,
+    ));
+    new_columns.push((
+        TARGET_INSERT_COLUMN.to_owned(),
+        build_case(insert_when, insert_then)?,
+    ));
+    new_columns.push((
+        TARGET_UPDATE_COLUMN.to_owned(),
+        build_case(update_when, update_then)?,
+    ));
+    new_columns.push((
+        TARGET_DELETE_COLUMN.to_owned(),
         build_case(target_delete_when, target_delete_then)?,
-    )?;
-    new_columns = new_columns.with_column(TARGET_COPY_COLUMN, build_case(copy_when, copy_then)?)?;
+    ));
+    new_columns.push((
+        TARGET_COPY_COLUMN.to_owned(),
+        build_case(copy_when, copy_then)?,
+    ));
 
-    let new_columns = new_columns.into_unoptimized_plan();
+    let new_columns = {
+        let plan = projection.into_unoptimized_plan();
+        let mut fields: Vec<Expr> = plan
+            .schema()
+            .fields()
+            .iter()
+            .map(|f| col(f.qualified_column()))
+            .collect();
+
+        fields.extend(new_columns.into_iter().map(|(name, ex)| ex.alias(name)));
+
+        LogicalPlanBuilder::from(plan).project(fields)?.build()?
+    };
 
     let distrbute_expr = col(file_column.as_str());
 
@@ -1357,13 +1379,13 @@ async fn execute(
         None,
         writer_properties,
         safe_cast,
-        false,
+        None,
     )
     .await?;
 
     metrics.rewrite_time_ms = Instant::now().duration_since(rewrite_start).as_millis() as u64;
 
-    let mut actions: Vec<Action> = add_actions.into_iter().map(Action::Add).collect();
+    let mut actions: Vec<Action> = add_actions.clone();
     metrics.num_target_files_added = actions.len();
 
     let survivors = barrier
@@ -1552,6 +1574,7 @@ mod tests {
         table
     }
 
+    // TODO(ion): property keys are not passed through or translated as table features.. fix this as well
     #[tokio::test]
     async fn test_merge_when_delta_table_is_append_only() {
         let schema = get_arrow_schema(&None);
