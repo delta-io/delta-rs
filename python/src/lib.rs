@@ -1389,13 +1389,13 @@ struct GilIterator {
     reader: ArrowArrayStreamReader,
 }
 
-impl<'a> Iterator for GilIterator {
+impl Iterator for GilIterator {
     type Item = RecordBatch;
 
     fn next(&mut self) -> Option<Self::Item> {
         let reader = &mut self.reader;
 
-        Python::with_gil(|_| reader.next().map_or(None, |v| Some(v.unwrap())))
+        Python::with_gil(|_| reader.next().map(|v| v.unwrap()))
     }
 }
 
