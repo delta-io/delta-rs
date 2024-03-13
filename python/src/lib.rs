@@ -288,7 +288,7 @@ impl RawDeltaTable {
         enforce_retention_duration: bool,
         custom_metadata: Option<HashMap<String, String>>,
     ) -> PyResult<Vec<String>> {
-        py.allow_threads(|| {
+        let cmd = py.allow_threads(|| {
             let mut cmd = VacuumBuilder::new(
                 self._table.log_store(),
                 self._table.snapshot().map_err(PythonError::from)?.clone(),
@@ -305,12 +305,15 @@ impl RawDeltaTable {
                 cmd = cmd.with_metadata(json_metadata);
             };
 
-            let (table, metrics) = rt()?
-                .block_on(cmd.into_future())
-                .map_err(PythonError::from)?;
-            self._table.state = table.state;
-            Ok(metrics.files_deleted)
-        })
+            cmd
+        });
+
+        let (table, metrics) = rt()?
+            .block_on(cmd.into_future())
+            .map_err(PythonError::from)?;
+
+        self._table.state = table.state;
+        Ok(metrics.files_deleted)
     }
 
     /// Run the UPDATE command on the Delta Table
@@ -1064,7 +1067,7 @@ impl RawDeltaTable {
         writer_properties: Option<HashMap<String, Option<String>>>,
         custom_metadata: Option<HashMap<String, String>>,
     ) -> PyResult<String> {
-        py.allow_threads(|| {
+        let (table_state, metrics) = py.allow_threads(|| {
             let mut cmd = DeleteBuilder::new(
                 self._table.log_store(),
                 self._table.snapshot().map_err(PythonError::from)?.clone(),
@@ -1088,9 +1091,10 @@ impl RawDeltaTable {
             let (table, metrics) = rt()?
                 .block_on(cmd.into_future())
                 .map_err(PythonError::from)?;
-            self._table.state = table.state;
-            Ok(serde_json::to_string(&metrics).unwrap())
-        })
+            (table.state, metrics)
+        });
+        self._table.state = table_state;
+        Ok(serde_json::to_string(&metrics).unwrap())
     }
 
     /// Execute the File System Check command (FSCK) on the delta table: removes old reference to files that
