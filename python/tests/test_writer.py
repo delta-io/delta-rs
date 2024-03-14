@@ -421,7 +421,7 @@ def test_write_modes(tmp_path: pathlib.Path, sample_data: pa.Table, engine):
     assert DeltaTable(tmp_path).to_pyarrow_table() == sample_data
 
     if engine == "pyarrow":
-        with pytest.raises(AssertionError):
+        with pytest.raises(FileExistsError):
             write_deltalake(tmp_path, sample_data, mode="error")
     elif engine == "rust":
         with pytest.raises(DeltaError):
@@ -481,7 +481,7 @@ def test_fails_wrong_partitioning(
     existing_table: DeltaTable, sample_data: pa.Table, engine
 ):
     if engine == "pyarrow":
-        with pytest.raises(AssertionError):
+        with pytest.raises(ValueError):
             write_deltalake(
                 existing_table,
                 sample_data,

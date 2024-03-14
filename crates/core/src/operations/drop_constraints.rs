@@ -1,14 +1,10 @@
 //! Drop a constraint from a table
 
-use std::collections::HashMap;
-
-use chrono::Utc;
 use futures::future::BoxFuture;
-use serde_json::json;
 
-use crate::kernel::{Action, CommitInfo, IsolationLevel};
+use super::transaction::{CommitBuilder, CommitProperties};
+use crate::kernel::Action;
 use crate::logstore::LogStoreRef;
-use crate::operations::transaction::commit;
 use crate::protocol::DeltaOperation;
 use crate::table::state::DeltaTableState;
 use crate::DeltaTable;
@@ -24,8 +20,8 @@ pub struct DropConstraintBuilder {
     raise_if_not_exists: bool,
     /// Delta object store for handling data files
     log_store: LogStoreRef,
-    /// Additional metadata to be added to commit
-    app_metadata: Option<HashMap<String, serde_json::Value>>,
+    /// Additional information to add to the commit
+    commit_properties: CommitProperties,
 }
 
 impl DropConstraintBuilder {
@@ -36,7 +32,7 @@ impl DropConstraintBuilder {
             raise_if_not_exists: true,
             snapshot,
             log_store,
-            app_metadata: None,
+            commit_properties: CommitProperties::default(),
         }
     }
 
@@ -53,11 +49,8 @@ impl DropConstraintBuilder {
     }
 
     /// Additional metadata to be added to commit info
-    pub fn with_metadata(
-        mut self,
-        metadata: impl IntoIterator<Item = (String, serde_json::Value)>,
-    ) -> Self {
-        self.app_metadata = Some(HashMap::from_iter(metadata));
+    pub fn with_commit_properties(mut self, commit_properties: CommitProperties) -> Self {
+        self.commit_properties = commit_properties;
         self
     }
 }
@@ -87,35 +80,17 @@ impl std::future::IntoFuture for DropConstraintBuilder {
                 }
                 return Ok(DeltaTable::new_with_state(this.log_store, this.snapshot));
             }
-            let operational_parameters = HashMap::from_iter([("name".to_string(), json!(&name))]);
+            let operation = DeltaOperation::DropConstraint { name: name.clone() };
 
-            let operations = DeltaOperation::DropConstraint { name: name.clone() };
+            let actions = vec![Action::Metadata(metadata)];
 
-            let app_metadata = this.app_metadata.unwrap_or_default();
+            let commit = CommitBuilder::from(this.commit_properties)
+                .with_actions(actions)
+                .build(Some(&this.snapshot), this.log_store.clone(), operation)?
+                .await?;
 
-            let commit_info = CommitInfo {
-                timestamp: Some(Utc::now().timestamp_millis()),
-                operation: Some(operations.name().to_string()),
-                operation_parameters: Some(operational_parameters),
-                read_version: Some(this.snapshot.version()),
-                isolation_level: Some(IsolationLevel::Serializable),
-                is_blind_append: Some(false),
-                info: app_metadata,
-                ..Default::default()
-            };
-
-            let actions = vec![Action::CommitInfo(commit_info), Action::Metadata(metadata)];
-
-            let version = commit(
-                this.log_store.as_ref(),
-                &actions,
-                operations.clone(),
-                Some(&this.snapshot),
-                None,
-            )
-            .await?;
-
-            this.snapshot.merge(actions, &operations, version)?;
+            this.snapshot
+                .merge(commit.data.actions, &commit.data.operation, commit.version)?;
             Ok(DeltaTable::new_with_state(this.log_store, this.snapshot))
         })
     }
