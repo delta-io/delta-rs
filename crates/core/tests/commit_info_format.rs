@@ -2,7 +2,7 @@
 mod fs_common;
 
 use deltalake_core::kernel::Action;
-use deltalake_core::operations::transaction::commit;
+use deltalake_core::operations::transaction::CommitBuilder;
 use deltalake_core::protocol::{DeltaOperation, SaveMode};
 use serde_json::json;
 use std::error::Error;
@@ -20,14 +20,10 @@ async fn test_operational_parameters() -> Result<(), Box<dyn Error>> {
         predicate: None,
     };
 
-    commit(
-        table.log_store().as_ref(),
-        &actions,
-        operation,
-        Some(table.snapshot()?),
-        None,
-    )
-    .await?;
+    CommitBuilder::default()
+        .with_actions(actions)
+        .build(Some(table.snapshot()?), table.log_store(), operation)?
+        .await?;
     table.update().await?;
 
     let commit_info = table.history(None).await?;
