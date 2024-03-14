@@ -171,7 +171,7 @@ async fn test_optimize_non_partitioned_table() -> Result<(), Box<dyn Error>> {
     assert_eq!(dt.get_files_count(), 5);
 
     let optimize = DeltaOps(dt).optimize().with_target_size(2_000_000);
-    let (dt, metrics) = optimize.await?;
+    let (dt, metrics, _) = optimize.await?;
 
     assert_eq!(version + 1, dt.version());
     assert_eq!(metrics.num_files_added, 1);
@@ -200,6 +200,153 @@ async fn write(
     Ok(())
 }
 
+#[tokio::test]
+async fn test_optimize_non_partitioned_table_deferred_commit() -> Result<(), Box<dyn Error>> {
+    let context = setup_test(false).await?;
+    let mut dt = context.table;
+    let mut writer = RecordBatchWriter::for_table(&dt)?;
+
+    write(
+        &mut writer,
+        &mut dt,
+        tuples_to_batch(vec![(1, 2), (1, 3), (1, 4)], "2022-05-22")?,
+    )
+    .await?;
+    write(
+        &mut writer,
+        &mut dt,
+        tuples_to_batch(vec![(2, 1), (2, 3), (2, 3)], "2022-05-23")?,
+    )
+    .await?;
+    write(
+        &mut writer,
+        &mut dt,
+        tuples_to_batch(vec![(3, 1), (3, 3), (3, 3)], "2022-05-22")?,
+    )
+    .await?;
+    write(
+        &mut writer,
+        &mut dt,
+        tuples_to_batch(vec![(4, 1), (4, 3), (4, 3)], "2022-05-23")?,
+    )
+    .await?;
+    write(
+        &mut writer,
+        &mut dt,
+        generate_random_batch(records_for_size(4_000_000), "2022-05-22")?,
+    )
+    .await?;
+
+    let version = dt.version();
+    assert_eq!(dt.get_files_count(), 5);
+
+    let optimize = DeltaOps(dt)
+        .optimize()
+        .with_target_size(2_000_000)
+        .with_commit_writes(false);
+    let (dt, metrics, commit_context) = optimize.await?;
+
+    // Still have same version, and file count,
+    // no commit yet!
+    assert_eq!(version, dt.version());
+    assert_eq!(dt.get_files_count(), 5);
+    assert_eq!(metrics.num_files_added, 1);
+    assert_eq!(metrics.num_files_removed, 4);
+    assert_eq!(metrics.total_considered_files, 5);
+    assert_eq!(metrics.partitions_optimized, 1);
+
+    let commit_info = dt.history(None).await?;
+    assert_eq!(commit_info.len(), 6);
+
+    let dt_commit = DeltaOps(dt)
+        .optimize()
+        .commit_writes(commit_context.unwrap())
+        .await?;
+
+    assert_eq!(version + 1, dt_commit.version());
+
+    // Should have compacted into two files,
+    // one for 2022-05-22, one for 2022-05-23
+    assert_eq!(dt_commit.get_files_count(), 2);
+
+    let commit_info = dt_commit.history(None).await?;
+    assert_eq!(commit_info.len(), 7);
+    let last_commit = &commit_info[0];
+    let parameters = last_commit.operation_parameters.clone().unwrap();
+    assert_eq!(parameters["targetSize"], json!("2000000"));
+    assert_eq!(parameters["predicate"], "[]");
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_optimize_with_partitions_deferred_commit() -> Result<(), Box<dyn Error>> {
+    let context = setup_test(true).await?;
+    let mut dt = context.table;
+    let mut writer = RecordBatchWriter::for_table(&dt)?;
+
+    write(
+        &mut writer,
+        &mut dt,
+        tuples_to_batch(vec![(1, 2), (1, 3), (1, 4)], "2022-05-22")?,
+    )
+    .await?;
+    write(
+        &mut writer,
+        &mut dt,
+        tuples_to_batch(vec![(2, 1), (2, 3), (2, 3)], "2022-05-23")?,
+    )
+    .await?;
+    write(
+        &mut writer,
+        &mut dt,
+        tuples_to_batch(vec![(3, 1), (3, 3), (3, 3)], "2022-05-22")?,
+    )
+    .await?;
+    write(
+        &mut writer,
+        &mut dt,
+        tuples_to_batch(vec![(4, 1), (4, 3), (4, 3)], "2022-05-23")?,
+    )
+    .await?;
+
+    let version = dt.version();
+    let filter = vec![PartitionFilter::try_from(("date", "=", "2022-05-22"))?];
+
+    let optimize = DeltaOps(dt)
+        .optimize()
+        .with_filters(&filter)
+        .with_commit_writes(false);
+    let (dt, metrics, commit_context) = optimize.await?;
+
+    // optimize is not committed, so we have 4 files.
+    assert_eq!(version, dt.version());
+    assert_eq!(dt.get_files_count(), 4);
+    assert_eq!(metrics.num_files_added, 1);
+    assert_eq!(metrics.num_files_removed, 2);
+
+    let commit_info = dt.history(None).await?;
+    assert_eq!(commit_info.len(), 5);
+
+    let dt_commit = DeltaOps(dt)
+        .optimize()
+        .commit_writes(commit_context.unwrap())
+        .await?;
+
+    assert_eq!(version + 1, dt_commit.version());
+
+    // Expect three files, one for 2022-05-22 (compacted)
+    // two for 2022-05-23 (uncompacted)
+    assert_eq!(dt_commit.get_files_count(), 3);
+
+    let commit_info = dt_commit.history(None).await?;
+    assert_eq!(commit_info.len(), 6);
+    let last_commit = &commit_info[0];
+    let parameters = last_commit.operation_parameters.clone().unwrap();
+    assert_eq!(parameters["predicate"], "[\"date = '2022-05-22'\"]");
+
+    Ok(())
+}
 #[tokio::test]
 async fn test_optimize_with_partitions() -> Result<(), Box<dyn Error>> {
     let context = setup_test(true).await?;
@@ -235,7 +382,7 @@ async fn test_optimize_with_partitions() -> Result<(), Box<dyn Error>> {
     let filter = vec![PartitionFilter::try_from(("date", "=", "2022-05-22"))?];
 
     let optimize = DeltaOps(dt).optimize().with_filters(&filter);
-    let (dt, metrics) = optimize.await?;
+    let (dt, metrics, _) = optimize.await?;
 
     assert_eq!(version + 1, dt.version());
     assert_eq!(metrics.num_files_added, 1);
@@ -307,7 +454,7 @@ async fn test_conflict_for_remove_actions() -> Result<(), Box<dyn Error>> {
     .await?;
 
     let maybe_metrics = plan
-        .execute(dt.log_store(), dt.snapshot()?, 1, 20, None, None)
+        .execute(dt.log_store(), dt.snapshot()?, 1, 20, None, None, true)
         .await;
 
     assert!(maybe_metrics.is_err());
@@ -357,8 +504,8 @@ async fn test_no_conflict_for_append_actions() -> Result<(), Box<dyn Error>> {
     )
     .await?;
 
-    let metrics = plan
-        .execute(dt.log_store(), dt.snapshot()?, 1, 20, None, None)
+    let (metrics, _) = plan
+        .execute(dt.log_store(), dt.snapshot()?, 1, 20, None, None, true)
         .await?;
     assert_eq!(metrics.num_files_added, 1);
     assert_eq!(metrics.num_files_removed, 2);
@@ -397,7 +544,7 @@ async fn test_commit_interval() -> Result<(), Box<dyn Error>> {
         WriterProperties::builder().build(),
     )?;
 
-    let metrics = plan
+    let (metrics, _) = plan
         .execute(
             dt.log_store(),
             dt.snapshot()?,
@@ -405,6 +552,7 @@ async fn test_commit_interval() -> Result<(), Box<dyn Error>> {
             20,
             Some(Duration::from_secs(0)), // this will cause as many commits as num_files_added
             None,
+            true,
         )
         .await?;
     assert_eq!(metrics.num_files_added, 2);
@@ -451,7 +599,7 @@ async fn test_idempotent() -> Result<(), Box<dyn Error>> {
         .optimize()
         .with_filters(&filter)
         .with_target_size(10_000_000);
-    let (dt, metrics) = optimize.await?;
+    let (dt, metrics, _) = optimize.await?;
     assert_eq!(metrics.num_files_added, 1);
     assert_eq!(metrics.num_files_removed, 2);
     assert_eq!(dt.version(), version + 1);
@@ -460,7 +608,7 @@ async fn test_idempotent() -> Result<(), Box<dyn Error>> {
         .optimize()
         .with_filters(&filter)
         .with_target_size(10_000_000);
-    let (dt, metrics) = optimize.await?;
+    let (dt, metrics, _) = optimize.await?;
 
     assert_eq!(metrics.num_files_added, 0);
     assert_eq!(metrics.num_files_removed, 0);
@@ -485,7 +633,7 @@ async fn test_idempotent_metrics() -> Result<(), Box<dyn Error>> {
 
     let version = dt.version();
     let optimize = DeltaOps(dt).optimize().with_target_size(10_000_000);
-    let (dt, metrics) = optimize.await?;
+    let (dt, metrics, _) = optimize.await?;
 
     let expected_metric_details = MetricDetails {
         min: 0,
@@ -560,7 +708,7 @@ async fn test_idempotent_with_multiple_bins() -> Result<(), Box<dyn Error>> {
         .optimize()
         .with_filters(&filter)
         .with_target_size(10_000_000);
-    let (dt, metrics) = optimize.await?;
+    let (dt, metrics, _) = optimize.await?;
     assert_eq!(metrics.num_files_added, 2);
     assert_eq!(metrics.num_files_removed, 4);
     assert_eq!(dt.version(), version + 1);
@@ -569,7 +717,7 @@ async fn test_idempotent_with_multiple_bins() -> Result<(), Box<dyn Error>> {
         .optimize()
         .with_filters(&filter)
         .with_target_size(10_000_000);
-    let (dt, metrics) = optimize.await?;
+    let (dt, metrics, _) = optimize.await?;
     assert_eq!(metrics.num_files_added, 0);
     assert_eq!(metrics.num_files_removed, 0);
     assert_eq!(dt.version(), version + 1);
@@ -606,7 +754,7 @@ async fn test_commit_info() -> Result<(), Box<dyn Error>> {
         .optimize()
         .with_target_size(2_000_000)
         .with_filters(&filter);
-    let (dt, metrics) = optimize.await?;
+    let (dt, metrics, _) = optimize.await?;
 
     let commit_info = dt.history(None).await?;
     let last_commit = &commit_info[0];
@@ -709,7 +857,7 @@ async fn test_zorder_unpartitioned() -> Result<(), Box<dyn Error>> {
         "x".to_string(),
         "y".to_string(),
     ]));
-    let (dt, metrics) = optimize.await?;
+    let (dt, metrics, _) = optimize.await?;
 
     assert_eq!(metrics.num_files_added, 1);
     assert_eq!(metrics.num_files_removed, 2);
@@ -779,7 +927,7 @@ async fn test_zorder_partitioned() -> Result<(), Box<dyn Error>> {
         .optimize()
         .with_type(OptimizeType::ZOrder(vec!["x".to_string(), "y".to_string()]))
         .with_filters(&filter);
-    let (dt, metrics) = optimize.await?;
+    let (dt, metrics, _) = optimize.await?;
 
     assert_eq!(metrics.num_files_added, 1);
     assert_eq!(metrics.num_files_removed, 2);
@@ -839,7 +987,7 @@ async fn test_zorder_respects_target_size() -> Result<(), Box<dyn Error>> {
         )
         .with_type(OptimizeType::ZOrder(vec!["x".to_string(), "y".to_string()]))
         .with_target_size(10_000_000);
-    let (_, metrics) = optimize.await?;
+    let (_, metrics, _) = optimize.await?;
 
     assert_eq!(metrics.num_files_added, 2);
     assert_eq!(metrics.num_files_removed, 3);
