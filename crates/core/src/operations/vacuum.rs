@@ -21,7 +21,7 @@
 //! let (table, metrics) = VacuumBuilder::new(table.object_store(). table.state).await?;
 //! ````
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::fmt::Debug;
 use std::sync::Arc;
 
@@ -31,13 +31,10 @@ use futures::{StreamExt, TryStreamExt};
 use object_store::Error;
 use object_store::{path::Path, ObjectStore};
 use serde::Serialize;
-use serde_json::Value;
 
-use super::transaction::commit;
-use crate::crate_version;
+use super::transaction::{CommitBuilder, CommitProperties};
 use crate::errors::{DeltaResult, DeltaTableError};
-use crate::kernel::Action;
-use crate::logstore::{LogStore, LogStoreRef};
+use crate::logstore::LogStoreRef;
 use crate::protocol::DeltaOperation;
 use crate::table::state::DeltaTableState;
 use crate::DeltaTable;
@@ -94,8 +91,8 @@ pub struct VacuumBuilder {
     dry_run: bool,
     /// Override the source of time
     clock: Option<Arc<dyn Clock>>,
-    /// Additional metadata to be added to commit
-    app_metadata: Option<HashMap<String, serde_json::Value>>,
+    /// Additional information to add to the commit
+    commit_properties: CommitProperties,
 }
 
 /// Details for the Vacuum operation including which files were
@@ -138,7 +135,7 @@ impl VacuumBuilder {
             enforce_retention_duration: true,
             dry_run: false,
             clock: None,
-            app_metadata: None,
+            commit_properties: CommitProperties::default(),
         }
     }
 
@@ -168,11 +165,8 @@ impl VacuumBuilder {
     }
 
     /// Additional metadata to be added to commit info
-    pub fn with_metadata(
-        mut self,
-        metadata: impl IntoIterator<Item = (String, serde_json::Value)>,
-    ) -> Self {
-        self.app_metadata = Some(HashMap::from_iter(metadata));
+    pub fn with_commit_properties(mut self, commit_properties: CommitProperties) -> Self {
+        self.commit_properties = commit_properties;
         self
     }
 
@@ -258,7 +252,11 @@ impl std::future::IntoFuture for VacuumBuilder {
             }
 
             let metrics = plan
-                .execute(this.log_store.as_ref(), &this.snapshot, this.app_metadata)
+                .execute(
+                    this.log_store.clone(),
+                    &this.snapshot,
+                    this.commit_properties,
+                )
                 .await?;
             Ok((
                 DeltaTable::new_with_state(this.log_store, this.snapshot),
@@ -286,9 +284,9 @@ impl VacuumPlan {
     /// Execute the vacuum plan and delete files from underlying storage
     pub async fn execute(
         self,
-        store: &dyn LogStore,
+        store: LogStoreRef,
         snapshot: &DeltaTableState,
-        app_metadata: Option<HashMap<String, serde_json::Value>>,
+        mut commit_properties: CommitProperties,
     ) -> Result<VacuumMetrics, DeltaTableError> {
         if self.files_to_delete.is_empty() {
             return Ok(VacuumMetrics {
@@ -307,30 +305,22 @@ impl VacuumPlan {
             status: String::from("COMPLETED"), // Maybe this should be FAILED when vacuum has error during the files, not sure how to check for this
         };
 
-        let start_metrics = serde_json::to_value(VacuumStartOperationMetrics {
+        let start_metrics = VacuumStartOperationMetrics {
             num_files_to_delete: self.files_to_delete.len() as i64,
             size_of_data_to_delete: self.file_sizes.iter().sum(),
-        });
+        };
 
         // Begin VACUUM START COMMIT
-        let mut commit_info = start_operation.get_commit_info();
-        let mut extra_info = match app_metadata.clone() {
-            Some(meta) => meta,
-            None => HashMap::new(),
-        };
-        commit_info.timestamp = Some(Utc::now().timestamp_millis());
-        extra_info.insert(
-            "clientVersion".to_string(),
-            Value::String(format!("delta-rs.{}", crate_version())),
+        let mut start_props = CommitProperties::default();
+        start_props.app_metadata = commit_properties.app_metadata.clone();
+        start_props.app_metadata.insert(
+            "operationMetrics".to_owned(),
+            serde_json::to_value(start_metrics)?,
         );
-        if let Ok(map) = start_metrics {
-            extra_info.insert("operationMetrics".to_owned(), map);
-        }
-        commit_info.info = extra_info;
 
-        let start_actions = vec![Action::CommitInfo(commit_info)];
-
-        commit(store, &start_actions, start_operation, Some(snapshot), None).await?;
+        CommitBuilder::from(start_props)
+            .build(Some(snapshot), store.clone(), start_operation)?
+            .await?;
         // Finish VACUUM START COMMIT
 
         let locations = futures::stream::iter(self.files_to_delete)
@@ -349,32 +339,19 @@ impl VacuumPlan {
             .await?;
 
         // Create end metadata
-        let end_metrics = serde_json::to_value(VacuumEndOperationMetrics {
+        let end_metrics = VacuumEndOperationMetrics {
             num_deleted_files: files_deleted.len() as i64,
             num_vacuumed_directories: 0, // Set to zero since we only remove files not dirs
-        });
-
-        // Begin VACUUM END COMMIT
-        let mut commit_info = end_operation.get_commit_info();
-
-        let mut extra_info = match app_metadata.clone() {
-            Some(meta) => meta,
-            None => HashMap::new(),
         };
 
-        commit_info.timestamp = Some(Utc::now().timestamp_millis());
-        extra_info.insert(
-            "clientVersion".to_string(),
-            Value::String(format!("delta-rs.{}", crate_version())),
+        // Begin VACUUM END COMMIT
+        commit_properties.app_metadata.insert(
+            "operationMetrics".to_owned(),
+            serde_json::to_value(end_metrics)?,
         );
-        if let Ok(map) = end_metrics {
-            extra_info.insert("operationMetrics".to_owned(), map);
-        }
-        commit_info.info = extra_info;
-
-        let end_actions = vec![Action::CommitInfo(commit_info)];
-
-        commit(store, &end_actions, end_operation, Some(snapshot), None).await?;
+        CommitBuilder::from(commit_properties)
+            .build(Some(snapshot), store.clone(), end_operation)?
+            .await?;
         // Finish VACUUM END COMMIT
 
         Ok(VacuumMetrics {

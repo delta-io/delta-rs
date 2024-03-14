@@ -12,7 +12,8 @@ use deltalake_aws::storage::S3StorageOptions;
 use deltalake_aws::{CommitEntry, DynamoDbConfig, DynamoDbLockClient};
 use deltalake_core::kernel::{Action, Add, DataType, PrimitiveType, StructField, StructType};
 use deltalake_core::logstore::LogStore;
-use deltalake_core::operations::transaction::{commit, prepare_commit};
+use deltalake_core::operations::transaction::{CommitBuilder, PreparedCommit};
+use deltalake_core::parquet::file::metadata;
 use deltalake_core::protocol::{DeltaOperation, SaveMode};
 use deltalake_core::storage::commit_uri_from_version;
 use deltalake_core::storage::StorageOptions;
@@ -261,18 +262,18 @@ async fn create_incomplete_commit_entry(
     tag: &str,
 ) -> TestResult<CommitEntry> {
     let actions = vec![add_action(tag)];
-    let temp_path = prepare_commit(
-        table.object_store().as_ref(),
-        &DeltaOperation::Write {
-            mode: SaveMode::Append,
-            partition_by: None,
-            predicate: None,
-        },
-        &actions,
-        None,
-    )
-    .await?;
-    let commit_entry = CommitEntry::new(version, temp_path);
+    let operation = DeltaOperation::Write {
+        mode: SaveMode::Append,
+        partition_by: None,
+        predicate: None,
+    };
+    let prepared = CommitBuilder::default()
+        .with_actions(actions)
+        .build(Some(table.snapshot()?), table.log_store(), operation)?
+        .into_prepared_commit_future()
+        .await?;
+
+    let commit_entry = CommitEntry::new(version, prepared.path().to_owned());
     make_client()?
         .put_commit_entry(&table.table_uri(), &commit_entry)
         .await?;
@@ -334,15 +335,12 @@ async fn append_to_table(
         predicate: None,
     };
     let actions = vec![add_action(name)];
-    let version = commit(
-        table.log_store().as_ref(),
-        &actions,
-        operation,
-        Some(table.snapshot()?),
-        metadata,
-    )
-    .await
-    .unwrap();
+    let version = CommitBuilder::default()
+        .with_actions(actions)
+        .with_app_metadata(metadata.unwrap_or_default())
+        .build(Some(table.snapshot()?), table.log_store(), operation)?
+        .await?
+        .version();
     Ok(version)
 }
 

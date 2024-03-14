@@ -532,6 +532,7 @@ mod tests {
 
     use super::*;
     use crate::kernel::StructType;
+    use crate::operations::transaction::{CommitBuilder, TableReference};
     use crate::operations::DeltaOps;
     use crate::protocol::Metadata;
     use crate::writer::test_utils::get_delta_schema;
@@ -590,19 +591,22 @@ mod tests {
             .expect("Time went backwards")
             .as_millis() as i64;
 
-        let v = crate::operations::transaction::commit(
-            table.log_store().clone().as_ref(),
-            &actions,
-            crate::protocol::DeltaOperation::StreamingUpdate {
-                output_mode: crate::protocol::OutputMode::Append,
-                query_id: "test".into(),
-                epoch_id,
-            },
-            table.state.as_ref(),
-            None,
-        )
-        .await
-        .expect("Failed to commit");
+        let operation = crate::protocol::DeltaOperation::StreamingUpdate {
+            output_mode: crate::protocol::OutputMode::Append,
+            query_id: "test".into(),
+            epoch_id,
+        };
+        let v = CommitBuilder::default()
+            .with_actions(actions)
+            .build(
+                table.state.as_ref().map(|f| f as &dyn TableReference),
+                table.log_store(),
+                operation,
+            )
+            .unwrap()
+            .await
+            .unwrap()
+            .version();
 
         assert_eq!(1, v, "Expected the commit to create table version 1");
         table.load().await.expect("Failed to reload table");

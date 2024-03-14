@@ -7,7 +7,7 @@ use std::sync::Arc;
 use futures::future::BoxFuture;
 use serde_json::Value;
 
-use super::transaction::{commit, PROTOCOL};
+use super::transaction::{CommitBuilder, TableReference, PROTOCOL};
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::{
     Action, DataType, Metadata, Protocol, ReaderFeatures, StructField, StructType, WriterFeatures,
@@ -328,7 +328,7 @@ impl std::future::IntoFuture for CreateBuilder {
         let this = self;
         Box::pin(async move {
             let mode = this.mode.clone();
-            let app_metadata = this.metadata.clone();
+            let app_metadata = this.metadata.clone().unwrap_or_default();
             let (mut table, actions, operation) = this.into_table_and_actions()?;
             let log_store = table.log_store();
 
@@ -349,15 +349,16 @@ impl std::future::IntoFuture for CreateBuilder {
                 None
             };
 
-            let version = commit(
-                table.log_store.as_ref(),
-                &actions,
-                operation,
-                table_state,
-                app_metadata,
-            )
-            .await?;
-
+            let version = CommitBuilder::default()
+                .with_actions(actions)
+                .with_app_metadata(app_metadata)
+                .build(
+                    table_state.map(|f| f as &dyn TableReference),
+                    table.log_store.clone(),
+                    operation,
+                )?
+                .await?
+                .version();
             table.load_version(version).await?;
 
             Ok(table)

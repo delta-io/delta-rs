@@ -58,12 +58,11 @@ use futures::future::BoxFuture;
 use itertools::Itertools;
 use parquet::file::properties::WriterProperties;
 use serde::Serialize;
-use serde_json::Value;
 
 use self::barrier::{MergeBarrier, MergeBarrierExec};
 
 use super::datafusion_utils::{into_expr, maybe_into_expr, Expression};
-use super::transaction::{commit, PROTOCOL};
+use super::transaction::{CommitProperties, PROTOCOL};
 use crate::delta_datafusion::expr::{fmt_expr_to_sql, parse_predicate_expression};
 use crate::delta_datafusion::logical::MetricObserver;
 use crate::delta_datafusion::physical::{find_metric_node, MetricObserverExec};
@@ -74,6 +73,7 @@ use crate::delta_datafusion::{
 use crate::kernel::Action;
 use crate::logstore::LogStoreRef;
 use crate::operations::merge::barrier::find_barrier_node;
+use crate::operations::transaction::CommitBuilder;
 use crate::operations::write::write_execution_plan;
 use crate::protocol::{DeltaOperation, MergePredicate};
 use crate::table::state::DeltaTableState;
@@ -126,8 +126,8 @@ pub struct MergeBuilder {
     state: Option<SessionState>,
     /// Properties passed to underlying parquet writer for when files are rewritten
     writer_properties: Option<WriterProperties>,
-    /// Additional metadata to be added to commit
-    app_metadata: Option<HashMap<String, serde_json::Value>>,
+    /// Additional information to add to the commit
+    commit_properties: CommitProperties,
     /// safe_cast determines how data types that do not match the underlying table are handled
     /// By default an error is returned
     safe_cast: bool,
@@ -150,7 +150,7 @@ impl MergeBuilder {
             source_alias: None,
             target_alias: None,
             state: None,
-            app_metadata: None,
+            commit_properties: CommitProperties::default(),
             writer_properties: None,
             match_operations: Vec::new(),
             not_match_operations: Vec::new(),
@@ -351,11 +351,8 @@ impl MergeBuilder {
     }
 
     /// Additional metadata to be added to commit info
-    pub fn with_metadata(
-        mut self,
-        metadata: impl IntoIterator<Item = (String, serde_json::Value)>,
-    ) -> Self {
-        self.app_metadata = Some(HashMap::from_iter(metadata));
+    pub fn with_commit_properties(mut self, commit_properties: CommitProperties) -> Self {
+        self.commit_properties = commit_properties;
         self
     }
 
@@ -944,7 +941,7 @@ async fn execute(
     snapshot: &DeltaTableState,
     state: SessionState,
     writer_properties: Option<WriterProperties>,
-    app_metadata: Option<HashMap<String, Value>>,
+    mut commit_properties: CommitProperties,
     safe_cast: bool,
     source_alias: Option<String>,
     target_alias: Option<String>,
@@ -1404,8 +1401,6 @@ async fn execute(
         }
     }
 
-    let mut version = snapshot.version();
-
     let source_count_metrics = source_count.metrics().unwrap();
     let target_count_metrics = op_count.metrics().unwrap();
     fn get_metric(metrics: &MetricsSet, name: &str) -> usize {
@@ -1423,13 +1418,8 @@ async fn execute(
 
     metrics.execution_time_ms = Instant::now().duration_since(exec_start).as_millis() as u64;
 
-    let mut app_metadata = match app_metadata {
-        Some(meta) => meta,
-        None => HashMap::new(),
-    };
-
+    let app_metadata = &mut commit_properties.app_metadata;
     app_metadata.insert("readVersion".to_owned(), snapshot.version().into());
-
     if let Ok(map) = serde_json::to_value(&metrics) {
         app_metadata.insert("operationMetrics".to_owned(), map);
     }
@@ -1441,18 +1431,23 @@ async fn execute(
         not_matched_predicates: not_match_target_operations,
         not_matched_by_source_predicates: not_match_source_operations,
     };
-    if !actions.is_empty() {
-        version = commit(
-            log_store.as_ref(),
-            &actions,
-            operation.clone(),
-            Some(snapshot),
-            Some(app_metadata),
-        )
-        .await?;
+
+    if actions.is_empty() {
+        return Ok(((actions, snapshot.version(), None), metrics));
     }
-    let op = (!actions.is_empty()).then_some(operation);
-    Ok(((actions, version, op), metrics))
+
+    let commit = CommitBuilder::from(commit_properties)
+        .with_actions(actions)
+        .build(Some(snapshot), log_store.clone(), operation)?
+        .await?;
+    Ok((
+        (
+            commit.data.actions,
+            commit.version,
+            Some(commit.data.operation),
+        ),
+        metrics,
+    ))
 }
 
 // TODO: Abstract MergePlanner into DeltaPlanner to support other delta operations in the future.
@@ -1482,7 +1477,7 @@ impl std::future::IntoFuture for MergeBuilder {
         let mut this = self;
 
         Box::pin(async move {
-            PROTOCOL.can_write_to(&this.snapshot)?;
+            PROTOCOL.can_write_to(&this.snapshot.snapshot)?;
 
             let state = this.state.unwrap_or_else(|| {
                 let config: SessionConfig = DeltaSessionConfig::default().into();
@@ -1501,7 +1496,7 @@ impl std::future::IntoFuture for MergeBuilder {
                 &this.snapshot,
                 state,
                 this.writer_properties,
-                this.app_metadata,
+                this.commit_properties,
                 this.safe_cast,
                 this.source_alias,
                 this.target_alias,
