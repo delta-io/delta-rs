@@ -532,8 +532,8 @@ mod tests {
 
     use super::*;
     use crate::kernel::StructType;
-    use crate::operations::write::WriteData;
     use crate::operations::transaction::{CommitBuilder, TableReference};
+    use crate::operations::write::WriteData;
     use crate::operations::DeltaOps;
     use crate::protocol::Metadata;
     use crate::writer::test_utils::get_delta_schema;
