@@ -994,6 +994,7 @@ def test_partition_overwrite_unfiltered_data_fails(
         )
 
 
+@pytest.mark.parametrize("large_dtypes", [True, False])
 @pytest.mark.parametrize(
     "value_1,value_2,value_type,filter_string",
     [
@@ -1008,6 +1009,7 @@ def test_replace_where_overwrite(
     value_2: Any,
     value_type: pa.DataType,
     filter_string: str,
+    large_dtypes: bool,
 ):
     table_path = tmp_path
 
@@ -1018,7 +1020,9 @@ def test_replace_where_overwrite(
             "val": pa.array([1, 1, 1, 1], pa.int64()),
         }
     )
-    write_deltalake(table_path, sample_data, mode="overwrite")
+    write_deltalake(
+        table_path, sample_data, mode="overwrite", large_dtypes=large_dtypes
+    )
 
     delta_table = DeltaTable(table_path)
     assert (
@@ -1049,6 +1053,7 @@ def test_replace_where_overwrite(
         mode="overwrite",
         predicate="p1 = '1'",
         engine="rust",
+        large_dtypes=large_dtypes,
     )
 
     delta_table.update_incremental()
