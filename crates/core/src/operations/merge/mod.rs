@@ -29,7 +29,6 @@
 //! ````
 
 use std::collections::HashMap;
-use std::ops::Deref;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -856,7 +855,6 @@ fn replace_placeholders(expr: Expr, placeholders: &HashMap<String, ScalarValue>)
     .unwrap()
 }
 
-
 async fn try_construct_early_filter(
     join_predicate: Expr,
     table_snapshot: &DeltaTableState,
@@ -1032,11 +1030,14 @@ async fn execute(
             &source,
             &source_name,
             &target_name,
-        ).await?
+        )
+        .await?
     };
     let target = match target_subset_filter.as_ref() {
-        None => { target }
-        Some(subset_filter) => { LogicalPlan::Filter(Filter::try_new(subset_filter.clone(), target.into())?)}
+        None => target,
+        Some(subset_filter) => {
+            LogicalPlan::Filter(Filter::try_new(subset_filter.clone(), target.into())?)
+        }
     };
 
     let source = DataFrame::new(state.clone(), source);
@@ -1425,13 +1426,14 @@ async fn execute(
 
     // Predicate will be used for conflict detection
     let commit_predicate = match target_subset_filter {
-        None => {None}  // No predicate means it's a full table merge
+        None => None, // No predicate means it's a full table merge
         Some(some_filter) => {
             let predict_expr = match target_alias {
-                None => {some_filter}
-                Some(alias) => {remove_table_alias(some_filter, alias)}
+                None => some_filter,
+                Some(alias) => remove_table_alias(some_filter, alias),
             };
-            Some(fmt_expr_to_sql(&predict_expr)?)}
+            Some(fmt_expr_to_sql(&predict_expr)?)
+        }
     };
     // Do not make a commit when there are zero updates to the state
     let operation = DeltaOperation::Merge {
@@ -1462,16 +1464,14 @@ async fn execute(
 
 fn remove_table_alias(expr: Expr, table_alias: String) -> Expr {
     expr.transform(&|expr| match expr {
-        Expr::Column(c) => {
-            match c.relation {
-                Some(rel) if rel.table() == table_alias => {
-                    Ok(Transformed::Yes(Expr::Column(Column::new_unqualified(c.name))))
-                },
-                _ => {
-                    Ok(Transformed::No(Expr::Column(Column::new(c.relation, c.name))))
-                }
-            }
-        }
+        Expr::Column(c) => match c.relation {
+            Some(rel) if rel.table() == table_alias => Ok(Transformed::Yes(Expr::Column(
+                Column::new_unqualified(c.name),
+            ))),
+            _ => Ok(Transformed::No(Expr::Column(Column::new(
+                c.relation, c.name,
+            )))),
+        },
         _ => Ok(Transformed::No(expr)),
     })
     .unwrap()
@@ -1542,7 +1542,6 @@ impl std::future::IntoFuture for MergeBuilder {
         })
     }
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -2006,7 +2005,6 @@ mod tests {
         assert_batches_sorted_eq!(&expected, &actual);
     }
 
-
     #[tokio::test]
     async fn test_merge_partition_filtered() {
         let schema = get_arrow_schema(&None);
@@ -2022,7 +2020,7 @@ mod tests {
                 Arc::new(arrow::array::Int32Array::from(vec![10, 20])),
                 Arc::new(arrow::array::StringArray::from(vec![
                     "2021-02-02",
-                    "2021-02-02"
+                    "2021-02-02",
                 ])),
             ],
         )
@@ -2122,7 +2120,10 @@ mod tests {
         let commit_info = table.history(None).await.unwrap();
         let last_commit = &commit_info[0];
         let parameters = last_commit.operation_parameters.clone().unwrap();
-        assert_eq!(parameters["predicate"], json!("id = 'C' OR id = 'X' OR id = 'B'"));
+        assert_eq!(
+            parameters["predicate"],
+            json!("id = 'C' OR id = 'X' OR id = 'B'")
+        );
 
         let expected = vec![
             "+-------+------------+----+",
@@ -2488,7 +2489,7 @@ mod tests {
     #[tokio::test]
     async fn test_merge_case_sensitive() {
         let schema = vec![
-             StructField::new(
+            StructField::new(
                 "Id".to_string(),
                 DataType::Primitive(PrimitiveType::String),
                 true,
