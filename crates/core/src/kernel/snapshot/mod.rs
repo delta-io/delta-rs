@@ -759,7 +759,8 @@ mod tests {
             predicate: None,
         };
 
-        let actions = vec![CommitData::new(removes, operation, HashMap::new()).unwrap()];
+        let actions =
+            vec![CommitData::new(removes, operation, HashMap::new(), Vec::new()).unwrap()];
 
         let new_version = snapshot.advance(&actions)?;
         assert_eq!(new_version, version + 1);

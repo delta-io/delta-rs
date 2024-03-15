@@ -77,7 +77,7 @@ use serde_json::Value;
 use self::conflict_checker::{CommitConflictError, TransactionInfo, WinningCommitSummary};
 use crate::errors::DeltaTableError;
 use crate::kernel::{
-    Action, CommitInfo, EagerSnapshot, Metadata, Protocol, ReaderFeatures, WriterFeatures,
+    Action, CommitInfo, EagerSnapshot, Metadata, Protocol, ReaderFeatures, Txn, WriterFeatures,
 };
 use crate::logstore::LogStoreRef;
 use crate::protocol::DeltaOperation;
@@ -245,6 +245,8 @@ pub struct CommitData {
     pub operation: DeltaOperation,
     /// The Metadata
     pub app_metadata: HashMap<String, Value>,
+    /// Application specific transaction
+    pub app_transactions: Vec<Txn>,
 }
 
 impl CommitData {
@@ -253,6 +255,7 @@ impl CommitData {
         mut actions: Vec<Action>,
         operation: DeltaOperation,
         mut app_metadata: HashMap<String, Value>,
+        app_transactions: Vec<Txn>,
     ) -> Result<Self, CommitBuilderError> {
         if !actions.iter().any(|a| matches!(a, Action::CommitInfo(..))) {
             let mut commit_info = operation.get_commit_info();
@@ -265,10 +268,18 @@ impl CommitData {
             commit_info.info = app_metadata.clone();
             actions.push(Action::CommitInfo(commit_info))
         }
+
+        for txn in &app_transactions {
+            actions.push(Action::Txn(txn.clone()))
+        }
+
+        dbg!("{:?}", &actions);
+
         Ok(CommitData {
             actions,
             operation,
             app_metadata,
+            app_transactions,
         })
     }
 
@@ -298,6 +309,7 @@ impl CommitData {
 /// Enable controling commit behaviour and modifying metadata that is written during a commit.
 pub struct CommitProperties {
     pub(crate) app_metadata: HashMap<String, Value>,
+    pub(crate) app_transaction: Vec<Txn>,
     max_retries: usize,
 }
 
@@ -305,6 +317,7 @@ impl Default for CommitProperties {
     fn default() -> Self {
         Self {
             app_metadata: Default::default(),
+            app_transaction: Vec::new(),
             max_retries: DEFAULT_RETRIES,
         }
     }
@@ -319,6 +332,18 @@ impl CommitProperties {
         self.app_metadata = HashMap::from_iter(metadata);
         self
     }
+
+    /// Add an additonal application transaction to the commit
+    pub fn with_application_transaction(mut self, txn: Txn) -> Self {
+        self.app_transaction.push(txn);
+        self
+    }
+
+    /// Override application transactions for the commit
+    pub fn with_application_transactions(mut self, txn: Vec<Txn>) -> Self {
+        self.app_transaction = txn;
+        self
+    }
 }
 
 impl From<CommitProperties> for CommitBuilder {
@@ -326,6 +351,7 @@ impl From<CommitProperties> for CommitBuilder {
         CommitBuilder {
             max_retries: value.max_retries,
             app_metadata: value.app_metadata,
+            app_transaction: value.app_transaction,
             ..Default::default()
         }
     }
@@ -335,6 +361,7 @@ impl From<CommitProperties> for CommitBuilder {
 pub struct CommitBuilder {
     actions: Vec<Action>,
     app_metadata: HashMap<String, Value>,
+    app_transaction: Vec<Txn>,
     max_retries: usize,
 }
 
@@ -343,6 +370,7 @@ impl Default for CommitBuilder {
         CommitBuilder {
             actions: Vec::new(),
             app_metadata: HashMap::new(),
+            app_transaction: Vec::new(),
             max_retries: DEFAULT_RETRIES,
         }
     }
@@ -368,7 +396,12 @@ impl<'a> CommitBuilder {
         log_store: LogStoreRef,
         operation: DeltaOperation,
     ) -> Result<PreCommit<'a>, CommitBuilderError> {
-        let data = CommitData::new(self.actions, operation, self.app_metadata)?;
+        let data = CommitData::new(
+            self.actions,
+            operation,
+            self.app_metadata,
+            self.app_transaction,
+        )?;
         Ok(PreCommit {
             log_store,
             table_data,
