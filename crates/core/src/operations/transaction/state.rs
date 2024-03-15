@@ -11,6 +11,7 @@ use datafusion_common::Column;
 use datafusion_expr::Expr;
 use itertools::Itertools;
 use object_store::ObjectStore;
+use parquet::arrow::arrow_reader::ArrowReaderOptions;
 use parquet::arrow::async_reader::{ParquetObjectReader, ParquetRecordBatchStreamBuilder};
 
 use crate::delta_datafusion::{
@@ -37,11 +38,14 @@ impl DeltaTableState {
         {
             let file_meta = add.try_into()?;
             let file_reader = ParquetObjectReader::new(object_store, file_meta);
-            let file_schema = ParquetRecordBatchStreamBuilder::new(file_reader)
-                .await?
-                .build()?
-                .schema()
-                .clone();
+            let file_schema = ParquetRecordBatchStreamBuilder::new_with_options(
+                file_reader,
+                ArrowReaderOptions::new().with_skip_arrow_metadata(true),
+            )
+            .await?
+            .build()?
+            .schema()
+            .clone();
 
             let table_schema = Arc::new(ArrowSchema::new(
                 self.arrow_schema()?
