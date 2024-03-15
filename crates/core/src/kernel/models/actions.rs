@@ -671,6 +671,26 @@ pub struct Txn {
     pub last_updated: Option<i64>,
 }
 
+impl Txn {
+    /// Create a new application transactions. See [`Txn`] for details.
+    pub fn new(app_id: &dyn ToString, version: i64) -> Self {
+        Self::new_with_last_update(app_id, version, None)
+    }
+
+    /// Create a new application transactions. See [`Txn`] for details.
+    pub fn new_with_last_update(
+        app_id: &dyn ToString,
+        version: i64,
+        last_updated: Option<i64>,
+    ) -> Self {
+        Txn {
+            app_id: app_id.to_string(),
+            version,
+            last_updated,
+        }
+    }
+}
+
 /// The commitInfo is a fairly flexible action within the delta specification, where arbitrary data can be stored.
 /// However the reference implementation as well as delta-rs store useful information that may for instance
 /// allow us to be more permissive in commit conflict resolution.
