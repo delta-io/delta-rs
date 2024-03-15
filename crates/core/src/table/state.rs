@@ -84,6 +84,7 @@ impl DeltaTableState {
                 metadata: metadata.clone(),
             },
             HashMap::new(),
+            Vec::new(),
         )
         .unwrap()];
 
@@ -200,6 +201,7 @@ impl DeltaTableState {
             actions,
             operation: operation.clone(),
             app_metadata: HashMap::new(),
+            app_transactions: Vec::new(),
         };
         let new_version = self.snapshot.advance(&vec![commit_data])?;
         if new_version != version {
