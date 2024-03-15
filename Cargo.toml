@@ -70,4 +70,5 @@ uuid = { version = "1" }
 async-trait = { version = "0.1" }
 futures = { version = "0.3" }
 tokio = { version = "1" }
+async-channel = { version = "2.2" }
 num_cpus = { version = "1" }

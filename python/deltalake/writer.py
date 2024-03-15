@@ -129,6 +129,7 @@ def write_deltalake(
     mode: Literal["error", "append", "ignore"] = ...,
     name: Optional[str] = ...,
     description: Optional[str] = ...,
+    nr_concurrent_streams: Optional[int] = ...,
     configuration: Optional[Mapping[str, Optional[str]]] = ...,
     overwrite_schema: bool = ...,
     schema_mode: Optional[Literal["merge", "overwrite"]] = ...,
@@ -157,6 +158,7 @@ def write_deltalake(
     mode: Literal["overwrite"],
     name: Optional[str] = ...,
     description: Optional[str] = ...,
+    nr_concurrent_streams: Optional[int] = ...,
     configuration: Optional[Mapping[str, Optional[str]]] = ...,
     overwrite_schema: bool = ...,
     schema_mode: Optional[Literal["merge", "overwrite"]] = ...,
@@ -191,6 +193,7 @@ def write_deltalake(
     max_rows_per_group: int = 128 * 1024,
     name: Optional[str] = None,
     description: Optional[str] = None,
+    nr_concurrent_streams: Optional[int] = None,
     configuration: Optional[Mapping[str, Optional[str]]] = None,
     overwrite_schema: bool = False,
     schema_mode: Optional[Literal["merge", "overwrite"]] = None,
@@ -246,6 +249,7 @@ def write_deltalake(
             If this value is set, then min_rows_per_group should also be set.
         name: User-provided identifier for this table.
         description: User-provided description for this table.
+        nr_concurrent_streams: Number of concurrent streams to use when writing. At least nr_concurrent_streams files will be written.
         configuration: A map containing configuration options for the metadata action.
         overwrite_schema: Deprecated, use schema_mode instead.
         schema_mode: If set to "overwrite", allows replacing the schema of the table. Set to "merge" to merge with existing schema.
@@ -324,6 +328,7 @@ def write_deltalake(
             predicate=predicate,
             name=name,
             description=description,
+            nr_concurrent_streams=nr_concurrent_streams,
             configuration=configuration,
             storage_options=storage_options,
             writer_properties=(

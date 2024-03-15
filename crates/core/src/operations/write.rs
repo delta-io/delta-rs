@@ -160,6 +160,8 @@ pub struct WriteBuilderConfig {
     mode: SaveMode,
     /// Column names for table partitioning
     partition_columns: Option<Vec<String>>,
+    /// Number of streams to run concurrently on reading
+    nr_concurrent_streams: u32,
     /// When using `Overwrite` mode, replace data that matches a predicate
     predicate: Option<Expression>,
     /// Size above which we will write a buffered parquet file to disk.
@@ -206,6 +208,7 @@ impl WriteBuilder {
                 safe_cast: false,
                 schema_mode: None,
                 writer_properties: None,
+                nr_concurrent_streams: 1,
                 commit_properties: CommitProperties::default(),
                 name: None,
                 description: None,
@@ -303,6 +306,12 @@ impl WriteBuilder {
     /// Comment to describe the table.
     pub fn with_description(mut self, description: impl Into<String>) -> Self {
         self.config.description = Some(description.into());
+        self
+    }
+
+    /// Set the number of concurrent streams to use when writing data from a RecordBatch
+    pub fn with_nr_concurrent_streams(mut self, nr_concurrent_streams: u32) -> Self {
+        self.config.nr_concurrent_streams = nr_concurrent_streams;
         self
     }
 
@@ -706,7 +715,9 @@ impl std::future::IntoFuture for WriteBuilder {
                 }
                 _ => (None, None),
             };
-
+            let mut producer_task: Option<
+                tokio::task::JoinHandle<std::result::Result<(), async_channel::SendError<_>>>,
+            > = None;
             let write_data = match input_data {
                 None => return Err(WriteError::MissingData.into()),
                 Some(WriteData::DataFusionPlan(plan)) => plan_to_streams(state.clone(), plan)?,
@@ -718,14 +729,25 @@ impl std::future::IntoFuture for WriteBuilder {
                     vec![rec_batch_stream]
                 }
                 Some(WriteData::RecordBatches((input_batches, _))) => {
-                    let stream = futures::stream::iter(input_batches.map(Ok));
-                    let rec_batch_stream =
-                        Box::pin(RecordBatchStreamAdapter::new(input_schema.clone(), stream))
-                            as SendableRecordBatchStream;
-                    vec![rec_batch_stream]
+                    let (sender, receiver) =
+                        async_channel::bounded(this.nr_concurrent_streams as usize);
+                    producer_task = Some(tokio::task::spawn(async move {
+                        for batch in input_batches {
+                            sender.send(batch).await?;
+                        }
+                        sender.close();
+                        Ok(())
+                    }));
+                    (0..this.nr_concurrent_streams)
+                        .map(|_| {
+                            let stream = receiver.clone().map(Ok);
+                            Box::pin(RecordBatchStreamAdapter::new(input_schema.clone(), stream))
+                                as SendableRecordBatchStream
+                        })
+                        .collect()
                 }
             };
-            let add_actions = write_execution_plan_with_predicate(
+            let add_actions_task = write_execution_plan_with_predicate(
                 predicate.clone(),
                 this.snapshot.as_ref(),
                 write_data,
@@ -737,8 +759,14 @@ impl std::future::IntoFuture for WriteBuilder {
                 this.safe_cast,
                 this.schema_mode,
                 None,
-            )
-            .await?;
+            );
+            let add_actions = match producer_task {
+                Some(task) => {
+                    let (_, add_actions) = tokio::join!(task, add_actions_task);
+                    add_actions?
+                }
+                None => add_actions_task.await?,
+            };
             actions.extend(add_actions);
             // Here we need to validate if the new data conforms to a predicate if one is provided
 
