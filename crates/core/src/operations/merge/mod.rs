@@ -1988,6 +1988,10 @@ mod tests {
         let last_commit = &commit_info[0];
         let parameters = last_commit.operation_parameters.clone().unwrap();
         assert!(!parameters.contains_key("predicate"));
+        assert_eq!(
+            parameters["mergePredicate"],
+            "target.id = source.id AND target.modified = '2021-02-02'"
+        );
 
         let expected = vec![
             "+----+-------+------------+",
@@ -2058,6 +2062,10 @@ mod tests {
         let last_commit = &commit_info[0];
         let parameters = last_commit.operation_parameters.clone().unwrap();
         assert_eq!(parameters["predicate"], "modified = '2021-02-02'");
+        assert_eq!(
+            parameters["mergePredicate"],
+            "target.id = source.id AND target.modified = '2021-02-02'"
+        );
     }
 
     #[tokio::test]
@@ -2472,6 +2480,11 @@ mod tests {
         assert_eq!(metrics.num_target_rows_deleted, 0);
         assert_eq!(metrics.num_output_rows, 3);
         assert_eq!(metrics.num_source_rows, 3);
+
+        let commit_info = table.history(None).await.unwrap();
+        let last_commit = &commit_info[0];
+        let parameters = last_commit.operation_parameters.clone().unwrap();
+        assert_eq!(parameters["predicate"], json!("modified = '2021-02-02'"));
 
         let expected = vec![
             "+----+-------+------------+",
