@@ -1,0 +1,43 @@
+[package]
+name = "deltalake-mount"
+version = "0.1.0"
+authors.workspace = true
+keywords.workspace = true
+readme.workspace = true
+edition.workspace = true
+homepage.workspace = true
+description.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+deltalake-core = { version = "0.17.0", path = "../core", features = [
+    "datafusion",
+] }
+lazy_static = "1"
+errno = "0.3"
+
+# workspace depenndecies
+async-trait = { workspace = true }
+bytes = { workspace = true }
+futures = { workspace = true }
+tracing = { workspace = true }
+object_store = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+regex = { workspace = true }
+url = { workspace = true }
+
+[dev-dependencies]
+chrono = { workspace = true }
+serial_test = "3"
+deltalake-test = { path = "../test" }
+pretty_env_logger = "0.5.0"
+rand = "0.8"
+serde_json = { workspace = true }
+tempfile = "3"
+fs_extra = "1.3.0"
+
+[features]
+integration_test = []
