@@ -323,6 +323,30 @@ def test_local_path(
 
 
 @pytest.mark.parametrize("engine", ["pyarrow", "rust"])
+def test_local_path_with_unsafe_rename(
+    tmp_path: pathlib.Path,
+    sample_data: pa.Table,
+    monkeypatch,
+    engine: Literal["pyarrow", "rust"],
+):
+    monkeypatch.chdir(tmp_path)  # Make tmp_path the working directory
+    (tmp_path / "path/to/table").mkdir(parents=True)
+
+    local_path = "./path/to/table"
+    storage_opts = {
+        "allow_unsafe_rename": "true",
+    }
+    write_deltalake(
+        local_path, sample_data, storage_options=storage_opts, engine=engine
+    )
+    delta_table = DeltaTable(local_path, storage_options=storage_opts)
+    assert delta_table.schema().to_pyarrow() == sample_data.schema
+
+    table = delta_table.to_pyarrow_table()
+    assert table == sample_data
+
+
+@pytest.mark.parametrize("engine", ["pyarrow", "rust"])
 def test_roundtrip_metadata(tmp_path: pathlib.Path, sample_data: pa.Table, engine):
     write_deltalake(
         tmp_path,
