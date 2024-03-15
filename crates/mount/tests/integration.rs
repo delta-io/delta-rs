@@ -25,6 +25,7 @@ async fn test_integration_local() -> TestResult {
 
 #[tokio::test]
 #[serial]
+#[ignore = "The DBFS tests currently hang due to CI pipeline cannot write to /dbfs"]
 async fn test_integration_dbfs() -> TestResult {
     let context = IntegrationContext::new(Box::<DbfsIntegration>::default())?;
 
