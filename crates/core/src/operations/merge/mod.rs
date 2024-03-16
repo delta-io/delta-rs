@@ -866,10 +866,6 @@ async fn try_construct_early_filter(
     let table_metadata = table_snapshot.metadata();
     let partition_columns = &table_metadata.partition_columns;
 
-    if partition_columns.is_empty() {
-        return Ok(None);
-    }
-
     let mut placeholders = HashMap::default();
 
     match generalize_filter(
@@ -2720,6 +2716,32 @@ mod tests {
         })
         .eq(col(Column::new(target.clone().into(), "id")))
         .and(col(Column::new(target.clone().into(), "id")).eq(lit("C")));
+
+        assert_eq!(generalized, expected_filter);
+    }
+
+
+    #[tokio::test]
+    async fn test_generalize_filter_keeps_only_static_target_references() {
+        let source = TableReference::parse_str("source");
+        let target = TableReference::parse_str("target");
+
+        let parsed_filter = col(Column::new(source.clone().into(), "id"))
+            .eq(col(Column::new(target.clone().into(), "id")))
+            .and(col(Column::new(target.clone().into(), "id")).eq(lit("C")));
+
+        let mut placeholders = HashMap::default();
+
+        let generalized = generalize_filter(
+            parsed_filter,
+            &vec!["other".to_owned()],
+            &source,
+            &target,
+            &mut placeholders,
+        )
+        .unwrap();
+
+        let expected_filter = col(Column::new(target.clone().into(), "id")).eq(lit("C"));
 
         assert_eq!(generalized, expected_filter);
     }
