@@ -87,22 +87,21 @@ def test_cleanup_metadata_no_checkpoint(tmp_path: pathlib.Path, sample_data: pa.
 
 def test_features_maintained_after_checkpoint(tmp_path: pathlib.Path):
     from datetime import datetime
+
     data = pa.table(
         {
-            "timestamp": pa.array(
-                [datetime(2022, 1, 1)]
-            ),
+            "timestamp": pa.array([datetime(2022, 1, 1)]),
         }
     )
     write_deltalake(tmp_path, data)
-    
+
     dt = DeltaTable(tmp_path)
     current_protocol = dt.protocol()
-    
+
     dt.create_checkpoint()
-    
+
     dt = DeltaTable(tmp_path)
     protocol_after_checkpoint = dt.protocol()
-    
-    assert protocol_after_checkpoint.reader_features == ['timestampNtz']
+
+    assert protocol_after_checkpoint.reader_features == ["timestampNtz"]
     assert current_protocol == protocol_after_checkpoint
