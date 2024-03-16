@@ -15,6 +15,7 @@ use crate::kernel::{
     StructType,
 };
 use crate::logstore::LogStore;
+use crate::operations::transaction::CommitData;
 use crate::partitions::{DeltaTablePartition, PartitionFilter};
 use crate::protocol::DeltaOperation;
 use crate::{DeltaResult, DeltaTableError};
@@ -73,7 +74,7 @@ impl DeltaTableState {
             })
             .ok_or(DeltaTableError::NotInitialized)?;
 
-        let commit_data = [(
+        let commit_data = [CommitData::new(
             actions,
             DeltaOperation::Create {
                 mode: SaveMode::Append,
@@ -81,8 +82,10 @@ impl DeltaTableState {
                 protocol: protocol.clone(),
                 metadata: metadata.clone(),
             },
-            None,
-        )];
+            HashMap::new(),
+        )
+        .unwrap()];
+
         let snapshot = EagerSnapshot::new_test(&commit_data).unwrap();
         Ok(Self {
             app_transaction_version: Default::default(),
@@ -186,12 +189,22 @@ impl DeltaTableState {
         operation: &DeltaOperation,
         version: i64,
     ) -> Result<(), DeltaTableError> {
-        let commit_infos = vec![(actions, operation.clone(), None)];
-        let new_version = self.snapshot.advance(&commit_infos)?;
+        // TODO: Maybe change this interface to just use CommitData..
+        let commit_data = CommitData {
+            actions,
+            operation: operation.clone(),
+            app_metadata: HashMap::new(),
+        };
+        let new_version = self.snapshot.advance(&vec![commit_data])?;
         if new_version != version {
             return Err(DeltaTableError::Generic("Version mismatch".to_string()));
         }
         Ok(())
+    }
+
+    /// Obtain the Eager snapshot of the state
+    pub fn snapshot(&self) -> &EagerSnapshot {
+        &self.snapshot
     }
 
     /// Update the state of the table to the given version.

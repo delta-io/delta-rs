@@ -44,13 +44,13 @@ use futures::StreamExt;
 use parquet::file::properties::WriterProperties;
 
 use super::datafusion_utils::Expression;
-use super::transaction::PROTOCOL;
+use super::transaction::{CommitBuilder, CommitProperties, TableReference, PROTOCOL};
 use super::writer::{DeltaWriter, WriterConfig};
-use super::{transaction::commit, CreateBuilder};
+use super::CreateBuilder;
 use crate::delta_datafusion::expr::fmt_expr_to_sql;
 use crate::delta_datafusion::expr::parse_predicate_expression;
-use crate::delta_datafusion::DeltaDataChecker;
 use crate::delta_datafusion::{find_files, register_store, DeltaScanBuilder};
+use crate::delta_datafusion::{DataFusionMixins, DeltaDataChecker};
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::{Action, Add, Metadata, PartitionsExt, Remove, StructType};
 use crate::logstore::LogStoreRef;
@@ -142,8 +142,8 @@ pub struct WriteBuilder {
     safe_cast: bool,
     /// Parquet writer properties
     writer_properties: Option<WriterProperties>,
-    /// Additional metadata to be added to commit
-    app_metadata: Option<HashMap<String, serde_json::Value>>,
+    /// Additional information to add to the commit
+    commit_properties: CommitProperties,
     /// Name of the table, only used when table doesn't exist yet
     name: Option<String>,
     /// Description of the table, only used when table doesn't exist yet
@@ -169,7 +169,7 @@ impl WriteBuilder {
             safe_cast: false,
             schema_mode: None,
             writer_properties: None,
-            app_metadata: None,
+            commit_properties: CommitProperties::default(),
             name: None,
             description: None,
             configuration: Default::default(),
@@ -248,11 +248,8 @@ impl WriteBuilder {
     }
 
     /// Additional metadata to be added to commit info
-    pub fn with_metadata(
-        mut self,
-        metadata: impl IntoIterator<Item = (String, serde_json::Value)>,
-    ) -> Self {
-        self.app_metadata = Some(HashMap::from_iter(metadata));
+    pub fn with_commit_properties(mut self, commit_properties: CommitProperties) -> Self {
+        self.commit_properties = commit_properties;
         self
     }
 
@@ -290,6 +287,9 @@ impl WriteBuilder {
                     let schema: StructType = (plan.schema()).try_into()?;
                     PROTOCOL.check_can_write_timestamp_ntz(snapshot, &schema)?;
                 } else if let Some(batches) = &self.batches {
+                    if batches.is_empty() {
+                        return Err(WriteError::MissingData.into());
+                    }
                     let schema: StructType = (batches[0].schema()).try_into()?;
                     PROTOCOL.check_can_write_timestamp_ntz(snapshot, &schema)?;
                 }
@@ -560,7 +560,7 @@ impl std::future::IntoFuture for WriteBuilder {
         Box::pin(async move {
             if this.mode == SaveMode::Overwrite {
                 if let Some(snapshot) = &this.snapshot {
-                    PROTOCOL.check_append_only(snapshot)?;
+                    PROTOCOL.check_append_only(&snapshot.snapshot)?;
                 }
             }
             if this.schema_mode == Some(SchemaMode::Overwrite) && this.mode != SaveMode::Overwrite {
@@ -801,20 +801,20 @@ impl std::future::IntoFuture for WriteBuilder {
                 predicate: predicate_str,
             };
 
-            let version = commit(
-                this.log_store.as_ref(),
-                &actions,
-                operation.clone(),
-                this.snapshot.as_ref(),
-                this.app_metadata,
-            )
-            .await?;
+            let commit = CommitBuilder::from(this.commit_properties)
+                .with_actions(actions)
+                .build(
+                    this.snapshot.as_ref().map(|f| f as &dyn TableReference),
+                    this.log_store.clone(),
+                    operation.clone(),
+                )?
+                .await?;
 
             // TODO we do not have the table config available, but since we are merging only our newly
             // created actions, it may be safe to assume, that we want to include all actions.
             // then again, having only some tombstones may be misleading.
             if let Some(mut snapshot) = this.snapshot {
-                snapshot.merge(actions, &operation, version)?;
+                snapshot.merge(commit.data.actions, &commit.data.operation, commit.version)?;
                 Ok(DeltaTable::new_with_state(this.log_store, snapshot))
             } else {
                 let mut table = DeltaTable::new(this.log_store, Default::default());
@@ -915,7 +915,7 @@ mod tests {
         let mut table = DeltaOps(table)
             .write(vec![batch.clone()])
             .with_save_mode(SaveMode::Append)
-            .with_metadata(metadata.clone())
+            .with_commit_properties(CommitProperties::default().with_metadata(metadata.clone()))
             .await
             .unwrap();
         assert_eq!(table.version(), 1);
@@ -938,7 +938,7 @@ mod tests {
         let mut table = DeltaOps(table)
             .write(vec![batch.clone()])
             .with_save_mode(SaveMode::Append)
-            .with_metadata(metadata.clone())
+            .with_commit_properties(CommitProperties::default().with_metadata(metadata.clone()))
             .await
             .unwrap();
         assert_eq!(table.version(), 2);
@@ -961,7 +961,7 @@ mod tests {
         let mut table = DeltaOps(table)
             .write(vec![batch])
             .with_save_mode(SaveMode::Overwrite)
-            .with_metadata(metadata.clone())
+            .with_commit_properties(CommitProperties::default().with_metadata(metadata.clone()))
             .await
             .unwrap();
         assert_eq!(table.version(), 3);
