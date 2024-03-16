@@ -1,18 +1,13 @@
 //! Unset table properties of the table
 
-use std::collections::HashMap;
-
-use chrono::Utc;
-use futures::future::BoxFuture;
-use serde_json::json;
-
-use crate::kernel::{Action, CommitInfo, IsolationLevel};
+use crate::kernel::Action;
 use crate::logstore::LogStoreRef;
-use crate::operations::transaction::commit;
+use crate::operations::transaction::{CommitBuilder, CommitProperties};
 use crate::protocol::DeltaOperation;
 use crate::table::config::DeltaConfigKey;
 use crate::table::state::DeltaTableState;
 use crate::{DeltaResult, DeltaTable, DeltaTableError};
+use futures::future::BoxFuture;
 
 /// Remove constraints from the table
 pub struct UnsetTablePropertiesBuilder {
@@ -24,8 +19,8 @@ pub struct UnsetTablePropertiesBuilder {
     raise_if_not_exists: bool,
     /// Delta object store for handling data files
     log_store: LogStoreRef,
-    /// Additional metadata to be added to commit
-    app_metadata: Option<HashMap<String, serde_json::Value>>,
+    /// Additional information to add to the commit
+    commit_properties: CommitProperties,
 }
 
 impl UnsetTablePropertiesBuilder {
@@ -36,7 +31,7 @@ impl UnsetTablePropertiesBuilder {
             raise_if_not_exists: true,
             snapshot,
             log_store,
-            app_metadata: None,
+            commit_properties: CommitProperties::default(),
         }
     }
 
@@ -63,11 +58,8 @@ impl UnsetTablePropertiesBuilder {
     }
 
     /// Additional metadata to be added to commit info
-    pub fn with_metadata(
-        mut self,
-        metadata: impl IntoIterator<Item = (String, serde_json::Value)>,
-    ) -> Self {
-        self.app_metadata = Some(HashMap::from_iter(metadata));
+    pub fn with_commit_properties(mut self, commit_properties: CommitProperties) -> Self {
+        self.commit_properties = commit_properties;
         self
     }
 }
@@ -119,38 +111,19 @@ impl std::future::IntoFuture for UnsetTablePropertiesBuilder {
                 metadata.configuration.remove(*key);
             }
 
-            let operational_parameters =
-                HashMap::from_iter([("properties".to_string(), json!(properties))]);
-
-            let operations = DeltaOperation::UnsetTableProperties {
+            let operation = DeltaOperation::UnsetTableProperties {
                 properties: properties.iter().map(|v| v.to_string()).collect(),
             };
 
-            let app_metadata = this.app_metadata.unwrap_or_default();
+            let actions = vec![Action::Metadata(metadata)];
 
-            let commit_info = CommitInfo {
-                timestamp: Some(Utc::now().timestamp_millis()),
-                operation: Some(operations.name().to_string()),
-                operation_parameters: Some(operational_parameters),
-                read_version: Some(this.snapshot.version()),
-                isolation_level: Some(IsolationLevel::Serializable),
-                is_blind_append: Some(false),
-                info: app_metadata,
-                ..Default::default()
-            };
+            let commit = CommitBuilder::from(this.commit_properties)
+                .with_actions(actions)
+                .build(Some(&this.snapshot), this.log_store.clone(), operation)?
+                .await?;
 
-            let actions = vec![Action::CommitInfo(commit_info), Action::Metadata(metadata)];
-
-            let version = commit(
-                this.log_store.as_ref(),
-                &actions,
-                operations.clone(),
-                Some(&this.snapshot),
-                None,
-            )
-            .await?;
-
-            this.snapshot.merge(actions, &operations, version)?;
+            this.snapshot
+                .merge(commit.data.actions, &commit.data.operation, commit.version)?;
             Ok(DeltaTable::new_with_state(this.log_store, this.snapshot))
         })
     }
