@@ -2720,7 +2720,6 @@ mod tests {
         assert_eq!(generalized, expected_filter);
     }
 
-
     #[tokio::test]
     async fn test_generalize_filter_keeps_only_static_target_references() {
         let source = TableReference::parse_str("source");
