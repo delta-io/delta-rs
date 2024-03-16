@@ -80,9 +80,9 @@ impl std::future::IntoFuture for UnsetTablePropertiesBuilder {
                 .iter()
                 .any(|f| f == &DeltaConfigKey::ColumnMappingMode)
             {
-                return Err(DeltaTableError::Generic(format!(
-                    "Unsetting table property delta.columnMapping.mode is not allowed."
-                )));
+                return Err(DeltaTableError::Generic(
+                    "Unsetting table property delta.columnMapping.mode is not allowed.".into(),
+                ));
             };
 
             let properties = this
@@ -100,7 +100,7 @@ impl std::future::IntoFuture for UnsetTablePropertiesBuilder {
                 }
             }
 
-            if this.raise_if_not_exists && incorrect_config_names.len() > 0 {
+            if this.raise_if_not_exists && !incorrect_config_names.is_empty() {
                 return Err(DeltaTableError::Generic(format!(
                     "table properties with names: {:?} don't exists",
                     incorrect_config_names
