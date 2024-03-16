@@ -1102,7 +1102,8 @@ impl RawDeltaTable {
         if let Some(metadata) = custom_metadata {
             let json_metadata: Map<String, Value> =
                 metadata.into_iter().map(|(k, v)| (k, v.into())).collect();
-            cmd = cmd.with_metadata(json_metadata);
+            cmd = cmd
+                .with_commit_properties(CommitProperties::default().with_metadata(json_metadata));
         };
 
         let table = rt()?
