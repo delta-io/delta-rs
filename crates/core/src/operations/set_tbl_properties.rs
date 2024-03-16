@@ -1,13 +1,12 @@
 //! Set table properties on a table
 
 use std::collections::{HashMap, HashSet};
-use std::hash::Hash;
 
 use futures::future::BoxFuture;
 use maplit::hashset;
 
 use super::transaction::{CommitBuilder, CommitProperties};
-use crate::kernel::{Action, CommitInfo, IsolationLevel, Protocol, ReaderFeatures, WriterFeatures};
+use crate::kernel::{Action, Protocol, ReaderFeatures, WriterFeatures};
 use crate::logstore::LogStoreRef;
 use crate::protocol::DeltaOperation;
 use crate::table::state::DeltaTableState;
