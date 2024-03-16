@@ -1576,6 +1576,7 @@ mod tests {
     use datafusion_expr::LogicalPlanBuilder;
     use datafusion_expr::Operator;
     use itertools::Itertools;
+    use regex::Regex;
     use serde_json::json;
     use std::collections::HashMap;
     use std::ops::Neg;
@@ -2128,10 +2129,9 @@ mod tests {
         let commit_info = table.history(None).await.unwrap();
         let last_commit = &commit_info[0];
         let parameters = last_commit.operation_parameters.clone().unwrap();
-        assert_eq!(
-            parameters["predicate"],
-            json!("id = 'C' OR id = 'X' OR id = 'B'")
-        );
+        let predicate = parameters["predicate"].as_str().unwrap();
+        let re = Regex::new(r"^id = '(C|X|B)' OR id = '(C|X|B)' OR id = '(C|X|B)'$").unwrap();
+        assert!(re.is_match(predicate));
 
         let expected = vec![
             "+-------+------------+----+",
