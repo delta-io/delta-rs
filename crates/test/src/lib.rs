@@ -4,7 +4,7 @@ use bytes::Bytes;
 use deltalake_core::kernel::{Action, Add, Remove, StructType};
 use deltalake_core::logstore::LogStore;
 use deltalake_core::operations::create::CreateBuilder;
-use deltalake_core::operations::transaction::commit;
+use deltalake_core::operations::transaction::CommitBuilder;
 use deltalake_core::protocol::{DeltaOperation, SaveMode};
 use deltalake_core::DeltaTable;
 use deltalake_core::DeltaTableBuilder;
@@ -147,15 +147,14 @@ pub async fn add_file(
             predicate: None,
         };
         let actions = vec![Action::Add(add)];
-        commit(
-            table.log_store().as_ref(),
-            &actions,
-            operation,
-            table.state.as_ref(),
-            None,
-        )
-        .await
-        .unwrap();
+        let snapshot = table.snapshot().unwrap().snapshot();
+
+        CommitBuilder::default()
+            .with_actions(actions)
+            .build(Some(snapshot), table.log_store(), operation)
+            .unwrap()
+            .await
+            .unwrap();
         table.update().await.unwrap();
     }
 }
@@ -185,14 +184,13 @@ pub async fn remove_file(
     };
     let operation = DeltaOperation::Delete { predicate: None };
     let actions = vec![Action::Remove(remove)];
-    commit(
-        table.log_store().as_ref(),
-        &actions,
-        operation,
-        table.state.as_ref(),
-        None,
-    )
-    .await
-    .unwrap();
+    let snapshot = table.snapshot().unwrap().snapshot();
+
+    CommitBuilder::default()
+        .with_actions(actions)
+        .build(Some(snapshot), table.log_store(), operation)
+        .unwrap()
+        .await
+        .unwrap();
     table.update().await.unwrap();
 }
