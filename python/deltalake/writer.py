@@ -354,16 +354,18 @@ def write_deltalake(
                     f"Data schema:\n{schema}\nTable Schema:\n{table.schema().to_pyarrow(as_large_types=large_dtypes)}"
                 )
             if mode == "error":
-                raise AssertionError("DeltaTable already exists.")
+                raise FileExistsError(
+                    "Delta table already exists, write mode set to error."
+                )
             elif mode == "ignore":
                 return
 
             current_version = table.version()
 
-            if partition_by:
-                assert (
-                    partition_by == table.metadata().partition_columns
-                ), f"Partition columns should be {table.metadata().partition_columns} but is {partition_by}"
+            if partition_by and partition_by != table.metadata().partition_columns:
+                raise ValueError(
+                    f"Partition columns should be {table.metadata().partition_columns} but is {partition_by}"
+                )
             else:
                 partition_by = table.metadata().partition_columns
 

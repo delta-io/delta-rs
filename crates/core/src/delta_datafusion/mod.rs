@@ -27,7 +27,10 @@ use std::sync::Arc;
 
 use arrow::compute::{cast_with_options, CastOptions};
 use arrow::datatypes::DataType;
-use arrow::datatypes::{DataType as ArrowDataType, Schema as ArrowSchema, SchemaRef, TimeUnit};
+use arrow::datatypes::{
+    DataType as ArrowDataType, Schema as ArrowSchema, SchemaRef, SchemaRef as ArrowSchemaRef,
+    TimeUnit,
+};
 use arrow::error::ArrowError;
 use arrow::record_batch::RecordBatch;
 use arrow_array::types::UInt16Type;
@@ -56,7 +59,9 @@ use datafusion::physical_plan::{
 };
 use datafusion_common::scalar::ScalarValue;
 use datafusion_common::tree_node::{TreeNode, TreeNodeVisitor, VisitRecursion};
-use datafusion_common::{Column, DataFusionError, Result as DataFusionResult, ToDFSchema};
+use datafusion_common::{
+    Column, DFSchema, DataFusionError, Result as DataFusionResult, ToDFSchema,
+};
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::logical_plan::CreateExternalTable;
 use datafusion_expr::utils::conjunction;
@@ -66,6 +71,7 @@ use datafusion_physical_expr::{create_physical_expr, PhysicalExpr};
 use datafusion_proto::logical_plan::LogicalExtensionCodec;
 use datafusion_proto::physical_plan::PhysicalExtensionCodec;
 use datafusion_sql::planner::ParserOptions;
+use either::Either;
 use futures::TryStreamExt;
 
 use itertools::Itertools;
@@ -73,8 +79,9 @@ use object_store::ObjectMeta;
 use serde::{Deserialize, Serialize};
 use url::Url;
 
+use crate::delta_datafusion::expr::parse_predicate_expression;
 use crate::errors::{DeltaResult, DeltaTableError};
-use crate::kernel::{Add, DataCheck, Invariant};
+use crate::kernel::{Add, DataCheck, EagerSnapshot, Invariant, Snapshot};
 use crate::logstore::LogStoreRef;
 use crate::table::builder::ensure_table_uri;
 use crate::table::state::DeltaTableState;
@@ -110,6 +117,154 @@ impl From<DataFusionError> for DeltaTableError {
             DataFusionError::ParquetError(source) => DeltaTableError::Parquet { source },
             _ => DeltaTableError::Generic(err.to_string()),
         }
+    }
+}
+
+/// Convience trait for calling common methods on snapshot heirarchies
+pub trait DataFusionMixins {
+    /// The physical datafusion schema of a table
+    fn arrow_schema(&self) -> DeltaResult<ArrowSchemaRef>;
+
+    /// Get the table schema as an [`ArrowSchemaRef`]
+    fn input_schema(&self) -> DeltaResult<ArrowSchemaRef>;
+
+    /// Parse an expression string into a datafusion [`Expr`]
+    fn parse_predicate_expression(
+        &self,
+        expr: impl AsRef<str>,
+        df_state: &SessionState,
+    ) -> DeltaResult<Expr>;
+}
+
+impl DataFusionMixins for Snapshot {
+    fn arrow_schema(&self) -> DeltaResult<ArrowSchemaRef> {
+        _arrow_schema(self, true)
+    }
+
+    fn parse_predicate_expression(
+        &self,
+        expr: impl AsRef<str>,
+        df_state: &SessionState,
+    ) -> DeltaResult<Expr> {
+        let schema = DFSchema::try_from(self.arrow_schema()?.as_ref().to_owned())?;
+        parse_predicate_expression(&schema, expr, df_state)
+    }
+
+    fn input_schema(&self) -> DeltaResult<ArrowSchemaRef> {
+        _arrow_schema(self, false)
+    }
+}
+
+impl DataFusionMixins for EagerSnapshot {
+    fn arrow_schema(&self) -> DeltaResult<ArrowSchemaRef> {
+        self.snapshot().arrow_schema()
+    }
+
+    fn parse_predicate_expression(
+        &self,
+        expr: impl AsRef<str>,
+        df_state: &SessionState,
+    ) -> DeltaResult<Expr> {
+        self.snapshot().parse_predicate_expression(expr, df_state)
+    }
+
+    fn input_schema(&self) -> DeltaResult<ArrowSchemaRef> {
+        self.snapshot().input_schema()
+    }
+}
+
+impl DataFusionMixins for DeltaTableState {
+    fn arrow_schema(&self) -> DeltaResult<ArrowSchemaRef> {
+        self.snapshot.arrow_schema()
+    }
+
+    fn input_schema(&self) -> DeltaResult<ArrowSchemaRef> {
+        self.snapshot.input_schema()
+    }
+
+    fn parse_predicate_expression(
+        &self,
+        expr: impl AsRef<str>,
+        df_state: &SessionState,
+    ) -> DeltaResult<Expr> {
+        self.snapshot.parse_predicate_expression(expr, df_state)
+    }
+}
+
+fn _arrow_schema(snapshot: &Snapshot, wrap_partitions: bool) -> DeltaResult<ArrowSchemaRef> {
+    let meta = snapshot.metadata();
+    let fields = meta
+        .schema()?
+        .fields()
+        .iter()
+        .filter(|f| !meta.partition_columns.contains(&f.name().to_string()))
+        .map(|f| f.try_into())
+        .chain(
+            meta.schema()?
+                .fields()
+                .iter()
+                .filter(|f| meta.partition_columns.contains(&f.name().to_string()))
+                .map(|f| {
+                    let field = Field::try_from(f)?;
+                    let corrected = if wrap_partitions {
+                        match field.data_type() {
+                            // Only dictionary-encode types that may be large
+                            // // https://github.com/apache/arrow-datafusion/pull/5545
+                            DataType::Utf8
+                            | DataType::LargeUtf8
+                            | DataType::Binary
+                            | DataType::LargeBinary => {
+                                wrap_partition_type_in_dict(field.data_type().clone())
+                            }
+                            _ => field.data_type().clone(),
+                        }
+                    } else {
+                        field.data_type().clone()
+                    };
+                    Ok(field.with_data_type(corrected))
+                }),
+        )
+        .collect::<Result<Vec<Field>, _>>()?;
+
+    Ok(Arc::new(ArrowSchema::new(fields)))
+}
+
+pub(crate) trait DataFusionFileMixins {
+    /// Iterate over all files in the log matching a predicate
+    fn files_matching_predicate(&self, filters: &[Expr]) -> DeltaResult<impl Iterator<Item = Add>>;
+}
+
+impl DataFusionFileMixins for EagerSnapshot {
+    fn files_matching_predicate(&self, filters: &[Expr]) -> DeltaResult<impl Iterator<Item = Add>> {
+        files_matching_predicate(self, filters)
+    }
+}
+
+pub(crate) fn files_matching_predicate<'a>(
+    snapshot: &'a EagerSnapshot,
+    filters: &[Expr],
+) -> DeltaResult<impl Iterator<Item = Add> + 'a> {
+    if let Some(Some(predicate)) =
+        (!filters.is_empty()).then_some(conjunction(filters.iter().cloned()))
+    {
+        let expr = logical_expr_to_physical_expr(&predicate, snapshot.arrow_schema()?.as_ref());
+        let pruning_predicate = PruningPredicate::try_new(expr, snapshot.arrow_schema()?)?;
+        Ok(Either::Left(
+            snapshot
+                .file_actions()?
+                .zip(pruning_predicate.prune(snapshot)?)
+                .filter_map(
+                    |(action, keep_file)| {
+                        if keep_file {
+                            Some(action)
+                        } else {
+                            None
+                        }
+                    },
+                ),
+        ))
+    } else {
+        Ok(Either::Right(snapshot.file_actions()?))
     }
 }
 
