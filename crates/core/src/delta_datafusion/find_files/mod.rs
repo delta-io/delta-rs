@@ -33,11 +33,7 @@ pub mod physical;
 lazy_static! {
     static ref ONLY_FILES_SCHEMA: Arc<Schema> = {
         let mut builder = SchemaBuilder::new();
-        builder.push(Field::new(
-            PATH_COLUMN,
-            DataType::Dictionary(Box::new(DataType::UInt16), Box::new(DataType::Utf8)),
-            false,
-        ));
+        builder.push(Field::new(PATH_COLUMN, DataType::Utf8, false));
         Arc::new(builder.finish())
     };
     static ref ONLY_FILES_DF_SCHEMA: DFSchemaRef =
@@ -135,11 +131,10 @@ async fn scan_table_by_files(
     expression: Expr,
 ) -> Result<RecordBatch> {
     register_store(log_store.clone(), state.runtime_env().clone());
-    let scan_config = DeltaScanConfigBuilder {
-        include_file_column: true,
-        ..Default::default()
-    }
-    .build(&snapshot)?;
+    let scan_config = DeltaScanConfigBuilder::new()
+        .wrap_partition_values(false)
+        .with_file_column(true)
+        .build(&snapshot)?;
 
     let logical_schema = df_logical_schema(&snapshot, &scan_config)?;
 
