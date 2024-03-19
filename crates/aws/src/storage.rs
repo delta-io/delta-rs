@@ -65,7 +65,7 @@ impl ObjectStoreFactory for S3ObjectStoreFactory {
 
         let mut builder = object_store::aws::AmazonS3Builder::new();
         
-        let url_decoded = match urlencoding::decode(url.as_str()) {
+        /* let url_decoded = match urlencoding::decode(url.as_str()) {
             Ok(res) => {
                 println!("TEST CODE - BEFORE DECODE - {:?}", url);
                 let result = res.into_owned();
@@ -78,8 +78,9 @@ impl ObjectStoreFactory for S3ObjectStoreFactory {
                 url.as_str().to_string()
             }
         };
+        */
 
-        builder = builder.with_url(url_decoded);
+        builder = builder.with_url(url.as_str());
 
         // TODO: better code
         // TODO: get rid of clone
