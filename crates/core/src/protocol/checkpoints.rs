@@ -18,9 +18,7 @@ use tracing::{debug, error};
 
 use super::{time_utils, ProtocolError};
 use crate::kernel::arrow::delta_log_schema_for_table;
-use crate::kernel::{
-    Action, Add as AddAction, DataType, PrimitiveType, Protocol, Remove, StructField, Txn,
-};
+use crate::kernel::{Action, Add as AddAction, DataType, PrimitiveType, Remove, StructField, Txn};
 use crate::logstore::LogStore;
 use crate::table::state::DeltaTableState;
 use crate::table::{get_partition_col_data_types, CheckPoint, CheckPointBuilder};
@@ -276,44 +274,39 @@ fn parquet_bytes_from_state(
     }
     let files = state.file_actions().unwrap();
     // protocol
-    let jsons = std::iter::once(Action::Protocol(Protocol {
-        min_reader_version: state.protocol().min_reader_version,
-        min_writer_version: state.protocol().min_writer_version,
-        writer_features: None,
-        reader_features: None,
-    }))
-    // metaData
-    .chain(std::iter::once(Action::Metadata(current_metadata.clone())))
-    // txns
-    .chain(
-        state
-            .app_transaction_version()
-            .iter()
-            .map(|(app_id, version)| {
-                Action::Txn(Txn {
-                    app_id: app_id.clone(),
-                    version: *version,
-                    last_updated: None,
-                })
-            }),
-    )
-    // removes
-    .chain(tombstones.iter().map(|r| {
-        let mut r = (*r).clone();
+    let jsons = std::iter::once(Action::Protocol(state.protocol().clone()))
+        // metaData
+        .chain(std::iter::once(Action::Metadata(current_metadata.clone())))
+        // txns
+        .chain(
+            state
+                .app_transaction_version()
+                .iter()
+                .map(|(app_id, version)| {
+                    Action::Txn(Txn {
+                        app_id: app_id.clone(),
+                        version: *version,
+                        last_updated: None,
+                    })
+                }),
+        )
+        // removes
+        .chain(tombstones.iter().map(|r| {
+            let mut r = (*r).clone();
 
-        // As a "new writer", we should always set `extendedFileMetadata` when writing, and include/ignore the other three fields accordingly.
-        // https://github.com/delta-io/delta/blob/fb0452c2fb142310211c6d3604eefb767bb4a134/core/src/main/scala/org/apache/spark/sql/delta/actions/actions.scala#L311-L314
-        if r.extended_file_metadata.is_none() {
-            r.extended_file_metadata = Some(false);
-        }
+            // As a "new writer", we should always set `extendedFileMetadata` when writing, and include/ignore the other three fields accordingly.
+            // https://github.com/delta-io/delta/blob/fb0452c2fb142310211c6d3604eefb767bb4a134/core/src/main/scala/org/apache/spark/sql/delta/actions/actions.scala#L311-L314
+            if r.extended_file_metadata.is_none() {
+                r.extended_file_metadata = Some(false);
+            }
 
-        Action::Remove(r)
-    }))
-    .map(|a| serde_json::to_value(a).map_err(ProtocolError::from))
-    // adds
-    .chain(files.iter().map(|f| {
-        checkpoint_add_from_state(f, partition_col_data_types.as_slice(), &stats_conversions)
-    }));
+            Action::Remove(r)
+        }))
+        .map(|a| serde_json::to_value(a).map_err(ProtocolError::from))
+        // adds
+        .chain(files.iter().map(|f| {
+            checkpoint_add_from_state(f, partition_col_data_types.as_slice(), &stats_conversions)
+        }));
 
     // Create the arrow schema that represents the Checkpoint parquet file.
     let arrow_schema = delta_log_schema_for_table(
@@ -532,6 +525,7 @@ mod tests {
 
     use super::*;
     use crate::kernel::StructType;
+    use crate::operations::transaction::{CommitBuilder, TableReference};
     use crate::operations::DeltaOps;
     use crate::protocol::Metadata;
     use crate::writer::test_utils::get_delta_schema;
@@ -590,19 +584,22 @@ mod tests {
             .expect("Time went backwards")
             .as_millis() as i64;
 
-        let v = crate::operations::transaction::commit(
-            table.log_store().clone().as_ref(),
-            &actions,
-            crate::protocol::DeltaOperation::StreamingUpdate {
-                output_mode: crate::protocol::OutputMode::Append,
-                query_id: "test".into(),
-                epoch_id,
-            },
-            table.state.as_ref(),
-            None,
-        )
-        .await
-        .expect("Failed to commit");
+        let operation = crate::protocol::DeltaOperation::StreamingUpdate {
+            output_mode: crate::protocol::OutputMode::Append,
+            query_id: "test".into(),
+            epoch_id,
+        };
+        let v = CommitBuilder::default()
+            .with_actions(actions)
+            .build(
+                table.state.as_ref().map(|f| f as &dyn TableReference),
+                table.log_store(),
+                operation,
+            )
+            .unwrap()
+            .await
+            .unwrap()
+            .version();
 
         assert_eq!(1, v, "Expected the commit to create table version 1");
         table.load().await.expect("Failed to reload table");

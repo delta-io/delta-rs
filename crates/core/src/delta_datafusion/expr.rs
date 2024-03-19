@@ -376,7 +376,7 @@ mod test {
     use datafusion_expr::{cardinality, col, lit, substring, Cast, Expr, ExprSchemable};
     use datafusion_functions::expr_fn::decode;
 
-    use crate::delta_datafusion::DeltaSessionContext;
+    use crate::delta_datafusion::{DataFusionMixins, DeltaSessionContext};
     use crate::kernel::{ArrayType, DataType, PrimitiveType, StructField, StructType};
     use crate::{DeltaOps, DeltaTable};
 

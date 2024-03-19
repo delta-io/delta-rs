@@ -1,6 +1,6 @@
 [package]
 name = "deltalake-python"
-version = "0.16.0"
+version = "0.16.1"
 authors = ["Qingping Hou <dave2008713@gmail.com>", "Will Jones <willjones127@gmail.com>"]
 homepage = "https://github.com/delta-io/delta-rs"
 license = "Apache-2.0"
@@ -45,7 +45,7 @@ features = ["extension-module", "abi3", "abi3-py38"]
 [dependencies.deltalake]
 path = "../crates/deltalake"
 version = "0"
-features = ["azure", "gcs", "python", "datafusion", "unity-experimental"]
+features = ["azure", "gcs", "python", "datafusion", "unity-experimental", "mount"]
 
 [features]
 default = ["rustls"]

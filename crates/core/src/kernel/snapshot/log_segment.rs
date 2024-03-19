@@ -1,5 +1,5 @@
 use std::cmp::Ordering;
-use std::collections::{HashMap, VecDeque};
+use std::collections::VecDeque;
 use std::sync::Arc;
 
 use arrow_array::RecordBatch;
@@ -13,19 +13,15 @@ use parquet::arrow::arrow_reader::ArrowReaderOptions;
 use parquet::arrow::async_reader::{ParquetObjectReader, ParquetRecordBatchStreamBuilder};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 use tracing::debug;
 
 use super::parse;
-use crate::kernel::{arrow::json, Action, ActionType, Metadata, Protocol, Schema, StructType};
+use crate::kernel::{arrow::json, ActionType, Metadata, Protocol, Schema, StructType};
 use crate::logstore::LogStore;
-use crate::operations::transaction::get_commit_bytes;
-use crate::protocol::DeltaOperation;
+use crate::operations::transaction::CommitData;
 use crate::{DeltaResult, DeltaTableConfig, DeltaTableError};
 
 const LAST_CHECKPOINT_FILE_NAME: &str = "_last_checkpoint";
-
-pub type CommitData = (Vec<Action>, DeltaOperation, Option<HashMap<String, Value>>);
 
 lazy_static! {
     static ref CHECKPOINT_FILE_PATTERN: Regex =
@@ -351,10 +347,10 @@ impl LogSegment {
         let mut decoder = json::get_decoder(Arc::new(read_schema.try_into()?), config)?;
 
         let mut commit_data = Vec::new();
-        for (actions, operation, app_metadata) in commits {
+        for commit in commits {
             self.version += 1;
             let path = log_path.child(format!("{:020}.json", self.version));
-            let bytes = get_commit_bytes(operation, actions, app_metadata.clone())?;
+            let bytes = commit.get_bytes()?;
             let meta = ObjectMeta {
                 location: path,
                 size: bytes.len(),
@@ -449,7 +445,7 @@ async fn list_log_files_with_checkpoint(
     let checkpoint_files = files
         .iter()
         .filter_map(|f| {
-            if f.location.is_checkpoint_file() {
+            if f.location.is_checkpoint_file() && f.location.commit_version() == Some(cp.version) {
                 Some(f.clone())
             } else {
                 None
