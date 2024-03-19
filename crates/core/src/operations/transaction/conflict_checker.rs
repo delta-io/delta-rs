@@ -2,6 +2,7 @@
 use std::collections::HashSet;
 
 use super::CommitInfo;
+#[cfg(feature = "datafusion")]
 use crate::delta_datafusion::DataFusionMixins;
 use crate::errors::DeltaResult;
 use crate::kernel::EagerSnapshot;
@@ -192,7 +193,7 @@ impl<'a> TransactionInfo<'a> {
 
     #[cfg(not(feature = "datafusion"))]
     /// Files read by the transaction
-    pub fn read_files(&self) -> Result<impl Iterator<Item = Add>, CommitConflictError> {
+    pub fn read_files(&self) -> Result<impl Iterator<Item = Add> + '_, CommitConflictError> {
         Ok(self.read_snapshot.file_actions().unwrap().into_iter())
     }
 
