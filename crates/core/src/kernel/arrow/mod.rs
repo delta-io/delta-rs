@@ -451,7 +451,9 @@ pub(crate) fn delta_log_schema_for_table(
                 ],
                 protocol[
                     minReaderVersion:Int32,
-                    minWriterVersion:Int32
+                    minWriterVersion:Int32,
+                    writerFeatures[element]{Utf8},
+                    readerFeatures[element]{Utf8}
                 ],
                 txn[
                     appId:Utf8,
