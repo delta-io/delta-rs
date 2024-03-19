@@ -16,7 +16,7 @@
 set -e
 
 LANGUAGE="rust"
-SINCE_VERSION=${SINCE_VERSION:-"0.16.0"}
+SINCE_VERSION=${SINCE_VERSION:-"0.17.0"}
 FUTURE_RELEASE=${FUTURE_RELEASE:-"0.18.0"}
 
 # only consider tags of the correct language

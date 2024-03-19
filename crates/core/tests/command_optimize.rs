@@ -9,7 +9,7 @@ use deltalake_core::kernel::{Action, DataType, PrimitiveType, StructField};
 use deltalake_core::operations::optimize::{
     create_merge_plan, MetricDetails, Metrics, OptimizeType,
 };
-use deltalake_core::operations::transaction::commit;
+use deltalake_core::operations::transaction::{CommitBuilder, CommitProperties};
 use deltalake_core::operations::DeltaOps;
 use deltalake_core::protocol::DeltaOperation;
 use deltalake_core::storage::ObjectStoreRef;
@@ -296,17 +296,20 @@ async fn test_conflict_for_remove_actions() -> Result<(), Box<dyn Error>> {
     let remove = add.remove_action(true);
 
     let operation = DeltaOperation::Delete { predicate: None };
-    commit(
-        other_dt.log_store().as_ref(),
-        &vec![Action::Remove(remove)],
-        operation,
-        Some(other_dt.snapshot()?),
-        None,
-    )
-    .await?;
+    CommitBuilder::default()
+        .with_actions(vec![Action::Remove(remove)])
+        .build(Some(other_dt.snapshot()?), other_dt.log_store(), operation)?
+        .await?;
 
     let maybe_metrics = plan
-        .execute(dt.log_store(), dt.snapshot()?, 1, 20, None, None)
+        .execute(
+            dt.log_store(),
+            dt.snapshot()?,
+            1,
+            20,
+            None,
+            CommitProperties::default(),
+        )
         .await;
 
     assert!(maybe_metrics.is_err());
@@ -358,7 +361,14 @@ async fn test_no_conflict_for_append_actions() -> Result<(), Box<dyn Error>> {
     .await?;
 
     let metrics = plan
-        .execute(dt.log_store(), dt.snapshot()?, 1, 20, None, None)
+        .execute(
+            dt.log_store(),
+            dt.snapshot()?,
+            1,
+            20,
+            None,
+            CommitProperties::default(),
+        )
         .await?;
     assert_eq!(metrics.num_files_added, 1);
     assert_eq!(metrics.num_files_removed, 2);
@@ -404,7 +414,7 @@ async fn test_commit_interval() -> Result<(), Box<dyn Error>> {
             1,
             20,
             Some(Duration::from_secs(0)), // this will cause as many commits as num_files_added
-            None,
+            CommitProperties::default(),
         )
         .await?;
     assert_eq!(metrics.num_files_added, 2);

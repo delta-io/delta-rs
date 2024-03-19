@@ -1350,6 +1350,10 @@ class TableMerger:
         """Update a matched table row based on the rules defined by ``updates``.
         If a ``predicate`` is specified, then it must evaluate to true for the row to be updated.
 
+        Note:
+            Column names with special characters, such as numbers or spaces should be encapsulated
+            in backticks: "target.`123column`" or "target.`my column`"
+
         Args:
             updates: a mapping of column name to update SQL expression.
             predicate:  SQL like predicate on when to update.
@@ -1362,10 +1366,10 @@ class TableMerger:
             from deltalake import DeltaTable, write_deltalake
             import pyarrow as pa
 
-            data = pa.table({"x": [1, 2, 3], "y": [4, 5, 6]})
+            data = pa.table({"x": [1, 2, 3], "1y": [4, 5, 6]})
             write_deltalake("tmp", data)
             dt = DeltaTable("tmp")
-            new_data = pa.table({"x": [1], "y": [7]})
+            new_data = pa.table({"x": [1], "1y": [7]})
 
             (
                  dt.merge(
@@ -1373,7 +1377,7 @@ class TableMerger:
                      predicate="target.x = source.x",
                      source_alias="source",
                      target_alias="target")
-                 .when_matched_update(updates={"x": "source.x", "y": "source.y"})
+                 .when_matched_update(updates={"x": "source.x", "`1y`": "source.`1y`"})
                  .execute()
             )
             {'num_source_rows': 1, 'num_target_rows_inserted': 0, 'num_target_rows_updated': 1, 'num_target_rows_deleted': 0, 'num_target_rows_copied': 2, 'num_output_rows': 3, 'num_target_files_added': 1, 'num_target_files_removed': 1, 'execution_time_ms': ..., 'scan_time_ms': ..., 'rewrite_time_ms': ...}
@@ -1398,6 +1402,10 @@ class TableMerger:
     def when_matched_update_all(self, predicate: Optional[str] = None) -> "TableMerger":
         """Updating all source fields to target fields, source and target are required to have the same field names.
         If a ``predicate`` is specified, then it must evaluate to true for the row to be updated.
+
+        Note:
+            Column names with special characters, such as numbers or spaces should be encapsulated
+            in backticks: "target.`123column`" or "target.`my column`"
 
         Args:
             predicate: SQL like predicate on when to update all columns.
@@ -1438,7 +1446,7 @@ class TableMerger:
         trgt_alias = (self.target_alias + ".") if self.target_alias is not None else ""
 
         updates = {
-            f"{trgt_alias}{col.name}": f"{src_alias}{col.name}"
+            f"{trgt_alias}`{col.name}`": f"{src_alias}`{col.name}`"
             for col in self.source.schema
         }
 
@@ -1456,6 +1464,10 @@ class TableMerger:
     def when_matched_delete(self, predicate: Optional[str] = None) -> "TableMerger":
         """Delete a matched row from the table only if the given ``predicate`` (if specified) is
         true for the matched row. If not specified it deletes all matches.
+
+        Note:
+            Column names with special characters, such as numbers or spaces should be encapsulated
+            in backticks: "target.`123column`" or "target.`my column`"
 
         Args:
            predicate (str | None, Optional):  SQL like predicate on when to delete.
@@ -1533,6 +1545,10 @@ class TableMerger:
         """Insert a new row to the target table based on the rules defined by ``updates``. If a
         ``predicate`` is specified, then it must evaluate to true for the new row to be inserted.
 
+        Note:
+            Column names with special characters, such as numbers or spaces should be encapsulated
+            in backticks: "target.`123column`" or "target.`my column`"
+
         Args:
             updates (dict):  a mapping of column name to insert SQL expression.
             predicate (str | None, Optional): SQL like predicate on when to insert.
@@ -1592,6 +1608,10 @@ class TableMerger:
         required to have the same field names. If a ``predicate`` is specified, then it must evaluate to true for
         the new row to be inserted.
 
+        Note:
+            Column names with special characters, such as numbers or spaces should be encapsulated
+            in backticks: "target.`123column`" or "target.`my column`"
+
         Args:
             predicate: SQL like predicate on when to insert.
 
@@ -1631,7 +1651,7 @@ class TableMerger:
         src_alias = (self.source_alias + ".") if self.source_alias is not None else ""
         trgt_alias = (self.target_alias + ".") if self.target_alias is not None else ""
         updates = {
-            f"{trgt_alias}{col.name}": f"{src_alias}{col.name}"
+            f"{trgt_alias}`{col.name}`": f"{src_alias}`{col.name}`"
             for col in self.source.schema
         }
         if isinstance(self.not_matched_insert_updates, list) and isinstance(
@@ -1650,6 +1670,10 @@ class TableMerger:
     ) -> "TableMerger":
         """Update a target row that has no matches in the source based on the rules defined by ``updates``.
         If a ``predicate`` is specified, then it must evaluate to true for the row to be updated.
+
+        Note:
+            Column names with special characters, such as numbers or spaces should be encapsulated
+            in backticks: "target.`123column`" or "target.`my column`"
 
         Args:
             updates: a mapping of column name to update SQL expression.
@@ -1704,6 +1728,10 @@ class TableMerger:
     ) -> "TableMerger":
         """Delete a target row that has no matches in the source from the table only if the given
         ``predicate`` (if specified) is true for the target row.
+
+        Note:
+            Column names with special characters, such as numbers or spaces should be encapsulated
+            in backticks: "target.`123column`" or "target.`my column`"
 
         Args:
             predicate:  SQL like predicate on when to delete when not matched by source.
