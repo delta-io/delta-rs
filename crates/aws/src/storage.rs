@@ -70,6 +70,20 @@ impl ObjectStoreFactory for S3ObjectStoreFactory {
             }),
         )?;
 
+        let prefix = match urlencoding::decode(prefix.to_string().as_str()) {
+            Ok(res) => {
+                println!("TEST CODE - BEFORE DECODE - {:?}", prefix);
+                let result = Path::from_url_path(res.into_owned())?;
+                println!("TEST CODE - AFTER DECODE - {:?}", result);
+                result
+            }
+            Err(e) => {
+                // Default back to prefix as is
+                println!("TEST CODE - COULD NOT DECODE, err: {:?}", e);
+                prefix
+            }
+        };
+
         if options
             .0
             .contains_key(AmazonS3ConfigKey::CopyIfNotExists.as_ref())
