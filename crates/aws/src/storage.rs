@@ -63,9 +63,10 @@ impl ObjectStoreFactory for S3ObjectStoreFactory {
     ) -> DeltaResult<(ObjectStoreRef, Path)> {
         let options = self.with_env_s3(options);
 
+        /*
         let mut builder = object_store::aws::AmazonS3Builder::new();
         
-        /* let url_decoded = match urlencoding::decode(url.as_str()) {
+        let url_decoded = match urlencoding::decode(url.as_str()) {
             Ok(res) => {
                 println!("TEST CODE - BEFORE DECODE - {:?}", url);
                 let result = res.into_owned();
@@ -78,7 +79,6 @@ impl ObjectStoreFactory for S3ObjectStoreFactory {
                 url.as_str().to_string()
             }
         };
-        */
 
         builder = builder.with_url(url.as_str());
 
@@ -91,10 +91,9 @@ impl ObjectStoreFactory for S3ObjectStoreFactory {
                 }
         }
 
-
         // TODO: fix prefix
         let (store, prefix) = (Box::new(builder.build()?) as Box<dyn ObjectStore>, Path::from_absolute_path("")?);
-        /*
+        */
         let (store, prefix) = parse_url_opts(
             url,
             options.0.iter().filter_map(|(key, value)| {
@@ -102,7 +101,6 @@ impl ObjectStoreFactory for S3ObjectStoreFactory {
                 Some((s3_key, value.clone()))
             }),
         )?;
-        */
 
         /*
         let prefix = match urlencoding::decode(prefix.to_string().as_str()) {
