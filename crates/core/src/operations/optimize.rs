@@ -39,12 +39,12 @@ use parquet::file::properties::WriterProperties;
 use serde::{Deserialize, Serialize};
 use tracing::debug;
 
-use super::transaction::{commit_with_retries, DEFAULT_MAX_RETRIES, PROTOCOL};
+use super::transaction::PROTOCOL;
 use super::writer::{PartitionWriter, PartitionWriterConfig};
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::{Action, PartitionsExt, Remove, Scalar};
 use crate::logstore::LogStoreRef;
-use crate::operations::transaction::{CommitBuilder, CommitProperties};
+use crate::operations::transaction::{CommitBuilder, CommitProperties, DEFAULT_RETRIES};
 use crate::protocol::DeltaOperation;
 use crate::storage::ObjectStoreRef;
 use crate::table::state::DeltaTableState;
@@ -741,24 +741,10 @@ impl MergePlan {
                 }
 
                 debug!("committing {} actions", actions.len());
-/*
-                commit_with_retries(
-                    table.log_store.as_ref(),
-                    &actions,
-                    self.task_parameters.input_parameters.clone().into(),
-                    Some(table.snapshot()?),
-                    Some(app_metadata.clone()),
-                    DEFAULT_MAX_RETRIES + commits_made,
-                )
-                .await?;
-
-                commits_made += 1;
-*/
-                //// TODO: Check for remove actions on optimized partitions. If a
-                //// optimized partition was updated then abort the commit. Requires (#593).
 
                 CommitBuilder::from(properties)
                     .with_actions(actions)
+                    .with_max_retries(DEFAULT_RETRIES + commits_made)
                     .build(
                         Some(snapshot),
                         log_store.clone(),
@@ -766,6 +752,7 @@ impl MergePlan {
                     )?
                     .await?;
 
+                commits_made += 1;
             }
 
             if end {
@@ -780,6 +767,8 @@ impl MergePlan {
         if total_metrics.num_files_removed == 0 {
             total_metrics.files_removed.min = 0;
         }
+
+        table.update().await?;
 
         Ok(total_metrics)
     }

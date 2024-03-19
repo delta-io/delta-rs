@@ -96,7 +96,7 @@ mod state;
 pub(crate) mod test_utils;
 
 const DELTA_LOG_FOLDER: &str = "_delta_log";
-const DEFAULT_RETRIES: usize = 15;
+pub(crate) const DEFAULT_RETRIES: usize = 15;
 
 /// Error raised while commititng transaction
 #[derive(thiserror::Error, Debug)]
@@ -321,33 +321,6 @@ impl CommitProperties {
     }
 }
 
-
-/// The number of times that [`commit`] will re-try the commit before failing
-/// with [`TransactionError::MaxCommitAttempts`].
-pub const DEFAULT_MAX_RETRIES: usize = 15;
-
-/// Commit a transaction, with up to 15 retries. This is higher-level transaction API.
-///
-/// Will error early if the a concurrent transaction has already been committed
-/// and conflicts with this transaction.
-pub async fn commit(
-    log_store: &dyn LogStore,
-    actions: &Vec<Action>,
-    operation: DeltaOperation,
-    read_snapshot: Option<&DeltaTableState>,
-    app_metadata: Option<HashMap<String, Value>>,
-) -> DeltaResult<i64> {
-    commit_with_retries(
-        log_store,
-        actions,
-        operation,
-        read_snapshot,
-        app_metadata,
-        DEFAULT_MAX_RETRIES,
-    )
-    .await
-}
-
 impl From<CommitProperties> for CommitBuilder {
     fn from(value: CommitProperties) -> Self {
         CommitBuilder {
@@ -385,6 +358,12 @@ impl<'a> CommitBuilder {
     /// Metadata for the operation performed like metrics, user, and notebook
     pub fn with_app_metadata(mut self, app_metadata: HashMap<String, Value>) -> Self {
         self.app_metadata = app_metadata;
+        self
+    }
+
+    /// Maximum number of times to retry the transaction before failing to commit
+    pub fn with_max_retries(mut self, max_retries: usize) -> Self {
+        self.max_retries = max_retries;
         self
     }
 
