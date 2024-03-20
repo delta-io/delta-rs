@@ -1,12 +1,34 @@
 //! Provide common cast functionality for callers
 //!
-use crate::kernel::{ArrayType, DataType as DeltaDataType, MapType, StructField, StructType};
+use crate::kernel::{
+    ArrayType, DataType as DeltaDataType, MapType, MetadataValue, StructField, StructType,
+};
 use arrow_array::{new_null_array, Array, ArrayRef, RecordBatch, StructArray};
 use arrow_cast::{cast_with_options, CastOptions};
 use arrow_schema::{ArrowError, DataType, Fields, SchemaRef as ArrowSchemaRef};
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::DeltaResult;
+
+fn try_merge_metadata(
+    left: &mut HashMap<String, MetadataValue>,
+    right: &HashMap<String, MetadataValue>,
+) -> Result<(), ArrowError> {
+    for (k, v) in right {
+        if let Some(vl) = left.get(k) {
+            if vl != v {
+                return Err(ArrowError::SchemaError(format!(
+                    "Cannot merge metadata with different values for key {}",
+                    k
+                )));
+            }
+        } else {
+            left.insert(k.clone(), v.clone());
+        }
+    }
+    Ok(())
+}
 
 pub(crate) fn merge_struct(
     left: &StructType,
@@ -25,11 +47,17 @@ pub(crate) fn merge_struct(
                         errors.push(e.to_string());
                         Err(e)
                     }
-                    Ok(f) => Ok(StructField::new(
-                        field.name(),
-                        f,
-                        field.is_nullable() || right_field.is_nullable(),
-                    )),
+                    Ok(f) => {
+                        let mut new_field = StructField::new(
+                            field.name(),
+                            f,
+                            field.is_nullable() || right_field.is_nullable(),
+                        );
+
+                        new_field.metadata = field.metadata.clone();
+                        try_merge_metadata(&mut new_field.metadata, &right_field.metadata)?;
+                        Ok(new_field)
+                    }
                 }
             } else {
                 Ok(field.clone())
@@ -172,12 +200,17 @@ pub fn cast_record_batch(
 
 #[cfg(test)]
 mod tests {
-    use crate::kernel::{ArrayType as DeltaArrayType, DataType as DeltaDataType};
+    use crate::kernel::{
+        ArrayType as DeltaArrayType, DataType as DeltaDataType, StructField as DeltaStructField,
+        StructType as DeltaStructType,
+    };
+    use crate::operations::cast::MetadataValue;
     use crate::operations::cast::{cast_record_batch, is_cast_required};
     use arrow::array::ArrayData;
     use arrow_array::{Array, ArrayRef, ListArray, RecordBatch};
     use arrow_buffer::Buffer;
     use arrow_schema::{DataType, Field, FieldRef, Fields, Schema, SchemaRef};
+    use std::collections::HashMap;
     use std::sync::Arc;
 
     #[test]
@@ -199,6 +232,36 @@ mod tests {
         assert_eq!(delta_type, DeltaDataType::STRING);
         assert_eq!(result.fields()[0].is_nullable(), true);
     }
+
+    #[test]
+    fn test_merge_schema_with_meta() {
+        let mut left_meta = HashMap::new();
+        left_meta.insert("a".to_string(), "a1".to_string());
+        let left_schema = DeltaStructType::new(vec![DeltaStructField::new(
+            "f",
+            DeltaDataType::STRING,
+            false,
+        )
+        .with_metadata(left_meta)]);
+        let mut right_meta = HashMap::new();
+        right_meta.insert("b".to_string(), "b2".to_string());
+        let right_schema = DeltaStructType::new(vec![DeltaStructField::new(
+            "f",
+            DeltaDataType::STRING,
+            true,
+        )
+        .with_metadata(right_meta)]);
+
+        let result = super::merge_struct(&left_schema, &right_schema).unwrap();
+        assert_eq!(result.fields().len(), 1);
+        let delta_type = result.fields()[0].data_type();
+        assert_eq!(delta_type, &DeltaDataType::STRING);
+        let mut expected_meta = HashMap::new();
+        expected_meta.insert("a".to_string(), MetadataValue::String("a1".to_string()));
+        expected_meta.insert("b".to_string(), MetadataValue::String("b2".to_string()));
+        assert_eq!(result.fields()[0].metadata(), &expected_meta);
+    }
+
     #[test]
     fn test_merge_schema_with_nested() {
         let left_schema = Arc::new(Schema::new(vec![Field::new(
