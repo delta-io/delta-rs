@@ -128,7 +128,9 @@ def test_features_null_on_below_v3_v7(tmp_path: pathlib.Path):
     assert protocol_after_checkpoint.writer_features is None
     assert current_protocol == protocol_after_checkpoint
 
-    checkpoint = pq.read_table(os.path.join(tmp_path, "_delta_log/00000000000000000000.checkpoint.parquet"))
-    
-    assert checkpoint['protocol'][0]['writerFeatures'].as_py() is None
-    assert checkpoint['protocol'][0]['readerFeatures'].as_py() is None
+    checkpoint = pq.read_table(
+        os.path.join(tmp_path, "_delta_log/00000000000000000000.checkpoint.parquet")
+    )
+
+    assert checkpoint["protocol"][0]["writerFeatures"].as_py() is None
+    assert checkpoint["protocol"][0]["readerFeatures"].as_py() is None
