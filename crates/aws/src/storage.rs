@@ -62,7 +62,6 @@ impl ObjectStoreFactory for S3ObjectStoreFactory {
         options: &StorageOptions,
     ) -> DeltaResult<(ObjectStoreRef, Path)> {
         let options = self.with_env_s3(options);
-
         let (store, prefix) = parse_url_opts(
             url,
             options.0.iter().filter_map(|(key, value)| {
