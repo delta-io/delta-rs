@@ -1,6 +1,6 @@
 //! Implementation for writing delta checkpoints.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::iter::Iterator;
 
 use arrow_json::ReaderBuilder;
