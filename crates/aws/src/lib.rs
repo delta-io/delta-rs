@@ -43,15 +43,12 @@ impl LogStoreFactory for S3LogStoreFactory {
     ) -> DeltaResult<Arc<dyn LogStore>> {
         let path_decoded = match urlencoding::decode(location.path()) {
             Ok(res) => {
-                println!("TEST CODE - BEFORE DECODE - {:?}", location);
                 let result = res.into_owned();
-                println!("TEST CODE - AFTER DECODE - {:?}", result);
                 result
             }
             Err(e) => {
                 // Default back to prefix as is
-                println!("TEST CODE - COULD NOT DECODE, err: {:?}", e);
-                location.as_str().to_string()
+                location.path().to_string()
             }
         };
 

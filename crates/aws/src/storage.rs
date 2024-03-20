@@ -63,37 +63,6 @@ impl ObjectStoreFactory for S3ObjectStoreFactory {
     ) -> DeltaResult<(ObjectStoreRef, Path)> {
         let options = self.with_env_s3(options);
 
-        /*
-        let mut builder = object_store::aws::AmazonS3Builder::new();
-        
-        let url_decoded = match urlencoding::decode(url.as_str()) {
-            Ok(res) => {
-                println!("TEST CODE - BEFORE DECODE - {:?}", url);
-                let result = res.into_owned();
-                println!("TEST CODE - AFTER DECODE - {:?}", result);
-                result
-            }
-            Err(e) => {
-                // Default back to prefix as is
-                println!("TEST CODE - COULD NOT DECODE, err: {:?}", e);
-                url.as_str().to_string()
-            }
-        };
-
-        builder = builder.with_url(url.as_str());
-
-        // TODO: better code
-        // TODO: get rid of clone
-        for (key, value) in options.clone().0.into_iter() {
-                let s3_key = AmazonS3ConfigKey::from_str(&key.to_ascii_lowercase()).ok();
-                if let Some(s3_key) = s3_key {
-                    builder = builder.with_config(s3_key, value.clone());
-                }
-        }
-
-        // TODO: fix prefix
-        let (store, prefix) = (Box::new(builder.build()?) as Box<dyn ObjectStore>, Path::from_absolute_path("")?);
-        */
         let (store, prefix) = parse_url_opts(
             url,
             options.0.iter().filter_map(|(key, value)| {
@@ -101,22 +70,6 @@ impl ObjectStoreFactory for S3ObjectStoreFactory {
                 Some((s3_key, value.clone()))
             }),
         )?;
-
-        /*
-        let prefix = match urlencoding::decode(prefix.to_string().as_str()) {
-            Ok(res) => {
-                println!("TEST CODE - BEFORE DECODE - {:?}", prefix);
-                let result = Path::from_url_path(res.into_owned())?;
-                println!("TEST CODE - AFTER DECODE - {:?}", result);
-                result
-            }
-            Err(e) => {
-                // Default back to prefix as is
-                println!("TEST CODE - COULD NOT DECODE, err: {:?}", e);
-                prefix
-            }
-        };
-        */
 
         if options
             .0
