@@ -1,61 +1,38 @@
 //! Provide common cast functionality for callers
 //!
-use crate::kernel::DataType as DeltaDataType;
-use arrow::datatypes::DataType::Dictionary;
+use crate::kernel::{ArrayType, DataType as DeltaDataType, MapType, StructField, StructType};
 use arrow_array::{new_null_array, Array, ArrayRef, RecordBatch, StructArray};
 use arrow_cast::{cast_with_options, CastOptions};
-use arrow_schema::{
-    ArrowError, DataType, Field as ArrowField, Fields, Schema as ArrowSchema,
-    SchemaRef as ArrowSchemaRef,
-};
+use arrow_schema::{ArrowError, DataType, Fields, SchemaRef as ArrowSchemaRef};
 use std::sync::Arc;
 
 use crate::DeltaResult;
 
-pub(crate) fn merge_field(left: &ArrowField, right: &ArrowField) -> Result<ArrowField, ArrowError> {
-    let left_type = left.data_type();
-    let right_type = right.data_type();
-    if left_type.equals_datatype(right_type) {
-        return Ok(left.clone());
-    }
-    let left_delta_type: DeltaDataType = left_type.try_into()?;
-    let right_delta_type: DeltaDataType = right_type.try_into()?;
-    if left_delta_type == right_delta_type {
-        // The types are same in delta, so we just pick the left one as a base
-        // As we only store the delta type in metadata, that should be fine
-        // However, we need to merge the nullable flag
-        if (left.is_nullable() || left.is_nullable() == right.is_nullable()) {
-            return Ok(left.clone());
-        }
-        let mut new_field = left.clone();
-        return Ok(new_field.with_nullable(left.is_nullable() || right.is_nullable()));
-    }
-    let mut new_field = left.clone();
-    new_field.try_merge(right)?; // this is mostly used for structs / arrays etc
-    Ok(new_field)
-}
-
-pub(crate) fn merge_schema(
-    left: ArrowSchema,
-    right: ArrowSchema,
-) -> Result<ArrowSchema, ArrowError> {
+pub(crate) fn merge_struct(
+    left: &StructType,
+    right: &StructType,
+) -> Result<StructType, ArrowError> {
     let mut errors = Vec::with_capacity(left.fields().len());
-    let merged_fields: Result<Vec<ArrowField>, ArrowError> = left
+    let merged_fields: Result<Vec<StructField>, ArrowError> = left
         .fields()
         .iter()
         .map(|field| {
             let right_field = right.field_with_name(field.name());
             if let Ok(right_field) = right_field {
-                let field_or_not = merge_field(field.as_ref(), right_field);
-                match field_or_not {
+                let type_or_not = merge_type(field.data_type(), right_field.data_type());
+                match type_or_not {
                     Err(e) => {
                         errors.push(e.to_string());
                         Err(e)
                     }
-                    Ok(f) => Ok(f),
+                    Ok(f) => Ok(StructField::new(
+                        field.name(),
+                        f,
+                        field.is_nullable() || right_field.is_nullable(),
+                    )),
                 }
             } else {
-                Ok(field.as_ref().clone())
+                Ok(field.clone())
             }
         })
         .collect();
@@ -63,17 +40,62 @@ pub(crate) fn merge_schema(
         Ok(mut fields) => {
             for field in right.fields() {
                 if !left.field_with_name(field.name()).is_ok() {
-                    fields.push(field.as_ref().clone());
+                    fields.push(field.clone());
                 }
             }
 
-            Ok(ArrowSchema::new(fields))
+            Ok(StructType::new(fields))
         }
         Err(e) => {
             errors.push(e.to_string());
             Err(ArrowError::SchemaError(errors.join("\n")))
         }
     }
+}
+
+pub(crate) fn merge_type(
+    left: &DeltaDataType,
+    right: &DeltaDataType,
+) -> Result<DeltaDataType, ArrowError> {
+    if left == right {
+        return Ok(left.clone());
+    }
+    match (left, right) {
+        (DeltaDataType::Array(a), DeltaDataType::Array(b)) => {
+            let merged = merge_type(&a.element_type, &b.element_type)?;
+            Ok(DeltaDataType::Array(Box::new(ArrayType::new(
+                merged,
+                a.contains_null() || b.contains_null(),
+            ))))
+        }
+        (DeltaDataType::Map(a), DeltaDataType::Map(b)) => {
+            let merged_key = merge_type(&a.key_type, &b.key_type)?;
+            let merged_value = merge_type(&a.value_type, &b.value_type)?;
+            Ok(DeltaDataType::Map(Box::new(MapType::new(
+                merged_key,
+                merged_value,
+                a.value_contains_null() || b.value_contains_null(),
+            ))))
+        }
+        (DeltaDataType::Struct(a), DeltaDataType::Struct(b)) => {
+            let merged = merge_struct(a, b)?;
+            Ok(DeltaDataType::Struct(Box::new(merged)))
+        }
+        (a, b) => Err(ArrowError::SchemaError(format!(
+            "Cannot merge types {} and {}",
+            a, b
+        ))),
+    }
+}
+
+pub(crate) fn merge_schema(
+    left: ArrowSchemaRef,
+    right: ArrowSchemaRef,
+) -> Result<ArrowSchemaRef, ArrowError> {
+    let left_delta: StructType = left.try_into()?;
+    let right_delta: StructType = right.try_into()?;
+    let merged: StructType = merge_struct(&left_delta, &right_delta)?;
+    Ok(Arc::new((&merged).try_into()?))
 }
 
 fn cast_struct(
@@ -150,7 +172,7 @@ pub fn cast_record_batch(
 
 #[cfg(test)]
 mod tests {
-    use crate::kernel::DataType as DeltaDataType;
+    use crate::kernel::{ArrayType as DeltaArrayType, DataType as DeltaDataType};
     use crate::operations::cast::{cast_record_batch, is_cast_required};
     use arrow::array::ArrayData;
     use arrow_array::{Array, ArrayRef, ListArray, RecordBatch};
@@ -160,17 +182,43 @@ mod tests {
 
     #[test]
     fn test_merge_schema_with_dict() {
-        let left_schema = Schema::new(vec![Field::new(
+        let left_schema = Arc::new(Schema::new(vec![Field::new(
             "f",
             DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
             false,
-        )]);
-        let right_schema = Schema::new(vec![Field::new("f", DataType::LargeUtf8, true)]);
+        )]));
+        let right_schema = Arc::new(Schema::new(vec![Field::new(
+            "f",
+            DataType::LargeUtf8,
+            true,
+        )]));
 
         let result = super::merge_schema(left_schema, right_schema).unwrap();
         assert_eq!(result.fields().len(), 1);
         let delta_type: DeltaDataType = result.fields()[0].data_type().try_into().unwrap();
         assert_eq!(delta_type, DeltaDataType::STRING);
+        assert_eq!(result.fields()[0].is_nullable(), true);
+    }
+    #[test]
+    fn test_merge_schema_with_nested() {
+        let left_schema = Arc::new(Schema::new(vec![Field::new(
+            "f",
+            DataType::LargeList(Arc::new(Field::new("item", DataType::Utf8, false))),
+            false,
+        )]));
+        let right_schema = Arc::new(Schema::new(vec![Field::new(
+            "f",
+            DataType::List(Arc::new(Field::new("item", DataType::LargeUtf8, false))),
+            true,
+        )]));
+
+        let result = super::merge_schema(left_schema, right_schema).unwrap();
+        assert_eq!(result.fields().len(), 1);
+        let delta_type: DeltaDataType = result.fields()[0].data_type().try_into().unwrap();
+        assert_eq!(
+            delta_type,
+            DeltaDataType::Array(Box::new(DeltaArrayType::new(DeltaDataType::STRING, false)))
+        );
         assert_eq!(result.fields()[0].is_nullable(), true);
     }
 
