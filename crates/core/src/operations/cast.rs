@@ -162,10 +162,7 @@ mod tests {
     fn test_merge_schema_with_dict() {
         let left_schema = Schema::new(vec![Field::new(
             "f",
-            DataType::Dictionary(
-                Box::new(DataType::Int32),
-                Box::new(DataType::Utf8),
-            ),
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
             false,
         )]);
         let right_schema = Schema::new(vec![Field::new("f", DataType::LargeUtf8, true)]);
