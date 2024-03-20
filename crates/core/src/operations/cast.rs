@@ -1,5 +1,6 @@
 //! Provide common cast functionality for callers
 //!
+use crate::kernel::DataType as DeltaDataType;
 use arrow::datatypes::DataType::Dictionary;
 use arrow_array::{new_null_array, Array, ArrayRef, RecordBatch, StructArray};
 use arrow_cast::{cast_with_options, CastOptions};
@@ -12,18 +13,25 @@ use std::sync::Arc;
 use crate::DeltaResult;
 
 pub(crate) fn merge_field(left: &ArrowField, right: &ArrowField) -> Result<ArrowField, ArrowError> {
-    if let Dictionary(_, value_type) = right.data_type() {
-        if value_type.equals_datatype(left.data_type()) {
+    let left_type = left.data_type();
+    let right_type = right.data_type();
+    if left_type.equals_datatype(right_type) {
+        return Ok(left.clone());
+    }
+    let left_delta_type: DeltaDataType = left_type.try_into()?;
+    let right_delta_type: DeltaDataType = right_type.try_into()?;
+    if left_delta_type == right_delta_type {
+        // The types are same in delta, so we just pick the left one as a base
+        // As we only store the delta type in metadata, that should be fine
+        // However, we need to merge the nullable flag
+        if (left.is_nullable() || left.is_nullable() == right.is_nullable()) {
             return Ok(left.clone());
         }
-    }
-    if let Dictionary(_, value_type) = left.data_type() {
-        if value_type.equals_datatype(right.data_type()) {
-            return Ok(right.clone());
-        }
+        let mut new_field = left.clone();
+        return Ok(new_field.with_nullable(left.is_nullable() || right.is_nullable()));
     }
     let mut new_field = left.clone();
-    new_field.try_merge(right)?;
+    new_field.try_merge(right)?; // this is mostly used for structs / arrays etc
     Ok(new_field)
 }
 
@@ -142,12 +150,32 @@ pub fn cast_record_batch(
 
 #[cfg(test)]
 mod tests {
+    use crate::kernel::DataType as DeltaDataType;
     use crate::operations::cast::{cast_record_batch, is_cast_required};
     use arrow::array::ArrayData;
     use arrow_array::{Array, ArrayRef, ListArray, RecordBatch};
     use arrow_buffer::Buffer;
     use arrow_schema::{DataType, Field, FieldRef, Fields, Schema, SchemaRef};
     use std::sync::Arc;
+
+    #[test]
+    fn test_merge_schema_with_dict() {
+        let left_schema = Schema::new(vec![Field::new(
+            "f",
+            DataType::Dictionary(
+                Box::new(DataType::Int32),
+                Box::new(DataType::Utf8),
+            ),
+            false,
+        )]);
+        let right_schema = Schema::new(vec![Field::new("f", DataType::LargeUtf8, true)]);
+
+        let result = super::merge_schema(left_schema, right_schema).unwrap();
+        assert_eq!(result.fields().len(), 1);
+        let delta_type: DeltaDataType = result.fields()[0].data_type().try_into().unwrap();
+        assert_eq!(delta_type, DeltaDataType::STRING);
+        assert_eq!(result.fields()[0].is_nullable(), true);
+    }
 
     #[test]
     fn test_cast_record_batch_with_list_non_default_item() {
