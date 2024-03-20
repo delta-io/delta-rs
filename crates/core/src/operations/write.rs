@@ -161,7 +161,7 @@ pub struct WriteBuilderConfig {
     /// Column names for table partitioning
     partition_columns: Option<Vec<String>>,
     /// Number of streams to run concurrently on reading
-    nr_concurrent_streams: u32,
+    concurrent_streams: u32,
     /// When using `Overwrite` mode, replace data that matches a predicate
     predicate: Option<Expression>,
     /// Size above which we will write a buffered parquet file to disk.
@@ -208,7 +208,7 @@ impl WriteBuilder {
                 safe_cast: false,
                 schema_mode: None,
                 writer_properties: None,
-                nr_concurrent_streams: 1,
+                concurrent_streams: 1,
                 commit_properties: CommitProperties::default(),
                 name: None,
                 description: None,
@@ -310,8 +310,8 @@ impl WriteBuilder {
     }
 
     /// Set the number of concurrent streams to use when writing data from a RecordBatch
-    pub fn with_nr_concurrent_streams(mut self, nr_concurrent_streams: u32) -> Self {
-        self.config.nr_concurrent_streams = nr_concurrent_streams;
+    pub fn with_concurrent_streams(mut self, concurrent_streams: u32) -> Self {
+        self.config.concurrent_streams = concurrent_streams;
         self
     }
 
@@ -730,7 +730,7 @@ impl std::future::IntoFuture for WriteBuilder {
                 }
                 Some(WriteData::RecordBatches((input_batches, _))) => {
                     let (sender, receiver) =
-                        async_channel::bounded(this.nr_concurrent_streams as usize);
+                        async_channel::bounded(this.concurrent_streams as usize);
                     producer_task = Some(tokio::task::spawn(async move {
                         for batch in input_batches {
                             sender.send(batch).await?;
@@ -738,7 +738,7 @@ impl std::future::IntoFuture for WriteBuilder {
                         sender.close();
                         Ok(())
                     }));
-                    (0..this.nr_concurrent_streams)
+                    (0..this.concurrent_streams)
                         .map(|_| {
                             let stream = receiver.clone().map(Ok);
                             Box::pin(RecordBatchStreamAdapter::new(input_schema.clone(), stream))

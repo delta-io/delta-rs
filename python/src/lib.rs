@@ -1408,7 +1408,6 @@ fn write_to_deltalake(
     py: Python,
     table_uri: String,
     data: PyArrowType<ArrowArrayStreamReader>,
-    data_schema: PyArrowType<ArrowSchema>,
     mode: String,
     max_rows_per_group: i64,
     schema_mode: Option<String>,
@@ -1416,7 +1415,7 @@ fn write_to_deltalake(
     predicate: Option<String>,
     name: Option<String>,
     description: Option<String>,
-    nr_concurrent_streams: Option<u32>,
+    concurrent_streams: Option<u32>,
     configuration: Option<HashMap<String, Option<String>>>,
     storage_options: Option<HashMap<String, String>>,
     writer_properties: Option<HashMap<String, Option<String>>>,
@@ -1434,10 +1433,7 @@ fn write_to_deltalake(
             .map_err(PythonError::from)?;
 
         let mut builder = table
-            .write(WriteData::RecordBatches((
-                Box::new(batches),
-                Arc::new(data_schema.0),
-            )))
+            .write(WriteData::RecordBatches((Box::new(batches), data.1)))
             .with_save_mode(save_mode)
             .with_write_batch_size(max_rows_per_group as usize);
         if let Some(schema_mode) = schema_mode {
@@ -1446,8 +1442,8 @@ fn write_to_deltalake(
         if let Some(partition_columns) = partition_by {
             builder = builder.with_partition_columns(partition_columns);
         }
-        if let Some(nr_concurrent_streams) = nr_concurrent_streams {
-            builder = builder.with_nr_concurrent_streams(nr_concurrent_streams);
+        if let Some(concurrent_streams) = concurrent_streams {
+            builder = builder.with_concurrent_streams(concurrent_streams);
         }
         if let Some(writer_props) = writer_properties {
             builder = builder.with_writer_properties(

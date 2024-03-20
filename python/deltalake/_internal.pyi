@@ -171,7 +171,6 @@ def write_new_deltalake(
 def write_to_deltalake(
     table_uri: str,
     data: pyarrow.RecordBatchReader,
-    data_schema: pyarrow.Schema,
     partition_by: Optional[List[str]],
     mode: str,
     max_rows_per_group: int,
@@ -179,7 +178,7 @@ def write_to_deltalake(
     predicate: Optional[str],
     name: Optional[str],
     description: Optional[str],
-    nr_concurrent_streams: Optional[int],
+    concurrent_streams: Optional[int],
     configuration: Optional[Mapping[str, Optional[str]]],
     storage_options: Optional[Dict[str, str]],
     writer_properties: Optional[Dict[str, Optional[str]]],
