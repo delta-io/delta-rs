@@ -1,6 +1,6 @@
 //! Implementation for writing delta checkpoints.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::iter::Iterator;
 
 use arrow_json::ReaderBuilder;
@@ -18,7 +18,9 @@ use tracing::{debug, error};
 
 use super::{time_utils, ProtocolError};
 use crate::kernel::arrow::delta_log_schema_for_table;
-use crate::kernel::{Action, Add as AddAction, DataType, PrimitiveType, Remove, StructField, Txn};
+use crate::kernel::{
+    Action, Add as AddAction, DataType, PrimitiveType, Protocol, Remove, StructField, Txn,
+};
 use crate::logstore::LogStore;
 use crate::table::state::DeltaTableState;
 use crate::table::{get_partition_col_data_types, CheckPoint, CheckPointBuilder};
@@ -274,39 +276,52 @@ fn parquet_bytes_from_state(
     }
     let files = state.file_actions().unwrap();
     // protocol
-    let jsons = std::iter::once(Action::Protocol(state.protocol().clone()))
-        // metaData
-        .chain(std::iter::once(Action::Metadata(current_metadata.clone())))
-        // txns
-        .chain(
-            state
-                .app_transaction_version()
-                .iter()
-                .map(|(app_id, version)| {
-                    Action::Txn(Txn {
-                        app_id: app_id.clone(),
-                        version: *version,
-                        last_updated: None,
-                    })
-                }),
-        )
-        // removes
-        .chain(tombstones.iter().map(|r| {
-            let mut r = (*r).clone();
+    let jsons = std::iter::once(Action::Protocol(Protocol {
+        min_reader_version: state.protocol().min_reader_version,
+        min_writer_version: state.protocol().min_writer_version,
+        writer_features: if state.protocol().min_writer_version >= 7 {
+            Some(state.protocol().writer_features.clone().unwrap_or_default())
+        } else {
+            None
+        },
+        reader_features: if state.protocol().min_reader_version >= 3 {
+            Some(state.protocol().reader_features.clone().unwrap_or_default())
+        } else {
+            None
+        },
+    }))
+    // metaData
+    .chain(std::iter::once(Action::Metadata(current_metadata.clone())))
+    // txns
+    .chain(
+        state
+            .app_transaction_version()
+            .iter()
+            .map(|(app_id, version)| {
+                Action::Txn(Txn {
+                    app_id: app_id.clone(),
+                    version: *version,
+                    last_updated: None,
+                })
+            }),
+    )
+    // removes
+    .chain(tombstones.iter().map(|r| {
+        let mut r = (*r).clone();
 
-            // As a "new writer", we should always set `extendedFileMetadata` when writing, and include/ignore the other three fields accordingly.
-            // https://github.com/delta-io/delta/blob/fb0452c2fb142310211c6d3604eefb767bb4a134/core/src/main/scala/org/apache/spark/sql/delta/actions/actions.scala#L311-L314
-            if r.extended_file_metadata.is_none() {
-                r.extended_file_metadata = Some(false);
-            }
+        // As a "new writer", we should always set `extendedFileMetadata` when writing, and include/ignore the other three fields accordingly.
+        // https://github.com/delta-io/delta/blob/fb0452c2fb142310211c6d3604eefb767bb4a134/core/src/main/scala/org/apache/spark/sql/delta/actions/actions.scala#L311-L314
+        if r.extended_file_metadata.is_none() {
+            r.extended_file_metadata = Some(false);
+        }
 
-            Action::Remove(r)
-        }))
-        .map(|a| serde_json::to_value(a).map_err(ProtocolError::from))
-        // adds
-        .chain(files.iter().map(|f| {
-            checkpoint_add_from_state(f, partition_col_data_types.as_slice(), &stats_conversions)
-        }));
+        Action::Remove(r)
+    }))
+    .map(|a| serde_json::to_value(a).map_err(ProtocolError::from))
+    // adds
+    .chain(files.iter().map(|f| {
+        checkpoint_add_from_state(f, partition_col_data_types.as_slice(), &stats_conversions)
+    }));
 
     // Create the arrow schema that represents the Checkpoint parquet file.
     let arrow_schema = delta_log_schema_for_table(
