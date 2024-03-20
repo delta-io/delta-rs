@@ -111,7 +111,7 @@ def test_read_checkpointed_table(tmp_path: pathlib.Path):
     dt = DeltaTable(tmp_path)
     dt.create_checkpoint()
 
-    assert_spark_read_equal(data, str(tmp_path))
+    assert_spark_read_equal(data, str(tmp_path), ["int"])
 
 
 @pytest.mark.pyspark
@@ -129,4 +129,4 @@ def test_read_checkpointed_features_table(tmp_path: pathlib.Path):
     dt = DeltaTable(tmp_path)
     dt.create_checkpoint()
 
-    assert_spark_read_equal(data, str(tmp_path))
+    assert_spark_read_equal(data, str(tmp_path), ["timestamp"])
