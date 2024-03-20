@@ -260,7 +260,8 @@ impl TryFrom<&ArrowDataType> for DataType {
                 } else {
                     panic!("DataType::Map should contain a struct field child");
                 }
-            }
+            },
+            ArrowDataType::Dictionary(_, value_type) => Ok(value_type.as_ref().try_into()?),
             s => Err(ArrowError::SchemaError(format!(
                 "Invalid data type for Delta Lake: {s}"
             ))),
