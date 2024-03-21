@@ -245,7 +245,7 @@ def test_roundtrip_azure_decoded_sas(azurite_sas_creds, sample_data: pa.Table):
 
     env = os.environ.copy()
     for key in env:
-        if "AZURE" in key:
+        if "AZURE" in key or "KEY" in key:
             print(key)
 
     write_deltalake(table_path, sample_data, storage_options=azurite_sas_creds)
