@@ -259,7 +259,7 @@ def test_update_schema_rust_writer_append(existing_table: DeltaTable):
         )
     with pytest.raises(
         SchemaMismatchError,
-        match="Schema error: Fail to merge schema field 'utf8' because the from data_type = Int64 does not equal Utf8",
+        match="Schema error: Cannot merge types string and long",
     ):
         write_deltalake(
             existing_table,

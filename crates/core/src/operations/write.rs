@@ -681,10 +681,8 @@ impl std::future::IntoFuture for WriteBuilder {
                     if this.mode == SaveMode::Overwrite && this.schema_mode.is_some() {
                         new_schema = None // we overwrite anyway, so no need to cast
                     } else if this.schema_mode == Some(SchemaMode::Merge) {
-                        new_schema = Some(Arc::new(merge_schema(
-                            table_schema.as_ref().clone(),
-                            input_schema.as_ref().clone(),
-                        )?));
+                        new_schema =
+                            Some(merge_schema(table_schema.clone(), input_schema.clone())?);
                     } else {
                         return Err(schema_err.into());
                     }
