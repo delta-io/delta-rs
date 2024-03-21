@@ -237,6 +237,7 @@ def test_roundtrip_azure_decoded_sas(azurite_sas_creds, sample_data: pa.Table):
     import os
 
     for key in [
+        "AZURE_EXTENSION_DIR",
         "AZURE_USE_EMULATOR",
         "AZURE_STORAGE_ALLOW_HTTP",
         "AZURE_STORAGE_CONNECTION_STRING",
