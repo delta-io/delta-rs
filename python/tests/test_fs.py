@@ -209,7 +209,15 @@ def test_roundtrip_azure_direct(azurite_creds, sample_data: pa.Table):
 @pytest.mark.timeout(timeout=60, method="thread")
 def test_roundtrip_azure_sas(azurite_sas_creds, sample_data: pa.Table):
     table_path = "az://deltars/roundtrip3"
+    import os
 
+    for key in [
+        "AZURE_USE_EMULATOR",
+        "AZURE_STORAGE_ALLOW_HTTP",
+        "AZURE_STORAGE_CONNECTION_STRING",
+    ]:
+        if key in os.environ:
+            del os.environ[key]
     write_deltalake(table_path, sample_data, storage_options=azurite_sas_creds)
     dt = DeltaTable(table_path, storage_options=azurite_sas_creds)
     table = dt.to_pyarrow_table()
@@ -226,6 +234,14 @@ def test_roundtrip_azure_decoded_sas(azurite_sas_creds, sample_data: pa.Table):
         azurite_sas_creds["SAS_TOKEN"]
     )
     import os
+
+    for key in [
+        "AZURE_USE_EMULATOR",
+        "AZURE_STORAGE_ALLOW_HTTP",
+        "AZURE_STORAGE_CONNECTION_STRING",
+    ]:
+        if key in os.environ:
+            del os.environ[key]
 
     env = os.environ.copy()
     for key in env:
