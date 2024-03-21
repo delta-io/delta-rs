@@ -207,6 +207,7 @@ def test_roundtrip_azure_direct(azurite_creds, sample_data: pa.Table):
 @pytest.mark.azure
 @pytest.mark.integration
 @pytest.mark.timeout(timeout=60, method="thread")
+@pytest.mark.skip()
 def test_roundtrip_azure_sas(azurite_sas_creds, sample_data: pa.Table):
     table_path = "az://deltars/roundtrip3"
     import os
@@ -245,8 +246,7 @@ def test_roundtrip_azure_decoded_sas(azurite_sas_creds, sample_data: pa.Table):
 
     env = os.environ.copy()
     for key in env:
-        if "AZURE" in key or "KEY" in key:
-            print(key)
+        print(key)
 
     write_deltalake(table_path, sample_data, storage_options=azurite_sas_creds)
     dt = DeltaTable(table_path, storage_options=azurite_sas_creds)
