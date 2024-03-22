@@ -78,7 +78,7 @@ pub struct Metrics {
     pub preserve_insertion_order: bool,
 }
 
-// Custom serialization function that serializes any type as a string
+// Custom serialization function that serializes metric details as a string
 fn serialize_metric_details_as_string<S>(value: &MetricDetails, serializer: S) -> Result<S::Ok, S::Error>
 where
     S: Serializer,
