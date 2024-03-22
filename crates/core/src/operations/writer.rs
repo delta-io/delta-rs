@@ -386,7 +386,7 @@ impl PartitionWriter {
                 self.flush_arrow_writer().await?;
             }
         }
-
+        self.arrow_writer.flush();
         Ok(())
     }
 

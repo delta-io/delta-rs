@@ -33,7 +33,7 @@ debug = "line-tables-only"
 # arrow
 arrow = { version = "50" }
 arrow-arith = { version = "50" }
-arrow-array = { version = "50" }
+arrow-array = { version = "50", features = ["chrono-tz"]}
 arrow-buffer = { version = "50" }
 arrow-cast = { version = "50" }
 arrow-ipc = { version = "50" }
@@ -42,7 +42,7 @@ arrow-ord = { version = "50" }
 arrow-row = { version = "50" }
 arrow-schema = { version = "50" }
 arrow-select = { version = "50" }
-object_store = { version = "=0.9.0" }
+object_store = { version = "0.9" }
 parquet = { version = "50" }
 
 # datafusion

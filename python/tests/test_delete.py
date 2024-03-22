@@ -2,6 +2,7 @@ import pathlib
 
 import pyarrow as pa
 import pyarrow.compute as pc
+import pytest
 
 from deltalake.table import DeltaTable
 from deltalake.writer import write_deltalake
@@ -56,4 +57,27 @@ def test_delete_some_rows(existing_table: DeltaTable):
     assert existing_table.version() == old_version + 1
 
     table = existing_table.to_pyarrow_table()
+    assert table.equals(expected_table)
+
+
+@pytest.mark.parametrize("engine", ["pyarrow", "rust"])
+def test_delete_large_dtypes(
+    tmp_path: pathlib.Path, sample_table: pa.table, engine: str
+):
+    write_deltalake(tmp_path, sample_table, large_dtypes=True, engine=engine)  # type: ignore
+
+    dt = DeltaTable(tmp_path)
+    old_version = dt.version()
+
+    existing = dt.to_pyarrow_table()
+    mask = pc.invert(pc.is_in(existing["id"], pa.array(["1"])))
+    expected_table = existing.filter(mask)
+
+    dt.delete(predicate="id = '1'")
+
+    last_action = dt.history(1)[0]
+    assert last_action["operation"] == "DELETE"
+    assert dt.version() == old_version + 1
+
+    table = dt.to_pyarrow_table()
     assert table.equals(expected_table)

@@ -52,6 +52,37 @@ def test_update_with_predicate(tmp_path: pathlib.Path, sample_table: pa.Table):
     assert result == expected
 
 
+def test_update_with_predicate_large_dtypes(
+    tmp_path: pathlib.Path, sample_table: pa.Table
+):
+    write_deltalake(tmp_path, sample_table, mode="append", large_dtypes=True)
+
+    dt = DeltaTable(tmp_path)
+
+    nrows = 5
+    expected = pa.table(
+        {
+            "id": pa.array(["1", "2", "3", "4", "5"]),
+            "price": pa.array(list(range(nrows)), pa.int64()),
+            "sold": pa.array(list(range(nrows)), pa.int64()),
+            "price_float": pa.array(list(range(nrows)), pa.float64()),
+            "items_in_bucket": pa.array([["item1", "item2", "item3"]] * nrows),
+            "deleted": pa.array([True, False, False, False, False]),
+        }
+    )
+
+    dt.update(
+        updates={"deleted": "True"},
+        predicate="id = '1'",
+    )
+
+    result = dt.to_pyarrow_table()
+    last_action = dt.history(1)[0]
+
+    assert last_action["operation"] == "UPDATE"
+    assert result == expected
+
+
 def test_update_wo_predicate(tmp_path: pathlib.Path, sample_table: pa.Table):
     write_deltalake(tmp_path, sample_table, mode="append")
 
