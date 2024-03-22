@@ -1886,7 +1886,7 @@ class TableOptimizer:
         partition_filters: Optional[FilterType] = None,
         target_size: Optional[int] = None,
         max_concurrent_tasks: Optional[int] = None,
-    ) -> Dict[str, Any]:
+    ) -> str:
         """
         !!! warning "DEPRECATED 0.10.0"
             Use [compact][deltalake.table.DeltaTable.compact] instead, which has the same signature.
