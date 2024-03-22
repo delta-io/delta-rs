@@ -1908,7 +1908,7 @@ class TableOptimizer:
         min_commit_interval: Optional[Union[int, timedelta]] = None,
         writer_properties: Optional[WriterProperties] = None,
         custom_metadata: Optional[Dict[str, str]] = None,
-    ) -> Dict[str, Any]:
+    ) -> str:
         """
         Compacts small files to reduce the total number of files in the table.
 
@@ -1933,7 +1933,7 @@ class TableOptimizer:
             custom_metadata: custom metadata that will be added to the transaction commit.
 
         Returns:
-            the metrics from optimize
+            the metrics from optimize as a string
 
         Example:
             Use a timedelta object to specify the seconds, minutes or hours of the interval.
@@ -1963,7 +1963,7 @@ class TableOptimizer:
             custom_metadata,
         )
         self.table.update_incremental()
-        return json.loads(metrics)
+        return metrics
 
     def z_order(
         self,
@@ -1975,7 +1975,7 @@ class TableOptimizer:
         min_commit_interval: Optional[Union[int, timedelta]] = None,
         writer_properties: Optional[WriterProperties] = None,
         custom_metadata: Optional[Dict[str, str]] = None,
-    ) -> Dict[str, Any]:
+    ) -> str:
         """
         Reorders the data using a Z-order curve to improve data skipping.
 
@@ -1998,7 +1998,7 @@ class TableOptimizer:
             custom_metadata: custom metadata that will be added to the transaction commit.
 
         Returns:
-            the metrics from optimize
+            the metrics from optimize as a string
 
         Example:
             Use a timedelta object to specify the seconds, minutes or hours of the interval.
@@ -2030,4 +2030,4 @@ class TableOptimizer:
             custom_metadata,
         )
         self.table.update_incremental()
-        return json.loads(metrics)
+        return metrics
