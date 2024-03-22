@@ -37,7 +37,7 @@ use parquet::arrow::async_reader::{ParquetObjectReader, ParquetRecordBatchStream
 use parquet::basic::{Compression, ZstdLevel};
 use parquet::errors::ParquetError;
 use parquet::file::properties::WriterProperties;
-use serde::{Deserialize, Serialize, Serializer};
+use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error as DeError};
 use tracing::debug;
 
 use super::transaction::PROTOCOL;
@@ -61,10 +61,10 @@ pub struct Metrics {
     /// Number of unoptimized files removed
     pub num_files_removed: u64,
     /// Detailed metrics for the add operation
-    #[serde(serialize_with = "serialize_metric_details_as_string")]
+    #[serde(serialize_with = "serialize_metric_details", deserialize_with = "deserialize_metric_details")]
     pub files_added: MetricDetails,
     /// Detailed metrics for the remove operation
-    #[serde(serialize_with = "serialize_metric_details_as_string")]
+    #[serde(serialize_with = "serialize_metric_details", deserialize_with = "deserialize_metric_details")]
     pub files_removed: MetricDetails,
     /// Number of partitions that had at least one file optimized
     pub partitions_optimized: u64,
@@ -79,11 +79,20 @@ pub struct Metrics {
 }
 
 // Custom serialization function that serializes metric details as a string
-fn serialize_metric_details_as_string<S>(value: &MetricDetails, serializer: S) -> Result<S::Ok, S::Error>
+fn serialize_metric_details<S>(value: &MetricDetails, serializer: S) -> Result<S::Ok, S::Error>
 where
     S: Serializer,
 {
     serializer.serialize_str(&value.to_string())
+}
+
+// Custom deserialization that parses a JSON string into MetricDetails
+fn deserialize_metric_details<'de, D>(deserializer: D) -> Result<MetricDetails, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let s: String = Deserialize::deserialize(deserializer)?;
+    serde_json::from_str(&s).map_err(DeError::custom)
 }
 
 /// Statistics on files for a particular operation
