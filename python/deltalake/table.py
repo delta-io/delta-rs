@@ -1886,7 +1886,7 @@ class TableOptimizer:
         partition_filters: Optional[FilterType] = None,
         target_size: Optional[int] = None,
         max_concurrent_tasks: Optional[int] = None,
-    ) -> str:
+    ) -> Dict[str, Any]:
         """
         !!! warning "DEPRECATED 0.10.0"
             Use [compact][deltalake.table.DeltaTable.compact] instead, which has the same signature.
@@ -1908,7 +1908,7 @@ class TableOptimizer:
         min_commit_interval: Optional[Union[int, timedelta]] = None,
         writer_properties: Optional[WriterProperties] = None,
         custom_metadata: Optional[Dict[str, str]] = None,
-    ) -> str:
+    ) -> Dict[str, Any]:
         """
         Compacts small files to reduce the total number of files in the table.
 
@@ -1933,7 +1933,7 @@ class TableOptimizer:
             custom_metadata: custom metadata that will be added to the transaction commit.
 
         Returns:
-            the metrics from optimize as a string
+            the metrics from optimize
 
         Example:
             Use a timedelta object to specify the seconds, minutes or hours of the interval.
@@ -1963,7 +1963,7 @@ class TableOptimizer:
             custom_metadata,
         )
         self.table.update_incremental()
-        return metrics
+        return json.loads(metrics)
 
     def z_order(
         self,
@@ -1975,7 +1975,7 @@ class TableOptimizer:
         min_commit_interval: Optional[Union[int, timedelta]] = None,
         writer_properties: Optional[WriterProperties] = None,
         custom_metadata: Optional[Dict[str, str]] = None,
-    ) -> str:
+    ) -> Dict[str, Any]:
         """
         Reorders the data using a Z-order curve to improve data skipping.
 
@@ -1998,7 +1998,7 @@ class TableOptimizer:
             custom_metadata: custom metadata that will be added to the transaction commit.
 
         Returns:
-            the metrics from optimize as a string
+            the metrics from optimize
 
         Example:
             Use a timedelta object to specify the seconds, minutes or hours of the interval.
@@ -2030,4 +2030,4 @@ class TableOptimizer:
             custom_metadata,
         )
         self.table.update_incremental()
-        return metrics
+        return json.loads(metrics)
