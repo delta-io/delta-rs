@@ -261,6 +261,7 @@ impl TryFrom<&ArrowDataType> for DataType {
                     panic!("DataType::Map should contain a struct field child");
                 }
             }
+            ArrowDataType::Dictionary(_, value_type) => Ok(value_type.as_ref().try_into()?),
             s => Err(ArrowError::SchemaError(format!(
                 "Invalid data type for Delta Lake: {s}"
             ))),
@@ -451,7 +452,9 @@ pub(crate) fn delta_log_schema_for_table(
                 ],
                 protocol[
                     minReaderVersion:Int32,
-                    minWriterVersion:Int32
+                    minWriterVersion:Int32,
+                    writerFeatures[element]{Utf8},
+                    readerFeatures[element]{Utf8}
                 ],
                 txn[
                     appId:Utf8,

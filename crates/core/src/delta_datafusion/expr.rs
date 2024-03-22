@@ -370,7 +370,7 @@ mod test {
     use datafusion_common::{Column, DFSchema, ScalarValue};
     use datafusion_expr::{cardinality, col, decode, lit, substring, Cast, Expr, ExprSchemable};
 
-    use crate::delta_datafusion::DeltaSessionContext;
+    use crate::delta_datafusion::{DataFusionMixins, DeltaSessionContext};
     use crate::kernel::{ArrayType, DataType, PrimitiveType, StructField, StructType};
     use crate::{DeltaOps, DeltaTable};
 

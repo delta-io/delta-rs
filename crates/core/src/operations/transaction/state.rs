@@ -5,111 +5,24 @@ use arrow::array::{ArrayRef, BooleanArray};
 use arrow::datatypes::{
     DataType, Field as ArrowField, Schema as ArrowSchema, SchemaRef as ArrowSchemaRef,
 };
-use datafusion::datasource::physical_plan::wrap_partition_type_in_dict;
-use datafusion::execution::context::SessionState;
 use datafusion::physical_optimizer::pruning::{PruningPredicate, PruningStatistics};
 use datafusion_common::scalar::ScalarValue;
-use datafusion_common::{Column, DFSchema};
-use datafusion_expr::{utils::conjunction, Expr};
-use itertools::Either;
+use datafusion_common::Column;
+use datafusion_expr::Expr;
+use itertools::Itertools;
 use object_store::ObjectStore;
+use parquet::arrow::arrow_reader::ArrowReaderOptions;
 use parquet::arrow::async_reader::{ParquetObjectReader, ParquetRecordBatchStreamBuilder};
 
-use crate::delta_datafusion::expr::parse_predicate_expression;
 use crate::delta_datafusion::{
     get_null_of_arrow_type, logical_expr_to_physical_expr, to_correct_scalar_value,
+    DataFusionMixins,
 };
 use crate::errors::DeltaResult;
-use crate::kernel::Add;
+use crate::kernel::{Add, EagerSnapshot};
 use crate::table::state::DeltaTableState;
 
 impl DeltaTableState {
-    /// Get the table schema as an [`ArrowSchemaRef`]
-    pub fn arrow_schema(&self) -> DeltaResult<ArrowSchemaRef> {
-        self._arrow_schema(true)
-    }
-
-    fn _arrow_schema(&self, wrap_partitions: bool) -> DeltaResult<ArrowSchemaRef> {
-        let meta = self.metadata();
-        let fields = meta
-            .schema()?
-            .fields()
-            .iter()
-            .filter(|f| !meta.partition_columns.contains(&f.name().to_string()))
-            .map(|f| f.try_into())
-            .chain(
-                meta.schema()?
-                    .fields()
-                    .iter()
-                    .filter(|f| meta.partition_columns.contains(&f.name().to_string()))
-                    .map(|f| {
-                        let field = ArrowField::try_from(f)?;
-                        let corrected = if wrap_partitions {
-                            match field.data_type() {
-                                // Only dictionary-encode types that may be large
-                                // // https://github.com/apache/arrow-datafusion/pull/5545
-                                DataType::Utf8
-                                | DataType::LargeUtf8
-                                | DataType::Binary
-                                | DataType::LargeBinary => {
-                                    wrap_partition_type_in_dict(field.data_type().clone())
-                                }
-                                _ => field.data_type().clone(),
-                            }
-                        } else {
-                            field.data_type().clone()
-                        };
-                        Ok(field.with_data_type(corrected))
-                    }),
-            )
-            .collect::<Result<Vec<ArrowField>, _>>()?;
-
-        Ok(Arc::new(ArrowSchema::new(fields)))
-    }
-
-    pub(crate) fn input_schema(&self) -> DeltaResult<ArrowSchemaRef> {
-        self._arrow_schema(false)
-    }
-
-    /// Iterate over all files in the log matching a predicate
-    pub fn files_matching_predicate(
-        &self,
-        filters: &[Expr],
-    ) -> DeltaResult<impl Iterator<Item = Add>> {
-        if let Some(Some(predicate)) =
-            (!filters.is_empty()).then_some(conjunction(filters.iter().cloned()))
-        {
-            let expr = logical_expr_to_physical_expr(&predicate, self.arrow_schema()?.as_ref());
-            let pruning_predicate = PruningPredicate::try_new(expr, self.arrow_schema()?)?;
-            Ok(Either::Left(
-                self.file_actions()?
-                    .into_iter()
-                    .zip(pruning_predicate.prune(self)?)
-                    .filter_map(
-                        |(action, keep_file)| {
-                            if keep_file {
-                                Some(action)
-                            } else {
-                                None
-                            }
-                        },
-                    ),
-            ))
-        } else {
-            Ok(Either::Right(self.file_actions()?.into_iter()))
-        }
-    }
-
-    /// Parse an expression string into a datafusion [`Expr`]
-    pub fn parse_predicate_expression(
-        &self,
-        expr: impl AsRef<str>,
-        df_state: &SessionState,
-    ) -> DeltaResult<Expr> {
-        let schema = DFSchema::try_from(self.arrow_schema()?.as_ref().to_owned())?;
-        parse_predicate_expression(&schema, expr, df_state)
-    }
-
     /// Get the physical table schema.
     ///
     /// This will construct a schema derived from the parquet schema of the latest data file,
@@ -125,11 +38,14 @@ impl DeltaTableState {
         {
             let file_meta = add.try_into()?;
             let file_reader = ParquetObjectReader::new(object_store, file_meta);
-            let file_schema = ParquetRecordBatchStreamBuilder::new(file_reader)
-                .await?
-                .build()?
-                .schema()
-                .clone();
+            let file_schema = ParquetRecordBatchStreamBuilder::new_with_options(
+                file_reader,
+                ArrowReaderOptions::new().with_skip_arrow_metadata(true),
+            )
+            .await?
+            .build()?
+            .schema()
+            .clone();
 
             let table_schema = Arc::new(ArrowSchema::new(
                 self.arrow_schema()?
@@ -305,11 +221,11 @@ impl<'a> PruningStatistics for AddContainer<'a> {
     }
 }
 
-impl PruningStatistics for DeltaTableState {
+impl PruningStatistics for EagerSnapshot {
     /// return the minimum values for the named column, if known.
     /// Note: the returned array must contain `num_containers()` rows
     fn min_values(&self, column: &Column) -> Option<ArrayRef> {
-        let files = self.file_actions().ok()?;
+        let files = self.file_actions().ok()?.collect_vec();
         let partition_columns = &self.metadata().partition_columns;
         let container = AddContainer::new(&files, partition_columns, self.arrow_schema().ok()?);
         container.min_values(column)
@@ -318,7 +234,7 @@ impl PruningStatistics for DeltaTableState {
     /// return the maximum values for the named column, if known.
     /// Note: the returned array must contain `num_containers()` rows.
     fn max_values(&self, column: &Column) -> Option<ArrayRef> {
-        let files = self.file_actions().ok()?;
+        let files = self.file_actions().ok()?.collect_vec();
         let partition_columns = &self.metadata().partition_columns;
         let container = AddContainer::new(&files, partition_columns, self.arrow_schema().ok()?);
         container.max_values(column)
@@ -335,7 +251,7 @@ impl PruningStatistics for DeltaTableState {
     ///
     /// Note: the returned array must contain `num_containers()` rows.
     fn null_counts(&self, column: &Column) -> Option<ArrayRef> {
-        let files = self.file_actions().ok()?;
+        let files = self.file_actions().ok()?.collect_vec();
         let partition_columns = &self.metadata().partition_columns;
         let container = AddContainer::new(&files, partition_columns, self.arrow_schema().ok()?);
         container.null_counts(column)
@@ -348,9 +264,32 @@ impl PruningStatistics for DeltaTableState {
     }
 }
 
+impl PruningStatistics for DeltaTableState {
+    fn min_values(&self, column: &Column) -> Option<ArrayRef> {
+        self.snapshot.min_values(column)
+    }
+
+    fn max_values(&self, column: &Column) -> Option<ArrayRef> {
+        self.snapshot.max_values(column)
+    }
+
+    fn num_containers(&self) -> usize {
+        self.snapshot.num_containers()
+    }
+
+    fn null_counts(&self, column: &Column) -> Option<ArrayRef> {
+        self.snapshot.null_counts(column)
+    }
+
+    fn contained(&self, column: &Column, values: &HashSet<ScalarValue>) -> Option<BooleanArray> {
+        self.snapshot.contained(column, values)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::delta_datafusion::DataFusionFileMixins;
     use crate::operations::transaction::test_utils::{create_add_action, init_table_actions};
     use datafusion::prelude::SessionContext;
     use datafusion_expr::{col, lit};
@@ -391,6 +330,7 @@ mod tests {
 
         let state = DeltaTableState::from_actions(actions).unwrap();
         let files = state
+            .snapshot
             .files_matching_predicate(&[])
             .unwrap()
             .collect::<Vec<_>>();
@@ -401,6 +341,7 @@ mod tests {
             .or(col("value").lt_eq(lit::<i32>(0)));
 
         let files = state
+            .snapshot
             .files_matching_predicate(&[predictate])
             .unwrap()
             .collect::<Vec<_>>();

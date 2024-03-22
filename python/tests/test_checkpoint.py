@@ -3,6 +3,7 @@ import os
 import pathlib
 
 import pyarrow as pa
+import pyarrow.parquet as pq
 
 from deltalake import DeltaTable, write_deltalake
 
@@ -83,3 +84,53 @@ def test_cleanup_metadata_no_checkpoint(tmp_path: pathlib.Path, sample_data: pa.
     assert first_log_path.exists()
     assert second_log_path.exists()
     assert third_log_path.exists()
+
+
+def test_features_maintained_after_checkpoint(tmp_path: pathlib.Path):
+    from datetime import datetime
+
+    data = pa.table(
+        {
+            "timestamp": pa.array([datetime(2022, 1, 1)]),
+        }
+    )
+    write_deltalake(tmp_path, data)
+
+    dt = DeltaTable(tmp_path)
+    current_protocol = dt.protocol()
+
+    dt.create_checkpoint()
+
+    dt = DeltaTable(tmp_path)
+    protocol_after_checkpoint = dt.protocol()
+
+    assert protocol_after_checkpoint.reader_features == ["timestampNtz"]
+    assert current_protocol == protocol_after_checkpoint
+
+
+def test_features_null_on_below_v3_v7(tmp_path: pathlib.Path):
+    data = pa.table(
+        {
+            "int": pa.array([1]),
+        }
+    )
+    write_deltalake(tmp_path, data)
+
+    dt = DeltaTable(tmp_path)
+    current_protocol = dt.protocol()
+
+    dt.create_checkpoint()
+
+    dt = DeltaTable(tmp_path)
+    protocol_after_checkpoint = dt.protocol()
+
+    assert protocol_after_checkpoint.reader_features is None
+    assert protocol_after_checkpoint.writer_features is None
+    assert current_protocol == protocol_after_checkpoint
+
+    checkpoint = pq.read_table(
+        os.path.join(tmp_path, "_delta_log/00000000000000000000.checkpoint.parquet")
+    )
+
+    assert checkpoint["protocol"][0]["writerFeatures"].as_py() is None
+    assert checkpoint["protocol"][0]["readerFeatures"].as_py() is None

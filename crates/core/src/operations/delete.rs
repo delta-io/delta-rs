@@ -18,7 +18,6 @@
 //! ````
 
 use core::panic;
-use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
@@ -33,15 +32,15 @@ use datafusion_common::DFSchema;
 use futures::future::BoxFuture;
 use parquet::file::properties::WriterProperties;
 use serde::Serialize;
-use serde_json::Value;
 
 use super::datafusion_utils::Expression;
-use super::transaction::PROTOCOL;
+use super::transaction::{CommitBuilder, CommitProperties, PROTOCOL};
 use crate::delta_datafusion::expr::fmt_expr_to_sql;
-use crate::delta_datafusion::{find_files, register_store, DeltaScanBuilder, DeltaSessionContext};
+use crate::delta_datafusion::{
+    find_files, register_store, DataFusionMixins, DeltaScanBuilder, DeltaSessionContext,
+};
 use crate::errors::DeltaResult;
 use crate::kernel::{Action, Add, Remove};
-use crate::operations::transaction::commit;
 use crate::operations::write::write_execution_plan;
 use crate::protocol::DeltaOperation;
 use crate::table::state::DeltaTableState;
@@ -60,8 +59,8 @@ pub struct DeleteBuilder {
     state: Option<SessionState>,
     /// Properties passed to underlying parquet writer for when files are rewritten
     writer_properties: Option<WriterProperties>,
-    /// Additional metadata to be added to commit
-    app_metadata: Option<HashMap<String, serde_json::Value>>,
+    /// Commit properties and configuration
+    commit_properties: CommitProperties,
 }
 
 #[derive(Default, Debug, Serialize)]
@@ -91,7 +90,7 @@ impl DeleteBuilder {
             snapshot,
             log_store,
             state: None,
-            app_metadata: None,
+            commit_properties: CommitProperties::default(),
             writer_properties: None,
         }
     }
@@ -108,12 +107,9 @@ impl DeleteBuilder {
         self
     }
 
-    /// Additional metadata to be added to commit info
-    pub fn with_metadata(
-        mut self,
-        metadata: impl IntoIterator<Item = (String, serde_json::Value)>,
-    ) -> Self {
-        self.app_metadata = Some(HashMap::from_iter(metadata));
+    /// Additonal information to write to the commit
+    pub fn with_commit_properties(mut self, commit_properties: CommitProperties) -> Self {
+        self.commit_properties = commit_properties;
         self
     }
 
@@ -194,14 +190,14 @@ async fn execute(
     snapshot: &DeltaTableState,
     state: SessionState,
     writer_properties: Option<WriterProperties>,
-    app_metadata: Option<HashMap<String, Value>>,
+    mut commit_properties: CommitProperties,
 ) -> DeltaResult<((Vec<Action>, i64, Option<DeltaOperation>), DeleteMetrics)> {
     let exec_start = Instant::now();
     let mut metrics = DeleteMetrics::default();
 
     let scan_start = Instant::now();
     let candidates = find_files(snapshot, log_store.clone(), &state, predicate.clone()).await?;
-    metrics.scan_time_ms = Instant::now().duration_since(scan_start).as_micros();
+    metrics.scan_time_ms = Instant::now().duration_since(scan_start).as_millis();
 
     let predicate = predicate.unwrap_or(Expr::Literal(ScalarValue::Boolean(Some(true))));
 
@@ -230,7 +226,6 @@ async fn execute(
         .as_millis() as i64;
 
     let mut actions: Vec<Action> = add.into_iter().map(Action::Add).collect();
-    let mut version = snapshot.version();
     metrics.num_removed_files = remove.len();
     metrics.num_added_files = actions.len();
 
@@ -249,35 +244,36 @@ async fn execute(
         }))
     }
 
-    metrics.execution_time_ms = Instant::now().duration_since(exec_start).as_micros();
+    metrics.execution_time_ms = Instant::now().duration_since(exec_start).as_millis();
 
-    let mut app_metadata = match app_metadata {
-        Some(meta) => meta,
-        None => HashMap::new(),
-    };
-
-    app_metadata.insert("readVersion".to_owned(), snapshot.version().into());
-
-    if let Ok(map) = serde_json::to_value(&metrics) {
-        app_metadata.insert("operationMetrics".to_owned(), map);
-    }
+    commit_properties
+        .app_metadata
+        .insert("readVersion".to_owned(), snapshot.version().into());
+    commit_properties.app_metadata.insert(
+        "operationMetrics".to_owned(),
+        serde_json::to_value(&metrics)?,
+    );
 
     // Do not make a commit when there are zero updates to the state
     let operation = DeltaOperation::Delete {
         predicate: Some(fmt_expr_to_sql(&predicate)?),
     };
-    if !actions.is_empty() {
-        version = commit(
-            log_store.as_ref(),
-            &actions,
-            operation.clone(),
-            Some(snapshot),
-            Some(app_metadata),
-        )
-        .await?;
+    if actions.is_empty() {
+        return Ok(((actions, snapshot.version(), None), metrics));
     }
-    let op = (!actions.is_empty()).then_some(operation);
-    Ok(((actions, version, op), metrics))
+
+    let commit = CommitBuilder::from(commit_properties)
+        .with_actions(actions)
+        .build(Some(snapshot), log_store, operation)?
+        .await?;
+    Ok((
+        (
+            commit.data.actions,
+            commit.version,
+            Some(commit.data.operation),
+        ),
+        metrics,
+    ))
 }
 
 impl std::future::IntoFuture for DeleteBuilder {
@@ -288,9 +284,8 @@ impl std::future::IntoFuture for DeleteBuilder {
         let mut this = self;
 
         Box::pin(async move {
-            PROTOCOL.check_append_only(&this.snapshot)?;
-
-            PROTOCOL.can_write_to(&this.snapshot)?;
+            PROTOCOL.check_append_only(&this.snapshot.snapshot)?;
+            PROTOCOL.can_write_to(&this.snapshot.snapshot)?;
 
             let state = this.state.unwrap_or_else(|| {
                 let session: SessionContext = DeltaSessionContext::default().into();
@@ -317,7 +312,7 @@ impl std::future::IntoFuture for DeleteBuilder {
                 &this.snapshot,
                 state,
                 this.writer_properties,
-                this.app_metadata,
+                this.commit_properties,
             )
             .await?;
 

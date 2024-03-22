@@ -259,7 +259,7 @@ def test_update_schema_rust_writer_append(existing_table: DeltaTable):
         )
     with pytest.raises(
         SchemaMismatchError,
-        match="Schema error: Fail to merge schema field 'utf8' because the from data_type = Int64 does not equal Utf8",
+        match="Schema error: Cannot merge types string and long",
     ):
         write_deltalake(
             existing_table,
@@ -316,6 +316,30 @@ def test_local_path(
     local_path = "./path/to/table"
     write_deltalake(local_path, sample_data, engine=engine)
     delta_table = DeltaTable(local_path)
+    assert delta_table.schema().to_pyarrow() == sample_data.schema
+
+    table = delta_table.to_pyarrow_table()
+    assert table == sample_data
+
+
+@pytest.mark.parametrize("engine", ["pyarrow", "rust"])
+def test_local_path_with_unsafe_rename(
+    tmp_path: pathlib.Path,
+    sample_data: pa.Table,
+    monkeypatch,
+    engine: Literal["pyarrow", "rust"],
+):
+    monkeypatch.chdir(tmp_path)  # Make tmp_path the working directory
+    (tmp_path / "path/to/table").mkdir(parents=True)
+
+    local_path = "./path/to/table"
+    storage_opts = {
+        "allow_unsafe_rename": "true",
+    }
+    write_deltalake(
+        local_path, sample_data, storage_options=storage_opts, engine=engine
+    )
+    delta_table = DeltaTable(local_path, storage_options=storage_opts)
     assert delta_table.schema().to_pyarrow() == sample_data.schema
 
     table = delta_table.to_pyarrow_table()
@@ -421,7 +445,7 @@ def test_write_modes(tmp_path: pathlib.Path, sample_data: pa.Table, engine):
     assert DeltaTable(tmp_path).to_pyarrow_table() == sample_data
 
     if engine == "pyarrow":
-        with pytest.raises(AssertionError):
+        with pytest.raises(FileExistsError):
             write_deltalake(tmp_path, sample_data, mode="error")
     elif engine == "rust":
         with pytest.raises(DeltaError):
@@ -481,7 +505,7 @@ def test_fails_wrong_partitioning(
     existing_table: DeltaTable, sample_data: pa.Table, engine
 ):
     if engine == "pyarrow":
-        with pytest.raises(AssertionError):
+        with pytest.raises(ValueError):
             write_deltalake(
                 existing_table,
                 sample_data,
@@ -994,6 +1018,7 @@ def test_partition_overwrite_unfiltered_data_fails(
         )
 
 
+@pytest.mark.parametrize("large_dtypes", [True, False])
 @pytest.mark.parametrize(
     "value_1,value_2,value_type,filter_string",
     [
@@ -1008,6 +1033,7 @@ def test_replace_where_overwrite(
     value_2: Any,
     value_type: pa.DataType,
     filter_string: str,
+    large_dtypes: bool,
 ):
     table_path = tmp_path
 
@@ -1018,7 +1044,9 @@ def test_replace_where_overwrite(
             "val": pa.array([1, 1, 1, 1], pa.int64()),
         }
     )
-    write_deltalake(table_path, sample_data, mode="overwrite")
+    write_deltalake(
+        table_path, sample_data, mode="overwrite", large_dtypes=large_dtypes
+    )
 
     delta_table = DeltaTable(table_path)
     assert (
@@ -1049,6 +1077,7 @@ def test_replace_where_overwrite(
         mode="overwrite",
         predicate="p1 = '1'",
         engine="rust",
+        large_dtypes=large_dtypes,
     )
 
     delta_table.update_incremental()
