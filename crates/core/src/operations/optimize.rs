@@ -78,7 +78,7 @@ pub struct Metrics {
     pub preserve_insertion_order: bool,
 }
 
-// Custom serialization function that serializes a metric detail as a string
+// Custom serialization function that serializes any type as a string
 fn serialize_metric_details_as_string<S>(value: &MetricDetails, serializer: S) -> Result<S::Ok, S::Error>
 where
     S: Serializer,
@@ -116,7 +116,7 @@ impl MetricDetails {
 }
 
 impl fmt::Display for MetricDetails {
-    /// Display the metric details using serde serialization in field alphabetical order
+    /// Display the metric details using serde serialization 
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         serde_json::to_string(self)
             .map_err(|_| fmt::Error)?
