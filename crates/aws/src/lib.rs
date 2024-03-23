@@ -47,10 +47,7 @@ impl LogStoreFactory for S3LogStoreFactory {
         options: &StorageOptions,
     ) -> DeltaResult<Arc<dyn LogStore>> {
         let path_decoded = match urlencoding::decode(location.path()) {
-            Ok(res) => {
-                let result = res.into_owned();
-                result
-            }
+            Ok(res) => res.into_owned(),
             Err(e) => {
                 // Default back to prefix as is
                 location.path().to_string()
