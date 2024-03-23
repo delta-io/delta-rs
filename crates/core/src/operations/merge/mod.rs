@@ -1014,21 +1014,22 @@ async fn execute(
     // Attempt to construct an early filter that we can apply to the Add action list and the delta scan.
     // In the case where there are partition columns in the join predicate, we can scan the source table
     // to get the distinct list of partitions affected and constrain the search to those.
-    let target_subset_filter = if !not_match_source_operations.is_empty() {
-        // It's only worth trying to create an early filter where there are no `when_not_matched_source` operators, since
-        // that implies a full scan
-        None
-    } else {
-        try_construct_early_filter(
-            predicate.clone(),
-            snapshot,
-            &state,
-            &source,
-            &source_name,
-            &target_name,
-        )
-        .await?
-    };
+    let target_subset_filter =
+        if !not_match_source_operations.is_empty() | !match_operations.is_empty() {
+            // It's only worth trying to create an early filter where there are no `when_not_matched_source` operators, since
+            // that implies a full scan, temp fix to also not pushdown scans when match_operations exists.
+            None
+        } else {
+            try_construct_early_filter(
+                predicate.clone(),
+                snapshot,
+                &state,
+                &source,
+                &source_name,
+                &target_name,
+            )
+            .await?
+        };
     let target = match target_subset_filter.as_ref() {
         None => target,
         Some(subset_filter) => {
