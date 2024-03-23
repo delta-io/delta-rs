@@ -882,8 +882,8 @@ async fn try_construct_early_filter(
         None => Ok(None),
         Some(filter) => {
             if placeholders.is_empty() {
-                // if we haven't recognised any partition-based predicates in the join predicate, return our reduced filter
-                Ok(Some(filter))
+                // if we haven't recognised any partition-based predicates in the join predicate, return no filter
+                Ok(None)
             } else {
                 // if we have some recognised partitions, then discover the distinct set of partitions in the source data and
                 // make a new filter, which expands out the placeholders for each distinct partition (and then OR these together)
@@ -1033,6 +1033,7 @@ async fn execute(
         )
         .await?
     };
+
     let target = match target_subset_filter.as_ref() {
         None => target,
         Some(subset_filter) => {
@@ -2063,7 +2064,6 @@ mod tests {
         let commit_info = table.history(None).await.unwrap();
         let last_commit = &commit_info[0];
         let parameters = last_commit.operation_parameters.clone().unwrap();
-        assert_eq!(parameters["predicate"], "modified = '2021-02-02'");
         assert_eq!(
             parameters["mergePredicate"],
             "target.id = source.id AND target.modified = '2021-02-02'"
@@ -2485,7 +2485,6 @@ mod tests {
         let commit_info = table.history(None).await.unwrap();
         let last_commit = &commit_info[0];
         let parameters = last_commit.operation_parameters.clone().unwrap();
-        assert_eq!(parameters["predicate"], json!("modified = '2021-02-02'"));
 
         let expected = vec![
             "+----+-------+------------+",
