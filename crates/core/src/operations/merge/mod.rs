@@ -1014,7 +1014,7 @@ async fn execute(
     };
 
     let state = state.with_query_planner(Arc::new(MergePlanner {}));
-    
+
     // Attempt to construct an early filter that we can apply to the Add action list and the delta scan.
     // In the case where there are partition columns in the join predicate, we can scan the source table
     // to get the distinct list of partitions affected and constrain the search to those.
