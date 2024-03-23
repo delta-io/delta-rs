@@ -865,7 +865,9 @@ async fn try_construct_early_filter(
 ) -> DeltaResult<Option<Expr>> {
     let table_metadata = table_snapshot.metadata();
     let partition_columns = &table_metadata.partition_columns;
-
+    if partition_columns.is_empty() {
+        return Ok(None);
+    }
     let mut placeholders = HashMap::default();
 
     match generalize_filter(
@@ -1029,21 +1031,12 @@ async fn execute(
         )
         .await?
     };
-    let (target, inverse_target) = match target_subset_filter.as_ref() {
-        None => (target, None),
-        Some(subset_filter) => {
-            let negated_filter = Expr::Not(Box::new(Expr::IsTrue(Box::new(subset_filter.clone()))));
-            (
-                LogicalPlan::Filter(Filter::try_new(
-                    subset_filter.clone(),
-                    target.clone().into(),
-                )?),
-                Some(LogicalPlan::Filter(Filter::try_new(
-                    negated_filter,
-                    target.into(),
-                )?)),
-            )
-        }
+    let target = match target_subset_filter.as_ref() {
+        None => target,
+        Some(subset_filter) => LogicalPlan::Filter(Filter::try_new(
+            subset_filter.clone(),
+            target.clone().into(),
+        )?),
     };
 
     let source = DataFrame::new(state.clone(), source);
@@ -1358,15 +1351,7 @@ async fn execute(
     let operation_count = DataFrame::new(state.clone(), operation_count);
     let filtered = operation_count.filter(col(DELETE_COLUMN).is_false())?;
 
-    let mut project = filtered.select(write_projection.clone())?;
-
-    if let Some(inv_target) = inverse_target {
-        let inverse_target_df = DataFrame::new(state.clone(), inv_target);
-        let cols = project.schema().field_names();
-        let cols_slice: &[&str] = &cols.iter().map(|s| s.as_str()).collect::<Vec<_>>();
-        project = project.union(inverse_target_df.select_columns(cols_slice)?)?;
-    }
-
+    let project = filtered.select(write_projection)?;
     let merge_final = &project.into_unoptimized_plan();
 
     let write = state.create_physical_plan(merge_final).await?;
