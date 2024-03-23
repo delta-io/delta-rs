@@ -21,9 +21,9 @@
 //! ````
 
 use std::collections::HashMap;
+use std::fmt;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
-use std::fmt;
 
 use arrow::datatypes::SchemaRef as ArrowSchemaRef;
 use arrow_array::RecordBatch;
@@ -37,7 +37,7 @@ use parquet::arrow::async_reader::{ParquetObjectReader, ParquetRecordBatchStream
 use parquet::basic::{Compression, ZstdLevel};
 use parquet::errors::ParquetError;
 use parquet::file::properties::WriterProperties;
-use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error as DeError};
+use serde::{de::Error as DeError, Deserialize, Deserializer, Serialize, Serializer};
 use tracing::debug;
 
 use super::transaction::PROTOCOL;
@@ -61,10 +61,16 @@ pub struct Metrics {
     /// Number of unoptimized files removed
     pub num_files_removed: u64,
     /// Detailed metrics for the add operation
-    #[serde(serialize_with = "serialize_metric_details", deserialize_with = "deserialize_metric_details")]
+    #[serde(
+        serialize_with = "serialize_metric_details",
+        deserialize_with = "deserialize_metric_details"
+    )]
     pub files_added: MetricDetails,
     /// Detailed metrics for the remove operation
-    #[serde(serialize_with = "serialize_metric_details", deserialize_with = "deserialize_metric_details")]
+    #[serde(
+        serialize_with = "serialize_metric_details",
+        deserialize_with = "deserialize_metric_details"
+    )]
     pub files_removed: MetricDetails,
     /// Number of partitions that had at least one file optimized
     pub partitions_optimized: u64,
@@ -121,15 +127,12 @@ impl MetricDetails {
         self.total_size += partial.total_size;
         self.avg = self.total_size as f64 / self.total_files as f64;
     }
-
 }
 
 impl fmt::Display for MetricDetails {
-    /// Display the metric details using serde serialization 
+    /// Display the metric details using serde serialization
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        serde_json::to_string(self)
-            .map_err(|_| fmt::Error)?
-            .fmt(f)
+        serde_json::to_string(self).map_err(|_| fmt::Error)?.fmt(f)
     }
 }
 
