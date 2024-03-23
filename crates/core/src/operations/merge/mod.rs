@@ -51,7 +51,7 @@ use datafusion_common::{Column, DFSchema, ScalarValue, TableReference};
 use datafusion_expr::expr::Placeholder;
 use datafusion_expr::{col, conditional_expressions::CaseBuilder, lit, when, Expr, JoinType};
 use datafusion_expr::{
-    BinaryExpr, Distinct, Extension, Filter, LogicalPlan, LogicalPlanBuilder, Operator, Projection,
+    BinaryExpr, Distinct, Extension, LogicalPlan, LogicalPlanBuilder, Operator, Projection,
     UserDefinedLogicalNode, UNNAMED_TABLE,
 };
 use futures::future::BoxFuture;
@@ -988,16 +988,16 @@ async fn execute(
     let target_provider = Arc::new(DeltaTableProvider::try_new(
         snapshot.clone(),
         log_store.clone(),
-        scan_config,
+        scan_config.clone(),
     )?);
 
     let target_provider = provider_as_source(target_provider);
-
-    let target = LogicalPlanBuilder::scan(target_name.clone(), target_provider, None)?.build()?;
+    let target =
+        LogicalPlanBuilder::scan(target_name.clone(), target_provider.clone(), None)?.build()?;
 
     let source_schema = source.schema();
     let target_schema = target.schema();
-    let join_schema_df = build_join_schema(source_schema, target_schema, &JoinType::Full)?;
+    let join_schema_df = build_join_schema(source_schema, &target_schema, &JoinType::Full)?;
     let predicate = match predicate {
         Expression::DataFusion(expr) => expr,
         Expression::String(s) => parse_predicate_expression(&join_schema_df, s, &state)?,
@@ -1022,29 +1022,8 @@ async fn execute(
         .await?
     };
 
-    let scan_config = DeltaScanConfigBuilder::default()
-        .with_file_column(true)
-        .build(snapshot)?;
-
-    // TODO: Need to manually push this filter into the scan... We want to PRUNE files not FILTER RECORDS
-    //let scan_config = match target_subset_filter.as_ref() {
-    //    None => scan_config,
-    //    Some(subset_filter) => {
-    //        let filter = remove_table_alias(subset_filter.to_owned(), target_alias.clone().unwrap());
-    //        scan_config.with_filter(filter)
-    //    }
-    //}.build(snapshot)?;
-
     let file_column = Arc::new(scan_config.file_column_name.clone().unwrap());
-
-    let target_provider = Arc::new(DeltaTableProvider::try_new(
-        snapshot.clone(),
-        log_store.clone(),
-        scan_config,
-    )?);
-
-    let target_provider = provider_as_source(target_provider);
-
+    // Need to manually push this filter into the scan... We want to PRUNE files not FILTER RECORDS
     let target = match target_subset_filter.clone() {
         Some(filter) => {
             let filter = match &target_alias {
@@ -2056,7 +2035,8 @@ mod tests {
         let (table, _metrics) = DeltaOps(table)
             .merge(
                 source,
-                (col("target.id").eq(col("source.id")))
+                col("target.id")
+                    .eq(col("source.id"))
                     .and(col("target.modified").eq(lit("2021-02-02"))),
             )
             .with_source_alias("source")
