@@ -2114,8 +2114,6 @@ mod tests {
             .await
             .unwrap();
 
-        dbg!(metrics.clone());
-
         assert_eq!(table.version(), 2);
         assert!(table.get_files_count() >= 3);
         assert_eq!(metrics.num_target_files_added, 3);
