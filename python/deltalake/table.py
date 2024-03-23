@@ -1029,6 +1029,22 @@ class DeltaTable:
 
          More info: https://arrow.apache.org/docs/python/generated/pyarrow.dataset.ParquetReadOptions.html
 
+        Example:
+            ``deltalake`` will work with any storage compliant with :class:`pyarrow.fs.FileSystem`, however the root of the filesystem has
+            to be adjusted to point at the root of the Delta table. We can achieve this by wrapping the custom filesystem into
+            a :class:`pyarrow.fs.SubTreeFileSystem`.
+            ```
+            import pyarrow.fs as fs
+            from deltalake import DeltaTable
+
+            table_uri = "s3://<bucket>/<path>"
+            raw_fs, normalized_path = fs.FileSystem.from_uri(table_uri)
+            filesystem = fs.SubTreeFileSystem(normalized_path, raw_fs)
+
+            dt = DeltaTable(table_uri)
+            ds = dt.to_pyarrow_dataset(filesystem=filesystem)
+            ```
+
         Returns:
             the PyArrow dataset in PyArrow
         """
@@ -1063,7 +1079,6 @@ class DeltaTable:
                     self._table.table_uri(), self._storage_options, file_sizes
                 )
             )
-
         format = ParquetFileFormat(
             read_options=parquet_read_options,
             default_fragment_scan_options=ParquetFragmentScanOptions(pre_buffer=True),
