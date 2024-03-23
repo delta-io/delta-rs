@@ -1014,26 +1014,35 @@ async fn execute(
     // Attempt to construct an early filter that we can apply to the Add action list and the delta scan.
     // In the case where there are partition columns in the join predicate, we can scan the source table
     // to get the distinct list of partitions affected and constrain the search to those.
-    let target_subset_filter =
-        if !not_match_source_operations.is_empty() | !match_operations.is_empty() {
-            // It's only worth trying to create an early filter where there are no `when_not_matched_source` operators, since
-            // that implies a full scan, temp fix to also not pushdown scans when match_operations exists.
-            None
-        } else {
-            try_construct_early_filter(
-                predicate.clone(),
-                snapshot,
-                &state,
-                &source,
-                &source_name,
-                &target_name,
-            )
-            .await?
-        };
-    let target = match target_subset_filter.as_ref() {
-        None => target,
+    let target_subset_filter = if !not_match_source_operations.is_empty() {
+        // It's only worth trying to create an early filter where there are no `when_not_matched_source` operators, since
+        // that implies a full scan
+        None
+    } else {
+        try_construct_early_filter(
+            predicate.clone(),
+            snapshot,
+            &state,
+            &source,
+            &source_name,
+            &target_name,
+        )
+        .await?
+    };
+    let (target, inverse_target) = match target_subset_filter.as_ref() {
+        None => (target, None),
         Some(subset_filter) => {
-            LogicalPlan::Filter(Filter::try_new(subset_filter.clone(), target.into())?)
+            let negated_filter = Expr::Not(Box::new(Expr::IsTrue(Box::new(subset_filter.clone()))));
+            (
+                LogicalPlan::Filter(Filter::try_new(
+                    subset_filter.clone(),
+                    target.clone().into(),
+                )?),
+                Some(LogicalPlan::Filter(Filter::try_new(
+                    negated_filter,
+                    target.into(),
+                )?)),
+            )
         }
     };
 
@@ -1349,7 +1358,15 @@ async fn execute(
     let operation_count = DataFrame::new(state.clone(), operation_count);
     let filtered = operation_count.filter(col(DELETE_COLUMN).is_false())?;
 
-    let project = filtered.select(write_projection)?;
+    let mut project = filtered.select(write_projection.clone())?;
+
+    if let Some(inv_target) = inverse_target {
+        let inverse_target_df = DataFrame::new(state.clone(), inv_target);
+        let cols = project.schema().field_names();
+        let cols_slice: &[&str] = &cols.iter().map(|s| s.as_str()).collect::<Vec<_>>();
+        project = project.union(inverse_target_df.select_columns(cols_slice)?)?;
+    }
+
     let merge_final = &project.into_unoptimized_plan();
 
     let write = state.create_physical_plan(merge_final).await?;
@@ -2112,6 +2129,8 @@ mod tests {
             .await
             .unwrap();
 
+        dbg!(metrics.clone());
+
         assert_eq!(table.version(), 2);
         assert!(table.get_files_count() >= 3);
         assert_eq!(metrics.num_target_files_added, 3);
@@ -2871,5 +2890,102 @@ mod tests {
         ];
 
         assert_eq!(split_pred, expected_pred_parts);
+    }
+    #[tokio::test]
+    async fn test_merge_pushdowns() {
+        //See https://github.com/delta-io/delta-rs/issues/2158
+        let schema = vec![
+            StructField::new(
+                "id".to_string(),
+                DataType::Primitive(PrimitiveType::String),
+                true,
+            ),
+            StructField::new(
+                "cost".to_string(),
+                DataType::Primitive(PrimitiveType::Float),
+                true,
+            ),
+            StructField::new(
+                "month".to_string(),
+                DataType::Primitive(PrimitiveType::String),
+                true,
+            ),
+        ];
+
+        let arrow_schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("id", ArrowDataType::Utf8, true),
+            Field::new("cost", ArrowDataType::Float32, true),
+            Field::new("month", ArrowDataType::Utf8, true),
+        ]));
+
+        let table = DeltaOps::new_in_memory()
+            .create()
+            .with_columns(schema)
+            .await
+            .unwrap();
+
+        let ctx = SessionContext::new();
+        let batch = RecordBatch::try_new(
+            Arc::clone(&arrow_schema.clone()),
+            vec![
+                Arc::new(arrow::array::StringArray::from(vec!["A", "B"])),
+                Arc::new(arrow::array::Float32Array::from(vec![Some(10.15), None])),
+                Arc::new(arrow::array::StringArray::from(vec![
+                    "2023-07-04",
+                    "2023-07-04",
+                ])),
+            ],
+        )
+        .unwrap();
+
+        let table = DeltaOps(table)
+            .write(vec![batch.clone()])
+            .with_save_mode(SaveMode::Append)
+            .await
+            .unwrap();
+        assert_eq!(table.version(), 1);
+        assert_eq!(table.get_files_count(), 1);
+
+        let batch = RecordBatch::try_new(
+            Arc::clone(&arrow_schema.clone()),
+            vec![
+                Arc::new(arrow::array::StringArray::from(vec!["A", "B"])),
+                Arc::new(arrow::array::Float32Array::from(vec![
+                    Some(12.15),
+                    Some(11.15),
+                ])),
+                Arc::new(arrow::array::StringArray::from(vec![
+                    "2023-07-04",
+                    "2023-07-04",
+                ])),
+            ],
+        )
+        .unwrap();
+        let source = ctx.read_batch(batch).unwrap();
+
+        let (table, _metrics) = DeltaOps(table)
+            .merge(source, "target.id = source.id and target.cost is null")
+            .with_source_alias("source")
+            .with_target_alias("target")
+            .when_matched_update(|insert| {
+                insert
+                    .update("id", "target.id")
+                    .update("cost", "source.cost")
+                    .update("month", "target.month")
+            })
+            .unwrap()
+            .await
+            .unwrap();
+
+        let expected = vec![
+            "+----+-------+------------+",
+            "| id | cost  | month      |",
+            "+----+-------+------------+",
+            "| A  | 10.15 | 2023-07-04 |",
+            "| B  | 11.15 | 2023-07-04 |",
+            "+----+-------+------------+",
+        ];
+        let actual = get_data(&table).await;
+        assert_batches_sorted_eq!(&expected, &actual);
     }
 }
