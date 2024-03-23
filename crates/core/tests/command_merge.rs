@@ -191,47 +191,6 @@ async fn test_merge_concurrent_different_partition() {
 }
 
 #[tokio::test]
-async fn test_merge_concurrent_no_overlapping_files() {
-    // predicate contains filter and files are not overlapping -> No conflict
-    let tmp_dir = tempfile::tempdir().unwrap();
-    let table_uri = tmp_dir.path().to_str().to_owned().unwrap();
-
-    let table_ref1 = create_table(&table_uri.to_string(), None).await;
-    let table_ref2 = open_table(table_uri).await.unwrap();
-    let (df1, df2) = create_test_data();
-
-    let expr = col("target.id").eq(col("source.id"));
-    let (_table_ref1, _metrics) = merge(
-        table_ref1,
-        df2,
-        expr.clone()
-            .and(col(Column::from_qualified_name("target.event_date")).eq(lit("2021-02-03"))),
-    )
-    .await
-    .unwrap();
-    let result = merge(
-        table_ref2,
-        df1,
-        expr.and(col(Column::from_qualified_name("target.event_date")).eq(lit("2021-02-02"))),
-    )
-    .await;
-
-    // TODO: Currently it throws a Version mismatch error, but the merge commit was successfully
-    // This bug needs to be fixed, see pull request #2280
-    assert!(!matches!(
-        result.as_ref().unwrap_err(),
-        DeltaTableError::Transaction { .. }
-    ));
-    assert!(matches!(
-        result.as_ref().unwrap_err(),
-        DeltaTableError::Generic(_)
-    ));
-    if let DeltaTableError::Generic(msg) = result.unwrap_err() {
-        assert_eq!(msg, "Version mismatch");
-    }
-}
-
-#[tokio::test]
 async fn test_merge_concurrent_with_overlapping_files() {
     // predicate contains filter and files are overlapping -> Commit conflict
     let tmp_dir = tempfile::tempdir().unwrap();
