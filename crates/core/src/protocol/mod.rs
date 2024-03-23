@@ -380,11 +380,8 @@ pub enum DeltaOperation {
     /// Merge data with a source data with the following predicate
     #[serde(rename_all = "camelCase")]
     Merge {
-        /// Cleaned merge predicate for conflict checks
+        /// The merge predicate
         predicate: Option<String>,
-
-        /// The original merge predicate
-        merge_predicate: Option<String>,
 
         /// Match operations performed
         matched_predicates: Vec<MergePredicate>,
@@ -544,8 +541,9 @@ impl DeltaOperation {
     /// Denotes if the operation reads the entire table
     pub fn read_whole_table(&self) -> bool {
         match self {
-            // Predicate is none -> Merge operation had to join full source and target
-            Self::Merge { predicate, .. } if predicate.is_none() => true,
+            // TODO just adding one operation example, as currently none of the
+            // implemented operations scan the entire table.
+            Self::Write { predicate, .. } if predicate.is_none() => false,
             _ => false,
         }
     }

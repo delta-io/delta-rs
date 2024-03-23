@@ -499,7 +499,8 @@ impl<'a> std::future::IntoFuture for PreparedCommit<'a> {
                             read_snapshot,
                             this.data.operation.read_predicate(),
                             &this.data.actions,
-                            this.data.operation.read_whole_table(),
+                            // TODO allow tainting whole table
+                            false,
                         )?;
                         let conflict_checker = ConflictChecker::new(
                             transaction_info,
