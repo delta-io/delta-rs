@@ -866,12 +866,6 @@ async fn try_construct_early_filter(
     let table_metadata = table_snapshot.metadata();
     let partition_columns = &table_metadata.partition_columns;
 
-    if partition_columns.is_empty() {
-        return Ok(None);
-    }
-
-    dbg!(partition_columns.clone());
-
     let mut placeholders = HashMap::default();
 
     match generalize_filter(
@@ -883,11 +877,9 @@ async fn try_construct_early_filter(
     ) {
         None => Ok(None),
         Some(filter) => {
-            dbg!(placeholders.clone());
-
             if placeholders.is_empty() {
-                // if we haven't recognised any partition-based predicates in the join predicate, return no filter
-                Ok(None)
+                // if we haven't recognised any partition-based predicates in the join predicate, return our reduced filter
+                Ok(Some(filter))
             } else {
                 // if we have some recognised partitions, then discover the distinct set of partitions in the source data and
                 // make a new filter, which expands out the placeholders for each distinct partition (and then OR these together)
@@ -901,20 +893,16 @@ async fn try_construct_early_filter(
                     )?)
                     .into(),
                 ));
-
                 let execution_plan = session_state
                     .create_physical_plan(&distinct_partitions)
                     .await?;
-
                 let items = execute_plan_to_batch(session_state, execution_plan).await?;
-
                 let placeholder_names = items
                     .schema()
                     .fields()
                     .iter()
                     .map(|f| f.name().to_owned())
                     .collect_vec();
-
                 let expr = (0..items.num_rows())
                     .map(|i| {
                         let replacements = placeholder_names
@@ -930,7 +918,6 @@ async fn try_construct_early_filter(
                     .collect::<DeltaResult<Vec<_>>>()?
                     .into_iter()
                     .reduce(Expr::or);
-
                 Ok(expr)
             }
         }
@@ -957,6 +944,7 @@ async fn execute(
     let exec_start = Instant::now();
 
     let current_metadata = snapshot.metadata();
+    let state = state.with_query_planner(Arc::new(MergePlanner {}));
 
     // TODO: Given the join predicate, remove any expression that involve the
     // source table and keep expressions that only involve the target table.
@@ -997,8 +985,6 @@ async fn execute(
         .with_file_column(true)
         .build(snapshot)?;
 
-    let file_column = Arc::new(scan_config.file_column_name.clone().unwrap());
-
     let target_provider = Arc::new(DeltaTableProvider::try_new(
         snapshot.clone(),
         log_store.clone(),
@@ -1016,8 +1002,6 @@ async fn execute(
         Expression::DataFusion(expr) => expr,
         Expression::String(s) => parse_predicate_expression(&join_schema_df, s, &state)?,
     };
-
-    let state = state.with_query_planner(Arc::new(MergePlanner {}));
 
     // Attempt to construct an early filter that we can apply to the Add action list and the delta scan.
     // In the case where there are partition columns in the join predicate, we can scan the source table
@@ -1038,11 +1022,44 @@ async fn execute(
         .await?
     };
 
-    let target = match target_subset_filter.as_ref() {
-        None => target,
-        Some(subset_filter) => {
-            LogicalPlan::Filter(Filter::try_new(subset_filter.clone(), target.into())?)
+    let scan_config = DeltaScanConfigBuilder::default()
+        .with_file_column(true)
+        .build(snapshot)?;
+
+    // TODO: Need to manually push this filter into the scan... We want to PRUNE files not FILTER RECORDS
+    //let scan_config = match target_subset_filter.as_ref() {
+    //    None => scan_config,
+    //    Some(subset_filter) => {
+    //        let filter = remove_table_alias(subset_filter.to_owned(), target_alias.clone().unwrap());
+    //        scan_config.with_filter(filter)
+    //    }
+    //}.build(snapshot)?;
+
+    let file_column = Arc::new(scan_config.file_column_name.clone().unwrap());
+
+    let target_provider = Arc::new(DeltaTableProvider::try_new(
+        snapshot.clone(),
+        log_store.clone(),
+        scan_config,
+    )?);
+
+    let target_provider = provider_as_source(target_provider);
+
+    let target = match target_subset_filter.clone() {
+        Some(filter) => {
+            let filter = match &target_alias {
+                Some(alias) => remove_table_alias(filter, alias),
+                None => filter,
+            };
+            LogicalPlanBuilder::scan_with_filters(
+                target_name.clone(),
+                target_provider,
+                None,
+                vec![filter],
+            )?
+            .build()?
         }
+        None => LogicalPlanBuilder::scan(target_name.clone(), target_provider, None)?.build()?,
     };
 
     let source = DataFrame::new(state.clone(), source);
@@ -1433,7 +1450,7 @@ async fn execute(
     let commit_predicate = match target_subset_filter {
         None => None, // No predicate means it's a full table merge
         Some(some_filter) => {
-            let predict_expr = match target_alias {
+            let predict_expr = match &target_alias {
                 None => some_filter,
                 Some(alias) => remove_table_alias(some_filter, alias),
             };
@@ -1468,7 +1485,7 @@ async fn execute(
     ))
 }
 
-fn remove_table_alias(expr: Expr, table_alias: String) -> Expr {
+fn remove_table_alias(expr: Expr, table_alias: &str) -> Expr {
     expr.transform(&|expr| match expr {
         Expr::Column(c) => match c.relation {
             Some(rel) if rel.table() == table_alias => Ok(Transformed::Yes(Expr::Column(
@@ -2039,8 +2056,7 @@ mod tests {
         let (table, _metrics) = DeltaOps(table)
             .merge(
                 source,
-                col("target.id")
-                    .eq(col("source.id"))
+                (col("target.id").eq(col("source.id")))
                     .and(col("target.modified").eq(lit("2021-02-02"))),
             )
             .with_source_alias("source")
