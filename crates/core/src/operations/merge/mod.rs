@@ -870,6 +870,8 @@ async fn try_construct_early_filter(
         return Ok(None);
     }
 
+    dbg!(partition_columns.clone());
+
     let mut placeholders = HashMap::default();
 
     match generalize_filter(
@@ -881,6 +883,8 @@ async fn try_construct_early_filter(
     ) {
         None => Ok(None),
         Some(filter) => {
+            dbg!(placeholders.clone());
+
             if placeholders.is_empty() {
                 // if we haven't recognised any partition-based predicates in the join predicate, return no filter
                 Ok(None)
@@ -2018,7 +2022,6 @@ mod tests {
         let table = setup_table(Some(vec!["modified"])).await;
         let table = write_data(table, &schema).await;
         assert_eq!(table.version(), 1);
-
         let ctx = SessionContext::new();
         let batch = RecordBatch::try_new(
             Arc::clone(&schema),
@@ -2033,7 +2036,6 @@ mod tests {
         )
         .unwrap();
         let source = ctx.read_batch(batch).unwrap();
-
         let (table, _metrics) = DeltaOps(table)
             .merge(
                 source,
@@ -2058,12 +2060,11 @@ mod tests {
             .unwrap()
             .await
             .unwrap();
-
         assert_eq!(table.version(), 2);
-
         let commit_info = table.history(None).await.unwrap();
         let last_commit = &commit_info[0];
         let parameters = last_commit.operation_parameters.clone().unwrap();
+        assert_eq!(parameters["predicate"], "modified = '2021-02-02'");
         assert_eq!(
             parameters["mergePredicate"],
             "target.id = source.id AND target.modified = '2021-02-02'"
@@ -2485,6 +2486,8 @@ mod tests {
         let commit_info = table.history(None).await.unwrap();
         let last_commit = &commit_info[0];
         let parameters = last_commit.operation_parameters.clone().unwrap();
+
+        assert_eq!(parameters["predicate"], json!("modified = '2021-02-02'"));
 
         let expected = vec![
             "+----+-------+------------+",
