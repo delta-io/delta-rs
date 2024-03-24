@@ -1498,3 +1498,29 @@ def test_empty(existing_table: DeltaTable):
     empty_table = pa.Table.from_pylist([], schema=schema)
     with pytest.raises(DeltaError, match="No data source supplied to write command"):
         write_deltalake(existing_table, empty_table, mode="append", engine="rust")
+
+
+def test_rust_decimal_cast(tmp_path: pathlib.Path):
+    import re
+    from decimal import Decimal
+
+    import pandas as pd
+
+    df = pd.DataFrame({"id": [1], "amount": [Decimal("100.1")]})
+    write_deltalake(tmp_path, df, mode="append", engine="rust")
+
+    assert DeltaTable(tmp_path).to_pandas()["amount"][0] == Decimal("100.1")
+
+    # Write smaller decimal,  works since it's fits in the previous decimal precision, scale
+    df = pd.DataFrame({"id": [1], "amount": [Decimal("10.1")]})
+    write_deltalake(tmp_path, df, mode="append", engine="rust")
+
+    df = pd.DataFrame({"id": [1], "amount": [Decimal("1000.1")]})
+    # write decimal that is larger than target type in table
+    with pytest.raises(
+        SchemaMismatchError,
+        match=re.escape(
+            "Cannot cast field amount from Decimal128(5, 1) to Decimal128(4, 1)"
+        ),
+    ):
+        write_deltalake(tmp_path, df, mode="append", engine="rust")
