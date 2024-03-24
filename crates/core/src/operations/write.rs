@@ -812,9 +812,11 @@ impl std::future::IntoFuture for WriteBuilder {
             // created actions, it may be safe to assume, that we want to include all actions.
             // then again, having only some tombstones may be misleading.
             if let Some(mut snapshot) = this.snapshot {
+                dbg!("merge1!");
                 snapshot.merge(commit.data.actions, &commit.data.operation, commit.version)?;
                 Ok(DeltaTable::new_with_state(this.log_store, snapshot))
             } else {
+                dbg!("update!");
                 let mut table = DeltaTable::new(this.log_store, Default::default());
                 table.update().await?;
                 Ok(table)

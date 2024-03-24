@@ -3,6 +3,9 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use arrow::compute::{filter_record_batch, is_not_null};
+use arrow_array::{Array, Int64Array, StringArray, StructArray};
+use arrow_cast::pretty::pretty_format_batches;
 use chrono::Utc;
 use futures::TryStreamExt;
 use object_store::{path::Path, ObjectStore};
@@ -10,15 +13,50 @@ use serde::{Deserialize, Serialize};
 
 use super::config::TableConfig;
 use super::{get_partition_col_data_types, DeltaTableConfig};
+use crate::kernel::arrow::extract as ex;
 use crate::kernel::{
     Action, Add, DataType, EagerSnapshot, LogDataHandler, LogicalFile, Metadata, Protocol, Remove,
-    StructType,
+    ReplayVistor, StructType,
 };
 use crate::logstore::LogStore;
 use crate::operations::transaction::CommitData;
 use crate::partitions::{DeltaTablePartition, PartitionFilter};
 use crate::protocol::DeltaOperation;
 use crate::{DeltaResult, DeltaTableError};
+
+pub(crate) struct AppTransactionVisitor {
+    app_transaction_version: HashMap<String, i64>,
+}
+
+impl AppTransactionVisitor {
+    pub(crate) fn new() -> Self {
+        Self {
+            app_transaction_version: HashMap::new(),
+        }
+    }
+}
+
+impl ReplayVistor for AppTransactionVisitor {
+    fn visit_batch(&mut self, batch: &arrow_array::RecordBatch) -> DeltaResult<()> {
+        let txn_col = ex::extract_and_cast::<StructArray>(batch, "txn")?;
+        let filter = is_not_null(txn_col)?;
+
+        let filtered = filter_record_batch(batch, &filter)?;
+        let arr = ex::extract_and_cast::<StructArray>(&filtered, "txn")?;
+
+        let id = ex::extract_and_cast::<StringArray>(arr, "appId")?;
+        let version = ex::extract_and_cast::<Int64Array>(arr, "version")?;
+
+        for idx in 0..id.len() {
+            let app = ex::read_str(id, idx)?;
+            let version = ex::read_primitive(version, idx)?;
+
+            self.app_transaction_version.insert(app.to_owned(), version);
+        }
+
+        Ok(())
+    }
+}
 
 /// State snapshot currently held by the Delta Table instance.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -36,10 +74,19 @@ impl DeltaTableState {
         config: DeltaTableConfig,
         version: Option<i64>,
     ) -> DeltaResult<Self> {
-        let snapshot = EagerSnapshot::try_new(table_root, store.clone(), config, version).await?;
+        let mut app_visitor = AppTransactionVisitor::new();
+        let visitors: Vec<&mut dyn ReplayVistor> = vec![&mut app_visitor];
+        let snapshot = EagerSnapshot::try_new_with_visitor(
+            table_root,
+            store.clone(),
+            config,
+            version,
+            visitors,
+        )
+        .await?;
         Ok(Self {
             snapshot,
-            app_transaction_version: HashMap::new(),
+            app_transaction_version: app_visitor.app_transaction_version,
         })
     }
 
@@ -215,6 +262,7 @@ impl DeltaTableState {
         log_store: Arc<dyn LogStore>,
         version: Option<i64>,
     ) -> Result<(), DeltaTableError> {
+        println!("update table");
         self.snapshot.update(log_store, version).await?;
         Ok(())
     }

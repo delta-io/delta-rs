@@ -33,6 +33,7 @@ use crate::kernel::StructType;
 use crate::logstore::LogStore;
 use crate::operations::transaction::CommitData;
 use crate::table::config::TableConfig;
+use crate::table::state::AppTransactionVisitor;
 use crate::{DeltaResult, DeltaTableConfig, DeltaTableError};
 
 mod log_data;
@@ -197,10 +198,11 @@ impl Snapshot {
     }
 
     /// Get the files in the snapshot
-    pub fn files(
+    pub fn files<'a>(
         &self,
         store: Arc<dyn ObjectStore>,
-    ) -> DeltaResult<ReplayStream<BoxStream<'_, DeltaResult<RecordBatch>>>> {
+        visitors: Vec<&'a mut dyn ReplayVistor>,
+    ) -> DeltaResult<ReplayStream<'a, BoxStream<'_, DeltaResult<RecordBatch>>>> {
         let log_stream = self.log_segment.commit_stream(
             store.clone(),
             &log_segment::COMMIT_SCHEMA,
@@ -211,7 +213,7 @@ impl Snapshot {
             &log_segment::CHECKPOINT_SCHEMA,
             &self.config,
         );
-        ReplayStream::try_new(log_stream, checkpoint_stream, self)
+        ReplayStream::try_new(log_stream, checkpoint_stream, self, visitors)
     }
 
     /// Get the commit infos in the snapshot
@@ -337,6 +339,20 @@ impl Snapshot {
     }
 }
 
+/// TODO!
+pub trait ReplayVistor: Send {
+    /// TODO!
+    fn visit_batch(&mut self, batch: &RecordBatch) -> DeltaResult<()>;
+}
+
+struct PrintVistor {}
+impl ReplayVistor for PrintVistor {
+    fn visit_batch(&mut self, _batch: &RecordBatch) -> DeltaResult<()> {
+        println!("Hello world!");
+        Ok(())
+    }
+}
+
 /// A snapshot of a Delta table that has been eagerly loaded into memory.
 #[derive(Debug, Clone, PartialEq)]
 pub struct EagerSnapshot {
@@ -354,8 +370,21 @@ impl EagerSnapshot {
         config: DeltaTableConfig,
         version: Option<i64>,
     ) -> DeltaResult<Self> {
+        let mut p = PrintVistor {};
+        let mut i = AppTransactionVisitor::new();
+        Self::try_new_with_visitor(table_root, store, config, version, vec![&mut p, &mut i]).await
+    }
+
+    /// Create a new [`EagerSnapshot`] instance
+    pub async fn try_new_with_visitor(
+        table_root: &Path,
+        store: Arc<dyn ObjectStore>,
+        config: DeltaTableConfig,
+        version: Option<i64>,
+        visitors: Vec<&mut dyn ReplayVistor>,
+    ) -> DeltaResult<Self> {
         let snapshot = Snapshot::try_new(table_root, store.clone(), config, version).await?;
-        let files = snapshot.files(store)?.try_collect().await?;
+        let files = snapshot.files(store, visitors)?.try_collect().await?;
         Ok(Self { snapshot, files })
     }
 
@@ -379,9 +408,13 @@ impl EagerSnapshot {
         log_store: Arc<dyn LogStore>,
         target_version: Option<i64>,
     ) -> DeltaResult<()> {
+        dbg!("Update Call: {} {:?}", self.version(), target_version);
         if Some(self.version()) == target_version {
             return Ok(());
         }
+
+        let mut p = PrintVistor {};
+        let visitors: Vec<&mut dyn ReplayVistor> = vec![&mut p];
         let new_slice = self
             .snapshot
             .update_inner(log_store.clone(), target_version)
@@ -404,11 +437,13 @@ impl EagerSnapshot {
                     )
                     .boxed()
             };
+            dbg!("here2");
             let mapper = LogMapper::try_new(&self.snapshot)?;
-            let files = ReplayStream::try_new(log_stream, checkpoint_stream, &self.snapshot)?
-                .map(|batch| batch.and_then(|b| mapper.map_batch(b)))
-                .try_collect()
-                .await?;
+            let files =
+                ReplayStream::try_new(log_stream, checkpoint_stream, &self.snapshot, visitors)?
+                    .map(|batch| batch.and_then(|b| mapper.map_batch(b)))
+                    .try_collect()
+                    .await?;
 
             self.files = files;
         }
@@ -483,6 +518,7 @@ impl EagerSnapshot {
         &mut self,
         commits: impl IntoIterator<Item = &'a CommitData>,
     ) -> DeltaResult<i64> {
+        println!("Advance!");
         let mut metadata = None;
         let mut protocol = None;
         let mut send = Vec::new();
@@ -633,7 +669,7 @@ mod tests {
         assert_eq!(tombstones.len(), 31);
 
         let batches = snapshot
-            .files(store.clone())?
+            .files(store.clone(), vec![])?
             .try_collect::<Vec<_>>()
             .await?;
         let expected = [
@@ -663,7 +699,7 @@ mod tests {
             )
             .await?;
             let batches = snapshot
-                .files(store.clone())?
+                .files(store.clone(), vec![])?
                 .try_collect::<Vec<_>>()
                 .await?;
             let num_files = batches.iter().map(|b| b.num_rows() as i64).sum::<i64>();
