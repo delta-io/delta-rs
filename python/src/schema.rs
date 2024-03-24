@@ -138,7 +138,7 @@ impl PrimitiveType {
 
     #[pyo3(text_signature = "($self)")]
     fn to_json(&self) -> PyResult<String> {
-        let inner_type = DataType::Primitive(self.inner_type.clone());
+        let inner_type = DataType::Primitive(self.inner_type);
         serde_json::to_string(&inner_type).map_err(|err| PyException::new_err(err.to_string()))
     }
 
@@ -153,7 +153,7 @@ impl PrimitiveType {
 
     #[pyo3(text_signature = "($self)")]
     fn to_pyarrow(&self) -> PyResult<PyArrowType<ArrowDataType>> {
-        let inner_type = DataType::Primitive(self.inner_type.clone());
+        let inner_type = DataType::Primitive(self.inner_type);
         Ok(PyArrowType((&inner_type).try_into().map_err(
             |err: ArrowError| PyException::new_err(err.to_string()),
         )?))

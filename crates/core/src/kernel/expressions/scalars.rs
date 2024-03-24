@@ -394,7 +394,7 @@ impl From<String> for Scalar {
 
 impl PrimitiveType {
     fn data_type(&self) -> DataType {
-        DataType::Primitive(self.clone())
+        DataType::Primitive(*self)
     }
 
     /// Parses a string into a scalar value.

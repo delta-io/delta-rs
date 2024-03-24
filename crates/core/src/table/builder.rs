@@ -321,7 +321,7 @@ impl DeltaTableBuilder {
 
     /// Build the [`DeltaTable`] and load its state
     pub async fn load(self) -> DeltaResult<DeltaTable> {
-        let version = self.options.version.clone();
+        let version = self.options.version;
         let mut table = self.build()?;
         match version {
             DeltaVersion::Newest => table.load().await?,
