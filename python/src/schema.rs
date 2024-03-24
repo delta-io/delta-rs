@@ -13,7 +13,6 @@ use deltalake::kernel::{
 use pyo3::exceptions::{PyException, PyNotImplementedError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::IntoPyDict;
-use pyo3::{PyRef, PyResult};
 use std::collections::HashMap;
 
 // PyO3 doesn't yet support converting classes with inheritance with Python
