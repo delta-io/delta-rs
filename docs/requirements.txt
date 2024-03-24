@@ -5,3 +5,4 @@ mkdocs-material==9.4.5
 mkdocs-macros-plugin==1.0.4
 markdown-exec[ansi]==1.7.0
 mkdocs-simple-hooks==0.1.5
+mike==2.0.0
