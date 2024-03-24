@@ -51,7 +51,7 @@ use datafusion_common::{Column, DFSchema, ScalarValue, TableReference};
 use datafusion_expr::expr::Placeholder;
 use datafusion_expr::{col, conditional_expressions::CaseBuilder, lit, when, Expr, JoinType};
 use datafusion_expr::{
-    BinaryExpr, Distinct, Extension, Filter, LogicalPlan, LogicalPlanBuilder, Operator, Projection,
+    BinaryExpr, Distinct, Extension, LogicalPlan, LogicalPlanBuilder, Operator, Projection,
     UserDefinedLogicalNode, UNNAMED_TABLE,
 };
 use futures::future::BoxFuture;
@@ -866,10 +866,6 @@ async fn try_construct_early_filter(
     let table_metadata = table_snapshot.metadata();
     let partition_columns = &table_metadata.partition_columns;
 
-    if partition_columns.is_empty() {
-        return Ok(None);
-    }
-
     let mut placeholders = HashMap::default();
 
     match generalize_filter(
@@ -897,20 +893,16 @@ async fn try_construct_early_filter(
                     )?)
                     .into(),
                 ));
-
                 let execution_plan = session_state
                     .create_physical_plan(&distinct_partitions)
                     .await?;
-
                 let items = execute_plan_to_batch(session_state, execution_plan).await?;
-
                 let placeholder_names = items
                     .schema()
                     .fields()
                     .iter()
                     .map(|f| f.name().to_owned())
                     .collect_vec();
-
                 let expr = (0..items.num_rows())
                     .map(|i| {
                         let replacements = placeholder_names
@@ -926,7 +918,6 @@ async fn try_construct_early_filter(
                     .collect::<DeltaResult<Vec<_>>>()?
                     .into_iter()
                     .reduce(Expr::or);
-
                 Ok(expr)
             }
         }
@@ -953,6 +944,7 @@ async fn execute(
     let exec_start = Instant::now();
 
     let current_metadata = snapshot.metadata();
+    let state = state.with_query_planner(Arc::new(MergePlanner {}));
 
     // TODO: Given the join predicate, remove any expression that involve the
     // source table and keep expressions that only involve the target table.
@@ -993,38 +985,33 @@ async fn execute(
         .with_file_column(true)
         .build(snapshot)?;
 
-    let file_column = Arc::new(scan_config.file_column_name.clone().unwrap());
-
     let target_provider = Arc::new(DeltaTableProvider::try_new(
         snapshot.clone(),
         log_store.clone(),
-        scan_config,
+        scan_config.clone(),
     )?);
 
     let target_provider = provider_as_source(target_provider);
-
-    let target = LogicalPlanBuilder::scan(target_name.clone(), target_provider, None)?.build()?;
+    let target =
+        LogicalPlanBuilder::scan(target_name.clone(), target_provider.clone(), None)?.build()?;
 
     let source_schema = source.schema();
     let target_schema = target.schema();
-    let join_schema_df = build_join_schema(source_schema, target_schema, &JoinType::Full)?;
+    let join_schema_df = build_join_schema(source_schema, &target_schema, &JoinType::Full)?;
     let predicate = match predicate {
         Expression::DataFusion(expr) => expr,
         Expression::String(s) => parse_predicate_expression(&join_schema_df, s, &state)?,
     };
 
-    let state = state.with_query_planner(Arc::new(MergePlanner {}));
-
-    let target = {
-        // Attempt to construct an early filter that we can apply to the Add action list and the delta scan.
-        // In the case where there are partition columns in the join predicate, we can scan the source table
-        // to get the distinct list of partitions affected and constrain the search to those.
-
-        if !not_match_source_operations.is_empty() {
-            // It's only worth trying to create an early filter where there are no `when_not_matched_source` operators, since
-            // that implies a full scan
-            target
-        } else if let Some(filter) = try_construct_early_filter(
+    // Attempt to construct an early filter that we can apply to the Add action list and the delta scan.
+    // In the case where there are partition columns in the join predicate, we can scan the source table
+    // to get the distinct list of partitions affected and constrain the search to those.
+    let target_subset_filter = if !not_match_source_operations.is_empty() {
+        // It's only worth trying to create an early filter where there are no `when_not_matched_source` operators, since
+        // that implies a full scan
+        None
+    } else {
+        try_construct_early_filter(
             predicate.clone(),
             snapshot,
             &state,
@@ -1033,11 +1020,25 @@ async fn execute(
             &target_name,
         )
         .await?
-        {
-            LogicalPlan::Filter(Filter::try_new(filter, target.into())?)
-        } else {
-            target
+    };
+
+    let file_column = Arc::new(scan_config.file_column_name.clone().unwrap());
+    // Need to manually push this filter into the scan... We want to PRUNE files not FILTER RECORDS
+    let target = match target_subset_filter.clone() {
+        Some(filter) => {
+            let filter = match &target_alias {
+                Some(alias) => remove_table_alias(filter, alias),
+                None => filter,
+            };
+            LogicalPlanBuilder::scan_with_filters(
+                target_name.clone(),
+                target_provider,
+                None,
+                vec![filter],
+            )?
+            .build()?
         }
+        None => LogicalPlanBuilder::scan(target_name.clone(), target_provider, None)?.build()?,
     };
 
     let source = DataFrame::new(state.clone(), source);
@@ -1424,9 +1425,22 @@ async fn execute(
         app_metadata.insert("operationMetrics".to_owned(), map);
     }
 
+    // Predicate will be used for conflict detection
+    let commit_predicate = match target_subset_filter {
+        None => None, // No predicate means it's a full table merge
+        Some(some_filter) => {
+            let predict_expr = match &target_alias {
+                None => some_filter,
+                Some(alias) => remove_table_alias(some_filter, alias),
+            };
+            Some(fmt_expr_to_sql(&predict_expr)?)
+        }
+    };
+
     // Do not make a commit when there are zero updates to the state
     let operation = DeltaOperation::Merge {
-        predicate: Some(fmt_expr_to_sql(&predicate)?),
+        predicate: commit_predicate,
+        merge_predicate: Some(fmt_expr_to_sql(&predicate)?),
         matched_predicates: match_operations,
         not_matched_predicates: not_match_target_operations,
         not_matched_by_source_predicates: not_match_source_operations,
@@ -1448,6 +1462,21 @@ async fn execute(
         ),
         metrics,
     ))
+}
+
+fn remove_table_alias(expr: Expr, table_alias: &str) -> Expr {
+    expr.transform(&|expr| match expr {
+        Expr::Column(c) => match c.relation {
+            Some(rel) if rel.table() == table_alias => Ok(Transformed::Yes(Expr::Column(
+                Column::new_unqualified(c.name),
+            ))),
+            _ => Ok(Transformed::No(Expr::Column(Column::new(
+                c.relation, c.name,
+            )))),
+        },
+        _ => Ok(Transformed::No(expr)),
+    })
+    .unwrap()
 }
 
 // TODO: Abstract MergePlanner into DeltaPlanner to support other delta operations in the future.
@@ -1549,6 +1578,7 @@ mod tests {
     use datafusion_expr::LogicalPlanBuilder;
     use datafusion_expr::Operator;
     use itertools::Itertools;
+    use regex::Regex;
     use serde_json::json;
     use std::collections::HashMap;
     use std::ops::Neg;
@@ -1699,7 +1729,8 @@ mod tests {
         let commit_info = table.history(None).await.unwrap();
         let last_commit = &commit_info[0];
         let parameters = last_commit.operation_parameters.clone().unwrap();
-        assert_eq!(parameters["predicate"], json!("target.id = source.id"));
+        assert!(!parameters.contains_key("predicate"));
+        assert_eq!(parameters["mergePredicate"], json!("target.id = source.id"));
         assert_eq!(
             parameters["matchedPredicates"],
             json!(r#"[{"actionType":"update"}]"#)
@@ -1751,7 +1782,8 @@ mod tests {
         let commit_info = table.history(None).await.unwrap();
         let last_commit = &commit_info[0];
         let parameters = last_commit.operation_parameters.clone().unwrap();
-        assert_eq!(parameters["predicate"], json!("target.id = source.id"));
+        assert!(!parameters.contains_key("predicate"));
+        assert_eq!(parameters["mergePredicate"], json!("target.id = source.id"));
         assert_eq!(
             parameters["matchedPredicates"],
             json!(r#"[{"actionType":"update"}]"#)
@@ -1955,6 +1987,15 @@ mod tests {
         assert_eq!(metrics.num_output_rows, 6);
         assert_eq!(metrics.num_source_rows, 3);
 
+        let commit_info = table.history(None).await.unwrap();
+        let last_commit = &commit_info[0];
+        let parameters = last_commit.operation_parameters.clone().unwrap();
+        assert!(!parameters.contains_key("predicate"));
+        assert_eq!(
+            parameters["mergePredicate"],
+            "target.id = source.id AND target.modified = '2021-02-02'"
+        );
+
         let expected = vec![
             "+----+-------+------------+",
             "| id | value | modified   |",
@@ -1969,6 +2010,61 @@ mod tests {
         ];
         let actual = get_data(&table).await;
         assert_batches_sorted_eq!(&expected, &actual);
+    }
+
+    #[tokio::test]
+    async fn test_merge_partition_filtered() {
+        let schema = get_arrow_schema(&None);
+        let table = setup_table(Some(vec!["modified"])).await;
+        let table = write_data(table, &schema).await;
+        assert_eq!(table.version(), 1);
+        let ctx = SessionContext::new();
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(arrow::array::StringArray::from(vec!["B", "C"])),
+                Arc::new(arrow::array::Int32Array::from(vec![10, 20])),
+                Arc::new(arrow::array::StringArray::from(vec![
+                    "2021-02-02",
+                    "2021-02-02",
+                ])),
+            ],
+        )
+        .unwrap();
+        let source = ctx.read_batch(batch).unwrap();
+        let (table, _metrics) = DeltaOps(table)
+            .merge(
+                source,
+                col("target.id")
+                    .eq(col("source.id"))
+                    .and(col("target.modified").eq(lit("2021-02-02"))),
+            )
+            .with_source_alias("source")
+            .with_target_alias("target")
+            .when_matched_update(|update| {
+                update
+                    .update("value", col("source.value"))
+                    .update("modified", col("source.modified"))
+            })
+            .unwrap()
+            .when_not_matched_insert(|insert| {
+                insert
+                    .set("id", col("source.id"))
+                    .set("value", col("source.value"))
+                    .set("modified", col("source.modified"))
+            })
+            .unwrap()
+            .await
+            .unwrap();
+        assert_eq!(table.version(), 2);
+        let commit_info = table.history(None).await.unwrap();
+        let last_commit = &commit_info[0];
+        let parameters = last_commit.operation_parameters.clone().unwrap();
+        assert_eq!(parameters["predicate"], "modified = '2021-02-02'");
+        assert_eq!(
+            parameters["mergePredicate"],
+            "target.id = source.id AND target.modified = '2021-02-02'"
+        );
     }
 
     #[tokio::test]
@@ -2027,6 +2123,13 @@ mod tests {
         assert_eq!(metrics.num_target_rows_deleted, 0);
         assert_eq!(metrics.num_output_rows, 3);
         assert_eq!(metrics.num_source_rows, 3);
+
+        let commit_info = table.history(None).await.unwrap();
+        let last_commit = &commit_info[0];
+        let parameters = last_commit.operation_parameters.clone().unwrap();
+        let predicate = parameters["predicate"].as_str().unwrap();
+        let re = Regex::new(r"^id = '(C|X|B)' OR id = '(C|X|B)' OR id = '(C|X|B)'$").unwrap();
+        assert!(re.is_match(predicate));
 
         let expected = vec![
             "+-------+------------+----+",
@@ -2098,7 +2201,8 @@ mod tests {
             extra_info["operationMetrics"],
             serde_json::to_value(&metrics).unwrap()
         );
-        assert_eq!(parameters["predicate"], json!("target.id = source.id"));
+        assert!(!parameters.contains_key("predicate"));
+        assert_eq!(parameters["mergePredicate"], json!("target.id = source.id"));
         assert_eq!(
             parameters["matchedPredicates"],
             json!(r#"[{"actionType":"delete"}]"#)
@@ -2162,7 +2266,7 @@ mod tests {
         let commit_info = table.history(None).await.unwrap();
         let last_commit = &commit_info[0];
         let parameters = last_commit.operation_parameters.clone().unwrap();
-        assert_eq!(parameters["predicate"], json!("target.id = source.id"));
+        assert_eq!(parameters["mergePredicate"], json!("target.id = source.id"));
         assert_eq!(
             parameters["matchedPredicates"],
             json!(r#"[{"actionType":"delete","predicate":"source.value <= 10"}]"#)
@@ -2231,7 +2335,8 @@ mod tests {
         let commit_info = table.history(None).await.unwrap();
         let last_commit = &commit_info[0];
         let parameters = last_commit.operation_parameters.clone().unwrap();
-        assert_eq!(parameters["predicate"], json!("target.id = source.id"));
+        assert!(!parameters.contains_key("predicate"));
+        assert_eq!(parameters["mergePredicate"], json!("target.id = source.id"));
         assert_eq!(
             parameters["notMatchedBySourcePredicates"],
             json!(r#"[{"actionType":"delete"}]"#)
@@ -2295,7 +2400,7 @@ mod tests {
         let commit_info = table.history(None).await.unwrap();
         let last_commit = &commit_info[0];
         let parameters = last_commit.operation_parameters.clone().unwrap();
-        assert_eq!(parameters["predicate"], json!("target.id = source.id"));
+        assert_eq!(parameters["mergePredicate"], json!("target.id = source.id"));
         assert_eq!(
             parameters["notMatchedBySourcePredicates"],
             json!(r#"[{"actionType":"delete","predicate":"target.modified > '2021-02-01'"}]"#)
@@ -2373,6 +2478,12 @@ mod tests {
         assert_eq!(metrics.num_target_rows_deleted, 0);
         assert_eq!(metrics.num_output_rows, 3);
         assert_eq!(metrics.num_source_rows, 3);
+
+        let commit_info = table.history(None).await.unwrap();
+        let last_commit = &commit_info[0];
+        let parameters = last_commit.operation_parameters.clone().unwrap();
+
+        assert_eq!(parameters["predicate"], json!("modified = '2021-02-02'"));
 
         let expected = vec![
             "+----+-------+------------+",
@@ -2613,6 +2724,31 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_generalize_filter_keeps_only_static_target_references() {
+        let source = TableReference::parse_str("source");
+        let target = TableReference::parse_str("target");
+
+        let parsed_filter = col(Column::new(source.clone().into(), "id"))
+            .eq(col(Column::new(target.clone().into(), "id")))
+            .and(col(Column::new(target.clone().into(), "id")).eq(lit("C")));
+
+        let mut placeholders = HashMap::default();
+
+        let generalized = generalize_filter(
+            parsed_filter,
+            &vec!["other".to_owned()],
+            &source,
+            &target,
+            &mut placeholders,
+        )
+        .unwrap();
+
+        let expected_filter = col(Column::new(target.clone().into(), "id")).eq(lit("C"));
+
+        assert_eq!(generalized, expected_filter);
+    }
+
+    #[tokio::test]
     async fn test_generalize_filter_removes_source_references() {
         let source = TableReference::parse_str("source");
         let target = TableReference::parse_str("target");
@@ -2741,7 +2877,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_merge_pushdowns() {
-        //See #2158
+        //See https://github.com/delta-io/delta-rs/issues/2158
         let schema = vec![
             StructField::new(
                 "id".to_string(),
@@ -2769,6 +2905,106 @@ mod tests {
         let table = DeltaOps::new_in_memory()
             .create()
             .with_columns(schema)
+            .await
+            .unwrap();
+
+        let ctx = SessionContext::new();
+        let batch = RecordBatch::try_new(
+            Arc::clone(&arrow_schema.clone()),
+            vec![
+                Arc::new(arrow::array::StringArray::from(vec!["A", "B"])),
+                Arc::new(arrow::array::Float32Array::from(vec![Some(10.15), None])),
+                Arc::new(arrow::array::StringArray::from(vec![
+                    "2023-07-04",
+                    "2023-07-04",
+                ])),
+            ],
+        )
+        .unwrap();
+
+        let table = DeltaOps(table)
+            .write(vec![batch.clone()])
+            .with_save_mode(SaveMode::Append)
+            .await
+            .unwrap();
+        assert_eq!(table.version(), 1);
+        assert_eq!(table.get_files_count(), 1);
+
+        let batch = RecordBatch::try_new(
+            Arc::clone(&arrow_schema.clone()),
+            vec![
+                Arc::new(arrow::array::StringArray::from(vec!["A", "B"])),
+                Arc::new(arrow::array::Float32Array::from(vec![
+                    Some(12.15),
+                    Some(11.15),
+                ])),
+                Arc::new(arrow::array::StringArray::from(vec![
+                    "2023-07-04",
+                    "2023-07-04",
+                ])),
+            ],
+        )
+        .unwrap();
+        let source = ctx.read_batch(batch).unwrap();
+
+        let (table, _metrics) = DeltaOps(table)
+            .merge(source, "target.id = source.id and target.cost is null")
+            .with_source_alias("source")
+            .with_target_alias("target")
+            .when_matched_update(|insert| {
+                insert
+                    .update("id", "target.id")
+                    .update("cost", "source.cost")
+                    .update("month", "target.month")
+            })
+            .unwrap()
+            .await
+            .unwrap();
+
+        let expected = vec![
+            "+----+-------+------------+",
+            "| id | cost  | month      |",
+            "+----+-------+------------+",
+            "| A  | 10.15 | 2023-07-04 |",
+            "| B  | 11.15 | 2023-07-04 |",
+            "+----+-------+------------+",
+        ];
+        let actual = get_data(&table).await;
+        assert_batches_sorted_eq!(&expected, &actual);
+    }
+
+    #[tokio::test]
+    async fn test_merge_pushdowns_partitioned() {
+        //See #2158
+        let schema = vec![
+            StructField::new(
+                "id".to_string(),
+                DataType::Primitive(PrimitiveType::String),
+                true,
+            ),
+            StructField::new(
+                "cost".to_string(),
+                DataType::Primitive(PrimitiveType::Float),
+                true,
+            ),
+            StructField::new(
+                "month".to_string(),
+                DataType::Primitive(PrimitiveType::String),
+                true,
+            ),
+        ];
+
+        let arrow_schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("id", ArrowDataType::Utf8, true),
+            Field::new("cost", ArrowDataType::Float32, true),
+            Field::new("month", ArrowDataType::Utf8, true),
+        ]));
+
+        let part_cols = vec!["month"];
+        let table = DeltaOps::new_in_memory()
+            .create()
+            .with_columns(schema)
+            .with_partition_columns(part_cols)
             .await
             .unwrap();
 
