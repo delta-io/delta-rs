@@ -21,6 +21,7 @@
 //! ````
 
 use std::collections::HashMap;
+use std::fmt;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -36,7 +37,7 @@ use parquet::arrow::async_reader::{ParquetObjectReader, ParquetRecordBatchStream
 use parquet::basic::{Compression, ZstdLevel};
 use parquet::errors::ParquetError;
 use parquet::file::properties::WriterProperties;
-use serde::{Deserialize, Serialize};
+use serde::{de::Error as DeError, Deserialize, Deserializer, Serialize, Serializer};
 use tracing::debug;
 
 use super::transaction::PROTOCOL;
@@ -60,8 +61,16 @@ pub struct Metrics {
     /// Number of unoptimized files removed
     pub num_files_removed: u64,
     /// Detailed metrics for the add operation
+    #[serde(
+        serialize_with = "serialize_metric_details",
+        deserialize_with = "deserialize_metric_details"
+    )]
     pub files_added: MetricDetails,
     /// Detailed metrics for the remove operation
+    #[serde(
+        serialize_with = "serialize_metric_details",
+        deserialize_with = "deserialize_metric_details"
+    )]
     pub files_removed: MetricDetails,
     /// Number of partitions that had at least one file optimized
     pub partitions_optimized: u64,
@@ -75,17 +84,34 @@ pub struct Metrics {
     pub preserve_insertion_order: bool,
 }
 
+// Custom serialization function that serializes metric details as a string
+fn serialize_metric_details<S>(value: &MetricDetails, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    serializer.serialize_str(&value.to_string())
+}
+
+// Custom deserialization that parses a JSON string into MetricDetails
+fn deserialize_metric_details<'de, D>(deserializer: D) -> Result<MetricDetails, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let s: String = Deserialize::deserialize(deserializer)?;
+    serde_json::from_str(&s).map_err(DeError::custom)
+}
+
 /// Statistics on files for a particular operation
 /// Operation can be remove or add
 #[derive(Debug, PartialEq, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MetricDetails {
-    /// Minimum file size of a operation
-    pub min: i64,
-    /// Maximum file size of a operation
-    pub max: i64,
     /// Average file size of a operation
     pub avg: f64,
+    /// Maximum file size of a operation
+    pub max: i64,
+    /// Minimum file size of a operation
+    pub min: i64,
     /// Number of files encountered during operation
     pub total_files: usize,
     /// Sum of file sizes of a operation
@@ -100,6 +126,13 @@ impl MetricDetails {
         self.total_files += partial.total_files;
         self.total_size += partial.total_size;
         self.avg = self.total_size as f64 / self.total_files as f64;
+    }
+}
+
+impl fmt::Display for MetricDetails {
+    /// Display the metric details using serde serialization
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        serde_json::to_string(self).map_err(|_| fmt::Error)?.fmt(f)
     }
 }
 
