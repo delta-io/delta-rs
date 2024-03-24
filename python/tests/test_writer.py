@@ -1524,3 +1524,6 @@ def test_rust_decimal_cast(tmp_path: pathlib.Path):
         ),
     ):
         write_deltalake(tmp_path, df, mode="append", engine="rust")
+
+    with pytest.raises(SchemaMismatchError, match="Cannot merge types decimal"):
+        write_deltalake(tmp_path, df, mode="append", schema_mode="merge", engine="rust")
