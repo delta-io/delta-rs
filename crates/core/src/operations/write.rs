@@ -845,7 +845,6 @@ fn try_cast_batch(from_fields: &Fields, to_fields: &Fields) -> Result<(), ArrowE
                         (
                             DataType::Decimal128(left_precision, left_scale),
                             DataType::Decimal128(right_precision, right_scale)
-                            | DataType::Decimal256(right_precision, right_scale),
                         ) => {
                             if left_precision <= right_precision && left_scale <= right_scale {
                                 Ok(())
@@ -859,21 +858,14 @@ fn try_cast_batch(from_fields: &Fields, to_fields: &Fields) -> Result<(), ArrowE
                             }
                         }
                         (
-                            DataType::Decimal256(left_precision, left_scale),
-                            DataType::Decimal256(right_precision, right_scale),
+                            DataType::Decimal256(_, _),
+                            DataType::Decimal256(_, _),
                         ) => {
-                            if left_precision <= right_precision && left_scale <= right_scale {
-                                Ok(())
-                            } else {
-                                Err(ArrowError::SchemaError(format!(
-                                    "Cannot cast field {} from {} to {}",
-                                    f.name(),
-                                    f.data_type(),
-                                    target_field.data_type()
-                                )))
-                            }
+                            unreachable!("Target field can never be Decimal 256. According to the protocol: 'The precision and scale can be up to 38.'")
                         }
-                        (DataType::Decimal256(_, _), DataType::Decimal128(_, _)) => {
+                        (DataType::Decimal256(left_precision, left_scale), DataType::Decimal128(right_precision, right_scale)) => if left_precision <= right_precision && left_scale <= right_scale {
+                            Ok(())
+                        } else {
                             Err(ArrowError::SchemaError(format!(
                                 "Cannot cast field {} from {} to {}",
                                 f.name(),
