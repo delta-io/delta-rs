@@ -842,43 +842,59 @@ fn try_cast_batch(from_fields: &Fields, to_fields: &Fields) -> Result<(), ArrowE
                     try_cast_batch(fields0, fields1)
                 } else {
                     match (f.data_type(), target_field.data_type()) {
-                        (DataType::Decimal128(left_precision,left_scale), DataType::Decimal128(right_precision,right_scale) | DataType::Decimal256(right_precision,right_scale)) => if left_precision <= right_precision && left_scale <= right_scale { 
-                            Ok(())
-                        } else {
-                            Err(ArrowError::SchemaError(format!(
-                                "Cannot cast field {} from {} to {}",
-                                f.name(),
-                                f.data_type(),
-                                target_field.data_type()
-                            )))
-                        },
-                        (DataType::Decimal256(left_precision,left_scale), DataType::Decimal256(right_precision,right_scale)) => if left_precision <= right_precision && left_scale <= right_scale { 
-                            Ok(())
-                        } else {
-                            Err(ArrowError::SchemaError(format!(
-                                "Cannot cast field {} from {} to {}",
-                                f.name(),
-                                f.data_type(),
-                                target_field.data_type()
-                            )))
-                        },
-                        (DataType::Decimal256(_,_), DataType::Decimal128(_,_)) =>  Err(ArrowError::SchemaError(format!(
-                            "Cannot cast field {} from {} to {}",
-                            f.name(),
-                            f.data_type(),
-                            target_field.data_type()
-                        ))),
-                        (left, right) => if !can_cast_types(left, right) {
-                            Err(ArrowError::SchemaError(format!(
-                                "Cannot cast field {} from {} to {}",
-                                f.name(),
-                                f.data_type(),
-                                target_field.data_type()
-                            )))
+                        (
+                            DataType::Decimal128(left_precision, left_scale),
+                            DataType::Decimal128(right_precision, right_scale)
+                            | DataType::Decimal256(right_precision, right_scale),
+                        ) => {
+                            if left_precision <= right_precision && left_scale <= right_scale {
+                                Ok(())
                             } else {
-                        Ok(())
+                                Err(ArrowError::SchemaError(format!(
+                                    "Cannot cast field {} from {} to {}",
+                                    f.name(),
+                                    f.data_type(),
+                                    target_field.data_type()
+                                )))
+                            }
+                        }
+                        (
+                            DataType::Decimal256(left_precision, left_scale),
+                            DataType::Decimal256(right_precision, right_scale),
+                        ) => {
+                            if left_precision <= right_precision && left_scale <= right_scale {
+                                Ok(())
+                            } else {
+                                Err(ArrowError::SchemaError(format!(
+                                    "Cannot cast field {} from {} to {}",
+                                    f.name(),
+                                    f.data_type(),
+                                    target_field.data_type()
+                                )))
+                            }
+                        }
+                        (DataType::Decimal256(_, _), DataType::Decimal128(_, _)) => {
+                            Err(ArrowError::SchemaError(format!(
+                                "Cannot cast field {} from {} to {}",
+                                f.name(),
+                                f.data_type(),
+                                target_field.data_type()
+                            )))
+                        }
+                        (left, right) => {
+                            if !can_cast_types(left, right) {
+                                Err(ArrowError::SchemaError(format!(
+                                    "Cannot cast field {} from {} to {}",
+                                    f.name(),
+                                    f.data_type(),
+                                    target_field.data_type()
+                                )))
+                            } else {
+                                Ok(())
+                            }
+                        }
                     }
-                }}
+                }
             } else {
                 Err(ArrowError::SchemaError(format!(
                     "Field {} not found in schema",
