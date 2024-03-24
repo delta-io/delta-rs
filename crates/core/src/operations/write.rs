@@ -843,7 +843,7 @@ fn try_cast_batch(from_fields: &Fields, to_fields: &Fields) -> Result<(), ArrowE
                 } else {
                     match (f.data_type(), target_field.data_type()) {
                         (
-                            DataType::Decimal128(left_precision, left_scale),
+                            DataType::Decimal128(left_precision, left_scale) | DataType::Decimal256(left_precision, left_scale),
                             DataType::Decimal128(right_precision, right_scale)
                         ) => {
                             if left_precision <= right_precision && left_scale <= right_scale {
@@ -856,23 +856,13 @@ fn try_cast_batch(from_fields: &Fields, to_fields: &Fields) -> Result<(), ArrowE
                                     target_field.data_type()
                                 )))
                             }
-                        }
+                        },
                         (
                             DataType::Decimal256(_, _),
                             DataType::Decimal256(_, _),
                         ) => {
                             unreachable!("Target field can never be Decimal 256. According to the protocol: 'The precision and scale can be up to 38.'")
-                        }
-                        (DataType::Decimal256(left_precision, left_scale), DataType::Decimal128(right_precision, right_scale)) => if left_precision <= right_precision && left_scale <= right_scale {
-                            Ok(())
-                        } else {
-                            Err(ArrowError::SchemaError(format!(
-                                "Cannot cast field {} from {} to {}",
-                                f.name(),
-                                f.data_type(),
-                                target_field.data_type()
-                            )))
-                        }
+                        },
                         (left, right) => {
                             if !can_cast_types(left, right) {
                                 Err(ArrowError::SchemaError(format!(
