@@ -265,6 +265,8 @@ async fn regular_rename(from: &str, to: &str) -> Result<(), LocalFileSystemError
     let from_path = String::from(from);
     let to_path = String::from(to);
 
+    println!("rr {from_path} -> {to_path}");
+
     tokio::task::spawn_blocking(move || {
         if std::fs::metadata(&to_path).is_ok() {
             Err(LocalFileSystemError::AlreadyExists {
@@ -276,6 +278,7 @@ async fn regular_rename(from: &str, to: &str) -> Result<(), LocalFileSystemError
             })
         } else {
             std::fs::rename(&from_path, &to_path).map_err(|err| {
+                println!("err: {err:?}");
                 if err.kind() == std::io::ErrorKind::NotFound {
                     LocalFileSystemError::NotFound {
                         path: from_path.clone(),
