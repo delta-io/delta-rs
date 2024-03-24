@@ -198,7 +198,7 @@ impl DeltaWriter<RecordBatch> for RecordBatchWriter {
 
         for result in self.divide_by_partition_values(&values)? {
             let schema = self
-                .write_partition(result.record_batch, &result.partition_values, mode.clone())
+                .write_partition(result.record_batch, &result.partition_values, mode)
                 .await?;
             self.arrow_schema_ref = schema;
         }

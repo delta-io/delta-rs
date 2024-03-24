@@ -997,7 +997,7 @@ async fn execute(
 
     let source_schema = source.schema();
     let target_schema = target.schema();
-    let join_schema_df = build_join_schema(source_schema, &target_schema, &JoinType::Full)?;
+    let join_schema_df = build_join_schema(source_schema, target_schema, &JoinType::Full)?;
     let predicate = match predicate {
         Expression::DataFusion(expr) => expr,
         Expression::String(s) => parse_predicate_expression(&join_schema_df, s, &state)?,

@@ -14,7 +14,7 @@ macro_rules! parser_err {
     };
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum DescribeOperation {
     Detail,
     History,
