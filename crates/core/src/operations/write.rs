@@ -858,7 +858,7 @@ fn try_cast_batch(from_fields: &Fields, to_fields: &Fields) -> Result<(), ArrowE
                             }
                         },
                         (
-                            DataType::Decimal256(_, _),
+                            _,
                             DataType::Decimal256(_, _),
                         ) => {
                             unreachable!("Target field can never be Decimal 256. According to the protocol: 'The precision and scale can be up to 38.'")
