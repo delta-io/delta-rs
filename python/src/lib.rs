@@ -6,7 +6,6 @@ mod schema;
 mod utils;
 
 use std::collections::{HashMap, HashSet};
-use std::convert::TryFrom;
 use std::future::IntoFuture;
 use std::sync::Arc;
 use std::time;

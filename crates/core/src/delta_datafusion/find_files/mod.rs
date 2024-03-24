@@ -1,5 +1,7 @@
+use arrow_array::cast::AsArray;
 use std::sync::Arc;
 
+use arrow_array::types::UInt16Type;
 use arrow_array::RecordBatch;
 use arrow_schema::SchemaBuilder;
 use arrow_schema::{ArrowError, DataType, Field, Schema, SchemaRef};
@@ -132,7 +134,7 @@ async fn scan_table_by_files(
 ) -> Result<RecordBatch> {
     register_store(log_store.clone(), state.runtime_env().clone());
     let scan_config = DeltaScanConfigBuilder::new()
-        .wrap_partition_values(false)
+        .wrap_partition_values(true)
         .with_file_column(true)
         .build(&snapshot)?;
 
@@ -172,7 +174,13 @@ async fn scan_table_by_files(
     let path_batches: Vec<RecordBatch> = datafusion::physical_plan::collect(limit, task_ctx)
         .await?
         .into_iter()
-        .map(|batch| batch.project(&[field_idx]).unwrap())
+        .map(|batch| {
+            let col = batch
+                .column(field_idx)
+                .as_dictionary::<UInt16Type>()
+                .values();
+            RecordBatch::try_from_iter(vec![(PATH_COLUMN, col.clone())]).unwrap()
+        })
         .collect();
 
     let result_batches = concat_batches(&ONLY_FILES_SCHEMA.clone(), &path_batches)?;
