@@ -1508,9 +1508,7 @@ def test_rust_decimal_cast(tmp_path: pathlib.Path):
 
     write_deltalake(tmp_path, data, mode="append", engine="rust")
 
-    assert DeltaTable("test-table").to_pyarrow_table()["x"][0].as_py() == Decimal(
-        "100.1"
-    )
+    assert DeltaTable(tmp_path).to_pyarrow_table()["x"][0].as_py() == Decimal("100.1")
 
     # Write smaller decimal,  works since it's fits in the previous decimal precision, scale
     data = pa.table({"x": pa.array([Decimal("10.1")])})
