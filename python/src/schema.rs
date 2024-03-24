@@ -85,8 +85,16 @@ impl PrimitiveType {
     #[new]
     #[pyo3(signature = (data_type))]
     fn new(data_type: String) -> PyResult<Self> {
-        let data_type: DeltaPrimitve = serde_json::from_str(&format!("\"{data_type}\""))
-            .map_err(|_| PyValueError::new_err(format!("invalid type string: {data_type}")))?;
+        let data_type: DeltaPrimitve =
+            serde_json::from_str(&format!("\"{data_type}\"")).map_err(|_| {
+                if data_type.starts_with("decimal") {
+                    PyValueError::new_err(format!(
+                        "invalid type string: {data_type}, precision/scale can't be larger than 38"
+                    ))
+                } else {
+                    PyValueError::new_err(format!("invalid type string: {data_type}"))
+                }
+            })?;
 
         Ok(Self {
             inner_type: data_type,
