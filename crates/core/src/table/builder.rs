@@ -39,7 +39,7 @@ impl From<BuilderError> for DeltaTableError {
 }
 
 /// possible version specifications for loading a delta table
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Default)]
 pub enum DeltaVersion {
     /// load the newest version
     #[default]

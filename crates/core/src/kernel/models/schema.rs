@@ -467,7 +467,7 @@ fn default_true() -> bool {
     true
 }
 
-#[derive(Debug, Serialize, Deserialize, PartialEq, Clone, Eq, Hash)]
+#[derive(Debug, Serialize, Deserialize, PartialEq, Copy, Clone, Eq, Hash)]
 #[serde(rename_all = "snake_case")]
 /// Primitive types supported by Delta
 pub enum PrimitiveType {
