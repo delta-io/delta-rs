@@ -36,7 +36,7 @@ arrow-arith = { version = "50" }
 arrow-array = { version = "50", features = ["chrono-tz"]}
 arrow-buffer = { version = "50" }
 arrow-cast = { version = "50" }
-arrow-ipc = { version = "50" }
+arrow-ipc = { version = "51" }
 arrow-json = { version = "50" }
 arrow-ord = { version = "50" }
 arrow-row = { version = "50" }
