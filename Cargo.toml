@@ -38,7 +38,7 @@ arrow-buffer = { version = "50" }
 arrow-cast = { version = "50" }
 arrow-ipc = { version = "50" }
 arrow-json = { version = "50" }
-arrow-ord = { version = "50" }
+arrow-ord = { version = "51" }
 arrow-row = { version = "50" }
 arrow-schema = { version = "50" }
 arrow-select = { version = "50" }
