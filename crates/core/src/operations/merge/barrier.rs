@@ -6,7 +6,7 @@
 //! To determine if a file contains zero changes, the input stream is
 //! exhausted. Afterwards, records are then dropped.
 //!
-//! Bookkeeping is maintained to determine which files have modifications so
+//! Bookkeeping is maintained to determine which files have modifications, so
 //! they can be removed from the delta log.
 
 use std::{
@@ -79,12 +79,12 @@ impl ExecutionPlan for MergeBarrierExec {
         self.input.output_partitioning()
     }
 
-    fn required_input_distribution(&self) -> Vec<Distribution> {
-        vec![Distribution::HashPartitioned(vec![self.expr.clone()]); 1]
-    }
-
     fn output_ordering(&self) -> Option<&[datafusion_physical_expr::PhysicalSortExpr]> {
         None
+    }
+
+    fn required_input_distribution(&self) -> Vec<Distribution> {
+        vec![Distribution::HashPartitioned(vec![self.expr.clone()]); 1]
     }
 
     fn children(&self) -> Vec<std::sync::Arc<dyn ExecutionPlan>> {

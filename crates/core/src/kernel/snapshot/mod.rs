@@ -28,7 +28,7 @@ use object_store::ObjectStore;
 use self::log_segment::{LogSegment, PathExt};
 use self::parse::{read_adds, read_removes};
 use self::replay::{LogMapper, LogReplayScanner, ReplayStream};
-use super::{Action, Add, CommitInfo, DataType, Metadata, Protocol, Remove, StructField};
+use super::{Action, Add, AddCDCFile, CommitInfo, DataType, Metadata, Protocol, Remove, StructField};
 use crate::kernel::StructType;
 use crate::logstore::LogStore;
 use crate::operations::transaction::CommitData;
@@ -42,6 +42,7 @@ mod replay;
 mod serde;
 
 pub use log_data::*;
+use crate::kernel::parse::read_cdf_adds;
 
 /// A snapshot of a Delta table
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
@@ -476,6 +477,11 @@ impl EagerSnapshot {
     /// Get a file action iterator for the given version
     pub fn files(&self) -> impl Iterator<Item = LogicalFile<'_>> {
         self.log_data().into_iter()
+    }
+
+    /// Get an iterator for the CDC files added in this version
+    pub fn cdc_files(&self) -> DeltaResult<impl Iterator<Item = AddCDCFile> + '_> {
+        Ok(self.files.iter().flat_map(|b| read_cdf_adds(b)).flatten())
     }
 
     /// Advance the snapshot based on the given commit actions
