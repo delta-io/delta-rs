@@ -2924,7 +2924,7 @@ mod tests {
         .unwrap();
 
         let table = DeltaOps(table)
-            .write(vec![batch.clone()])
+            .write(batch.into())
             .with_save_mode(SaveMode::Append)
             .await
             .unwrap();
@@ -3024,7 +3024,7 @@ mod tests {
         .unwrap();
 
         let table = DeltaOps(table)
-            .write(vec![batch.clone()])
+            .write(batch.into())
             .with_save_mode(SaveMode::Append)
             .await
             .unwrap();
