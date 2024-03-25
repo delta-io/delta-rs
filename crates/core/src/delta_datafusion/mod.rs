@@ -27,7 +27,10 @@ use std::sync::Arc;
 
 use arrow::compute::{cast_with_options, CastOptions};
 use arrow::datatypes::DataType;
-use arrow::datatypes::{DataType as ArrowDataType, Schema as ArrowSchema, SchemaRef, TimeUnit};
+use arrow::datatypes::{
+    DataType as ArrowDataType, Schema as ArrowSchema, SchemaRef, SchemaRef as ArrowSchemaRef,
+    TimeUnit,
+};
 use arrow::error::ArrowError;
 use arrow::record_batch::RecordBatch;
 use arrow_array::types::UInt16Type;
@@ -56,7 +59,9 @@ use datafusion::physical_plan::{
 };
 use datafusion_common::scalar::ScalarValue;
 use datafusion_common::tree_node::{TreeNode, TreeNodeVisitor, VisitRecursion};
-use datafusion_common::{Column, DataFusionError, Result as DataFusionResult, ToDFSchema};
+use datafusion_common::{
+    Column, DFSchema, DataFusionError, Result as DataFusionResult, ToDFSchema,
+};
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::logical_plan::CreateExternalTable;
 use datafusion_expr::utils::conjunction;
@@ -66,6 +71,7 @@ use datafusion_physical_expr::{create_physical_expr, PhysicalExpr};
 use datafusion_proto::logical_plan::LogicalExtensionCodec;
 use datafusion_proto::physical_plan::PhysicalExtensionCodec;
 use datafusion_sql::planner::ParserOptions;
+use either::Either;
 use futures::TryStreamExt;
 
 use itertools::Itertools;
@@ -73,8 +79,9 @@ use object_store::ObjectMeta;
 use serde::{Deserialize, Serialize};
 use url::Url;
 
+use crate::delta_datafusion::expr::parse_predicate_expression;
 use crate::errors::{DeltaResult, DeltaTableError};
-use crate::kernel::{Add, DataCheck, Invariant};
+use crate::kernel::{Add, DataCheck, EagerSnapshot, Invariant, Snapshot};
 use crate::logstore::LogStoreRef;
 use crate::table::builder::ensure_table_uri;
 use crate::table::state::DeltaTableState;
@@ -87,6 +94,8 @@ pub mod cdf;
 pub mod expr;
 pub mod logical;
 pub mod physical;
+
+mod find_files;
 
 impl From<DeltaTableError> for DataFusionError {
     fn from(err: DeltaTableError) -> Self {
@@ -109,6 +118,154 @@ impl From<DataFusionError> for DeltaTableError {
             DataFusionError::ParquetError(source) => DeltaTableError::Parquet { source },
             _ => DeltaTableError::Generic(err.to_string()),
         }
+    }
+}
+
+/// Convience trait for calling common methods on snapshot heirarchies
+pub trait DataFusionMixins {
+    /// The physical datafusion schema of a table
+    fn arrow_schema(&self) -> DeltaResult<ArrowSchemaRef>;
+
+    /// Get the table schema as an [`ArrowSchemaRef`]
+    fn input_schema(&self) -> DeltaResult<ArrowSchemaRef>;
+
+    /// Parse an expression string into a datafusion [`Expr`]
+    fn parse_predicate_expression(
+        &self,
+        expr: impl AsRef<str>,
+        df_state: &SessionState,
+    ) -> DeltaResult<Expr>;
+}
+
+impl DataFusionMixins for Snapshot {
+    fn arrow_schema(&self) -> DeltaResult<ArrowSchemaRef> {
+        _arrow_schema(self, true)
+    }
+
+    fn parse_predicate_expression(
+        &self,
+        expr: impl AsRef<str>,
+        df_state: &SessionState,
+    ) -> DeltaResult<Expr> {
+        let schema = DFSchema::try_from(self.arrow_schema()?.as_ref().to_owned())?;
+        parse_predicate_expression(&schema, expr, df_state)
+    }
+
+    fn input_schema(&self) -> DeltaResult<ArrowSchemaRef> {
+        _arrow_schema(self, false)
+    }
+}
+
+impl DataFusionMixins for EagerSnapshot {
+    fn arrow_schema(&self) -> DeltaResult<ArrowSchemaRef> {
+        self.snapshot().arrow_schema()
+    }
+
+    fn parse_predicate_expression(
+        &self,
+        expr: impl AsRef<str>,
+        df_state: &SessionState,
+    ) -> DeltaResult<Expr> {
+        self.snapshot().parse_predicate_expression(expr, df_state)
+    }
+
+    fn input_schema(&self) -> DeltaResult<ArrowSchemaRef> {
+        self.snapshot().input_schema()
+    }
+}
+
+impl DataFusionMixins for DeltaTableState {
+    fn arrow_schema(&self) -> DeltaResult<ArrowSchemaRef> {
+        self.snapshot.arrow_schema()
+    }
+
+    fn input_schema(&self) -> DeltaResult<ArrowSchemaRef> {
+        self.snapshot.input_schema()
+    }
+
+    fn parse_predicate_expression(
+        &self,
+        expr: impl AsRef<str>,
+        df_state: &SessionState,
+    ) -> DeltaResult<Expr> {
+        self.snapshot.parse_predicate_expression(expr, df_state)
+    }
+}
+
+fn _arrow_schema(snapshot: &Snapshot, wrap_partitions: bool) -> DeltaResult<ArrowSchemaRef> {
+    let meta = snapshot.metadata();
+    let fields = meta
+        .schema()?
+        .fields()
+        .iter()
+        .filter(|f| !meta.partition_columns.contains(&f.name().to_string()))
+        .map(|f| f.try_into())
+        .chain(
+            meta.schema()?
+                .fields()
+                .iter()
+                .filter(|f| meta.partition_columns.contains(&f.name().to_string()))
+                .map(|f| {
+                    let field = Field::try_from(f)?;
+                    let corrected = if wrap_partitions {
+                        match field.data_type() {
+                            // Only dictionary-encode types that may be large
+                            // // https://github.com/apache/arrow-datafusion/pull/5545
+                            DataType::Utf8
+                            | DataType::LargeUtf8
+                            | DataType::Binary
+                            | DataType::LargeBinary => {
+                                wrap_partition_type_in_dict(field.data_type().clone())
+                            }
+                            _ => field.data_type().clone(),
+                        }
+                    } else {
+                        field.data_type().clone()
+                    };
+                    Ok(field.with_data_type(corrected))
+                }),
+        )
+        .collect::<Result<Vec<Field>, _>>()?;
+
+    Ok(Arc::new(ArrowSchema::new(fields)))
+}
+
+pub(crate) trait DataFusionFileMixins {
+    /// Iterate over all files in the log matching a predicate
+    fn files_matching_predicate(&self, filters: &[Expr]) -> DeltaResult<impl Iterator<Item = Add>>;
+}
+
+impl DataFusionFileMixins for EagerSnapshot {
+    fn files_matching_predicate(&self, filters: &[Expr]) -> DeltaResult<impl Iterator<Item = Add>> {
+        files_matching_predicate(self, filters)
+    }
+}
+
+pub(crate) fn files_matching_predicate<'a>(
+    snapshot: &'a EagerSnapshot,
+    filters: &[Expr],
+) -> DeltaResult<impl Iterator<Item = Add> + 'a> {
+    if let Some(Some(predicate)) =
+        (!filters.is_empty()).then_some(conjunction(filters.iter().cloned()))
+    {
+        let expr = logical_expr_to_physical_expr(&predicate, snapshot.arrow_schema()?.as_ref());
+        let pruning_predicate = PruningPredicate::try_new(expr, snapshot.arrow_schema()?)?;
+        Ok(Either::Left(
+            snapshot
+                .file_actions()?
+                .zip(pruning_predicate.prune(snapshot)?)
+                .filter_map(
+                    |(action, keep_file)| {
+                        if keep_file {
+                            Some(action)
+                        } else {
+                            None
+                        }
+                    },
+                ),
+        ))
+    } else {
+        Ok(Either::Right(snapshot.file_actions()?))
     }
 }
 
@@ -142,8 +299,9 @@ pub(crate) fn register_store(store: LogStoreRef, env: Arc<RuntimeEnv>) {
     env.register_object_store(url, store.object_store());
 }
 
-/// The logical schema for a Deltatable is different then protocol level schema since partiton columns must appear at the end of the schema.
-/// This is to align with how partition are handled at the physical level
+/// The logical schema for a Deltatable is different from the protocol level schema since partition
+/// columns must appear at the end of the schema. This is to align with how partition are handled
+/// at the physical level
 pub(crate) fn df_logical_schema(
     snapshot: &DeltaTableState,
     scan_config: &DeltaScanConfig,
@@ -168,11 +326,7 @@ pub(crate) fn df_logical_schema(
     }
 
     if let Some(file_column_name) = &scan_config.file_column_name {
-        fields.push(Arc::new(Field::new(
-            file_column_name,
-            arrow_schema::DataType::Utf8,
-            true,
-        )));
+        fields.push(Arc::new(Field::new(file_column_name, DataType::Utf8, true)));
     }
 
     Ok(Arc::new(ArrowSchema::new(fields)))
@@ -181,13 +335,15 @@ pub(crate) fn df_logical_schema(
 #[derive(Debug, Clone, Default)]
 /// Used to specify if additional metadata columns are exposed to the user
 pub struct DeltaScanConfigBuilder {
-    /// Include the source path for each record. The name of this column is determine by `file_column_name`
+    /// Include the source path for each record. The name of this column is determined by `file_column_name`
     include_file_column: bool,
     /// Column name that contains the source path.
     ///
     /// If include_file_column is true and the name is None then it will be auto-generated
     /// Otherwise the user provided name will be used
     file_column_name: Option<String>,
+    /// Whether to wrap partition values in a dictionary encoding to potentially save space
+    wrap_partition_values: Option<bool>,
 }
 
 impl DeltaScanConfigBuilder {
@@ -208,6 +364,12 @@ impl DeltaScanConfigBuilder {
     pub fn with_file_column_name<S: ToString>(mut self, name: &S) -> Self {
         self.file_column_name = Some(name.to_string());
         self.include_file_column = true;
+        self
+    }
+
+    /// Whether to wrap partition values in a dictionary encoding
+    pub fn wrap_partition_values(mut self, wrap: bool) -> Self {
+        self.wrap_partition_values = Some(wrap);
         self
     }
 
@@ -247,7 +409,10 @@ impl DeltaScanConfigBuilder {
             }
         }
 
-        Ok(DeltaScanConfig { file_column_name })
+        Ok(DeltaScanConfig {
+            file_column_name,
+            wrap_partition_values: self.wrap_partition_values.unwrap_or(true),
+        })
     }
 }
 
@@ -256,6 +421,8 @@ impl DeltaScanConfigBuilder {
 pub struct DeltaScanConfig {
     /// Include the source path for each record
     pub file_column_name: Option<String>,
+    /// Wrap partition values in a dictionary encoding
+    pub wrap_partition_values: bool,
 }
 
 #[derive(Debug)]
@@ -380,10 +547,12 @@ impl<'a> DeltaScanBuilder<'a> {
             let mut part = partitioned_file_from_action(action, table_partition_cols, &schema);
 
             if config.file_column_name.is_some() {
-                part.partition_values
-                    .push(wrap_partition_value_in_dict(ScalarValue::Utf8(Some(
-                        action.path.clone(),
-                    ))));
+                let partition_value = if config.wrap_partition_values {
+                    wrap_partition_value_in_dict(ScalarValue::Utf8(Some(action.path.clone())))
+                } else {
+                    ScalarValue::Utf8(Some(action.path.clone()))
+                };
+                part.partition_values.push(partition_value);
             }
 
             file_groups
@@ -407,9 +576,14 @@ impl<'a> DeltaScanBuilder<'a> {
             .collect::<Result<Vec<_>, ArrowError>>()?;
 
         if let Some(file_column_name) = &config.file_column_name {
+            let field_name_datatype = if config.wrap_partition_values {
+                wrap_partition_type_in_dict(DataType::Utf8)
+            } else {
+                DataType::Utf8
+            };
             table_partition_cols.push(Field::new(
                 file_column_name.clone(),
-                wrap_partition_type_in_dict(DataType::Utf8),
+                field_name_datatype,
                 false,
             ));
         }
@@ -1169,6 +1343,7 @@ impl TreeNodeVisitor for FindFilesExprProperties {
     }
 }
 
+#[derive(Debug, Hash, Eq, PartialEq)]
 /// Representing the result of the [find_files] function.
 pub struct FindFiles {
     /// A list of `Add` objects that match the given predicate
@@ -1222,7 +1397,7 @@ fn join_batches_with_add_actions(
     Ok(files)
 }
 
-/// Determine which files contain a record that statisfies the predicate
+/// Determine which files contain a record that satisfies the predicate
 pub(crate) async fn find_files_scan<'a>(
     snapshot: &DeltaTableState,
     log_store: LogStoreRef,

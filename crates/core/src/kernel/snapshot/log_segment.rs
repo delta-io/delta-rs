@@ -1,5 +1,5 @@
 use std::cmp::Ordering;
-use std::collections::{HashMap, VecDeque};
+use std::collections::VecDeque;
 use std::sync::Arc;
 
 use arrow_array::RecordBatch;
@@ -13,24 +13,20 @@ use parquet::arrow::arrow_reader::ArrowReaderOptions;
 use parquet::arrow::async_reader::{ParquetObjectReader, ParquetRecordBatchStreamBuilder};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 use tracing::debug;
 
 use super::parse;
-use crate::kernel::{arrow::json, Action, ActionType, Metadata, Protocol, Schema, StructType};
+use crate::kernel::{arrow::json, ActionType, Metadata, Protocol, Schema, StructType};
 use crate::logstore::LogStore;
-use crate::operations::transaction::get_commit_bytes;
-use crate::protocol::DeltaOperation;
+use crate::operations::transaction::CommitData;
 use crate::{DeltaResult, DeltaTableConfig, DeltaTableError};
 
 const LAST_CHECKPOINT_FILE_NAME: &str = "_last_checkpoint";
 
-pub type CommitData = (Vec<Action>, DeltaOperation, Option<HashMap<String, Value>>);
-
 lazy_static! {
     static ref CHECKPOINT_FILE_PATTERN: Regex =
         Regex::new(r"\d+\.checkpoint(\.\d+\.\d+)?\.parquet").unwrap();
-    static ref DELTA_FILE_PATTERN: Regex = Regex::new(r"\d+\.json").unwrap();
+    static ref DELTA_FILE_PATTERN: Regex = Regex::new(r"^\d+\.json$").unwrap();
     pub(super) static ref COMMIT_SCHEMA: StructType = StructType::new(vec![
         ActionType::Add.schema_field().clone(),
         ActionType::Remove.schema_field().clone(),
@@ -351,10 +347,10 @@ impl LogSegment {
         let mut decoder = json::get_decoder(Arc::new(read_schema.try_into()?), config)?;
 
         let mut commit_data = Vec::new();
-        for (actions, operation, app_metadata) in commits {
+        for commit in commits {
             self.version += 1;
             let path = log_path.child(format!("{:020}.json", self.version));
-            let bytes = get_commit_bytes(operation, actions, app_metadata.clone())?;
+            let bytes = commit.get_bytes()?;
             let meta = ObjectMeta {
                 location: path,
                 size: bytes.len(),
@@ -449,7 +445,7 @@ async fn list_log_files_with_checkpoint(
     let checkpoint_files = files
         .iter()
         .filter_map(|f| {
-            if f.location.is_checkpoint_file() {
+            if f.location.is_checkpoint_file() && f.location.commit_version() == Some(cp.version) {
                 Some(f.clone())
             } else {
                 None
@@ -616,5 +612,22 @@ pub(super) mod tests {
         assert_eq!(protocol, expected);
 
         Ok(())
+    }
+
+    #[test]
+    pub fn is_commit_file_only_matches_commits() {
+        for path in [0, 1, 5, 10, 100, i64::MAX]
+            .into_iter()
+            .map(crate::storage::commit_uri_from_version)
+        {
+            assert!(path.is_commit_file());
+        }
+
+        let not_commits = ["_delta_log/_commit_2132c4fe-4077-476c-b8f5-e77fea04f170.json.tmp"];
+
+        for not_commit in not_commits {
+            let path = Path::from(not_commit);
+            assert!(!path.is_commit_file());
+        }
     }
 }

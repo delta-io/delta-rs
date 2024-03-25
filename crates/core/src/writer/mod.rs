@@ -8,7 +8,7 @@ use serde_json::Value;
 
 use crate::errors::DeltaTableError;
 use crate::kernel::{Action, Add};
-use crate::operations::transaction::commit;
+use crate::operations::transaction::CommitBuilder;
 use crate::protocol::{ColumnCountStat, DeltaOperation, SaveMode};
 use crate::DeltaTable;
 
@@ -116,16 +116,33 @@ impl From<DeltaWriterError> for DeltaTableError {
             DeltaWriterError::ObjectStore { source } => DeltaTableError::ObjectStore { source },
             DeltaWriterError::Parquet { source } => DeltaTableError::Parquet { source },
             DeltaWriterError::DeltaTable(e) => e,
+            DeltaWriterError::SchemaMismatch { .. } => DeltaTableError::SchemaMismatch {
+                msg: err.to_string(),
+            },
             _ => DeltaTableError::Generic(err.to_string()),
         }
     }
 }
 
+/// Write mode for the [DeltaWriter]
+#[derive(Clone, Debug, PartialEq)]
+pub enum WriteMode {
+    /// Default write mode which will return an error if schemas do not match correctly
+    Default,
+    /// Merge the schema of the table with the newly written data
+    ///
+    /// [Read more here](https://delta.io/blog/2023-02-08-delta-lake-schema-evolution/)
+    MergeSchema,
+}
+
 #[async_trait]
 /// Trait for writing data to Delta tables
 pub trait DeltaWriter<T> {
-    /// write a chunk of values into the internal write buffers.
+    /// Write a chunk of values into the internal write buffers with the default write mode
     async fn write(&mut self, values: T) -> Result<(), DeltaTableError>;
+
+    /// Wreite a chunk of values into the internal write buffers with the specified [WriteMode]
+    async fn write_with_mode(&mut self, values: T, mode: WriteMode) -> Result<(), DeltaTableError>;
 
     /// Flush the internal write buffers to files in the delta table folder structure.
     /// The corresponding delta [`Add`] actions are returned and should be committed via a transaction.
@@ -135,27 +152,33 @@ pub trait DeltaWriter<T> {
     /// and commit the changes to the Delta log, creating a new table version.
     async fn flush_and_commit(&mut self, table: &mut DeltaTable) -> Result<i64, DeltaTableError> {
         let adds: Vec<_> = self.flush().await?.drain(..).map(Action::Add).collect();
-        let snapshot = table.snapshot()?;
-        let partition_cols = snapshot.metadata().partition_columns.clone();
-        let partition_by = if !partition_cols.is_empty() {
-            Some(partition_cols)
-        } else {
-            None
-        };
-        let operation = DeltaOperation::Write {
-            mode: SaveMode::Append,
-            partition_by,
-            predicate: None,
-        };
-        let version = commit(
-            table.log_store.as_ref(),
-            &adds,
-            operation,
-            Some(snapshot),
-            None,
-        )
-        .await?;
-        table.update().await?;
-        Ok(version)
+        flush_and_commit(adds, table).await
     }
+}
+
+/// Method for flushing to be used by writers
+pub(crate) async fn flush_and_commit(
+    adds: Vec<Action>,
+    table: &mut DeltaTable,
+) -> Result<i64, DeltaTableError> {
+    let snapshot = table.snapshot()?;
+    let partition_cols = snapshot.metadata().partition_columns.clone();
+    let partition_by = if !partition_cols.is_empty() {
+        Some(partition_cols)
+    } else {
+        None
+    };
+    let operation = DeltaOperation::Write {
+        mode: SaveMode::Append,
+        partition_by,
+        predicate: None,
+    };
+
+    let version = CommitBuilder::default()
+        .with_actions(adds)
+        .build(Some(snapshot), table.log_store.clone(), operation)?
+        .await?
+        .version();
+    table.update().await?;
+    Ok(version)
 }

@@ -11,6 +11,7 @@ use serde_json::Value;
 
 use crate::kernel::error::Error;
 use crate::kernel::DataCheck;
+use crate::protocol::ProtocolError;
 
 /// Type alias for a top level schema
 pub type Schema = StructType;
@@ -134,6 +135,8 @@ pub struct StructField {
 impl Hash for StructField {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.name.hash(state);
+        self.data_type.hash(state);
+        self.nullable.hash(state);
     }
 }
 
@@ -215,7 +218,7 @@ impl StructField {
 
 /// A struct is used to represent both the top-level schema of the table
 /// as well as struct columns that contain nested columns.
-#[derive(Debug, Serialize, Deserialize, PartialEq, Clone, Eq)]
+#[derive(Debug, Serialize, Deserialize, PartialEq, Clone, Eq, Hash)]
 pub struct StructType {
     #[serde(rename = "type")]
     /// The type of this struct
@@ -379,7 +382,7 @@ impl<'a> IntoIterator for &'a StructType {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize, PartialEq, Clone, Eq)]
+#[derive(Debug, Serialize, Deserialize, PartialEq, Clone, Eq, Hash)]
 #[serde(rename_all = "camelCase")]
 /// An array stores a variable length collection of items of some type.
 pub struct ArrayType {
@@ -415,7 +418,7 @@ impl ArrayType {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize, PartialEq, Clone, Eq)]
+#[derive(Debug, Serialize, Deserialize, PartialEq, Clone, Eq, Hash)]
 #[serde(rename_all = "camelCase")]
 /// A map stores an arbitrary length collection of key-value pairs
 pub struct MapType {
@@ -465,8 +468,14 @@ fn default_true() -> bool {
     true
 }
 
-#[derive(Debug, Serialize, Deserialize, PartialEq, Clone, Eq)]
-#[serde(rename_all = "camelCase")]
+/// The maximum precision for [PrimitiveType::Decimal] values
+pub const DECIMAL_MAX_PRECISION: u8 = 38;
+
+/// The maximum scale for [PrimitiveType::Decimal] values
+pub const DECIMAL_MAX_SCALE: i8 = 38;
+
+#[derive(Debug, Serialize, Deserialize, PartialEq, Clone, Eq, Hash)]
+#[serde(rename_all = "snake_case")]
 /// Primitive types supported by Delta
 pub enum PrimitiveType {
     /// UTF-8 encoded string of characters
@@ -491,7 +500,9 @@ pub enum PrimitiveType {
     Date,
     /// Microsecond precision timestamp, adjusted to UTC.
     Timestamp,
-    // TODO: timestamp without timezone
+    /// Micrsoecond precision timestamp with no timezone
+    #[serde(alias = "timestampNtz")]
+    TimestampNtz,
     #[serde(
         serialize_with = "serialize_decimal",
         deserialize_with = "deserialize_decimal",
@@ -534,7 +545,12 @@ where
         .ok_or_else(|| {
             serde::de::Error::custom(format!("Invalid scale in decimal: {}", str_value))
         })?;
-
+    if precision > DECIMAL_MAX_PRECISION || scale > DECIMAL_MAX_SCALE {
+        return Err(serde::de::Error::custom(format!(
+            "Precision or scale is larger than 38: {}, {}",
+            precision, scale
+        )));
+    }
     Ok((precision, scale))
 }
 
@@ -552,6 +568,7 @@ impl Display for PrimitiveType {
             PrimitiveType::Binary => write!(f, "binary"),
             PrimitiveType::Date => write!(f, "date"),
             PrimitiveType::Timestamp => write!(f, "timestamp"),
+            PrimitiveType::TimestampNtz => write!(f, "timestampNtz"),
             PrimitiveType::Decimal(precision, scale) => {
                 write!(f, "decimal({},{})", precision, scale)
             }
@@ -559,7 +576,7 @@ impl Display for PrimitiveType {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize, PartialEq, Clone, Eq)]
+#[derive(Debug, Serialize, Deserialize, PartialEq, Clone, Eq, Hash)]
 #[serde(untagged, rename_all = "camelCase")]
 /// Top level delta tdatatypes
 pub enum DataType {
@@ -606,9 +623,18 @@ impl DataType {
     pub const BINARY: Self = DataType::Primitive(PrimitiveType::Binary);
     pub const DATE: Self = DataType::Primitive(PrimitiveType::Date);
     pub const TIMESTAMP: Self = DataType::Primitive(PrimitiveType::Timestamp);
+    pub const TIMESTAMPNTZ: Self = DataType::Primitive(PrimitiveType::TimestampNtz);
 
-    pub fn decimal(precision: u8, scale: i8) -> Self {
-        DataType::Primitive(PrimitiveType::Decimal(precision, scale))
+    pub fn decimal(precision: u8, scale: i8) -> Result<Self, ProtocolError> {
+        if precision > DECIMAL_MAX_PRECISION || scale > DECIMAL_MAX_SCALE {
+            return Err(ProtocolError::InvalidField(format!(
+                "decimal({},{})",
+                precision, scale
+            )));
+        }
+        Ok(DataType::Primitive(PrimitiveType::Decimal(
+            precision, scale,
+        )))
     }
 
     pub fn struct_type(fields: Vec<StructField>) -> Self {
@@ -641,6 +667,7 @@ mod tests {
     use super::*;
     use serde_json;
     use serde_json::json;
+    use std::collections::hash_map::DefaultHasher;
 
     #[test]
     fn test_serde_data_types() {
@@ -740,6 +767,35 @@ mod tests {
             json_str,
             r#"{"name":"a","type":"decimal(10,2)","nullable":false,"metadata":{}}"#
         );
+    }
+
+    #[test]
+    fn test_invalid_decimal() {
+        let data = r#"
+        {
+            "name": "a",
+            "type": "decimal(39, 10)",
+            "nullable": false,
+            "metadata": {}
+        }
+        "#;
+        assert!(matches!(
+            serde_json::from_str::<StructField>(data).unwrap_err(),
+            _
+        ));
+
+        let data = r#"
+        {
+            "name": "a",
+            "type": "decimal(10, 39)",
+            "nullable": false,
+            "metadata": {}
+        }
+        "#;
+        assert!(matches!(
+            serde_json::from_str::<StructField>(data).unwrap_err(),
+            _
+        ));
     }
 
     #[test]
@@ -865,5 +921,66 @@ mod tests {
     fn test_identity_columns() {
         let buf = r#"{"type":"struct","fields":[{"name":"ID_D_DATE","type":"long","nullable":true,"metadata":{"delta.identity.start":1,"delta.identity.step":1,"delta.identity.allowExplicitInsert":false}},{"name":"TXT_DateKey","type":"string","nullable":true,"metadata":{}}]}"#;
         let _schema: StructType = serde_json::from_str(buf).expect("Failed to load");
+    }
+
+    fn get_hash(field: &StructField) -> u64 {
+        let mut hasher = DefaultHasher::new();
+        field.hash(&mut hasher);
+        hasher.finish()
+    }
+
+    #[test]
+    fn test_hash_struct_field() {
+        // different names should result in different hashes
+        let field_1 = StructField::new(
+            "field_name_1",
+            DataType::Primitive(PrimitiveType::Decimal(4, 4)),
+            true,
+        );
+        let field_2 = StructField::new(
+            "field_name_2",
+            DataType::Primitive(PrimitiveType::Decimal(4, 4)),
+            true,
+        );
+        assert_ne!(get_hash(&field_1), get_hash(&field_2));
+
+        // different types should result in different hashes
+        let field_int = StructField::new(
+            "field_name",
+            DataType::Primitive(PrimitiveType::Integer),
+            true,
+        );
+        let field_string = StructField::new(
+            "field_name",
+            DataType::Primitive(PrimitiveType::String),
+            true,
+        );
+        assert_ne!(get_hash(&field_int), get_hash(&field_string));
+
+        // different nullability should result in different hashes
+        let field_true = StructField::new(
+            "field_name",
+            DataType::Primitive(PrimitiveType::Binary),
+            true,
+        );
+        let field_false = StructField::new(
+            "field_name",
+            DataType::Primitive(PrimitiveType::Binary),
+            false,
+        );
+        assert_ne!(get_hash(&field_true), get_hash(&field_false));
+
+        // case where hashes are the same
+        let field_1 = StructField::new(
+            "field_name",
+            DataType::Primitive(PrimitiveType::Timestamp),
+            true,
+        );
+        let field_2 = StructField::new(
+            "field_name",
+            DataType::Primitive(PrimitiveType::Timestamp),
+            true,
+        );
+        assert_eq!(get_hash(&field_1), get_hash(&field_2));
     }
 }

@@ -132,7 +132,7 @@ print(pl.read_delta("tmp/bear_delta_lake", version=1))
 +-----+
 ```
 
-Read the Delta table wihout specifying a version and see how it reads the latest version by default:
+Read the Delta table without specifying a version and see how it reads the latest version by default:
 
 ```
 print(pl.read_delta("tmp/bear_delta_lake"))

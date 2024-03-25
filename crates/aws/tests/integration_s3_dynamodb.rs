@@ -5,12 +5,15 @@
 use std::collections::HashMap;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use aws_config::SdkConfig;
+use aws_sdk_dynamodb::types::BillingMode;
 use deltalake_aws::logstore::{RepairLogEntryResult, S3DynamoDbLogStore};
 use deltalake_aws::storage::S3StorageOptions;
 use deltalake_aws::{CommitEntry, DynamoDbConfig, DynamoDbLockClient};
 use deltalake_core::kernel::{Action, Add, DataType, PrimitiveType, StructField, StructType};
 use deltalake_core::logstore::LogStore;
-use deltalake_core::operations::transaction::{commit, prepare_commit};
+use deltalake_core::operations::transaction::{CommitBuilder, PreparedCommit};
+use deltalake_core::parquet::file::metadata;
 use deltalake_core::protocol::{DeltaOperation, SaveMode};
 use deltalake_core::storage::commit_uri_from_version;
 use deltalake_core::storage::StorageOptions;
@@ -31,17 +34,16 @@ lazy_static! {
     static ref OPTIONS: HashMap<String, String> = maplit::hashmap! {
         "allow_http".to_owned() => "true".to_owned(),
     };
-    static ref S3_OPTIONS: S3StorageOptions = S3StorageOptions::from_map(&OPTIONS);
+    static ref S3_OPTIONS: S3StorageOptions = S3StorageOptions::from_map(&OPTIONS).unwrap();
 }
 
 fn make_client() -> TestResult<DynamoDbLockClient> {
-    let options: S3StorageOptions = S3StorageOptions::default();
+    let options: S3StorageOptions = S3StorageOptions::try_default().unwrap();
     Ok(DynamoDbLockClient::try_new(
+        &options.sdk_config,
         None,
         None,
         None,
-        options.region.clone(),
-        false,
     )?)
 }
 
@@ -62,13 +64,13 @@ fn client_configs_via_env_variables() -> TestResult<()> {
     );
     let client = make_client()?;
     let config = client.get_dynamodb_config();
+    let options: S3StorageOptions = S3StorageOptions::try_default().unwrap();
     assert_eq!(
         DynamoDbConfig {
-            billing_mode: deltalake_aws::BillingMode::PayPerRequest,
+            billing_mode: BillingMode::PayPerRequest,
             lock_table_name: "some_table".to_owned(),
             max_elapsed_request_time: Duration::from_secs(64),
-            use_web_identity: false,
-            region: config.region.clone(),
+            sdk_config: options.sdk_config,
         },
         *config,
     );
@@ -208,7 +210,9 @@ async fn test_concurrent_writers() -> TestResult<()> {
     for f in futures {
         map.extend(f.await?);
     }
+
     validate_lock_table_state(&table, WORKERS * COMMITS).await?;
+
     Ok(())
 }
 
@@ -258,18 +262,18 @@ async fn create_incomplete_commit_entry(
     tag: &str,
 ) -> TestResult<CommitEntry> {
     let actions = vec![add_action(tag)];
-    let temp_path = prepare_commit(
-        table.object_store().as_ref(),
-        &DeltaOperation::Write {
-            mode: SaveMode::Append,
-            partition_by: None,
-            predicate: None,
-        },
-        &actions,
-        None,
-    )
-    .await?;
-    let commit_entry = CommitEntry::new(version, temp_path);
+    let operation = DeltaOperation::Write {
+        mode: SaveMode::Append,
+        partition_by: None,
+        predicate: None,
+    };
+    let prepared = CommitBuilder::default()
+        .with_actions(actions)
+        .build(Some(table.snapshot()?), table.log_store(), operation)?
+        .into_prepared_commit_future()
+        .await?;
+
+    let commit_entry = CommitEntry::new(version, prepared.path().to_owned());
     make_client()?
         .put_commit_entry(&table.table_uri(), &commit_entry)
         .await?;
@@ -331,15 +335,12 @@ async fn append_to_table(
         predicate: None,
     };
     let actions = vec![add_action(name)];
-    let version = commit(
-        table.log_store().as_ref(),
-        &actions,
-        operation,
-        Some(table.snapshot()?),
-        metadata,
-    )
-    .await
-    .unwrap();
+    let version = CommitBuilder::default()
+        .with_actions(actions)
+        .with_app_metadata(metadata.unwrap_or_default())
+        .build(Some(table.snapshot()?), table.log_store(), operation)?
+        .await?
+        .version();
     Ok(version)
 }
 

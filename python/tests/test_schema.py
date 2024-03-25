@@ -76,7 +76,7 @@ def test_primitive_delta_types():
         "decimal(10,2)",
     ]
 
-    invalid_types = ["int", "decimal", "decimal()"]
+    invalid_types = ["int", "decimal", "decimal()", "decimal(39,1)", "decimal(1,39)"]
 
     for data_type in valid_types:
         delta_type = PrimitiveType(data_type)
@@ -404,10 +404,10 @@ def test_delta_schema():
                     ("timestamp1", pa.timestamp("us")),
                     ("timestamp2", pa.timestamp("us")),
                     ("timestamp3", pa.timestamp("us")),
-                    ("timestamp4", pa.timestamp("us")),
-                    ("timestamp5", pa.timestamp("us")),
-                    ("timestamp6", pa.timestamp("us")),
-                    ("timestamp7", pa.timestamp("us")),
+                    ("timestamp4", pa.timestamp("us", tz="UTC")),
+                    ("timestamp5", pa.timestamp("us", tz="UTC")),
+                    ("timestamp6", pa.timestamp("us", tz="UTC")),
+                    ("timestamp7", pa.timestamp("us", tz="UTC")),
                 ]
             ),
             False,
