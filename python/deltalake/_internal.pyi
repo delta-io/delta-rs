@@ -234,7 +234,7 @@ class PrimitiveType:
      * "date",
      * "timestamp",
      * "timestampNtz",
-     * "decimal(<precision>, <scale>)"
+     * "decimal(<precision>, <scale>)" Max: decimal(38,38)
 
     Args:
         data_type: string representation of the data type

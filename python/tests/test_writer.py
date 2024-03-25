@@ -1391,6 +1391,22 @@ def test_issue_1651_roundtrip_timestamp(tmp_path: pathlib.Path):
     assert dataset.count_rows() == 1
 
 
+@pytest.mark.parametrize("engine", ["rust", "pyarrow"])
+def test_invalid_decimals(tmp_path: pathlib.Path, engine):
+    import re
+    from decimal import Decimal
+
+    data = pa.table(
+        {"x": pa.array([Decimal("10000000000000000000000000000000000000.0")])}
+    )
+
+    with pytest.raises(
+        SchemaMismatchError,
+        match=re.escape("Invalid data type for Delta Lake: decimal(39,1)"),
+    ):
+        write_deltalake(table_or_uri=tmp_path, mode="append", data=data, engine=engine)
+
+
 def test_float_values(tmp_path: pathlib.Path):
     data = pa.table(
         {

@@ -96,7 +96,7 @@ mod state;
 pub(crate) mod test_utils;
 
 const DELTA_LOG_FOLDER: &str = "_delta_log";
-const DEFAULT_RETRIES: usize = 15;
+pub(crate) const DEFAULT_RETRIES: usize = 15;
 
 /// Error raised while commititng transaction
 #[derive(thiserror::Error, Debug)]
@@ -358,6 +358,12 @@ impl<'a> CommitBuilder {
     /// Metadata for the operation performed like metrics, user, and notebook
     pub fn with_app_metadata(mut self, app_metadata: HashMap<String, Value>) -> Self {
         self.app_metadata = app_metadata;
+        self
+    }
+
+    /// Maximum number of times to retry the transaction before failing to commit
+    pub fn with_max_retries(mut self, max_retries: usize) -> Self {
+        self.max_retries = max_retries;
         self
     }
 
