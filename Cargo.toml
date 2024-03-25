@@ -41,7 +41,7 @@ arrow-json = { version = "50" }
 arrow-ord = { version = "50" }
 arrow-row = { version = "50" }
 arrow-schema = { version = "50" }
-arrow-select = { version = "50" }
+arrow-select = { version = "51" }
 object_store = { version = "0.9" }
 parquet = { version = "50" }
 
