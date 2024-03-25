@@ -10,7 +10,7 @@ use datafusion::prelude::SessionContext;
 use datafusion_common::{ScalarValue, Statistics};
 
 use crate::delta_datafusion::cdf::*;
-use crate::delta_datafusion::register_store;
+use crate::delta_datafusion::*;
 use crate::DeltaTableError;
 use crate::errors::DeltaResult;
 use crate::kernel::{Action, Add, AddCDCFile, Remove};
