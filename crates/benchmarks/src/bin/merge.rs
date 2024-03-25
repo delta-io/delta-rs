@@ -71,10 +71,13 @@ pub async fn convert_tpcds_web_returns(input_path: String, table_path: String) -
         .await
         .unwrap();
 
+    let tbl = table.collect().await.unwrap();
+    let _schema = tbl[0].schema().clone();
+
     DeltaOps::try_from_uri(table_path)
         .await
         .unwrap()
-        .write(table.collect().await.unwrap())
+        .write(tbl.into())
         .with_partition_columns(vec!["wr_returned_date_sk"])
         .await
         .unwrap();
@@ -552,7 +555,7 @@ async fn main() {
             ]));
 
             let batch = RecordBatch::try_new(
-                schema,
+                schema.clone(),
                 vec![
                     Arc::new(StringArray::from(group_ids)),
                     Arc::new(StringArray::from(name)),
@@ -566,7 +569,7 @@ async fn main() {
             DeltaOps::try_from_uri(output)
                 .await
                 .unwrap()
-                .write(vec![batch])
+                .write(batch.into())
                 .with_save_mode(SaveMode::Append)
                 .await
                 .unwrap();

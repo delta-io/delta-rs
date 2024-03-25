@@ -99,6 +99,7 @@ impl std::future::IntoFuture for DropConstraintBuilder {
 #[cfg(feature = "datafusion")]
 #[cfg(test)]
 mod tests {
+    use crate::operations::write::WriteData;
     use crate::writer::test_utils::{create_bare_table, get_record_batch};
     use crate::{DeltaOps, DeltaResult, DeltaTable};
 
@@ -121,7 +122,7 @@ mod tests {
     async fn drop_valid_constraint() -> DeltaResult<()> {
         let batch = get_record_batch(None, false);
         let write = DeltaOps(create_bare_table())
-            .write(vec![batch.clone()])
+            .write(batch.clone().into())
             .await?;
         let table = DeltaOps(write);
 
@@ -145,7 +146,7 @@ mod tests {
     async fn drop_invalid_constraint_not_existing() -> DeltaResult<()> {
         let batch = get_record_batch(None, false);
         let write = DeltaOps(create_bare_table())
-            .write(vec![batch.clone()])
+            .write(batch.clone().into())
             .await?;
 
         let table = DeltaOps(write)
@@ -161,7 +162,7 @@ mod tests {
     async fn drop_invalid_constraint_ignore() -> DeltaResult<()> {
         let batch = get_record_batch(None, false);
         let write = DeltaOps(create_bare_table())
-            .write(vec![batch.clone()])
+            .write(batch.clone().into())
             .await?;
 
         let version = write.version();

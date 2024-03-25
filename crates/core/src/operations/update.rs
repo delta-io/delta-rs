@@ -475,6 +475,7 @@ mod tests {
     use crate::kernel::PrimitiveType;
     use crate::kernel::StructField;
     use crate::kernel::StructType;
+    use crate::operations::write::WriteData;
     use crate::operations::DeltaOps;
     use crate::writer::test_utils::datafusion::get_data;
     use crate::writer::test_utils::datafusion::write_batch;
@@ -525,7 +526,7 @@ mod tests {
         )
         .unwrap();
 
-        DeltaOps::new_in_memory().write(vec![batch]).await.unwrap()
+        DeltaOps::new_in_memory().write(batch.into()).await.unwrap()
     }
 
     #[tokio::test]

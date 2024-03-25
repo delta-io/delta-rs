@@ -307,6 +307,7 @@ pub async fn create_initialized_table(partition_cols: &[String]) -> DeltaTable {
 
 #[cfg(feature = "datafusion")]
 pub mod datafusion {
+    use crate::operations::write::WriteData;
     use crate::operations::DeltaOps;
     use crate::writer::SaveMode;
     use crate::DeltaTable;
@@ -347,7 +348,7 @@ pub mod datafusion {
 
     pub async fn write_batch(table: DeltaTable, batch: RecordBatch) -> DeltaTable {
         DeltaOps(table)
-            .write(vec![batch.clone()])
+            .write(batch.clone().into())
             .with_save_mode(SaveMode::Append)
             .await
             .expect("Failed to append")

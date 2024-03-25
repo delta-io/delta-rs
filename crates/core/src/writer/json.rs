@@ -561,6 +561,7 @@ mod tests {
     // The following sets of tests are related to #1386 and mergeSchema support
     // <https://github.com/delta-io/delta-rs/issues/1386>
     mod schema_evolution {
+
         use super::*;
 
         #[tokio::test]

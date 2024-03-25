@@ -541,6 +541,7 @@ mod tests {
     use super::*;
     use crate::kernel::StructType;
     use crate::operations::transaction::{CommitBuilder, TableReference};
+    use crate::operations::write::WriteData;
     use crate::operations::DeltaOps;
     use crate::protocol::Metadata;
     use crate::writer::test_utils::get_delta_schema;
@@ -826,12 +827,12 @@ mod tests {
         let batches = vec![RecordBatch::try_new(schema.clone(), data).unwrap()];
 
         let table = DeltaOps::new_in_memory()
-            .write(batches.clone())
+            .write(batches.clone().into())
             .await
             .unwrap();
 
         DeltaOps(table)
-            .write(batches)
+            .write(batches.into())
             .with_save_mode(crate::protocol::SaveMode::Overwrite)
             .await
             .unwrap()
@@ -1025,7 +1026,7 @@ mod tests {
             ("struct_with_list", struct_with_list_array),
         ])
         .unwrap();
-        let table = DeltaOps::new_in_memory().write(vec![batch]).await.unwrap();
+        let table = DeltaOps::new_in_memory().write(batch.into()).await.unwrap();
 
         create_checkpoint(&table).await.unwrap();
     }
