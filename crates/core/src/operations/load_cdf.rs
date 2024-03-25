@@ -1,21 +1,21 @@
 use std::sync::Arc;
 
 use arrow_schema::{ArrowError, Field};
-use datafusion::datasource::file_format::FileFormat;
 use datafusion::datasource::file_format::parquet::ParquetFormat;
+use datafusion::datasource::file_format::FileFormat;
 use datafusion::datasource::physical_plan::FileScanConfig;
-use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_plan::union::UnionExec;
+use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::SessionContext;
 use datafusion_common::{ScalarValue, Statistics};
 
 use crate::delta_datafusion::cdf::*;
 use crate::delta_datafusion::*;
-use crate::DeltaTableError;
 use crate::errors::DeltaResult;
 use crate::kernel::{Action, Add, AddCDCFile, Remove};
 use crate::logstore::{get_actions, LogStoreRef};
 use crate::table::state::DeltaTableState;
+use crate::DeltaTableError;
 
 #[derive(Clone)]
 pub struct CdfLoadBuilder {
@@ -43,7 +43,7 @@ impl CdfLoadBuilder {
     }
 
     /// Specify column selection to load
-    pub fn with_columns(mut self, columns: impl IntoIterator<Item=impl Into<String>>) -> Self {
+    pub fn with_columns(mut self, columns: impl IntoIterator<Item = impl Into<String>>) -> Self {
         self.columns = Some(columns.into_iter().map(|s| s.into()).collect());
         self
     }
@@ -99,7 +99,12 @@ impl CdfLoadBuilder {
             }
 
             if !cdc_actions.is_empty() {
-                change_files.push(CdcDataSpec::new(version, ts, cdc_actions, commit_info.cloned()))
+                change_files.push(CdcDataSpec::new(
+                    version,
+                    ts,
+                    cdc_actions,
+                    commit_info.cloned(),
+                ))
             } else {
                 let add_actions = version_actions
                     .iter()
@@ -118,11 +123,21 @@ impl CdfLoadBuilder {
                     .collect::<Vec<Remove>>();
 
                 if !add_actions.is_empty() {
-                    add_files.push(CdcDataSpec::new(version, ts, add_actions, commit_info.cloned()));
+                    add_files.push(CdcDataSpec::new(
+                        version,
+                        ts,
+                        add_actions,
+                        commit_info.cloned(),
+                    ));
                 }
 
                 if !remove_actions.is_empty() {
-                    remove_files.push(CdcDataSpec::new(version, ts, remove_actions, commit_info.cloned()));
+                    remove_files.push(CdcDataSpec::new(
+                        version,
+                        ts,
+                        remove_actions,
+                        commit_info.cloned(),
+                    ));
                 }
             }
         }
@@ -138,11 +153,15 @@ impl CdfLoadBuilder {
     /// Executes the scan
     pub async fn build(&self) -> DeltaResult<DeltaCdfScan> {
         let (cdc, add, _remove) = self.determine_files_to_read().await?;
-        register_store(self.log_store.clone(), self.ctx.state().runtime_env().clone());
+        register_store(
+            self.log_store.clone(),
+            self.ctx.state().runtime_env().clone(),
+        );
 
         let partition_values = self.snapshot.metadata().partition_columns.clone();
         let schema = self.snapshot.arrow_schema()?;
-        let schema_fields: Vec<Field> = self.snapshot
+        let schema_fields: Vec<Field> = self
+            .snapshot
             .arrow_schema()?
             .all_fields()
             .into_iter()
@@ -219,7 +238,11 @@ impl CdfLoadBuilder {
         // being for development. I plan to parallelize the reads once the base idea is correct.
         let union_scan: Arc<dyn ExecutionPlan> = Arc::new(UnionExec::new(vec![cdc_scan, add_scan]));
 
-        Ok(DeltaCdfScan::new(union_scan, schema, partition_values.clone()))
+        Ok(DeltaCdfScan::new(
+            union_scan,
+            schema,
+            partition_values.clone(),
+        ))
         // let task_ctx = Arc::new(TaskContext::from(&ctx.state()));
         // Ok(union_scan.execute(0, task_ctx)?)
     }
@@ -232,9 +255,9 @@ mod tests {
     use datafusion::physical_plan::ExecutionPlan;
     use datafusion::prelude::SessionContext;
 
-    use crate::DeltaOps;
     use crate::operations::collect_sendable_stream;
     use crate::writer::test_utils::TestResult;
+    use crate::DeltaOps;
 
     #[tokio::test]
     async fn test_load_local() -> TestResult {
@@ -247,9 +270,9 @@ mod tests {
             .build()
             .await?;
 
-
         for p in 0.._table.output_partitioning().partition_count() {
-            let data: Vec<RecordBatch> = collect_sendable_stream(_table.execute(p, ctx.task_ctx())?).await?;
+            let data: Vec<RecordBatch> =
+                collect_sendable_stream(_table.execute(p, ctx.task_ctx())?).await?;
             print_batches(&data)?;
         }
         Ok(())

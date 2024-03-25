@@ -11,8 +11,8 @@ use serde::{Deserialize, Serialize};
 use super::config::TableConfig;
 use super::{get_partition_col_data_types, DeltaTableConfig};
 use crate::kernel::{
-    Action, Add, AddCDCFile, DataType, EagerSnapshot, LogDataHandler, LogicalFile, Metadata, Protocol, Remove,
-    StructType,
+    Action, Add, AddCDCFile, DataType, EagerSnapshot, LogDataHandler, LogicalFile, Metadata,
+    Protocol, Remove, StructType,
 };
 
 use crate::logstore::LogStore;
