@@ -3723,6 +3723,22 @@ Results in
   </table>
       <p>More info: https://arrow.apache.org/docs/python/generated/pyarrow.dataset.ParquetReadOptions.html</p>
 
+<details class="example" open>
+  <summary>Example</summary>
+  <p><code>deltalake</code> will work with any storage compliant with :class:<code>pyarrow.fs.FileSystem</code>, however the root of the filesystem has
+to be adjusted to point at the root of the Delta table. We can achieve this by wrapping the custom filesystem into
+a :class:<code>pyarrow.fs.SubTreeFileSystem</code>.
+<div class="language-text highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>import pyarrow.fs as fs
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>from deltalake import DeltaTable
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>table_uri = &quot;s3://&lt;bucket&gt;/&lt;path&gt;&quot;
+</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>raw_fs, normalized_path = fs.FileSystem.from_uri(table_uri)
+</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>filesystem = fs.SubTreeFileSystem(normalized_path, raw_fs)
+</span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>
+</span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a>dt = DeltaTable(table_uri)
+</span><span id="__span-0-9"><a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a>ds = dt.to_pyarrow_dataset(filesystem=filesystem)
+</span></code></pre></div></p>
+</details>
 
 
   <p><strong>Returns:</strong></p>
