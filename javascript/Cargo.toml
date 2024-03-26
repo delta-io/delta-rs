@@ -1,0 +1,40 @@
+[package]
+name = "deltalake-javascript"
+version = "0.0.0"
+authors = ["Cory Grinstead <cory.grinstead@gmail.com>"]
+homepage = "https://github.com/delta-io/delta-rs"
+license = "Apache-2.0"
+description = "Native Delta Lake Javascript binding based on delta-rs with arrow integration"
+readme = "README.md"
+edition = "2021"
+keywords = ["deltalake", "delta", "datalake", "arrow"]
+
+[lib]
+name = "deltalake"
+crate-type = ["cdylib"]
+
+[dependencies]
+napi = { version = "2.16.1", default-features = false, features = [
+    "napi8",
+    "async",
+] }
+napi-derive = "2.16.1"
+
+
+# reqwest is pulled in by azure sdk, but not used by js binding itself
+# for binary best practice, statically link openssl
+reqwest = { version = "*", features = ["native-tls-vendored"] }
+serde_json = "1"
+chrono = "0"
+
+[dependencies.deltalake]
+path = "../rust"
+version = "0"
+features = ["s3", "azure", "glue", "gcs", "python"]
+
+
+[build-dependencies]
+napi-build = "2.1.1"
+
+[profile.release]
+lto = true
