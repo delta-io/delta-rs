@@ -444,6 +444,12 @@ pub enum DeltaOperation {
         /// The status of the operation
         status: String,
     },
+
+    /// Unset table properties
+    UnsetTableProperties {
+        /// Names of unsetted table properties
+        properties: Vec<String>,
+    },
 }
 
 impl DeltaOperation {
@@ -467,6 +473,7 @@ impl DeltaOperation {
             DeltaOperation::VacuumStart { .. } => "VACUUM START",
             DeltaOperation::VacuumEnd { .. } => "VACUUM END",
             DeltaOperation::AddConstraint { .. } => "ADD CONSTRAINT",
+            DeltaOperation::UnsetTableProperties { .. } => "UNSET TBLPROPERTIES",
             DeltaOperation::DropConstraint { .. } => "DROP CONSTRAINT",
         }
     }
@@ -507,7 +514,8 @@ impl DeltaOperation {
             | Self::VacuumStart { .. }
             | Self::VacuumEnd { .. }
             | Self::AddConstraint { .. }
-            | Self::DropConstraint { .. } => false,
+            | Self::UnsetTableProperties { .. } => false,
+            Self::DropConstraint { .. } => false,
             Self::Create { .. }
             | Self::FileSystemCheck {}
             | Self::StreamingUpdate { .. }

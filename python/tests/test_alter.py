@@ -63,6 +63,65 @@ def test_add_constraint_roundtrip_metadata(
     assert dt.history(1)[0]["userName"] == "John Doe"
 
 
+def test_unset_table_properties(tmp_path: pathlib.Path, sample_table: pa.Table):
+    write_deltalake(
+        tmp_path,
+        sample_table,
+        mode="append",
+        configuration={"delta.checkpointInterval": "10", "delta.appendOnly": "true"},
+    )
+
+    dt = DeltaTable(tmp_path)
+
+    dt.alter.unset_table_properties("delta.checkpointInterval")
+
+    last_action = dt.history(1)[0]
+    assert last_action["operation"] == "UNSET TBLPROPERTIES"
+    assert dt.version() == 1
+    assert dt.metadata().configuration == {"delta.appendOnly": "true"}
+
+    dt.alter.unset_table_properties(
+        "delta.checkpointInterval", raise_if_not_exists=False
+    )
+
+    last_action = dt.history(1)[0]
+    assert last_action["operation"] == "UNSET TBLPROPERTIES"
+    assert dt.version() == 2
+    assert dt.metadata().configuration == {"delta.appendOnly": "true"}
+
+    with pytest.raises(DeltaError):
+        # Invalid properties
+        dt.alter.unset_table_properties("invalid_property")
+
+    with pytest.raises(DeltaError):
+        # Invalid properties
+        dt.alter.unset_table_properties(
+            ["delta.checkpointInterval", "invalid_property"]
+        )
+
+
+def test_unset_unallowed_table_properties(
+    tmp_path: pathlib.Path, sample_table: pa.Table
+):
+    write_deltalake(
+        tmp_path,
+        sample_table,
+        mode="append",
+        configuration={
+            "delta.minReaderVersion": "2",
+            "delta.minWriterVersion": "5",
+            "delta.columnMapping.mode": "name",
+        },
+    )
+    dt = DeltaTable(tmp_path)
+    with pytest.raises(
+        DeltaError,
+        match="Generic DeltaTable error: Unsetting table property delta.columnMapping.mode is not allowed.",
+    ):
+        # Invalid properties
+        dt.alter.unset_table_properties("delta.columnMapping.mode")
+
+
 def test_drop_constraint(tmp_path: pathlib.Path, sample_table: pa.Table):
     write_deltalake(tmp_path, sample_table)
 
