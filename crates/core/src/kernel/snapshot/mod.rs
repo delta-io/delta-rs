@@ -315,13 +315,7 @@ impl Snapshot {
                 .fields
                 .iter()
                 .enumerate()
-                .filter_map(|(idx, f)| match f.data_type() {
-                    DataType::Map(_) | DataType::Array(_) | &DataType::BINARY => None,
-                    _ if num_indexed_cols < 0 || (idx as i32) < num_indexed_cols => {
-                        Some(StructField::new(f.name(), f.data_type().clone(), true))
-                    }
-                    _ => None,
-                })
+                .filter_map(|(idx, f)| stats_field(idx, num_indexed_cols, f))
                 .collect()
         };
         Ok(StructType::new(vec![
@@ -535,6 +529,31 @@ impl EagerSnapshot {
         }
 
         Ok(self.snapshot.version())
+    }
+}
+
+fn stats_field(idx: usize, num_indexed_cols: i32, field: &StructField) -> Option<StructField> {
+    if !(num_indexed_cols < 0 || (idx as i32) < num_indexed_cols) {
+        return None;
+    }
+    match field.data_type() {
+        DataType::Map(_) | DataType::Array(_) | &DataType::BINARY => None,
+        DataType::Struct(dt_struct) => Some(StructField::new(
+            field.name(),
+            StructType::new(
+                dt_struct
+                    .fields()
+                    .iter()
+                    .flat_map(|f| stats_field(idx, num_indexed_cols, f))
+                    .collect(),
+            ),
+            true,
+        )),
+        DataType::Primitive(_) => Some(StructField::new(
+            field.name(),
+            field.data_type.clone(),
+            true,
+        )),
     }
 }
 
