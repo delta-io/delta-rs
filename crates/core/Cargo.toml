@@ -40,6 +40,7 @@ datafusion-common = { workspace = true, optional = true }
 datafusion-proto = { workspace = true, optional = true }
 datafusion-sql = { workspace = true, optional = true }
 datafusion-physical-expr = { workspace = true, optional = true }
+datafusion-functions = { workspace = true, optional = true }
 
 # serde
 serde = { workspace = true, features = ["derive"] }
@@ -95,7 +96,7 @@ reqwest = { version = "0.11.18", default-features = false, features = [
     "rustls-tls",
     "json",
 ], optional = true }
-sqlparser = { version = "0.41", optional = true }
+sqlparser = { version = "0.44", optional = true }
 
 [dev-dependencies]
 criterion = "0.5"
@@ -121,6 +122,7 @@ datafusion = [
     "datafusion-proto",
     "datafusion-physical-expr",
     "datafusion-sql",
+    "datafusion-functions",
     "sqlparser",
 ]
 datafusion-ext = ["datafusion"]
