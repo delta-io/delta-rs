@@ -46,7 +46,16 @@ impl LogStoreFactory for S3LogStoreFactory {
         location: &Url,
         options: &StorageOptions,
     ) -> DeltaResult<Arc<dyn LogStore>> {
-        let store = url_prefix_handler(store, Path::parse(location.path())?)?;
+        // Decode this path, as this prefix is passed into an S3 API that does not expect a URL-encoded path
+        let path_decoded = match urlencoding::decode(location.path()) {
+            Ok(res) => res.into_owned(),
+            Err(e) => {
+                // Default back to prefix as is
+                location.path().to_string()
+            }
+        };
+
+        let store = url_prefix_handler(store, Path::parse(path_decoded)?)?;
 
         if options
             .0
