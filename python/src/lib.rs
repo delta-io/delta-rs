@@ -6,7 +6,6 @@ mod schema;
 mod utils;
 
 use std::collections::{HashMap, HashSet};
-use std::convert::TryFrom;
 use std::future::IntoFuture;
 use std::sync::Arc;
 use std::time;
@@ -1441,7 +1440,6 @@ fn write_to_deltalake(
     table_uri: String,
     data: PyArrowType<ArrowArrayStreamReader>,
     mode: String,
-    max_rows_per_group: i64,
     schema_mode: Option<String>,
     partition_by: Option<Vec<String>>,
     predicate: Option<String>,
@@ -1463,10 +1461,7 @@ fn write_to_deltalake(
             ))
             .map_err(PythonError::from)?;
 
-        let mut builder = table
-            .write(batches)
-            .with_save_mode(save_mode)
-            .with_write_batch_size(max_rows_per_group as usize);
+        let mut builder = table.write(batches).with_save_mode(save_mode);
         if let Some(schema_mode) = schema_mode {
             builder = builder.with_schema_mode(schema_mode.parse().map_err(PythonError::from)?);
         }
