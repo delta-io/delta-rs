@@ -22,11 +22,12 @@
 //! Utility functions for Datafusion's Expressions
 
 use std::{
-    fmt::{self, Display, Formatter, Write},
+    fmt::{self, format, Display, Formatter, Write},
     sync::Arc,
 };
 
 use arrow_schema::DataType;
+use chrono::{Date, NaiveDate, NaiveDateTime, TimeZone};
 use datafusion::execution::context::SessionState;
 use datafusion_common::Result as DFResult;
 use datafusion_common::{config::ConfigOptions, DFSchema, Result, ScalarValue, TableReference};
@@ -321,6 +322,9 @@ macro_rules! format_option {
     }};
 }
 
+/// Epoch days from ce calander until 1970-01-01
+pub const EPOCH_DAYS_FROM_CE: i32 = 719_163;
+
 struct ScalarValueFormat<'a> {
     scalar: &'a ScalarValue,
 }
@@ -339,6 +343,41 @@ impl<'a> fmt::Display for ScalarValueFormat<'a> {
             ScalarValue::UInt16(e) => format_option!(f, e)?,
             ScalarValue::UInt32(e) => format_option!(f, e)?,
             ScalarValue::UInt64(e) => format_option!(f, e)?,
+            ScalarValue::Date32(e) => match e {
+                Some(e) => {
+                    let dt =
+                        NaiveDate::from_num_days_from_ce_opt((EPOCH_DAYS_FROM_CE + (*e)).into())
+                            .unwrap();
+                    write!(f, "{}", dt)?
+                }
+                None => write!(f, "NULL")?,
+            },
+            ScalarValue::Date64(e) => match e {
+                Some(e) => write!(
+                    f,
+                    "{}",
+                    NaiveDateTime::from_timestamp_millis((*e).into())
+                        .unwrap()
+                        .date()
+                )?,
+                None => write!(f, "NULL")?,
+            },
+            ScalarValue::TimestampMicrosecond(e, tz) => match e {
+                Some(e) => match tz {
+                    Some(tz) => write!(
+                        f,
+                        "{}",
+                        NaiveDateTime::from_timestamp_micros(*e).unwrap().and_utc()
+                    )?,
+                    None => write!(
+                        f,
+                        "{}",
+                        NaiveDateTime::from_timestamp_micros(*e)
+                            .unwrap()
+                    )?,
+                },
+                None => write!(f, "NULL")?,
+            },
             ScalarValue::Utf8(e) | ScalarValue::LargeUtf8(e) => match e {
                 Some(e) => write!(f, "'{}'", escape_quoted_string(e, '\''))?,
                 None => write!(f, "NULL")?,
