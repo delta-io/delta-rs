@@ -100,7 +100,7 @@ pub(crate) fn parse_predicate_expression(
     let context_provider = DeltaContextProvider { state: df_state };
     let sql_to_rel =
         SqlToRel::new_with_options(&context_provider, DeltaParserOptions::default().into());
-        
+
     Ok(sql_to_rel.sql_to_expr(sql, schema, &mut Default::default())?)
 }
 
@@ -275,7 +275,11 @@ impl<'a> Display for SqlFormat<'a> {
                 datafusion_expr::GetFieldAccess::ListIndex { key } => {
                     write!(f, "{}[{}]", SqlFormat { expr }, SqlFormat { expr: key })
                 }
-                datafusion_expr::GetFieldAccess::ListRange { start, stop, stride } => {
+                datafusion_expr::GetFieldAccess::ListRange {
+                    start,
+                    stop,
+                    stride,
+                } => {
                     write!(
                         f,
                         "{expr}[{start}:{stop}:{stride}]",
@@ -369,8 +373,8 @@ mod test {
     use arrow_schema::DataType as ArrowDataType;
     use datafusion::prelude::SessionContext;
     use datafusion_common::{Column, ScalarValue, ToDFSchema};
-    use datafusion_functions::encoding::expr_fn::decode;
     use datafusion_expr::{cardinality, col, lit, substring, Cast, Expr, ExprSchemable};
+    use datafusion_functions::encoding::expr_fn::decode;
 
     use crate::delta_datafusion::{DataFusionMixins, DeltaSessionContext};
     use crate::kernel::{ArrayType, DataType, PrimitiveType, StructField, StructType};
