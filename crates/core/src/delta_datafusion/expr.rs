@@ -369,12 +369,7 @@ impl<'a> fmt::Display for ScalarValueFormat<'a> {
                         "{}",
                         NaiveDateTime::from_timestamp_micros(*e).unwrap().and_utc()
                     )?,
-                    None => write!(
-                        f,
-                        "{}",
-                        NaiveDateTime::from_timestamp_micros(*e)
-                            .unwrap()
-                    )?,
+                    None => write!(f, "{}", NaiveDateTime::from_timestamp_micros(*e).unwrap())?,
                 },
                 None => write!(f, "NULL")?,
             },
