@@ -318,7 +318,6 @@ def write_deltalake(
             data=data,
             partition_by=partition_by,
             mode=mode,
-            max_rows_per_group=max_rows_per_group,
             schema_mode=schema_mode,
             predicate=predicate,
             name=name,

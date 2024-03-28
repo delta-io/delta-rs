@@ -91,7 +91,7 @@ impl DeltaTableState {
                     .fields
                     .iter()
                     .map(|field| Cow::Owned(field.name().clone()))
-                    .zip(partition_cols_batch.columns().iter().map(Arc::clone)),
+                    .zip(partition_cols_batch.columns().iter().cloned()),
             )
         }
 
@@ -103,7 +103,7 @@ impl DeltaTableState {
                     .fields
                     .iter()
                     .map(|field| Cow::Owned(field.name().clone()))
-                    .zip(stats.columns().iter().map(Arc::clone)),
+                    .zip(stats.columns().iter().cloned()),
             );
         }
         if files.iter().any(|add| add.deletion_vector.is_some()) {
@@ -114,7 +114,7 @@ impl DeltaTableState {
                     .fields
                     .iter()
                     .map(|field| Cow::Owned(field.name().clone()))
-                    .zip(delvs.columns().iter().map(Arc::clone)),
+                    .zip(delvs.columns().iter().cloned()),
             );
         }
         if files.iter().any(|add| {
@@ -129,7 +129,7 @@ impl DeltaTableState {
                     .fields
                     .iter()
                     .map(|field| Cow::Owned(field.name().clone()))
-                    .zip(tags.columns().iter().map(Arc::clone)),
+                    .zip(tags.columns().iter().cloned()),
             );
         }
 
