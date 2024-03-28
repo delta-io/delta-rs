@@ -1,6 +1,7 @@
 import datetime as dt
 import os
 import pathlib
+import shutil
 
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -31,7 +32,13 @@ def test_checkpoint(tmp_path: pathlib.Path, sample_data: pa.Table):
 def setup_cleanup_metadata(tmp_path: pathlib.Path, sample_data: pa.Table):
     tmp_table_path = tmp_path / "path" / "to" / "table"
     first_log_path = tmp_table_path / "_delta_log" / "00000000000000000000.json"
+    first_failed_log_path = (
+        tmp_table_path / "_delta_log" / "00000000000000000000.json.tmp"
+    )
     second_log_path = tmp_table_path / "_delta_log" / "00000000000000000001.json"
+    second_failed_log_path = (
+        tmp_table_path / "_delta_log" / "00000000000000000002.json.tmp"
+    )
     third_log_path = tmp_table_path / "_delta_log" / "00000000000000000002.json"
 
     # TODO: Include binary after fixing issue "Json error: binary type is not supported"
@@ -43,6 +50,14 @@ def setup_cleanup_metadata(tmp_path: pathlib.Path, sample_data: pa.Table):
     delta_table = DeltaTable(str(tmp_table_path))
     delta_table.delete()
 
+    # Create failed json commit
+    shutil.copy(str(first_log_path), str(first_failed_log_path))
+    shutil.copy(str(third_log_path), str(second_failed_log_path))
+
+    # Move first failed log entry timestamp back in time for more than 30 days
+    old_ts = (dt.datetime.now() - dt.timedelta(days=31)).timestamp()
+    os.utime(first_failed_log_path, (old_ts, old_ts))
+
     # Move first log entry timestamp back in time for more than 30 days
     old_ts = (dt.datetime.now() - dt.timedelta(days=31)).timestamp()
     os.utime(first_log_path, (old_ts, old_ts))
@@ -52,8 +67,10 @@ def setup_cleanup_metadata(tmp_path: pathlib.Path, sample_data: pa.Table):
     os.utime(second_log_path, (near_ts, near_ts))
 
     assert first_log_path.exists()
+    assert first_failed_log_path.exists()
     assert second_log_path.exists()
     assert third_log_path.exists()
+    assert second_failed_log_path.exists()
     return delta_table
 
 
@@ -63,13 +80,21 @@ def test_cleanup_metadata(tmp_path: pathlib.Path, sample_data: pa.Table):
     delta_table.cleanup_metadata()
 
     tmp_table_path = tmp_path / "path" / "to" / "table"
+    first_failed_log_path = (
+        tmp_table_path / "_delta_log" / "00000000000000000000.json.tmp"
+    )
     first_log_path = tmp_table_path / "_delta_log" / "00000000000000000000.json"
     second_log_path = tmp_table_path / "_delta_log" / "00000000000000000001.json"
+    second_failed_log_path = (
+        tmp_table_path / "_delta_log" / "00000000000000000002.json.tmp"
+    )
     third_log_path = tmp_table_path / "_delta_log" / "00000000000000000002.json"
 
     assert not first_log_path.exists()
+    assert not first_failed_log_path.exists()
     assert second_log_path.exists()
     assert third_log_path.exists()
+    assert second_failed_log_path.exists()
 
 
 def test_cleanup_metadata_no_checkpoint(tmp_path: pathlib.Path, sample_data: pa.Table):
@@ -77,13 +102,21 @@ def test_cleanup_metadata_no_checkpoint(tmp_path: pathlib.Path, sample_data: pa.
     delta_table.cleanup_metadata()
 
     tmp_table_path = tmp_path / "path" / "to" / "table"
+    first_failed_log_path = (
+        tmp_table_path / "_delta_log" / "00000000000000000000.json.tmp"
+    )
     first_log_path = tmp_table_path / "_delta_log" / "00000000000000000000.json"
     second_log_path = tmp_table_path / "_delta_log" / "00000000000000000001.json"
+    second_failed_log_path = (
+        tmp_table_path / "_delta_log" / "00000000000000000002.json.tmp"
+    )
     third_log_path = tmp_table_path / "_delta_log" / "00000000000000000002.json"
 
     assert first_log_path.exists()
+    assert first_failed_log_path.exists()
     assert second_log_path.exists()
     assert third_log_path.exists()
+    assert second_failed_log_path.exists()
 
 
 def test_features_maintained_after_checkpoint(tmp_path: pathlib.Path):
