@@ -812,6 +812,11 @@ impl std::future::IntoFuture for WriteBuilder {
             // created actions, it may be safe to assume, that we want to include all actions.
             // then again, having only some tombstones may be misleading.
             if let Some(mut snapshot) = this.snapshot {
+                if snapshot.version() != commit.version - 1 {
+                    snapshot
+                        .update(this.log_store.clone(), Some(commit.version - 1))
+                        .await?;
+                }
                 snapshot.merge(commit.data.actions, &commit.data.operation, commit.version)?;
                 Ok(DeltaTable::new_with_state(this.log_store, snapshot))
             } else {
