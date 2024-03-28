@@ -23,13 +23,16 @@ use crate::kernel::arrow::extract::{self as ex, ProvidesColumnByName};
 use crate::kernel::arrow::json;
 use crate::{DeltaResult, DeltaTableConfig, DeltaTableError};
 
+use super::ReplayVistor;
 use super::Snapshot;
 
 pin_project! {
-    pub struct ReplayStream<S> {
+    pub struct ReplayStream<'a, S> {
         scanner: LogReplayScanner,
 
         mapper: Arc<LogMapper>,
+
+        visitors: Vec<&'a mut dyn ReplayVistor>,
 
         #[pin]
         commits: S,
@@ -39,8 +42,13 @@ pin_project! {
     }
 }
 
-impl<S> ReplayStream<S> {
-    pub(super) fn try_new(commits: S, checkpoint: S, snapshot: &Snapshot) -> DeltaResult<Self> {
+impl<'a, S> ReplayStream<'a, S> {
+    pub(super) fn try_new(
+        commits: S,
+        checkpoint: S,
+        snapshot: &Snapshot,
+        visitors: Vec<&'a mut dyn ReplayVistor>,
+    ) -> DeltaResult<Self> {
         let stats_schema = Arc::new((&snapshot.stats_schema()?).try_into()?);
         let mapper = Arc::new(LogMapper {
             stats_schema,
@@ -50,6 +58,7 @@ impl<S> ReplayStream<S> {
             commits,
             checkpoint,
             mapper,
+            visitors,
             scanner: LogReplayScanner::new(),
         })
     }
@@ -127,7 +136,7 @@ fn map_batch(
     Ok(batch)
 }
 
-impl<S> Stream for ReplayStream<S>
+impl<'a, S> Stream for ReplayStream<'a, S>
 where
     S: Stream<Item = DeltaResult<RecordBatch>>,
 {
@@ -136,19 +145,29 @@ where
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let this = self.project();
         let res = this.commits.poll_next(cx).map(|b| match b {
-            Some(Ok(batch)) => match this.scanner.process_files_batch(&batch, true) {
-                Ok(filtered) => Some(this.mapper.map_batch(filtered)),
-                Err(e) => Some(Err(e)),
-            },
+            Some(Ok(batch)) => {
+                for visitor in this.visitors.iter_mut() {
+                    visitor.visit_batch(&batch).unwrap();
+                }
+                match this.scanner.process_files_batch(&batch, true) {
+                    Ok(filtered) => Some(this.mapper.map_batch(filtered)),
+                    Err(e) => Some(Err(e)),
+                }
+            }
             Some(Err(e)) => Some(Err(e)),
             None => None,
         });
         if matches!(res, Poll::Ready(None)) {
             this.checkpoint.poll_next(cx).map(|b| match b {
-                Some(Ok(batch)) => match this.scanner.process_files_batch(&batch, false) {
-                    Ok(filtered) => Some(this.mapper.map_batch(filtered)),
-                    Err(e) => Some(Err(e)),
-                },
+                Some(Ok(batch)) => {
+                    for visitor in this.visitors.iter_mut() {
+                        visitor.visit_batch(&batch).unwrap();
+                    }
+                    match this.scanner.process_files_batch(&batch, false) {
+                        Ok(filtered) => Some(this.mapper.map_batch(filtered)),
+                        Err(e) => Some(Err(e)),
+                    }
+                }
                 Some(Err(e)) => Some(Err(e)),
                 None => None,
             })

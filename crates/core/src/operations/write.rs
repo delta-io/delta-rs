@@ -812,9 +812,11 @@ impl std::future::IntoFuture for WriteBuilder {
             // created actions, it may be safe to assume, that we want to include all actions.
             // then again, having only some tombstones may be misleading.
             if let Some(mut snapshot) = this.snapshot {
+                dbg!("merge1!");
                 snapshot.merge(commit.data.actions, &commit.data.operation, commit.version)?;
                 Ok(DeltaTable::new_with_state(this.log_store, snapshot))
             } else {
+                dbg!("update!");
                 let mut table = DeltaTable::new(this.log_store, Default::default());
                 table.update().await?;
                 Ok(table)
@@ -891,6 +893,7 @@ fn try_cast_batch(from_fields: &Fields, to_fields: &Fields) -> Result<(), ArrowE
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::kernel::Txn;
     use crate::operations::{collect_sendable_stream, DeltaOps};
     use crate::protocol::SaveMode;
     use crate::writer::test_utils::datafusion::write_batch;
@@ -1634,5 +1637,25 @@ mod tests {
         ];
         let actual = get_data_sorted(&table, "id,value,modified").await;
         assert_batches_sorted_eq!(&expected, &actual);
+    }
+
+    #[tokio::test]
+    async fn test_app_txn() {
+        let batch = get_record_batch(None, false);
+        let table = DeltaOps::new_in_memory()
+            .write(vec![batch.clone()])
+            .with_save_mode(SaveMode::ErrorIfExists)
+            .with_partition_columns(["modified"])
+            .with_commit_properties(
+                CommitProperties::default().with_application_transaction(Txn::new(&"my-app", 1)),
+            )
+            .await
+            .unwrap();
+        assert_eq!(table.version(), 0);
+        assert_eq!(table.get_files_count(), 2);
+
+        let app_txns = table.get_app_transaction_version();
+        println!("{:?}", &app_txns);
+        assert_eq!(app_txns.len(), 1);
     }
 }

@@ -341,13 +341,15 @@ impl DeltaTable {
         &mut self,
         max_version: Option<i64>,
     ) -> Result<(), DeltaTableError> {
-        debug!(
+        dbg!(
             "incremental update with version({}) and max_version({max_version:?})",
             self.version(),
+            max_version,
         );
         match self.state.as_mut() {
             Some(state) => state.update(self.log_store.clone(), max_version).await,
             _ => {
+                dbg!("New!");
                 let state = DeltaTableState::try_new(
                     &Path::default(),
                     self.log_store.object_store(),
