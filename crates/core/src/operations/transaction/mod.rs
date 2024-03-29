@@ -513,7 +513,7 @@ impl<'a> std::future::IntoFuture for PreparedCommit<'a> {
                             Err(err) => {
                                 this.log_store
                                     .object_store()
-                                    .delete_with_retries(&tmp_commit, 15)
+                                    .delete_with_retries(tmp_commit, 15)
                                     .await?;
                                 return Err(TransactionError::CommitConflict(err).into());
                             }
@@ -522,7 +522,7 @@ impl<'a> std::future::IntoFuture for PreparedCommit<'a> {
                     Err(err) => {
                         this.log_store
                             .object_store()
-                            .delete_with_retries(&tmp_commit, 15)
+                            .delete_with_retries(tmp_commit, 15)
                             .await?;
                         return Err(err.into());
                     }

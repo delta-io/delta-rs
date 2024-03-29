@@ -39,7 +39,7 @@ impl From<BuilderError> for DeltaTableError {
 }
 
 /// possible version specifications for loading a delta table
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Default)]
 pub enum DeltaVersion {
     /// load the newest version
     #[default]
@@ -321,7 +321,7 @@ impl DeltaTableBuilder {
 
     /// Build the [`DeltaTable`] and load its state
     pub async fn load(self) -> DeltaResult<DeltaTable> {
-        let version = self.options.version.clone();
+        let version = self.options.version;
         let mut table = self.build()?;
         match version {
             DeltaVersion::Newest => table.load().await?,
