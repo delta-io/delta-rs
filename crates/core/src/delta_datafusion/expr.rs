@@ -22,7 +22,7 @@
 //! Utility functions for Datafusion's Expressions
 
 use std::{
-    fmt::{self, format, Display, Formatter, Write},
+    fmt::{self, format, Display, Error, Formatter, Write},
     sync::Arc,
 };
 
@@ -344,12 +344,12 @@ impl<'a> fmt::Display for ScalarValueFormat<'a> {
             ScalarValue::UInt32(e) => format_option!(f, e)?,
             ScalarValue::UInt64(e) => format_option!(f, e)?,
             ScalarValue::Date32(e) => match e {
-                Some(e) => {
-                    let dt =
-                        NaiveDate::from_num_days_from_ce_opt((EPOCH_DAYS_FROM_CE + (*e)).into())
-                            .unwrap();
-                    write!(f, "{}", dt)?
-                }
+                Some(e) => write!(
+                    f,
+                    "{}",
+                    NaiveDate::from_num_days_from_ce_opt((EPOCH_DAYS_FROM_CE + (*e)).into())
+                        .ok_or(Error::default())?
+                )?,
                 None => write!(f, "NULL")?,
             },
             ScalarValue::Date64(e) => match e {
@@ -357,7 +357,7 @@ impl<'a> fmt::Display for ScalarValueFormat<'a> {
                     f,
                     "{}",
                     NaiveDateTime::from_timestamp_millis((*e).into())
-                        .unwrap()
+                        .ok_or(Error::default())?
                         .date()
                 )?,
                 None => write!(f, "NULL")?,
@@ -367,9 +367,15 @@ impl<'a> fmt::Display for ScalarValueFormat<'a> {
                     Some(tz) => write!(
                         f,
                         "{}",
-                        NaiveDateTime::from_timestamp_micros(*e).unwrap().and_utc()
+                        NaiveDateTime::from_timestamp_micros(*e)
+                            .ok_or(Error::default())?
+                            .and_utc()
                     )?,
-                    None => write!(f, "{}", NaiveDateTime::from_timestamp_micros(*e).unwrap())?,
+                    None => write!(
+                        f,
+                        "{}",
+                        NaiveDateTime::from_timestamp_micros(*e).ok_or(Error::default())?
+                    )?,
                 },
                 None => write!(f, "NULL")?,
             },
