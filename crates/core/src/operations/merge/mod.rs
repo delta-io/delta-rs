@@ -2974,7 +2974,6 @@ mod tests {
         assert_batches_sorted_eq!(&expected, &actual);
     }
 
-
     #[tokio::test]
     async fn test_merge_row_groups_parquet_pushdown() {
         //See https://github.com/delta-io/delta-rs/issues/2362
@@ -3026,7 +3025,10 @@ mod tests {
             Arc::clone(&arrow_schema.clone()),
             vec![
                 Arc::new(arrow::array::StringArray::from(vec!["C", "D"])),
-                Arc::new(arrow::array::Float32Array::from(vec![Some(11.0), Some(12.0)])),
+                Arc::new(arrow::array::Float32Array::from(vec![
+                    Some(11.0),
+                    Some(12.0),
+                ])),
                 Arc::new(arrow::array::StringArray::from(vec![
                     "2023-07-04",
                     "2023-07-04",
@@ -3072,27 +3074,27 @@ mod tests {
                     .update("month", "target.month")
             })
             .unwrap()
-            .when_not_matched_insert(|insert|
+            .when_not_matched_insert(|insert| {
                 insert
                     .set("id", "source.id")
                     .set("cost", "source.cost")
                     .set("month", "source.month")
-            )
+            })
             .unwrap()
             .await
             .unwrap();
 
         let expected = vec![
-    "+----+-------+------------+",
-    "| id | cost  | month      |",
-    "+----+-------+------------+",
-    "| A  | 10.15 | 2023-07-04 |",
-    "| B  |       | 2023-07-04 |",
-    "| C  | 12.15 | 2023-07-04 |",
-    "| D  | 12.0  | 2023-07-04 |",
-    "| E  | 11.15 | 2023-07-04 |",
-    "+----+-------+------------+",
-];
+            "+----+-------+------------+",
+            "| id | cost  | month      |",
+            "+----+-------+------------+",
+            "| A  | 10.15 | 2023-07-04 |",
+            "| B  |       | 2023-07-04 |",
+            "| C  | 12.15 | 2023-07-04 |",
+            "| D  | 12.0  | 2023-07-04 |",
+            "| E  | 11.15 | 2023-07-04 |",
+            "+----+-------+------------+",
+        ];
         let actual = get_data(&table).await;
         assert_batches_sorted_eq!(&expected, &actual);
     }
