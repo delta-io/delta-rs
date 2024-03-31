@@ -983,6 +983,7 @@ async fn execute(
 
     let scan_config = DeltaScanConfigBuilder::default()
         .with_file_column(true)
+        .with_parquet_pushdown(false)
         .build(snapshot)?;
 
     let target_provider = Arc::new(DeltaTableProvider::try_new(
