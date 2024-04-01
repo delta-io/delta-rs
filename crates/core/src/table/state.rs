@@ -37,8 +37,26 @@ impl AppTransactionVisitor {
     }
 }
 
+impl AppTransactionVisitor {
+    pub fn merge(self, map: &HashMap<String, i64>) -> HashMap<String, i64> {
+        let mut clone = map.clone();
+        for (key, value) in self.app_transaction_version {
+            clone.insert(key, value);
+        }
+
+        return clone;
+    }
+}
+
 impl ReplayVistor for AppTransactionVisitor {
     fn visit_batch(&mut self, batch: &arrow_array::RecordBatch) -> DeltaResult<()> {
+        if batch.column_by_name("txn").is_none() {
+            return Ok(());
+        }
+
+        let s = pretty_format_batches(&[batch.to_owned()])
+            .unwrap()
+            .to_string();
         let txn_col = ex::extract_and_cast::<StructArray>(batch, "txn")?;
         let filter = is_not_null(txn_col)?;
 
@@ -250,7 +268,14 @@ impl DeltaTableState {
             app_metadata: HashMap::new(),
             app_transactions: Vec::new(),
         };
-        let new_version = self.snapshot.advance(&vec![commit_data])?;
+
+        let mut app_txn_visitor = AppTransactionVisitor::new();
+        let new_version = self
+            .snapshot
+            .advance(&vec![commit_data], vec![&mut app_txn_visitor])?;
+
+        self.app_transaction_version = app_txn_visitor.merge(&self.app_transaction_version);
+
         if new_version != version {
             return Err(DeltaTableError::Generic("Version mismatch".to_string()));
         }
@@ -269,7 +294,11 @@ impl DeltaTableState {
         version: Option<i64>,
     ) -> Result<(), DeltaTableError> {
         println!("update table");
-        self.snapshot.update(log_store, version).await?;
+        let mut app_txn_visitor = AppTransactionVisitor::new();
+        self.snapshot
+            .update(log_store, version, vec![&mut app_txn_visitor])
+            .await?;
+        self.app_transaction_version = app_txn_visitor.merge(&self.app_transaction_version);
         Ok(())
     }
 
