@@ -300,7 +300,7 @@ impl CreateBuilder {
         }
 
         let operation = DeltaOperation::Create {
-            mode: self.mode.clone(),
+            mode: self.mode,
             metadata: metadata.clone(),
             location: storage_url,
             protocol: protocol.clone(),
@@ -324,7 +324,7 @@ impl std::future::IntoFuture for CreateBuilder {
     fn into_future(self) -> Self::IntoFuture {
         let this = self;
         Box::pin(async move {
-            let mode = this.mode.clone();
+            let mode = this.mode;
             let app_metadata = this.metadata.clone().unwrap_or_default();
             let (mut table, actions, operation) = this.into_table_and_actions()?;
             let log_store = table.log_store();
