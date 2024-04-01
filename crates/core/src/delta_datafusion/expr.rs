@@ -608,7 +608,7 @@ mod test {
             ),
             simple!(
                 cardinality(col("_list").range(col("value"), lit(10_i64))),
-                "cardinality(_list[value:10])".to_string()
+                "cardinality(_list[value:10:1])".to_string()
             ),
         ];
 
