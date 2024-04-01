@@ -1,9 +1,10 @@
 use std::borrow::Cow;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use arrow_array::{Array, Int32Array, Int64Array, MapArray, RecordBatch, StringArray, StructArray};
 use chrono::{NaiveDateTime, TimeZone, Utc};
+use indexmap::IndexMap;
 use object_store::path::Path;
 use object_store::ObjectMeta;
 use percent_encoding::percent_decode_str;
@@ -19,37 +20,35 @@ const COL_MIN_VALUES: &str = "minValues";
 const COL_MAX_VALUES: &str = "maxValues";
 const COL_NULL_COUNT: &str = "nullCount";
 
-pub(crate) type PartitionFields<'a> = Arc<BTreeMap<&'a str, &'a StructField>>;
-pub(crate) type PartitionValues<'a> = BTreeMap<&'a str, Scalar>;
+pub(crate) type PartitionFields<'a> = Arc<IndexMap<&'a str, &'a StructField>>;
+pub(crate) type PartitionValues<'a> = IndexMap<&'a str, Scalar>;
 
 pub(crate) trait PartitionsExt {
     fn hive_partition_path(&self) -> String;
 }
 
-impl PartitionsExt for BTreeMap<&str, Scalar> {
+impl PartitionsExt for IndexMap<&str, Scalar> {
     fn hive_partition_path(&self) -> String {
-        let mut fields = self
+        let fields = self
             .iter()
             .map(|(k, v)| {
                 let encoded = v.serialize_encoded();
                 format!("{k}={encoded}")
             })
             .collect::<Vec<_>>();
-        fields.reverse();
         fields.join("/")
     }
 }
 
-impl PartitionsExt for BTreeMap<String, Scalar> {
+impl PartitionsExt for IndexMap<String, Scalar> {
     fn hive_partition_path(&self) -> String {
-        let mut fields = self
+        let fields = self
             .iter()
             .map(|(k, v)| {
                 let encoded = v.serialize_encoded();
                 format!("{k}={encoded}")
             })
             .collect::<Vec<_>>();
-        fields.reverse();
         fields.join("/")
     }
 }
@@ -121,9 +120,9 @@ impl<'a> DeletionVectorView<'a> {
     }
 }
 
-/// A view into the log data representiang a single logical file.
+/// A view into the log data representing a single logical file.
 ///
-/// This stuct holds a pointer to a specific row in the log data and provides access to the
+/// This struct holds a pointer to a specific row in the log data and provides access to the
 /// information stored in that row by tracking references to the underlying arrays.
 ///
 /// Additionally, references to some table metadata is tracked to provide higher level
@@ -192,7 +191,7 @@ impl LogicalFile<'_> {
     /// The partition values for this logical file.
     pub fn partition_values(&self) -> DeltaResult<PartitionValues<'_>> {
         if self.partition_fields.is_empty() {
-            return Ok(BTreeMap::new());
+            return Ok(IndexMap::new());
         }
         let map_value = self.partition_values.value(self.index);
         let keys = map_value
@@ -237,7 +236,7 @@ impl LogicalFile<'_> {
                     .unwrap_or(Scalar::Null(f.data_type.clone()));
                 Ok((*k, val))
             })
-            .collect::<DeltaResult<BTreeMap<_, _>>>()
+            .collect::<DeltaResult<IndexMap<_, _>>>()
     }
 
     /// Defines a deletion vector
@@ -355,7 +354,7 @@ impl<'a> FileStatsAccessor<'a> {
                 .partition_columns
                 .iter()
                 .map(|c| Ok((c.as_str(), schema.field_with_name(c.as_str())?)))
-                .collect::<DeltaResult<BTreeMap<_, _>>>()?,
+                .collect::<DeltaResult<IndexMap<_, _>>>()?,
         );
         let deletion_vector = extract_and_cast_opt::<StructArray>(data, "add.deletionVector");
         let deletion_vector = deletion_vector.and_then(|dv| {
@@ -550,7 +549,15 @@ mod datafusion {
                             _ => None,
                         })
                         .collect::<Option<Vec<_>>>()
-                        .map(|o| Precision::Exact(ScalarValue::Struct(Some(o), fields.clone())))
+                        .map(|o| {
+                            let arrays = o
+                                .into_iter()
+                                .map(|sv| sv.to_array())
+                                .collect::<Result<Vec<_>, datafusion_common::DataFusionError>>()
+                                .unwrap();
+                            let sa = StructArray::new(fields.clone(), arrays, None);
+                            Precision::Exact(ScalarValue::Struct(Arc::new(sa)))
+                        })
                         .unwrap_or(Precision::Absent);
                 }
                 _ => Precision::Absent,

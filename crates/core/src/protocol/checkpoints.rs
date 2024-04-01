@@ -11,7 +11,9 @@ use futures::{StreamExt, TryStreamExt};
 use lazy_static::lazy_static;
 use object_store::{Error, ObjectStore};
 use parquet::arrow::ArrowWriter;
+use parquet::basic::Compression;
 use parquet::errors::ParquetError;
+use parquet::file::properties::WriterProperties;
 use regex::Regex;
 use serde_json::Value;
 use tracing::{debug, error};
@@ -186,7 +188,7 @@ pub async fn cleanup_expired_logs_for(
 ) -> Result<usize, ProtocolError> {
     lazy_static! {
         static ref DELTA_LOG_REGEX: Regex =
-            Regex::new(r"_delta_log/(\d{20})\.(json|checkpoint).*$").unwrap();
+            Regex::new(r"_delta_log/(\d{20})\.(json|checkpoint|json.tmp).*$").unwrap();
     }
 
     let object_store = log_store.object_store();
@@ -279,8 +281,16 @@ fn parquet_bytes_from_state(
     let jsons = std::iter::once(Action::Protocol(Protocol {
         min_reader_version: state.protocol().min_reader_version,
         min_writer_version: state.protocol().min_writer_version,
-        writer_features: None,
-        reader_features: None,
+        writer_features: if state.protocol().min_writer_version >= 7 {
+            Some(state.protocol().writer_features.clone().unwrap_or_default())
+        } else {
+            None
+        },
+        reader_features: if state.protocol().min_reader_version >= 3 {
+            Some(state.protocol().reader_features.clone().unwrap_or_default())
+        } else {
+            None
+        },
     }))
     // metaData
     .chain(std::iter::once(Action::Metadata(current_metadata.clone())))
@@ -325,7 +335,15 @@ fn parquet_bytes_from_state(
     debug!("Writing to checkpoint parquet buffer...");
     // Write the Checkpoint parquet file.
     let mut bytes = vec![];
-    let mut writer = ArrowWriter::try_new(&mut bytes, arrow_schema.clone(), None)?;
+    let mut writer = ArrowWriter::try_new(
+        &mut bytes,
+        arrow_schema.clone(),
+        Some(
+            WriterProperties::builder()
+                .set_compression(Compression::SNAPPY)
+                .build(),
+        ),
+    )?;
     let mut decoder = ReaderBuilder::new(arrow_schema)
         .with_batch_size(CHECKPOINT_RECORD_BATCH_SIZE)
         .build_decoder()?;
@@ -532,7 +550,9 @@ mod tests {
 
     use super::*;
     use crate::kernel::StructType;
+    use crate::operations::transaction::{CommitBuilder, TableReference};
     use crate::operations::DeltaOps;
+    use crate::protocol::Metadata;
     use crate::writer::test_utils::get_delta_schema;
 
     #[tokio::test]
@@ -563,6 +583,85 @@ mod tests {
             .expect("Failed to get bytes for _last_checkpoint");
         let last_checkpoint: CheckPoint = serde_json::from_slice(&last_checkpoint).expect("Fail");
         assert_eq!(last_checkpoint.version, 0);
+    }
+
+    /// This test validates that a checkpoint can be written and re-read with the minimum viable
+    /// Metadata. There was a bug which didn't handle the optionality of createdTime.
+    #[tokio::test]
+    async fn test_create_checkpoint_with_metadata() {
+        let table_schema = get_delta_schema();
+
+        let mut table = DeltaOps::new_in_memory()
+            .create()
+            .with_columns(table_schema.fields().clone())
+            .with_save_mode(crate::protocol::SaveMode::Ignore)
+            .await
+            .unwrap();
+        assert_eq!(table.version(), 0);
+        assert_eq!(table.get_schema().unwrap(), &table_schema);
+
+        let part_cols: Vec<String> = vec![];
+        let metadata = Metadata::try_new(table_schema, part_cols, HashMap::new()).unwrap();
+        let actions = vec![Action::Metadata(metadata)];
+
+        let epoch_id = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("Time went backwards")
+            .as_millis() as i64;
+
+        let operation = crate::protocol::DeltaOperation::StreamingUpdate {
+            output_mode: crate::protocol::OutputMode::Append,
+            query_id: "test".into(),
+            epoch_id,
+        };
+        let v = CommitBuilder::default()
+            .with_actions(actions)
+            .build(
+                table.state.as_ref().map(|f| f as &dyn TableReference),
+                table.log_store(),
+                operation,
+            )
+            .unwrap()
+            .await
+            .unwrap()
+            .version();
+
+        assert_eq!(1, v, "Expected the commit to create table version 1");
+        table.load().await.expect("Failed to reload table");
+        assert_eq!(
+            table.version(),
+            1,
+            "The loaded version of the table is not up to date"
+        );
+
+        let res = create_checkpoint_for(
+            table.version(),
+            table.state.as_ref().unwrap(),
+            table.log_store.as_ref(),
+        )
+        .await;
+        assert!(res.is_ok());
+
+        // Look at the "files" and verify that the _last_checkpoint has the right version
+        let path = Path::from("_delta_log/_last_checkpoint");
+        let last_checkpoint = table
+            .object_store()
+            .get(&path)
+            .await
+            .expect("Failed to get the _last_checkpoint")
+            .bytes()
+            .await
+            .expect("Failed to get bytes for _last_checkpoint");
+        let last_checkpoint: CheckPoint = serde_json::from_slice(&last_checkpoint).expect("Fail");
+        assert_eq!(last_checkpoint.version, 1);
+
+        // If the regression exists, this will fail
+        table.load().await.expect("Failed to reload the table, this likely means that the optional createdTime was not actually optional");
+        assert_eq!(
+            1,
+            table.version(),
+            "The reloaded table doesn't have the right version"
+        );
     }
 
     #[tokio::test]

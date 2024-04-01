@@ -8,14 +8,17 @@ use arrow_schema::{
 };
 use lazy_static::lazy_static;
 
-use super::{ActionType, ArrayType, DataType, MapType, PrimitiveType, StructField, StructType};
+use super::{
+    ActionType, ArrayType, DataType, MapType, PrimitiveType, StructField, StructType,
+    DECIMAL_MAX_PRECISION, DECIMAL_MAX_SCALE,
+};
 
 pub(crate) mod extract;
 pub(crate) mod json;
 
 const MAP_ROOT_DEFAULT: &str = "entries";
-const MAP_KEY_DEFAULT: &str = "keys";
-const MAP_VALUE_DEFAULT: &str = "values";
+const MAP_KEY_DEFAULT: &str = "key";
+const MAP_VALUE_DEFAULT: &str = "value";
 const LIST_ROOT_DEFAULT: &str = "item";
 
 impl TryFrom<ActionType> for ArrowField {
@@ -118,14 +121,12 @@ impl TryFrom<&DataType> for ArrowDataType {
                     PrimitiveType::Boolean => Ok(ArrowDataType::Boolean),
                     PrimitiveType::Binary => Ok(ArrowDataType::Binary),
                     PrimitiveType::Decimal(precision, scale) => {
-                        if precision <= &38 {
+                        if precision <= &DECIMAL_MAX_PRECISION && scale <= &DECIMAL_MAX_SCALE {
                             Ok(ArrowDataType::Decimal128(*precision, *scale))
-                        } else if precision <= &76 {
-                            Ok(ArrowDataType::Decimal256(*precision, *scale))
                         } else {
-                            Err(ArrowError::SchemaError(format!(
-                                "Precision too large to be represented in Arrow: {}",
-                                precision
+                            Err(ArrowError::CastError(format!(
+                                "Precision/scale can not be larger than 38 ({},{})",
+                                precision, scale
                             )))
                         }
                     }
@@ -134,8 +135,11 @@ impl TryFrom<&DataType> for ArrowDataType {
                         // timezone. Stored as 4 bytes integer representing days since 1970-01-01
                         Ok(ArrowDataType::Date32)
                     }
-                    PrimitiveType::Timestamp => {
-                        // Issue: https://github.com/delta-io/delta/issues/643
+                    PrimitiveType::Timestamp => Ok(ArrowDataType::Timestamp(
+                        TimeUnit::Microsecond,
+                        Some("UTC".into()),
+                    )),
+                    PrimitiveType::TimestampNtz => {
                         Ok(ArrowDataType::Timestamp(TimeUnit::Microsecond, None))
                     }
                 }
@@ -211,13 +215,16 @@ impl TryFrom<&ArrowDataType> for DataType {
             ArrowDataType::Decimal128(p, s) => {
                 Ok(DataType::Primitive(PrimitiveType::Decimal(*p, *s)))
             }
-            ArrowDataType::Decimal256(p, s) => {
-                Ok(DataType::Primitive(PrimitiveType::Decimal(*p, *s)))
-            }
+            ArrowDataType::Decimal256(p, s) => DataType::decimal(*p, *s).map_err(|_| {
+                ArrowError::SchemaError(format!(
+                    "Invalid data type for Delta Lake: decimal({},{})",
+                    p, s
+                ))
+            }),
             ArrowDataType::Date32 => Ok(DataType::Primitive(PrimitiveType::Date)),
             ArrowDataType::Date64 => Ok(DataType::Primitive(PrimitiveType::Date)),
             ArrowDataType::Timestamp(TimeUnit::Microsecond, None) => {
-                Ok(DataType::Primitive(PrimitiveType::Timestamp))
+                Ok(DataType::Primitive(PrimitiveType::TimestampNtz))
             }
             ArrowDataType::Timestamp(TimeUnit::Microsecond, Some(tz))
                 if tz.eq_ignore_ascii_case("utc") =>
@@ -258,6 +265,7 @@ impl TryFrom<&ArrowDataType> for DataType {
                     panic!("DataType::Map should contain a struct field child");
                 }
             }
+            ArrowDataType::Dictionary(_, value_type) => Ok(value_type.as_ref().try_into()?),
             s => Err(ArrowError::SchemaError(format!(
                 "Invalid data type for Delta Lake: {s}"
             ))),
@@ -448,7 +456,9 @@ pub(crate) fn delta_log_schema_for_table(
                 ],
                 protocol[
                     minReaderVersion:Int32,
-                    minWriterVersion:Int32
+                    minWriterVersion:Int32,
+                    writerFeatures[element]{Utf8},
+                    readerFeatures[element]{Utf8}
                 ],
                 txn[
                     appId:Utf8,
@@ -768,8 +778,43 @@ mod tests {
     }
 
     #[test]
+    fn test_arrow_from_delta_decimal_type_invalid_precision() {
+        let precision = 39;
+        let scale = 2;
+        assert!(matches!(
+            <DataType as TryFrom<&ArrowDataType>>::try_from(&ArrowDataType::Decimal256(
+                precision, scale
+            ))
+            .unwrap_err(),
+            _
+        ));
+    }
+
+    #[test]
+    fn test_arrow_from_delta_decimal_type_invalid_scale() {
+        let precision = 2;
+        let scale = 39;
+        assert!(matches!(
+            <DataType as TryFrom<&ArrowDataType>>::try_from(&ArrowDataType::Decimal256(
+                precision, scale
+            ))
+            .unwrap_err(),
+            _
+        ));
+    }
+
+    #[test]
     fn test_arrow_from_delta_timestamp_type() {
         let timestamp_field = DataType::Primitive(PrimitiveType::Timestamp);
+        assert_eq!(
+            <ArrowDataType as TryFrom<&DataType>>::try_from(&timestamp_field).unwrap(),
+            ArrowDataType::Timestamp(TimeUnit::Microsecond, Some("UTC".to_string().into()))
+        );
+    }
+
+    #[test]
+    fn test_arrow_from_delta_timestampntz_type() {
+        let timestamp_field = DataType::Primitive(PrimitiveType::TimestampNtz);
         assert_eq!(
             <ArrowDataType as TryFrom<&DataType>>::try_from(&timestamp_field).unwrap(),
             ArrowDataType::Timestamp(TimeUnit::Microsecond, None)
@@ -777,11 +822,11 @@ mod tests {
     }
 
     #[test]
-    fn test_delta_from_arrow_timestamp_type() {
+    fn test_delta_from_arrow_timestamp_type_no_tz() {
         let timestamp_field = ArrowDataType::Timestamp(TimeUnit::Microsecond, None);
         assert_eq!(
             <DataType as TryFrom<&ArrowDataType>>::try_from(&timestamp_field).unwrap(),
-            DataType::Primitive(PrimitiveType::Timestamp)
+            DataType::Primitive(PrimitiveType::TimestampNtz)
         );
     }
 
@@ -846,9 +891,9 @@ mod tests {
             let entry_offsets_buffer = Buffer::from(entry_offsets.to_byte_slice());
             let keys_data = StringArray::from_iter_values(keys);
 
-            let keys_field = Arc::new(Field::new("keys", ArrowDataType::Utf8, false));
+            let keys_field = Arc::new(Field::new("key", ArrowDataType::Utf8, false));
             let values_field = Arc::new(Field::new(
-                "values",
+                "value",
                 values.data_type().clone(),
                 values.null_count() > 0,
             ));

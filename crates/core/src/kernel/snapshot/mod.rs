@@ -25,12 +25,13 @@ use futures::{StreamExt, TryStreamExt};
 use object_store::path::Path;
 use object_store::ObjectStore;
 
-use self::log_segment::{CommitData, LogSegment, PathExt};
+use self::log_segment::{LogSegment, PathExt};
 use self::parse::{read_adds, read_removes};
 use self::replay::{LogMapper, LogReplayScanner, ReplayStream};
 use super::{Action, Add, CommitInfo, DataType, Metadata, Protocol, Remove, StructField};
 use crate::kernel::StructType;
 use crate::logstore::LogStore;
+use crate::operations::transaction::CommitData;
 use crate::table::config::TableConfig;
 use crate::{DeltaResult, DeltaTableConfig, DeltaTableError};
 
@@ -314,13 +315,7 @@ impl Snapshot {
                 .fields
                 .iter()
                 .enumerate()
-                .filter_map(|(idx, f)| match f.data_type() {
-                    DataType::Map(_) | DataType::Array(_) | &DataType::BINARY => None,
-                    _ if num_indexed_cols < 0 || (idx as i32) < num_indexed_cols => {
-                        Some(StructField::new(f.name(), f.data_type().clone(), true))
-                    }
-                    _ => None,
-                })
+                .filter_map(|(idx, f)| stats_field(idx, num_indexed_cols, f))
                 .collect()
         };
         Ok(StructType::new(vec![
@@ -487,13 +482,13 @@ impl EagerSnapshot {
         let mut send = Vec::new();
         for commit in commits {
             if metadata.is_none() {
-                metadata = commit.0.iter().find_map(|a| match a {
+                metadata = commit.actions.iter().find_map(|a| match a {
                     Action::Metadata(metadata) => Some(metadata.clone()),
                     _ => None,
                 });
             }
             if protocol.is_none() {
-                protocol = commit.0.iter().find_map(|a| match a {
+                protocol = commit.actions.iter().find_map(|a| match a {
                     Action::Protocol(protocol) => Some(protocol.clone()),
                     _ => None,
                 });
@@ -537,6 +532,31 @@ impl EagerSnapshot {
     }
 }
 
+fn stats_field(idx: usize, num_indexed_cols: i32, field: &StructField) -> Option<StructField> {
+    if !(num_indexed_cols < 0 || (idx as i32) < num_indexed_cols) {
+        return None;
+    }
+    match field.data_type() {
+        DataType::Map(_) | DataType::Array(_) | &DataType::BINARY => None,
+        DataType::Struct(dt_struct) => Some(StructField::new(
+            field.name(),
+            StructType::new(
+                dt_struct
+                    .fields()
+                    .iter()
+                    .flat_map(|f| stats_field(idx, num_indexed_cols, f))
+                    .collect(),
+            ),
+            true,
+        )),
+        DataType::Primitive(_) => Some(StructField::new(
+            field.name(),
+            field.data_type.clone(),
+            true,
+        )),
+    }
+}
+
 fn to_count_field(field: &StructField) -> Option<StructField> {
     match field.data_type() {
         DataType::Map(_) | DataType::Array(_) | &DataType::BINARY => None,
@@ -570,6 +590,8 @@ mod datafusion {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use chrono::Utc;
     use deltalake_test::utils::*;
     use futures::TryStreamExt;
@@ -757,15 +779,13 @@ mod tests {
             })
             .collect_vec();
 
-        let actions = vec![(
-            removes,
-            DeltaOperation::Write {
-                mode: SaveMode::Append,
-                partition_by: None,
-                predicate: None,
-            },
-            None,
-        )];
+        let operation = DeltaOperation::Write {
+            mode: SaveMode::Append,
+            partition_by: None,
+            predicate: None,
+        };
+
+        let actions = vec![CommitData::new(removes, operation, HashMap::new()).unwrap()];
 
         let new_version = snapshot.advance(&actions)?;
         assert_eq!(new_version, version + 1);

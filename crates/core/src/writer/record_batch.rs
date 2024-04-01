@@ -5,19 +5,20 @@
 //! the writer. Once written, add actions are returned by the writer. It's the users responsibility
 //! to create the transaction using those actions.
 
-use std::collections::BTreeMap;
 use std::{collections::HashMap, sync::Arc};
 
-use arrow::array::{Array, UInt32Array};
+use arrow::array::{new_null_array, Array, UInt32Array};
 use arrow::compute::{partition, take};
 use arrow::record_batch::RecordBatch;
 use arrow_array::ArrayRef;
 use arrow_row::{RowConverter, SortField};
 use arrow_schema::{ArrowError, Schema as ArrowSchema, SchemaRef as ArrowSchemaRef};
 use bytes::Bytes;
+use indexmap::IndexMap;
 use object_store::{path::Path, ObjectStore};
 use parquet::{arrow::ArrowWriter, errors::ParquetError};
 use parquet::{basic::Compression, file::properties::WriterProperties};
+use tracing::log::*;
 use uuid::Uuid;
 
 use super::stats::create_add;
@@ -25,17 +26,21 @@ use super::utils::{
     arrow_schema_without_partitions, next_data_path, record_batch_without_partitions,
     ShareableBuffer,
 };
-use super::{DeltaWriter, DeltaWriterError};
+use super::{DeltaWriter, DeltaWriterError, WriteMode};
 use crate::errors::DeltaTableError;
-use crate::kernel::{Add, PartitionsExt, Scalar, StructType};
+use crate::kernel::{Action, Add, PartitionsExt, Scalar, StructType};
+use crate::operations::cast::merge_schema;
+use crate::storage::ObjectStoreRetryExt;
 use crate::table::builder::DeltaTableBuilder;
 use crate::DeltaTable;
 
 /// Writes messages to a delta lake table.
 pub struct RecordBatchWriter {
     storage: Arc<dyn ObjectStore>,
-    arrow_schema_ref: Arc<ArrowSchema>,
+    arrow_schema_ref: ArrowSchemaRef,
+    original_schema_ref: ArrowSchemaRef,
     writer_properties: WriterProperties,
+    should_evolve: bool,
     partition_columns: Vec<String>,
     arrow_writers: HashMap<String, PartitionWriter>,
 }
@@ -67,9 +72,11 @@ impl RecordBatchWriter {
 
         Ok(Self {
             storage,
-            arrow_schema_ref: schema,
+            arrow_schema_ref: schema.clone(),
+            original_schema_ref: schema,
             writer_properties,
             partition_columns: partition_columns.unwrap_or_default(),
+            should_evolve: false,
             arrow_writers: HashMap::new(),
         })
     }
@@ -91,9 +98,11 @@ impl RecordBatchWriter {
 
         Ok(Self {
             storage: table.object_store(),
-            arrow_schema_ref,
+            arrow_schema_ref: arrow_schema_ref.clone(),
+            original_schema_ref: arrow_schema_ref.clone(),
             writer_properties,
             partition_columns,
+            should_evolve: false,
             arrow_writers: HashMap::new(),
         })
     }
@@ -127,30 +136,29 @@ impl RecordBatchWriter {
     pub async fn write_partition(
         &mut self,
         record_batch: RecordBatch,
-        partition_values: &BTreeMap<String, Scalar>,
-    ) -> Result<(), DeltaTableError> {
+        partition_values: &IndexMap<String, Scalar>,
+        mode: WriteMode,
+    ) -> Result<ArrowSchemaRef, DeltaTableError> {
         let arrow_schema =
             arrow_schema_without_partitions(&self.arrow_schema_ref, &self.partition_columns);
         let partition_key = partition_values.hive_partition_path();
 
         let record_batch = record_batch_without_partitions(&record_batch, &self.partition_columns)?;
 
-        match self.arrow_writers.get_mut(&partition_key) {
-            Some(writer) => {
-                writer.write(&record_batch)?;
-            }
+        let written_schema = match self.arrow_writers.get_mut(&partition_key) {
+            Some(writer) => writer.write(&record_batch, mode)?,
             None => {
                 let mut writer = PartitionWriter::new(
                     arrow_schema,
                     partition_values.clone(),
                     self.writer_properties.clone(),
                 )?;
-                writer.write(&record_batch)?;
+                let schema = writer.write(&record_batch, mode)?;
                 let _ = self.arrow_writers.insert(partition_key, writer);
+                schema
             }
-        }
-
-        Ok(())
+        };
+        Ok(written_schema)
     }
 
     /// Sets the writer properties for the underlying arrow writer.
@@ -173,12 +181,26 @@ impl RecordBatchWriter {
 
 #[async_trait::async_trait]
 impl DeltaWriter<RecordBatch> for RecordBatchWriter {
+    /// Write a chunk of values into the internal write buffers with the default write mode
+    async fn write(&mut self, values: RecordBatch) -> Result<(), DeltaTableError> {
+        self.write_with_mode(values, WriteMode::Default).await
+    }
     /// Divides a single record batch into into multiple according to table partitioning.
     /// Values are written to arrow buffers, to collect data until it should be written to disk.
-    async fn write(&mut self, values: RecordBatch) -> Result<(), DeltaTableError> {
+    async fn write_with_mode(
+        &mut self,
+        values: RecordBatch,
+        mode: WriteMode,
+    ) -> Result<(), DeltaTableError> {
+        // Set the should_evolve flag for later in case the writer should perform schema evolution
+        // on its flush_and_commit
+        self.should_evolve = mode == WriteMode::MergeSchema;
+
         for result in self.divide_by_partition_values(&values)? {
-            self.write_partition(result.record_batch, &result.partition_values)
+            let schema = self
+                .write_partition(result.record_batch, &result.partition_values, mode)
                 .await?;
+            self.arrow_schema_ref = schema;
         }
         Ok(())
     }
@@ -195,7 +217,7 @@ impl DeltaWriter<RecordBatch> for RecordBatchWriter {
             let path = next_data_path(&prefix, 0, &uuid, &writer.writer_properties);
             let obj_bytes = Bytes::from(writer.buffer.to_vec());
             let file_size = obj_bytes.len() as i64;
-            self.storage.put(&path, obj_bytes).await?;
+            self.storage.put_with_retries(&path, obj_bytes, 15).await?;
 
             actions.push(create_add(
                 &writer.partition_values,
@@ -206,30 +228,47 @@ impl DeltaWriter<RecordBatch> for RecordBatchWriter {
         }
         Ok(actions)
     }
+
+    /// Flush the internal write buffers to files in the delta table folder structure.
+    /// and commit the changes to the Delta log, creating a new table version.
+    async fn flush_and_commit(&mut self, table: &mut DeltaTable) -> Result<i64, DeltaTableError> {
+        use crate::kernel::{Metadata, StructType};
+        let mut adds: Vec<Action> = self.flush().await?.drain(..).map(Action::Add).collect();
+
+        if self.arrow_schema_ref != self.original_schema_ref && self.should_evolve {
+            let schema: StructType = self.arrow_schema_ref.clone().try_into()?;
+            // TODO: Handle partition columns somehow? Can we even evolve partition columns? Maybe
+            // this should just propagate the existing columns in the new action
+            let part_cols: Vec<String> = vec![];
+            let metadata = Metadata::try_new(schema, part_cols, HashMap::new())?;
+            adds.push(Action::Metadata(metadata));
+        }
+        super::flush_and_commit(adds, table).await
+    }
 }
 
 /// Helper container for partitioned record batches
 #[derive(Clone, Debug)]
 pub struct PartitionResult {
     /// values found in partition columns
-    pub partition_values: BTreeMap<String, Scalar>,
+    pub partition_values: IndexMap<String, Scalar>,
     /// remaining dataset with partition column values removed
     pub record_batch: RecordBatch,
 }
 
 struct PartitionWriter {
-    arrow_schema: Arc<ArrowSchema>,
+    arrow_schema: ArrowSchemaRef,
     writer_properties: WriterProperties,
     pub(super) buffer: ShareableBuffer,
     pub(super) arrow_writer: ArrowWriter<ShareableBuffer>,
-    pub(super) partition_values: BTreeMap<String, Scalar>,
+    pub(super) partition_values: IndexMap<String, Scalar>,
     pub(super) buffered_record_batch_count: usize,
 }
 
 impl PartitionWriter {
     pub fn new(
-        arrow_schema: Arc<ArrowSchema>,
-        partition_values: BTreeMap<String, Scalar>,
+        arrow_schema: ArrowSchemaRef,
+        partition_values: IndexMap<String, Scalar>,
         writer_properties: WriterProperties,
     ) -> Result<Self, ParquetError> {
         let buffer = ShareableBuffer::default();
@@ -254,21 +293,55 @@ impl PartitionWriter {
     /// Writes the record batch in-memory and updates internal state accordingly.
     /// This method buffers the write stream internally so it can be invoked for many
     /// record batches and flushed after the appropriate number of bytes has been written.
-    pub fn write(&mut self, record_batch: &RecordBatch) -> Result<(), DeltaWriterError> {
-        if record_batch.schema() != self.arrow_schema {
-            return Err(DeltaWriterError::SchemaMismatch {
-                record_batch_schema: record_batch.schema(),
-                expected_schema: self.arrow_schema.clone(),
-            });
-        }
+    ///
+    /// Returns the schema which was written by the write which can be used to understand if a
+    /// schema evolution has happened
+    pub fn write(
+        &mut self,
+        record_batch: &RecordBatch,
+        mode: WriteMode,
+    ) -> Result<ArrowSchemaRef, DeltaWriterError> {
+        let merged_batch = if record_batch.schema() != self.arrow_schema {
+            match mode {
+                WriteMode::MergeSchema => {
+                    debug!("The writer and record batch schemas do not match, merging");
+
+                    let merged =
+                        merge_schema(self.arrow_schema.clone(), record_batch.schema().clone())?;
+                    self.arrow_schema = merged;
+
+                    let mut cols = vec![];
+                    for field in self.arrow_schema.fields() {
+                        if let Some(column) = record_batch.column_by_name(field.name()) {
+                            cols.push(column.clone());
+                        } else {
+                            let null_column =
+                                new_null_array(field.data_type(), record_batch.num_rows());
+                            cols.push(null_column);
+                        }
+                    }
+                    Some(RecordBatch::try_new(self.arrow_schema.clone(), cols)?)
+                }
+                WriteMode::Default => {
+                    // If the schemas didn't match then an error should be pushed up
+                    Err(DeltaWriterError::SchemaMismatch {
+                        record_batch_schema: record_batch.schema(),
+                        expected_schema: self.arrow_schema.clone(),
+                    })?
+                }
+            }
+        } else {
+            None
+        };
 
         // Copy current cursor bytes so we can recover from failures
         let buffer_bytes = self.buffer.to_vec();
+        let record_batch = merged_batch.as_ref().unwrap_or(record_batch);
 
         match self.arrow_writer.write(record_batch) {
             Ok(_) => {
                 self.buffered_record_batch_count += 1;
-                Ok(())
+                Ok(self.arrow_schema.clone())
             }
             // If a write fails we need to reset the state of the PartitionWriter
             Err(e) => {
@@ -302,7 +375,7 @@ pub(crate) fn divide_by_partition_values(
 
     if partition_columns.is_empty() {
         partitions.push(PartitionResult {
-            partition_values: BTreeMap::new(),
+            partition_values: IndexMap::new(),
             record_batch: values.clone(),
         });
         return Ok(partitions);
@@ -375,8 +448,11 @@ fn lexsort_to_indices(arrays: &[ArrayRef]) -> UInt32Array {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::writer::test_utils::{create_initialized_table, get_record_batch};
+    use crate::operations::create::CreateBuilder;
+    use crate::writer::test_utils::*;
     use arrow::json::ReaderBuilder;
+    use arrow_array::{Int32Array, RecordBatch, StringArray};
+    use arrow_schema::{DataType, Field, Schema as ArrowSchema};
     use std::path::Path;
 
     #[tokio::test]
@@ -581,5 +657,239 @@ mod tests {
         writer.write(batch).await.unwrap();
         let adds = writer.flush().await.unwrap();
         assert_eq!(adds.len(), 4);
+    }
+
+    // The following sets of tests are related to #1386 and mergeSchema support
+    // <https://github.com/delta-io/delta-rs/issues/1386>
+    mod schema_evolution {
+        use super::*;
+
+        #[tokio::test]
+        async fn test_write_mismatched_schema() {
+            let batch = get_record_batch(None, false);
+            let partition_cols = vec![];
+            let table = create_initialized_table(&partition_cols).await;
+            let mut writer = RecordBatchWriter::for_table(&table).unwrap();
+
+            // Write the first batch with the first schema to the table
+            writer.write(batch).await.unwrap();
+            let adds = writer.flush().await.unwrap();
+            assert_eq!(adds.len(), 1);
+
+            // Create a second batch with a different schema
+            let second_schema = Arc::new(ArrowSchema::new(vec![
+                Field::new("id", DataType::Int32, true),
+                Field::new("name", DataType::Utf8, true),
+            ]));
+            let second_batch = RecordBatch::try_new(
+                second_schema,
+                vec![
+                    Arc::new(Int32Array::from(vec![Some(1), Some(2)])),
+                    Arc::new(StringArray::from(vec![Some("will"), Some("robert")])),
+                ],
+            )
+            .unwrap();
+
+            let result = writer.write(second_batch).await;
+            assert!(result.is_err());
+
+            match result {
+                Ok(_) => {
+                    assert!(false, "Should not have successfully written");
+                }
+                Err(e) => {
+                    match e {
+                        DeltaTableError::SchemaMismatch { .. } => {
+                            // this is expected
+                        }
+                        others => {
+                            assert!(false, "Got the wrong error: {others:?}");
+                        }
+                    }
+                }
+            };
+        }
+
+        #[tokio::test]
+        async fn test_write_schema_evolution() {
+            let table_schema = get_delta_schema();
+            let table_dir = tempfile::tempdir().unwrap();
+            let table_path = table_dir.path();
+
+            let mut table = CreateBuilder::new()
+                .with_location(table_path.to_str().unwrap())
+                .with_table_name("test-table")
+                .with_comment("A table for running tests")
+                .with_columns(table_schema.fields().clone())
+                .await
+                .unwrap();
+            table.load().await.expect("Failed to load table");
+            assert_eq!(table.version(), 0);
+
+            let batch = get_record_batch(None, false);
+            let mut writer = RecordBatchWriter::for_table(&table).unwrap();
+
+            writer.write(batch).await.unwrap();
+            let version = writer.flush_and_commit(&mut table).await.unwrap();
+            assert_eq!(version, 1);
+            table.load().await.expect("Failed to load table");
+            assert_eq!(table.version(), 1);
+
+            // Create a second batch with a different schema
+            let second_schema = Arc::new(ArrowSchema::new(vec![
+                Field::new("vid", DataType::Int32, true),
+                Field::new("name", DataType::Utf8, true),
+            ]));
+            let second_batch = RecordBatch::try_new(
+                second_schema,
+                vec![
+                    Arc::new(Int32Array::from(vec![Some(1), Some(2)])), // vid
+                    Arc::new(StringArray::from(vec![Some("will"), Some("robert")])), // name
+                ],
+            )
+            .unwrap();
+
+            let result = writer
+                .write_with_mode(second_batch, WriteMode::MergeSchema)
+                .await;
+            assert!(
+                result.is_ok(),
+                "Failed to write with WriteMode::MergeSchema, {:?}",
+                result
+            );
+            let version = writer.flush_and_commit(&mut table).await.unwrap();
+            assert_eq!(version, 2);
+            table.load().await.expect("Failed to load table");
+            assert_eq!(table.version(), 2);
+
+            let new_schema = table.metadata().unwrap().schema().unwrap();
+            let expected_columns = vec!["id", "value", "modified", "vid", "name"];
+            let found_columns: Vec<&String> =
+                new_schema.fields().iter().map(|f| f.name()).collect();
+            assert_eq!(
+                expected_columns, found_columns,
+                "The new table schema does not contain all evolved columns as expected"
+            );
+        }
+
+        #[tokio::test]
+        async fn test_schema_evolution_column_type_mismatch() {
+            let batch = get_record_batch(None, false);
+            let partition_cols = vec![];
+            let mut table = create_initialized_table(&partition_cols).await;
+
+            let mut writer = RecordBatchWriter::for_table(&table).unwrap();
+
+            // Write the first batch with the first schema to the table
+            writer.write(batch).await.unwrap();
+            let version = writer.flush_and_commit(&mut table).await.unwrap();
+            assert_eq!(version, 1);
+
+            // Create a second batch with a different schema
+            let second_schema = Arc::new(ArrowSchema::new(vec![
+                Field::new("id", DataType::Int32, true),
+                Field::new("name", DataType::Utf8, true),
+            ]));
+            let second_batch = RecordBatch::try_new(
+                second_schema,
+                vec![
+                    Arc::new(Int32Array::from(vec![Some(1), Some(2)])), // vid
+                    Arc::new(StringArray::from(vec![Some("will"), Some("robert")])), // name
+                ],
+            )
+            .unwrap();
+
+            let result = writer
+                .write_with_mode(second_batch, WriteMode::MergeSchema)
+                .await;
+            assert!(
+                result.is_err(),
+                "Did not expect to successfully add new writes with different column types: {:?}",
+                result
+            );
+        }
+
+        #[tokio::test]
+        async fn test_schema_evolution_with_nonnullable_col() {
+            use crate::kernel::{
+                DataType as DeltaDataType, PrimitiveType, StructField, StructType,
+            };
+
+            let table_schema = StructType::new(vec![
+                StructField::new(
+                    "id".to_string(),
+                    DeltaDataType::Primitive(PrimitiveType::String),
+                    false,
+                ),
+                StructField::new(
+                    "value".to_string(),
+                    DeltaDataType::Primitive(PrimitiveType::Integer),
+                    true,
+                ),
+                StructField::new(
+                    "modified".to_string(),
+                    DeltaDataType::Primitive(PrimitiveType::String),
+                    true,
+                ),
+            ]);
+            let table_dir = tempfile::tempdir().unwrap();
+            let table_path = table_dir.path();
+
+            let mut table = CreateBuilder::new()
+                .with_location(table_path.to_str().unwrap())
+                .with_table_name("test-table")
+                .with_comment("A table for running tests")
+                .with_columns(table_schema.fields().clone())
+                .await
+                .unwrap();
+            table.load().await.expect("Failed to load table");
+            assert_eq!(table.version(), 0);
+
+            // Hand-crafting the first RecordBatch to ensure that a write with non-nullable columns
+            // works properly before attepting the second write
+            let arrow_schema = Arc::new(ArrowSchema::new(vec![
+                Field::new("id", DataType::Utf8, false),
+                Field::new("value", DataType::Int32, true),
+                Field::new("modified", DataType::Utf8, true),
+            ]));
+            let batch = RecordBatch::try_new(
+                arrow_schema,
+                vec![
+                    Arc::new(StringArray::from(vec![Some("1"), Some("2")])), // id
+                    Arc::new(new_null_array(&DataType::Int32, 2)),           // value
+                    Arc::new(new_null_array(&DataType::Utf8, 2)),            // modified
+                ],
+            )
+            .unwrap();
+
+            // Write the first batch with the first schema to the table
+            let mut writer = RecordBatchWriter::for_table(&table).unwrap();
+            writer.write(batch).await.unwrap();
+            let version = writer.flush_and_commit(&mut table).await.unwrap();
+            assert_eq!(version, 1);
+
+            // Create a second batch with a different schema
+            let second_schema = Arc::new(ArrowSchema::new(vec![Field::new(
+                "name",
+                DataType::Utf8,
+                true,
+            )]));
+            let second_batch = RecordBatch::try_new(
+                second_schema,
+                vec![
+                    Arc::new(StringArray::from(vec![Some("will"), Some("robert")])), // name
+                ],
+            )
+            .unwrap();
+
+            let result = writer
+                .write_with_mode(second_batch, WriteMode::MergeSchema)
+                .await;
+            assert!(
+                result.is_err(),
+                "Should not have been able to write with a missing non-nullable column: {:?}",
+                result
+            );
+        }
     }
 }

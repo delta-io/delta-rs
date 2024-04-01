@@ -1,11 +1,12 @@
 //! Abstractions and implementations for writing data to delta tables
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 
 use arrow::datatypes::SchemaRef as ArrowSchemaRef;
 use arrow::error::ArrowError;
 use arrow::record_batch::RecordBatch;
 use bytes::Bytes;
+use indexmap::IndexMap;
 use object_store::{path::Path, ObjectStore};
 use parquet::arrow::ArrowWriter;
 use parquet::basic::Compression;
@@ -65,6 +66,7 @@ impl From<WriteError> for DeltaTableError {
 }
 
 /// Configuration to write data into Delta tables
+#[derive(Debug)]
 pub struct WriterConfig {
     /// Schema of the delta table
     table_schema: ArrowSchemaRef,
@@ -111,6 +113,7 @@ impl WriterConfig {
     }
 }
 
+#[derive(Debug)]
 /// A parquet writer implementation tailored to the needs of writing data to a delta table.
 pub struct DeltaWriter {
     /// An object store pointing at Delta table root
@@ -155,7 +158,7 @@ impl DeltaWriter {
     pub async fn write_partition(
         &mut self,
         record_batch: RecordBatch,
-        partition_values: &BTreeMap<String, Scalar>,
+        partition_values: &IndexMap<String, Scalar>,
     ) -> DeltaResult<()> {
         let partition_key = Path::parse(partition_values.hive_partition_path())?;
 
@@ -211,13 +214,14 @@ impl DeltaWriter {
     }
 }
 
+#[derive(Debug)]
 pub(crate) struct PartitionWriterConfig {
     /// Schema of the data written to disk
     file_schema: ArrowSchemaRef,
     /// Prefix applied to all paths
     prefix: Path,
     /// Values for all partition columns
-    partition_values: BTreeMap<String, Scalar>,
+    partition_values: IndexMap<String, Scalar>,
     /// Properties passed to underlying parquet writer
     writer_properties: WriterProperties,
     /// Size above which we will write a buffered parquet file to disk.
@@ -230,7 +234,7 @@ pub(crate) struct PartitionWriterConfig {
 impl PartitionWriterConfig {
     pub fn try_new(
         file_schema: ArrowSchemaRef,
-        partition_values: BTreeMap<String, Scalar>,
+        partition_values: IndexMap<String, Scalar>,
         writer_properties: Option<WriterProperties>,
         target_file_size: Option<usize>,
         write_batch_size: Option<usize>,
@@ -256,6 +260,7 @@ impl PartitionWriterConfig {
     }
 }
 
+#[derive(Debug)]
 pub(crate) struct PartitionWriter {
     object_store: ObjectStoreRef,
     writer_id: uuid::Uuid,
@@ -381,7 +386,7 @@ impl PartitionWriter {
                 self.flush_arrow_writer().await?;
             }
         }
-
+        self.arrow_writer.flush()?;
         Ok(())
     }
 
@@ -395,11 +400,46 @@ impl PartitionWriter {
 mod tests {
     use super::*;
     use crate::storage::utils::flatten_list_stream as list;
-    use crate::writer::test_utils::get_record_batch;
+    use crate::writer::test_utils::*;
     use crate::DeltaTableBuilder;
     use arrow::array::{Int32Array, StringArray};
     use arrow::datatypes::{DataType, Field, Schema as ArrowSchema};
     use std::sync::Arc;
+
+    fn get_delta_writer(
+        object_store: ObjectStoreRef,
+        batch: &RecordBatch,
+        writer_properties: Option<WriterProperties>,
+        target_file_size: Option<usize>,
+        write_batch_size: Option<usize>,
+    ) -> DeltaWriter {
+        let config = WriterConfig::new(
+            batch.schema(),
+            vec![],
+            writer_properties,
+            target_file_size,
+            write_batch_size,
+        );
+        DeltaWriter::new(object_store, config)
+    }
+
+    fn get_partition_writer(
+        object_store: ObjectStoreRef,
+        batch: &RecordBatch,
+        writer_properties: Option<WriterProperties>,
+        target_file_size: Option<usize>,
+        write_batch_size: Option<usize>,
+    ) -> PartitionWriter {
+        let config = PartitionWriterConfig::try_new(
+            batch.schema(),
+            IndexMap::new(),
+            writer_properties,
+            target_file_size,
+            write_batch_size,
+        )
+        .unwrap();
+        PartitionWriter::try_with_config(object_store, config).unwrap()
+    }
 
     #[tokio::test]
     async fn test_write_partition() {
@@ -410,7 +450,7 @@ mod tests {
         let batch = get_record_batch(None, false);
 
         // write single un-partitioned batch
-        let mut writer = get_writer(object_store.clone(), &batch, None, None, None);
+        let mut writer = get_partition_writer(object_store.clone(), &batch, None, None, None);
         writer.write(&batch).await.unwrap();
         let files = list(object_store.as_ref(), None).await.unwrap();
         assert_eq!(files.len(), 0);
@@ -442,8 +482,9 @@ mod tests {
         let properties = WriterProperties::builder()
             .set_max_row_group_size(1024)
             .build();
-        // configure small target file size and row group size so we can observe multiple files written
-        let mut writer = get_writer(object_store, &batch, Some(properties), Some(10_000), None);
+        // configure small target file size and and row group size so we can observe multiple files written
+        let mut writer =
+            get_partition_writer(object_store, &batch, Some(properties), Some(10_000), None);
         writer.write(&batch).await.unwrap();
 
         // check that we have written more then once file, and no more then 1 is below target size
@@ -470,7 +511,7 @@ mod tests {
             .unwrap()
             .object_store();
         // configure small target file size so we can observe multiple files written
-        let mut writer = get_writer(object_store, &batch, None, Some(10_000), None);
+        let mut writer = get_partition_writer(object_store, &batch, None, Some(10_000), None);
         writer.write(&batch).await.unwrap();
 
         // check that we have written more then once file, and no more then 1 is below target size
@@ -484,7 +525,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_do_not_write_empty_file_on_close() {
-        let base_int = Arc::new(Int32Array::from((0..10000 as i32).collect::<Vec<i32>>()));
+        let base_int = Arc::new(Int32Array::from((0..10000_i32).collect::<Vec<i32>>()));
         let base_str = Arc::new(StringArray::from(vec!["A"; 10000]));
         let schema = Arc::new(ArrowSchema::new(vec![
             Field::new("id", DataType::Utf8, true),
@@ -498,28 +539,59 @@ mod tests {
             .object_store();
         // configure high batch size and low file size to observe one file written and flushed immediately
         // upon writing batch, then ensures the buffer is empty upon closing writer
-        let mut writer = get_writer(object_store, &batch, None, Some(9000), Some(10000));
+        let mut writer = get_partition_writer(object_store, &batch, None, Some(9000), Some(10000));
         writer.write(&batch).await.unwrap();
 
         let adds = writer.close().await.unwrap();
         assert!(adds.len() == 1);
     }
 
-    fn get_writer(
-        object_store: ObjectStoreRef,
-        batch: &RecordBatch,
-        writer_properties: Option<WriterProperties>,
-        target_file_size: Option<usize>,
-        write_batch_size: Option<usize>,
-    ) -> PartitionWriter {
-        let config = PartitionWriterConfig::try_new(
-            batch.schema(),
-            BTreeMap::new(),
-            writer_properties,
-            target_file_size,
-            write_batch_size,
+    #[tokio::test]
+    async fn test_write_mismatched_schema() {
+        let log_store = DeltaTableBuilder::from_uri("memory://")
+            .build_storage()
+            .unwrap();
+        let object_store = log_store.object_store();
+        let batch = get_record_batch(None, false);
+
+        // write single un-partitioned batch
+        let mut writer = get_delta_writer(object_store.clone(), &batch, None, None, None);
+        writer.write(&batch).await.unwrap();
+        // Ensure the write hasn't been flushed
+        let files = list(object_store.as_ref(), None).await.unwrap();
+        assert_eq!(files.len(), 0);
+
+        // Create a second batch with a different schema
+        let second_schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("id", DataType::Int32, true),
+            Field::new("name", DataType::Utf8, true),
+        ]));
+        let second_batch = RecordBatch::try_new(
+            second_schema,
+            vec![
+                Arc::new(Int32Array::from(vec![Some(1), Some(2)])),
+                Arc::new(StringArray::from(vec![Some("will"), Some("robert")])),
+            ],
         )
         .unwrap();
-        PartitionWriter::try_with_config(object_store, config).unwrap()
+
+        let result = writer.write(&second_batch).await;
+        assert!(result.is_err());
+
+        match result {
+            Ok(_) => {
+                assert!(false, "Should not have successfully written");
+            }
+            Err(e) => {
+                match e {
+                    DeltaTableError::SchemaMismatch { .. } => {
+                        // this is expected
+                    }
+                    others => {
+                        assert!(false, "Got the wrong error: {others:?}");
+                    }
+                }
+            }
+        };
     }
 }

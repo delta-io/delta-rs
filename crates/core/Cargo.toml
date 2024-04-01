@@ -1,27 +1,24 @@
 [package]
 name = "deltalake-core"
-version = "0.17.0"
-rust-version = "1.64"
-authors = ["Qingping Hou <dave2008713@gmail.com>"]
-homepage = "https://github.com/delta-io/delta.rs"
-license = "Apache-2.0"
-keywords = ["deltalake", "delta", "datalake"]
-description = "Native Delta Lake implementation in Rust"
-documentation = "https://docs.rs/deltalake"
-repository = "https://github.com/delta-io/delta.rs"
-readme = "README.md"
-edition = "2021"
+version = "0.17.1"
+authors.workspace = true
+keywords.workspace = true
+readme.workspace = true
+edition.workspace = true
+homepage.workspace = true
+description.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
 
 [package.metadata.docs.rs]
-# We cannot use all_features because TLS features are mutually exclusive.
-# We cannot use hdfs feature because it requires Java to be installed.
-features = ["azure", "datafusion", "gcs", "hdfs", "json", "python", "s3", "unity-experimental"]
+features = ["datafusion", "json", "unity-experimental"]
 
 [dependencies]
 # arrow
 arrow = { workspace = true }
 arrow-arith = { workspace = true }
-arrow-array = { workspace = true }
+arrow-array = { workspace = true , features = ["chrono-tz"]}
 arrow-buffer = { workspace = true }
 arrow-cast = { workspace = true }
 arrow-ipc = { workspace = true }
@@ -43,6 +40,7 @@ datafusion-common = { workspace = true, optional = true }
 datafusion-proto = { workspace = true, optional = true }
 datafusion-sql = { workspace = true, optional = true }
 datafusion-physical-expr = { workspace = true, optional = true }
+datafusion-functions = { workspace = true, optional = true }
 
 # serde
 serde = { workspace = true, features = ["derive"] }
@@ -51,7 +49,7 @@ serde_json = { workspace = true }
 # "stdlib"
 bytes = { workspace = true }
 chrono = { workspace = true, default-features = false, features = ["clock"] }
-hashbrown = "*"
+hashbrown = "0.14.3"
 regex = { workspace = true }
 thiserror = { workspace = true }
 uuid = { workspace = true, features = ["serde", "v4"] }
@@ -77,6 +75,7 @@ errno = "0.3"
 either = "1.8"
 fix-hidden-lifetime-bug = "0.2"
 hyper = { version = "0.14", optional = true }
+indexmap = "2.2.1"
 itertools = "0.12"
 lazy_static = "1"
 libc = ">=0.2.90, <1"
@@ -97,7 +96,7 @@ reqwest = { version = "0.11.18", default-features = false, features = [
     "rustls-tls",
     "json",
 ], optional = true }
-sqlparser = { version = "0.41", optional = true }
+sqlparser = { version = "0.44", optional = true }
 
 [dev-dependencies]
 criterion = "0.5"
@@ -107,7 +106,7 @@ dotenvy = "0"
 hyper = { version = "0.14", features = ["server"] }
 maplit = "1"
 pretty_assertions = "1.2.1"
-pretty_env_logger = "*"
+pretty_env_logger = "0.5.0"
 rand = "0.8"
 serial_test = "3"
 tempfile = "3"
@@ -123,6 +122,7 @@ datafusion = [
     "datafusion-proto",
     "datafusion-physical-expr",
     "datafusion-sql",
+    "datafusion-functions",
     "sqlparser",
 ]
 datafusion-ext = ["datafusion"]

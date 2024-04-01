@@ -1,7 +1,7 @@
 //! Exceptions for the deltalake crate
 use object_store::Error as ObjectStoreError;
 
-use crate::operations::transaction::TransactionError;
+use crate::operations::transaction::{CommitBuilderError, TransactionError};
 use crate::protocol::ProtocolError;
 
 /// A result returned by delta-rs
@@ -144,6 +144,13 @@ pub enum DeltaTableError {
         /// Source error details returned while reading the log record.
         #[from]
         source: std::io::Error,
+    },
+
+    /// Error raised while preparing a commit
+    #[error("Commit actions are unsound: {source}")]
+    CommitValidation {
+        /// The source error
+        source: CommitBuilderError,
     },
 
     /// Error raised while commititng transaction

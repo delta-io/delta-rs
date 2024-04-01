@@ -1,11 +1,12 @@
 //! Main writer API to write json messages to delta table
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::sync::Arc;
 
 use arrow::datatypes::{Schema as ArrowSchema, SchemaRef as ArrowSchemaRef};
 use arrow::record_batch::*;
 use bytes::Bytes;
+use indexmap::IndexMap;
 use object_store::path::Path;
 use object_store::ObjectStore;
 use parquet::{
@@ -21,9 +22,10 @@ use super::utils::{
     arrow_schema_without_partitions, next_data_path, record_batch_from_message,
     record_batch_without_partitions,
 };
-use super::{DeltaWriter, DeltaWriterError};
+use super::{DeltaWriter, DeltaWriterError, WriteMode};
 use crate::errors::DeltaTableError;
 use crate::kernel::{Add, PartitionsExt, Scalar, StructType};
+use crate::storage::ObjectStoreRetryExt;
 use crate::table::builder::DeltaTableBuilder;
 use crate::writer::utils::ShareableBuffer;
 use crate::DeltaTable;
@@ -45,7 +47,7 @@ pub(crate) struct DataArrowWriter {
     writer_properties: WriterProperties,
     buffer: ShareableBuffer,
     arrow_writer: ArrowWriter<ShareableBuffer>,
-    partition_values: BTreeMap<String, Scalar>,
+    partition_values: IndexMap<String, Scalar>,
     buffered_record_batch_count: usize,
 }
 
@@ -153,7 +155,7 @@ impl DataArrowWriter {
             writer_properties.clone(),
         )?;
 
-        let partition_values = BTreeMap::new();
+        let partition_values = IndexMap::new();
         let buffered_record_batch_count = 0;
 
         Ok(Self {
@@ -285,8 +287,20 @@ impl JsonWriter {
 
 #[async_trait::async_trait]
 impl DeltaWriter<Vec<Value>> for JsonWriter {
-    /// Writes the given values to internal parquet buffers for each represented partition.
+    /// Write a chunk of values into the internal write buffers with the default write mode
     async fn write(&mut self, values: Vec<Value>) -> Result<(), DeltaTableError> {
+        self.write_with_mode(values, WriteMode::Default).await
+    }
+
+    /// Writes the given values to internal parquet buffers for each represented partition.
+    async fn write_with_mode(
+        &mut self,
+        values: Vec<Value>,
+        mode: WriteMode,
+    ) -> Result<(), DeltaTableError> {
+        if mode != WriteMode::Default {
+            warn!("The JsonWriter does not currently support non-default write modes, falling back to default mode");
+        }
         let mut partial_writes: Vec<(Value, ParquetError)> = Vec::new();
         let arrow_schema = self.arrow_schema();
         let divided = self.divide_by_partition_values(values)?;
@@ -347,7 +361,7 @@ impl DeltaWriter<Vec<Value>> for JsonWriter {
             let path = next_data_path(&prefix, 0, &uuid, &writer.writer_properties);
             let obj_bytes = Bytes::from(writer.buffer.to_vec());
             let file_size = obj_bytes.len() as i64;
-            self.storage.put(&path, obj_bytes).await?;
+            self.storage.put_with_retries(&path, obj_bytes, 15).await?;
 
             actions.push(create_add(
                 &writer.partition_values,
@@ -397,8 +411,8 @@ fn quarantine_failed_parquet_rows(
 fn extract_partition_values(
     partition_cols: &[String],
     record_batch: &RecordBatch,
-) -> Result<BTreeMap<String, Scalar>, DeltaWriterError> {
-    let mut partition_values = BTreeMap::new();
+) -> Result<IndexMap<String, Scalar>, DeltaWriterError> {
+    let mut partition_values = IndexMap::new();
 
     for col_name in partition_cols.iter() {
         let arrow_schema = record_batch.schema();
@@ -499,7 +513,7 @@ mod tests {
                 &record_batch
             )
             .unwrap(),
-            BTreeMap::from([
+            IndexMap::from([
                 (String::from("col1"), Scalar::Integer(1)),
                 (String::from("col2"), Scalar::Integer(2)),
                 (String::from("col3"), Scalar::Null(DataType::INTEGER)),
@@ -507,7 +521,7 @@ mod tests {
         );
         assert_eq!(
             extract_partition_values(&[String::from("col1")], &record_batch).unwrap(),
-            BTreeMap::from([(String::from("col1"), Scalar::Integer(1)),])
+            IndexMap::from([(String::from("col1"), Scalar::Integer(1)),])
         );
         assert!(extract_partition_values(&[String::from("col4")], &record_batch).is_err())
     }
@@ -542,5 +556,104 @@ mod tests {
                 source: ArrowError::JsonError(_)
             })
         ));
+    }
+
+    // The following sets of tests are related to #1386 and mergeSchema support
+    // <https://github.com/delta-io/delta-rs/issues/1386>
+    mod schema_evolution {
+        use super::*;
+
+        #[tokio::test]
+        async fn test_json_write_mismatched_values() {
+            let table_dir = tempfile::tempdir().unwrap();
+            let schema = get_delta_schema();
+            let path = table_dir.path().to_str().unwrap().to_string();
+
+            let arrow_schema = <ArrowSchema as TryFrom<&StructType>>::try_from(&schema).unwrap();
+            let mut writer = JsonWriter::try_new(
+                path.clone(),
+                Arc::new(arrow_schema),
+                Some(vec!["modified".to_string()]),
+                None,
+            )
+            .unwrap();
+
+            let data = serde_json::json!(
+                {
+                    "id" : "A",
+                    "value": 42,
+                    "modified": "2021-02-01"
+                }
+            );
+
+            writer.write(vec![data]).await.unwrap();
+            let add_actions = writer.flush().await.unwrap();
+            assert_eq!(add_actions.len(), 1);
+
+            let second_data = serde_json::json!(
+                {
+                    "id" : 1,
+                    "name" : "Ion"
+                }
+            );
+
+            match writer.write(vec![second_data]).await {
+                Ok(_) => {
+                    assert!(false, "Should not have successfully written");
+                }
+                _ => {}
+            }
+        }
+
+        #[tokio::test]
+        async fn test_json_write_mismatched_schema() {
+            use crate::operations::create::CreateBuilder;
+            let table_dir = tempfile::tempdir().unwrap();
+            let schema = get_delta_schema();
+            let path = table_dir.path().to_str().unwrap().to_string();
+
+            let mut table = CreateBuilder::new()
+                .with_location(&path)
+                .with_table_name("test-table")
+                .with_comment("A table for running tests")
+                .with_columns(schema.fields().clone())
+                .await
+                .unwrap();
+            table.load().await.expect("Failed to load table");
+            assert_eq!(table.version(), 0);
+
+            let arrow_schema = <ArrowSchema as TryFrom<&StructType>>::try_from(&schema).unwrap();
+            let mut writer = JsonWriter::try_new(
+                path.clone(),
+                Arc::new(arrow_schema),
+                Some(vec!["modified".to_string()]),
+                None,
+            )
+            .unwrap();
+
+            let data = serde_json::json!(
+                {
+                    "id" : "A",
+                    "value": 42,
+                    "modified": "2021-02-01"
+                }
+            );
+
+            writer.write(vec![data]).await.unwrap();
+            let add_actions = writer.flush().await.unwrap();
+            assert_eq!(add_actions.len(), 1);
+
+            let second_data = serde_json::json!(
+                {
+                    "postcode" : 1,
+                    "name" : "Ion"
+                }
+            );
+
+            // TODO This should fail because we haven't asked to evolve the schema
+            writer.write(vec![second_data]).await.unwrap();
+            writer.flush_and_commit(&mut table).await.unwrap();
+            assert_eq!(table.version(), 1);
+        }
     }
 }

@@ -31,6 +31,8 @@ if sys.version_info >= (3, 8):
 else:
     from typing_extensions import Literal
 
+import warnings
+
 import pyarrow as pa
 import pyarrow.dataset as ds
 import pyarrow.fs as pa_fs
@@ -48,7 +50,13 @@ from .schema import (
     convert_pyarrow_recordbatchreader,
     convert_pyarrow_table,
 )
-from .table import MAX_SUPPORTED_WRITER_VERSION, DeltaTable, WriterProperties
+from .table import (
+    MAX_SUPPORTED_PYARROW_WRITER_VERSION,
+    NOT_SUPPORTED_PYARROW_WRITER_VERSIONS,
+    SUPPORTED_WRITER_FEATURES,
+    DeltaTable,
+    WriterProperties,
+)
 
 try:
     import pandas as pd  # noqa: F811
@@ -95,13 +103,13 @@ def write_deltalake(
     description: Optional[str] = ...,
     configuration: Optional[Mapping[str, Optional[str]]] = ...,
     overwrite_schema: bool = ...,
+    schema_mode: Optional[Literal["overwrite"]] = ...,
     storage_options: Optional[Dict[str, str]] = ...,
     partition_filters: Optional[List[Tuple[str, str, Any]]] = ...,
     large_dtypes: bool = ...,
     engine: Literal["pyarrow"] = ...,
     custom_metadata: Optional[Dict[str, str]] = ...,
-) -> None:
-    ...
+) -> None: ...
 
 
 @overload
@@ -118,19 +126,47 @@ def write_deltalake(
     *,
     schema: Optional[Union[pa.Schema, DeltaSchema]] = ...,
     partition_by: Optional[Union[List[str], str]] = ...,
-    mode: Literal["error", "append", "overwrite", "ignore"] = ...,
+    mode: Literal["error", "append", "ignore"] = ...,
     name: Optional[str] = ...,
     description: Optional[str] = ...,
     configuration: Optional[Mapping[str, Optional[str]]] = ...,
     overwrite_schema: bool = ...,
+    schema_mode: Optional[Literal["merge", "overwrite"]] = ...,
+    storage_options: Optional[Dict[str, str]] = ...,
+    large_dtypes: bool = ...,
+    engine: Literal["rust"],
+    writer_properties: WriterProperties = ...,
+    custom_metadata: Optional[Dict[str, str]] = ...,
+) -> None: ...
+
+
+@overload
+def write_deltalake(
+    table_or_uri: Union[str, Path, DeltaTable],
+    data: Union[
+        "pd.DataFrame",
+        ds.Dataset,
+        pa.Table,
+        pa.RecordBatch,
+        Iterable[pa.RecordBatch],
+        RecordBatchReader,
+    ],
+    *,
+    schema: Optional[Union[pa.Schema, DeltaSchema]] = ...,
+    partition_by: Optional[Union[List[str], str]] = ...,
+    mode: Literal["overwrite"],
+    name: Optional[str] = ...,
+    description: Optional[str] = ...,
+    configuration: Optional[Mapping[str, Optional[str]]] = ...,
+    overwrite_schema: bool = ...,
+    schema_mode: Optional[Literal["merge", "overwrite"]] = ...,
     storage_options: Optional[Dict[str, str]] = ...,
     predicate: Optional[str] = ...,
     large_dtypes: bool = ...,
     engine: Literal["rust"],
     writer_properties: WriterProperties = ...,
     custom_metadata: Optional[Dict[str, str]] = ...,
-) -> None:
-    ...
+) -> None: ...
 
 
 def write_deltalake(
@@ -157,6 +193,7 @@ def write_deltalake(
     description: Optional[str] = None,
     configuration: Optional[Mapping[str, Optional[str]]] = None,
     overwrite_schema: bool = False,
+    schema_mode: Optional[Literal["merge", "overwrite"]] = None,
     storage_options: Optional[Dict[str, str]] = None,
     partition_filters: Optional[List[Tuple[str, str, Any]]] = None,
     predicate: Optional[str] = None,
@@ -210,7 +247,8 @@ def write_deltalake(
         name: User-provided identifier for this table.
         description: User-provided description for this table.
         configuration: A map containing configuration options for the metadata action.
-        overwrite_schema: If True, allows updating the schema of the table.
+        overwrite_schema: Deprecated, use schema_mode instead.
+        schema_mode: If set to "overwrite", allows replacing the schema of the table. Set to "merge" to merge with existing schema.
         storage_options: options passed to the native delta filesystem.
         predicate: When using `Overwrite` mode, replace data that matches a predicate. Only used in rust engine.
         partition_filters: the partition filters that will be used for partition overwrite. Only used in pyarrow engine.
@@ -228,12 +266,19 @@ def write_deltalake(
         table.update_incremental()
 
     __enforce_append_only(table=table, configuration=configuration, mode=mode)
+    if overwrite_schema:
+        schema_mode = "overwrite"
 
+        warnings.warn(
+            "overwrite_schema is deprecated, use schema_mode instead. ",
+            category=DeprecationWarning,
+            stacklevel=2,
+        )
     if isinstance(partition_by, str):
         partition_by = [partition_by]
 
     if isinstance(schema, DeltaSchema):
-        schema = schema.to_pyarrow()
+        schema = schema.to_pyarrow(as_large_types=True)
 
     if isinstance(data, RecordBatchReader):
         data = convert_pyarrow_recordbatchreader(data, large_dtypes)
@@ -273,42 +318,53 @@ def write_deltalake(
             data=data,
             partition_by=partition_by,
             mode=mode,
-            max_rows_per_group=max_rows_per_group,
-            overwrite_schema=overwrite_schema,
+            schema_mode=schema_mode,
             predicate=predicate,
             name=name,
             description=description,
             configuration=configuration,
             storage_options=storage_options,
-            writer_properties=writer_properties._to_dict()
-            if writer_properties
-            else None,
+            writer_properties=(
+                writer_properties._to_dict() if writer_properties else None
+            ),
             custom_metadata=custom_metadata,
         )
         if table:
             table.update_incremental()
 
     elif engine == "pyarrow":
+        if schema_mode == "merge":
+            raise ValueError(
+                "schema_mode 'merge' is not supported in pyarrow engine. Use engine=rust"
+            )
         # We need to write against the latest table version
         filesystem = pa_fs.PyFileSystem(DeltaStorageHandler(table_uri, storage_options))
 
+        def sort_arrow_schema(schema: pa.schema) -> pa.schema:
+            sorted_cols = sorted(iter(schema), key=lambda x: (x.name, str(x.type)))
+            return pa.schema(sorted_cols)
+
         if table:  # already exists
-            if schema != table.schema().to_pyarrow(
-                as_large_types=large_dtypes
-            ) and not (mode == "overwrite" and overwrite_schema):
+            if sort_arrow_schema(schema) != sort_arrow_schema(
+                table.schema().to_pyarrow(as_large_types=large_dtypes)
+            ) and not (mode == "overwrite" and schema_mode == "overwrite"):
                 raise ValueError(
                     "Schema of data does not match table schema\n"
                     f"Data schema:\n{schema}\nTable Schema:\n{table.schema().to_pyarrow(as_large_types=large_dtypes)}"
                 )
             if mode == "error":
-                raise AssertionError("DeltaTable already exists.")
+                raise FileExistsError(
+                    "Delta table already exists, write mode set to error."
+                )
             elif mode == "ignore":
                 return
 
             current_version = table.version()
 
-            if partition_by:
-                assert partition_by == table.metadata().partition_columns
+            if partition_by and partition_by != table.metadata().partition_columns:
+                raise ValueError(
+                    f"Partition columns should be {table.metadata().partition_columns} but is {partition_by}"
+                )
             else:
                 partition_by = table.metadata().partition_columns
 
@@ -372,12 +428,29 @@ def write_deltalake(
         if table is not None:
             # We don't currently provide a way to set invariants
             # (and maybe never will), so only enforce if already exist.
-            if table.protocol().min_writer_version > MAX_SUPPORTED_WRITER_VERSION:
+            table_protocol = table.protocol()
+            if (
+                table_protocol.min_writer_version > MAX_SUPPORTED_PYARROW_WRITER_VERSION
+                or table_protocol.min_writer_version
+                in NOT_SUPPORTED_PYARROW_WRITER_VERSIONS
+            ):
                 raise DeltaProtocolError(
                     "This table's min_writer_version is "
-                    f"{table.protocol().min_writer_version}, "
-                    "but this method only supports version 2."
+                    f"{table_protocol.min_writer_version}, "
+                    f"""but this method only supports version 2 or 7 with at max these features {SUPPORTED_WRITER_FEATURES} enabled. 
+                    Try engine='rust' instead which supports more features and writer versions."""
                 )
+            if (
+                table_protocol.min_writer_version >= 7
+                and table_protocol.writer_features is not None
+            ):
+                missing_features = {*table_protocol.writer_features}.difference(
+                    SUPPORTED_WRITER_FEATURES
+                )
+                if len(missing_features) > 0:
+                    raise DeltaProtocolError(
+                        f"The table has set these writer features: {missing_features} but these are not supported by the pyarrow writer. Please use engine='rust'."
+                    )
 
             invariants = table.schema().invariants
             checker = _DeltaDataChecker(invariants)
@@ -387,12 +460,12 @@ def write_deltalake(
             ) -> None:
                 if table is None:
                     return
-                existed_partitions: FrozenSet[
-                    FrozenSet[Tuple[str, Optional[str]]]
-                ] = table._table.get_active_partitions()
-                allowed_partitions: FrozenSet[
-                    FrozenSet[Tuple[str, Optional[str]]]
-                ] = table._table.get_active_partitions(partition_filters)
+                existed_partitions: FrozenSet[FrozenSet[Tuple[str, Optional[str]]]] = (
+                    table._table.get_active_partitions()
+                )
+                allowed_partitions: FrozenSet[FrozenSet[Tuple[str, Optional[str]]]] = (
+                    table._table.get_active_partitions(partition_filters)
+                )
                 partition_values = pa.RecordBatch.from_arrays(
                     [
                         batch.column(column_name)
@@ -638,7 +711,8 @@ def get_file_stats_from_metadata(
 
     def iter_groups(metadata: Any) -> Iterator[Any]:
         for i in range(metadata.num_row_groups):
-            yield metadata.row_group(i)
+            if metadata.row_group(i).num_rows > 0:
+                yield metadata.row_group(i)
 
     for column_idx in range(metadata.num_columns):
         name = metadata.row_group(0).column(column_idx).path_in_schema

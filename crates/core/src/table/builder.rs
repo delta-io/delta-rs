@@ -39,7 +39,7 @@ impl From<BuilderError> for DeltaTableError {
 }
 
 /// possible version specifications for loading a delta table
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Default)]
 pub enum DeltaVersion {
     /// load the newest version
     #[default]
@@ -186,7 +186,7 @@ impl DeltaTableBuilder {
             ensure_file_location_exists(PathBuf::from(table_uri.as_ref()))?;
         }
 
-        let url = ensure_table_uri(&table_uri).expect("The specified table_uri is not valid");
+        let url = ensure_table_uri(&table_uri)?;
         debug!("creating table builder with {url}");
 
         Ok(Self {
@@ -321,7 +321,7 @@ impl DeltaTableBuilder {
 
     /// Build the [`DeltaTable`] and load its state
     pub async fn load(self) -> DeltaResult<DeltaTable> {
-        let version = self.options.version.clone();
+        let version = self.options.version;
         let mut table = self.build()?;
         match version {
             DeltaVersion::Newest => table.load().await?,
@@ -553,5 +553,12 @@ mod tests {
         let expected = Url::from_directory_path(path).unwrap();
         let url = ensure_table_uri(&expected).unwrap();
         assert_eq!(expected.as_str().trim_end_matches('/'), url.as_str());
+    }
+
+    #[test]
+    fn test_invalid_uri() {
+        // Urls should round trips as-is
+        DeltaTableBuilder::from_valid_uri("this://is.nonsense")
+            .expect_err("this should be an error");
     }
 }

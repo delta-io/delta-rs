@@ -371,11 +371,20 @@ pub enum DeltaOperation {
         expr: String,
     },
 
+    /// Drops constraints from a table
+    DropConstraint {
+        /// Constraints name
+        name: String,
+    },
+
     /// Merge data with a source data with the following predicate
     #[serde(rename_all = "camelCase")]
     Merge {
-        /// The merge predicate
+        /// Cleaned merge predicate for conflict checks
         predicate: Option<String>,
+
+        /// The original merge predicate
+        merge_predicate: Option<String>,
 
         /// Match operations performed
         matched_predicates: Vec<MergePredicate>,
@@ -458,6 +467,7 @@ impl DeltaOperation {
             DeltaOperation::VacuumStart { .. } => "VACUUM START",
             DeltaOperation::VacuumEnd { .. } => "VACUUM END",
             DeltaOperation::AddConstraint { .. } => "ADD CONSTRAINT",
+            DeltaOperation::DropConstraint { .. } => "DROP CONSTRAINT",
         }
     }
 
@@ -496,7 +506,8 @@ impl DeltaOperation {
             Self::Optimize { .. }
             | Self::VacuumStart { .. }
             | Self::VacuumEnd { .. }
-            | Self::AddConstraint { .. } => false,
+            | Self::AddConstraint { .. }
+            | Self::DropConstraint { .. } => false,
             Self::Create { .. }
             | Self::FileSystemCheck {}
             | Self::StreamingUpdate { .. }
@@ -533,16 +544,15 @@ impl DeltaOperation {
     /// Denotes if the operation reads the entire table
     pub fn read_whole_table(&self) -> bool {
         match self {
-            // TODO just adding one operation example, as currently none of the
-            // implemented operations scan the entire table.
-            Self::Write { predicate, .. } if predicate.is_none() => false,
+            // Predicate is none -> Merge operation had to join full source and target
+            Self::Merge { predicate, .. } if predicate.is_none() => true,
             _ => false,
         }
     }
 }
 
 /// The SaveMode used when performing a DeltaOperation
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, Copy, Clone, PartialEq, Eq)]
 pub enum SaveMode {
     /// Files will be appended to the target location.
     Append,
@@ -572,7 +582,7 @@ impl FromStr for SaveMode {
 }
 
 /// The OutputMode used in streaming operations.
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Copy, Clone)]
 pub enum OutputMode {
     /// Only new rows will be written when new data is available.
     Append,
@@ -1298,15 +1308,21 @@ mod tests {
                 ),
                 (
                     "min.timestamp",
-                    Arc::new(array::TimestampMicrosecondArray::from(vec![
-                        TimestampMicrosecondType::parse("2022-10-24T22:59:32.846Z"),
-                    ])),
+                    Arc::new(
+                        array::TimestampMicrosecondArray::from(vec![
+                            TimestampMicrosecondType::parse("2022-10-24T22:59:32.846Z"),
+                        ])
+                        .with_timezone("UTC"),
+                    ),
                 ),
                 (
                     "max.timestamp",
-                    Arc::new(array::TimestampMicrosecondArray::from(vec![
-                        TimestampMicrosecondType::parse("2022-10-24T22:59:32.846Z"),
-                    ])),
+                    Arc::new(
+                        array::TimestampMicrosecondArray::from(vec![
+                            TimestampMicrosecondType::parse("2022-10-24T22:59:32.846Z"),
+                        ])
+                        .with_timezone("UTC"),
+                    ),
                 ),
                 (
                     "null_count.struct.struct_element",

@@ -1,10 +1,11 @@
 """Tests that deltalake(delta-rs) can write to tables written by PySpark."""
+
 import pathlib
 
 import pyarrow as pa
 import pytest
 
-from deltalake import write_deltalake
+from deltalake import DeltaTable, write_deltalake
 from deltalake.exceptions import DeltaProtocolError
 
 from .utils import assert_spark_read_equal, get_spark
@@ -112,3 +113,59 @@ def test_checks_min_writer_version(tmp_path: pathlib.Path):
     ):
         valid_data = pa.table({"c1": pa.array([5, 6])})
         write_deltalake(str(tmp_path), valid_data, mode="append")
+
+
+@pytest.mark.pyspark
+@pytest.mark.integration
+def test_spark_read_optimize_history(tmp_path: pathlib.Path):
+    ids = ["1"] * 10
+    values = [10, 20, 30, 40, 50, 60, 70, 80, 90, 100]
+
+    id_array = pa.array(ids, type=pa.string())
+    value_array = pa.array(values, type=pa.int32())
+
+    pa_table = pa.Table.from_arrays([id_array, value_array], names=["id", "value"])
+
+    # Two writes on purpose for an optimize to occur
+    write_deltalake(tmp_path, pa_table, mode="append", partition_by=["id"])
+    write_deltalake(tmp_path, pa_table, mode="append", partition_by=["id"])
+
+    dt = DeltaTable(tmp_path)
+    dt.optimize.compact(partition_filters=[("id", "=", "1")])
+
+    spark = get_spark()
+    history_df = spark.sql(f"DESCRIBE HISTORY '{tmp_path}'")
+
+    latest_operation_metrics = (
+        history_df.orderBy(history_df.version.desc()).select("operationMetrics").first()
+    )
+
+    assert latest_operation_metrics["operationMetrics"] is not None
+
+
+@pytest.mark.pyspark
+@pytest.mark.integration
+def test_spark_read_z_ordered_history(tmp_path: pathlib.Path):
+    ids = ["1"] * 10
+    values = [10, 20, 30, 40, 50, 60, 70, 80, 90, 100]
+
+    id_array = pa.array(ids, type=pa.string())
+    value_array = pa.array(values, type=pa.int32())
+
+    pa_table = pa.Table.from_arrays([id_array, value_array], names=["id", "value"])
+
+    # Two writes on purpose for an optimize to occur
+    write_deltalake(tmp_path, pa_table, mode="append", partition_by=["id"])
+    write_deltalake(tmp_path, pa_table, mode="append", partition_by=["id"])
+
+    dt = DeltaTable(tmp_path)
+    dt.optimize.z_order(columns=["value"], partition_filters=[("id", "=", "1")])
+
+    spark = get_spark()
+    history_df = spark.sql(f"DESCRIBE HISTORY '{tmp_path}'")
+
+    latest_operation_metrics = (
+        history_df.orderBy(history_df.version.desc()).select("operationMetrics").first()
+    )
+
+    assert latest_operation_metrics["operationMetrics"] is not None

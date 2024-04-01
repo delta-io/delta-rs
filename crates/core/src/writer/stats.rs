@@ -1,8 +1,8 @@
-use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use std::{collections::HashMap, ops::AddAssign};
 
+use indexmap::IndexMap;
 use parquet::format::FileMetaData;
 use parquet::schema::types::{ColumnDescriptor, SchemaDescriptor};
 use parquet::{basic::LogicalType, errors::ParquetError};
@@ -17,7 +17,7 @@ use crate::protocol::{ColumnValueStat, Stats};
 
 /// Creates an [`Add`] log action struct.
 pub fn create_add(
-    partition_values: &BTreeMap<String, Scalar>,
+    partition_values: &IndexMap<String, Scalar>,
     path: String,
     size: i64,
     file_metadata: &FileMetaData,
@@ -59,7 +59,7 @@ pub fn create_add(
 }
 
 fn stats_from_file_metadata(
-    partition_values: &BTreeMap<String, Scalar>,
+    partition_values: &IndexMap<String, Scalar>,
     file_metadata: &FileMetaData,
 ) -> Result<Stats, DeltaWriterError> {
     let type_ptr = parquet::schema::types::from_thrift(file_metadata.schema.as_slice());
@@ -645,7 +645,6 @@ mod tests {
         }
     }
 
-    #[ignore]
     #[tokio::test]
     async fn test_delta_stats() {
         let temp_dir = tempfile::tempdir().unwrap();

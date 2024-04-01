@@ -190,6 +190,7 @@ pub enum PeekCommit {
 }
 
 /// In memory representation of a Delta Table
+#[derive(Clone)]
 pub struct DeltaTable {
     /// The state of the table as of the most recent loaded Delta log entry.
     pub state: Option<DeltaTableState>,
@@ -461,7 +462,7 @@ impl DeltaTable {
             .map(|path| self.log_store.to_uri(&path)))
     }
 
-    /// Get the number of files in the table - retrn 0 if no metadata is loaded
+    /// Get the number of files in the table - returns 0 if no metadata is loaded
     pub fn get_files_count(&self) -> usize {
         self.state.as_ref().map(|s| s.files_count()).unwrap_or(0)
     }

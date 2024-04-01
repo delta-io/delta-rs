@@ -327,6 +327,24 @@ pub mod datafusion {
             .unwrap()
     }
 
+    pub async fn get_data_sorted(table: &DeltaTable, columns: &str) -> Vec<RecordBatch> {
+        let table = DeltaTable::new_with_state(
+            table.log_store.clone(),
+            table.state.as_ref().unwrap().clone(),
+        );
+        let ctx = SessionContext::new();
+        ctx.register_table("test", Arc::new(table)).unwrap();
+        ctx.sql(&format!(
+            "select {} from test order by {}",
+            columns, columns
+        ))
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap()
+    }
+
     pub async fn write_batch(table: DeltaTable, batch: RecordBatch) -> DeltaTable {
         DeltaOps(table)
             .write(vec![batch.clone()])

@@ -11,6 +11,7 @@ tlaplus/*.toolbox/*/[0-9]*-[0-9]*-[0-9]*-[0-9]*-[0-9]*-[0-9]*/
 /.idea
 .vscode
 .env
+.venv
 **/.DS_Store
 **/.python-version
 .coverage
