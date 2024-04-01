@@ -130,7 +130,6 @@ async fn test_restore_by_datetime() -> Result<(), Box<dyn Error>> {
     let timestamp = meta.last_modified.timestamp_millis();
     let datetime = DateTime::from_timestamp_millis(timestamp).unwrap();
 
-
     let result = DeltaOps(table)
         .restore()
         .with_datetime_to_restore(datetime)
@@ -148,7 +147,6 @@ async fn test_restore_with_error_params() -> Result<(), Box<dyn Error>> {
     let history = table.history(Some(10)).await?;
     let timestamp = history.get(1).unwrap().timestamp.unwrap();
     let datetime = DateTime::from_timestamp_millis(timestamp).unwrap();
-    
 
     // datetime and version both set
     let result = DeltaOps(table)

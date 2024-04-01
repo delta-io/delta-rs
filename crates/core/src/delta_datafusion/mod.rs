@@ -955,8 +955,11 @@ pub(crate) fn partitioned_file_from_action(
 
     let ts_secs = action.modification_time / 1000;
     let ts_ns = (action.modification_time % 1000) * 1_000_000;
-    let last_modified =
-        Utc.from_utc_datetime(&DateTime::from_timestamp(ts_secs, ts_ns as u32).unwrap().naive_utc());
+    let last_modified = Utc.from_utc_datetime(
+        &DateTime::from_timestamp(ts_secs, ts_ns as u32)
+            .unwrap()
+            .naive_utc(),
+    );
     PartitionedFile {
         object_meta: ObjectMeta {
             last_modified,
