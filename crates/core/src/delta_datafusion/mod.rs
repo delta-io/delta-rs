@@ -39,7 +39,7 @@ use arrow_cast::display::array_value_to_string;
 
 use arrow_schema::Field;
 use async_trait::async_trait;
-use chrono::{NaiveDateTime, TimeZone, Utc};
+use chrono::{DateTime, TimeZone, Utc};
 use datafusion::datasource::file_format::{parquet::ParquetFormat, FileFormat};
 use datafusion::datasource::physical_plan::{
     wrap_partition_type_in_dict, wrap_partition_value_in_dict, FileScanConfig,
@@ -955,8 +955,11 @@ pub(crate) fn partitioned_file_from_action(
 
     let ts_secs = action.modification_time / 1000;
     let ts_ns = (action.modification_time % 1000) * 1_000_000;
-    let last_modified =
-        Utc.from_utc_datetime(&NaiveDateTime::from_timestamp_opt(ts_secs, ts_ns as u32).unwrap());
+    let last_modified = Utc.from_utc_datetime(
+        &DateTime::from_timestamp(ts_secs, ts_ns as u32)
+            .unwrap()
+            .naive_utc(),
+    );
     PartitionedFile {
         object_meta: ObjectMeta {
             last_modified,
