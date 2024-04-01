@@ -1,6 +1,6 @@
 //! Utility functions for working across Delta tables
 
-use chrono::{NaiveDateTime, TimeZone, Utc};
+use chrono::DateTime;
 use futures::TryStreamExt;
 use object_store::path::Path;
 use object_store::{DynObjectStore, ObjectMeta, Result as ObjectStoreResult};
@@ -32,14 +32,13 @@ impl TryFrom<&Add> for ObjectMeta {
     type Error = DeltaTableError;
 
     fn try_from(value: &Add) -> DeltaResult<Self> {
-        let last_modified = Utc.from_utc_datetime(
-            &NaiveDateTime::from_timestamp_millis(value.modification_time).ok_or(
-                DeltaTableError::from(crate::protocol::ProtocolError::InvalidField(format!(
-                    "invalid modification_time: {:?}",
-                    value.modification_time
-                ))),
-            )?,
-        );
+        let last_modified = DateTime::from_timestamp_millis(value.modification_time).ok_or(
+            DeltaTableError::from(crate::protocol::ProtocolError::InvalidField(format!(
+                "invalid modification_time: {:?}",
+                value.modification_time
+            ))),
+        )?;
+
         Ok(Self {
             // TODO this won't work for absolute paths, since Paths are always relative to store.
             location: Path::parse(value.path.as_str())?,
