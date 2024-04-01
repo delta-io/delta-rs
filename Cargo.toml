@@ -32,7 +32,7 @@ debug = "line-tables-only"
 [workspace.dependencies]
 # arrow
 arrow = { version = "50" }
-arrow-arith = { version = "50" }
+arrow-arith = { version = "51" }
 arrow-array = { version = "50", features = ["chrono-tz"]}
 arrow-buffer = { version = "50" }
 arrow-cast = { version = "50" }
