@@ -6,7 +6,7 @@ use std::iter::Iterator;
 use arrow_json::ReaderBuilder;
 use arrow_schema::ArrowError;
 
-use chrono::{Datelike, Utc};
+use chrono::{DateTime, Datelike, Utc};
 use futures::{StreamExt, TryStreamExt};
 use lazy_static::lazy_static;
 use object_store::{Error, ObjectStore};
@@ -444,10 +444,9 @@ fn typed_partition_value_from_string(
             }
             PrimitiveType::Timestamp => {
                 let ts =
-                    chrono::naive::NaiveDateTime::parse_from_str(string_value, "%Y-%m-%d %H:%M:%S")
-                        .map_err(|_| {
-                            CheckpointError::PartitionValueNotParseable(string_value.to_owned())
-                        })?;
+                    DateTime::parse_from_str(string_value, "%Y-%m-%d %H:%M:%S").map_err(|_| {
+                        CheckpointError::PartitionValueNotParseable(string_value.to_owned())
+                    })?;
                 Ok((ts.timestamp_millis() * 1000).into())
             }
             s => unimplemented!(

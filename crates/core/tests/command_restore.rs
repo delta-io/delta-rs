@@ -1,7 +1,7 @@
 use arrow::datatypes::Schema as ArrowSchema;
 use arrow_array::{Int32Array, RecordBatch};
 use arrow_schema::{DataType as ArrowDataType, Field};
-use chrono::{DateTime, NaiveDateTime, TimeZone, Utc};
+use chrono::DateTime;
 use deltalake_core::kernel::{DataType, PrimitiveType, StructField};
 use deltalake_core::protocol::SaveMode;
 use deltalake_core::storage::commit_uri_from_version;
@@ -128,8 +128,8 @@ async fn test_restore_by_datetime() -> Result<(), Box<dyn Error>> {
         .head(&commit_uri_from_version(version))
         .await?;
     let timestamp = meta.last_modified.timestamp_millis();
-    let naive = NaiveDateTime::from_timestamp_millis(timestamp).unwrap();
-    let datetime: DateTime<Utc> = Utc.from_utc_datetime(&naive);
+    let datetime = DateTime::from_timestamp_millis(timestamp).unwrap();
+
 
     let result = DeltaOps(table)
         .restore()
@@ -147,8 +147,8 @@ async fn test_restore_with_error_params() -> Result<(), Box<dyn Error>> {
     let table = context.table;
     let history = table.history(Some(10)).await?;
     let timestamp = history.get(1).unwrap().timestamp.unwrap();
-    let naive = NaiveDateTime::from_timestamp_millis(timestamp).unwrap();
-    let datetime: DateTime<Utc> = Utc.from_utc_datetime(&naive);
+    let datetime = DateTime::from_timestamp_millis(timestamp).unwrap();
+    
 
     // datetime and version both set
     let result = DeltaOps(table)
