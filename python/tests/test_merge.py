@@ -807,8 +807,14 @@ def test_merge_date_partitioned_2344(tmp_path: pathlib.Path):
 @pytest.mark.parametrize(
     "timezone,predicate",
     [
-        (None, "to_timestamp_micros('2022-02-01T00:00:00.000000') = datetime"),
-        ("UTC", "to_timestamp_micros('2022-02-01T00:00:00.000000+00:00') = datetime"),
+        (
+            None,
+            "arrow_cast('2022-02-01T00:00:00.000000', 'Timestamp(Microsecond, None)') = datetime",
+        ),
+        (
+            "UTC",
+            "arrow_cast('2022-02-01T00:00:00.000000', 'Timestamp(Microsecond, Some(\"UTC\"))') = datetime",
+        ),
     ],
 )
 def test_merge_timestamps_partitioned_2344(tmp_path: pathlib.Path, timezone, predicate):
