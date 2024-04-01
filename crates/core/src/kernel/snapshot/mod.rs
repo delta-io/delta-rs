@@ -33,7 +33,6 @@ use crate::kernel::StructType;
 use crate::logstore::LogStore;
 use crate::operations::transaction::CommitData;
 use crate::table::config::TableConfig;
-use crate::table::state::AppTransactionVisitor;
 use crate::{DeltaResult, DeltaTableConfig, DeltaTableError};
 
 mod log_data;
@@ -333,18 +332,10 @@ impl Snapshot {
     }
 }
 
-/// TODO!
+/// Allows hooking into the reading of commit files and checkpoints whenever a table is loaded or updated.
 pub trait ReplayVistor: Send {
-    /// TODO!
+    /// Process a batch
     fn visit_batch(&mut self, batch: &RecordBatch) -> DeltaResult<()>;
-}
-
-struct PrintVistor {}
-impl ReplayVistor for PrintVistor {
-    fn visit_batch(&mut self, _batch: &RecordBatch) -> DeltaResult<()> {
-        println!("Hello world!");
-        Ok(())
-    }
 }
 
 /// A snapshot of a Delta table that has been eagerly loaded into memory.
@@ -364,9 +355,7 @@ impl EagerSnapshot {
         config: DeltaTableConfig,
         version: Option<i64>,
     ) -> DeltaResult<Self> {
-        let mut p = PrintVistor {};
-        let mut i = AppTransactionVisitor::new();
-        Self::try_new_with_visitor(table_root, store, config, version, vec![&mut p, &mut i]).await
+        Self::try_new_with_visitor(table_root, store, config, version, vec![]).await
     }
 
     /// Create a new [`EagerSnapshot`] instance
@@ -397,18 +386,16 @@ impl EagerSnapshot {
     }
 
     /// Update the snapshot to the given version
-    pub async fn update(
+    pub async fn update<'a>(
         &mut self,
         log_store: Arc<dyn LogStore>,
         target_version: Option<i64>,
+        visitors: Vec<&'a mut dyn ReplayVistor>,
     ) -> DeltaResult<()> {
-        dbg!("Update Call: {} {:?}", self.version(), target_version);
         if Some(self.version()) == target_version {
             return Ok(());
         }
 
-        let mut p = PrintVistor {};
-        let visitors: Vec<&mut dyn ReplayVistor> = vec![&mut p];
         let new_slice = self
             .snapshot
             .update_inner(log_store.clone(), target_version)
@@ -431,7 +418,6 @@ impl EagerSnapshot {
                     )
                     .boxed()
             };
-            dbg!("here2");
             let mapper = LogMapper::try_new(&self.snapshot)?;
             let files =
                 ReplayStream::try_new(log_stream, checkpoint_stream, &self.snapshot, visitors)?
@@ -511,8 +497,8 @@ impl EagerSnapshot {
     pub fn advance<'a>(
         &mut self,
         commits: impl IntoIterator<Item = &'a CommitData>,
+        mut visitors: Vec<&'a mut dyn ReplayVistor>,
     ) -> DeltaResult<i64> {
-        println!("Advance!");
         let mut metadata = None;
         let mut protocol = None;
         let mut send = Vec::new();
@@ -542,7 +528,11 @@ impl EagerSnapshot {
         let mut scanner = LogReplayScanner::new();
 
         for batch in actions {
-            files.push(scanner.process_files_batch(&batch?, true)?);
+            let batch = batch?;
+            files.push(scanner.process_files_batch(&batch, true)?);
+            for visitor in &mut visitors {
+                visitor.visit_batch(&batch)?;
+            }
         }
 
         let mapper = LogMapper::try_new(&self.snapshot)?;
@@ -817,7 +807,7 @@ mod tests {
         let actions =
             vec![CommitData::new(removes, operation, HashMap::new(), Vec::new()).unwrap()];
 
-        let new_version = snapshot.advance(&actions)?;
+        let new_version = snapshot.advance(&actions, vec![])?;
         assert_eq!(new_version, version + 1);
 
         let new_files = snapshot.file_actions()?.map(|f| f.path).collect::<Vec<_>>();

@@ -238,6 +238,7 @@ impl TableReference for DeltaTableState {
 }
 
 /// Data that was actually written to the log store.
+#[derive(Debug)]
 pub struct CommitData {
     /// The actions
     pub actions: Vec<Action>,
@@ -272,8 +273,6 @@ impl CommitData {
         for txn in &app_transactions {
             actions.push(Action::Txn(txn.clone()))
         }
-
-        dbg!("{:?}", &actions);
 
         Ok(CommitData {
             actions,
@@ -568,6 +567,7 @@ impl<'a> std::future::IntoFuture for PreparedCommit<'a> {
 }
 
 /// A commit that successfully completed
+#[derive(Debug)]
 pub struct FinalizedCommit {
     /// The winning version number of the commit
     pub version: i64,
