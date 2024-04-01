@@ -99,3 +99,35 @@ def test_optimize_min_commit_interval(
     # independently. So with min_commit_interval=0, each will get its
     # own commit.
     assert dt.version() == old_version + 5
+
+
+def test_optimize_schema_evolved_table(
+    tmp_path: pathlib.Path,
+    sample_data: pa.Table,
+):
+    data = pa.table({"foo": pa.array(["1"])})
+
+    write_deltalake(tmp_path, data, engine="rust", mode="append", schema_mode="merge")
+
+    data = pa.table({"bar": pa.array(["1"])})
+    write_deltalake(tmp_path, data, engine="rust", mode="append", schema_mode="merge")
+
+    dt = DeltaTable(tmp_path)
+    old_version = dt.version()
+
+    dt.optimize.compact()
+
+    last_action = dt.history(1)[0]
+    assert last_action["operation"] == "OPTIMIZE"
+    assert dt.version() == old_version + 1
+
+    data = pa.table(
+        {
+            "foo": pa.array([None, "1"]),
+            "bar": pa.array(["1", None]),
+        }
+    )
+
+    assert dt.to_pyarrow_table().sort_by([("foo", "ascending")]) == data.sort_by(
+        [("foo", "ascending")]
+    )

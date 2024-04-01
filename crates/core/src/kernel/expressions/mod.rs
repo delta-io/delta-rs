@@ -95,7 +95,7 @@ impl ExpressionEvaluator for DefaultExpressionEvaluator {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 /// A binary operator.
 pub enum BinaryOperator {
     /// Arithmetic Plus
@@ -121,7 +121,7 @@ pub enum BinaryOperator {
 }
 
 /// Variadic operators
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Copy, Clone, PartialEq)]
 pub enum VariadicOperator {
     /// AND
     And,
@@ -148,7 +148,7 @@ impl Display for BinaryOperator {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Copy, Clone, PartialEq)]
 /// A unary operator.
 pub enum UnaryOperator {
     /// Unary Not

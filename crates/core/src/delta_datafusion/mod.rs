@@ -331,7 +331,7 @@ pub(crate) fn df_logical_schema(
     Ok(Arc::new(ArrowSchema::new(fields)))
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 /// Used to specify if additional metadata columns are exposed to the user
 pub struct DeltaScanConfigBuilder {
     /// Include the source path for each record. The name of this column is determined by `file_column_name`
@@ -343,6 +343,18 @@ pub struct DeltaScanConfigBuilder {
     file_column_name: Option<String>,
     /// Whether to wrap partition values in a dictionary encoding to potentially save space
     wrap_partition_values: Option<bool>,
+    enable_parquet_pushdown: bool,
+}
+
+impl Default for DeltaScanConfigBuilder {
+    fn default() -> Self {
+        DeltaScanConfigBuilder {
+            include_file_column: false,
+            file_column_name: None,
+            wrap_partition_values: None,
+            enable_parquet_pushdown: true,
+        }
+    }
 }
 
 impl DeltaScanConfigBuilder {
@@ -369,6 +381,13 @@ impl DeltaScanConfigBuilder {
     /// Whether to wrap partition values in a dictionary encoding
     pub fn wrap_partition_values(mut self, wrap: bool) -> Self {
         self.wrap_partition_values = Some(wrap);
+        self
+    }
+
+    /// Allow pushdown of the scan filter
+    /// When disabled the filter will only be used for pruning files
+    pub fn with_parquet_pushdown(mut self, pushdown: bool) -> Self {
+        self.enable_parquet_pushdown = pushdown;
         self
     }
 
@@ -411,6 +430,7 @@ impl DeltaScanConfigBuilder {
         Ok(DeltaScanConfig {
             file_column_name,
             wrap_partition_values: self.wrap_partition_values.unwrap_or(true),
+            enable_parquet_pushdown: self.enable_parquet_pushdown,
         })
     }
 }
@@ -422,6 +442,8 @@ pub struct DeltaScanConfig {
     pub file_column_name: Option<String>,
     /// Wrap partition values in a dictionary encoding
     pub wrap_partition_values: bool,
+    /// Allow pushdown of the scan filter
+    pub enable_parquet_pushdown: bool,
 }
 
 #[derive(Debug)]
@@ -592,6 +614,15 @@ impl<'a> DeltaScanBuilder<'a> {
             .datafusion_table_statistics()
             .unwrap_or(Statistics::new_unknown(&schema));
 
+        // Sometimes (i.e Merge) we want to prune files that don't make the
+        // filter and read the entire contents for files that do match the
+        // filter
+        let parquet_pushdown = if config.enable_parquet_pushdown {
+            logical_filter.clone()
+        } else {
+            None
+        };
+
         let scan = ParquetFormat::new()
             .create_physical_plan(
                 self.state,
@@ -605,7 +636,7 @@ impl<'a> DeltaScanBuilder<'a> {
                     table_partition_cols,
                     output_ordering: vec![],
                 },
-                logical_filter.as_ref(),
+                parquet_pushdown.as_ref(),
             )
             .await?;
 

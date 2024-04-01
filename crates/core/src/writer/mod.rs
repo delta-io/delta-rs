@@ -125,7 +125,7 @@ impl From<DeltaWriterError> for DeltaTableError {
 }
 
 /// Write mode for the [DeltaWriter]
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Copy, Clone, Debug, PartialEq)]
 pub enum WriteMode {
     /// Default write mode which will return an error if schemas do not match correctly
     Default,
