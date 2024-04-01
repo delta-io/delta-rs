@@ -76,7 +76,7 @@ def test_primitive_delta_types():
         "decimal(10,2)",
     ]
 
-    invalid_types = ["int", "decimal", "decimal()"]
+    invalid_types = ["int", "decimal", "decimal()", "decimal(39,1)", "decimal(1,39)"]
 
     for data_type in valid_types:
         delta_type = PrimitiveType(data_type)

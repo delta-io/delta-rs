@@ -11,7 +11,9 @@ use futures::{StreamExt, TryStreamExt};
 use lazy_static::lazy_static;
 use object_store::{Error, ObjectStore};
 use parquet::arrow::ArrowWriter;
+use parquet::basic::Compression;
 use parquet::errors::ParquetError;
+use parquet::file::properties::WriterProperties;
 use regex::Regex;
 use serde_json::Value;
 use tracing::{debug, error};
@@ -186,7 +188,7 @@ pub async fn cleanup_expired_logs_for(
 ) -> Result<usize, ProtocolError> {
     lazy_static! {
         static ref DELTA_LOG_REGEX: Regex =
-            Regex::new(r"_delta_log/(\d{20})\.(json|checkpoint).*$").unwrap();
+            Regex::new(r"_delta_log/(\d{20})\.(json|checkpoint|json.tmp).*$").unwrap();
     }
 
     let object_store = log_store.object_store();
@@ -333,7 +335,15 @@ fn parquet_bytes_from_state(
     debug!("Writing to checkpoint parquet buffer...");
     // Write the Checkpoint parquet file.
     let mut bytes = vec![];
-    let mut writer = ArrowWriter::try_new(&mut bytes, arrow_schema.clone(), None)?;
+    let mut writer = ArrowWriter::try_new(
+        &mut bytes,
+        arrow_schema.clone(),
+        Some(
+            WriterProperties::builder()
+                .set_compression(Compression::SNAPPY)
+                .build(),
+        ),
+    )?;
     let mut decoder = ReaderBuilder::new(arrow_schema)
         .with_batch_size(CHECKPOINT_RECORD_BATCH_SIZE)
         .build_decoder()?;

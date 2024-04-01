@@ -13,7 +13,6 @@ use deltalake::kernel::{
 use pyo3::exceptions::{PyException, PyNotImplementedError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::IntoPyDict;
-use pyo3::{PyRef, PyResult};
 use std::collections::HashMap;
 
 // PyO3 doesn't yet support converting classes with inheritance with Python
@@ -85,8 +84,16 @@ impl PrimitiveType {
     #[new]
     #[pyo3(signature = (data_type))]
     fn new(data_type: String) -> PyResult<Self> {
-        let data_type: DeltaPrimitve = serde_json::from_str(&format!("\"{data_type}\""))
-            .map_err(|_| PyValueError::new_err(format!("invalid type string: {data_type}")))?;
+        let data_type: DeltaPrimitve =
+            serde_json::from_str(&format!("\"{data_type}\"")).map_err(|_| {
+                if data_type.starts_with("decimal") {
+                    PyValueError::new_err(format!(
+                        "invalid type string: {data_type}, precision/scale can't be larger than 38"
+                    ))
+                } else {
+                    PyValueError::new_err(format!("invalid type string: {data_type}"))
+                }
+            })?;
 
         Ok(Self {
             inner_type: data_type,
@@ -138,7 +145,7 @@ impl PrimitiveType {
 
     #[pyo3(text_signature = "($self)")]
     fn to_json(&self) -> PyResult<String> {
-        let inner_type = DataType::Primitive(self.inner_type.clone());
+        let inner_type = DataType::Primitive(self.inner_type);
         serde_json::to_string(&inner_type).map_err(|err| PyException::new_err(err.to_string()))
     }
 
@@ -153,7 +160,7 @@ impl PrimitiveType {
 
     #[pyo3(text_signature = "($self)")]
     fn to_pyarrow(&self) -> PyResult<PyArrowType<ArrowDataType>> {
-        let inner_type = DataType::Primitive(self.inner_type.clone());
+        let inner_type = DataType::Primitive(self.inner_type);
         Ok(PyArrowType((&inner_type).try_into().map_err(
             |err: ArrowError| PyException::new_err(err.to_string()),
         )?))

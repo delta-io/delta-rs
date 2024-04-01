@@ -120,9 +120,9 @@ impl<'a> DeletionVectorView<'a> {
     }
 }
 
-/// A view into the log data representiang a single logical file.
+/// A view into the log data representing a single logical file.
 ///
-/// This stuct holds a pointer to a specific row in the log data and provides access to the
+/// This struct holds a pointer to a specific row in the log data and provides access to the
 /// information stored in that row by tracking references to the underlying arrays.
 ///
 /// Additionally, references to some table metadata is tracked to provide higher level
@@ -549,7 +549,15 @@ mod datafusion {
                             _ => None,
                         })
                         .collect::<Option<Vec<_>>>()
-                        .map(|o| Precision::Exact(ScalarValue::Struct(Some(o), fields.clone())))
+                        .map(|o| {
+                            let arrays = o
+                                .into_iter()
+                                .map(|sv| sv.to_array())
+                                .collect::<Result<Vec<_>, datafusion_common::DataFusionError>>()
+                                .unwrap();
+                            let sa = StructArray::new(fields.clone(), arrays, None);
+                            Precision::Exact(ScalarValue::Struct(Arc::new(sa)))
+                        })
                         .unwrap_or(Precision::Absent);
                 }
                 _ => Precision::Absent,
