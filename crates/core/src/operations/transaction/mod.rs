@@ -96,7 +96,7 @@ mod state;
 pub(crate) mod test_utils;
 
 const DELTA_LOG_FOLDER: &str = "_delta_log";
-const DEFAULT_RETRIES: usize = 15;
+pub(crate) const DEFAULT_RETRIES: usize = 15;
 
 /// Error raised while commititng transaction
 #[derive(thiserror::Error, Debug)]
@@ -361,6 +361,12 @@ impl<'a> CommitBuilder {
         self
     }
 
+    /// Maximum number of times to retry the transaction before failing to commit
+    pub fn with_max_retries(mut self, max_retries: usize) -> Self {
+        self.max_retries = max_retries;
+        self
+    }
+
     /// Prepare a Commit operation using the configured builder
     pub fn build(
         self,
@@ -507,7 +513,7 @@ impl<'a> std::future::IntoFuture for PreparedCommit<'a> {
                             Err(err) => {
                                 this.log_store
                                     .object_store()
-                                    .delete_with_retries(&tmp_commit, 15)
+                                    .delete_with_retries(tmp_commit, 15)
                                     .await?;
                                 return Err(TransactionError::CommitConflict(err).into());
                             }
@@ -516,7 +522,7 @@ impl<'a> std::future::IntoFuture for PreparedCommit<'a> {
                     Err(err) => {
                         this.log_store
                             .object_store()
-                            .delete_with_retries(&tmp_commit, 15)
+                            .delete_with_retries(tmp_commit, 15)
                             .await?;
                         return Err(err.into());
                     }

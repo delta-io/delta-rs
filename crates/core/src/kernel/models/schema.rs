@@ -11,6 +11,7 @@ use serde_json::Value;
 
 use crate::kernel::error::Error;
 use crate::kernel::DataCheck;
+use crate::protocol::ProtocolError;
 
 /// Type alias for a top level schema
 pub type Schema = StructType;
@@ -467,7 +468,13 @@ fn default_true() -> bool {
     true
 }
 
-#[derive(Debug, Serialize, Deserialize, PartialEq, Clone, Eq, Hash)]
+/// The maximum precision for [PrimitiveType::Decimal] values
+pub const DECIMAL_MAX_PRECISION: u8 = 38;
+
+/// The maximum scale for [PrimitiveType::Decimal] values
+pub const DECIMAL_MAX_SCALE: i8 = 38;
+
+#[derive(Debug, Serialize, Deserialize, PartialEq, Copy, Clone, Eq, Hash)]
 #[serde(rename_all = "snake_case")]
 /// Primitive types supported by Delta
 pub enum PrimitiveType {
@@ -538,7 +545,12 @@ where
         .ok_or_else(|| {
             serde::de::Error::custom(format!("Invalid scale in decimal: {}", str_value))
         })?;
-
+    if precision > DECIMAL_MAX_PRECISION || scale > DECIMAL_MAX_SCALE {
+        return Err(serde::de::Error::custom(format!(
+            "Precision or scale is larger than 38: {}, {}",
+            precision, scale
+        )));
+    }
     Ok((precision, scale))
 }
 
@@ -613,8 +625,16 @@ impl DataType {
     pub const TIMESTAMP: Self = DataType::Primitive(PrimitiveType::Timestamp);
     pub const TIMESTAMPNTZ: Self = DataType::Primitive(PrimitiveType::TimestampNtz);
 
-    pub fn decimal(precision: u8, scale: i8) -> Self {
-        DataType::Primitive(PrimitiveType::Decimal(precision, scale))
+    pub fn decimal(precision: u8, scale: i8) -> Result<Self, ProtocolError> {
+        if precision > DECIMAL_MAX_PRECISION || scale > DECIMAL_MAX_SCALE {
+            return Err(ProtocolError::InvalidField(format!(
+                "decimal({},{})",
+                precision, scale
+            )));
+        }
+        Ok(DataType::Primitive(PrimitiveType::Decimal(
+            precision, scale,
+        )))
     }
 
     pub fn struct_type(fields: Vec<StructField>) -> Self {
@@ -747,6 +767,35 @@ mod tests {
             json_str,
             r#"{"name":"a","type":"decimal(10,2)","nullable":false,"metadata":{}}"#
         );
+    }
+
+    #[test]
+    fn test_invalid_decimal() {
+        let data = r#"
+        {
+            "name": "a",
+            "type": "decimal(39, 10)",
+            "nullable": false,
+            "metadata": {}
+        }
+        "#;
+        assert!(matches!(
+            serde_json::from_str::<StructField>(data).unwrap_err(),
+            _
+        ));
+
+        let data = r#"
+        {
+            "name": "a",
+            "type": "decimal(10, 39)",
+            "nullable": false,
+            "metadata": {}
+        }
+        "#;
+        assert!(matches!(
+            serde_json::from_str::<StructField>(data).unwrap_err(),
+            _
+        ));
     }
 
     #[test]

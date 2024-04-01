@@ -8,7 +8,10 @@ use arrow_schema::{
 };
 use lazy_static::lazy_static;
 
-use super::{ActionType, ArrayType, DataType, MapType, PrimitiveType, StructField, StructType};
+use super::{
+    ActionType, ArrayType, DataType, MapType, PrimitiveType, StructField, StructType,
+    DECIMAL_MAX_PRECISION, DECIMAL_MAX_SCALE,
+};
 
 pub(crate) mod extract;
 pub(crate) mod json;
@@ -118,14 +121,12 @@ impl TryFrom<&DataType> for ArrowDataType {
                     PrimitiveType::Boolean => Ok(ArrowDataType::Boolean),
                     PrimitiveType::Binary => Ok(ArrowDataType::Binary),
                     PrimitiveType::Decimal(precision, scale) => {
-                        if precision <= &38 {
+                        if precision <= &DECIMAL_MAX_PRECISION && scale <= &DECIMAL_MAX_SCALE {
                             Ok(ArrowDataType::Decimal128(*precision, *scale))
-                        } else if precision <= &76 {
-                            Ok(ArrowDataType::Decimal256(*precision, *scale))
                         } else {
-                            Err(ArrowError::SchemaError(format!(
-                                "Precision too large to be represented in Arrow: {}",
-                                precision
+                            Err(ArrowError::CastError(format!(
+                                "Precision/scale can not be larger than 38 ({},{})",
+                                precision, scale
                             )))
                         }
                     }
@@ -214,9 +215,12 @@ impl TryFrom<&ArrowDataType> for DataType {
             ArrowDataType::Decimal128(p, s) => {
                 Ok(DataType::Primitive(PrimitiveType::Decimal(*p, *s)))
             }
-            ArrowDataType::Decimal256(p, s) => {
-                Ok(DataType::Primitive(PrimitiveType::Decimal(*p, *s)))
-            }
+            ArrowDataType::Decimal256(p, s) => DataType::decimal(*p, *s).map_err(|_| {
+                ArrowError::SchemaError(format!(
+                    "Invalid data type for Delta Lake: decimal({},{})",
+                    p, s
+                ))
+            }),
             ArrowDataType::Date32 => Ok(DataType::Primitive(PrimitiveType::Date)),
             ArrowDataType::Date64 => Ok(DataType::Primitive(PrimitiveType::Date)),
             ArrowDataType::Timestamp(TimeUnit::Microsecond, None) => {
@@ -261,6 +265,7 @@ impl TryFrom<&ArrowDataType> for DataType {
                     panic!("DataType::Map should contain a struct field child");
                 }
             }
+            ArrowDataType::Dictionary(_, value_type) => Ok(value_type.as_ref().try_into()?),
             s => Err(ArrowError::SchemaError(format!(
                 "Invalid data type for Delta Lake: {s}"
             ))),
@@ -770,6 +775,32 @@ mod tests {
             <ArrowDataType as TryFrom<&DataType>>::try_from(&decimal_field).unwrap(),
             ArrowDataType::Decimal128(precision, scale)
         );
+    }
+
+    #[test]
+    fn test_arrow_from_delta_decimal_type_invalid_precision() {
+        let precision = 39;
+        let scale = 2;
+        assert!(matches!(
+            <DataType as TryFrom<&ArrowDataType>>::try_from(&ArrowDataType::Decimal256(
+                precision, scale
+            ))
+            .unwrap_err(),
+            _
+        ));
+    }
+
+    #[test]
+    fn test_arrow_from_delta_decimal_type_invalid_scale() {
+        let precision = 2;
+        let scale = 39;
+        assert!(matches!(
+            <DataType as TryFrom<&ArrowDataType>>::try_from(&ArrowDataType::Decimal256(
+                precision, scale
+            ))
+            .unwrap_err(),
+            _
+        ));
     }
 
     #[test]

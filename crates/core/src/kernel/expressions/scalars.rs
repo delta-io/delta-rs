@@ -63,7 +63,8 @@ impl Scalar {
             Self::TimestampNtz(_) => DataType::Primitive(PrimitiveType::TimestampNtz),
             Self::Date(_) => DataType::Primitive(PrimitiveType::Date),
             Self::Binary(_) => DataType::Primitive(PrimitiveType::Binary),
-            Self::Decimal(_, precision, scale) => DataType::decimal(*precision, *scale),
+            // Unwrapping should be safe, since the scalar should never have values that are unsupported
+            Self::Decimal(_, precision, scale) => DataType::decimal(*precision, *scale).unwrap(),
             Self::Null(data_type) => data_type.clone(),
             Self::Struct(_, fields) => DataType::struct_type(fields.clone()),
         }
@@ -394,7 +395,7 @@ impl From<String> for Scalar {
 
 impl PrimitiveType {
     fn data_type(&self) -> DataType {
-        DataType::Primitive(self.clone())
+        DataType::Primitive(*self)
     }
 
     /// Parses a string into a scalar value.

@@ -259,7 +259,7 @@ def test_update_schema_rust_writer_append(existing_table: DeltaTable):
         )
     with pytest.raises(
         SchemaMismatchError,
-        match="Schema error: Fail to merge schema field 'utf8' because the from data_type = Int64 does not equal Utf8",
+        match="Schema error: Cannot merge types string and long",
     ):
         write_deltalake(
             existing_table,
@@ -1391,6 +1391,22 @@ def test_issue_1651_roundtrip_timestamp(tmp_path: pathlib.Path):
     assert dataset.count_rows() == 1
 
 
+@pytest.mark.parametrize("engine", ["rust", "pyarrow"])
+def test_invalid_decimals(tmp_path: pathlib.Path, engine):
+    import re
+    from decimal import Decimal
+
+    data = pa.table(
+        {"x": pa.array([Decimal("10000000000000000000000000000000000000.0")])}
+    )
+
+    with pytest.raises(
+        SchemaMismatchError,
+        match=re.escape("Invalid data type for Delta Lake: decimal(39,1)"),
+    ):
+        write_deltalake(table_or_uri=tmp_path, mode="append", data=data, engine=engine)
+
+
 def test_float_values(tmp_path: pathlib.Path):
     data = pa.table(
         {
@@ -1482,3 +1498,33 @@ def test_empty(existing_table: DeltaTable):
     empty_table = pa.Table.from_pylist([], schema=schema)
     with pytest.raises(DeltaError, match="No data source supplied to write command"):
         write_deltalake(existing_table, empty_table, mode="append", engine="rust")
+
+
+def test_rust_decimal_cast(tmp_path: pathlib.Path):
+    import re
+    from decimal import Decimal
+
+    data = pa.table({"x": pa.array([Decimal("100.1")])})
+
+    write_deltalake(tmp_path, data, mode="append", engine="rust")
+
+    assert DeltaTable(tmp_path).to_pyarrow_table()["x"][0].as_py() == Decimal("100.1")
+
+    # Write smaller decimal,  works since it's fits in the previous decimal precision, scale
+    data = pa.table({"x": pa.array([Decimal("10.1")])})
+    write_deltalake(tmp_path, data, mode="append", engine="rust")
+
+    data = pa.table({"x": pa.array([Decimal("1000.1")])})
+    # write decimal that is larger than target type in table
+    with pytest.raises(
+        SchemaMismatchError,
+        match=re.escape(
+            "Cannot cast field x from Decimal128(5, 1) to Decimal128(4, 1)"
+        ),
+    ):
+        write_deltalake(tmp_path, data, mode="append", engine="rust")
+
+    with pytest.raises(SchemaMismatchError, match="Cannot merge types decimal"):
+        write_deltalake(
+            tmp_path, data, mode="append", schema_mode="merge", engine="rust"
+        )

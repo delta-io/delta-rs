@@ -200,6 +200,7 @@ async fn benchmark_merge_tpcds(
         table.log_store(),
         DeltaScanConfig {
             file_column_name: Some("file_path".to_string()),
+            ..Default::default()
         },
     )
     .unwrap();

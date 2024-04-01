@@ -623,10 +623,8 @@ impl std::future::IntoFuture for WriteBuilder {
                             if this.mode == SaveMode::Overwrite && this.schema_mode.is_some() {
                                 new_schema = None // we overwrite anyway, so no need to cast
                             } else if this.schema_mode == Some(SchemaMode::Merge) {
-                                new_schema = Some(Arc::new(merge_schema(
-                                    table_schema.as_ref().clone(),
-                                    schema.as_ref().clone(),
-                                )?));
+                                new_schema =
+                                    Some(merge_schema(table_schema.clone(), schema.clone())?);
                             } else {
                                 return Err(schema_err.into());
                             }
@@ -842,15 +840,42 @@ fn try_cast_batch(from_fields: &Fields, to_fields: &Fields) -> Result<(), ArrowE
                     (f.data_type(), target_field.data_type())
                 {
                     try_cast_batch(fields0, fields1)
-                } else if !can_cast_types(f.data_type(), target_field.data_type()) {
-                    Err(ArrowError::SchemaError(format!(
-                        "Cannot cast field {} from {} to {}",
-                        f.name(),
-                        f.data_type(),
-                        target_field.data_type()
-                    )))
                 } else {
-                    Ok(())
+                    match (f.data_type(), target_field.data_type()) {
+                        (
+                            DataType::Decimal128(left_precision, left_scale) | DataType::Decimal256(left_precision, left_scale),
+                            DataType::Decimal128(right_precision, right_scale)
+                        ) => {
+                            if left_precision <= right_precision && left_scale <= right_scale {
+                                Ok(())
+                            } else {
+                                Err(ArrowError::SchemaError(format!(
+                                    "Cannot cast field {} from {} to {}",
+                                    f.name(),
+                                    f.data_type(),
+                                    target_field.data_type()
+                                )))
+                            }
+                        },
+                        (
+                            _,
+                            DataType::Decimal256(_, _),
+                        ) => {
+                            unreachable!("Target field can never be Decimal 256. According to the protocol: 'The precision and scale can be up to 38.'")
+                        },
+                        (left, right) => {
+                            if !can_cast_types(left, right) {
+                                Err(ArrowError::SchemaError(format!(
+                                    "Cannot cast field {} from {} to {}",
+                                    f.name(),
+                                    f.data_type(),
+                                    target_field.data_type()
+                                )))
+                            } else {
+                                Ok(())
+                            }
+                        }
+                    }
                 }
             } else {
                 Err(ArrowError::SchemaError(format!(

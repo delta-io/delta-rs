@@ -94,6 +94,8 @@ pub mod expr;
 pub mod logical;
 pub mod physical;
 
+mod find_files;
+
 impl From<DeltaTableError> for DataFusionError {
     fn from(err: DeltaTableError) -> Self {
         match err {
@@ -296,8 +298,9 @@ pub(crate) fn register_store(store: LogStoreRef, env: Arc<RuntimeEnv>) {
     env.register_object_store(url, store.object_store());
 }
 
-/// The logical schema for a Deltatable is different then protocol level schema since partiton columns must appear at the end of the schema.
-/// This is to align with how partition are handled at the physical level
+/// The logical schema for a Deltatable is different from the protocol level schema since partition
+/// columns must appear at the end of the schema. This is to align with how partition are handled
+/// at the physical level
 pub(crate) fn df_logical_schema(
     snapshot: &DeltaTableState,
     scan_config: &DeltaScanConfig,
@@ -322,26 +325,36 @@ pub(crate) fn df_logical_schema(
     }
 
     if let Some(file_column_name) = &scan_config.file_column_name {
-        fields.push(Arc::new(Field::new(
-            file_column_name,
-            arrow_schema::DataType::Utf8,
-            true,
-        )));
+        fields.push(Arc::new(Field::new(file_column_name, DataType::Utf8, true)));
     }
 
     Ok(Arc::new(ArrowSchema::new(fields)))
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 /// Used to specify if additional metadata columns are exposed to the user
 pub struct DeltaScanConfigBuilder {
-    /// Include the source path for each record. The name of this column is determine by `file_column_name`
+    /// Include the source path for each record. The name of this column is determined by `file_column_name`
     include_file_column: bool,
     /// Column name that contains the source path.
     ///
     /// If include_file_column is true and the name is None then it will be auto-generated
     /// Otherwise the user provided name will be used
     file_column_name: Option<String>,
+    /// Whether to wrap partition values in a dictionary encoding to potentially save space
+    wrap_partition_values: Option<bool>,
+    enable_parquet_pushdown: bool,
+}
+
+impl Default for DeltaScanConfigBuilder {
+    fn default() -> Self {
+        DeltaScanConfigBuilder {
+            include_file_column: false,
+            file_column_name: None,
+            wrap_partition_values: None,
+            enable_parquet_pushdown: true,
+        }
+    }
 }
 
 impl DeltaScanConfigBuilder {
@@ -362,6 +375,19 @@ impl DeltaScanConfigBuilder {
     pub fn with_file_column_name<S: ToString>(mut self, name: &S) -> Self {
         self.file_column_name = Some(name.to_string());
         self.include_file_column = true;
+        self
+    }
+
+    /// Whether to wrap partition values in a dictionary encoding
+    pub fn wrap_partition_values(mut self, wrap: bool) -> Self {
+        self.wrap_partition_values = Some(wrap);
+        self
+    }
+
+    /// Allow pushdown of the scan filter
+    /// When disabled the filter will only be used for pruning files
+    pub fn with_parquet_pushdown(mut self, pushdown: bool) -> Self {
+        self.enable_parquet_pushdown = pushdown;
         self
     }
 
@@ -401,7 +427,11 @@ impl DeltaScanConfigBuilder {
             }
         }
 
-        Ok(DeltaScanConfig { file_column_name })
+        Ok(DeltaScanConfig {
+            file_column_name,
+            wrap_partition_values: self.wrap_partition_values.unwrap_or(true),
+            enable_parquet_pushdown: self.enable_parquet_pushdown,
+        })
     }
 }
 
@@ -410,6 +440,10 @@ impl DeltaScanConfigBuilder {
 pub struct DeltaScanConfig {
     /// Include the source path for each record
     pub file_column_name: Option<String>,
+    /// Wrap partition values in a dictionary encoding
+    pub wrap_partition_values: bool,
+    /// Allow pushdown of the scan filter
+    pub enable_parquet_pushdown: bool,
 }
 
 #[derive(Debug)]
@@ -534,10 +568,12 @@ impl<'a> DeltaScanBuilder<'a> {
             let mut part = partitioned_file_from_action(action, table_partition_cols, &schema);
 
             if config.file_column_name.is_some() {
-                part.partition_values
-                    .push(wrap_partition_value_in_dict(ScalarValue::Utf8(Some(
-                        action.path.clone(),
-                    ))));
+                let partition_value = if config.wrap_partition_values {
+                    wrap_partition_value_in_dict(ScalarValue::Utf8(Some(action.path.clone())))
+                } else {
+                    ScalarValue::Utf8(Some(action.path.clone()))
+                };
+                part.partition_values.push(partition_value);
             }
 
             file_groups
@@ -561,9 +597,14 @@ impl<'a> DeltaScanBuilder<'a> {
             .collect::<Result<Vec<_>, ArrowError>>()?;
 
         if let Some(file_column_name) = &config.file_column_name {
+            let field_name_datatype = if config.wrap_partition_values {
+                wrap_partition_type_in_dict(DataType::Utf8)
+            } else {
+                DataType::Utf8
+            };
             table_partition_cols.push(Field::new(
                 file_column_name.clone(),
-                wrap_partition_type_in_dict(DataType::Utf8),
+                field_name_datatype,
                 false,
             ));
         }
@@ -572,6 +613,15 @@ impl<'a> DeltaScanBuilder<'a> {
             .snapshot
             .datafusion_table_statistics()
             .unwrap_or(Statistics::new_unknown(&schema));
+
+        // Sometimes (i.e Merge) we want to prune files that don't make the
+        // filter and read the entire contents for files that do match the
+        // filter
+        let parquet_pushdown = if config.enable_parquet_pushdown {
+            logical_filter.clone()
+        } else {
+            None
+        };
 
         let scan = ParquetFormat::new()
             .create_physical_plan(
@@ -586,7 +636,7 @@ impl<'a> DeltaScanBuilder<'a> {
                     table_partition_cols,
                     output_ordering: vec![],
                 },
-                logical_filter.as_ref(),
+                parquet_pushdown.as_ref(),
             )
             .await?;
 
@@ -1300,6 +1350,7 @@ impl TreeNodeVisitor for FindFilesExprProperties {
     }
 }
 
+#[derive(Debug, Hash, Eq, PartialEq)]
 /// Representing the result of the [find_files] function.
 pub struct FindFiles {
     /// A list of `Add` objects that match the given predicate
@@ -1353,7 +1404,7 @@ fn join_batches_with_add_actions(
     Ok(files)
 }
 
-/// Determine which files contain a record that statisfies the predicate
+/// Determine which files contain a record that satisfies the predicate
 pub(crate) async fn find_files_scan<'a>(
     snapshot: &DeltaTableState,
     log_store: LogStoreRef,

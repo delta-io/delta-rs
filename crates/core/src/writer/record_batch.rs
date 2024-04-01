@@ -198,7 +198,7 @@ impl DeltaWriter<RecordBatch> for RecordBatchWriter {
 
         for result in self.divide_by_partition_values(&values)? {
             let schema = self
-                .write_partition(result.record_batch, &result.partition_values, mode.clone())
+                .write_partition(result.record_batch, &result.partition_values, mode)
                 .await?;
             self.arrow_schema_ref = schema;
         }
@@ -306,11 +306,9 @@ impl PartitionWriter {
                 WriteMode::MergeSchema => {
                     debug!("The writer and record batch schemas do not match, merging");
 
-                    let merged = merge_schema(
-                        self.arrow_schema.as_ref().clone(),
-                        record_batch.schema().as_ref().clone(),
-                    )?;
-                    self.arrow_schema = Arc::new(merged);
+                    let merged =
+                        merge_schema(self.arrow_schema.clone(), record_batch.schema().clone())?;
+                    self.arrow_schema = merged;
 
                     let mut cols = vec![];
                     for field in self.arrow_schema.fields() {

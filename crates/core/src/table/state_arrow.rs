@@ -91,7 +91,7 @@ impl DeltaTableState {
                     .fields
                     .iter()
                     .map(|field| Cow::Owned(field.name().clone()))
-                    .zip(partition_cols_batch.columns().iter().map(Arc::clone)),
+                    .zip(partition_cols_batch.columns().iter().cloned()),
             )
         }
 
@@ -103,7 +103,7 @@ impl DeltaTableState {
                     .fields
                     .iter()
                     .map(|field| Cow::Owned(field.name().clone()))
-                    .zip(stats.columns().iter().map(Arc::clone)),
+                    .zip(stats.columns().iter().cloned()),
             );
         }
         if files.iter().any(|add| add.deletion_vector.is_some()) {
@@ -114,7 +114,7 @@ impl DeltaTableState {
                     .fields
                     .iter()
                     .map(|field| Cow::Owned(field.name().clone()))
-                    .zip(delvs.columns().iter().map(Arc::clone)),
+                    .zip(delvs.columns().iter().cloned()),
             );
         }
         if files.iter().any(|add| {
@@ -129,7 +129,7 @@ impl DeltaTableState {
                     .fields
                     .iter()
                     .map(|field| Cow::Owned(field.name().clone()))
-                    .zip(tags.columns().iter().map(Arc::clone)),
+                    .zip(tags.columns().iter().cloned()),
             );
         }
 
@@ -328,7 +328,7 @@ impl DeltaTableState {
 
         for add in files {
             if let Some(value) = &add.deletion_vector {
-                storage_type.append_value(&value.storage_type);
+                storage_type.append_value(value.storage_type);
                 path_or_inline_div.append_value(value.path_or_inline_dv.clone());
                 if let Some(ofs) = value.offset {
                     offset.append_value(ofs);
