@@ -363,7 +363,7 @@ impl<'a> fmt::Display for ScalarValueFormat<'a> {
                     "{}",
                     NaiveDateTime::from_timestamp_millis((*e).into())
                         .ok_or(Error::default())?
-                        .date()
+                        .date().format("%Y-%m-%d")
                 )?,
                 None => write!(f, "NULL")?,
             },
@@ -371,15 +371,16 @@ impl<'a> fmt::Display for ScalarValueFormat<'a> {
                 Some(e) => match tz {
                     Some(tz) => write!(
                         f,
-                        "{}",
+                        "'{}'",
                         NaiveDateTime::from_timestamp_micros(*e)
                             .ok_or(Error::default())?
                             .and_utc()
+                            .format("%Y-%m-%dT%H:%M:%S%.6f")
                     )?,
                     None => write!(
                         f,
-                        "{}",
-                        NaiveDateTime::from_timestamp_micros(*e).ok_or(Error::default())?
+                        "'{}'",
+                        NaiveDateTime::from_timestamp_micros(*e).ok_or(Error::default())?.format("%Y-%m-%dT%H:%M:%S%.6f")
                     )?,
                 },
                 None => write!(f, "NULL")?,
@@ -483,6 +484,11 @@ mod test {
             StructField::new(
                 "_timestamp".to_string(),
                 DataType::Primitive(PrimitiveType::Timestamp),
+                true,
+            ),
+            StructField::new(
+                "_timestamp_ntz".to_string(),
+                DataType::Primitive(PrimitiveType::TimestampNtz),
                 true,
             ),
             StructField::new(
@@ -649,6 +655,17 @@ mod test {
             simple!(
                 cardinality(col("_list").range(col("value"), lit(10_i64))),
                 "cardinality(_list[value:10:1])".to_string()
+            ),
+            simple!(
+                col("_timestamp_ntz").gt(lit(ScalarValue::TimestampMicrosecond(Some(1262304000000000), None))),
+                "_timestamp_ntz > '2010-01-01T00:00:00.000000'".to_string()
+            ),
+            simple!(
+                col("_timestamp").gt(lit(ScalarValue::TimestampMicrosecond(
+                    Some(1262304000000000),
+                    Some("UTC".into())
+                ))),
+                "_timestamp > '2010-01-01T00:00:00.000000 UTC'".to_string()
             ),
         ];
 
