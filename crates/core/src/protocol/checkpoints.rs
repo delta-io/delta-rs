@@ -6,7 +6,7 @@ use std::iter::Iterator;
 use arrow_json::ReaderBuilder;
 use arrow_schema::ArrowError;
 
-use chrono::{DateTime, Datelike, Utc};
+use chrono::{DateTime, Datelike, NaiveDate, NaiveDateTime, Utc};
 use futures::{StreamExt, TryStreamExt};
 use lazy_static::lazy_static;
 use object_store::{Error, ObjectStore};
@@ -435,19 +435,17 @@ fn typed_partition_value_from_string(
                 .map_err(|_| CheckpointError::PartitionValueNotParseable(string_value.to_owned()))?
                 .into()),
             PrimitiveType::Date => {
-                let d = chrono::naive::NaiveDate::parse_from_str(string_value, "%Y-%m-%d")
-                    .map_err(|_| {
-                        CheckpointError::PartitionValueNotParseable(string_value.to_owned())
-                    })?;
+                let d = NaiveDate::parse_from_str(string_value, "%Y-%m-%d").map_err(|_| {
+                    CheckpointError::PartitionValueNotParseable(string_value.to_owned())
+                })?;
                 // day 0 is 1970-01-01 (719163 days from ce)
                 Ok((d.num_days_from_ce() - 719_163).into())
             }
             PrimitiveType::Timestamp => {
-                let ts =
-                    DateTime::parse_from_str(string_value, "%Y-%m-%d %H:%M:%S").map_err(|_| {
-                        CheckpointError::PartitionValueNotParseable(string_value.to_owned())
-                    })?;
-                Ok((ts.timestamp_millis() * 1000).into())
+                let ts = NaiveDateTime::parse_from_str(string_value, "%Y-%m-%d %H:%M:%S").map_err(
+                    |_| CheckpointError::PartitionValueNotParseable(string_value.to_owned()),
+                )?;
+                Ok((ts.and_utc().timestamp_millis() * 1000).into())
             }
             s => unimplemented!(
                 "Primitive type {} is not supported for partition column values.",
