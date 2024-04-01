@@ -360,7 +360,7 @@ impl<'a> fmt::Display for ScalarValueFormat<'a> {
             ScalarValue::Date64(e) => match e {
                 Some(e) => write!(
                     f,
-                    "{}",
+                    "'{}'::date",
                     NaiveDateTime::from_timestamp_millis((*e).into())
                         .ok_or(Error::default())?
                         .date().format("%Y-%m-%d")
@@ -371,7 +371,7 @@ impl<'a> fmt::Display for ScalarValueFormat<'a> {
                 Some(e) => match tz {
                     Some(tz) => write!(
                         f,
-                        "'{}'",
+                        "arrow_cast('{}', 'Timestamp(Microsecond, UTC)')",
                         NaiveDateTime::from_timestamp_micros(*e)
                             .ok_or(Error::default())?
                             .and_utc()
@@ -379,7 +379,7 @@ impl<'a> fmt::Display for ScalarValueFormat<'a> {
                     )?,
                     None => write!(
                         f,
-                        "'{}'",
+                        "arrow_cast('{}', 'Timestamp(Microsecond, None)')",
                         NaiveDateTime::from_timestamp_micros(*e).ok_or(Error::default())?.format("%Y-%m-%dT%H:%M:%S%.6f")
                     )?,
                 },
@@ -411,6 +411,7 @@ impl<'a> fmt::Display for ScalarValueFormat<'a> {
 
 #[cfg(test)]
 mod test {
+    use arrow_cast::cast;
     use arrow_schema::DataType as ArrowDataType;
     use datafusion::prelude::SessionContext;
     use datafusion_common::{Column, ScalarValue, ToDFSchema};
@@ -656,17 +657,29 @@ mod test {
                 cardinality(col("_list").range(col("value"), lit(10_i64))),
                 "cardinality(_list[value:10:1])".to_string()
             ),
-            simple!(
-                col("_timestamp_ntz").gt(lit(ScalarValue::TimestampMicrosecond(Some(1262304000000000), None))),
-                "_timestamp_ntz > '2010-01-01T00:00:00.000000'".to_string()
-            ),
-            simple!(
-                col("_timestamp").gt(lit(ScalarValue::TimestampMicrosecond(
+            ParseTest {
+                expr: col("_timestamp_ntz").gt(lit(ScalarValue::TimestampMicrosecond(Some(1262304000000000), None))),
+                expected: "_timestamp_ntz > arrow_cast('2010-01-01T00:00:00.000000', 'Timestamp(Microsecond, None)')".to_string(),
+                override_expected_expr: Some(col("_timestamp_ntz").gt(
+                    datafusion_expr::Expr::Cast( Cast {
+                        expr: Box::new(lit(ScalarValue::Utf8(Some("2010-01-01T00:00:00.000000".into())))),
+                        data_type:ArrowDataType::Timestamp(arrow_schema::TimeUnit::Microsecond, None)
+                    }   
+                    ))),
+            },
+            ParseTest {
+                expr: col("_timestamp").gt(lit(ScalarValue::TimestampMicrosecond(
                     Some(1262304000000000),
                     Some("UTC".into())
                 ))),
-                "_timestamp > '2010-01-01T00:00:00.000000 UTC'".to_string()
-            ),
+                expected: "_timestamp > arrow_cast('2010-01-01T00:00:00.000000', 'Timestamp(Microsecond, UTC)')".to_string(),
+                override_expected_expr: Some(col("_timestamp_ntz").gt(
+                    datafusion_expr::Expr::Cast( Cast {
+                        expr: Box::new(lit(ScalarValue::Utf8(Some("2010-01-01T00:00:00.000000".into())))),
+                        data_type:ArrowDataType::Timestamp(arrow_schema::TimeUnit::Microsecond, Some("UTC".into()))
+                    }   
+                    ))),
+            },
         ];
 
         let session: SessionContext = DeltaSessionContext::default().into();
