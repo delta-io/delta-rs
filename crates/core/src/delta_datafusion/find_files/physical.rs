@@ -99,8 +99,14 @@ impl ExecutionPlan for FindFilesExec {
 
     fn with_new_children(
         self: Arc<Self>,
-        _children: Vec<Arc<dyn ExecutionPlan>>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        if !children.is_empty() {
+            return Err(datafusion::error::DataFusionError::Plan(
+                "Children cannot be replaced in FindFilesExec".to_string(),
+            ));
+        }
+
         Ok(self)
     }
 
