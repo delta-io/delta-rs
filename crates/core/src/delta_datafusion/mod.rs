@@ -835,7 +835,18 @@ impl ExecutionPlan for DeltaScan {
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> DataFusionResult<Arc<dyn ExecutionPlan>> {
-        ExecutionPlan::with_new_children(self.parquet_scan.clone(), children)
+        if children.len() != 1 {
+            return Err(DataFusionError::Plan(format!(
+                "DeltaScan wrong number of children {}",
+                children.len()
+            )));
+        }
+        Ok(Arc::new(DeltaScan {
+            table_uri: self.table_uri.clone(),
+            config: self.config.clone(),
+            parquet_scan: children[0].clone(),
+            logical_schema: self.logical_schema.clone(),
+        }))
     }
 
     fn execute(
