@@ -363,7 +363,8 @@ impl<'a> fmt::Display for ScalarValueFormat<'a> {
                     "'{}'::date",
                     NaiveDateTime::from_timestamp_millis((*e).into())
                         .ok_or(Error::default())?
-                        .date().format("%Y-%m-%d")
+                        .date()
+                        .format("%Y-%m-%d")
                 )?,
                 None => write!(f, "NULL")?,
             },
@@ -371,16 +372,18 @@ impl<'a> fmt::Display for ScalarValueFormat<'a> {
                 Some(e) => match tz {
                     Some(tz) => write!(
                         f,
-                        "arrow_cast('{}', 'Timestamp(Microsecond, UTC)')",
+                        "to_timestamp_micros('{}')",
                         NaiveDateTime::from_timestamp_micros(*e)
                             .ok_or(Error::default())?
                             .and_utc()
-                            .format("%Y-%m-%dT%H:%M:%S%.6f")
+                            .format("%Y-%m-%dT%H:%M:%S%.6f%:z")
                     )?,
                     None => write!(
                         f,
-                        "arrow_cast('{}', 'Timestamp(Microsecond, None)')",
-                        NaiveDateTime::from_timestamp_micros(*e).ok_or(Error::default())?.format("%Y-%m-%dT%H:%M:%S%.6f")
+                        "to_timestamp_micros('{}')",
+                        NaiveDateTime::from_timestamp_micros(*e)
+                            .ok_or(Error::default())?
+                            .format("%Y-%m-%dT%H:%M:%S%.6f")
                     )?,
                 },
                 None => write!(f, "NULL")?,
@@ -415,7 +418,9 @@ mod test {
     use arrow_schema::DataType as ArrowDataType;
     use datafusion::prelude::SessionContext;
     use datafusion_common::{Column, ScalarValue, ToDFSchema};
-    use datafusion_expr::{cardinality, col, lit, substring, Cast, Expr, ExprSchemable};
+    use datafusion_expr::{
+        cardinality, col, lit, substring, to_timestamp_micros, Cast, Expr, ExprSchemable,
+    };
     use datafusion_functions::encoding::expr_fn::decode;
 
     use crate::delta_datafusion::{DataFusionMixins, DeltaSessionContext};
@@ -658,27 +663,26 @@ mod test {
                 "cardinality(_list[value:10:1])".to_string()
             ),
             ParseTest {
-                expr: col("_timestamp_ntz").gt(lit(ScalarValue::TimestampMicrosecond(Some(1262304000000000), None))),
-                expected: "_timestamp_ntz > arrow_cast('2010-01-01T00:00:00.000000', 'Timestamp(Microsecond, None)')".to_string(),
-                override_expected_expr: Some(col("_timestamp_ntz").gt(
-                    datafusion_expr::Expr::Cast( Cast {
-                        expr: Box::new(lit(ScalarValue::Utf8(Some("2010-01-01T00:00:00.000000".into())))),
-                        data_type:ArrowDataType::Timestamp(arrow_schema::TimeUnit::Microsecond, None)
-                    }   
-                    ))),
+                expr: col("_timestamp_ntz").gt(lit(ScalarValue::TimestampMicrosecond(
+                    Some(1262304000000000),
+                    None,
+                ))),
+                expected: "_timestamp_ntz > to_timestamp_micros('2010-01-01T00:00:00.000000')"
+                    .to_string(),
+                override_expected_expr: Some(col("_timestamp_ntz").gt(to_timestamp_micros(vec![
+                    lit(ScalarValue::Utf8(Some("2010-01-01T00:00:00.000000".into()))),
+                ]))),
             },
             ParseTest {
                 expr: col("_timestamp").gt(lit(ScalarValue::TimestampMicrosecond(
                     Some(1262304000000000),
-                    Some("UTC".into())
+                    Some("UTC".into()),
                 ))),
-                expected: "_timestamp > arrow_cast('2010-01-01T00:00:00.000000', 'Timestamp(Microsecond, UTC)')".to_string(),
-                override_expected_expr: Some(col("_timestamp_ntz").gt(
-                    datafusion_expr::Expr::Cast( Cast {
-                        expr: Box::new(lit(ScalarValue::Utf8(Some("2010-01-01T00:00:00.000000".into())))),
-                        data_type:ArrowDataType::Timestamp(arrow_schema::TimeUnit::Microsecond, Some("UTC".into()))
-                    }   
-                    ))),
+                expected: "_timestamp > to_timestamp_micros('2010-01-01T00:00:00.000000+00:00')"
+                    .to_string(),
+                override_expected_expr: Some(col("_timestamp").gt(to_timestamp_micros(vec![lit(
+                    ScalarValue::Utf8(Some("2010-01-01T00:00:00.000000+00:00".into())),
+                )]))),
             },
         ];
 
