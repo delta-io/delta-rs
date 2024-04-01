@@ -560,7 +560,7 @@ impl DeltaOperation {
 }
 
 /// The SaveMode used when performing a DeltaOperation
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, Copy, Clone, PartialEq, Eq)]
 pub enum SaveMode {
     /// Files will be appended to the target location.
     Append,
@@ -590,7 +590,7 @@ impl FromStr for SaveMode {
 }
 
 /// The OutputMode used in streaming operations.
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Copy, Clone)]
 pub enum OutputMode {
     /// Only new rows will be written when new data is available.
     Append,

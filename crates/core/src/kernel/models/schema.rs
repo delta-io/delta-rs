@@ -474,7 +474,7 @@ pub const DECIMAL_MAX_PRECISION: u8 = 38;
 /// The maximum scale for [PrimitiveType::Decimal] values
 pub const DECIMAL_MAX_SCALE: i8 = 38;
 
-#[derive(Debug, Serialize, Deserialize, PartialEq, Clone, Eq, Hash)]
+#[derive(Debug, Serialize, Deserialize, PartialEq, Copy, Clone, Eq, Hash)]
 #[serde(rename_all = "snake_case")]
 /// Primitive types supported by Delta
 pub enum PrimitiveType {

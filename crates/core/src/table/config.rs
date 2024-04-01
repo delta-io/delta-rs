@@ -365,7 +365,7 @@ impl<'a> TableConfig<'a> {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Copy, Clone, PartialEq)]
 /// The isolation level applied during transaction
 pub enum IsolationLevel {
     /// The strongest isolation level. It ensures that committed write operations
@@ -463,7 +463,7 @@ impl FromStr for CheckpointPolicy {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Copy, Clone, PartialEq)]
 /// The Column Mapping modes used for reading and writing data
 #[serde(rename_all = "camelCase")]
 pub enum ColumnMappingMode {

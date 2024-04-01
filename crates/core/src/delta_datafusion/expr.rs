@@ -34,10 +34,10 @@ use datafusion_expr::{
     expr::InList, AggregateUDF, Between, BinaryExpr, Cast, Expr, GetIndexedField, Like, TableSource,
 };
 use datafusion_sql::planner::{ContextProvider, SqlToRel};
-use sqlparser::ast::escape_quoted_string;
-use sqlparser::dialect::GenericDialect;
-use sqlparser::parser::Parser;
-use sqlparser::tokenizer::Tokenizer;
+use datafusion_sql::sqlparser::ast::escape_quoted_string;
+use datafusion_sql::sqlparser::dialect::GenericDialect;
+use datafusion_sql::sqlparser::parser::Parser;
+use datafusion_sql::sqlparser::tokenizer::Tokenizer;
 
 use crate::{DeltaResult, DeltaTableError};
 
@@ -275,13 +275,18 @@ impl<'a> Display for SqlFormat<'a> {
                 datafusion_expr::GetFieldAccess::ListIndex { key } => {
                     write!(f, "{}[{}]", SqlFormat { expr }, SqlFormat { expr: key })
                 }
-                datafusion_expr::GetFieldAccess::ListRange { start, stop } => {
+                datafusion_expr::GetFieldAccess::ListRange {
+                    start,
+                    stop,
+                    stride,
+                } => {
                     write!(
                         f,
-                        "{}[{}:{}]",
-                        SqlFormat { expr },
-                        SqlFormat { expr: start },
-                        SqlFormat { expr: stop }
+                        "{expr}[{start}:{stop}:{stride}]",
+                        expr = SqlFormat { expr },
+                        start = SqlFormat { expr: start },
+                        stop = SqlFormat { expr: stop },
+                        stride = SqlFormat { expr: stride }
                     )
                 }
             },
@@ -367,8 +372,9 @@ impl<'a> fmt::Display for ScalarValueFormat<'a> {
 mod test {
     use arrow_schema::DataType as ArrowDataType;
     use datafusion::prelude::SessionContext;
-    use datafusion_common::{Column, DFSchema, ScalarValue};
-    use datafusion_expr::{cardinality, col, decode, lit, substring, Cast, Expr, ExprSchemable};
+    use datafusion_common::{Column, ScalarValue, ToDFSchema};
+    use datafusion_expr::{cardinality, col, lit, substring, Cast, Expr, ExprSchemable};
+    use datafusion_functions::encoding::expr_fn::decode;
 
     use crate::delta_datafusion::{DataFusionMixins, DeltaSessionContext};
     use crate::kernel::{ArrayType, DataType, PrimitiveType, StructField, StructType};
@@ -572,7 +578,7 @@ mod test {
             ),
             simple!(
                 col("value")
-                    .cast_to::<DFSchema>(
+                    .cast_to(
                         &arrow_schema::DataType::Utf8,
                         &table
                             .snapshot()
@@ -581,7 +587,7 @@ mod test {
                             .unwrap()
                             .as_ref()
                             .to_owned()
-                            .try_into()
+                            .to_dfschema()
                             .unwrap()
                     )
                     .unwrap()
@@ -602,7 +608,7 @@ mod test {
             ),
             simple!(
                 cardinality(col("_list").range(col("value"), lit(10_i64))),
-                "cardinality(_list[value:10])".to_string()
+                "cardinality(_list[value:10:1])".to_string()
             ),
         ];
 
