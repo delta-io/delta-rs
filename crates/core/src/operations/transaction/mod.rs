@@ -246,6 +246,7 @@ impl TableReference for DeltaTableState {
 }
 
 /// Data that was actually written to the log store.
+#[derive(Debug)]
 pub struct CommitData {
     /// The actions
     pub actions: Vec<Action>,
@@ -280,8 +281,6 @@ impl CommitData {
         for txn in &app_transactions {
             actions.push(Action::Txn(txn.clone()))
         }
-
-        dbg!("{:?}", &actions);
 
         Ok(CommitData {
             actions,
@@ -626,11 +625,15 @@ impl<'a> PostCommit<'a> {
                 // This may only occur during concurrent write actions. We need to update the state first to - 1
                 // then we can advance.
                 snapshot
-                    .update(self.log_store.clone(), Some(self.version - 1))
+                    .update(
+                        self.log_store.clone(),
+                        Some(self.version - 1),
+                        Default::default(),
+                    )
                     .await?;
-                snapshot.advance(vec![&self.data])?;
+                snapshot.advance(vec![&self.data], Default::default())?;
             } else {
-                snapshot.advance(vec![&self.data])?;
+                snapshot.advance(vec![&self.data], Default::default())?;
             }
             let state = DeltaTableState {
                 app_transaction_version: HashMap::new(),

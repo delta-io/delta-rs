@@ -164,6 +164,7 @@ where
         if matches!(res, Poll::Ready(None)) {
             this.checkpoint.poll_next(cx).map(|b| match b {
                 Some(Ok(batch)) => {
+                    dbg!("Checkpoint Batch");
                     for visitor in this.visitors.iter_mut() {
                         visitor.visit_batch(&batch).unwrap();
                     }

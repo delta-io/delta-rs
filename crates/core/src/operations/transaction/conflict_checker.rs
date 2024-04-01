@@ -117,14 +117,24 @@ impl<'a> TransactionInfo<'a> {
     ) -> DeltaResult<Self> {
         use datafusion::prelude::SessionContext;
 
+        use crate::kernel::Txn;
+
         let session = SessionContext::new();
         let read_predicates = read_predicates
             .map(|pred| read_snapshot.parse_predicate_expression(pred, &session.state()))
             .transpose()?;
+
+        let mut read_app_ids = HashSet::<String>::new();
+        for action in actions.iter() {
+            if let Action::Txn(Txn { app_id, .. }) = action {
+                read_app_ids.insert(app_id.clone());
+            }
+        }
+
         Ok(Self {
             txn_id: "".into(),
             read_predicates,
-            read_app_ids: Default::default(),
+            read_app_ids: read_app_ids,
             actions,
             read_snapshot,
             read_whole_table,
@@ -139,10 +149,18 @@ impl<'a> TransactionInfo<'a> {
         actions: &'a Vec<Action>,
         read_whole_table: bool,
     ) -> Self {
+        use crate::kernel::Txn;
+
+        let mut read_app_ids = HashSet::<String>::new();
+        for action in actions.iter() {
+            if let Action::Txn(Txn { app_id, .. }) = action {
+                read_app_ids.insert(app_id.clone());
+            }
+        }
         Self {
             txn_id: "".into(),
             read_predicates,
-            read_app_ids: Default::default(),
+            read_app_ids: read_app_ids,
             actions,
             read_snapshot,
             read_whole_table,
@@ -156,10 +174,16 @@ impl<'a> TransactionInfo<'a> {
         actions: &'a Vec<Action>,
         read_whole_table: bool,
     ) -> DeltaResult<Self> {
+        let mut read_app_ids = HashSet::<String>::new();
+        for action in actions.iter() {
+            if let Action::Txn(Txn { app_id, .. }) = action {
+                read_app_ids.insert(app_id.clone());
+            }
+        }
         Ok(Self {
             txn_id: "".into(),
             read_predicates,
-            read_app_ids: Default::default(),
+            read_app_ids: read_app_ids,
             actions,
             read_snapshot,
             read_whole_table,
