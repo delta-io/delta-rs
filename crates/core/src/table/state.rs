@@ -53,9 +53,6 @@ impl ReplayVistor for AppTransactionVisitor {
             return Ok(());
         }
 
-        let s = pretty_format_batches(&[batch.to_owned()])
-            .unwrap()
-            .to_string();
         let txn_col = ex::extract_and_cast::<StructArray>(batch, "txn")?;
         let filter = is_not_null(txn_col)?;
 
