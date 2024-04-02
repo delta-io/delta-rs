@@ -23,7 +23,7 @@ use crate::kernel::arrow::extract::{self as ex, ProvidesColumnByName};
 use crate::kernel::arrow::json;
 use crate::{DeltaResult, DeltaTableConfig, DeltaTableError};
 
-use super::ReplayVistor;
+use super::ReplayVisitor;
 use super::Snapshot;
 
 pin_project! {
@@ -32,7 +32,7 @@ pin_project! {
 
         mapper: Arc<LogMapper>,
 
-        visitors: Vec<&'a mut dyn ReplayVistor>,
+        visitors: Vec<&'a mut dyn ReplayVisitor>,
 
         #[pin]
         commits: S,
@@ -47,7 +47,7 @@ impl<'a, S> ReplayStream<'a, S> {
         commits: S,
         checkpoint: S,
         snapshot: &Snapshot,
-        visitors: Vec<&'a mut dyn ReplayVistor>,
+        visitors: Vec<&'a mut dyn ReplayVisitor>,
     ) -> DeltaResult<Self> {
         let stats_schema = Arc::new((&snapshot.stats_schema()?).try_into()?);
         let mapper = Arc::new(LogMapper {
@@ -147,7 +147,9 @@ where
         let res = this.commits.poll_next(cx).map(|b| match b {
             Some(Ok(batch)) => {
                 for visitor in this.visitors.iter_mut() {
-                    visitor.visit_batch(&batch).unwrap();
+                    if let Err(e) = visitor.visit_batch(&batch) {
+                        return Some(Err(e));
+                    }
                 }
                 match this.scanner.process_files_batch(&batch, true) {
                     Ok(filtered) => Some(this.mapper.map_batch(filtered)),
@@ -160,9 +162,10 @@ where
         if matches!(res, Poll::Ready(None)) {
             this.checkpoint.poll_next(cx).map(|b| match b {
                 Some(Ok(batch)) => {
-                    dbg!("Checkpoint Batch");
                     for visitor in this.visitors.iter_mut() {
-                        visitor.visit_batch(&batch).unwrap();
+                        if let Err(e) = visitor.visit_batch(&batch) {
+                            return Some(Err(e));
+                        }
                     }
                     match this.scanner.process_files_batch(&batch, false) {
                         Ok(filtered) => Some(this.mapper.map_batch(filtered)),

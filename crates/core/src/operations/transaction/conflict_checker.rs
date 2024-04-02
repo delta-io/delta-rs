@@ -6,6 +6,7 @@ use super::CommitInfo;
 use crate::delta_datafusion::DataFusionMixins;
 use crate::errors::DeltaResult;
 use crate::kernel::EagerSnapshot;
+use crate::kernel::Txn;
 use crate::kernel::{Action, Add, Metadata, Protocol, Remove};
 use crate::logstore::{get_actions, LogStore};
 use crate::protocol::DeltaOperation;
@@ -117,8 +118,6 @@ impl<'a> TransactionInfo<'a> {
     ) -> DeltaResult<Self> {
         use datafusion::prelude::SessionContext;
 
-        use crate::kernel::Txn;
-
         let session = SessionContext::new();
         let read_predicates = read_predicates
             .map(|pred| read_snapshot.parse_predicate_expression(pred, &session.state()))
@@ -134,7 +133,7 @@ impl<'a> TransactionInfo<'a> {
         Ok(Self {
             txn_id: "".into(),
             read_predicates,
-            read_app_ids: read_app_ids,
+            read_app_ids,
             actions,
             read_snapshot,
             read_whole_table,
@@ -149,8 +148,6 @@ impl<'a> TransactionInfo<'a> {
         actions: &'a Vec<Action>,
         read_whole_table: bool,
     ) -> Self {
-        use crate::kernel::Txn;
-
         let mut read_app_ids = HashSet::<String>::new();
         for action in actions.iter() {
             if let Action::Txn(Txn { app_id, .. }) = action {
@@ -160,7 +157,7 @@ impl<'a> TransactionInfo<'a> {
         Self {
             txn_id: "".into(),
             read_predicates,
-            read_app_ids: read_app_ids,
+            read_app_ids,
             actions,
             read_snapshot,
             read_whole_table,
@@ -183,7 +180,7 @@ impl<'a> TransactionInfo<'a> {
         Ok(Self {
             txn_id: "".into(),
             read_predicates,
-            read_app_ids: read_app_ids,
+            read_app_ids,
             actions,
             read_snapshot,
             read_whole_table,
