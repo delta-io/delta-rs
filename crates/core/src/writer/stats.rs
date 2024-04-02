@@ -180,19 +180,19 @@ impl StatsScalar {
                 // https://github.com/delta-io/delta/blob/master/PROTOCOL.md#timestamp-without-timezone-timestampntz
                 let v = get_stat!(v);
                 let timestamp = match unit {
-                    TimeUnit::MILLIS(_) => chrono::NaiveDateTime::from_timestamp_millis(v),
-                    TimeUnit::MICROS(_) => chrono::NaiveDateTime::from_timestamp_micros(v),
+                    TimeUnit::MILLIS(_) => chrono::DateTime::from_timestamp_millis(v),
+                    TimeUnit::MICROS(_) => chrono::DateTime::from_timestamp_micros(v),
                     TimeUnit::NANOS(_) => {
                         let secs = v / 1_000_000_000;
                         let nanosecs = (v % 1_000_000_000) as u32;
-                        chrono::NaiveDateTime::from_timestamp_opt(secs, nanosecs)
+                        chrono::DateTime::from_timestamp(secs, nanosecs)
                     }
                 };
                 let timestamp = timestamp.ok_or(DeltaWriterError::StatsParsingFailed {
                     debug_value: v.to_string(),
                     logical_type: logical_type.clone(),
                 })?;
-                Ok(Self::Timestamp(timestamp))
+                Ok(Self::Timestamp(timestamp.naive_utc()))
             }
             (Statistics::Int64(v), Some(LogicalType::Decimal { scale, .. })) => {
                 let val = get_stat!(v) as f64 / 10.0_f64.powi(*scale);
