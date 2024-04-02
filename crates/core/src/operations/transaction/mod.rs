@@ -96,6 +96,8 @@ use crate::{crate_version, DeltaResult};
 
 pub use self::protocol::INSTANCE as PROTOCOL;
 
+#[cfg(test)]
+pub(crate) mod application;
 mod conflict_checker;
 mod protocol;
 #[cfg(feature = "datafusion")]

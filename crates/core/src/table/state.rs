@@ -5,7 +5,6 @@ use std::sync::Arc;
 
 use arrow::compute::{filter_record_batch, is_not_null};
 use arrow_array::{Array, Int64Array, StringArray, StructArray};
-use arrow_cast::pretty::pretty_format_batches;
 use chrono::Utc;
 use futures::TryStreamExt;
 use object_store::{path::Path, ObjectStore};
@@ -16,7 +15,7 @@ use super::{get_partition_col_data_types, DeltaTableConfig};
 use crate::kernel::arrow::extract as ex;
 use crate::kernel::{
     Action, Add, AddCDCFile, DataType, EagerSnapshot, LogDataHandler, LogicalFile, Metadata,
-    Protocol, Remove, ReplayVistor, StructType,
+    Protocol, Remove, ReplayVisitor, StructType,
 };
 
 use crate::logstore::LogStore;
@@ -48,7 +47,7 @@ impl AppTransactionVisitor {
     }
 }
 
-impl ReplayVistor for AppTransactionVisitor {
+impl ReplayVisitor for AppTransactionVisitor {
     fn visit_batch(&mut self, batch: &arrow_array::RecordBatch) -> DeltaResult<()> {
         if batch.column_by_name("txn").is_none() {
             return Ok(());
@@ -91,7 +90,7 @@ impl DeltaTableState {
         version: Option<i64>,
     ) -> DeltaResult<Self> {
         let mut app_visitor = AppTransactionVisitor::new();
-        let visitors: Vec<&mut dyn ReplayVistor> = vec![&mut app_visitor];
+        let visitors: Vec<&mut dyn ReplayVisitor> = vec![&mut app_visitor];
         let snapshot = EagerSnapshot::try_new_with_visitor(
             table_root,
             store.clone(),
@@ -290,7 +289,6 @@ impl DeltaTableState {
         log_store: Arc<dyn LogStore>,
         version: Option<i64>,
     ) -> Result<(), DeltaTableError> {
-        println!("update table");
         let mut app_txn_visitor = AppTransactionVisitor::new();
         self.snapshot
             .update(log_store, version, vec![&mut app_txn_visitor])

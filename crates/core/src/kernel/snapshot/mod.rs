@@ -203,7 +203,7 @@ impl Snapshot {
     pub fn files<'a>(
         &self,
         store: Arc<dyn ObjectStore>,
-        visitors: Vec<&'a mut dyn ReplayVistor>,
+        visitors: Vec<&'a mut dyn ReplayVisitor>,
     ) -> DeltaResult<ReplayStream<'a, BoxStream<'_, DeltaResult<RecordBatch>>>> {
         let log_stream = self.log_segment.commit_stream(
             store.clone(),
@@ -338,7 +338,7 @@ impl Snapshot {
 }
 
 /// Allows hooking into the reading of commit files and checkpoints whenever a table is loaded or updated.
-pub trait ReplayVistor: Send {
+pub trait ReplayVisitor: Send {
     /// Process a batch
     fn visit_batch(&mut self, batch: &RecordBatch) -> DeltaResult<()>;
 }
@@ -369,7 +369,7 @@ impl EagerSnapshot {
         store: Arc<dyn ObjectStore>,
         config: DeltaTableConfig,
         version: Option<i64>,
-        visitors: Vec<&mut dyn ReplayVistor>,
+        visitors: Vec<&mut dyn ReplayVisitor>,
     ) -> DeltaResult<Self> {
         let snapshot = Snapshot::try_new(table_root, store.clone(), config, version).await?;
         let files = snapshot.files(store, visitors)?.try_collect().await?;
@@ -395,7 +395,7 @@ impl EagerSnapshot {
         &mut self,
         log_store: Arc<dyn LogStore>,
         target_version: Option<i64>,
-        visitors: Vec<&'a mut dyn ReplayVistor>,
+        visitors: Vec<&'a mut dyn ReplayVisitor>,
     ) -> DeltaResult<()> {
         if Some(self.version()) == target_version {
             return Ok(());
@@ -507,7 +507,7 @@ impl EagerSnapshot {
     pub fn advance<'a>(
         &mut self,
         commits: impl IntoIterator<Item = &'a CommitData>,
-        mut visitors: Vec<&'a mut dyn ReplayVistor>,
+        mut visitors: Vec<&'a mut dyn ReplayVisitor>,
     ) -> DeltaResult<i64> {
         let mut metadata = None;
         let mut protocol = None;
