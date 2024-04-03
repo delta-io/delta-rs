@@ -95,6 +95,11 @@ impl ExecutionPlan for MergeBarrierExec {
         self: std::sync::Arc<Self>,
         children: Vec<std::sync::Arc<dyn ExecutionPlan>>,
     ) -> datafusion_common::Result<std::sync::Arc<dyn ExecutionPlan>> {
+        if children.len() != 1 {
+            return Err(DataFusionError::Plan(
+                "MergeBarrierExec wrong number of children".to_string(),
+            ));
+        }
         Ok(Arc::new(MergeBarrierExec::new(
             children[0].clone(),
             self.file_column.clone(),

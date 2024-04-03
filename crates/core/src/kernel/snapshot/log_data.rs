@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use arrow_array::{Array, Int32Array, Int64Array, MapArray, RecordBatch, StringArray, StructArray};
-use chrono::{NaiveDateTime, TimeZone, Utc};
+use chrono::{DateTime, Utc};
 use indexmap::IndexMap;
 use object_store::path::Path;
 use object_store::ObjectMeta;
@@ -178,13 +178,11 @@ impl LogicalFile<'_> {
 
     /// Datetime of the last modification time of the file.
     pub fn modification_datetime(&self) -> DeltaResult<chrono::DateTime<Utc>> {
-        Ok(Utc.from_utc_datetime(
-            &NaiveDateTime::from_timestamp_millis(self.modification_time()).ok_or(
-                DeltaTableError::from(crate::protocol::ProtocolError::InvalidField(format!(
-                    "invalid modification_time: {:?}",
-                    self.modification_time()
-                ))),
-            )?,
+        DateTime::from_timestamp_millis(self.modification_time()).ok_or(DeltaTableError::from(
+            crate::protocol::ProtocolError::InvalidField(format!(
+                "invalid modification_time: {:?}",
+                self.modification_time()
+            )),
         ))
     }
 
@@ -549,7 +547,15 @@ mod datafusion {
                             _ => None,
                         })
                         .collect::<Option<Vec<_>>>()
-                        .map(|o| Precision::Exact(ScalarValue::Struct(Some(o), fields.clone())))
+                        .map(|o| {
+                            let arrays = o
+                                .into_iter()
+                                .map(|sv| sv.to_array())
+                                .collect::<Result<Vec<_>, datafusion_common::DataFusionError>>()
+                                .unwrap();
+                            let sa = StructArray::new(fields.clone(), arrays, None);
+                            Precision::Exact(ScalarValue::Struct(Arc::new(sa)))
+                        })
                         .unwrap_or(Precision::Absent);
                 }
                 _ => Precision::Absent,

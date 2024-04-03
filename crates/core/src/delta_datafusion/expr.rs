@@ -22,11 +22,12 @@
 //! Utility functions for Datafusion's Expressions
 
 use std::{
-    fmt::{self, Display, Formatter, Write},
+    fmt::{self, format, Display, Error, Formatter, Write},
     sync::Arc,
 };
 
 use arrow_schema::DataType;
+use chrono::{Date, NaiveDate, NaiveDateTime, TimeZone};
 use datafusion::execution::context::SessionState;
 use datafusion_common::Result as DFResult;
 use datafusion_common::{config::ConfigOptions, DFSchema, Result, ScalarValue, TableReference};
@@ -34,10 +35,10 @@ use datafusion_expr::{
     expr::InList, AggregateUDF, Between, BinaryExpr, Cast, Expr, GetIndexedField, Like, TableSource,
 };
 use datafusion_sql::planner::{ContextProvider, SqlToRel};
-use sqlparser::ast::escape_quoted_string;
-use sqlparser::dialect::GenericDialect;
-use sqlparser::parser::Parser;
-use sqlparser::tokenizer::Tokenizer;
+use datafusion_sql::sqlparser::ast::escape_quoted_string;
+use datafusion_sql::sqlparser::dialect::GenericDialect;
+use datafusion_sql::sqlparser::parser::Parser;
+use datafusion_sql::sqlparser::tokenizer::Tokenizer;
 
 use crate::{DeltaResult, DeltaTableError};
 
@@ -275,13 +276,18 @@ impl<'a> Display for SqlFormat<'a> {
                 datafusion_expr::GetFieldAccess::ListIndex { key } => {
                     write!(f, "{}[{}]", SqlFormat { expr }, SqlFormat { expr: key })
                 }
-                datafusion_expr::GetFieldAccess::ListRange { start, stop } => {
+                datafusion_expr::GetFieldAccess::ListRange {
+                    start,
+                    stop,
+                    stride,
+                } => {
                     write!(
                         f,
-                        "{}[{}:{}]",
-                        SqlFormat { expr },
-                        SqlFormat { expr: start },
-                        SqlFormat { expr: stop }
+                        "{expr}[{start}:{stop}:{stride}]",
+                        expr = SqlFormat { expr },
+                        start = SqlFormat { expr: start },
+                        stop = SqlFormat { expr: stop },
+                        stride = SqlFormat { expr: stride }
                     )
                 }
             },
@@ -321,6 +327,9 @@ macro_rules! format_option {
     }};
 }
 
+/// Epoch days from ce calander until 1970-01-01
+pub const EPOCH_DAYS_FROM_CE: i32 = 719_163;
+
 struct ScalarValueFormat<'a> {
     scalar: &'a ScalarValue,
 }
@@ -339,6 +348,46 @@ impl<'a> fmt::Display for ScalarValueFormat<'a> {
             ScalarValue::UInt16(e) => format_option!(f, e)?,
             ScalarValue::UInt32(e) => format_option!(f, e)?,
             ScalarValue::UInt64(e) => format_option!(f, e)?,
+            ScalarValue::Date32(e) => match e {
+                Some(e) => write!(
+                    f,
+                    "{}",
+                    NaiveDate::from_num_days_from_ce_opt((EPOCH_DAYS_FROM_CE + (*e)).into())
+                        .ok_or(Error::default())?
+                )?,
+                None => write!(f, "NULL")?,
+            },
+            ScalarValue::Date64(e) => match e {
+                Some(e) => write!(
+                    f,
+                    "'{}'::date",
+                    NaiveDateTime::from_timestamp_millis((*e).into())
+                        .ok_or(Error::default())?
+                        .date()
+                        .format("%Y-%m-%d")
+                )?,
+                None => write!(f, "NULL")?,
+            },
+            ScalarValue::TimestampMicrosecond(e, tz) => match e {
+                Some(e) => match tz {
+                    Some(tz) => write!(
+                        f,
+                        "arrow_cast('{}', 'Timestamp(Microsecond, Some(\"UTC\"))')",
+                        NaiveDateTime::from_timestamp_micros(*e)
+                            .ok_or(Error::default())?
+                            .and_utc()
+                            .format("%Y-%m-%dT%H:%M:%S%.6f")
+                    )?,
+                    None => write!(
+                        f,
+                        "arrow_cast('{}', 'Timestamp(Microsecond, None)')",
+                        NaiveDateTime::from_timestamp_micros(*e)
+                            .ok_or(Error::default())?
+                            .format("%Y-%m-%dT%H:%M:%S%.6f")
+                    )?,
+                },
+                None => write!(f, "NULL")?,
+            },
             ScalarValue::Utf8(e) | ScalarValue::LargeUtf8(e) => match e {
                 Some(e) => write!(f, "'{}'", escape_quoted_string(e, '\''))?,
                 None => write!(f, "NULL")?,
@@ -367,8 +416,9 @@ impl<'a> fmt::Display for ScalarValueFormat<'a> {
 mod test {
     use arrow_schema::DataType as ArrowDataType;
     use datafusion::prelude::SessionContext;
-    use datafusion_common::{Column, DFSchema, ScalarValue};
-    use datafusion_expr::{cardinality, col, decode, lit, substring, Cast, Expr, ExprSchemable};
+    use datafusion_common::{Column, ScalarValue, ToDFSchema};
+    use datafusion_expr::{cardinality, col, lit, substring, Cast, Expr, ExprSchemable};
+    use datafusion_functions::encoding::expr_fn::decode;
 
     use crate::delta_datafusion::{DataFusionMixins, DeltaSessionContext};
     use crate::kernel::{ArrayType, DataType, PrimitiveType, StructField, StructType};
@@ -437,6 +487,11 @@ mod test {
             StructField::new(
                 "_timestamp".to_string(),
                 DataType::Primitive(PrimitiveType::Timestamp),
+                true,
+            ),
+            StructField::new(
+                "_timestamp_ntz".to_string(),
+                DataType::Primitive(PrimitiveType::TimestampNtz),
                 true,
             ),
             StructField::new(
@@ -572,7 +627,7 @@ mod test {
             ),
             simple!(
                 col("value")
-                    .cast_to::<DFSchema>(
+                    .cast_to(
                         &arrow_schema::DataType::Utf8,
                         &table
                             .snapshot()
@@ -581,7 +636,7 @@ mod test {
                             .unwrap()
                             .as_ref()
                             .to_owned()
-                            .try_into()
+                            .to_dfschema()
                             .unwrap()
                     )
                     .unwrap()
@@ -602,8 +657,30 @@ mod test {
             ),
             simple!(
                 cardinality(col("_list").range(col("value"), lit(10_i64))),
-                "cardinality(_list[value:10])".to_string()
+                "cardinality(_list[value:10:1])".to_string()
             ),
+            ParseTest {
+                expr: col("_timestamp_ntz").gt(lit(ScalarValue::TimestampMicrosecond(Some(1262304000000000), None))),
+                expected: "_timestamp_ntz > arrow_cast('2010-01-01T00:00:00.000000', 'Timestamp(Microsecond, None)')".to_string(),
+                override_expected_expr: Some(col("_timestamp_ntz").gt(
+                    datafusion_expr::Expr::Cast( Cast {
+                        expr: Box::new(lit(ScalarValue::Utf8(Some("2010-01-01T00:00:00.000000".into())))),
+                        data_type:ArrowDataType::Timestamp(arrow_schema::TimeUnit::Microsecond, None)
+                    }
+                    ))),
+            },
+            ParseTest {
+                expr: col("_timestamp").gt(lit(ScalarValue::TimestampMicrosecond(
+                    Some(1262304000000000),
+                    Some("UTC".into())
+                ))),
+                expected: "_timestamp > arrow_cast('2010-01-01T00:00:00.000000', 'Timestamp(Microsecond, Some(\"UTC\"))')".to_string(),
+                override_expected_expr: Some(col("_timestamp").gt(
+                    datafusion_expr::Expr::Cast( Cast {
+                        expr: Box::new(lit(ScalarValue::Utf8(Some("2010-01-01T00:00:00.000000".into())))),
+                        data_type:ArrowDataType::Timestamp(arrow_schema::TimeUnit::Microsecond, Some("UTC".into()))
+                    }))),
+            },
         ];
 
         let session: SessionContext = DeltaSessionContext::default().into();
