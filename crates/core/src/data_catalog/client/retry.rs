@@ -178,7 +178,7 @@ impl RetryExt for reqwest::RequestBuilder {
                         let mut do_retry = false;
                         if let Some(source) = e.source() {
                             if let Some(e) = source.downcast_ref::<hyper::Error>() {
-                                if e.is_connect() || e.is_closed() || e.is_incomplete_message() {
+                                if e.is_closed() || e.is_incomplete_message() {
                                     do_retry = true;
                                 }
                             }
@@ -211,8 +211,9 @@ mod tests {
     use super::super::mock_server::MockServer;
     use super::RetryConfig;
     use super::RetryExt;
+    use hyper::body::Body;
     use hyper::header::LOCATION;
-    use hyper::{Body, Response};
+    use hyper::Response;
     use reqwest::{Client, Method, StatusCode};
     use std::time::Duration;
 
