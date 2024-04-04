@@ -1,5 +1,6 @@
 //! Lock client implementation based on DynamoDb.
 
+mod credentials;
 pub mod errors;
 pub mod logstore;
 #[cfg(feature = "native-tls")]
