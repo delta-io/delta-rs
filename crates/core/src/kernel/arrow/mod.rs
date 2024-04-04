@@ -805,6 +805,8 @@ mod tests {
             .unwrap_err(),
             _
         ));
+    }
+
     fn test_arrow_from_delta_time64_type() {
         let time_field = DataType::Primitive(PrimitiveType::Time);
         assert_eq!(
