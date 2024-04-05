@@ -101,14 +101,13 @@ def test_load_as_version_datetime(date_value: str, expected_version):
     assert dt.version() == expected_version
 
 
-@pytest.mark.skip("Log replay, loading table before checkpoint is broken atm.")
 @pytest.mark.parametrize(
     ["date_value", "expected_version", "log_mtime_pairs"],
     [
-        ("2020-05-01T00:47:31-07:00", 2, [("00000000000000000000.json", 158839841.0)]),
+        ("2020-05-01T00:47:31-07:00", 1, [("00000000000000000000.json", 158839841.0)]),
         (
             "2020-05-02T22:47:31-07:00",
-            3,
+            2,
             [
                 ("00000000000000000000.json", 158839841.0),
                 ("00000000000000000001.json", 1588484851.0),
