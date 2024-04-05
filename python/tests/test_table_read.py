@@ -137,7 +137,7 @@ def test_load_as_version_datetime_with_logs_removed(
     assert file.exists()
     dt.cleanup_metadata()
 
-    file = log_path / f"0000000000000000000{expected_version-2}.json"
+    file = log_path / f"0000000000000000000{expected_version-1}.json"
     assert not file.exists()
     dt = DeltaTable(tmp_path)
     dt.load_as_version(date_value)
