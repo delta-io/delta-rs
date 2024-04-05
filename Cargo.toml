@@ -46,13 +46,21 @@ object_store = { version = "0.9" }
 parquet = { git = "https://github.com/Nekit2217/arrow-rs", branch="decimal-e-notation" }
 
 # datafusion
-datafusion = { git = "https://github.com/Nekit2217/arrow-datafusion", branch="main" }
-datafusion-expr = { git = "https://github.com/Nekit2217/arrow-datafusion", branch="main" }
-datafusion-common = { git = "https://github.com/Nekit2217/arrow-datafusion", branch="main" }
-datafusion-proto = { git = "https://github.com/Nekit2217/arrow-datafusion", branch="main" }
-datafusion-sql = { git = "https://github.com/Nekit2217/arrow-datafusion", branch="main" }
-datafusion-physical-expr = { git = "https://github.com/Nekit2217/arrow-datafusion", branch="main" }
-datafusion-functions = { git = "https://github.com/Nekit2217/arrow-datafusion", branch="main" }
+datafusion = { version = "36" }
+datafusion-expr = { version = "36" }
+datafusion-common = { version = "36" }
+datafusion-proto = { version = "36" }
+datafusion-sql = { version = "36" }
+datafusion-physical-expr = { version = "36" }
+datafusion-functions = { version = "36" }
+#datafusion = { git = "https://github.com/Nekit2217/arrow-datafusion", branch="main" }
+#datafusion-expr = { git = "https://github.com/Nekit2217/arrow-datafusion", branch="main" }
+#datafusion-common = { git = "https://github.com/Nekit2217/arrow-datafusion", branch="main" }
+#datafusion-proto = { git = "https://github.com/Nekit2217/arrow-datafusion", branch="main" }
+#datafusion-sql = { git = "https://github.com/Nekit2217/arrow-datafusion", branch="main" }
+#datafusion-physical-expr = { git = "https://github.com/Nekit2217/arrow-datafusion", branch="main" }
+#datafusion-functions = { git = "https://github.com/Nekit2217/arrow-datafusion", branch="main" }
+
 
 # serde
 serde = { version = "1.0.194", features = ["derive"] }
