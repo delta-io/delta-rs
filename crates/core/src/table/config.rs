@@ -591,7 +591,7 @@ mod tests {
     fn get_long_from_metadata_test() {
         let md = dummy_metadata();
         let config = TableConfig(&md.configuration);
-        assert_eq!(config.checkpoint_interval(), 10,)
+        assert_eq!(config.checkpoint_interval(), 100,)
     }
 
     #[test]
