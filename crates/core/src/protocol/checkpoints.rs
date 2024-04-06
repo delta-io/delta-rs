@@ -92,34 +92,6 @@ pub async fn create_checkpoint(table: &DeltaTable) -> Result<(), ProtocolError> 
     Ok(())
 }
 
-/// creates checkpoint if interval is met
-pub async fn maybe_create_checkpoint(
-    table: &DeltaTable,
-    version: i64,
-) -> Result<(), ProtocolError> {
-    let last_checkpoint = read_last_checkpoint(
-        table.log_store().object_store().as_ref(),
-        table.log_store().log_path(),
-    )
-    .await
-    .map_err(|e| ProtocolError::Generic(e.to_string()))?;
-
-    let checkpoint_interval = table
-        .snapshot()
-        .map_err(|e| ProtocolError::Generic(e.to_string()))?
-        .config()
-        .checkpoint_interval() as i64;
-
-    if let Some(last_checkpoint) = last_checkpoint {
-        if (version - last_checkpoint.version) >= checkpoint_interval {
-            create_checkpoint(table).await?
-        }
-    } else if (version + 1) >= checkpoint_interval {
-        create_checkpoint(table).await?
-    }
-    Ok(())
-}
-
 /// Delete expires log files before given version from table. The table log retention is based on
 /// the `logRetentionDuration` property of the Delta Table, 30 days by default.
 pub async fn cleanup_metadata(table: &DeltaTable) -> Result<usize, ProtocolError> {
