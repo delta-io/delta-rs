@@ -36,7 +36,7 @@ use crate::table::config::TableConfig;
 use crate::{DeltaResult, DeltaTableConfig, DeltaTableError};
 
 mod log_data;
-mod log_segment;
+pub mod log_segment;
 pub(crate) mod parse;
 mod replay;
 mod serde;

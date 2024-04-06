@@ -20,14 +20,15 @@ use tracing::{debug, error};
 
 use super::{time_utils, ProtocolError};
 use crate::kernel::arrow::delta_log_schema_for_table;
+use crate::kernel::snapshot::log_segment::read_last_checkpoint;
 use crate::kernel::{
     Action, Add as AddAction, DataType, PrimitiveType, Protocol, Remove, StructField, Txn,
 };
 use crate::logstore::LogStore;
+use crate::operations::transaction::TableReference;
 use crate::table::state::DeltaTableState;
 use crate::table::{get_partition_col_data_types, CheckPoint, CheckPointBuilder};
 use crate::{open_table_with_version, DeltaTable};
-
 type SchemaPath = Vec<String>;
 
 /// Error returned when there is an error during creating a checkpoint.
@@ -88,6 +89,34 @@ pub async fn create_checkpoint(table: &DeltaTable) -> Result<(), ProtocolError> 
         table.log_store.as_ref(),
     )
     .await?;
+    Ok(())
+}
+
+/// creates checkpoint if interval is met
+pub async fn maybe_create_checkpoint(
+    table: &DeltaTable,
+    version: i64,
+) -> Result<(), ProtocolError> {
+    let last_checkpoint = read_last_checkpoint(
+        table.log_store().object_store().as_ref(),
+        table.log_store().log_path(),
+    )
+    .await
+    .map_err(|e| ProtocolError::Generic(e.to_string()))?;
+
+    let checkpoint_interval = table
+        .snapshot()
+        .map_err(|e| ProtocolError::Generic(e.to_string()))?
+        .config()
+        .checkpoint_interval() as i64;
+
+    if let Some(last_checkpoint) = last_checkpoint {
+        if (version - last_checkpoint.version) >= checkpoint_interval {
+            create_checkpoint(table).await?
+        }
+    } else if (version + 1) >= checkpoint_interval {
+        create_checkpoint(table).await?
+    }
     Ok(())
 }
 
