@@ -20,12 +20,10 @@ use tracing::{debug, error};
 
 use super::{time_utils, ProtocolError};
 use crate::kernel::arrow::delta_log_schema_for_table;
-use crate::kernel::snapshot::log_segment::read_last_checkpoint;
 use crate::kernel::{
     Action, Add as AddAction, DataType, PrimitiveType, Protocol, Remove, StructField, Txn,
 };
 use crate::logstore::LogStore;
-use crate::operations::transaction::TableReference;
 use crate::table::state::DeltaTableState;
 use crate::table::{get_partition_col_data_types, CheckPoint, CheckPointBuilder};
 use crate::{open_table_with_version, DeltaTable};

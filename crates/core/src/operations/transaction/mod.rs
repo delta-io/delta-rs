@@ -428,7 +428,7 @@ impl<'a> std::future::IntoFuture for PreCommit<'a> {
     fn into_future(self) -> Self::IntoFuture {
         let this = self;
 
-        Box::pin(async move { this.into_prepared_commit_future().await?.await })
+        Box::pin(async move { this.into_prepared_commit_future().await?.await?.await })
     }
 }
 
@@ -458,65 +458,9 @@ impl<'a> PreCommit<'a> {
                 table_data: this.table_data,
                 max_retries: this.max_retries,
                 data: this.data,
-                post_commit: this.post_commit_hook.map(|v| PostCommit::from(v)),
+                post_commit: this.post_commit_hook,
             })
         })
-    }
-}
-
-/// Represents items for the post commit hook
-pub struct PostCommit {
-    create_checkpoint: bool,
-}
-
-impl From<PostCommitHookProperties> for PostCommit {
-    fn from(value: PostCommitHookProperties) -> Self {
-        PostCommit {
-            create_checkpoint: value.create_checkpoint,
-        }
-    }
-}
-
-impl<'a> PostCommit {
-    async fn maybe_create_checkpoint(
-        &self,
-        table: &Option<&'a dyn TableReference>,
-        log_store: &LogStoreRef,
-        version: i64,
-        commit_data: &CommitData,
-    ) -> DeltaResult<()> {
-        if self.create_checkpoint {
-            if let Some(table) = table {
-                let last_checkpoint =
-                    read_last_checkpoint(log_store.object_store().as_ref(), log_store.log_path())
-                        .await?;
-
-                let checkpoint_interval = table.config().checkpoint_interval() as i64;
-
-                if let Some(last_checkpoint) = last_checkpoint {
-                    if (version - last_checkpoint.version) >= checkpoint_interval {
-                        // We have to advance the snapshot otherwise we can't create a checkpoint
-                        let mut snapshot = table.eager_snapshot().unwrap().clone();
-                        snapshot.advance(vec![commit_data])?;
-                        let state = DeltaTableState {
-                            app_transaction_version: HashMap::new(),
-                            snapshot,
-                        };
-
-                        create_checkpoint_for(version, &state, log_store.as_ref()).await?
-                    }
-                } else if (version + 1) >= checkpoint_interval {
-                    let mut snapshot = table.eager_snapshot().unwrap().clone();
-                    snapshot.advance(vec![commit_data])?;
-                    let state = DeltaTableState {
-                        app_transaction_version: HashMap::new(),
-                        snapshot,
-                    };
-                    create_checkpoint_for(version, &state, log_store.as_ref()).await?
-                }
-            }
-        }
-        Ok(())
     }
 }
 
@@ -527,7 +471,7 @@ pub struct PreparedCommit<'a> {
     data: CommitData,
     table_data: Option<&'a dyn TableReference>,
     max_retries: usize,
-    post_commit: Option<PostCommit>,
+    post_commit: Option<PostCommitHookProperties>,
 }
 
 impl<'a> PreparedCommit<'a> {
@@ -535,23 +479,10 @@ impl<'a> PreparedCommit<'a> {
     pub fn path(&self) -> &Path {
         &self.path
     }
-    /// Runs the post commit activities
-    async fn run_post_commit_hook(
-        &self,
-        version: i64,
-        commit_data: &CommitData,
-    ) -> DeltaResult<()> {
-        if let Some(post_commit) = &self.post_commit {
-            post_commit
-                .maybe_create_checkpoint(&self.table_data, &self.log_store, version, commit_data)
-                .await?
-        }
-        Ok(())
-    }
 }
 
 impl<'a> std::future::IntoFuture for PreparedCommit<'a> {
-    type Output = DeltaResult<FinalizedCommit>;
+    type Output = DeltaResult<PostCommit<'a>>;
     type IntoFuture = BoxFuture<'a, Self::Output>;
 
     fn into_future(self) -> Self::IntoFuture {
@@ -562,9 +493,12 @@ impl<'a> std::future::IntoFuture for PreparedCommit<'a> {
 
             if this.table_data.is_none() {
                 this.log_store.write_commit_entry(0, tmp_commit).await?;
-                return Ok(FinalizedCommit {
+                return Ok(PostCommit {
                     version: 0,
                     data: this.data,
+                    create_checkpoint: false,
+                    log_store: this.log_store,
+                    table_data: this.table_data,
                 });
             }
 
@@ -583,13 +517,15 @@ impl<'a> std::future::IntoFuture for PreparedCommit<'a> {
                 let version = read_snapshot.version() + attempt_number as i64;
                 match this.log_store.write_commit_entry(version, tmp_commit).await {
                     Ok(()) => {
-                        match this.run_post_commit_hook(version, &this.data).await {
-                            Ok(_) => (),
-                            Err(err) => return Err(err),
-                        };
-                        return Ok(FinalizedCommit {
+                        return Ok(PostCommit {
                             version,
                             data: this.data,
+                            create_checkpoint: this
+                                .post_commit
+                                .map(|v| v.create_checkpoint)
+                                .unwrap_or_default(),
+                            log_store: this.log_store,
+                            table_data: this.table_data,
                         });
                     }
                     Err(TransactionError::VersionAlreadyExists(version)) => {
@@ -638,6 +574,70 @@ impl<'a> std::future::IntoFuture for PreparedCommit<'a> {
     }
 }
 
+/// Represents items for the post commit hook
+pub struct PostCommit<'a> {
+    /// The winning version number of the commit
+    pub version: i64,
+    /// The data that was comitted to the log store
+    pub data: CommitData,
+    create_checkpoint: bool,
+    log_store: LogStoreRef,
+    table_data: Option<&'a dyn TableReference>,
+}
+
+impl<'a> PostCommit<'a> {
+    /// Runs the post commit activities
+    async fn run_post_commit_hook(
+        &self,
+        version: i64,
+        commit_data: &CommitData,
+    ) -> DeltaResult<()> {
+        if self.create_checkpoint {
+            self.create_checkpoint(&self.table_data, &self.log_store, version, commit_data)
+                .await?
+        }
+        Ok(())
+    }
+    async fn create_checkpoint(
+        &self,
+        table: &Option<&'a dyn TableReference>,
+        log_store: &LogStoreRef,
+        version: i64,
+        commit_data: &CommitData,
+    ) -> DeltaResult<()> {
+        if let Some(table) = table {
+            let last_checkpoint =
+                read_last_checkpoint(log_store.object_store().as_ref(), log_store.log_path())
+                    .await?;
+
+            let checkpoint_interval = table.config().checkpoint_interval() as i64;
+
+            if let Some(last_checkpoint) = last_checkpoint {
+                if (version - last_checkpoint.version) >= checkpoint_interval {
+                    // We have to advance the snapshot otherwise we can't create a checkpoint
+                    let mut snapshot = table.eager_snapshot().unwrap().clone();
+                    snapshot.advance(vec![commit_data])?;
+                    let state = DeltaTableState {
+                        app_transaction_version: HashMap::new(),
+                        snapshot,
+                    };
+
+                    create_checkpoint_for(version, &state, log_store.as_ref()).await?
+                }
+            } else if (version + 1) >= checkpoint_interval {
+                let mut snapshot = table.eager_snapshot().unwrap().clone();
+                snapshot.advance(vec![commit_data])?;
+                let state = DeltaTableState {
+                    app_transaction_version: HashMap::new(),
+                    snapshot,
+                };
+                create_checkpoint_for(version, &state, log_store.as_ref()).await?
+            }
+        }
+        Ok(())
+    }
+}
+
 /// A commit that successfully completed
 pub struct FinalizedCommit {
     /// The winning version number of the commit
@@ -655,6 +655,27 @@ impl FinalizedCommit {
     /// Data used to write the commit
     pub fn data(&self) -> &CommitData {
         &self.data
+    }
+}
+
+impl<'a> std::future::IntoFuture for PostCommit<'a> {
+    type Output = DeltaResult<FinalizedCommit>;
+    type IntoFuture = BoxFuture<'a, Self::Output>;
+
+    fn into_future(self) -> Self::IntoFuture {
+        let this = self;
+
+        Box::pin(async move {
+            match this.run_post_commit_hook(this.version, &this.data).await {
+                Ok(_) => {
+                    return Ok(FinalizedCommit {
+                        version: this.version,
+                        data: this.data,
+                    })
+                }
+                Err(err) => return Err(err),
+            };
+        })
     }
 }
 
