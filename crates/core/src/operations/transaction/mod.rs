@@ -57,12 +57,21 @@
 //!                      │                                    
 //!                      ▼                                    
 //!       ┌───────────────────────────────┐                   
+//!       │          Post Commit          │                   
+//!       │                               │                   
+//!       │ Commit that was materialized  │                   
+//!       │ to storage with post commit   │                   
+//!       │      hooks to be executed     │                   
+//!       └──────────────┬────────────────┘                 
+//!                      │                                    
+//!                      ▼    
+//!       ┌───────────────────────────────┐                   
 //!       │        Finalized Commit       │                   
 //!       │                               │                   
 //!       │ Commit that was materialized  │                   
 //!       │         to storage            │                   
 //!       │                               │                   
-//!       └───────────────────────────────┘                   
+//!       └───────────────────────────────┘           
 //!</pre>
 
 use chrono::Utc;
