@@ -47,6 +47,7 @@ use super::datafusion_utils::Expression;
 use super::transaction::{CommitBuilder, CommitProperties, TableReference, PROTOCOL};
 use super::writer::{DeltaWriter, WriterConfig};
 use super::CreateBuilder;
+use crate::checkpoints::maybe_create_checkpoint;
 use crate::delta_datafusion::expr::fmt_expr_to_sql;
 use crate::delta_datafusion::expr::parse_predicate_expression;
 use crate::delta_datafusion::{find_files, register_store, DeltaScanBuilder};
@@ -813,7 +814,9 @@ impl std::future::IntoFuture for WriteBuilder {
             // then again, having only some tombstones may be misleading.
             if let Some(mut snapshot) = this.snapshot {
                 snapshot.merge(commit.data.actions, &commit.data.operation, commit.version)?;
-                Ok(DeltaTable::new_with_state(this.log_store, snapshot))
+                let table = DeltaTable::new_with_state(this.log_store, snapshot);
+                maybe_create_checkpoint(&table, commit.version).await?;
+                Ok(table)
             } else {
                 let mut table = DeltaTable::new(this.log_store, Default::default());
                 table.update().await?;
