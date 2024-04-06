@@ -374,7 +374,7 @@ impl LogSegment {
 
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct CheckpointMetadata {
+struct CheckpointMetadata {
     /// The version of the table when the last checkpoint was made.
     #[allow(unreachable_pub)] // used by acceptance tests (TODO make an fn accessor?)
     pub version: i64,
