@@ -274,7 +274,7 @@ impl<'a> TableConfig<'a> {
             DeltaConfigKey::CheckpointInterval,
             checkpoint_interval,
             i32,
-            100
+            10
         ),
     );
 
