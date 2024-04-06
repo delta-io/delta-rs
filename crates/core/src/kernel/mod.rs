@@ -6,7 +6,7 @@ pub mod arrow;
 pub mod error;
 pub mod expressions;
 pub mod models;
-mod snapshot;
+pub mod snapshot;
 
 pub use error::*;
 pub use expressions::*;
