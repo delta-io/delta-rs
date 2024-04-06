@@ -10,7 +10,7 @@ use lazy_static::lazy_static;
 use object_store::path::Path;
 use object_store::{Error as ObjectStoreError, ObjectMeta, ObjectStore};
 use parquet::arrow::arrow_reader::ArrowReaderOptions;
-use parquet::arrow::async_reader::{ParquetObjectReader, ParquetRecordBatchStreamBuilder};
+use parquet::arrow::async_reader::ParquetRecordBatchStreamBuilder;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use tracing::debug;
@@ -19,8 +19,8 @@ use super::parse;
 use crate::kernel::{arrow::json, ActionType, Metadata, Protocol, Schema, StructType};
 use crate::logstore::LogStore;
 use crate::operations::transaction::CommitData;
+use crate::reader::CloudParquetObjectReader;
 use crate::{DeltaResult, DeltaTableConfig, DeltaTableError};
-
 const LAST_CHECKPOINT_FILE_NAME: &str = "_last_checkpoint";
 
 lazy_static! {
@@ -264,7 +264,7 @@ impl LogSegment {
             .map(move |meta| {
                 let store = store.clone();
                 async move {
-                    let reader = ParquetObjectReader::new(store, meta);
+                    let reader = CloudParquetObjectReader::new(store, meta);
                     let options = ArrowReaderOptions::new(); //.with_page_index(enable_page_index);
                     let builder =
                         ParquetRecordBatchStreamBuilder::new_with_options(reader, options).await?;

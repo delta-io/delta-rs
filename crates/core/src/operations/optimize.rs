@@ -33,7 +33,7 @@ use futures::{Future, StreamExt, TryStreamExt};
 use indexmap::IndexMap;
 use itertools::Itertools;
 use num_cpus;
-use parquet::arrow::async_reader::{ParquetObjectReader, ParquetRecordBatchStreamBuilder};
+use parquet::arrow::async_reader::ParquetRecordBatchStreamBuilder;
 use parquet::basic::{Compression, ZstdLevel};
 use parquet::errors::ParquetError;
 use parquet::file::properties::WriterProperties;
@@ -47,11 +47,11 @@ use crate::kernel::{Action, PartitionsExt, Remove, Scalar};
 use crate::logstore::LogStoreRef;
 use crate::operations::transaction::{CommitBuilder, CommitProperties, DEFAULT_RETRIES};
 use crate::protocol::DeltaOperation;
+use crate::reader::CloudParquetObjectReader;
 use crate::storage::ObjectStoreRef;
 use crate::table::state::DeltaTableState;
 use crate::writer::utils::arrow_schema_without_partitions;
 use crate::{crate_version, DeltaTable, ObjectMeta, PartitionFilter};
-
 /// Metrics from Optimize
 #[derive(Default, Debug, PartialEq, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -666,7 +666,8 @@ impl MergePlan {
                         .then(move |file| {
                             let object_store_ref = object_store_ref.clone();
                             async move {
-                                let file_reader = ParquetObjectReader::new(object_store_ref, file);
+                                let file_reader =
+                                    CloudParquetObjectReader::new(object_store_ref, file);
                                 ParquetRecordBatchStreamBuilder::new(file_reader)
                                     .await?
                                     .build()
@@ -1159,7 +1160,7 @@ pub(super) mod zorder {
             .then(move |file| {
                 let object_store = object_store.clone();
                 async move {
-                    let file_reader = ParquetObjectReader::new(object_store.clone(), file);
+                    let file_reader = CloudParquetObjectReader::new(object_store.clone(), file);
                     ParquetRecordBatchStreamBuilder::new(file_reader)
                         .await?
                         .build()

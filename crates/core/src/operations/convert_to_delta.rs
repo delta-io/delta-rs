@@ -1,6 +1,7 @@
 //! Command for converting a Parquet table to a Delta table in place
 // https://github.com/delta-io/delta/blob/1d5dd774111395b0c4dc1a69c94abc169b1c83b6/spark/src/main/scala/org/apache/spark/sql/delta/commands/ConvertToDeltaCommand.scala
 
+use crate::reader::CloudParquetObjectReader;
 use crate::{
     kernel::{Add, DataType, Schema, StructField},
     logstore::{LogStore, LogStoreRef},
@@ -15,10 +16,8 @@ use futures::{
     future::{self, BoxFuture},
     TryStreamExt,
 };
-use parquet::{
-    arrow::async_reader::{ParquetObjectReader, ParquetRecordBatchStreamBuilder},
-    errors::ParquetError,
-};
+use parquet::{arrow::async_reader::ParquetRecordBatchStreamBuilder, errors::ParquetError};
+
 use percent_encoding::percent_decode_str;
 use serde_json::{Map, Value};
 use std::{
@@ -352,10 +351,9 @@ impl ConvertToDeltaBuilder {
                 .into(),
             );
 
-            let mut arrow_schema = ParquetRecordBatchStreamBuilder::new(ParquetObjectReader::new(
-                object_store.clone(),
-                file,
-            ))
+            let mut arrow_schema = ParquetRecordBatchStreamBuilder::new(
+                CloudParquetObjectReader::new(object_store.clone(), file),
+            )
             .await?
             .schema()
             .as_ref()

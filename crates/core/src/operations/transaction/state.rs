@@ -1,6 +1,7 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
+use crate::reader::CloudParquetObjectReader;
 use arrow::array::{ArrayRef, BooleanArray};
 use arrow::datatypes::{
     DataType, Field as ArrowField, Schema as ArrowSchema, SchemaRef as ArrowSchemaRef,
@@ -12,7 +13,7 @@ use datafusion_expr::Expr;
 use itertools::Itertools;
 use object_store::ObjectStore;
 use parquet::arrow::arrow_reader::ArrowReaderOptions;
-use parquet::arrow::async_reader::{ParquetObjectReader, ParquetRecordBatchStreamBuilder};
+use parquet::arrow::async_reader::ParquetRecordBatchStreamBuilder;
 
 use crate::delta_datafusion::{
     get_null_of_arrow_type, logical_expr_to_physical_expr, to_correct_scalar_value,
@@ -37,7 +38,7 @@ impl DeltaTableState {
             .max_by_key(|obj| obj.modification_time)
         {
             let file_meta = add.try_into()?;
-            let file_reader = ParquetObjectReader::new(object_store, file_meta);
+            let file_reader = CloudParquetObjectReader::new(object_store, file_meta);
             let file_schema = ParquetRecordBatchStreamBuilder::new_with_options(
                 file_reader,
                 ArrowReaderOptions::new().with_skip_arrow_metadata(true),

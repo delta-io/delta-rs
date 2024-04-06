@@ -75,6 +75,7 @@ pub mod kernel;
 pub mod logstore;
 pub mod operations;
 pub mod protocol;
+mod reader;
 pub mod schema;
 pub mod storage;
 pub mod table;
