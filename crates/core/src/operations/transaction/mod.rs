@@ -76,7 +76,6 @@ use std::collections::HashMap;
 use self::conflict_checker::{CommitConflictError, TransactionInfo, WinningCommitSummary};
 use crate::checkpoints::create_checkpoint_for;
 use crate::errors::DeltaTableError;
-use crate::kernel::log_segment::read_last_checkpoint;
 use crate::kernel::{
     Action, CommitInfo, EagerSnapshot, Metadata, Protocol, ReaderFeatures, WriterFeatures,
 };
@@ -606,25 +605,9 @@ impl<'a> PostCommit<'a> {
         commit_data: &CommitData,
     ) -> DeltaResult<()> {
         if let Some(table) = table {
-            let last_checkpoint =
-                read_last_checkpoint(log_store.object_store().as_ref(), log_store.log_path())
-                    .await?;
-
             let checkpoint_interval = table.config().checkpoint_interval() as i64;
-
-            if let Some(last_checkpoint) = last_checkpoint {
-                if (version - last_checkpoint.version) >= checkpoint_interval {
-                    // We have to advance the snapshot otherwise we can't create a checkpoint
-                    let mut snapshot = table.eager_snapshot().unwrap().clone();
-                    snapshot.advance(vec![commit_data])?;
-                    let state = DeltaTableState {
-                        app_transaction_version: HashMap::new(),
-                        snapshot,
-                    };
-
-                    create_checkpoint_for(version, &state, log_store.as_ref()).await?
-                }
-            } else if (version + 1) >= checkpoint_interval {
+            if ((version + 1) % checkpoint_interval) == 0 {
+                // We have to advance the snapshot otherwise we can't create a checkpoint
                 let mut snapshot = table.eager_snapshot().unwrap().clone();
                 snapshot.advance(vec![commit_data])?;
                 let state = DeltaTableState {

@@ -1,5 +1,3 @@
-//! Handling of log segments
-
 use std::cmp::Ordering;
 use std::collections::VecDeque;
 use std::sync::Arc;
@@ -376,7 +374,6 @@ impl LogSegment {
 
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
-/// Checkpoint metadata
 pub struct CheckpointMetadata {
     /// The version of the table when the last checkpoint was made.
     #[allow(unreachable_pub)] // used by acceptance tests (TODO make an fn accessor?)
@@ -398,7 +395,7 @@ pub struct CheckpointMetadata {
 /// Try reading the `_last_checkpoint` file.
 ///
 /// In case the file is not found, `None` is returned.
-pub async fn read_last_checkpoint(
+async fn read_last_checkpoint(
     fs_client: &dyn ObjectStore,
     log_root: &Path,
 ) -> DeltaResult<Option<CheckpointMetadata>> {
