@@ -190,7 +190,7 @@ async fn execute(
     state: SessionState,
     writer_properties: Option<WriterProperties>,
     mut commit_properties: CommitProperties,
-) -> DeltaResult<((Vec<Action>, i64, Option<DeltaOperation>), DeleteMetrics)> {
+) -> DeltaResult<(Option<DeltaTableState>, DeleteMetrics)> {
     let exec_start = Instant::now();
     let mut metrics = DeleteMetrics::default();
 
@@ -258,21 +258,14 @@ async fn execute(
         predicate: Some(fmt_expr_to_sql(&predicate)?),
     };
     if actions.is_empty() {
-        return Ok(((actions, snapshot.version(), None), metrics));
+        return Ok((None, metrics));
     }
 
     let commit = CommitBuilder::from(commit_properties)
         .with_actions(actions)
         .build(Some(snapshot), log_store, operation)?
         .await?;
-    Ok((
-        (
-            commit.data.actions,
-            commit.version,
-            Some(commit.data.operation),
-        ),
-        metrics,
-    ))
+    Ok((commit.snapshot(), metrics))
 }
 
 impl std::future::IntoFuture for DeleteBuilder {
@@ -305,7 +298,7 @@ impl std::future::IntoFuture for DeleteBuilder {
                 None => None,
             };
 
-            let ((actions, version, operation), metrics) = execute(
+            let (new_snapshot, metrics) = execute(
                 predicate,
                 this.log_store.clone(),
                 &this.snapshot,
@@ -315,11 +308,11 @@ impl std::future::IntoFuture for DeleteBuilder {
             )
             .await?;
 
-            if let Some(op) = &operation {
-                this.snapshot.merge(actions, op, version)?;
-            }
-
-            let table = DeltaTable::new_with_state(this.log_store, this.snapshot);
+            let table = if let Some(new_snapshot) = new_snapshot {
+                DeltaTable::new_with_state(this.log_store, new_snapshot)
+            } else {
+                DeltaTable::new_with_state(this.log_store, this.snapshot)
+            };
             Ok((table, metrics))
         })
     }

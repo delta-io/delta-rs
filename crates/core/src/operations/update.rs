@@ -41,7 +41,7 @@ use futures::future::BoxFuture;
 use parquet::file::properties::WriterProperties;
 use serde::Serialize;
 
-use super::transaction::PROTOCOL;
+use super::transaction::{FinalizedCommit, PROTOCOL};
 use super::write::write_execution_plan;
 use super::{
     datafusion_utils::Expression,
@@ -173,7 +173,7 @@ async fn execute(
     writer_properties: Option<WriterProperties>,
     mut commit_properties: CommitProperties,
     safe_cast: bool,
-) -> DeltaResult<((Vec<Action>, i64, Option<DeltaOperation>), UpdateMetrics)> {
+) -> DeltaResult<(Option<DeltaTableState>, UpdateMetrics)> {
     // Validate the predicate and update expressions.
     //
     // If the predicate is not set, then all files need to be updated.
@@ -189,7 +189,7 @@ async fn execute(
     let version = snapshot.version();
 
     if updates.is_empty() {
-        return Ok(((Vec::new(), version, None), metrics));
+        return Ok((None, metrics));
     }
 
     let predicate = match predicate {
@@ -218,7 +218,7 @@ async fn execute(
     metrics.scan_time_ms = Instant::now().duration_since(scan_start).as_millis() as u64;
 
     if candidates.candidates.is_empty() {
-        return Ok(((Vec::new(), version, None), metrics));
+        return Ok((None, metrics));
     }
 
     let predicate = predicate.unwrap_or(Expr::Literal(ScalarValue::Boolean(Some(true))));
@@ -419,14 +419,7 @@ async fn execute(
         .build(Some(snapshot), log_store, operation)?
         .await?;
 
-    Ok((
-        (
-            commit.data.actions,
-            commit.version,
-            Some(commit.data.operation),
-        ),
-        metrics,
-    ))
+    Ok((commit.snapshot(), metrics))
 }
 
 impl std::future::IntoFuture for UpdateBuilder {
@@ -449,7 +442,7 @@ impl std::future::IntoFuture for UpdateBuilder {
                 session.state()
             });
 
-            let ((actions, version, operation), metrics) = execute(
+            let (new_snapshot, metrics) = execute(
                 this.predicate,
                 this.updates,
                 this.log_store.clone(),
@@ -461,11 +454,11 @@ impl std::future::IntoFuture for UpdateBuilder {
             )
             .await?;
 
-            if let Some(op) = &operation {
-                this.snapshot.merge(actions, op, version)?;
-            }
-
-            let table = DeltaTable::new_with_state(this.log_store, this.snapshot);
+            let table = if let Some(new_snapshot) = new_snapshot {
+                DeltaTable::new_with_state(this.log_store, new_snapshot)
+            } else {
+                DeltaTable::new_with_state(this.log_store, this.snapshot)
+            };
             Ok((table, metrics))
         })
     }

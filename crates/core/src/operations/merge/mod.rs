@@ -942,7 +942,7 @@ async fn execute(
     match_operations: Vec<MergeOperationConfig>,
     not_match_target_operations: Vec<MergeOperationConfig>,
     not_match_source_operations: Vec<MergeOperationConfig>,
-) -> DeltaResult<((Vec<Action>, i64, Option<DeltaOperation>), MergeMetrics)> {
+) -> DeltaResult<(Option<DeltaTableState>, MergeMetrics)> {
     let mut metrics = MergeMetrics::default();
     let exec_start = Instant::now();
 
@@ -1449,21 +1449,14 @@ async fn execute(
     };
 
     if actions.is_empty() {
-        return Ok(((actions, snapshot.version(), None), metrics));
+        return Ok((None, metrics));
     }
 
     let commit = CommitBuilder::from(commit_properties)
         .with_actions(actions)
         .build(Some(snapshot), log_store.clone(), operation)?
         .await?;
-    Ok((
-        (
-            commit.data.actions,
-            commit.version,
-            Some(commit.data.operation),
-        ),
-        metrics,
-    ))
+    Ok((commit.snapshot(), metrics))
 }
 
 fn remove_table_alias(expr: Expr, table_alias: &str) -> Expr {
@@ -1521,7 +1514,7 @@ impl std::future::IntoFuture for MergeBuilder {
                 session.state()
             });
 
-            let ((actions, version, operation), metrics) = execute(
+            let (new_snapshot, metrics) = execute(
                 this.predicate,
                 this.source,
                 this.log_store.clone(),
@@ -1538,11 +1531,11 @@ impl std::future::IntoFuture for MergeBuilder {
             )
             .await?;
 
-            if let Some(op) = &operation {
-                this.snapshot.merge(actions, op, version)?;
-            }
-            let table = DeltaTable::new_with_state(this.log_store, this.snapshot);
-
+            let table = if let Some(new_snapshot) = new_snapshot {
+                DeltaTable::new_with_state(this.log_store, new_snapshot)
+            } else {
+                DeltaTable::new_with_state(this.log_store, this.snapshot)
+            };
             Ok((table, metrics))
         })
     }

@@ -595,36 +595,45 @@ pub struct PostCommit<'a> {
 
 impl<'a> PostCommit<'a> {
     /// Runs the post commit activities
-    async fn run_post_commit_hook(
-        &self,
-        version: i64,
-        commit_data: &CommitData,
-    ) -> DeltaResult<()> {
-        if self.create_checkpoint {
-            self.create_checkpoint(&self.table_data, &self.log_store, version, commit_data)
-                .await?
-        }
-        Ok(())
-    }
-    async fn create_checkpoint(
-        &self,
-        table: &Option<&'a dyn TableReference>,
-        log_store: &LogStoreRef,
-        version: i64,
-        commit_data: &CommitData,
-    ) -> DeltaResult<()> {
-        if let Some(table) = table {
-            let checkpoint_interval = table.config().checkpoint_interval() as i64;
-            if ((version + 1) % checkpoint_interval) == 0 {
-                // We have to advance the snapshot otherwise we can't create a checkpoint
-                let mut snapshot = table.eager_snapshot().unwrap().clone();
-                snapshot.advance(vec![commit_data])?;
+    async fn run_post_commit_hook(&self) -> DeltaResult<Option<DeltaTableState>> {
+        if let Some(table) = self.table_data {
+            if let Some(mut snapshot) = table.eager_snapshot().cloned() {
+                if self.version - snapshot.version() > 1 {
+                    // This may only occur during concurrent write actions. We need to update the state first to - 1
+                    // then we can advance.
+                    snapshot
+                        .update(self.log_store.clone(), Some(self.version - 1))
+                        .await?;
+                    snapshot.advance(vec![&self.data])?;
+                } else {
+                    snapshot.advance(vec![&self.data])?;
+                }
                 let state = DeltaTableState {
                     app_transaction_version: HashMap::new(),
                     snapshot,
                 };
-                create_checkpoint_for(version, &state, log_store.as_ref()).await?
+                // Execute each hook
+                if self.create_checkpoint {
+                    self.create_checkpoint(&state, &self.log_store, self.version)
+                        .await?;
+                }
+                return Ok(Some(state));
+            } else {
+                return Ok(None);
             }
+        } else {
+            return Ok(None);
+        }
+    }
+    async fn create_checkpoint(
+        &self,
+        table_state: &DeltaTableState,
+        log_store: &LogStoreRef,
+        version: i64,
+    ) -> DeltaResult<()> {
+        let checkpoint_interval = table_state.config().checkpoint_interval() as i64;
+        if ((version + 1) % checkpoint_interval) == 0 {
+            create_checkpoint_for(version, table_state, log_store.as_ref()).await?
         }
         Ok(())
     }
@@ -632,21 +641,21 @@ impl<'a> PostCommit<'a> {
 
 /// A commit that successfully completed
 pub struct FinalizedCommit {
-    /// The winning version number of the commit
+    /// The new table state after a commmit
+    pub snapshot: Option<DeltaTableState>,
+
+    /// Version of the finalized commit
     pub version: i64,
-    /// The data that was comitted to the log store
-    pub data: CommitData,
 }
 
 impl FinalizedCommit {
-    /// The materialized version of the commit
+    /// The new table state after a commmit
+    pub fn snapshot(&self) -> Option<DeltaTableState> {
+        self.snapshot.clone()
+    }
+    /// Version of the finalized commit
     pub fn version(&self) -> i64 {
         self.version
-    }
-
-    /// Data used to write the commit
-    pub fn data(&self) -> &CommitData {
-        &self.data
     }
 }
 
@@ -658,11 +667,11 @@ impl<'a> std::future::IntoFuture for PostCommit<'a> {
         let this = self;
 
         Box::pin(async move {
-            match this.run_post_commit_hook(this.version, &this.data).await {
-                Ok(_) => {
+            match this.run_post_commit_hook().await {
+                Ok(snapshot) => {
                     return Ok(FinalizedCommit {
+                        snapshot,
                         version: this.version,
-                        data: this.data,
                     })
                 }
                 Err(err) => return Err(err),
