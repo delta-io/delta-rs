@@ -247,3 +247,111 @@ def test_checkpoint_partition_timestamp_2380(
 
     assert last_checkpoint_path.exists()
     assert checkpoint_path.exists()
+
+def test_checkpoint_post_commit_config(tmp_path: pathlib.Path, sample_data: pa.Table):
+    """Checks whether checkpoints are properly written based on commit_interval"""
+    tmp_table_path = tmp_path / "path" / "to" / "table"
+    checkpoint_path = tmp_table_path / "_delta_log" / "_last_checkpoint"
+    first_checkpoint_path = (
+        tmp_table_path / "_delta_log" / "00000000000000000004.checkpoint.parquet"
+    )
+    second_checkpoint_path = (
+        tmp_table_path / "_delta_log" / "00000000000000000009.checkpoint.parquet"
+    )
+
+    # TODO: Include binary after fixing issue "Json error: binary type is not supported"
+    sample_data = sample_data.drop(["binary"])
+    for i in range(2):
+        write_deltalake(
+            str(tmp_table_path),
+            sample_data,
+            mode="append",
+            configuration={"delta.checkpointInterval": "5"},
+        )
+
+    assert not checkpoint_path.exists()
+    assert not first_checkpoint_path.exists()
+    assert not second_checkpoint_path.exists()
+
+    for i in range(10):
+        write_deltalake(
+            str(tmp_table_path),
+            sample_data,
+            mode="append",
+            configuration={"delta.checkpointInterval": "5"},
+        )
+
+    assert checkpoint_path.exists()
+    assert first_checkpoint_path.exists()
+    assert second_checkpoint_path.exists()
+
+    for i in range(12):
+        if i in [4, 9]:
+            continue
+        random_checkpoint_path = (
+            tmp_table_path / "_delta_log" / f"{str(i).zfill(20)}.checkpoint.parquet"
+        )
+        assert not random_checkpoint_path.exists()
+
+    dt = DeltaTable(str(tmp_table_path))
+    assert dt.version() == 11
+
+
+def test_checkpoint_post_commit_config_multiple_operations(
+    tmp_path: pathlib.Path, sample_data: pa.Table
+):
+    """Checks whether checkpoints are properly written based on commit_interval"""
+    tmp_table_path = tmp_path / "path" / "to" / "table"
+    checkpoint_path = tmp_table_path / "_delta_log" / "_last_checkpoint"
+    first_checkpoint_path = (
+        tmp_table_path / "_delta_log" / "00000000000000000004.checkpoint.parquet"
+    )
+    second_checkpoint_path = (
+        tmp_table_path / "_delta_log" / "00000000000000000009.checkpoint.parquet"
+    )
+
+    # TODO: Include binary after fixing issue "Json error: binary type is not supported"
+    sample_data = sample_data.drop(["binary", "decimal"])
+    for i in range(4):
+        write_deltalake(
+            str(tmp_table_path),
+            sample_data,
+            mode="append",
+            configuration={"delta.checkpointInterval": "5"},
+        )
+
+    assert not checkpoint_path.exists()
+    assert not first_checkpoint_path.exists()
+    assert not second_checkpoint_path.exists()
+
+    dt = DeltaTable(str(tmp_table_path))
+
+    dt.optimize.compact()
+
+    assert checkpoint_path.exists()
+    assert first_checkpoint_path.exists()
+
+    for i in range(4):
+        write_deltalake(
+            str(tmp_table_path),
+            sample_data,
+            mode="append",
+            configuration={"delta.checkpointInterval": "5"},
+        )
+
+    dt = DeltaTable(str(tmp_table_path))
+    dt.delete()
+
+    assert second_checkpoint_path.exists()
+
+    for i in range(12):
+        if i in [4, 9]:
+            continue
+        random_checkpoint_path = (
+            tmp_table_path / "_delta_log" / f"{str(i).zfill(20)}.checkpoint.parquet"
+        )
+        assert not random_checkpoint_path.exists()
+
+    delta_table = DeltaTable(str(tmp_table_path))
+    assert delta_table.version() == 9
+    
