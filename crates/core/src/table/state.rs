@@ -25,7 +25,7 @@ use crate::{DeltaResult, DeltaTableError};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DeltaTableState {
-    app_transaction_version: HashMap<String, i64>,
+    pub(crate) app_transaction_version: HashMap<String, i64>,
     pub(crate) snapshot: EagerSnapshot,
 }
 
