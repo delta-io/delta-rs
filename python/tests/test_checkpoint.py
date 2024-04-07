@@ -248,6 +248,7 @@ def test_checkpoint_partition_timestamp_2380(
     assert last_checkpoint_path.exists()
     assert checkpoint_path.exists()
 
+
 def test_checkpoint_post_commit_config(tmp_path: pathlib.Path, sample_data: pa.Table):
     """Checks whether checkpoints are properly written based on commit_interval"""
     tmp_table_path = tmp_path / "path" / "to" / "table"
@@ -354,4 +355,3 @@ def test_checkpoint_post_commit_config_multiple_operations(
 
     delta_table = DeltaTable(str(tmp_table_path))
     assert delta_table.version() == 9
-    
