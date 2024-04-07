@@ -218,8 +218,15 @@ impl<'a> PruningStatistics for AddContainer<'a> {
     /// as an `Option<UInt64Array>`.
     ///
     /// Note: the returned array must contain `num_containers()` rows
-    fn row_counts(&self, column: &Column) -> Option<ArrayRef> {
-        todo!()
+    fn row_counts(&self, _column: &Column) -> Option<ArrayRef> {
+        let values = self.inner.iter().map(|add| {
+            if let Ok(Some(statistics)) = add.get_stats() {
+                ScalarValue::UInt64(Some(statistics.num_records as u64))
+            } else {
+                ScalarValue::UInt64(None)
+            }
+        });
+        ScalarValue::iter_to_array(values).ok()
     }
 
     // This function is required since DataFusion 35.0, but is implemented as a no-op
