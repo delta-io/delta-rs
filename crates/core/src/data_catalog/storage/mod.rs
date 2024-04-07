@@ -110,12 +110,13 @@ impl SchemaProvider for ListingSchemaProvider {
         self.tables.iter().map(|t| t.key().clone()).collect()
     }
 
-    async fn table(&self, name: &str) -> Option<Arc<dyn TableProvider>> {
-        let location = self.tables.get(name).map(|t| t.clone())?;
-        let provider = open_table_with_storage_options(location, self.storage_options.0.clone())
-            .await
-            .ok()?;
-        Some(Arc::new(provider) as Arc<dyn TableProvider>)
+    async fn table(&self, name: &str) -> datafusion_common::Result<Option<Arc<dyn TableProvider>>> {
+        let Some(location) = self.tables.get(name).map(|t| t.clone()) else {
+            return Ok(None);
+        };
+        let provider =
+            open_table_with_storage_options(location, self.storage_options.0.clone()).await?;
+        Ok(Some(Arc::new(provider) as Arc<dyn TableProvider>))
     }
 
     fn register_table(

@@ -31,28 +31,29 @@ debug = "line-tables-only"
 
 [workspace.dependencies]
 # arrow
-arrow = { version = "50" }
-arrow-arith = { version = "50" }
-arrow-array = { version = "50", features = ["chrono-tz"]}
-arrow-buffer = { version = "50" }
-arrow-cast = { version = "50" }
-arrow-ipc = { version = "50" }
-arrow-json = { version = "50" }
-arrow-ord = { version = "50" }
-arrow-row = { version = "50" }
-arrow-schema = { version = "50" }
-arrow-select = { version = "50" }
+arrow = { version = "51" }
+arrow-arith = { version = "51" }
+arrow-array = { version = "51", features = ["chrono-tz"] }
+arrow-buffer = { version = "51" }
+arrow-cast = { version = "51" }
+arrow-ipc = { version = "51" }
+arrow-json = { version = "51" }
+arrow-ord = { version = "51" }
+arrow-row = { version = "51" }
+arrow-schema = { version = "51" }
+arrow-select = { version = "51" }
 object_store = { version = "0.9" }
-parquet = { version = "50" }
+parquet = { version = "51" }
 
 # datafusion
-datafusion = { version = "36" }
-datafusion-expr = { version = "36" }
-datafusion-common = { version = "36" }
-datafusion-proto = { version = "36" }
-datafusion-sql = { version = "36" }
-datafusion-physical-expr = { version = "36" }
-datafusion-functions = { version = "36" }
+datafusion = { version = "37" }
+datafusion-expr = { version = "37" }
+datafusion-common = { version = "37" }
+datafusion-proto = { version = "37" }
+datafusion-sql = { version = "37" }
+datafusion-physical-expr = { version = "37" }
+datafusion-functions = { version = "37" }
+datafusion-functions-array = { version = "37" }
 
 # serde
 serde = { version = "1.0.194", features = ["derive"] }

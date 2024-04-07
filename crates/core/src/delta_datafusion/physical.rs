@@ -82,12 +82,8 @@ impl ExecutionPlan for MetricObserverExec {
         self.parent.schema()
     }
 
-    fn output_partitioning(&self) -> datafusion::physical_plan::Partitioning {
-        self.parent.output_partitioning()
-    }
-
-    fn output_ordering(&self) -> Option<&[datafusion_physical_expr::PhysicalSortExpr]> {
-        self.parent.output_ordering()
+    fn properties(&self) -> &datafusion::physical_plan::PlanProperties {
+        self.parent.properties()
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {

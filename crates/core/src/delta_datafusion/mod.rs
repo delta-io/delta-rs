@@ -49,16 +49,15 @@ use datafusion::datasource::{listing::PartitionedFile, MemTable, TableProvider, 
 use datafusion::execution::context::{SessionConfig, SessionContext, SessionState, TaskContext};
 use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::execution::FunctionRegistry;
-use datafusion::physical_expr::PhysicalSortExpr;
 use datafusion::physical_optimizer::pruning::PruningPredicate;
 use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::limit::LocalLimitExec;
 use datafusion::physical_plan::{
-    DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning, SendableRecordBatchStream,
+    DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties, SendableRecordBatchStream,
     Statistics,
 };
 use datafusion_common::scalar::ScalarValue;
-use datafusion_common::tree_node::{TreeNode, TreeNodeVisitor, VisitRecursion};
+use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion, TreeNodeVisitor};
 use datafusion_common::{
     Column, DFSchema, DataFusionError, Result as DataFusionResult, ToDFSchema,
 };
@@ -819,12 +818,8 @@ impl ExecutionPlan for DeltaScan {
         self.parquet_scan.schema()
     }
 
-    fn output_partitioning(&self) -> Partitioning {
-        self.parquet_scan.output_partitioning()
-    }
-
-    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
-        self.parquet_scan.output_ordering()
+    fn properties(&self) -> &PlanProperties {
+        self.parquet_scan.properties()
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
@@ -916,6 +911,10 @@ pub(crate) fn get_null_of_arrow_type(t: &ArrowDataType) -> DeltaResult<ScalarVal
         | ArrowDataType::Duration(_)
         | ArrowDataType::Interval(_)
         | ArrowDataType::RunEndEncoded(_, _)
+        | ArrowDataType::BinaryView
+        | ArrowDataType::Utf8View
+        | ArrowDataType::LargeListView(_)
+        | ArrowDataType::ListView(_)
         | ArrowDataType::Map(_, _) => Err(DeltaTableError::Generic(format!(
             "Unsupported data type for Delta Lake {}",
             t
@@ -1033,8 +1032,8 @@ pub(crate) async fn execute_plan_to_batch(
     state: &SessionState,
     plan: Arc<dyn ExecutionPlan>,
 ) -> DeltaResult<arrow::record_batch::RecordBatch> {
-    let data =
-        futures::future::try_join_all((0..plan.output_partitioning().partition_count()).map(|p| {
+    let data = futures::future::try_join_all(
+        (0..plan.properties().output_partitioning().partition_count()).map(|p| {
             let plan_copy = plan.clone();
             let task_context = state.task_ctx().clone();
             async move {
@@ -1046,8 +1045,9 @@ pub(crate) async fn execute_plan_to_batch(
 
                 DataFusionResult::<_>::Ok(arrow::compute::concat_batches(&schema, batches.iter())?)
             }
-        }))
-        .await?;
+        }),
+    )
+    .await?;
 
     let batch = arrow::compute::concat_batches(&plan.schema(), data.iter())?;
 
@@ -1297,9 +1297,9 @@ pub(crate) struct FindFilesExprProperties {
 /// non-deterministic functions, and determine if the expression only contains
 /// partition columns
 impl TreeNodeVisitor for FindFilesExprProperties {
-    type N = Expr;
+    type Node = Expr;
 
-    fn pre_visit(&mut self, expr: &Self::N) -> datafusion_common::Result<VisitRecursion> {
+    fn f_down(&mut self, expr: &Self::Node) -> datafusion_common::Result<TreeNodeRecursion> {
         // TODO: We can likely relax the volatility to STABLE. Would require further
         // research to confirm the same value is generated during the scan and
         // rewrite phases.
@@ -1340,7 +1340,7 @@ impl TreeNodeVisitor for FindFilesExprProperties {
                         self.result = Err(DeltaTableError::Generic(format!(
                             "Cannot determine volatility of find files predicate function {n}",
                         )));
-                        return Ok(VisitRecursion::Stop);
+                        return Ok(TreeNodeRecursion::Stop);
                     }
                 };
                 if v > Volatility::Immutable {
@@ -1348,7 +1348,7 @@ impl TreeNodeVisitor for FindFilesExprProperties {
                         "Find files predicate contains nondeterministic function {}",
                         func_def.name()
                     )));
-                    return Ok(VisitRecursion::Stop);
+                    return Ok(TreeNodeRecursion::Stop);
                 }
             }
             _ => {
@@ -1356,11 +1356,11 @@ impl TreeNodeVisitor for FindFilesExprProperties {
                     "Find files predicate contains unsupported expression {}",
                     expr
                 )));
-                return Ok(VisitRecursion::Stop);
+                return Ok(TreeNodeRecursion::Stop);
             }
         }
 
-        Ok(VisitRecursion::Continue)
+        Ok(TreeNodeRecursion::Continue)
     }
 }
 

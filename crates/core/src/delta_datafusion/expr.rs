@@ -22,12 +22,12 @@
 //! Utility functions for Datafusion's Expressions
 
 use std::{
-    fmt::{self, format, Display, Error, Formatter, Write},
+    fmt::{self, Display, Error, Formatter, Write},
     sync::Arc,
 };
 
 use arrow_schema::DataType;
-use chrono::{Date, NaiveDate, NaiveDateTime, TimeZone};
+use chrono::{NaiveDate, NaiveDateTime};
 use datafusion::execution::context::SessionState;
 use datafusion_common::Result as DFResult;
 use datafusion_common::{config::ConfigOptions, DFSchema, Result, ScalarValue, TableReference};
@@ -74,6 +74,18 @@ impl<'a> ContextProvider for DeltaContextProvider<'a> {
     }
 
     fn get_table_source(&self, _name: TableReference) -> DFResult<Arc<dyn TableSource>> {
+        unimplemented!()
+    }
+
+    fn udfs_names(&self) -> Vec<String> {
+        unimplemented!()
+    }
+
+    fn udafs_names(&self) -> Vec<String> {
+        unimplemented!()
+    }
+
+    fn udwfs_names(&self) -> Vec<String> {
         unimplemented!()
     }
 }
@@ -417,8 +429,9 @@ mod test {
     use arrow_schema::DataType as ArrowDataType;
     use datafusion::prelude::SessionContext;
     use datafusion_common::{Column, ScalarValue, ToDFSchema};
-    use datafusion_expr::{cardinality, col, lit, substring, Cast, Expr, ExprSchemable};
+    use datafusion_expr::{col, lit, substring, Cast, Expr, ExprSchemable};
     use datafusion_functions::encoding::expr_fn::decode;
+    use datafusion_functions_array::expr_fn::cardinality;
 
     use crate::delta_datafusion::{DataFusionMixins, DeltaSessionContext};
     use crate::kernel::{ArrayType, DataType, PrimitiveType, StructField, StructType};

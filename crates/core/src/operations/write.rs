@@ -373,7 +373,7 @@ async fn write_execution_plan_with_predicate(
 
     // Write data to disk
     let mut tasks = vec![];
-    for i in 0..plan.output_partitioning().partition_count() {
+    for i in 0..plan.properties().output_partitioning().partition_count() {
         let inner_plan = plan.clone();
         let inner_schema = schema.clone();
         let task_ctx = Arc::new(TaskContext::from(&state));
