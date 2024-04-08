@@ -22,12 +22,12 @@
 //! Utility functions for Datafusion's Expressions
 
 use std::{
-    fmt::{self, format, Display, Error, Formatter, Write},
+    fmt::{self, Display, Error, Formatter, Write},
     sync::Arc,
 };
 
 use arrow_schema::DataType;
-use chrono::{Date, NaiveDate, NaiveDateTime, TimeZone};
+use chrono::{DateTime, NaiveDate};
 use datafusion::execution::context::SessionState;
 use datafusion_common::Result as DFResult;
 use datafusion_common::{config::ConfigOptions, DFSchema, Result, ScalarValue, TableReference};
@@ -352,8 +352,7 @@ impl<'a> fmt::Display for ScalarValueFormat<'a> {
                 Some(e) => write!(
                     f,
                     "{}",
-                    NaiveDate::from_num_days_from_ce_opt((EPOCH_DAYS_FROM_CE + (*e)).into())
-                        .ok_or(Error::default())?
+                    NaiveDate::from_num_days_from_ce_opt(EPOCH_DAYS_FROM_CE + (*e)).ok_or(Error)?
                 )?,
                 None => write!(f, "NULL")?,
             },
@@ -361,28 +360,28 @@ impl<'a> fmt::Display for ScalarValueFormat<'a> {
                 Some(e) => write!(
                     f,
                     "'{}'::date",
-                    NaiveDateTime::from_timestamp_millis((*e).into())
-                        .ok_or(Error::default())?
-                        .date()
+                    DateTime::from_timestamp_millis(*e)
+                        .ok_or(Error)?
+                        .date_naive()
                         .format("%Y-%m-%d")
                 )?,
                 None => write!(f, "NULL")?,
             },
             ScalarValue::TimestampMicrosecond(e, tz) => match e {
                 Some(e) => match tz {
-                    Some(tz) => write!(
+                    Some(_tz) => write!(
                         f,
                         "arrow_cast('{}', 'Timestamp(Microsecond, Some(\"UTC\"))')",
-                        NaiveDateTime::from_timestamp_micros(*e)
-                            .ok_or(Error::default())?
-                            .and_utc()
+                        DateTime::from_timestamp_micros(*e)
+                            .ok_or(Error)?
+                            .to_utc()
                             .format("%Y-%m-%dT%H:%M:%S%.6f")
                     )?,
                     None => write!(
                         f,
                         "arrow_cast('{}', 'Timestamp(Microsecond, None)')",
-                        NaiveDateTime::from_timestamp_micros(*e)
-                            .ok_or(Error::default())?
+                        DateTime::from_timestamp_micros(*e)
+                            .ok_or(Error)?
                             .format("%Y-%m-%dT%H:%M:%S%.6f")
                     )?,
                 },
@@ -406,7 +405,7 @@ impl<'a> fmt::Display for ScalarValueFormat<'a> {
                 None => write!(f, "NULL")?,
             },
             ScalarValue::Null => write!(f, "NULL")?,
-            _ => return Err(fmt::Error),
+            _ => return Err(Error),
         };
         Ok(())
     }

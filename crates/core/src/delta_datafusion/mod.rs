@@ -142,6 +142,10 @@ impl DataFusionMixins for Snapshot {
         _arrow_schema(self, true)
     }
 
+    fn input_schema(&self) -> DeltaResult<ArrowSchemaRef> {
+        _arrow_schema(self, false)
+    }
+
     fn parse_predicate_expression(
         &self,
         expr: impl AsRef<str>,
@@ -150,15 +154,15 @@ impl DataFusionMixins for Snapshot {
         let schema = DFSchema::try_from(self.arrow_schema()?.as_ref().to_owned())?;
         parse_predicate_expression(&schema, expr, df_state)
     }
-
-    fn input_schema(&self) -> DeltaResult<ArrowSchemaRef> {
-        _arrow_schema(self, false)
-    }
 }
 
 impl DataFusionMixins for EagerSnapshot {
     fn arrow_schema(&self) -> DeltaResult<ArrowSchemaRef> {
         self.snapshot().arrow_schema()
+    }
+
+    fn input_schema(&self) -> DeltaResult<ArrowSchemaRef> {
+        self.snapshot().input_schema()
     }
 
     fn parse_predicate_expression(
@@ -167,10 +171,6 @@ impl DataFusionMixins for EagerSnapshot {
         df_state: &SessionState,
     ) -> DeltaResult<Expr> {
         self.snapshot().parse_predicate_expression(expr, df_state)
-    }
-
-    fn input_schema(&self) -> DeltaResult<ArrowSchemaRef> {
-        self.snapshot().input_schema()
     }
 }
 

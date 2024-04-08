@@ -40,22 +40,12 @@ lazy_static! {
 pub struct DeltaCdfScan {
     plan: Arc<dyn ExecutionPlan>,
     schema: SchemaRef,
-    partition_values: Vec<String>,
 }
 
 impl DeltaCdfScan {
-
     /// Creates a new scan
-    pub fn new(
-        plan: Arc<dyn ExecutionPlan>,
-        schema: SchemaRef,
-        partition_values: Vec<String>,
-    ) -> Self {
-        Self {
-            plan,
-            schema,
-            partition_values,
-        }
+    pub fn new(plan: Arc<dyn ExecutionPlan>, schema: SchemaRef) -> Self {
+        Self { plan, schema }
     }
 }
 
@@ -86,11 +76,18 @@ impl ExecutionPlan for DeltaCdfScan {
         vec![self.plan.clone()]
     }
 
-    fn with_new_children(self: Arc<Self>, _children: Vec<Arc<dyn ExecutionPlan>>) -> datafusion_common::Result<Arc<dyn ExecutionPlan>> {
+    fn with_new_children(
+        self: Arc<Self>,
+        _children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> datafusion_common::Result<Arc<dyn ExecutionPlan>> {
         self.plan.clone().with_new_children(_children)
     }
 
-    fn execute(&self, partition: usize, context: Arc<TaskContext>) -> datafusion_common::Result<SendableRecordBatchStream> {
+    fn execute(
+        &self,
+        partition: usize,
+        context: Arc<TaskContext>,
+    ) -> datafusion_common::Result<SendableRecordBatchStream> {
         self.plan.execute(partition, context)
     }
 }

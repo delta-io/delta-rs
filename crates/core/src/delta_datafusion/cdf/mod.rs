@@ -3,7 +3,6 @@
 use crate::kernel::{Add, AddCDCFile, CommitInfo, Remove};
 use std::collections::HashMap;
 
-
 mod scan;
 mod scan_utils;
 
@@ -19,12 +18,17 @@ pub(crate) struct CdcDataSpec<F: FileAction> {
 }
 
 impl<F: FileAction> CdcDataSpec<F> {
-    pub fn new(version: i64, timestamp: i64, actions: Vec<F>, commit_info: Option<CommitInfo>) -> Self {
+    pub fn new(
+        version: i64,
+        timestamp: i64,
+        actions: Vec<F>,
+        commit_info: Option<CommitInfo>,
+    ) -> Self {
         Self {
             version,
             timestamp,
             actions,
-            commit_info
+            commit_info,
         }
     }
 }

@@ -28,7 +28,9 @@ use object_store::ObjectStore;
 use self::log_segment::{LogSegment, PathExt};
 use self::parse::{read_adds, read_removes};
 use self::replay::{LogMapper, LogReplayScanner, ReplayStream};
-use super::{Action, Add, AddCDCFile, CommitInfo, DataType, Metadata, Protocol, Remove, StructField};
+use super::{
+    Action, Add, AddCDCFile, CommitInfo, DataType, Metadata, Protocol, Remove, StructField,
+};
 use crate::kernel::StructType;
 use crate::logstore::LogStore;
 use crate::operations::transaction::CommitData;
@@ -41,8 +43,8 @@ pub(crate) mod parse;
 mod replay;
 mod serde;
 
-pub use log_data::*;
 use crate::kernel::parse::read_cdf_adds;
+pub use log_data::*;
 
 /// A snapshot of a Delta table
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]

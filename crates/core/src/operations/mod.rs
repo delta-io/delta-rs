@@ -28,8 +28,8 @@ pub mod vacuum;
 #[cfg(feature = "datafusion")]
 use self::{
     constraints::ConstraintBuilder, datafusion_utils::Expression, delete::DeleteBuilder,
-    drop_constraints::DropConstraintBuilder, load::LoadBuilder, load_cdf::CdfLoadBuilder, merge::MergeBuilder,
-    update::UpdateBuilder, write::WriteBuilder,
+    drop_constraints::DropConstraintBuilder, load::LoadBuilder, load_cdf::CdfLoadBuilder,
+    merge::MergeBuilder, update::UpdateBuilder, write::WriteBuilder,
 };
 #[cfg(feature = "datafusion")]
 pub use ::datafusion::physical_plan::common::collect as collect_sendable_stream;

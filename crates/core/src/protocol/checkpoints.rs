@@ -6,7 +6,7 @@ use std::iter::Iterator;
 use arrow_json::ReaderBuilder;
 use arrow_schema::ArrowError;
 
-use chrono::{DateTime, Datelike, NaiveDate, NaiveDateTime, Utc};
+use chrono::{Datelike, NaiveDate, NaiveDateTime, Utc};
 use futures::{StreamExt, TryStreamExt};
 use lazy_static::lazy_static;
 use object_store::{Error, ObjectStore};
