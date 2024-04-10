@@ -65,3 +65,18 @@ You can find additional information in the [delta-rs-documentation](https://docs
 ### Enable unsafe writes in S3 (opt-in)
 If for some reason you don't want to use dynamodb as your locking mechanism you can
 choose to set the `AWS_S3_ALLOW_UNSAFE_RENAME` variable to ``true`` in order to enable S3 unsafe writes.
+
+
+### Required permissions
+You need to have permissions to get, put and delete objects in the S3 bucket you're storing your data in. Please note that you must be allowed to delete objects even if you're just appending to the deltalake, because there are temporary files into the log folder that are deleted after usage.
+
+In AWS, those would be the required permissions:
+- s3:GetObject
+- s3:PutObject
+- s3:DeleteObject
+
+In DynamoDB, you need those permissions:
+- dynamodb:GetItem
+- dynamodb:Query
+- dynamodb:PutItem
+- dynamodb:UpdateItem
