@@ -165,12 +165,11 @@ pub(crate) fn decode_reader<'a, R: BufRead + 'a>(
 
 #[cfg(test)]
 mod tests {
-    use arrow_array::{Int32Array, RecordBatch, StringArray};
-    use arrow_schema::{Schema, Field, DataType};
-    use crate::DeltaTableConfig;
     use crate::kernel::arrow::json::parse_json;
+    use crate::DeltaTableConfig;
+    use arrow_array::{Int32Array, RecordBatch, StringArray};
+    use arrow_schema::{DataType, Field, Schema};
     use std::sync::Arc;
-
 
     #[test]
     fn json_to_struct() {
@@ -186,10 +185,19 @@ mod tests {
         ]));
         let config = DeltaTableConfig::default();
         let result = parse_json(&json_strings, struct_schema.clone(), &config).unwrap();
-        let expected = RecordBatch::try_new(struct_schema, vec![
-            Arc::new(Int32Array::from(vec![Some(1), Some(2), None, Some(3)])),
-            Arc::new(StringArray::from(vec![Some("foo"), Some("bar"), None, Some("baz")]))
-        ]).unwrap();
+        let expected = RecordBatch::try_new(
+            struct_schema,
+            vec![
+                Arc::new(Int32Array::from(vec![Some(1), Some(2), None, Some(3)])),
+                Arc::new(StringArray::from(vec![
+                    Some("foo"),
+                    Some("bar"),
+                    None,
+                    Some("baz"),
+                ])),
+            ],
+        )
+        .unwrap();
         assert_eq!(result, expected);
     }
 }
