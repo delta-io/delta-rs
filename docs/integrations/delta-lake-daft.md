@@ -1,6 +1,6 @@
 # Using Delta Lake with Daft
 
-[Daft](www.getdaft.io) is a framework for ETL, analytics, and ML/AI at scale with a familiar Python dataframe API, implemented in Rust.
+[Daft](https://www.getdaft.io) is a framework for ETL, analytics, and ML/AI at scale with a familiar Python dataframe API, implemented in Rust.
 
 For Delta Lake users, Daft is a great data processing tool because it gives you the following features:
 
@@ -206,7 +206,7 @@ Running a query on a non-partitioned column like `continent` will require readin
 
 Instead, running a query on a partitioned column (`country` in this case) means Daft only has to read only the relevant partition, saving us a whopping 2000+ bytes in this toy example :)
 
-You can read [High-Performance Querying on Massive Delta Lake Tables with Daft](link) for an in-depth benchmarking of query optimization with Delta Lake and Daft.
+You can read [High-Performance Querying on Massive Delta Lake Tables with Daft](https://delta.io/blog/daft-delta-lake-integration/) for an in-depth benchmarking of query optimization with Delta Lake and Daft.
 
 ## Transform columns with Expressions
 
@@ -298,7 +298,7 @@ We can then use the `apply` method to apply a function to each instance of the D
 
 Daft DataFrames can also contain [many other data types](https://www.getdaft.io/projects/docs/en/latest/api_docs/datatype.html), like tensors, JSON, URLs and images. The Expressions API provides useful tools to work with these data types.
 
-Take a look at the notebook in the `delta-examples` [Github repository](link) for a closer look at how Daft handles URLs, images and ML applications.
+Take a look at the notebook in the `delta-examples` Github repository for a closer look at how Daft handles URLs, images and ML applications.
 
 ## Transform multiple columns with UDFs
 
