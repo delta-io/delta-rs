@@ -27,7 +27,6 @@ use crate::logstore::LogStore;
 use crate::table::state::DeltaTableState;
 use crate::table::{get_partition_col_data_types, CheckPoint, CheckPointBuilder};
 use crate::{open_table_with_version, DeltaTable};
-
 type SchemaPath = Vec<String>;
 
 /// Error returned when there is an error during creating a checkpoint.
