@@ -345,6 +345,6 @@ Take a look at the [Daft tutorials](https://www.getdaft.io/projects/docs/en/late
 
 ## Contribute to `daft`
 
-Excited about Daft and want to contribute? Join us on [Github](https://github.com/Eventual-Inc/Daft) 🚀
+Excited about Daft and want to contribute? Join them on [Github](https://github.com/Eventual-Inc/Daft) 🚀
 
 Like many technologies, Daft collects some non-identifiable telemetry to improve the product. This is stricly non-identifiable metadata. You can disable telemetry by setting the following environment variable: `DAFT_ANALYTICS_ENABLED=0`. Read more in the [Daft documentation](https://www.getdaft.io/projects/docs/en/latest/faq/telemetry.html).
