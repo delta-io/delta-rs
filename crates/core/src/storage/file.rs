@@ -4,14 +4,9 @@
 
 use bytes::Bytes;
 use futures::stream::BoxStream;
-use object_store::{
-    local::LocalFileSystem, path::Path as ObjectStorePath, Error as ObjectStoreError, GetOptions,
-    GetResult, ListResult, MultipartId, ObjectMeta, ObjectStore, PutOptions, PutResult,
-    Result as ObjectStoreResult,
-};
+use object_store::{local::LocalFileSystem, path::Path as ObjectStorePath, Error as ObjectStoreError, GetOptions, GetResult, ListResult, ObjectMeta, ObjectStore, PutOptions, PutResult, Result as ObjectStoreResult, MultipartUpload};
 use std::ops::Range;
 use std::sync::Arc;
-use tokio::io::AsyncWrite;
 use url::Url;
 
 const STORE_NAME: &str = "DeltaLocalObjectStore";
@@ -254,16 +249,8 @@ impl ObjectStore for FileStorageBackend {
     async fn put_multipart(
         &self,
         location: &ObjectStorePath,
-    ) -> ObjectStoreResult<(MultipartId, Box<dyn AsyncWrite + Unpin + Send>)> {
+    ) -> ObjectStoreResult<Box<dyn MultipartUpload>> {
         self.inner.put_multipart(location).await
-    }
-
-    async fn abort_multipart(
-        &self,
-        location: &ObjectStorePath,
-        multipart_id: &MultipartId,
-    ) -> ObjectStoreResult<()> {
-        self.inner.abort_multipart(location, multipart_id).await
     }
 }
 

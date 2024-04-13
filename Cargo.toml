@@ -2,7 +2,7 @@
 members = [
     "crates/*",
     "delta-inspect",
-    "python",
+#    "python",
 ]
 exclude = ["proofs"]
 resolver = "2"
@@ -31,36 +31,28 @@ debug = "line-tables-only"
 
 [workspace.dependencies]
 # arrow
-arrow = { git = "https://github.com/Nekit2217/arrow-rs", branch="decimal-e-notation" }
-arrow-arith = { git = "https://github.com/Nekit2217/arrow-rs", branch="decimal-e-notation" }
-arrow-array = { git = "https://github.com/Nekit2217/arrow-rs", branch="decimal-e-notation", features = ["chrono-tz"]}
-arrow-buffer = { git = "https://github.com/Nekit2217/arrow-rs", branch="decimal-e-notation" }
-arrow-cast = { git = "https://github.com/Nekit2217/arrow-rs", branch="decimal-e-notation" }
-arrow-ipc = { git = "https://github.com/Nekit2217/arrow-rs", branch="decimal-e-notation" }
-arrow-json = { git = "https://github.com/Nekit2217/arrow-rs", branch="decimal-e-notation" }
-arrow-ord = { git = "https://github.com/Nekit2217/arrow-rs", branch="decimal-e-notation" }
-arrow-row = { git = "https://github.com/Nekit2217/arrow-rs", branch="decimal-e-notation" }
-arrow-schema = { git = "https://github.com/Nekit2217/arrow-rs", branch="decimal-e-notation" }
-arrow-select = { git = "https://github.com/Nekit2217/arrow-rs", branch="decimal-e-notation" }
-object_store = { version = "0.9" }
-parquet = { git = "https://github.com/Nekit2217/arrow-rs", branch="decimal-e-notation" }
+arrow = { path = "../arrow-rs/arrow" }
+arrow-arith = { path = "../arrow-rs/arrow-arith" }
+arrow-array = { path = "../arrow-rs/arrow-array", features = ["chrono-tz"]}
+arrow-buffer = { path = "../arrow-rs/arrow-buffer" }
+arrow-cast = { path = "../arrow-rs/arrow-cast" }
+arrow-ipc = { path = "../arrow-rs/arrow-ipc" }
+arrow-json = { path = "../arrow-rs/arrow-json" }
+arrow-ord = { path = "../arrow-rs/arrow-ord" }
+arrow-row = { path = "../arrow-rs/arrow-row" }
+arrow-schema = { path = "../arrow-rs/arrow-schema" }
+arrow-select = { path = "../arrow-rs/arrow-select" }
+object_store = { path = "../arrow-rs/object_store" }
+parquet = { path = "../arrow-rs/parquet" }
 
 # datafusion
-datafusion = { version = "36" }
-datafusion-expr = { version = "36" }
-datafusion-common = { version = "36" }
-datafusion-proto = { version = "36" }
-datafusion-sql = { version = "36" }
-datafusion-physical-expr = { version = "36" }
-datafusion-functions = { version = "36" }
-#datafusion = { git = "https://github.com/Nekit2217/arrow-datafusion", branch="main" }
-#datafusion-expr = { git = "https://github.com/Nekit2217/arrow-datafusion", branch="main" }
-#datafusion-common = { git = "https://github.com/Nekit2217/arrow-datafusion", branch="main" }
-#datafusion-proto = { git = "https://github.com/Nekit2217/arrow-datafusion", branch="main" }
-#datafusion-sql = { git = "https://github.com/Nekit2217/arrow-datafusion", branch="main" }
-#datafusion-physical-expr = { git = "https://github.com/Nekit2217/arrow-datafusion", branch="main" }
-#datafusion-functions = { git = "https://github.com/Nekit2217/arrow-datafusion", branch="main" }
-
+datafusion = { path = "../datafusion/datafusion/core" }
+datafusion-expr = { path = "../datafusion/datafusion/expr" }
+datafusion-common = { path = "../datafusion/datafusion/common" }
+datafusion-proto = { path = "../datafusion/datafusion/proto" }
+datafusion-sql = { path = "../datafusion/datafusion/sql" }
+datafusion-physical-expr = { path = "../datafusion/datafusion/physical-expr" }
+datafusion-functions = { path = "../datafusion/datafusion/functions" }
 
 # serde
 serde = { version = "1.0.194", features = ["derive"] }

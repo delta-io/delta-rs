@@ -4,13 +4,10 @@
 
 use bytes::Bytes;
 use futures::stream::BoxStream;
-use object_store::{
-    local::LocalFileSystem, path::Path as ObjectStorePath, Error as ObjectStoreError, GetOptions,
-    GetResult, ListResult, MultipartId, ObjectMeta, ObjectStore, PutOptions, PutResult,
-    Result as ObjectStoreResult,
-};
+use object_store::{local::LocalFileSystem, path::Path as ObjectStorePath, Error as ObjectStoreError, GetOptions, GetResult, ListResult, MultipartId, ObjectMeta, ObjectStore, PutOptions, PutResult, Result as ObjectStoreResult, MultipartUpload};
 use std::ops::Range;
 use std::sync::Arc;
+use object_store::path::Path;
 use tokio::io::AsyncWrite;
 use url::Url;
 
@@ -241,20 +238,17 @@ impl ObjectStore for MountFileStorageBackend {
         Ok(regular_rename(path_from.as_ref(), path_to.as_ref()).await?)
     }
 
-    async fn put_multipart(
-        &self,
-        location: &ObjectStorePath,
-    ) -> ObjectStoreResult<(MultipartId, Box<dyn AsyncWrite + Unpin + Send>)> {
+    async fn put_multipart(&self, location: &Path) -> object_store::Result<Box<dyn MultipartUpload>> {
         self.inner.put_multipart(location).await
     }
 
-    async fn abort_multipart(
-        &self,
-        location: &ObjectStorePath,
-        multipart_id: &MultipartId,
-    ) -> ObjectStoreResult<()> {
-        self.inner.abort_multipart(location, multipart_id).await
-    }
+    // async fn abort_multipart(
+    //     &self,
+    //     location: &ObjectStorePath,
+    //     multipart_id: &MultipartId,
+    // ) -> ObjectStoreResult<()> {
+    //     self.inner.abort_multipart(location, multipart_id).await
+    // }
 }
 
 /// Regular renames `from` to `to`.
