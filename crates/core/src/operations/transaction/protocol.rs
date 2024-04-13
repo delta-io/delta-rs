@@ -212,10 +212,10 @@ pub static INSTANCE: Lazy<ProtocolChecker> = Lazy::new(|| {
 
     let mut writer_features = HashSet::new();
     writer_features.insert(WriterFeatures::AppendOnly);
+    writer_features.insert(WriterFeatures::Invariants);
     writer_features.insert(WriterFeatures::TimestampWithoutTimezone);
     #[cfg(feature = "datafusion")]
     {
-        writer_features.insert(WriterFeatures::Invariants);
         writer_features.insert(WriterFeatures::CheckConstraints);
     }
     // writer_features.insert(WriterFeatures::ChangeDataFeed);
