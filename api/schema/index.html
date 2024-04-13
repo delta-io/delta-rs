@@ -1689,6 +1689,8 @@
       
         
       
+        
+      
     
     
     
@@ -1735,6 +1737,26 @@
   
   <span class="md-ellipsis">
     Arrow
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../integrations/delta-lake-daft/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Daft
   </span>
   
 
@@ -2394,7 +2416,7 @@
 
 
 </h3>
-<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">Schema</span><span class="p">(</span><span class="n">fields</span><span class="p">:</span> <span class="n">List</span><span class="p">[</span><span class="n">Field</span><span class="p">])</span>
+<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">Schema</span><span class="p">(</span><span class="n">fields</span><span class="p">:</span> <span class="n">List</span><span class="p">[</span><span class="n">Field</span><span class="p">])</span>
 </span></code></pre></div>
 
   <div class="doc doc-contents first">
@@ -2469,7 +2491,7 @@ Schema([Field(x, PrimitiveType("integer"), nullable=True), Field(y, PrimitiveTyp
   </span>
 
 </h4>
-<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">from_json</span><span class="p">(</span><span class="n">schema_json</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Schema</span>
+<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">from_json</span><span class="p">(</span><span class="n">schema_json</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Schema</span>
 </span></code></pre></div>
 
   <div class="doc doc-contents ">
@@ -2535,7 +2557,7 @@ Schema([Field(x, PrimitiveType("integer"), nullable=True), Field(y, PrimitiveTyp
   </span>
 
 </h4>
-<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">from_pyarrow</span><span class="p">(</span><span class="n">data_type</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Schema</span>
+<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">from_pyarrow</span><span class="p">(</span><span class="n">data_type</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Schema</span>
 </span></code></pre></div>
 
   <div class="doc doc-contents ">
@@ -2615,7 +2637,7 @@ Schema([Field(x, PrimitiveType("integer"), nullable=True), Field(y, PrimitiveTyp
   </span>
 
 </h4>
-<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">to_json</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="nb">str</span>
+<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">to_json</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="nb">str</span>
 </span></code></pre></div>
 
   <div class="doc doc-contents ">
@@ -2671,7 +2693,7 @@ Schema([Field(x, PrimitiveType("integer"), nullable=True), Field(y, PrimitiveTyp
   </span>
 
 </h4>
-<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">to_pyarrow</span><span class="p">(</span><span class="n">as_large_types</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">pyarrow</span><span class="o">.</span><span class="n">Schema</span>
+<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">to_pyarrow</span><span class="p">(</span><span class="n">as_large_types</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">pyarrow</span><span class="o">.</span><span class="n">Schema</span>
 </span></code></pre></div>
 
   <div class="doc doc-contents ">
@@ -2755,7 +2777,7 @@ This is for compatibility with systems like Polars that only support the large v
 
 
 </h3>
-<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">Field</span><span class="p">(</span><span class="n">name</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="nb">type</span><span class="p">:</span> <span class="n">DataType</span><span class="p">,</span> <span class="o">*</span><span class="p">,</span> <span class="n">nullable</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span> <span class="n">metadata</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span>
+<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">Field</span><span class="p">(</span><span class="n">name</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="nb">type</span><span class="p">:</span> <span class="n">DataType</span><span class="p">,</span> <span class="o">*</span><span class="p">,</span> <span class="n">nullable</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span> <span class="n">metadata</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span>
 </span></code></pre></div>
 
   <div class="doc doc-contents first">
@@ -2866,7 +2888,7 @@ This is for compatibility with systems like Polars that only support the large v
   </span>
 
 </h4>
-<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">from_json</span><span class="p">(</span><span class="n">field_json</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Field</span>
+<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">from_json</span><span class="p">(</span><span class="n">field_json</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Field</span>
 </span></code></pre></div>
 
   <div class="doc doc-contents ">
@@ -2957,7 +2979,7 @@ This is for compatibility with systems like Polars that only support the large v
   </span>
 
 </h4>
-<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">from_pyarrow</span><span class="p">(</span><span class="n">field</span><span class="p">:</span> <span class="n">pyarrow</span><span class="o">.</span><span class="n">Field</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Field</span>
+<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">from_pyarrow</span><span class="p">(</span><span class="n">field</span><span class="p">:</span> <span class="n">pyarrow</span><span class="o">.</span><span class="n">Field</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Field</span>
 </span></code></pre></div>
 
   <div class="doc doc-contents ">
@@ -3037,7 +3059,7 @@ Note: This currently doesn't preserve field metadata.</p>
   </span>
 
 </h4>
-<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">to_json</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="nb">str</span>
+<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">to_json</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="nb">str</span>
 </span></code></pre></div>
 
   <div class="doc doc-contents ">
@@ -3092,7 +3114,7 @@ Note: This currently doesn't preserve field metadata.</p>
   </span>
 
 </h4>
-<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">to_pyarrow</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="n">pyarrow</span><span class="o">.</span><span class="n">Field</span>
+<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">to_pyarrow</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="n">pyarrow</span><span class="o">.</span><span class="n">Field</span>
 </span></code></pre></div>
 
   <div class="doc doc-contents ">
@@ -3147,7 +3169,7 @@ Note: This currently doesn't preserve field metadata.</p>
 
 
 </h3>
-<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">PrimitiveType</span><span class="p">(</span><span class="n">data_type</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span>
+<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">PrimitiveType</span><span class="p">(</span><span class="n">data_type</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span>
 </span></code></pre></div>
 
   <div class="doc doc-contents first">
@@ -3201,7 +3223,7 @@ Note: This currently doesn't preserve field metadata.</p>
   </span>
 
 </h4>
-<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">from_json</span><span class="p">(</span><span class="n">type_json</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">PrimitiveType</span>
+<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">from_json</span><span class="p">(</span><span class="n">type_json</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">PrimitiveType</span>
 </span></code></pre></div>
 
   <div class="doc doc-contents ">
@@ -3281,7 +3303,7 @@ Note: This currently doesn't preserve field metadata.</p>
   </span>
 
 </h4>
-<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">from_pyarrow</span><span class="p">(</span><span class="n">data_type</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">PrimitiveType</span>
+<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">from_pyarrow</span><span class="p">(</span><span class="n">data_type</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">PrimitiveType</span>
 </span></code></pre></div>
 
   <div class="doc doc-contents ">
@@ -3361,7 +3383,7 @@ Note: This currently doesn't preserve field metadata.</p>
   </span>
 
 </h4>
-<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">to_pyarrow</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="n">pyarrow</span><span class="o">.</span><span class="n">DataType</span>
+<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">to_pyarrow</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="n">pyarrow</span><span class="o">.</span><span class="n">DataType</span>
 </span></code></pre></div>
 
   <div class="doc doc-contents ">
@@ -3390,7 +3412,7 @@ Note: This currently doesn't preserve field metadata.</p>
 
 
 </h3>
-<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">ArrayType</span><span class="p">(</span><span class="n">element_type</span><span class="p">:</span> <span class="n">DataType</span><span class="p">,</span> <span class="o">*</span><span class="p">,</span> <span class="n">contains_null</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">)</span>
+<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">ArrayType</span><span class="p">(</span><span class="n">element_type</span><span class="p">:</span> <span class="n">DataType</span><span class="p">,</span> <span class="o">*</span><span class="p">,</span> <span class="n">contains_null</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">)</span>
 </span></code></pre></div>
 
   <div class="doc doc-contents first">
@@ -3482,7 +3504,7 @@ Note: This currently doesn't preserve field metadata.</p>
   </span>
 
 </h4>
-<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">from_json</span><span class="p">(</span><span class="n">type_json</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">ArrayType</span>
+<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">from_json</span><span class="p">(</span><span class="n">type_json</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">ArrayType</span>
 </span></code></pre></div>
 
   <div class="doc doc-contents ">
@@ -3575,7 +3597,7 @@ Note: This currently doesn't preserve field metadata.</p>
   </span>
 
 </h4>
-<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">from_pyarrow</span><span class="p">(</span><span class="n">data_type</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">ArrayType</span>
+<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">from_pyarrow</span><span class="p">(</span><span class="n">data_type</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">ArrayType</span>
 </span></code></pre></div>
 
   <div class="doc doc-contents ">
@@ -3655,7 +3677,7 @@ Note: This currently doesn't preserve field metadata.</p>
   </span>
 
 </h4>
-<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">to_json</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="nb">str</span>
+<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">to_json</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="nb">str</span>
 </span></code></pre></div>
 
   <div class="doc doc-contents ">
@@ -3680,7 +3702,7 @@ Note: This currently doesn't preserve field metadata.</p>
   </span>
 
 </h4>
-<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">to_pyarrow</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="n">pyarrow</span><span class="o">.</span><span class="n">ListType</span>
+<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">to_pyarrow</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="n">pyarrow</span><span class="o">.</span><span class="n">ListType</span>
 </span></code></pre></div>
 
   <div class="doc doc-contents ">
@@ -3709,7 +3731,7 @@ Note: This currently doesn't preserve field metadata.</p>
 
 
 </h3>
-<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">MapType</span><span class="p">(</span><span class="n">key_type</span><span class="p">:</span> <span class="n">DataType</span><span class="p">,</span> <span class="n">value_type</span><span class="p">:</span> <span class="n">DataType</span><span class="p">,</span> <span class="o">*</span><span class="p">,</span> <span class="n">value_contains_null</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">)</span>
+<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">MapType</span><span class="p">(</span><span class="n">key_type</span><span class="p">:</span> <span class="n">DataType</span><span class="p">,</span> <span class="n">value_type</span><span class="p">:</span> <span class="n">DataType</span><span class="p">,</span> <span class="o">*</span><span class="p">,</span> <span class="n">value_contains_null</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">)</span>
 </span></code></pre></div>
 
   <div class="doc doc-contents first">
@@ -3820,7 +3842,7 @@ Note: This currently doesn't preserve field metadata.</p>
   </span>
 
 </h4>
-<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">from_json</span><span class="p">(</span><span class="n">type_json</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">MapType</span>
+<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">from_json</span><span class="p">(</span><span class="n">type_json</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">MapType</span>
 </span></code></pre></div>
 
   <div class="doc doc-contents ">
@@ -3914,7 +3936,7 @@ Note: This currently doesn't preserve field metadata.</p>
   </span>
 
 </h4>
-<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">from_pyarrow</span><span class="p">(</span><span class="n">data_type</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">MapType</span>
+<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">from_pyarrow</span><span class="p">(</span><span class="n">data_type</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">MapType</span>
 </span></code></pre></div>
 
   <div class="doc doc-contents ">
@@ -3994,7 +4016,7 @@ Note: This currently doesn't preserve field metadata.</p>
   </span>
 
 </h4>
-<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">to_json</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="nb">str</span>
+<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">to_json</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="nb">str</span>
 </span></code></pre></div>
 
   <div class="doc doc-contents ">
@@ -4043,7 +4065,7 @@ Note: This currently doesn't preserve field metadata.</p>
   </span>
 
 </h4>
-<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">to_pyarrow</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="n">pyarrow</span><span class="o">.</span><span class="n">MapType</span>
+<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">to_pyarrow</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="n">pyarrow</span><span class="o">.</span><span class="n">MapType</span>
 </span></code></pre></div>
 
   <div class="doc doc-contents ">
@@ -4072,7 +4094,7 @@ Note: This currently doesn't preserve field metadata.</p>
 
 
 </h3>
-<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">StructType</span><span class="p">(</span><span class="n">fields</span><span class="p">:</span> <span class="n">List</span><span class="p">[</span><span class="n">Field</span><span class="p">])</span>
+<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">StructType</span><span class="p">(</span><span class="n">fields</span><span class="p">:</span> <span class="n">List</span><span class="p">[</span><span class="n">Field</span><span class="p">])</span>
 </span></code></pre></div>
 
   <div class="doc doc-contents first">
@@ -4145,7 +4167,7 @@ Note: This currently doesn't preserve field metadata.</p>
   </span>
 
 </h4>
-<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">from_json</span><span class="p">(</span><span class="n">type_json</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">StructType</span>
+<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">from_json</span><span class="p">(</span><span class="n">type_json</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">StructType</span>
 </span></code></pre></div>
 
   <div class="doc doc-contents ">
@@ -4235,7 +4257,7 @@ Note: This currently doesn't preserve field metadata.</p>
   </span>
 
 </h4>
-<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">from_pyarrow</span><span class="p">(</span><span class="n">data_type</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">StructType</span>
+<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">from_pyarrow</span><span class="p">(</span><span class="n">data_type</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">StructType</span>
 </span></code></pre></div>
 
   <div class="doc doc-contents ">
@@ -4315,7 +4337,7 @@ Note: This currently doesn't preserve field metadata.</p>
   </span>
 
 </h4>
-<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">to_json</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="nb">str</span>
+<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">to_json</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="nb">str</span>
 </span></code></pre></div>
 
   <div class="doc doc-contents ">
@@ -4370,7 +4392,7 @@ Note: This currently doesn't preserve field metadata.</p>
   </span>
 
 </h4>
-<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">to_pyarrow</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="n">pyarrow</span><span class="o">.</span><span class="n">StructType</span>
+<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">to_pyarrow</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="n">pyarrow</span><span class="o">.</span><span class="n">StructType</span>
 </span></code></pre></div>
 
   <div class="doc doc-contents ">
