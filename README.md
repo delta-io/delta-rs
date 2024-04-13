@@ -116,6 +116,7 @@ Libraries and frameworks that interoperate with delta-rs - in alphabetical order
 - [AWS SDK for Pandas](https://github.com/aws/aws-sdk-pandas)
 - [ballista][ballista]
 - [datafusion][datafusion]
+- [Daft](https://www.getdaft.io/)
 - [Dask](https://github.com/dask-contrib/dask-deltatable)
 - [datahub](https://datahubproject.io/)
 - [DuckDB](https://duckdb.org/)
