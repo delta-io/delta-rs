@@ -217,6 +217,9 @@ pub enum DeltaTableError {
 
     #[error("Table has not yet been initialized")]
     NotInitialized,
+
+    #[error("Change Data not enabled for version: {version}, Start: {start}, End: {end}")]
+    ChangeDataNotRecorded { version: i64, start: i64, end: i64 },
 }
 
 impl From<object_store::path::Error> for DeltaTableError {

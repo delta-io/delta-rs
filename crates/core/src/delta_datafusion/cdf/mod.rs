@@ -1,34 +1,28 @@
 //! Logical operators and physical executions for CDF
 
-use crate::kernel::{Add, AddCDCFile, CommitInfo, Remove};
 use std::collections::HashMap;
-
-mod scan;
-mod scan_utils;
 
 pub(crate) use scan::*;
 pub(crate) use scan_utils::*;
+
+use crate::kernel::{Add, AddCDCFile, Remove};
+
+mod scan;
+mod scan_utils;
 
 #[derive(Debug)]
 pub(crate) struct CdcDataSpec<F: FileAction> {
     version: i64,
     timestamp: i64,
     actions: Vec<F>,
-    commit_info: Option<CommitInfo>,
 }
 
 impl<F: FileAction> CdcDataSpec<F> {
-    pub fn new(
-        version: i64,
-        timestamp: i64,
-        actions: Vec<F>,
-        commit_info: Option<CommitInfo>,
-    ) -> Self {
+    pub fn new(version: i64, timestamp: i64, actions: Vec<F>) -> Self {
         Self {
             version,
             timestamp,
             actions,
-            commit_info,
         }
     }
 }
