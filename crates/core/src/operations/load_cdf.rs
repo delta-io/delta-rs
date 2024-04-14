@@ -3,22 +3,22 @@ use std::time::SystemTime;
 
 use arrow_schema::{ArrowError, Field};
 use chrono::{DateTime, Utc};
-use datafusion::datasource::file_format::FileFormat;
 use datafusion::datasource::file_format::parquet::ParquetFormat;
+use datafusion::datasource::file_format::FileFormat;
 use datafusion::datasource::physical_plan::FileScanConfig;
-use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_plan::union::UnionExec;
+use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::SessionContext;
 use datafusion_common::{ScalarValue, Statistics};
 use tracing::log;
 
-use crate::delta_datafusion::{DataFusionMixins, register_store};
 use crate::delta_datafusion::cdf::*;
-use crate::DeltaTableError;
+use crate::delta_datafusion::{register_store, DataFusionMixins};
 use crate::errors::DeltaResult;
 use crate::kernel::{Action, Add, AddCDCFile, CommitInfo, Remove};
 use crate::logstore::{get_actions, LogStoreRef};
 use crate::table::state::DeltaTableState;
+use crate::DeltaTableError;
 
 #[derive(Clone)]
 pub struct CdfLoadBuilder {
@@ -315,9 +315,9 @@ mod tests {
     use datafusion_common::assert_batches_sorted_eq;
 
     use crate::delta_datafusion::cdf::DeltaCdfScan;
-    use crate::DeltaOps;
     use crate::operations::collect_sendable_stream;
     use crate::writer::test_utils::TestResult;
+    use crate::DeltaOps;
 
     async fn collect_batches(
         num_partitions: usize,
