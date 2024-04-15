@@ -3,7 +3,7 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 from threading import Barrier, Thread
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, List, Tuple
 from unittest.mock import Mock
 
 from packaging import version
@@ -97,6 +97,52 @@ def test_load_as_version_datetime(date_value: str, expected_version):
     dt.load_as_version(date_value)
     assert dt.version() == expected_version
     dt = DeltaTable(table_path)
+    dt.load_as_version(datetime.fromisoformat(date_value))
+    assert dt.version() == expected_version
+
+
+@pytest.mark.parametrize(
+    ["date_value", "expected_version", "log_mtime_pairs"],
+    [
+        ("2020-05-01T00:47:31-07:00", 1, [("00000000000000000000.json", 158839841.0)]),
+        (
+            "2020-05-02T22:47:31-07:00",
+            2,
+            [
+                ("00000000000000000000.json", 158839841.0),
+                ("00000000000000000001.json", 1588484851.0),
+            ],
+        ),
+    ],
+)
+def test_load_as_version_datetime_with_logs_removed(
+    tmp_path,
+    sample_table,
+    date_value: str,
+    expected_version,
+    log_mtime_pairs: List[Tuple[str, int]],
+):
+    log_path = tmp_path / "_delta_log"
+    for i in range(6):
+        write_deltalake(tmp_path, data=sample_table, mode="append")
+
+    for file_name, dt_epoch in log_mtime_pairs:
+        file_path = log_path / file_name
+        print(file_path)
+        os.utime(file_path, (dt_epoch, dt_epoch))
+
+    dt = DeltaTable(tmp_path, version=expected_version)
+    dt.create_checkpoint()
+    file = log_path / f"0000000000000000000{expected_version}.checkpoint.parquet"
+    assert file.exists()
+    dt.cleanup_metadata()
+
+    file = log_path / f"0000000000000000000{expected_version-1}.json"
+    assert not file.exists()
+    dt = DeltaTable(tmp_path)
+    dt.load_as_version(date_value)
+    assert dt.version() == expected_version
+    dt = DeltaTable(tmp_path)
     dt.load_as_version(datetime.fromisoformat(date_value))
     assert dt.version() == expected_version
 
