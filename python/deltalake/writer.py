@@ -129,7 +129,7 @@ def write_deltalake(
     mode: Literal["error", "append", "ignore"] = ...,
     name: Optional[str] = ...,
     description: Optional[str] = ...,
-    parallel: Optional[int] = ...,
+    parallel: bool | int = ...,
     configuration: Optional[Mapping[str, Optional[str]]] = ...,
     overwrite_schema: bool = ...,
     schema_mode: Optional[Literal["merge", "overwrite"]] = ...,
@@ -158,7 +158,7 @@ def write_deltalake(
     mode: Literal["overwrite"],
     name: Optional[str] = ...,
     description: Optional[str] = ...,
-    parallel: Optional[int] = ...,
+    parallel: bool | int = ...,
     configuration: Optional[Mapping[str, Optional[str]]] = ...,
     overwrite_schema: bool = ...,
     schema_mode: Optional[Literal["merge", "overwrite"]] = ...,
@@ -315,10 +315,10 @@ def write_deltalake(
     if engine == "rust":
         if table is not None and mode == "ignore":
             return
-        if parallel is True:
-            parallel = None  # rust engine will use default parallelism
-        elif parallel is False:
-            parallel = 1
+        # rust engine will use default parallelism if parallel is None
+        parallel_rust: int | None = (
+            parallel if isinstance(parallel, int) else (None if parallel else 1)
+        )
         data = RecordBatchReader.from_batches(schema, (batch for batch in data))
         write_deltalake_rust(
             table_uri=table_uri,
@@ -329,7 +329,7 @@ def write_deltalake(
             predicate=predicate,
             name=name,
             description=description,
-            parallel=parallel,
+            parallel=parallel_rust,
             configuration=configuration,
             storage_options=storage_options,
             writer_properties=(
