@@ -492,7 +492,7 @@ impl MergePlan {
                 &batch,
                 task_parameters.file_schema.clone(),
                 false,
-                false,
+                true,
             )?;
             partial_metrics.num_batches += 1;
             writer.write(&batch).await.map_err(DeltaTableError::from)?;

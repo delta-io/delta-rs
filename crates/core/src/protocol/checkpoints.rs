@@ -6,12 +6,14 @@ use std::iter::Iterator;
 use arrow_json::ReaderBuilder;
 use arrow_schema::ArrowError;
 
-use chrono::{Datelike, Utc};
+use chrono::{DateTime, Datelike, NaiveDate, NaiveDateTime, Utc};
 use futures::{StreamExt, TryStreamExt};
 use lazy_static::lazy_static;
 use object_store::{Error, ObjectStore};
 use parquet::arrow::ArrowWriter;
+use parquet::basic::Compression;
 use parquet::errors::ParquetError;
+use parquet::file::properties::WriterProperties;
 use regex::Regex;
 use serde_json::Value;
 use tracing::{debug, error};
@@ -25,7 +27,6 @@ use crate::logstore::LogStore;
 use crate::table::state::DeltaTableState;
 use crate::table::{get_partition_col_data_types, CheckPoint, CheckPointBuilder};
 use crate::{open_table_with_version, DeltaTable};
-
 type SchemaPath = Vec<String>;
 
 /// Error returned when there is an error during creating a checkpoint.
@@ -186,7 +187,7 @@ pub async fn cleanup_expired_logs_for(
 ) -> Result<usize, ProtocolError> {
     lazy_static! {
         static ref DELTA_LOG_REGEX: Regex =
-            Regex::new(r"_delta_log/(\d{20})\.(json|checkpoint).*$").unwrap();
+            Regex::new(r"_delta_log/(\d{20})\.(json|checkpoint|json.tmp).*$").unwrap();
     }
 
     let object_store = log_store.object_store();
@@ -333,7 +334,15 @@ fn parquet_bytes_from_state(
     debug!("Writing to checkpoint parquet buffer...");
     // Write the Checkpoint parquet file.
     let mut bytes = vec![];
-    let mut writer = ArrowWriter::try_new(&mut bytes, arrow_schema.clone(), None)?;
+    let mut writer = ArrowWriter::try_new(
+        &mut bytes,
+        arrow_schema.clone(),
+        Some(
+            WriterProperties::builder()
+                .set_compression(Compression::SNAPPY)
+                .build(),
+        ),
+    )?;
     let mut decoder = ReaderBuilder::new(arrow_schema)
         .with_batch_size(CHECKPOINT_RECORD_BATCH_SIZE)
         .build_decoder()?;
@@ -425,20 +434,17 @@ fn typed_partition_value_from_string(
                 .map_err(|_| CheckpointError::PartitionValueNotParseable(string_value.to_owned()))?
                 .into()),
             PrimitiveType::Date => {
-                let d = chrono::naive::NaiveDate::parse_from_str(string_value, "%Y-%m-%d")
-                    .map_err(|_| {
-                        CheckpointError::PartitionValueNotParseable(string_value.to_owned())
-                    })?;
+                let d = NaiveDate::parse_from_str(string_value, "%Y-%m-%d").map_err(|_| {
+                    CheckpointError::PartitionValueNotParseable(string_value.to_owned())
+                })?;
                 // day 0 is 1970-01-01 (719163 days from ce)
                 Ok((d.num_days_from_ce() - 719_163).into())
             }
             PrimitiveType::Timestamp => {
-                let ts =
-                    chrono::naive::NaiveDateTime::parse_from_str(string_value, "%Y-%m-%d %H:%M:%S")
-                        .map_err(|_| {
-                            CheckpointError::PartitionValueNotParseable(string_value.to_owned())
-                        })?;
-                Ok((ts.timestamp_millis() * 1000).into())
+                let ts = NaiveDateTime::parse_from_str(string_value, "%Y-%m-%d %H:%M:%S").map_err(
+                    |_| CheckpointError::PartitionValueNotParseable(string_value.to_owned()),
+                )?;
+                Ok((ts.and_utc().timestamp_millis() * 1000).into())
             }
             s => unimplemented!(
                 "Primitive type {} is not supported for partition column values.",

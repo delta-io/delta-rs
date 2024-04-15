@@ -97,9 +97,7 @@ impl Scalar {
                 ts.format("%Y-%m-%d %H:%M:%S%.6f").to_string()
             }
             Self::Date(days) => {
-                let date = Utc.from_utc_datetime(
-                    &NaiveDateTime::from_timestamp_opt(*days as i64 * 24 * 3600, 0).unwrap(),
-                );
+                let date = DateTime::from_timestamp(*days as i64 * 24 * 3600, 0).unwrap();
                 date.format("%Y-%m-%d").to_string()
             }
             Self::Decimal(value, _, scale) => match scale.cmp(&0) {
@@ -395,7 +393,7 @@ impl From<String> for Scalar {
 
 impl PrimitiveType {
     fn data_type(&self) -> DataType {
-        DataType::Primitive(self.clone())
+        DataType::Primitive(*self)
     }
 
     /// Parses a string into a scalar value.

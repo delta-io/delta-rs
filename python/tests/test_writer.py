@@ -1498,3 +1498,33 @@ def test_empty(existing_table: DeltaTable, engine):
     schema = existing_table.schema().to_pyarrow()
     empty_table = pa.Table.from_pylist([], schema=schema)
     write_deltalake(existing_table, empty_table, mode="append", engine=engine)
+
+
+def test_rust_decimal_cast(tmp_path: pathlib.Path):
+    import re
+    from decimal import Decimal
+
+    data = pa.table({"x": pa.array([Decimal("100.1")])})
+
+    write_deltalake(tmp_path, data, mode="append", engine="rust")
+
+    assert DeltaTable(tmp_path).to_pyarrow_table()["x"][0].as_py() == Decimal("100.1")
+
+    # Write smaller decimal,  works since it's fits in the previous decimal precision, scale
+    data = pa.table({"x": pa.array([Decimal("10.1")])})
+    write_deltalake(tmp_path, data, mode="append", engine="rust")
+
+    data = pa.table({"x": pa.array([Decimal("1000.1")])})
+    # write decimal that is larger than target type in table
+    with pytest.raises(
+        SchemaMismatchError,
+        match=re.escape(
+            "Cannot cast field x from Decimal128(5, 1) to Decimal128(4, 1)"
+        ),
+    ):
+        write_deltalake(tmp_path, data, mode="append", engine="rust")
+
+    with pytest.raises(SchemaMismatchError, match="Cannot merge types decimal"):
+        write_deltalake(
+            tmp_path, data, mode="append", schema_mode="merge", engine="rust"
+        )

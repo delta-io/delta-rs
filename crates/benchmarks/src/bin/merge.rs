@@ -202,8 +202,8 @@ async fn benchmark_merge_tpcds(
         table.snapshot()?.clone(),
         table.log_store(),
         DeltaScanConfig {
-            wrap_partition_values: true,
             file_column_name: Some("file_path".to_string()),
+            ..Default::default()
         },
     )
     .unwrap();

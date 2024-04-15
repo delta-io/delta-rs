@@ -274,7 +274,7 @@ impl<'a> TableConfig<'a> {
             DeltaConfigKey::CheckpointInterval,
             checkpoint_interval,
             i32,
-            10
+            100
         ),
     );
 
@@ -362,7 +362,7 @@ impl<'a> TableConfig<'a> {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Copy, Clone, PartialEq)]
 /// The isolation level applied during transaction
 pub enum IsolationLevel {
     /// The strongest isolation level. It ensures that committed write operations
@@ -460,7 +460,7 @@ impl FromStr for CheckpointPolicy {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Copy, Clone, PartialEq)]
 /// The Column Mapping modes used for reading and writing data
 #[serde(rename_all = "camelCase")]
 pub enum ColumnMappingMode {
@@ -591,7 +591,7 @@ mod tests {
     fn get_long_from_metadata_test() {
         let md = dummy_metadata();
         let config = TableConfig(&md.configuration);
-        assert_eq!(config.checkpoint_interval(), 10,)
+        assert_eq!(config.checkpoint_interval(), 100,)
     }
 
     #[test]
