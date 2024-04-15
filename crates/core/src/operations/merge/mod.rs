@@ -3039,7 +3039,7 @@ mod tests {
         .unwrap();
 
         let table = DeltaOps(table)
-            .write(vec![batch1, batch2])
+            .write((vec![batch1, batch2]).into())
             .with_write_batch_size(2)
             .with_save_mode(SaveMode::Append)
             .await

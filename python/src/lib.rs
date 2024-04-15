@@ -1413,7 +1413,7 @@ fn write_to_deltalake(
     predicate: Option<String>,
     name: Option<String>,
     description: Option<String>,
-    concurrent_streams: Option<u32>,
+    parallel: Option<u32>,
     configuration: Option<HashMap<String, Option<String>>>,
     storage_options: Option<HashMap<String, String>>,
     writer_properties: Option<HashMap<String, Option<String>>>,
@@ -1440,8 +1440,10 @@ fn write_to_deltalake(
         if let Some(partition_columns) = partition_by {
             builder = builder.with_partition_columns(partition_columns);
         }
-        if let Some(concurrent_streams) = concurrent_streams {
-            builder = builder.with_concurrent_streams(concurrent_streams);
+        if let Some(parallel) = parallel {
+            builder = builder.with_concurrent_streams(parallel);
+        } else {
+            builder = builder.with_concurrent_streams(num_cpus::get().try_into().unwrap());
         }
         if let Some(writer_props) = writer_properties {
             builder = builder.with_writer_properties(
