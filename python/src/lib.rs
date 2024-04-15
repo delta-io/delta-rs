@@ -1431,7 +1431,9 @@ fn write_to_deltalake(
             ))
             .map_err(PythonError::from)?;
 
-        let mut builder = table.write(WriteData::RecordBatches((Box::new(batches), schema))).with_save_mode(save_mode);
+        let mut builder = table
+            .write(WriteData::RecordBatches((Box::new(batches), schema)))
+            .with_save_mode(save_mode);
         if let Some(schema_mode) = schema_mode {
             builder = builder.with_schema_mode(schema_mode.parse().map_err(PythonError::from)?);
         }
