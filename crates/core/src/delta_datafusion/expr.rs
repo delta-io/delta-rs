@@ -27,7 +27,7 @@ use std::{
 };
 
 use arrow_schema::DataType;
-use chrono::{Date, NaiveDate, NaiveDateTime, TimeZone};
+use chrono::{DateTime, NaiveDate};
 use datafusion::execution::context::SessionState;
 use datafusion_common::Result as DFResult;
 use datafusion_common::{config::ConfigOptions, DFSchema, Result, ScalarValue, TableReference};
@@ -361,7 +361,7 @@ impl<'a> fmt::Display for ScalarValueFormat<'a> {
                 Some(e) => write!(
                     f,
                     "'{}'::date",
-                    NaiveDateTime::from_timestamp_millis((*e).into())
+                    DateTime::from_timestamp_millis((*e).into())
                         .ok_or(Error::default())?
                         .date()
                         .format("%Y-%m-%d")
@@ -370,18 +370,17 @@ impl<'a> fmt::Display for ScalarValueFormat<'a> {
             },
             ScalarValue::TimestampMicrosecond(e, tz) => match e {
                 Some(e) => match tz {
-                    Some(tz) => write!(
+                    Some(_tz) => write!(
                         f,
                         "arrow_cast('{}', 'Timestamp(Microsecond, Some(\"UTC\"))')",
-                        NaiveDateTime::from_timestamp_micros(*e)
+                        DateTime::from_timestamp_micros(*e)
                             .ok_or(Error::default())?
-                            .and_utc()
                             .format("%Y-%m-%dT%H:%M:%S%.6f")
                     )?,
                     None => write!(
                         f,
                         "arrow_cast('{}', 'Timestamp(Microsecond, None)')",
-                        NaiveDateTime::from_timestamp_micros(*e)
+                        DateTime::from_timestamp_micros(*e)
                             .ok_or(Error::default())?
                             .format("%Y-%m-%dT%H:%M:%S%.6f")
                     )?,
