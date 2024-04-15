@@ -43,7 +43,7 @@ arrow-row = { version = "50" }
 arrow-schema = { version = "50" }
 arrow-select = { version = "50" }
 object_store = { version = "0.9" }
-parquet = { version = "50" }
+parquet = { version = "51" }
 
 # datafusion
 datafusion = { version = "36" }
