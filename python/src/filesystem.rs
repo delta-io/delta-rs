@@ -24,7 +24,7 @@ pub(crate) struct FsConfig {
 #[derive(Debug, Clone)]
 pub struct DeltaFileSystemHandler {
     pub(crate) inner: Arc<DynObjectStore>,
-    pub(crate) rt: Arc<&'static Runtime>,
+    pub(crate) rt: &'static Runtime,
     pub(crate) config: FsConfig,
     pub(crate) known_sizes: Option<HashMap<String, i64>>,
 }
@@ -313,7 +313,7 @@ impl DeltaFileSystemHandler {
 #[derive(Debug, Clone)]
 pub struct ObjectInputFile {
     store: Arc<DynObjectStore>,
-    rt: Arc<&'static Runtime>,
+    rt: &'static Runtime,
     path: Path,
     content_length: i64,
     #[pyo3(get)]
@@ -325,7 +325,7 @@ pub struct ObjectInputFile {
 
 impl ObjectInputFile {
     pub async fn try_new(
-        rt: Arc<&'static Runtime>,
+        rt: &'static Runtime,
         store: Arc<DynObjectStore>,
         path: Path,
         size: Option<i64>,
@@ -492,7 +492,7 @@ impl ObjectInputFile {
 #[pyclass(weakref, module = "deltalake._internal")]
 pub struct ObjectOutputStream {
     store: Arc<DynObjectStore>,
-    rt: Arc<&'static Runtime>,
+    rt: &'static Runtime,
     path: Path,
     writer: Box<dyn AsyncWrite + Send + Unpin>,
     multipart_id: MultipartId,
@@ -507,7 +507,7 @@ pub struct ObjectOutputStream {
 
 impl ObjectOutputStream {
     pub async fn try_new(
-        rt: Arc<&'static Runtime>,
+        rt: &'static Runtime,
         store: Arc<DynObjectStore>,
         path: Path,
         max_buffer_size: i64,
