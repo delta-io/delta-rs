@@ -1,15 +1,14 @@
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use deltalake::storage::{ListResult, ObjectStore, ObjectStoreError, ObjectStoreResult, Path};
 use futures::future::{join_all, BoxFuture, FutureExt};
 use futures::StreamExt;
-use pyo3::exceptions::PyRuntimeError;
-use pyo3::prelude::*;
 use tokio::runtime::Runtime;
 
 #[inline]
-pub fn rt() -> PyResult<tokio::runtime::Runtime> {
-    Runtime::new().map_err(|_| PyRuntimeError::new_err("Couldn't start a new tokio runtime."))
+pub fn rt() -> &'static Runtime {
+    static TOKIO_RT: OnceLock<Runtime> = OnceLock::new();
+    TOKIO_RT.get_or_init(|| Runtime::new().expect("Failed to create a tokio runtime."))
 }
 
 /// walk the "directory" tree along common prefixes in object store
