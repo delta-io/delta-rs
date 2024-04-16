@@ -59,14 +59,11 @@ fn rt() -> PyResult<tokio::runtime::Runtime> {
     tokio::runtime::Runtime::new().map_err(|err| PyRuntimeError::new_err(err.to_string()))
 }
 
-
 lazy_static! {
     #[derive(Debug)]
     pub static ref TOKIO_RT: tokio::runtime::Runtime = tokio::runtime::Runtime::new()
         .expect("Failed to create a tokio runtime.");
 }
-
-
 
 #[derive(FromPyObject)]
 enum PartitionFilterValue<'a> {
@@ -127,7 +124,9 @@ impl RawDeltaTable {
                 .map_err(PythonError::from)?;
         }
 
-        let table = TOKIO_RT.block_on(builder.load()).map_err(PythonError::from)?;
+        let table = TOKIO_RT
+            .block_on(builder.load())
+            .map_err(PythonError::from)?;
         Ok(RawDeltaTable {
             _table: table,
             _config: FsConfig {
