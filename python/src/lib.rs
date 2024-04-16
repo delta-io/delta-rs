@@ -34,6 +34,7 @@ use deltalake::operations::merge::MergeBuilder;
 use deltalake::operations::optimize::{OptimizeBuilder, OptimizeType};
 use deltalake::operations::restore::RestoreBuilder;
 use deltalake::operations::transaction::{CommitBuilder, CommitProperties};
+use deltalake::operations::unset_tbl_properties::UnsetTablePropertiesBuilder;
 use deltalake::operations::update::UpdateBuilder;
 use deltalake::operations::vacuum::VacuumBuilder;
 use deltalake::parquet::basic::Compression;
@@ -41,7 +42,7 @@ use deltalake::parquet::errors::ParquetError;
 use deltalake::parquet::file::properties::WriterProperties;
 use deltalake::partitions::PartitionFilter;
 use deltalake::protocol::{DeltaOperation, SaveMode};
-use deltalake::DeltaTableBuilder;
+use deltalake::{DeltaConfigKey, DeltaTableBuilder};
 use deltalake::{DeltaOps, DeltaResult};
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
@@ -1101,6 +1102,38 @@ impl RawDeltaTable {
             .map_err(PythonError::from)?;
         self._table.state = table.state;
         Ok(serde_json::to_string(&metrics).unwrap())
+    }
+
+    #[pyo3(signature = (properties, raise_if_not_exists, custom_metadata=None))]
+    pub fn unset_table_properties(
+        &mut self,
+        properties: Vec<String>,
+        raise_if_not_exists: bool,
+        custom_metadata: Option<HashMap<String, String>>,
+    ) -> PyResult<()> {
+        let properties: Result<Vec<_>, _> = properties
+            .iter()
+            .map(|v| v.parse::<DeltaConfigKey>())
+            .collect();
+        let mut cmd = UnsetTablePropertiesBuilder::new(
+            self._table.log_store(),
+            self._table.snapshot().map_err(PythonError::from)?.clone(),
+        )
+        .with_properties(properties.map_err(PythonError::from)?)
+        .with_raise_if_not_exists(raise_if_not_exists);
+
+        if let Some(metadata) = custom_metadata {
+            let json_metadata: Map<String, Value> =
+                metadata.into_iter().map(|(k, v)| (k, v.into())).collect();
+            cmd = cmd
+                .with_commit_properties(CommitProperties::default().with_metadata(json_metadata));
+        };
+
+        let table = rt()?
+            .block_on(cmd.into_future())
+            .map_err(PythonError::from)?;
+        self._table.state = table.state;
+        Ok(())
     }
 }
 
