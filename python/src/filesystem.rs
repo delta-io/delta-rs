@@ -56,7 +56,7 @@ impl DeltaFileSystemHandler {
             .object_store();
         Ok(Self {
             inner: storage,
-            rt: Arc::new(rt()),
+            rt: rt(),
             config: FsConfig {
                 root_url: table_uri.into(),
                 options: options.unwrap_or_default(),
@@ -264,7 +264,7 @@ impl DeltaFileSystemHandler {
         let file = self
             .rt
             .block_on(ObjectInputFile::try_new(
-                Arc::clone(&self.rt),
+                self.rt,
                 self.inner.clone(),
                 path,
                 size.copied(),
@@ -290,7 +290,7 @@ impl DeltaFileSystemHandler {
         let file = self
             .rt
             .block_on(ObjectOutputStream::try_new(
-                Arc::clone(&self.rt),
+                &self.rt,
                 self.inner.clone(),
                 path,
                 max_buffer_size,

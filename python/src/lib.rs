@@ -1010,7 +1010,7 @@ impl RawDeltaTable {
     pub fn get_py_storage_backend(&self) -> PyResult<filesystem::DeltaFileSystemHandler> {
         Ok(filesystem::DeltaFileSystemHandler {
             inner: self._table.object_store(),
-            rt: Arc::new(rt()),
+            rt: &Arc::new(rt()),
             config: self._config.clone(),
             known_sizes: None,
         })
