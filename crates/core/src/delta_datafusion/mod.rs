@@ -60,7 +60,8 @@ use datafusion::physical_plan::{
 use datafusion_common::scalar::ScalarValue;
 use datafusion_common::tree_node::{TreeNode, TreeNodeVisitor, VisitRecursion};
 use datafusion_common::{
-    Column, DFSchema, DataFusionError, Result as DataFusionResult, ToDFSchema,
+    config::ConfigOptions, Column, DFSchema, DataFusionError, Result as DataFusionResult,
+    ToDFSchema,
 };
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::logical_plan::CreateExternalTable;
@@ -859,6 +860,23 @@ impl ExecutionPlan for DeltaScan {
 
     fn statistics(&self) -> DataFusionResult<Statistics> {
         self.parquet_scan.statistics()
+    }
+
+    fn repartitioned(
+        &self,
+        target_partitions: usize,
+        config: &ConfigOptions,
+    ) -> DataFusionResult<Option<Arc<dyn ExecutionPlan>>> {
+        if let Some(parquet_scan) = self.parquet_scan.repartitioned(target_partitions, config)? {
+            Ok(Some(Arc::new(DeltaScan {
+                table_uri: self.table_uri.clone(),
+                config: self.config.clone(),
+                parquet_scan,
+                logical_schema: self.logical_schema.clone(),
+            })))
+        } else {
+            Ok(None)
+        }
     }
 }
 
