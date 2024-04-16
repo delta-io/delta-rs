@@ -8,9 +8,7 @@ use tokio::runtime::Runtime;
 #[inline]
 pub fn rt() -> &'static Runtime {
     static TOKIO_RT: OnceLock<Runtime> = OnceLock::new();
-    TOKIO_RT.get_or_init(|| {
-        Runtime::new().expect("Failed to create a tokio runtime.")
-    })
+    TOKIO_RT.get_or_init(|| Runtime::new().expect("Failed to create a tokio runtime."))
 }
 
 /// walk the "directory" tree along common prefixes in object store

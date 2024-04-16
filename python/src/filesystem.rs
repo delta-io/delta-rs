@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use crate::error::PythonError;
+use crate::utils::{delete_dir, rt, walk_tree};
 use deltalake::storage::{DynObjectStore, ListResult, MultipartId, ObjectStoreError, Path};
 use deltalake::DeltaTableBuilder;
 use pyo3::exceptions::{PyIOError, PyNotImplementedError, PyValueError};
@@ -9,8 +11,6 @@ use pyo3::types::{IntoPyDict, PyBytes};
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncWrite, AsyncWriteExt};
 use tokio::runtime::Runtime;
-use crate::error::PythonError;
-use crate::utils::{delete_dir, rt, walk_tree};
 
 const DEFAULT_MAX_BUFFER_SIZE: i64 = 4 * 1024 * 1024;
 

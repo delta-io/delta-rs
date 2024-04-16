@@ -54,7 +54,6 @@ use crate::filesystem::FsConfig;
 use crate::schema::schema_to_pyobject;
 use crate::utils::rt;
 
-
 #[derive(FromPyObject)]
 enum PartitionFilterValue<'a> {
     Single(&'a str),
@@ -114,9 +113,7 @@ impl RawDeltaTable {
                 .map_err(PythonError::from)?;
         }
 
-        let table = rt()
-            .block_on(builder.load())
-            .map_err(PythonError::from)?;
+        let table = rt().block_on(builder.load()).map_err(PythonError::from)?;
         Ok(RawDeltaTable {
             _table: table,
             _config: FsConfig {
@@ -987,26 +984,25 @@ impl RawDeltaTable {
             predicate: None,
         };
 
-        rt()
-            .block_on(
-                CommitBuilder::from(
-                    CommitProperties::default().with_metadata(
-                        custom_metadata
-                            .unwrap_or_default()
-                            .into_iter()
-                            .map(|(k, v)| (k, v.into())),
-                    ),
-                )
-                .with_actions(actions)
-                .build(
-                    Some(self._table.snapshot().map_err(PythonError::from)?),
-                    self._table.log_store(),
-                    operation,
-                )
-                .map_err(|err| PythonError::from(DeltaTableError::from(err)))?
-                .into_future(),
+        rt().block_on(
+            CommitBuilder::from(
+                CommitProperties::default().with_metadata(
+                    custom_metadata
+                        .unwrap_or_default()
+                        .into_iter()
+                        .map(|(k, v)| (k, v.into())),
+                ),
             )
-            .map_err(PythonError::from)?;
+            .with_actions(actions)
+            .build(
+                Some(self._table.snapshot().map_err(PythonError::from)?),
+                self._table.log_store(),
+                operation,
+            )
+            .map_err(|err| PythonError::from(DeltaTableError::from(err)))?
+            .into_future(),
+        )
+        .map_err(PythonError::from)?;
 
         Ok(())
     }
@@ -1021,16 +1017,14 @@ impl RawDeltaTable {
     }
 
     pub fn create_checkpoint(&self) -> PyResult<()> {
-        rt()
-            .block_on(create_checkpoint(&self._table))
+        rt().block_on(create_checkpoint(&self._table))
             .map_err(PythonError::from)?;
 
         Ok(())
     }
 
     pub fn cleanup_metadata(&self) -> PyResult<()> {
-        rt()
-            .block_on(cleanup_metadata(&self._table))
+        rt().block_on(cleanup_metadata(&self._table))
             .map_err(PythonError::from)?;
 
         Ok(())
@@ -1464,8 +1458,7 @@ fn write_to_deltalake(
                 .with_commit_properties(CommitProperties::default().with_metadata(json_metadata));
         };
 
-        rt()
-            .block_on(builder.into_future())
+        rt().block_on(builder.into_future())
             .map_err(PythonError::from)?;
 
         Ok(())
@@ -1517,8 +1510,7 @@ fn create_deltalake(
         builder = builder.with_metadata(json_metadata);
     };
 
-    rt()
-        .block_on(builder.into_future())
+    rt().block_on(builder.into_future())
         .map_err(PythonError::from)?;
 
     Ok(())
@@ -1569,8 +1561,7 @@ fn write_new_deltalake(
         builder = builder.with_metadata(json_metadata);
     };
 
-    rt()
-        .block_on(builder.into_future())
+    rt().block_on(builder.into_future())
         .map_err(PythonError::from)?;
 
     Ok(())
@@ -1622,8 +1613,7 @@ fn convert_to_deltalake(
         builder = builder.with_metadata(json_metadata);
     };
 
-    rt()
-        .block_on(builder.into_future())
+    rt().block_on(builder.into_future())
         .map_err(PythonError::from)?;
     Ok(())
 }
