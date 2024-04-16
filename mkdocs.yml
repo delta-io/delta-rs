@@ -7,7 +7,7 @@ theme:
   name: material
   logo: delta-rust-no-whitespace.svg
   favicon: delta-rust-no-whitespace.svg
-  
+
   palette:
     # Palette toggle for automatic mode
     - media: "(prefers-color-scheme)"
@@ -15,7 +15,7 @@ theme:
       toggle:
         icon: material/brightness-auto
         name: Switch to light mode
-        
+
     # Palette toggle for light mode
     - media: "(prefers-color-scheme: light)"
       scheme: default
@@ -46,50 +46,51 @@ theme:
     - content.code.copy
 nav:
   - Home:
-    - Home: index.md
-    - Why Use Delta Lake: why-use-delta-lake.md
-    - Delta Lake for big and small data: delta-lake-big-data-small-data.md
-    - Best practices: delta-lake-best-practices.md
+      - Home: index.md
+      - Why Use Delta Lake: why-use-delta-lake.md
+      - Delta Lake for big and small data: delta-lake-big-data-small-data.md
+      - Best practices: delta-lake-best-practices.md
   - Usage:
-    - Installation: usage/installation.md
-    - Overview: usage/overview.md
-    - Creating a table: usage/create-delta-lake-table.md
-    - Loading a table: usage/loading-table.md
-    - Append/overwrite tables: usage/appending-overwriting-delta-lake-table.md
-    - Adding a constraint: usage/constraints.md
-    - Examining a table: usage/examining-table.md
-    - Querying a table: usage/querying-delta-tables.md
-    - Managing a table: usage/managing-tables.md
-    - Writing a table: 
-      - usage/writing/index.md
-      - usage/writing/writing-to-s3-with-locking-provider.md
-    - Deleting rows from a table: usage/deleting-rows-from-delta-lake-table.md
-    - Optimize:
-      - Small file compaction: usage/optimize/small-file-compaction-with-optimize.md
-      - Z Order: usage/optimize/delta-lake-z-order.md
+      - Installation: usage/installation.md
+      - Overview: usage/overview.md
+      - Creating a table: usage/create-delta-lake-table.md
+      - Loading a table: usage/loading-table.md
+      - Append/overwrite tables: usage/appending-overwriting-delta-lake-table.md
+      - Adding a constraint: usage/constraints.md
+      - Examining a table: usage/examining-table.md
+      - Querying a table: usage/querying-delta-tables.md
+      - Managing a table: usage/managing-tables.md
+      - Writing a table:
+          - usage/writing/index.md
+          - usage/writing/writing-to-s3-with-locking-provider.md
+      - Deleting rows from a table: usage/deleting-rows-from-delta-lake-table.md
+      - Optimize:
+          - Small file compaction: usage/optimize/small-file-compaction-with-optimize.md
+          - Z Order: usage/optimize/delta-lake-z-order.md
   - API Reference:
-    - api/delta_writer.md
-    - Table:
-      - api/delta_table/index.md
-      - api/delta_table/metadata.md
-      - api/delta_table/delta_table_merger.md
-      - api/delta_table/delta_table_optimizer.md
-      - api/delta_table/delta_table_alterer.md
-    - api/schema.md
-    - api/storage.md
-    - api/catalog.md
-    - api/exceptions.md
+      - api/delta_writer.md
+      - Table:
+          - api/delta_table/index.md
+          - api/delta_table/metadata.md
+          - api/delta_table/delta_table_merger.md
+          - api/delta_table/delta_table_optimizer.md
+          - api/delta_table/delta_table_alterer.md
+      - api/schema.md
+      - api/storage.md
+      - api/catalog.md
+      - api/exceptions.md
   - Integrations:
-    - Arrow: integrations/delta-lake-arrow.md
-    - Dagster: integrations/delta-lake-dagster.md
-    - Dask: integrations/delta-lake-dask.md
-    - DataFusion: integrations/delta-lake-datafusion.md
-    - pandas: integrations/delta-lake-pandas.md
-    - Polars: integrations/delta-lake-polars.md
+      - Arrow: integrations/delta-lake-arrow.md
+      - Daft: integrations/delta-lake-daft.md
+      - Dagster: integrations/delta-lake-dagster.md
+      - Dask: integrations/delta-lake-dask.md
+      - DataFusion: integrations/delta-lake-datafusion.md
+      - pandas: integrations/delta-lake-pandas.md
+      - Polars: integrations/delta-lake-polars.md
   - How Delta Lake works:
-    - Architecture: how-delta-lake-works/architecture-of-delta-table.md
-    - Transactions: how-delta-lake-works/delta-lake-acid-transactions.md
-    - File skipping: how-delta-lake-works/delta-lake-file-skipping.md
+      - Architecture: how-delta-lake-works/architecture-of-delta-table.md
+      - Transactions: how-delta-lake-works/delta-lake-acid-transactions.md
+      - File skipping: how-delta-lake-works/delta-lake-file-skipping.md
 not_in_nav: |
   /_build/
 
@@ -131,7 +132,7 @@ plugins:
       module_name: docs/_build/macro
   - mkdocs-simple-hooks:
       hooks:
-        on_page_markdown: 'docs._build.hooks:on_page_markdown'
+        on_page_markdown: "docs._build.hooks:on_page_markdown"
 
 markdown_extensions:
   - pymdownx.highlight:
@@ -149,7 +150,7 @@ markdown_extensions:
   - pymdownx.tabbed:
       alternate_style: true
   - pymdownx.snippets:
-      base_path: ['.','docs/src/']
+      base_path: [".", "docs/src/"]
       check_paths: true
       dedent_subsections: true
   - footnotes
