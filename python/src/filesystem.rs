@@ -290,7 +290,7 @@ impl DeltaFileSystemHandler {
         let file = self
             .rt
             .block_on(ObjectOutputStream::try_new(
-                &self.rt,
+                self.rt,
                 self.inner.clone(),
                 path,
                 max_buffer_size,
