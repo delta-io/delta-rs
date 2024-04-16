@@ -43,6 +43,7 @@ use deltalake::partitions::PartitionFilter;
 use deltalake::protocol::{DeltaOperation, SaveMode};
 use deltalake::DeltaTableBuilder;
 use deltalake::{DeltaOps, DeltaResult};
+use lazy_static::lazy_static;
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyFrozenSet};
@@ -57,6 +58,15 @@ use crate::schema::schema_to_pyobject;
 fn rt() -> PyResult<tokio::runtime::Runtime> {
     tokio::runtime::Runtime::new().map_err(|err| PyRuntimeError::new_err(err.to_string()))
 }
+
+
+lazy_static! {
+    #[derive(Debug)]
+    pub static ref TOKIO_RT: tokio::runtime::Runtime = tokio::runtime::Runtime::new()
+        .expect("Failed to create a tokio runtime.");
+}
+
+
 
 #[derive(FromPyObject)]
 enum PartitionFilterValue<'a> {
@@ -117,7 +127,7 @@ impl RawDeltaTable {
                 .map_err(PythonError::from)?;
         }
 
-        let table = rt()?.block_on(builder.load()).map_err(PythonError::from)?;
+        let table = TOKIO_RT.block_on(builder.load()).map_err(PythonError::from)?;
         Ok(RawDeltaTable {
             _table: table,
             _config: FsConfig {
@@ -180,13 +190,13 @@ impl RawDeltaTable {
     }
 
     pub fn load_version(&mut self, version: i64) -> PyResult<()> {
-        Ok(rt()?
+        Ok(TOKIO_RT
             .block_on(self._table.load_version(version))
             .map_err(PythonError::from)?)
     }
 
     pub fn get_latest_version(&mut self) -> PyResult<i64> {
-        Ok(rt()?
+        Ok(TOKIO_RT
             .block_on(self._table.get_latest_version())
             .map_err(PythonError::from)?)
     }
@@ -196,7 +206,7 @@ impl RawDeltaTable {
             DateTime::<Utc>::from(DateTime::<FixedOffset>::parse_from_rfc3339(ds).map_err(
                 |err| PyValueError::new_err(format!("Failed to parse datetime string: {err}")),
             )?);
-        Ok(rt()?
+        Ok(TOKIO_RT
             .block_on(self._table.load_with_datetime(datetime))
             .map_err(PythonError::from)?)
     }
@@ -303,7 +313,7 @@ impl RawDeltaTable {
                 .with_commit_properties(CommitProperties::default().with_metadata(json_metadata));
         };
 
-        let (table, metrics) = rt()?
+        let (table, metrics) = TOKIO_RT
             .block_on(cmd.into_future())
             .map_err(PythonError::from)?;
         self._table.state = table.state;
@@ -347,7 +357,7 @@ impl RawDeltaTable {
                 .with_commit_properties(CommitProperties::default().with_metadata(json_metadata));
         };
 
-        let (table, metrics) = rt()?
+        let (table, metrics) = TOKIO_RT
             .block_on(cmd.into_future())
             .map_err(PythonError::from)?;
         self._table.state = table.state;
@@ -401,7 +411,7 @@ impl RawDeltaTable {
             .map_err(PythonError::from)?;
         cmd = cmd.with_filters(&converted_filters);
 
-        let (table, metrics) = rt()?
+        let (table, metrics) = TOKIO_RT
             .block_on(cmd.into_future())
             .map_err(PythonError::from)?;
         self._table.state = table.state;
@@ -460,7 +470,7 @@ impl RawDeltaTable {
             .map_err(PythonError::from)?;
         cmd = cmd.with_filters(&converted_filters);
 
-        let (table, metrics) = rt()?
+        let (table, metrics) = TOKIO_RT
             .block_on(cmd.into_future())
             .map_err(PythonError::from)?;
         self._table.state = table.state;
@@ -489,7 +499,7 @@ impl RawDeltaTable {
                 .with_commit_properties(CommitProperties::default().with_metadata(json_metadata));
         };
 
-        let table = rt()?
+        let table = TOKIO_RT
             .block_on(cmd.into_future())
             .map_err(PythonError::from)?;
         self._table.state = table.state;
@@ -517,7 +527,7 @@ impl RawDeltaTable {
                 .with_commit_properties(CommitProperties::default().with_metadata(json_metadata));
         };
 
-        let table = rt()?
+        let table = TOKIO_RT
             .block_on(cmd.into_future())
             .map_err(PythonError::from)?;
         self._table.state = table.state;
@@ -712,7 +722,7 @@ impl RawDeltaTable {
                 }
             }
 
-            let (table, metrics) = rt()?
+            let (table, metrics) = TOKIO_RT
                 .block_on(cmd.into_future())
                 .map_err(PythonError::from)?;
             self._table.state = table.state;
@@ -756,7 +766,7 @@ impl RawDeltaTable {
                 .with_commit_properties(CommitProperties::default().with_metadata(json_metadata));
         };
 
-        let (table, metrics) = rt()?
+        let (table, metrics) = TOKIO_RT
             .block_on(cmd.into_future())
             .map_err(PythonError::from)?;
         self._table.state = table.state;
@@ -765,7 +775,7 @@ impl RawDeltaTable {
 
     /// Run the History command on the Delta Table: Returns provenance information, including the operation, user, and so on, for each write to a table.
     pub fn history(&mut self, limit: Option<usize>) -> PyResult<Vec<String>> {
-        let history = rt()?
+        let history = TOKIO_RT
             .block_on(self._table.history(limit))
             .map_err(PythonError::from)?;
         Ok(history
@@ -776,7 +786,7 @@ impl RawDeltaTable {
 
     pub fn update_incremental(&mut self) -> PyResult<()> {
         #[allow(deprecated)]
-        Ok(rt()?
+        Ok(TOKIO_RT
             .block_on(self._table.update_incremental(None))
             .map_err(PythonError::from)?)
     }
@@ -988,7 +998,7 @@ impl RawDeltaTable {
             predicate: None,
         };
 
-        rt()?
+        TOKIO_RT
             .block_on(
                 CommitBuilder::from(
                     CommitProperties::default().with_metadata(
@@ -1022,7 +1032,7 @@ impl RawDeltaTable {
     }
 
     pub fn create_checkpoint(&self) -> PyResult<()> {
-        rt()?
+        TOKIO_RT
             .block_on(create_checkpoint(&self._table))
             .map_err(PythonError::from)?;
 
@@ -1030,7 +1040,7 @@ impl RawDeltaTable {
     }
 
     pub fn cleanup_metadata(&self) -> PyResult<()> {
-        rt()?
+        TOKIO_RT
             .block_on(cleanup_metadata(&self._table))
             .map_err(PythonError::from)?;
 
@@ -1076,7 +1086,7 @@ impl RawDeltaTable {
                 .with_commit_properties(CommitProperties::default().with_metadata(json_metadata));
         };
 
-        let (table, metrics) = rt()?
+        let (table, metrics) = TOKIO_RT
             .block_on(cmd.into_future())
             .map_err(PythonError::from)?;
         self._table.state = table.state;
@@ -1104,7 +1114,7 @@ impl RawDeltaTable {
                 .with_commit_properties(CommitProperties::default().with_metadata(json_metadata));
         };
 
-        let (table, metrics) = rt()?
+        let (table, metrics) = TOKIO_RT
             .block_on(cmd.into_future())
             .map_err(PythonError::from)?;
         self._table.state = table.state;
@@ -1354,7 +1364,7 @@ fn batch_distinct(batch: PyArrowType<RecordBatch>) -> PyResult<PyArrowType<Recor
     let schema = batch.0.schema();
     ctx.register_batch("batch", batch.0)
         .map_err(|err| PyRuntimeError::new_err(err.to_string()))?;
-    let batches = rt()?
+    let batches = TOKIO_RT
         .block_on(async { ctx.table("batch").await?.distinct()?.collect().await })
         .map_err(|err| PyRuntimeError::new_err(err.to_string()))?;
 
@@ -1422,7 +1432,7 @@ fn write_to_deltalake(
         let save_mode = mode.parse().map_err(PythonError::from)?;
 
         let options = storage_options.clone().unwrap_or_default();
-        let table = rt()?
+        let table = TOKIO_RT
             .block_on(DeltaOps::try_from_uri_with_storage_options(
                 &table_uri, options,
             ))
@@ -1465,7 +1475,7 @@ fn write_to_deltalake(
                 .with_commit_properties(CommitProperties::default().with_metadata(json_metadata));
         };
 
-        rt()?
+        TOKIO_RT
             .block_on(builder.into_future())
             .map_err(PythonError::from)?;
 
@@ -1518,7 +1528,7 @@ fn create_deltalake(
         builder = builder.with_metadata(json_metadata);
     };
 
-    rt()?
+    TOKIO_RT
         .block_on(builder.into_future())
         .map_err(PythonError::from)?;
 
@@ -1570,7 +1580,7 @@ fn write_new_deltalake(
         builder = builder.with_metadata(json_metadata);
     };
 
-    rt()?
+    TOKIO_RT
         .block_on(builder.into_future())
         .map_err(PythonError::from)?;
 
@@ -1623,7 +1633,7 @@ fn convert_to_deltalake(
         builder = builder.with_metadata(json_metadata);
     };
 
-    rt()?
+    TOKIO_RT
         .block_on(builder.into_future())
         .map_err(PythonError::from)?;
     Ok(())
