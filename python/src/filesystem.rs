@@ -9,7 +9,6 @@ use pyo3::types::{IntoPyDict, PyBytes};
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncWrite, AsyncWriteExt};
 use tokio::runtime::Runtime;
-
 use crate::error::PythonError;
 use crate::utils::{delete_dir, rt, walk_tree};
 
@@ -25,7 +24,7 @@ pub(crate) struct FsConfig {
 #[derive(Debug, Clone)]
 pub struct DeltaFileSystemHandler {
     pub(crate) inner: Arc<DynObjectStore>,
-    pub(crate) rt: Arc<Runtime>,
+    pub(crate) rt: Arc<&'static Runtime>,
     pub(crate) config: FsConfig,
     pub(crate) known_sizes: Option<HashMap<String, i64>>,
 }
@@ -57,7 +56,7 @@ impl DeltaFileSystemHandler {
             .object_store();
         Ok(Self {
             inner: storage,
-            rt: Arc::new(rt()?),
+            rt: Arc::new(rt()),
             config: FsConfig {
                 root_url: table_uri.into(),
                 options: options.unwrap_or_default(),
@@ -314,7 +313,7 @@ impl DeltaFileSystemHandler {
 #[derive(Debug, Clone)]
 pub struct ObjectInputFile {
     store: Arc<DynObjectStore>,
-    rt: Arc<Runtime>,
+    rt: Arc<&'static Runtime>,
     path: Path,
     content_length: i64,
     #[pyo3(get)]
@@ -326,7 +325,7 @@ pub struct ObjectInputFile {
 
 impl ObjectInputFile {
     pub async fn try_new(
-        rt: Arc<Runtime>,
+        rt: Arc<&'static Runtime>,
         store: Arc<DynObjectStore>,
         path: Path,
         size: Option<i64>,
@@ -493,7 +492,7 @@ impl ObjectInputFile {
 #[pyclass(weakref, module = "deltalake._internal")]
 pub struct ObjectOutputStream {
     store: Arc<DynObjectStore>,
-    rt: Arc<Runtime>,
+    rt: Arc<&'static Runtime>,
     path: Path,
     writer: Box<dyn AsyncWrite + Send + Unpin>,
     multipart_id: MultipartId,
@@ -508,7 +507,7 @@ pub struct ObjectOutputStream {
 
 impl ObjectOutputStream {
     pub async fn try_new(
-        rt: Arc<Runtime>,
+        rt: Arc<&'static Runtime>,
         store: Arc<DynObjectStore>,
         path: Path,
         max_buffer_size: i64,
