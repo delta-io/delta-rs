@@ -79,7 +79,7 @@ fn map_batch(
     config: &DeltaTableConfig,
 ) -> DeltaResult<RecordBatch> {
     let stats_col = ex::extract_and_cast_opt::<StringArray>(&batch, "add.stats");
-    let stats_parsed_col = ex::extract_and_cast_opt::<StringArray>(&batch, "add.stats_parsed");
+    let stats_parsed_col = ex::extract_and_cast_opt::<StructArray>(&batch, "add.stats_parsed");
     if stats_parsed_col.is_some() {
         return Ok(batch);
     }

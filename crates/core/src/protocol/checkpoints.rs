@@ -440,10 +440,15 @@ fn typed_partition_value_from_string(
                 // day 0 is 1970-01-01 (719163 days from ce)
                 Ok((d.num_days_from_ce() - 719_163).into())
             }
-            PrimitiveType::Timestamp => {
-                let ts = NaiveDateTime::parse_from_str(string_value, "%Y-%m-%d %H:%M:%S").map_err(
-                    |_| CheckpointError::PartitionValueNotParseable(string_value.to_owned()),
-                )?;
+            PrimitiveType::Timestamp | PrimitiveType::TimestampNtz => {
+                let ts = NaiveDateTime::parse_from_str(string_value, "%Y-%m-%d %H:%M:%S.%6f");
+                let ts: NaiveDateTime = match ts {
+                    Ok(_) => ts,
+                    Err(_) => NaiveDateTime::parse_from_str(string_value, "%Y-%m-%d %H:%M:%S"),
+                }
+                .map_err(|_| {
+                    CheckpointError::PartitionValueNotParseable(string_value.to_owned())
+                })?;
                 Ok((ts.and_utc().timestamp_millis() * 1000).into())
             }
             s => unimplemented!(
@@ -744,8 +749,11 @@ mod tests {
         }
 
         for (s, v) in [
+            ("2021-08-08 01:00:01.000000", 1628384401000000i64),
             ("2021-08-08 01:00:01", 1628384401000000i64),
+            ("1970-01-02 12:59:59.000000", 133199000000i64),
             ("1970-01-02 12:59:59", 133199000000i64),
+            ("1970-01-01 13:00:01.000000", 46801000000i64),
             ("1970-01-01 13:00:01", 46801000000i64),
             ("1969-12-31 00:00:00", -86400000000i64),
             ("1677-09-21 00:12:44", -9223372036000000i64),

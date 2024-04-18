@@ -2,9 +2,11 @@ import datetime as dt
 import os
 import pathlib
 import shutil
+from datetime import date, datetime, timedelta
 
 import pyarrow as pa
 import pyarrow.parquet as pq
+import pytest
 
 from deltalake import DeltaTable, write_deltalake
 
@@ -167,6 +169,84 @@ def test_features_null_on_below_v3_v7(tmp_path: pathlib.Path):
 
     assert checkpoint["protocol"][0]["writerFeatures"].as_py() is None
     assert checkpoint["protocol"][0]["readerFeatures"].as_py() is None
+
+
+@pytest.fixture
+def sample_all_types():
+    from datetime import timezone
+
+    nrows = 5
+    return pa.table(
+        {
+            "utf8": pa.array([str(x) for x in range(nrows)]),
+            "int64": pa.array(list(range(nrows)), pa.int64()),
+            "int32": pa.array(list(range(nrows)), pa.int32()),
+            "int16": pa.array(list(range(nrows)), pa.int16()),
+            "int8": pa.array(list(range(nrows)), pa.int8()),
+            "float32": pa.array([float(x) for x in range(nrows)], pa.float32()),
+            "float64": pa.array([float(x) for x in range(nrows)], pa.float64()),
+            "bool": pa.array([x % 2 == 0 for x in range(nrows)]),
+            "binary": pa.array([str(x).encode() for x in range(nrows)]),
+            # "decimal": pa.array([Decimal("10.000") + x for x in range(nrows)]), # Some issue with decimal and Rust engine at the moment.
+            "date32": pa.array(
+                [date(2022, 1, 1) + timedelta(days=x) for x in range(nrows)]
+            ),
+            "timestampNtz": pa.array(
+                [datetime(2022, 1, 1) + timedelta(hours=x) for x in range(nrows)]
+            ),
+            "timestamp": pa.array(
+                [
+                    datetime(2022, 1, 1, tzinfo=timezone.utc) + timedelta(hours=x)
+                    for x in range(nrows)
+                ]
+            ),
+            "struct": pa.array([{"x": x, "y": str(x)} for x in range(nrows)]),
+            "list": pa.array([list(range(x + 1)) for x in range(nrows)]),
+        }
+    )
+
+
+@pytest.mark.parametrize(
+    "engine,part_col",
+    [
+        ("rust", "timestampNtz"),
+        ("rust", "timestamp"),
+        ("pyarrow", "timestampNtz"),
+        pytest.param(
+            "pyarrow",
+            "timestamp",
+            marks=pytest.mark.skip(
+                "Pyarrow serialization of UTC datetimes is incorrect, it appends a 'Z' at the end."
+            ),
+        ),
+    ],
+)
+def test_checkpoint_partition_timestamp_2380(
+    tmp_path: pathlib.Path, sample_all_types: pa.Table, part_col: str, engine: str
+):
+    tmp_table_path = tmp_path / "path" / "to" / "table"
+    checkpoint_path = tmp_table_path / "_delta_log" / "_last_checkpoint"
+    last_checkpoint_path = (
+        tmp_table_path / "_delta_log" / "00000000000000000000.checkpoint.parquet"
+    )
+
+    # TODO: Include binary after fixing issue "Json error: binary type is not supported"
+    sample_data = sample_all_types.drop(["binary"])
+    write_deltalake(
+        str(tmp_table_path),
+        sample_data,
+        partition_by=[part_col],
+        engine=engine,  # type: ignore
+    )
+
+    assert not checkpoint_path.exists()
+
+    delta_table = DeltaTable(str(tmp_table_path))
+
+    delta_table.create_checkpoint()
+
+    assert last_checkpoint_path.exists()
+    assert checkpoint_path.exists()
 
 
 def test_checkpoint_post_commit_config(tmp_path: pathlib.Path, sample_data: pa.Table):
