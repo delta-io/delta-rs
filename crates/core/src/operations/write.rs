@@ -25,7 +25,6 @@
 //! ````
 
 use std::collections::HashMap;
-use std::hash::Hash;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -34,7 +33,6 @@ use std::vec;
 use arrow_array::RecordBatch;
 use arrow_cast::can_cast_types;
 use arrow_schema::{ArrowError, DataType, Fields, SchemaRef as ArrowSchemaRef};
-use datafusion::execution::config;
 use datafusion::execution::context::{SessionContext, SessionState, TaskContext};
 use datafusion::physical_expr::create_physical_expr;
 use datafusion::physical_plan::filter::FilterExec;
@@ -54,7 +52,7 @@ use crate::delta_datafusion::expr::parse_predicate_expression;
 use crate::delta_datafusion::{find_files, register_store, DeltaScanBuilder};
 use crate::delta_datafusion::{DataFusionMixins, DeltaDataChecker};
 use crate::errors::{DeltaResult, DeltaTableError};
-use crate::kernel::{Action, Add, Metadata, PartitionsExt, Remove, Snapshot, StructType};
+use crate::kernel::{Action, Add, Metadata, PartitionsExt, Remove, StructType};
 use crate::logstore::LogStoreRef;
 use crate::operations::cast::{cast_record_batch, merge_schema};
 use crate::protocol::{DeltaOperation, SaveMode};
@@ -478,6 +476,7 @@ pub(crate) async fn write_execution_plan(
     .await
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn execute_non_empty_expr(
     snapshot: &DeltaTableState,
     log_store: LogStoreRef,
@@ -531,6 +530,7 @@ async fn execute_non_empty_expr(
 }
 
 // This should only be called wth a valid predicate
+#[allow(clippy::too_many_arguments)]
 async fn prepare_predicate_actions(
     predicate: Expr,
     log_store: LogStoreRef,
@@ -753,19 +753,17 @@ impl std::future::IntoFuture for WriteBuilder {
                 _ => (None, None),
             };
 
-            let config = if let Some(snapshot) = &this.snapshot {
-                Some(snapshot.table_config())
-            } else {
-                None
-            };
+            let config = this
+                .snapshot
+                .as_ref()
+                .map(|snapshot| snapshot.table_config());
 
             let (num_index_cols, stats_columns) = match &config {
                 Some(conf) => (conf.num_indexed_cols(), conf.stats_columns()),
                 _ => (
                     this.configuration
                         .get("delta.dataSkippingNumIndexedCols")
-                        .map(|v| v.clone().map(|v| v.parse::<i32>().unwrap()))
-                        .flatten()
+                        .and_then(|v| v.clone().map(|v| v.parse::<i32>().unwrap()))
                         .unwrap_or(DEFAULT_NUM_INDEX_COLS),
                     this.configuration
                         .get("delta.dataSkippingStatsColumns")
@@ -774,7 +772,7 @@ impl std::future::IntoFuture for WriteBuilder {
             };
 
             let writer_stats_config = WriterStatsConfig {
-                num_indexed_cols: num_index_cols.clone(),
+                num_indexed_cols: num_index_cols,
                 stats_columns: stats_columns
                     .clone()
                     .map(|v| v.iter().map(|v| v.to_string()).collect::<Vec<String>>()),

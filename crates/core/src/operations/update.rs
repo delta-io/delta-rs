@@ -47,10 +47,7 @@ use super::{
     datafusion_utils::Expression,
     transaction::{CommitBuilder, CommitProperties},
 };
-use super::{
-    transaction::{TableReference, PROTOCOL},
-    write::WriterStatsConfig,
-};
+use super::{transaction::PROTOCOL, write::WriterStatsConfig};
 use crate::delta_datafusion::{
     expr::fmt_expr_to_sql, physical::MetricObserverExec, DataFusionMixins, DeltaColumn,
     DeltaSessionContext,
