@@ -253,12 +253,9 @@ class ProtocolVersions(NamedTuple):
 
 FilterLiteralType = Tuple[str, str, Any]
 
-
 FilterConjunctionType = List[FilterLiteralType]
 
-
 FilterDNFType = List[FilterConjunctionType]
-
 
 FilterType = Union[FilterConjunctionType, FilterDNFType]
 
@@ -682,6 +679,17 @@ class DeltaTable:
             stacklevel=2,
         )
         self._table.load_with_datetime(datetime_string)
+
+    def load_cdf(
+        self,
+        starting_version,
+        ending_version=None,
+        starting_timestamp=None,
+        ending_timestamp=None,
+    ) -> pyarrow.RecordBatch:
+        return self._table.read_cdf(
+            starting_version, ending_version, starting_timestamp, ending_timestamp
+        )
 
     @property
     def table_uri(self) -> str:

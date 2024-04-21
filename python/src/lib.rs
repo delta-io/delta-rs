@@ -7,12 +7,14 @@ mod utils;
 
 use std::collections::{HashMap, HashSet};
 use std::future::IntoFuture;
+use std::str::FromStr;
 use std::sync::Arc;
 use std::time;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use arrow::pyarrow::PyArrowType;
 use chrono::{DateTime, Duration, FixedOffset, Utc};
+use futures::future::join_all;
 use deltalake::arrow::compute::concat_batches;
 use deltalake::arrow::ffi_stream::ArrowArrayStreamReader;
 use deltalake::arrow::record_batch::RecordBatch;
@@ -21,15 +23,18 @@ use deltalake::arrow::{self, datatypes::Schema as ArrowSchema};
 use deltalake::checkpoints::{cleanup_metadata, create_checkpoint};
 use deltalake::datafusion::datasource::memory::MemTable;
 use deltalake::datafusion::datasource::provider::TableProvider;
+use deltalake::datafusion::physical_plan::ExecutionPlan;
 use deltalake::datafusion::prelude::SessionContext;
 use deltalake::delta_datafusion::DeltaDataChecker;
 use deltalake::errors::DeltaTableError;
 use deltalake::kernel::{Action, Add, Invariant, LogicalFile, Remove, Scalar, StructType};
+use deltalake::operations::collect_sendable_stream;
 use deltalake::operations::constraints::ConstraintBuilder;
 use deltalake::operations::convert_to_delta::{ConvertToDeltaBuilder, PartitionStrategy};
 use deltalake::operations::delete::DeleteBuilder;
 use deltalake::operations::drop_constraints::DropConstraintBuilder;
 use deltalake::operations::filesystem_check::FileSystemCheckBuilder;
+use deltalake::operations::load_cdf::CdfLoadBuilder;
 use deltalake::operations::merge::MergeBuilder;
 use deltalake::operations::optimize::{OptimizeBuilder, OptimizeType};
 use deltalake::operations::restore::RestoreBuilder;
@@ -518,6 +523,67 @@ impl RawDeltaTable {
             .map_err(PythonError::from)?;
         self._table.state = table.state;
         Ok(())
+    }
+
+    #[pyo3(signature = (starting_version, ending_version = None, starting_timestamp = None, ending_timestamp = None))]
+    pub fn read_cdf(
+        &mut self,
+        py: Python,
+        starting_version: i64,
+        ending_version: Option<i64>,
+        starting_timestamp: Option<String>,
+        ending_timestamp: Option<String>,
+    ) -> PyResult<PyArrowType<RecordBatch>> {
+        let ctx = SessionContext::new();
+        let mut cdf_read = CdfLoadBuilder::new(
+            self._table.log_store(),
+            self._table.snapshot().map_err(PythonError::from)?.clone(),
+        )
+        .with_starting_version(starting_version);
+
+        if let Some(ev) = ending_version {
+            cdf_read = cdf_read.with_ending_version(ev);
+        }
+        if let Some(st) = starting_timestamp {
+            let starting_ts: DateTime<Utc> = DateTime::<Utc>::from_str(&st)
+                .map_err(|pe| PyValueError::new_err(pe.to_string()))?
+                .to_utc();
+            cdf_read = cdf_read.with_starting_timestamp(starting_ts);
+        }
+        if let Some(et) = ending_timestamp {
+            let ending_ts = DateTime::<Utc>::from_str(&et)
+                .map_err(|pe| PyValueError::new_err(pe.to_string()))?
+                .to_utc();
+            cdf_read = cdf_read.with_starting_timestamp(ending_ts);
+        }
+
+        cdf_read = cdf_read.with_session_ctx(ctx.clone());
+
+        let plan = rt().block_on(cdf_read.build()).map_err(PythonError::from)?;
+
+        py.allow_threads(|| {
+            let mut tasks = vec![];
+            for p in 0..plan.output_partitioning().partition_count() {
+                let inner_plan = plan.clone();
+                let partition_batch = inner_plan.execute(p, ctx.task_ctx()).unwrap();
+                let handle = rt().spawn(collect_sendable_stream(partition_batch));
+                tasks.push(handle);
+            }
+
+            // This is unfortunate.
+            let batches: Vec<_> = rt()
+                .block_on(join_all(tasks))
+                .into_iter()
+                .flatten()
+                .collect::<Result<Vec<Vec<_>>, _>>()
+                .unwrap()
+                .into_iter()
+                .flatten()
+                .collect();
+
+            let final_batch = concat_batches(&batches[0].schema(), &batches).unwrap();
+            Ok(PyArrowType(final_batch))
+        })
     }
 
     #[allow(clippy::too_many_arguments)]

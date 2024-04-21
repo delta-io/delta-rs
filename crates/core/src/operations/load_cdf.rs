@@ -1,3 +1,6 @@
+//! Module for reading the change datafeed of delta tables
+
+use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 use std::time::SystemTime;
 
@@ -20,6 +23,7 @@ use crate::logstore::{get_actions, LogStoreRef};
 use crate::table::state::DeltaTableState;
 use crate::DeltaTableError;
 
+/// Builder for create a read of change data feeds for delta tables
 #[derive(Clone)]
 pub struct CdfLoadBuilder {
     /// A snapshot of the to-be-loaded table's state
@@ -52,26 +56,31 @@ impl CdfLoadBuilder {
         }
     }
 
+    /// Version to start at (version 0 if not provided)
     pub fn with_starting_version(mut self, starting_version: i64) -> Self {
         self.starting_version = starting_version;
         self
     }
 
+    /// Version (inclusive) to end at
     pub fn with_ending_version(mut self, ending_version: i64) -> Self {
         self.ending_version = Some(ending_version);
         self
     }
 
+    /// Provide a datafusion session context
     pub fn with_session_ctx(mut self, ctx: SessionContext) -> Self {
         self.ctx = ctx;
         self
     }
 
+    /// Timestamp (inclusive) to end at
     pub fn with_ending_timestamp(mut self, timestamp: DateTime<Utc>) -> Self {
         self.ending_timestamp = Some(timestamp);
         self
     }
 
+    /// Timestamp to start from
     pub fn with_starting_timestamp(mut self, timestamp: DateTime<Utc>) -> Self {
         self.starting_timestamp = Some(timestamp);
         self

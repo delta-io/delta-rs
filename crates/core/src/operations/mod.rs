@@ -45,7 +45,7 @@ pub mod delete;
 #[cfg(feature = "datafusion")]
 mod load;
 #[cfg(feature = "datafusion")]
-mod load_cdf;
+pub mod load_cdf;
 #[cfg(feature = "datafusion")]
 pub mod merge;
 #[cfg(feature = "datafusion")]

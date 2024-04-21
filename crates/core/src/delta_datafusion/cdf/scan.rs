@@ -36,7 +36,7 @@ lazy_static! {
 }
 
 /// Physical execution of a scan
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct DeltaCdfScan {
     plan: Arc<dyn ExecutionPlan>,
     schema: SchemaRef,
