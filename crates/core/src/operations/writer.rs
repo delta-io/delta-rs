@@ -422,6 +422,7 @@ impl PartitionWriter {
 mod tests {
     use super::*;
     use crate::storage::utils::flatten_list_stream as list;
+    use crate::table::config::DEFAULT_NUM_INDEX_COLS;
     use crate::writer::test_utils::*;
     use crate::DeltaTableBuilder;
     use arrow::array::{Int32Array, StringArray};
@@ -441,6 +442,8 @@ mod tests {
             writer_properties,
             target_file_size,
             write_batch_size,
+            DEFAULT_NUM_INDEX_COLS,
+            None,
         );
         DeltaWriter::new(object_store, config)
     }
@@ -460,7 +463,8 @@ mod tests {
             write_batch_size,
         )
         .unwrap();
-        PartitionWriter::try_with_config(object_store, config).unwrap()
+        PartitionWriter::try_with_config(object_store, config, DEFAULT_NUM_INDEX_COLS, None)
+            .unwrap()
     }
 
     #[tokio::test]
