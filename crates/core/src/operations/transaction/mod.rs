@@ -207,7 +207,7 @@ pub trait TableReference: Send + Sync {
     fn metadata(&self) -> &Metadata;
 
     /// Try to cast this table reference to a `EagerSnapshot`
-    fn eager_snapshot(&self) -> Option<&EagerSnapshot>;
+    fn eager_snapshot(&self) -> &EagerSnapshot;
 }
 
 impl TableReference for EagerSnapshot {
@@ -223,8 +223,8 @@ impl TableReference for EagerSnapshot {
         self.table_config()
     }
 
-    fn eager_snapshot(&self) -> Option<&EagerSnapshot> {
-        Some(self)
+    fn eager_snapshot(&self) -> &EagerSnapshot {
+        self
     }
 }
 
@@ -241,8 +241,8 @@ impl TableReference for DeltaTableState {
         self.snapshot.metadata()
     }
 
-    fn eager_snapshot(&self) -> Option<&EagerSnapshot> {
-        Some(&self.snapshot)
+    fn eager_snapshot(&self) -> &EagerSnapshot {
+        &self.snapshot
     }
 }
 
@@ -512,13 +512,7 @@ impl<'a> std::future::IntoFuture for PreparedCommit<'a> {
 
             // unwrap() is safe here due to the above check
             // TODO: refactor to only depend on TableReference Trait
-            let read_snapshot =
-                this.table_data
-                    .unwrap()
-                    .eager_snapshot()
-                    .ok_or(DeltaTableError::Generic(
-                        "Expected an instance of EagerSnapshot".to_owned(),
-                    ))?;
+            let read_snapshot = this.table_data.unwrap().eager_snapshot();
 
             let mut attempt_number = 1;
             while attempt_number <= this.max_retries {
@@ -595,34 +589,38 @@ pub struct PostCommit<'a> {
 
 impl<'a> PostCommit<'a> {
     /// Runs the post commit activities
-    async fn run_post_commit_hook(&self) -> DeltaResult<Option<DeltaTableState>> {
+    async fn run_post_commit_hook(&self) -> DeltaResult<DeltaTableState> {
         if let Some(table) = self.table_data {
-            if let Some(mut snapshot) = table.eager_snapshot().cloned() {
-                if self.version - snapshot.version() > 1 {
-                    // This may only occur during concurrent write actions. We need to update the state first to - 1
-                    // then we can advance.
-                    snapshot
-                        .update(self.log_store.clone(), Some(self.version - 1))
-                        .await?;
-                    snapshot.advance(vec![&self.data])?;
-                } else {
-                    snapshot.advance(vec![&self.data])?;
-                }
-                let state = DeltaTableState {
-                    app_transaction_version: HashMap::new(),
-                    snapshot,
-                };
-                // Execute each hook
-                if self.create_checkpoint {
-                    self.create_checkpoint(&state, &self.log_store, self.version)
-                        .await?;
-                }
-                return Ok(Some(state));
+            let mut snapshot = table.eager_snapshot().clone();
+            if self.version - snapshot.version() > 1 {
+                // This may only occur during concurrent write actions. We need to update the state first to - 1
+                // then we can advance.
+                snapshot
+                    .update(self.log_store.clone(), Some(self.version - 1))
+                    .await?;
+                snapshot.advance(vec![&self.data])?;
             } else {
-                return Ok(None);
+                snapshot.advance(vec![&self.data])?;
             }
+            let state = DeltaTableState {
+                app_transaction_version: HashMap::new(),
+                snapshot,
+            };
+            // Execute each hook
+            if self.create_checkpoint {
+                self.create_checkpoint(&state, &self.log_store, self.version)
+                    .await?;
+            }
+            Ok(state)
         } else {
-            return Ok(None);
+            let state = DeltaTableState::try_new(
+                &Path::default(),
+                self.log_store.object_store(),
+                Default::default(),
+                Some(self.version),
+            )
+            .await?;
+            Ok(state)
         }
     }
     async fn create_checkpoint(
@@ -642,7 +640,7 @@ impl<'a> PostCommit<'a> {
 /// A commit that successfully completed
 pub struct FinalizedCommit {
     /// The new table state after a commmit
-    pub snapshot: Option<DeltaTableState>,
+    pub snapshot: DeltaTableState,
 
     /// Version of the finalized commit
     pub version: i64,
@@ -650,7 +648,7 @@ pub struct FinalizedCommit {
 
 impl FinalizedCommit {
     /// The new table state after a commmit
-    pub fn snapshot(&self) -> Option<DeltaTableState> {
+    pub fn snapshot(&self) -> DeltaTableState {
         self.snapshot.clone()
     }
     /// Version of the finalized commit
@@ -668,14 +666,12 @@ impl<'a> std::future::IntoFuture for PostCommit<'a> {
 
         Box::pin(async move {
             match this.run_post_commit_hook().await {
-                Ok(snapshot) => {
-                    return Ok(FinalizedCommit {
-                        snapshot,
-                        version: this.version,
-                    })
-                }
-                Err(err) => return Err(err),
-            };
+                Ok(snapshot) => Ok(FinalizedCommit {
+                    snapshot,
+                    version: this.version,
+                }),
+                Err(err) => Err(err),
+            }
         })
     }
 }

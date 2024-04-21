@@ -168,12 +168,12 @@ async fn execute(
     predicate: Option<Expression>,
     updates: HashMap<Column, Expression>,
     log_store: LogStoreRef,
-    snapshot: &DeltaTableState,
+    snapshot: DeltaTableState,
     state: SessionState,
     writer_properties: Option<WriterProperties>,
     mut commit_properties: CommitProperties,
     safe_cast: bool,
-) -> DeltaResult<(Option<DeltaTableState>, UpdateMetrics)> {
+) -> DeltaResult<(DeltaTableState, UpdateMetrics)> {
     // Validate the predicate and update expressions.
     //
     // If the predicate is not set, then all files need to be updated.
@@ -189,7 +189,7 @@ async fn execute(
     let version = snapshot.version();
 
     if updates.is_empty() {
-        return Ok((None, metrics));
+        return Ok((snapshot, metrics));
     }
 
     let predicate = match predicate {
@@ -214,11 +214,11 @@ async fn execute(
     let table_partition_cols = current_metadata.partition_columns.clone();
 
     let scan_start = Instant::now();
-    let candidates = find_files(snapshot, log_store.clone(), &state, predicate.clone()).await?;
+    let candidates = find_files(&snapshot, log_store.clone(), &state, predicate.clone()).await?;
     metrics.scan_time_ms = Instant::now().duration_since(scan_start).as_millis() as u64;
 
     if candidates.candidates.is_empty() {
-        return Ok((None, metrics));
+        return Ok((snapshot, metrics));
     }
 
     let predicate = predicate.unwrap_or(Expr::Literal(ScalarValue::Boolean(Some(true))));
@@ -226,7 +226,7 @@ async fn execute(
     let execution_props = state.execution_props();
     // For each rewrite evaluate the predicate and then modify each expression
     // to either compute the new value or obtain the old one then write these batches
-    let scan = DeltaScanBuilder::new(snapshot, log_store.clone(), &state)
+    let scan = DeltaScanBuilder::new(&snapshot, log_store.clone(), &state)
         .with_files(&candidates.candidates)
         .build()
         .await?;
@@ -350,7 +350,7 @@ async fn execute(
     )?);
 
     let add_actions = write_execution_plan(
-        Some(snapshot),
+        Some(&snapshot),
         state.clone(),
         projection.clone(),
         table_partition_cols.clone(),
@@ -416,7 +416,7 @@ async fn execute(
 
     let commit = CommitBuilder::from(commit_properties)
         .with_actions(actions)
-        .build(Some(snapshot), log_store, operation)?
+        .build(Some(&snapshot), log_store, operation)?
         .await?;
 
     Ok((commit.snapshot(), metrics))
@@ -442,11 +442,11 @@ impl std::future::IntoFuture for UpdateBuilder {
                 session.state()
             });
 
-            let (new_snapshot, metrics) = execute(
+            let (snapshot, metrics) = execute(
                 this.predicate,
                 this.updates,
                 this.log_store.clone(),
-                &this.snapshot,
+                this.snapshot,
                 state,
                 this.writer_properties,
                 this.commit_properties,
@@ -454,12 +454,10 @@ impl std::future::IntoFuture for UpdateBuilder {
             )
             .await?;
 
-            let table = if let Some(new_snapshot) = new_snapshot {
-                DeltaTable::new_with_state(this.log_store, new_snapshot)
-            } else {
-                DeltaTable::new_with_state(this.log_store, this.snapshot)
-            };
-            Ok((table, metrics))
+            Ok((
+                DeltaTable::new_with_state(this.log_store, snapshot),
+                metrics,
+            ))
         })
     }
 }

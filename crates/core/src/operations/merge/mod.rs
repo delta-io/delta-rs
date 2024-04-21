@@ -932,7 +932,7 @@ async fn execute(
     predicate: Expression,
     source: DataFrame,
     log_store: LogStoreRef,
-    snapshot: &DeltaTableState,
+    snapshot: DeltaTableState,
     state: SessionState,
     writer_properties: Option<WriterProperties>,
     mut commit_properties: CommitProperties,
@@ -942,7 +942,7 @@ async fn execute(
     match_operations: Vec<MergeOperationConfig>,
     not_match_target_operations: Vec<MergeOperationConfig>,
     not_match_source_operations: Vec<MergeOperationConfig>,
-) -> DeltaResult<(Option<DeltaTableState>, MergeMetrics)> {
+) -> DeltaResult<(DeltaTableState, MergeMetrics)> {
     let mut metrics = MergeMetrics::default();
     let exec_start = Instant::now();
 
@@ -987,7 +987,7 @@ async fn execute(
     let scan_config = DeltaScanConfigBuilder::default()
         .with_file_column(true)
         .with_parquet_pushdown(false)
-        .build(snapshot)?;
+        .build(&snapshot)?;
 
     let target_provider = Arc::new(DeltaTableProvider::try_new(
         snapshot.clone(),
@@ -1017,7 +1017,7 @@ async fn execute(
     } else {
         try_construct_early_filter(
             predicate.clone(),
-            snapshot,
+            &snapshot,
             &state,
             &source,
             &source_name,
@@ -1370,7 +1370,7 @@ async fn execute(
 
     let rewrite_start = Instant::now();
     let add_actions = write_execution_plan(
-        Some(snapshot),
+        Some(&snapshot),
         state.clone(),
         write,
         table_partition_cols.clone(),
@@ -1449,12 +1449,12 @@ async fn execute(
     };
 
     if actions.is_empty() {
-        return Ok((None, metrics));
+        return Ok((snapshot, metrics));
     }
 
     let commit = CommitBuilder::from(commit_properties)
         .with_actions(actions)
-        .build(Some(snapshot), log_store.clone(), operation)?
+        .build(Some(&snapshot), log_store.clone(), operation)?
         .await?;
     Ok((commit.snapshot(), metrics))
 }
@@ -1514,11 +1514,11 @@ impl std::future::IntoFuture for MergeBuilder {
                 session.state()
             });
 
-            let (new_snapshot, metrics) = execute(
+            let (snapshot, metrics) = execute(
                 this.predicate,
                 this.source,
                 this.log_store.clone(),
-                &this.snapshot,
+                this.snapshot,
                 state,
                 this.writer_properties,
                 this.commit_properties,
@@ -1531,12 +1531,10 @@ impl std::future::IntoFuture for MergeBuilder {
             )
             .await?;
 
-            let table = if let Some(new_snapshot) = new_snapshot {
-                DeltaTable::new_with_state(this.log_store, new_snapshot)
-            } else {
-                DeltaTable::new_with_state(this.log_store, this.snapshot)
-            };
-            Ok((table, metrics))
+            Ok((
+                DeltaTable::new_with_state(this.log_store, snapshot),
+                metrics,
+            ))
         })
     }
 }

@@ -808,16 +808,7 @@ impl std::future::IntoFuture for WriteBuilder {
                 )?
                 .await?;
 
-            // TODO we do not have the table config available, but since we are merging only our newly
-            // created actions, it may be safe to assume, that we want to include all actions.
-            // then again, having only some tombstones may be misleading.
-            if let (Some(mut snapshot), Some(new_snapshot)) = (this.snapshot, commit.snapshot) {
-                Ok(DeltaTable::new_with_state(this.log_store, new_snapshot))
-            } else {
-                let mut table = DeltaTable::new(this.log_store, Default::default());
-                table.update().await?;
-                Ok(table)
-            }
+            Ok(DeltaTable::new_with_state(this.log_store, commit.snapshot))
         })
     }
 }

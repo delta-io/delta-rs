@@ -186,16 +186,16 @@ async fn excute_non_empty_expr(
 async fn execute(
     predicate: Option<Expr>,
     log_store: LogStoreRef,
-    snapshot: &DeltaTableState,
+    snapshot: DeltaTableState,
     state: SessionState,
     writer_properties: Option<WriterProperties>,
     mut commit_properties: CommitProperties,
-) -> DeltaResult<(Option<DeltaTableState>, DeleteMetrics)> {
+) -> DeltaResult<(DeltaTableState, DeleteMetrics)> {
     let exec_start = Instant::now();
     let mut metrics = DeleteMetrics::default();
 
     let scan_start = Instant::now();
-    let candidates = find_files(snapshot, log_store.clone(), &state, predicate.clone()).await?;
+    let candidates = find_files(&snapshot, log_store.clone(), &state, predicate.clone()).await?;
     metrics.scan_time_ms = Instant::now().duration_since(scan_start).as_millis();
 
     let predicate = predicate.unwrap_or(Expr::Literal(ScalarValue::Boolean(Some(true))));
@@ -205,7 +205,7 @@ async fn execute(
     } else {
         let write_start = Instant::now();
         let add = excute_non_empty_expr(
-            snapshot,
+            &snapshot,
             log_store.clone(),
             &state,
             &predicate,
@@ -258,12 +258,12 @@ async fn execute(
         predicate: Some(fmt_expr_to_sql(&predicate)?),
     };
     if actions.is_empty() {
-        return Ok((None, metrics));
+        return Ok((snapshot.clone(), metrics));
     }
 
     let commit = CommitBuilder::from(commit_properties)
         .with_actions(actions)
-        .build(Some(snapshot), log_store, operation)?
+        .build(Some(&snapshot), log_store, operation)?
         .await?;
     Ok((commit.snapshot(), metrics))
 }
@@ -301,19 +301,17 @@ impl std::future::IntoFuture for DeleteBuilder {
             let (new_snapshot, metrics) = execute(
                 predicate,
                 this.log_store.clone(),
-                &this.snapshot,
+                this.snapshot,
                 state,
                 this.writer_properties,
                 this.commit_properties,
             )
             .await?;
 
-            let table = if let Some(new_snapshot) = new_snapshot {
-                DeltaTable::new_with_state(this.log_store, new_snapshot)
-            } else {
-                DeltaTable::new_with_state(this.log_store, this.snapshot)
-            };
-            Ok((table, metrics))
+            Ok((
+                DeltaTable::new_with_state(this.log_store, new_snapshot),
+                metrics,
+            ))
         })
     }
 }
