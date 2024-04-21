@@ -2,7 +2,7 @@ import json
 import operator
 import warnings
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from enum import Enum
 from functools import reduce
 from pathlib import Path
@@ -604,6 +604,7 @@ class DeltaTable:
         """
         Load/time travel a DeltaTable to a specified version number, or a timestamp version of the table. If a
         string is passed then the argument should be an RFC 3339 and ISO 8601 date and time string format.
+        If a datetime object without a timezone is passed, the UTC timezone will be assumed.
 
         Args:
             version: the identifier of the version of the DeltaTable to load
@@ -617,7 +618,8 @@ class DeltaTable:
 
             **Use a datetime object**
             ```
-            dt.load_as_version(datetime(2023,1,1))
+            dt.load_as_version(datetime(2023, 1, 1))
+            dt.load_as_version(datetime(2023, 1, 1, tzinfo=timezone.utc))
             ```
 
             **Use a datetime in string format**
@@ -630,6 +632,8 @@ class DeltaTable:
         if isinstance(version, int):
             self._table.load_version(version)
         elif isinstance(version, datetime):
+            if version.tzinfo is None:
+                version = version.astimezone(timezone.utc)
             self._table.load_with_datetime(version.isoformat())
         elif isinstance(version, str):
             self._table.load_with_datetime(version)
