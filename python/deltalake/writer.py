@@ -746,7 +746,7 @@ def get_file_stats_from_metadata(
     if columns_to_collect_stats is not None:
         columns_to_iterate = metadata.num_columns
     else:
-        columns_to_iterate = num_indexed_cols
+        columns_to_iterate = min(num_indexed_cols, metadata.num_columns)
 
     for column_idx in range(columns_to_iterate):
         name = metadata.row_group(0).column(column_idx).path_in_schema

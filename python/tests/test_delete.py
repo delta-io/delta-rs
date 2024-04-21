@@ -81,3 +81,51 @@ def test_delete_large_dtypes(
 
     table = dt.to_pyarrow_table()
     assert table.equals(expected_table)
+
+
+@pytest.mark.parametrize("engine", ["pyarrow", "rust"])
+def test_delete_stats_columns_stats_provided(tmp_path: pathlib.Path, engine):
+    data = pa.table(
+        {
+            "foo": pa.array(["a", "b", None, None]),
+            "bar": pa.array([1, 2, 3, None]),
+            "baz": pa.array([1, 1, None, None]),
+        }
+    )
+    write_deltalake(
+        tmp_path,
+        data,
+        mode="append",
+        engine=engine,
+        configuration={"delta.dataSkippingStatsColumns": "foo,baz"},
+    )
+    dt = DeltaTable(tmp_path)
+    add_actions_table = dt.get_add_actions(flatten=True)
+    stats = add_actions_table.to_pylist()[0]
+
+    assert stats["null_count.foo"] == 2
+    assert stats["min.foo"] == "a"
+    assert stats["max.foo"] == "b"
+    assert stats["null_count.bar"] is None
+    assert stats["min.bar"] is None
+    assert stats["max.bar"] is None
+    assert stats["null_count.baz"] == 2
+    assert stats["min.baz"] == 1
+    assert stats["max.baz"] == 1
+
+    dt.delete("bar == 3")
+
+    dt = DeltaTable(tmp_path)
+    add_actions_table = dt.get_add_actions(flatten=True)
+    stats = add_actions_table.to_pylist()[0]
+
+    assert dt.version() == 1
+    assert stats["null_count.foo"] == 1
+    assert stats["min.foo"] == "a"
+    assert stats["max.foo"] == "b"
+    assert stats["null_count.bar"] is None
+    assert stats["min.bar"] is None
+    assert stats["max.bar"] is None
+    assert stats["null_count.baz"] == 1
+    assert stats["min.baz"] == 1
+    assert stats["max.baz"] == 1

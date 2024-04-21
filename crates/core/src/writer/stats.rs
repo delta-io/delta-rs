@@ -1,7 +1,3 @@
-use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
-use std::{collections::HashMap, ops::AddAssign};
-
 use indexmap::IndexMap;
 use parquet::format::FileMetaData;
 use parquet::schema::types::{ColumnDescriptor, SchemaDescriptor};
@@ -10,6 +6,10 @@ use parquet::{
     file::{metadata::RowGroupMetaData, statistics::Statistics},
     format::TimeUnit,
 };
+use std::cmp::min;
+use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
+use std::{collections::HashMap, ops::AddAssign};
 
 use super::*;
 use crate::kernel::{Add, Scalar};
@@ -85,10 +85,10 @@ fn stats_from_file_metadata(
         .collect();
     let row_group_metadata = row_group_metadata?;
 
-    let number_to_iterate = if let Some(cols) = stats_columns {
+    let number_to_iterate = if stats_columns.is_some() {
         schema_descriptor.num_columns()
     } else {
-        num_indexed_cols as usize
+        min(num_indexed_cols as usize, schema_descriptor.num_columns())
     };
 
     for i in 0..number_to_iterate {

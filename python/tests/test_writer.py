@@ -1528,3 +1528,87 @@ def test_rust_decimal_cast(tmp_path: pathlib.Path):
         write_deltalake(
             tmp_path, data, mode="append", schema_mode="merge", engine="rust"
         )
+
+
+@pytest.mark.parametrize("engine", ["pyarrow", "rust"])
+def test_write_stats_column_idx(tmp_path: pathlib.Path, engine):
+    def _check_stats(dt: DeltaTable):
+        add_actions_table = dt.get_add_actions(flatten=True)
+        stats = add_actions_table.to_pylist()[0]
+
+        assert stats["null_count.foo"] == 2
+        assert stats["min.foo"] == "a"
+        assert stats["max.foo"] == "b"
+        assert stats["null_count.bar"] == 1
+        assert stats["min.bar"] == 1
+        assert stats["max.bar"] == 3
+        assert stats["null_count.baz"] is None
+        assert stats["min.baz"] is None
+        assert stats["max.baz"] is None
+
+    data = pa.table(
+        {
+            "foo": pa.array(["a", "b", None, None]),
+            "bar": pa.array([1, 2, 3, None]),
+            "baz": pa.array([1, 1, None, None]),
+        }
+    )
+    write_deltalake(
+        tmp_path,
+        data,
+        mode="append",
+        engine=engine,
+        configuration={"delta.dataSkippingNumIndexedCols": "2"},
+    )
+
+    dt = DeltaTable(tmp_path)
+    _check_stats(dt)
+
+    # Check if it properly takes skippingNumIndexCols from the config in the table
+    write_deltalake(tmp_path, data, mode="overwrite", engine=engine)
+
+    dt = DeltaTable(tmp_path)
+    assert dt.version() == 1
+    _check_stats(dt)
+
+
+@pytest.mark.parametrize("engine", ["pyarrow", "rust"])
+def test_write_stats_columns_stats_provided(tmp_path: pathlib.Path, engine):
+    def _check_stats(dt: DeltaTable):
+        add_actions_table = dt.get_add_actions(flatten=True)
+        stats = add_actions_table.to_pylist()[0]
+
+        assert stats["null_count.foo"] == 2
+        assert stats["min.foo"] == "a"
+        assert stats["max.foo"] == "b"
+        assert stats["null_count.bar"] is None
+        assert stats["min.bar"] is None
+        assert stats["max.bar"] is None
+        assert stats["null_count.baz"] == 2
+        assert stats["min.baz"] == 1
+        assert stats["max.baz"] == 1
+
+    data = pa.table(
+        {
+            "foo": pa.array(["a", "b", None, None]),
+            "bar": pa.array([1, 2, 3, None]),
+            "baz": pa.array([1, 1, None, None]),
+        }
+    )
+    write_deltalake(
+        tmp_path,
+        data,
+        mode="append",
+        engine=engine,
+        configuration={"delta.dataSkippingStatsColumns": "foo,baz"},
+    )
+
+    dt = DeltaTable(tmp_path)
+    _check_stats(dt)
+
+    # Check if it properly takes skippingNumIndexCols from the config in the table
+    write_deltalake(tmp_path, data, mode="overwrite", engine=engine)
+
+    dt = DeltaTable(tmp_path)
+    assert dt.version() == 1
+    _check_stats(dt)
