@@ -33,7 +33,7 @@ use deltalake::operations::filesystem_check::FileSystemCheckBuilder;
 use deltalake::operations::merge::MergeBuilder;
 use deltalake::operations::optimize::{OptimizeBuilder, OptimizeType};
 use deltalake::operations::restore::RestoreBuilder;
-use deltalake::operations::transaction::{CommitBuilder, CommitProperties};
+use deltalake::operations::transaction::{CommitBuilder, CommitProperties, TableReference};
 use deltalake::operations::update::UpdateBuilder;
 use deltalake::operations::vacuum::VacuumBuilder;
 use deltalake::parquet::basic::Compression;
@@ -185,6 +185,20 @@ impl RawDeltaTable {
         Ok(rt()
             .block_on(self._table.get_latest_version())
             .map_err(PythonError::from)?)
+    }
+
+    pub fn get_num_index_cols(&mut self) -> PyResult<i32> {
+        Ok(self._table.snapshot().map_err(PythonError::from)?.config().num_indexed_cols())
+    }
+
+    pub fn get_stats_columns(&mut self) -> PyResult<Option<Vec<String>>> {
+        Ok(self._table.snapshot().map_err(PythonError::from)?
+            .config()
+            .stats_columns()
+            .map(|v|{
+                v.iter()
+                 .map(|v|v.to_string()).collect::<Vec<String>>()
+            }))
     }
 
     pub fn load_with_datetime(&mut self, ds: &str) -> PyResult<()> {
