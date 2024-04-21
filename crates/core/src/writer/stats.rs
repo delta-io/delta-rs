@@ -88,7 +88,15 @@ fn stats_from_file_metadata(
     let number_to_iterate = if stats_columns.is_some() {
         schema_descriptor.num_columns()
     } else {
-        min(num_indexed_cols as usize, schema_descriptor.num_columns())
+        if num_indexed_cols == -1 {
+            schema_descriptor.num_columns()
+        } else if num_indexed_cols >= 0 {
+            min(num_indexed_cols as usize, schema_descriptor.num_columns())
+        } else {
+            return Err(DeltaWriterError::DeltaTable(DeltaTableError::Generic(
+                "delta.dataSkippingNumIndexedCols valid values are >=-1".to_string(),
+            )));
+        }
     };
 
     for i in 0..number_to_iterate {

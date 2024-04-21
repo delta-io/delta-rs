@@ -283,6 +283,8 @@ def write_deltalake(
                         raise ValueError(
                             "dataSkippingStatsColumns needs to be a comma-separated list of column names in string format. Example: 'foo,bar,baz'"
                         )
+            else:
+                stats_cols = None
         else:
             num_indexed_cols = DEFAULT_DATA_SKIPPING_NUM_INDEX_COLS
             stats_cols = None
@@ -744,7 +746,12 @@ def get_file_stats_from_metadata(
     if columns_to_collect_stats is not None:
         columns_to_iterate = metadata.num_columns
     else:
-        columns_to_iterate = min(num_indexed_cols, metadata.num_columns)
+        if num_indexed_cols == -1:
+            columns_to_iterate = metadata.num_columns
+        elif num_indexed_cols >= 0:
+            columns_to_iterate = min(num_indexed_cols, metadata.num_columns)
+        else:
+            raise ValueError("delta.dataSkippingNumIndexedCols valid values are >=-1")
 
     for column_idx in range(columns_to_iterate):
         name = metadata.row_group(0).column(column_idx).path_in_schema
