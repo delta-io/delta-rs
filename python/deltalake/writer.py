@@ -269,17 +269,15 @@ def write_deltalake(
     else:
         DEFAULT_DATA_SKIPPING_NUM_INDEX_COLS = 32
         if configuration is not None:
-            num_indexed_cols = configuration.get(
-                "delta.dataSkippingNumIndexedCols", DEFAULT_DATA_SKIPPING_NUM_INDEX_COLS
-            )
-            if num_indexed_cols is None:
-                num_indexed_cols = DEFAULT_DATA_SKIPPING_NUM_INDEX_COLS
+            if "delta.dataSkippingNumIndexedCols" in configuration:
+                str_indexed_cols = configuration["delta.dataSkippingNumIndexedCols"]
+                if str_indexed_cols is not None:
+                    num_indexed_cols = int(str_indexed_cols)
             else:
-                num_indexed_cols = int(num_indexed_cols)
-
-            stats_cols = configuration.get("delta.dataSkippingStatsColumns")
-            if isinstance(stats_cols, str):
-                stats_cols = stats_cols.split(",")
+                num_indexed_cols = DEFAULT_DATA_SKIPPING_NUM_INDEX_COLS
+            string_stats_cols = configuration.get("delta.dataSkippingStatsColumns")
+            if isinstance(string_stats_cols, str):
+                stats_cols = string_stats_cols.split(",")
                 if stats_cols and isinstance(stats_cols, list):
                     if not all(isinstance(inner, str) for inner in stats_cols):
                         raise ValueError(
