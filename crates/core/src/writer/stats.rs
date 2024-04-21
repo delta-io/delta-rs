@@ -3,6 +3,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use std::{collections::HashMap, ops::AddAssign};
 
 use indexmap::IndexMap;
+use parquet::column;
 use parquet::format::FileMetaData;
 use parquet::schema::types::{ColumnDescriptor, SchemaDescriptor};
 use parquet::{basic::LogicalType, errors::ParquetError};
@@ -21,8 +22,15 @@ pub fn create_add(
     path: String,
     size: i64,
     file_metadata: &FileMetaData,
+    num_indexed_cols: i32,
+    stats_columns: &Option<Vec<String>>,
 ) -> Result<Add, DeltaTableError> {
-    let stats = stats_from_file_metadata(partition_values, file_metadata)?;
+    let stats = stats_from_file_metadata(
+        partition_values,
+        file_metadata,
+        num_indexed_cols,
+        stats_columns,
+    )?;
     let stats_string = serde_json::to_string(&stats)?;
 
     // Determine the modification timestamp to include in the add action - milliseconds since epoch
@@ -61,6 +69,8 @@ pub fn create_add(
 fn stats_from_file_metadata(
     partition_values: &IndexMap<String, Scalar>,
     file_metadata: &FileMetaData,
+    num_indexed_cols: i32,
+    stats_columns: &Option<Vec<String>>,
 ) -> Result<Stats, DeltaWriterError> {
     let type_ptr = parquet::schema::types::from_thrift(file_metadata.schema.as_slice());
     let schema_descriptor = type_ptr.map(|type_| Arc::new(SchemaDescriptor::new(type_)))?;
@@ -76,7 +86,13 @@ fn stats_from_file_metadata(
         .collect();
     let row_group_metadata = row_group_metadata?;
 
-    for i in 0..schema_descriptor.num_columns() {
+    let number_to_iterate = if let Some(cols) = stats_columns {
+        schema_descriptor.num_columns()
+    } else {
+        num_indexed_cols as usize
+    };
+
+    for i in 0..number_to_iterate {
         let column_descr = schema_descriptor.column(i);
 
         let column_path = column_descr.path();
@@ -85,6 +101,12 @@ fn stats_from_file_metadata(
         // Do not include partition columns in statistics
         if partition_values.contains_key(&column_path_parts[0]) {
             continue;
+        }
+
+        if let Some(cols) = stats_columns {
+            if !cols.contains(&column_descr.name().to_string()) {
+                continue;
+            }
         }
 
         let maybe_stats: Option<AggregatedStats> = row_group_metadata

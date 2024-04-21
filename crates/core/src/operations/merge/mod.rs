@@ -74,7 +74,7 @@ use crate::kernel::Action;
 use crate::logstore::LogStoreRef;
 use crate::operations::merge::barrier::find_barrier_node;
 use crate::operations::transaction::CommitBuilder;
-use crate::operations::write::write_execution_plan;
+use crate::operations::write::{write_execution_plan, WriterStatsConfig};
 use crate::protocol::{DeltaOperation, MergePredicate};
 use crate::table::state::DeltaTableState;
 use crate::{DeltaResult, DeltaTable, DeltaTableError};
@@ -1367,6 +1367,14 @@ async fn execute(
     // write projected records
     let table_partition_cols = current_metadata.partition_columns.clone();
 
+    let writer_stats_config = WriterStatsConfig::new(
+        snapshot.table_config().num_indexed_cols(),
+        snapshot
+            .table_config()
+            .stats_columns()
+            .map(|v| v.iter().map(|v| v.to_string()).collect::<Vec<String>>()),
+    );
+
     let rewrite_start = Instant::now();
     let add_actions = write_execution_plan(
         Some(snapshot),
@@ -1379,6 +1387,7 @@ async fn execute(
         writer_properties,
         safe_cast,
         None,
+        writer_stats_config,
     )
     .await?;
 

@@ -79,6 +79,10 @@ pub struct WriterConfig {
     /// Row chunks passed to parquet writer. This and the internal parquet writer settings
     /// determine how fine granular we can track / control the size of resulting files.
     write_batch_size: usize,
+    /// Num index cols to collect stats for
+    num_indexed_cols: i32,
+    /// Stats columns, specific columns to collect stats from, takes precedence over num_indexed_cols
+    stats_columns: Option<Vec<String>>,
 }
 
 impl WriterConfig {
@@ -89,6 +93,8 @@ impl WriterConfig {
         writer_properties: Option<WriterProperties>,
         target_file_size: Option<usize>,
         write_batch_size: Option<usize>,
+        num_indexed_cols: i32,
+        stats_columns: Option<Vec<String>>,
     ) -> Self {
         let writer_properties = writer_properties.unwrap_or_else(|| {
             WriterProperties::builder()
@@ -104,6 +110,8 @@ impl WriterConfig {
             writer_properties,
             target_file_size,
             write_batch_size,
+            num_indexed_cols,
+            stats_columns,
         }
     }
 
@@ -177,8 +185,12 @@ impl DeltaWriter {
                     Some(self.config.target_file_size),
                     Some(self.config.write_batch_size),
                 )?;
-                let mut writer =
-                    PartitionWriter::try_with_config(self.object_store.clone(), config)?;
+                let mut writer = PartitionWriter::try_with_config(
+                    self.object_store.clone(),
+                    config,
+                    self.config.num_indexed_cols,
+                    self.config.stats_columns.clone(),
+                )?;
                 writer.write(&record_batch).await?;
                 let _ = self.partition_writers.insert(partition_key, writer);
             }
@@ -269,6 +281,10 @@ pub(crate) struct PartitionWriter {
     arrow_writer: ArrowWriter<ShareableBuffer>,
     part_counter: usize,
     files_written: Vec<Add>,
+    /// Num index cols to collect stats for
+    num_indexed_cols: i32,
+    /// Stats columns, specific columns to collect stats from, takes precedence over num_indexed_cols
+    stats_columns: Option<Vec<String>>,
 }
 
 impl PartitionWriter {
@@ -276,6 +292,8 @@ impl PartitionWriter {
     pub fn try_with_config(
         object_store: ObjectStoreRef,
         config: PartitionWriterConfig,
+        num_indexed_cols: i32,
+        stats_columns: Option<Vec<String>>,
     ) -> DeltaResult<Self> {
         let buffer = ShareableBuffer::default();
         let arrow_writer = ArrowWriter::try_new(
@@ -292,6 +310,8 @@ impl PartitionWriter {
             arrow_writer,
             part_counter: 0,
             files_written: Vec::new(),
+            num_indexed_cols,
+            stats_columns,
         })
     }
 
@@ -349,6 +369,8 @@ impl PartitionWriter {
                 path.to_string(),
                 file_size,
                 &metadata,
+                self.num_indexed_cols,
+                &self.stats_columns,
             )
             .map_err(|err| WriteError::CreateAdd {
                 source: Box::new(err),

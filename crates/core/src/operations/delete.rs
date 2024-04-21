@@ -35,6 +35,7 @@ use serde::Serialize;
 
 use super::datafusion_utils::Expression;
 use super::transaction::{CommitBuilder, CommitProperties, PROTOCOL};
+use super::write::WriterStatsConfig;
 use crate::delta_datafusion::expr::fmt_expr_to_sql;
 use crate::delta_datafusion::{
     find_files, register_store, DataFusionMixins, DeltaScanBuilder, DeltaSessionContext,
@@ -154,6 +155,14 @@ async fn excute_non_empty_expr(
     let filter: Arc<dyn ExecutionPlan> =
         Arc::new(FilterExec::try_new(predicate_expr, scan.clone())?);
 
+    let writer_stats_config = WriterStatsConfig::new(
+        snapshot.table_config().num_indexed_cols(),
+        snapshot
+            .table_config()
+            .stats_columns()
+            .map(|v| v.iter().map(|v| v.to_string()).collect::<Vec<String>>()),
+    );
+
     let add_actions = write_execution_plan(
         Some(snapshot),
         state.clone(),
@@ -165,6 +174,7 @@ async fn excute_non_empty_expr(
         writer_properties,
         false,
         None,
+        writer_stats_config,
     )
     .await?
     .into_iter()
