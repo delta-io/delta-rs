@@ -264,7 +264,30 @@ def write_deltalake(
         storage_options.update(storage_options or {})
 
         table.update_incremental()
+        num_indexed_cols = table._table.get_num_index_cols()
+        stats_cols = table._table.get_stats_columns()
+    else:
+        DEFAULT_DATA_SKIPPING_NUM_INDEX_COLS = 32
+        if configuration is not None:
+            num_indexed_cols = configuration.get(
+                "delta.dataSkippingNumIndexedCols", DEFAULT_DATA_SKIPPING_NUM_INDEX_COLS
+            )
+            if num_indexed_cols is None:
+                num_indexed_cols = DEFAULT_DATA_SKIPPING_NUM_INDEX_COLS
+            else:
+                num_indexed_cols = int(num_indexed_cols)
 
+            stats_cols = configuration.get("delta.dataSkippingStatsColumns")
+            if isinstance(stats_cols, str):
+                stats_cols = stats_cols.split(",")
+                if stats_cols and isinstance(stats_cols, list):
+                    if not all(isinstance(inner, str) for inner in stats_cols):
+                        raise ValueError(
+                            "dataSkippingStatsColumns needs to be a comma-separated list of column names in string format. Example: 'foo,bar,baz'"
+                        )
+        else:
+            num_indexed_cols = DEFAULT_DATA_SKIPPING_NUM_INDEX_COLS
+            stats_cols = None
     __enforce_append_only(table=table, configuration=configuration, mode=mode)
     if overwrite_schema:
         schema_mode = "overwrite"
@@ -404,7 +427,11 @@ def write_deltalake(
 
         def visitor(written_file: Any) -> None:
             path, partition_values = get_partitions_from_path(written_file.path)
-            stats = get_file_stats_from_metadata(written_file.metadata)
+            stats = get_file_stats_from_metadata(
+                written_file.metadata,
+                num_indexed_cols=num_indexed_cols,
+                columns_to_collect_stats=stats_cols,
+            )
 
             # PyArrow added support for written_file.size in 9.0.0
             if PYARROW_MAJOR_VERSION >= 9:
@@ -701,6 +728,8 @@ def get_partitions_from_path(path: str) -> Tuple[str, Dict[str, Optional[str]]]:
 
 def get_file_stats_from_metadata(
     metadata: Any,
+    num_indexed_cols: int,
+    columns_to_collect_stats: Optional[List[str]],
 ) -> Dict[str, Union[int, Dict[str, Any]]]:
     stats = {
         "numRecords": metadata.num_rows,
@@ -714,8 +743,17 @@ def get_file_stats_from_metadata(
             if metadata.row_group(i).num_rows > 0:
                 yield metadata.row_group(i)
 
-    for column_idx in range(metadata.num_columns):
+    if columns_to_collect_stats is not None:
+        columns_to_iterate = metadata.num_columns
+    else:
+        columns_to_iterate = num_indexed_cols
+
+    for column_idx in range(columns_to_iterate):
         name = metadata.row_group(0).column(column_idx).path_in_schema
+
+        if columns_to_collect_stats is not None:
+            if name not in columns_to_collect_stats:
+                continue
         # If stats missing, then we can't know aggregate stats
         if all(
             group.column(column_idx).is_stats_set for group in iter_groups(metadata)

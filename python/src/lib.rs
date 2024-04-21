@@ -188,17 +188,22 @@ impl RawDeltaTable {
     }
 
     pub fn get_num_index_cols(&mut self) -> PyResult<i32> {
-        Ok(self._table.snapshot().map_err(PythonError::from)?.config().num_indexed_cols())
+        Ok(self
+            ._table
+            .snapshot()
+            .map_err(PythonError::from)?
+            .config()
+            .num_indexed_cols())
     }
 
     pub fn get_stats_columns(&mut self) -> PyResult<Option<Vec<String>>> {
-        Ok(self._table.snapshot().map_err(PythonError::from)?
+        Ok(self
+            ._table
+            .snapshot()
+            .map_err(PythonError::from)?
             .config()
             .stats_columns()
-            .map(|v|{
-                v.iter()
-                 .map(|v|v.to_string()).collect::<Vec<String>>()
-            }))
+            .map(|v| v.iter().map(|v| v.to_string()).collect::<Vec<String>>()))
     }
 
     pub fn load_with_datetime(&mut self, ds: &str) -> PyResult<()> {
