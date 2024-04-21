@@ -773,9 +773,6 @@ impl std::future::IntoFuture for WriteBuilder {
                 ),
             };
 
-            dbg!(num_index_cols.clone());
-            dbg!(stats_columns.clone());
-
             let writer_stats_config = WriterStatsConfig {
                 num_indexed_cols: num_index_cols.clone(),
                 stats_columns: stats_columns
