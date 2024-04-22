@@ -90,7 +90,7 @@ impl S3DynamoDbLogStore {
         for retry in 0..=MAX_REPAIR_RETRIES {
             match write_commit_entry(&self.storage, entry.version, &entry.temp_path).await {
                 Ok(()) => {
-                    debug!("Successfully committed entry for version {}", entry.version);
+                    warn!("Successfully committed entry for version {}, entry.complete {}", entry.version, entry.complete);
                     return self.try_complete_entry(entry, true).await;
                 }
                 // `N.json` has already been moved, complete the entry in DynamoDb just in case
@@ -102,7 +102,7 @@ impl S3DynamoDbLogStore {
                 }
                 Err(err) if retry == MAX_REPAIR_RETRIES => return Err(err),
                 Err(err) => {
-                    debug!("retry #{retry} on log entry {entry:?} failed to move commit: '{err}'")
+                    warn!("retry #{retry} on log entry {entry:?} failed to move commit: '{err}'")
                 }
             }
         }
@@ -115,7 +115,7 @@ impl S3DynamoDbLogStore {
         entry: &CommitEntry,
         copy_performed: bool,
     ) -> Result<RepairLogEntryResult, TransactionError> {
-        debug!("try_complete_entry for {:?}, {}", entry, copy_performed);
+        warn!("try_complete_entry for {:?}, {}", entry, copy_performed);
         for retry in 0..=MAX_REPAIR_RETRIES {
             match self
                 .lock_client
@@ -230,6 +230,12 @@ impl LogStore for S3DynamoDbLogStore {
                     }
                 }
             })?;
+        warn!(
+                "Commit Entry version: {}, temp_path: {}, is_complete: {}.",
+                entry.version,
+                entry.temp_path,
+                entry.complete
+            );
         // `repair_entry` performs the exact steps required to finalize the commit, but contains
         // retry logic and more robust error handling under the assumption that any other client
         // could attempt to concurrently repair that very same entry. In fact, the original writer

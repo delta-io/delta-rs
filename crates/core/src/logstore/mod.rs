@@ -435,6 +435,8 @@ pub async fn write_commit_entry(
 ) -> Result<(), TransactionError> {
     // move temporary commit file to delta log directory
     // rely on storage to fail if the file already exists -
+    warn!("Temp commit path: {}", tmp_commit);
+    warn!("Version (prior to rename_if_not_exists call): {}", version);
     storage
         .rename_if_not_exists(tmp_commit, &commit_uri_from_version(version))
         .await
@@ -443,9 +445,12 @@ pub async fn write_commit_entry(
                 ObjectStoreError::AlreadyExists { .. } => {
                     TransactionError::VersionAlreadyExists(version)
                 }
-                _ => TransactionError::from(err),
+                _ => {
+                    warn!("Error occurred from the rename_if_not_exists call: {:?}", err);
+                    TransactionError::from(err)
+                }
             }
-        })?;
+            });
     Ok(())
 }
 
