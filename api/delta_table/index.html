@@ -2899,7 +2899,8 @@ The operations are returned in reverse chronological order.</p>
   <div class="doc doc-contents ">
   
       <p>Load/time travel a DeltaTable to a specified version number, or a timestamp version of the table. If a
-string is passed then the argument should be an RFC 3339 and ISO 8601 date and time string format.</p>
+string is passed then the argument should be an RFC 3339 and ISO 8601 date and time string format.
+If a datetime object without a timezone is passed, the UTC timezone will be assumed.</p>
 
 
 
@@ -2938,7 +2939,8 @@ string is passed then the argument should be an RFC 3339 and ISO 8601 date and t
 </span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>dt.load_as_version(1)
 </span></code></pre></div></p>
 <p><strong>Use a datetime object</strong>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>dt.load_as_version(datetime(2023,1,1))
+<div class="language-text highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>dt.load_as_version(datetime(2023, 1, 1))
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>dt.load_as_version(datetime(2023, 1, 1, tzinfo=timezone.utc))
 </span></code></pre></div></p>
 <p><strong>Use a datetime in string format</strong>
 <div class="language-text highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>dt.load_as_version(&quot;2018-01-26T18:30:09Z&quot;)
@@ -3103,7 +3105,7 @@ match the underlying table.</p>
         <tr>
           <td><code>source</code></td>
           <td>
-                <code><span title="typing.Union">Union</span>[<a class="autorefs autorefs-external" title="pyarrow.Table" href="https://arrow.apache.org/docs/python/generated/pyarrow.Table.html#pyarrow.Table">Table</a>, <a class="autorefs autorefs-external" title="pyarrow.RecordBatch" href="https://arrow.apache.org/docs/python/generated/pyarrow.RecordBatch.html#pyarrow.RecordBatch">RecordBatch</a>, <a class="autorefs autorefs-external" title="pyarrow.RecordBatchReader" href="https://arrow.apache.org/docs/python/generated/pyarrow.RecordBatchReader.html#pyarrow.RecordBatchReader">RecordBatchReader</a>, <span title="pyarrow.Dataset">Dataset</span>, <a class="autorefs autorefs-external" title="pandas.DataFrame" href="https://pandas.pydata.org/docs/reference/api/pandas.DataFrame.html#pandas.DataFrame">DataFrame</a>]</code>
+                <code><span title="typing.Union">Union</span>[<a class="autorefs autorefs-external" title="pyarrow.Table" href="https://arrow.apache.org/docs/python/generated/pyarrow.Table.html#pyarrow.Table">Table</a>, <a class="autorefs autorefs-external" title="pyarrow.RecordBatch" href="https://arrow.apache.org/docs/python/generated/pyarrow.RecordBatch.html#pyarrow.RecordBatch">RecordBatch</a>, <a class="autorefs autorefs-external" title="pyarrow.RecordBatchReader" href="https://arrow.apache.org/docs/python/generated/pyarrow.RecordBatchReader.html#pyarrow.RecordBatchReader">RecordBatchReader</a>, <a class="autorefs autorefs-external" title="pyarrow.dataset.Dataset" href="https://arrow.apache.org/docs/python/generated/pyarrow.dataset.Dataset.html#pyarrow.dataset.Dataset">Dataset</a>, <a class="autorefs autorefs-external" title="pandas.DataFrame" href="https://pandas.pydata.org/docs/reference/api/pandas.DataFrame.html#pandas.DataFrame">DataFrame</a>]</code>
           </td>
           <td>
             <div class="doc-md-description">
@@ -3637,7 +3639,7 @@ Results in
         <tr>
           <td><code>filesystem</code></td>
           <td>
-                <code><span title="typing.Optional">Optional</span>[<span title="typing.Union">Union</span>[str, <span title="pyarrow.FileSystem">FileSystem</span>]]</code>
+                <code><span title="typing.Optional">Optional</span>[<span title="typing.Union">Union</span>[str, <a class="autorefs autorefs-external" title="pyarrow.fs.FileSystem" href="https://arrow.apache.org/docs/python/generated/pyarrow.fs.FileSystem.html#pyarrow.fs.FileSystem">FileSystem</a>]]</code>
           </td>
           <td>
             <div class="doc-md-description">
@@ -3716,7 +3718,7 @@ Results in
         <tr>
           <td><code>filesystem</code></td>
           <td>
-                <code><span title="typing.Optional">Optional</span>[<span title="typing.Union">Union</span>[str, <span title="pyarrow.FileSystem">FileSystem</span>]]</code>
+                <code><span title="typing.Optional">Optional</span>[<span title="typing.Union">Union</span>[str, <a class="autorefs autorefs-external" title="pyarrow.fs.FileSystem" href="https://arrow.apache.org/docs/python/generated/pyarrow.fs.FileSystem.html#pyarrow.fs.FileSystem">FileSystem</a>]]</code>
           </td>
           <td>
             <div class="doc-md-description">
@@ -3850,7 +3852,7 @@ a :class:<code>pyarrow.fs.SubTreeFileSystem</code>.
         <tr>
           <td><code>filesystem</code></td>
           <td>
-                <code><span title="typing.Optional">Optional</span>[<span title="typing.Union">Union</span>[str, <span title="pyarrow.FileSystem">FileSystem</span>]]</code>
+                <code><span title="typing.Optional">Optional</span>[<span title="typing.Union">Union</span>[str, <a class="autorefs autorefs-external" title="pyarrow.fs.FileSystem" href="https://arrow.apache.org/docs/python/generated/pyarrow.fs.FileSystem.html#pyarrow.fs.FileSystem">FileSystem</a>]]</code>
           </td>
           <td>
             <div class="doc-md-description">
