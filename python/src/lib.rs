@@ -14,7 +14,6 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use arrow::pyarrow::PyArrowType;
 use chrono::{DateTime, Duration, FixedOffset, Utc};
-use futures::future::join_all;
 use deltalake::arrow::compute::concat_batches;
 use deltalake::arrow::ffi_stream::ArrowArrayStreamReader;
 use deltalake::arrow::record_batch::RecordBatch;
@@ -48,6 +47,7 @@ use deltalake::partitions::PartitionFilter;
 use deltalake::protocol::{DeltaOperation, SaveMode};
 use deltalake::DeltaTableBuilder;
 use deltalake::{DeltaOps, DeltaResult};
+use futures::future::join_all;
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyFrozenSet};
@@ -525,7 +525,7 @@ impl RawDeltaTable {
         Ok(())
     }
 
-    #[pyo3(signature = (starting_version, ending_version = None, starting_timestamp = None, ending_timestamp = None))]
+    #[pyo3(signature = (starting_version = 0, ending_version = None, starting_timestamp = None, ending_timestamp = None))]
     pub fn read_cdf(
         &mut self,
         py: Python,

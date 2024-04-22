@@ -686,7 +686,7 @@ class DeltaTable:
 
     def load_cdf(
         self,
-        starting_version,
+        starting_version=0,
         ending_version=None,
         starting_timestamp=None,
         ending_timestamp=None,
