@@ -98,6 +98,8 @@ pub struct UpdateMetrics {
     pub scan_time_ms: u64,
 }
 
+impl super::Operation<()> for UpdateBuilder {}
+
 impl UpdateBuilder {
     /// Create a new ['UpdateBuilder']
     pub fn new(log_store: LogStoreRef, snapshot: DeltaTableState) -> Self {

@@ -24,6 +24,8 @@ pub struct DropConstraintBuilder {
     commit_properties: CommitProperties,
 }
 
+impl super::Operation<()> for DropConstraintBuilder {}
+
 impl DropConstraintBuilder {
     /// Create a new builder
     pub fn new(log_store: LogStoreRef, snapshot: DeltaTableState) -> Self {

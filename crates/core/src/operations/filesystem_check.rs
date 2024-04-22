@@ -75,6 +75,8 @@ fn is_absolute_path(path: &str) -> DeltaResult<bool> {
     }
 }
 
+impl super::Operation<()> for FileSystemCheckBuilder {}
+
 impl FileSystemCheckBuilder {
     /// Create a new [`FileSystemCheckBuilder`]
     pub fn new(log_store: LogStoreRef, state: DeltaTableState) -> Self {

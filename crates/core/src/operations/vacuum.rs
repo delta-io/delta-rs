@@ -95,6 +95,8 @@ pub struct VacuumBuilder {
     commit_properties: CommitProperties,
 }
 
+impl super::Operation<()> for VacuumBuilder {}
+
 /// Details for the Vacuum operation including which files were
 #[derive(Debug)]
 pub struct VacuumMetrics {
