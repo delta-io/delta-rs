@@ -1218,10 +1218,8 @@ async fn execute(
         .end()?;
 
         let name = "__delta_rs_c_".to_owned() + delta_field.name();
-        write_projection.push(
-            Expr::Column(Column::from_qualified_name_ignore_case(name.clone()))
-                .alias(delta_field.name()),
-        );
+        write_projection
+            .push(Expr::Column(Column::from_name(name.clone())).alias(delta_field.name()));
         new_columns.push((name, case));
     }
 
