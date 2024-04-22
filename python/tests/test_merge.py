@@ -855,3 +855,27 @@ def test_merge_timestamps_partitioned_2344(tmp_path: pathlib.Path, timezone, pre
     assert last_action["operation"] == "MERGE"
     assert result == data
     assert last_action["operationParameters"].get("predicate") == predicate
+
+
+def test_merge_field_special_characters_delete_2438(tmp_path: pathlib.Path):
+    ## See issue: https://github.com/delta-io/delta-rs/issues/2438
+    data = pa.table({"x": [1, 2, 3], "y--1": [4, 5, 6]})
+    write_deltalake(tmp_path, data, mode="append")
+
+    dt = DeltaTable(tmp_path)
+    new_data = pa.table({"x": [2, 3]})
+
+    (
+        dt.merge(
+            source=new_data,
+            predicate="target.x = source.x",
+            source_alias="source",
+            target_alias="target",
+        )
+        .when_matched_delete()
+        .execute()
+    )
+
+    expected = pa.table({"x": [1], "y--1": [4]})
+
+    assert dt.to_pyarrow_table() == expected
