@@ -133,6 +133,8 @@ pub struct MergeBuilder {
     safe_cast: bool,
 }
 
+impl super::Operation<()> for MergeBuilder {}
+
 impl MergeBuilder {
     /// Create a new [`MergeBuilder`]
     pub fn new<E: Into<Expression>>(

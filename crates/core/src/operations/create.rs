@@ -60,6 +60,8 @@ pub struct CreateBuilder {
     metadata: Option<HashMap<String, Value>>,
 }
 
+impl super::Operation<()> for CreateBuilder {}
+
 impl Default for CreateBuilder {
     fn default() -> Self {
         Self::new()
