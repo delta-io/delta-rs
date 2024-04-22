@@ -1,5 +1,6 @@
 //! AWS S3 storage backend.
 
+use aws_config::provider_config::ProviderConfig;
 use aws_config::{Region, SdkConfig};
 use bytes::Bytes;
 use deltalake_core::storage::object_store::{
@@ -169,8 +170,12 @@ impl S3StorageOptions {
             .unwrap_or(false);
         let imds_timeout =
             Self::u64_or_default(options, s3_constants::AWS_EC2_METADATA_TIMEOUT, 100);
-        let credentials_provider =
-            crate::credentials::ConfiguredCredentialChain::new(disable_imds, imds_timeout, None);
+        let provider_config = ProviderConfig::default();
+        let credentials_provider = crate::credentials::ConfiguredCredentialChain::new(
+            disable_imds,
+            imds_timeout,
+            &provider_config,
+        );
         #[cfg(feature = "native-tls")]
         let sdk_config = execute_sdk_future(
             aws_config::from_env()
@@ -179,6 +184,11 @@ impl S3StorageOptions {
                         .map(|val| str_is_truthy(&val))
                         .unwrap_or(false),
                 ))
+                .region(crate::credentials::new_region_provider(
+                    &provider_config,
+                    disable_imds,
+                    imds_timeout,
+                ))
                 .credentials_provider(credentials_provider)
                 .load(),
         )?;
@@ -186,6 +196,11 @@ impl S3StorageOptions {
         let sdk_config = execute_sdk_future(
             aws_config::from_env()
                 .credentials_provider(credentials_provider)
+                .region(crate::credentials::new_region_provider(
+                    &provider_config,
+                    disable_imds,
+                    imds_timeout,
+                ))
                 .load(),
         )?;
 
