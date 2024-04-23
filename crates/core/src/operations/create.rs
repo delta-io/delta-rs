@@ -235,16 +235,12 @@ impl CreateBuilder {
             )
         };
 
-        let contains_timestampntz = &self
-            .columns
-            .iter()
-            .any(|f| f.data_type() == &DataType::TIMESTAMPNTZ);
-
+        let contains_timestampntz = PROTOCOL.contains_timestampntz(&self.columns);
         // TODO configure more permissive versions based on configuration. Also how should this ideally be handled?
         // We set the lowest protocol we can, and if subsequent writes use newer features we update metadata?
 
         let (min_reader_version, min_writer_version, writer_features, reader_features) =
-            if *contains_timestampntz {
+            if contains_timestampntz {
                 let mut converted_writer_features = self
                     .configuration
                     .keys()
