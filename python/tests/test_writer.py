@@ -1550,3 +1550,23 @@ def test_write_timestamp_ntz_nested(tmp_path: pathlib.Path, array: pa.array):
     assert protocol.min_writer_version == 7
     assert protocol.reader_features == ["timestampNtz"]
     assert protocol.writer_features == ["timestampNtz"]
+
+
+def test_write_timestamp_ntz_on_table_with_features_not_enabled(tmp_path: pathlib.Path):
+    data = pa.table({"x": pa.array(["foo"])})
+    write_deltalake(tmp_path, data, mode="append", engine="pyarrow")
+
+    dt = DeltaTable(tmp_path)
+
+    protocol = dt.protocol()
+    assert protocol.min_reader_version == 1
+    assert protocol.min_writer_version == 2
+
+    data = pa.table({"x": pa.array([datetime(2010, 1, 1)])})
+    with pytest.raises(
+        DeltaError,
+        match="Generic DeltaTable error: Writer features must be specified for writerversion >= 7, please specify: TimestampWithoutTimezone",
+    ):
+        write_deltalake(
+            tmp_path, data, mode="overwrite", engine="pyarrow", schema_mode="overwrite"
+        )
