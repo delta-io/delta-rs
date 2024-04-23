@@ -167,7 +167,7 @@ impl S3StorageOptions {
             .unwrap_or(false);
         let disable_imds = str_option(options, s3_constants::AWS_EC2_METADATA_DISABLED)
             .map(|val| str_is_truthy(&val))
-            .unwrap_or(false);
+            .unwrap_or(true);
         let imds_timeout =
             Self::u64_or_default(options, s3_constants::AWS_EC2_METADATA_TIMEOUT, 100);
         let provider_config = ProviderConfig::default();
@@ -460,7 +460,7 @@ pub mod s3_constants {
     pub const AWS_S3_ALLOW_UNSAFE_RENAME: &str = "AWS_S3_ALLOW_UNSAFE_RENAME";
 
     /// If set to "true", disables the imds client
-    /// Defaults to "false"
+    /// Defaults to "true"
     pub const AWS_EC2_METADATA_DISABLED: &str = "AWS_EC2_METADATA_DISABLED";
 
     /// The timeout in milliseconds for the EC2 metadata endpoint
