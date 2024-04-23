@@ -33,7 +33,7 @@ use deltalake::operations::filesystem_check::FileSystemCheckBuilder;
 use deltalake::operations::merge::MergeBuilder;
 use deltalake::operations::optimize::{OptimizeBuilder, OptimizeType};
 use deltalake::operations::restore::RestoreBuilder;
-use deltalake::operations::transaction::{CommitBuilder, CommitProperties};
+use deltalake::operations::transaction::{CommitBuilder, CommitProperties, PROTOCOL};
 use deltalake::operations::update::UpdateBuilder;
 use deltalake::operations::vacuum::VacuumBuilder;
 use deltalake::parquet::basic::Compression;
@@ -173,6 +173,17 @@ impl RawDeltaTable {
                     })
                 }),
         ))
+    }
+
+    pub fn check_can_write_timestamp_ntz(&self, schema: PyArrowType<ArrowSchema>) -> PyResult<()> {
+        let schema: StructType = (&schema.0).try_into().map_err(PythonError::from)?;
+        Ok(PROTOCOL
+            .check_can_write_timestamp_ntz(
+                self._table.snapshot().map_err(PythonError::from)?,
+                &schema,
+            )
+            .map_err(|e| DeltaTableError::Generic(e.to_string()))
+            .map_err(PythonError::from)?)
     }
 
     pub fn load_version(&mut self, version: i64) -> PyResult<()> {
