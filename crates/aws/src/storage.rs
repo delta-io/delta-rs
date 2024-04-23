@@ -808,7 +808,7 @@ mod tests {
                 default_time.as_micros(),
             );
             assert!(disabled_time < enabled_time);
-            assert!(disabled_time < default_time);
+            assert!(default_time < enabled_time);
         })
         .await;
     }
