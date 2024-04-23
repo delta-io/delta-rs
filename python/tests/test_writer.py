@@ -1528,3 +1528,25 @@ def test_rust_decimal_cast(tmp_path: pathlib.Path):
         write_deltalake(
             tmp_path, data, mode="append", schema_mode="merge", engine="rust"
         )
+
+
+@pytest.mark.parametrize(
+    "array",
+    [
+        pa.array([[datetime(2010, 1, 1)]]),
+        pa.array([{"foo": datetime(2010, 1, 1)}]),
+        pa.array([{"foo": [[datetime(2010, 1, 1)]]}]),
+        pa.array([{"foo": [[{"foo": datetime(2010, 1, 1)}]]}]),
+    ],
+)
+def test_write_timestamp_ntz_nested(tmp_path: pathlib.Path, array: pa.array):
+    data = pa.table({"x": array})
+    write_deltalake(tmp_path, data, mode="append", engine="rust")
+
+    dt = DeltaTable(tmp_path)
+
+    protocol = dt.protocol()
+    assert protocol.min_reader_version == 3
+    assert protocol.min_writer_version == 7
+    assert protocol.reader_features == ["timestampNtz"]
+    assert protocol.writer_features == ["timestampNtz"]
