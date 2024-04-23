@@ -1,5 +1,6 @@
 //! AWS S3 storage backend.
 
+use aws_config::provider_config::ProviderConfig;
 use aws_config::{Region, SdkConfig};
 use bytes::Bytes;
 use deltalake_core::storage::object_store::{
@@ -166,11 +167,15 @@ impl S3StorageOptions {
             .unwrap_or(false);
         let disable_imds = str_option(options, s3_constants::AWS_EC2_METADATA_DISABLED)
             .map(|val| str_is_truthy(&val))
-            .unwrap_or(false);
+            .unwrap_or(true);
         let imds_timeout =
             Self::u64_or_default(options, s3_constants::AWS_EC2_METADATA_TIMEOUT, 100);
-        let credentials_provider =
-            crate::credentials::ConfiguredCredentialChain::new(disable_imds, imds_timeout, None);
+        let provider_config = ProviderConfig::default();
+        let credentials_provider = crate::credentials::ConfiguredCredentialChain::new(
+            disable_imds,
+            imds_timeout,
+            &provider_config,
+        );
         #[cfg(feature = "native-tls")]
         let sdk_config = execute_sdk_future(
             aws_config::from_env()
@@ -179,6 +184,11 @@ impl S3StorageOptions {
                         .map(|val| str_is_truthy(&val))
                         .unwrap_or(false),
                 ))
+                .region(crate::credentials::new_region_provider(
+                    &provider_config,
+                    disable_imds,
+                    imds_timeout,
+                ))
                 .credentials_provider(credentials_provider)
                 .load(),
         )?;
@@ -186,6 +196,11 @@ impl S3StorageOptions {
         let sdk_config = execute_sdk_future(
             aws_config::from_env()
                 .credentials_provider(credentials_provider)
+                .region(crate::credentials::new_region_provider(
+                    &provider_config,
+                    disable_imds,
+                    imds_timeout,
+                ))
                 .load(),
         )?;
 
@@ -445,7 +460,7 @@ pub mod s3_constants {
     pub const AWS_S3_ALLOW_UNSAFE_RENAME: &str = "AWS_S3_ALLOW_UNSAFE_RENAME";
 
     /// If set to "true", disables the imds client
-    /// Defaults to "false"
+    /// Defaults to "true"
     pub const AWS_EC2_METADATA_DISABLED: &str = "AWS_EC2_METADATA_DISABLED";
 
     /// The timeout in milliseconds for the EC2 metadata endpoint
@@ -793,7 +808,7 @@ mod tests {
                 default_time.as_micros(),
             );
             assert!(disabled_time < enabled_time);
-            assert!(disabled_time < default_time);
+            assert!(default_time < enabled_time);
         })
         .await;
     }
