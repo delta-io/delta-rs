@@ -178,6 +178,7 @@ def write_to_deltalake(
     predicate: Optional[str],
     name: Optional[str],
     description: Optional[str],
+    parallel: Optional[int],
     configuration: Optional[Mapping[str, Optional[str]]],
     storage_options: Optional[Dict[str, str]],
     writer_properties: Optional[Dict[str, Optional[str]]],

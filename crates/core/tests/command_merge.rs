@@ -73,7 +73,7 @@ async fn write_data(table: DeltaTable, schema: &Arc<ArrowSchema>) -> DeltaTable 
     .unwrap();
     // write some data
     DeltaOps(table)
-        .write(vec![batch.clone()])
+        .write(batch.clone().into())
         .with_save_mode(SaveMode::Append)
         .await
         .unwrap()

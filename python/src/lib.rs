@@ -36,6 +36,7 @@ use deltalake::operations::restore::RestoreBuilder;
 use deltalake::operations::transaction::{CommitBuilder, CommitProperties, PROTOCOL};
 use deltalake::operations::update::UpdateBuilder;
 use deltalake::operations::vacuum::VacuumBuilder;
+use deltalake::operations::write::WriteData;
 use deltalake::parquet::basic::Compression;
 use deltalake::parquet::errors::ParquetError;
 use deltalake::parquet::file::properties::WriterProperties;
@@ -1415,13 +1416,15 @@ fn write_to_deltalake(
     predicate: Option<String>,
     name: Option<String>,
     description: Option<String>,
+    parallel: Option<u32>,
     configuration: Option<HashMap<String, Option<String>>>,
     storage_options: Option<HashMap<String, String>>,
     writer_properties: Option<HashMap<String, Option<String>>>,
     custom_metadata: Option<HashMap<String, String>>,
 ) -> PyResult<()> {
     py.allow_threads(|| {
-        let batches = data.0.map(|batch| batch.unwrap()).collect::<Vec<_>>();
+        let schema = data.0.schema().clone();
+        let batches = data.0.map(|batch| batch.unwrap());
         let save_mode = mode.parse().map_err(PythonError::from)?;
 
         let options = storage_options.clone().unwrap_or_default();
@@ -1431,14 +1434,20 @@ fn write_to_deltalake(
             ))
             .map_err(PythonError::from)?;
 
-        let mut builder = table.write(batches).with_save_mode(save_mode);
+        let mut builder = table
+            .write(WriteData::RecordBatches((Box::new(batches), schema)))
+            .with_save_mode(save_mode);
         if let Some(schema_mode) = schema_mode {
             builder = builder.with_schema_mode(schema_mode.parse().map_err(PythonError::from)?);
         }
         if let Some(partition_columns) = partition_by {
             builder = builder.with_partition_columns(partition_columns);
         }
-
+        if let Some(parallel) = parallel {
+            builder = builder.with_concurrent_streams(parallel);
+        } else {
+            builder = builder.with_concurrent_streams(num_cpus::get().try_into().unwrap());
+        }
         if let Some(writer_props) = writer_properties {
             builder = builder.with_writer_properties(
                 set_writer_properties(writer_props).map_err(PythonError::from)?,

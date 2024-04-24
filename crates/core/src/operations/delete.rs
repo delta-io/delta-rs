@@ -328,6 +328,7 @@ impl std::future::IntoFuture for DeleteBuilder {
 
 #[cfg(test)]
 mod tests {
+    use crate::operations::write::WriteData;
     use crate::operations::DeltaOps;
     use crate::protocol::*;
     use crate::writer::test_utils::datafusion::get_data;
@@ -396,7 +397,7 @@ mod tests {
         .unwrap();
         // write some data
         let table = DeltaOps(table)
-            .write(vec![batch.clone()])
+            .write(batch.into())
             .with_save_mode(SaveMode::Append)
             .await
             .unwrap();
@@ -458,7 +459,7 @@ mod tests {
 
         // write some data
         let table = DeltaOps(table)
-            .write(vec![batch])
+            .write(batch.into())
             .with_save_mode(SaveMode::Append)
             .await
             .unwrap();
@@ -482,7 +483,7 @@ mod tests {
 
         // write some data
         let table = DeltaOps(table)
-            .write(vec![batch])
+            .write(batch.into())
             .with_save_mode(SaveMode::Append)
             .await
             .unwrap();
@@ -549,7 +550,7 @@ mod tests {
             )
             .unwrap();
 
-            DeltaOps::new_in_memory().write(vec![batch]).await.unwrap()
+            DeltaOps::new_in_memory().write(batch.into()).await.unwrap()
         }
 
         // Validate behaviour of greater than
@@ -638,7 +639,7 @@ mod tests {
 
         // write some data
         let table = DeltaOps(table)
-            .write(vec![batch])
+            .write(batch.into())
             .with_save_mode(SaveMode::Append)
             .await
             .unwrap();
@@ -696,7 +697,7 @@ mod tests {
 
         // write some data
         let table = DeltaOps(table)
-            .write(vec![batch])
+            .write(batch.into())
             .with_save_mode(SaveMode::Append)
             .await
             .unwrap();
@@ -765,7 +766,10 @@ mod tests {
         ];
         let batches = vec![RecordBatch::try_new(schema.clone(), data).unwrap()];
 
-        let table = DeltaOps::new_in_memory().write(batches).await.unwrap();
+        let table = DeltaOps::new_in_memory()
+            .write(batches.into())
+            .await
+            .unwrap();
 
         let (table, _metrics) = DeltaOps(table)
             .delete()

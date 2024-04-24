@@ -245,7 +245,7 @@ mod tests {
     use serde_json::json;
 
     fn check_json_serialize(filter: PartitionFilter, expected_json: &str) {
-        assert_eq!(serde_json::to_value(&filter).unwrap(), json!(expected_json))
+        assert_eq!(serde_json::to_value(filter).unwrap(), json!(expected_json))
     }
 
     #[test]

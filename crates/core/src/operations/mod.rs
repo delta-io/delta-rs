@@ -33,8 +33,7 @@ use self::{
 };
 #[cfg(feature = "datafusion")]
 pub use ::datafusion::physical_plan::common::collect as collect_sendable_stream;
-#[cfg(feature = "datafusion")]
-use arrow::record_batch::RecordBatch;
+
 use optimize::OptimizeBuilder;
 use restore::RestoreBuilder;
 
@@ -137,8 +136,8 @@ impl DeltaOps {
     /// Write data to Delta table
     #[cfg(feature = "datafusion")]
     #[must_use]
-    pub fn write(self, batches: impl IntoIterator<Item = RecordBatch>) -> WriteBuilder {
-        WriteBuilder::new(self.0.log_store, self.0.state).with_input_batches(batches)
+    pub fn write(self, data: write::WriteData) -> WriteBuilder {
+        WriteBuilder::new(self.0.log_store, self.0.state).with_data(data)
     }
 
     /// Vacuum stale files from delta table

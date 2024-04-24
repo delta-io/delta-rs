@@ -40,6 +40,7 @@ datafusion-common = { workspace = true, optional = true }
 datafusion-proto = { workspace = true, optional = true }
 datafusion-sql = { workspace = true, optional = true }
 datafusion-physical-expr = { workspace = true, optional = true }
+async-channel = { version = "2.2", optional = true }
 datafusion-functions = { workspace = true, optional = true }
 
 # serde
@@ -67,7 +68,6 @@ tokio = { workspace = true, features = [
     "fs",
     "parking_lot",
 ] }
-
 # other deps (these should be organized and pulled into workspace.dependencies as necessary)
 cfg-if = "1"
 dashmap = "5"
@@ -124,6 +124,7 @@ datafusion = [
     "datafusion-sql",
     "datafusion-functions",
     "sqlparser",
+    "async-channel",
 ]
 datafusion-ext = ["datafusion"]
 json = ["parquet/json"]
