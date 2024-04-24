@@ -41,6 +41,7 @@ use datafusion_expr::Expr;
 use futures::future::BoxFuture;
 use futures::StreamExt;
 use parquet::file::properties::WriterProperties;
+use tracing::log::*;
 
 use super::datafusion_utils::Expression;
 use super::transaction::{CommitBuilder, CommitProperties, TableReference, PROTOCOL};
@@ -62,6 +63,8 @@ use crate::table::state::DeltaTableState;
 use crate::table::Constraint as DeltaConstraint;
 use crate::writer::record_batch::divide_by_partition_values;
 use crate::DeltaTable;
+
+use tokio::sync::mpsc::Sender;
 
 #[derive(thiserror::Error, Debug)]
 enum WriteError {
@@ -370,6 +373,7 @@ async fn write_execution_plan_with_predicate(
     safe_cast: bool,
     schema_mode: Option<SchemaMode>,
     writer_stats_config: WriterStatsConfig,
+    sender: Option<Sender<RecordBatch>>,
 ) -> DeltaResult<Vec<Action>> {
     let schema: ArrowSchemaRef = if schema_mode.is_some() {
         plan.schema()
@@ -378,7 +382,6 @@ async fn write_execution_plan_with_predicate(
             .and_then(|s| s.input_schema().ok())
             .unwrap_or(plan.schema())
     };
-
     let checker = if let Some(snapshot) = snapshot {
         DeltaDataChecker::new(snapshot)
     } else {
@@ -410,11 +413,15 @@ async fn write_execution_plan_with_predicate(
         );
         let mut writer = DeltaWriter::new(object_store.clone(), config);
         let checker_stream = checker.clone();
+        let sender_stream = sender.clone();
         let mut stream = inner_plan.execute(i, task_ctx)?;
-        let handle: tokio::task::JoinHandle<DeltaResult<Vec<Action>>> =
-            tokio::task::spawn(async move {
+
+        let handle: tokio::task::JoinHandle<DeltaResult<Vec<Action>>> = tokio::task::spawn(
+            async move {
+                let sendable = sender_stream.clone();
                 while let Some(maybe_batch) = stream.next().await {
                     let batch = maybe_batch?;
+
                     checker_stream.check_batch(&batch).await?;
                     let arr = super::cast::cast_record_batch(
                         &batch,
@@ -422,6 +429,12 @@ async fn write_execution_plan_with_predicate(
                         safe_cast,
                         schema_mode == Some(SchemaMode::Merge),
                     )?;
+
+                    if let Some(s) = sendable.as_ref() {
+                        let _ = s.send(arr.clone()).await;
+                    } else {
+                        debug!("write_execution_plan_with_predicate did not send any batches, no sender.");
+                    }
                     writer.write(&arr).await?;
                 }
                 let add_actions = writer.close().await;
@@ -429,7 +442,8 @@ async fn write_execution_plan_with_predicate(
                     Ok(actions) => Ok(actions.into_iter().map(Action::Add).collect::<Vec<_>>()),
                     Err(err) => Err(err),
                 }
-            });
+            },
+        );
 
         tasks.push(handle);
     }
@@ -460,6 +474,7 @@ pub(crate) async fn write_execution_plan(
     safe_cast: bool,
     schema_mode: Option<SchemaMode>,
     writer_stats_config: WriterStatsConfig,
+    sender: Option<Sender<RecordBatch>>,
 ) -> DeltaResult<Vec<Action>> {
     write_execution_plan_with_predicate(
         None,
@@ -474,6 +489,7 @@ pub(crate) async fn write_execution_plan(
         safe_cast,
         schema_mode,
         writer_stats_config,
+        sender,
     )
     .await
 }
@@ -522,6 +538,7 @@ async fn execute_non_empty_expr(
         false,
         None,
         writer_stats_config,
+        None,
     )
     .await?;
 
@@ -778,6 +795,7 @@ impl std::future::IntoFuture for WriteBuilder {
                 this.safe_cast,
                 this.schema_mode,
                 writer_stats_config.clone(),
+                None,
             )
             .await?;
             actions.extend(add_actions);
@@ -1270,7 +1288,6 @@ mod tests {
             ],
         )
         .unwrap();
-        println!("new_batch: {:?}", new_batch.schema());
         let table = DeltaOps(table)
             .write(vec![new_batch])
             .with_save_mode(SaveMode::Append)
