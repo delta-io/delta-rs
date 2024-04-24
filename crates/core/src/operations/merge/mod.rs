@@ -1389,6 +1389,7 @@ async fn execute(
         safe_cast,
         None,
         writer_stats_config,
+        None,
     )
     .await?;
 
