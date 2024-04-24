@@ -174,6 +174,7 @@ async fn excute_non_empty_expr(
         false,
         None,
         writer_stats_config,
+        None,
     )
     .await?
     .into_iter()
