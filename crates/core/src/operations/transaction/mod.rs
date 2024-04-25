@@ -552,13 +552,17 @@ impl<'a> std::future::IntoFuture for PreparedCommit<'a> {
                                 attempt_number += 1;
                             }
                             Err(err) => {
-                                this.log_store.abort_commit_entry(version, tmp_commit).await?;
+                                this.log_store
+                                    .abort_commit_entry(version, tmp_commit)
+                                    .await?;
                                 return Err(TransactionError::CommitConflict(err).into());
                             }
                         };
                     }
                     Err(err) => {
-                        this.log_store.abort_commit_entry(version, tmp_commit).await?;
+                        this.log_store
+                            .abort_commit_entry(version, tmp_commit)
+                            .await?;
                         return Err(err.into());
                     }
                 }
