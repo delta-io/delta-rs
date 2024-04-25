@@ -18,7 +18,7 @@ use crate::{
     kernel::Action,
     operations::transaction::TransactionError,
     protocol::{get_last_checkpoint, ProtocolError},
-    storage::{commit_uri_from_version, ObjectStoreRef, StorageOptions},
+    storage::{commit_uri_from_version, ObjectStoreRef, StorageOptions, retry_ext::ObjectStoreRetryExt},
     DeltaTableError,
 };
 use bytes::Bytes;
@@ -178,6 +178,13 @@ pub trait LogStore: Sync + Send {
     /// This operation can be retried with a higher version in case the write
     /// fails with [`TransactionError::VersionAlreadyExists`].
     async fn write_commit_entry(
+        &self,
+        version: i64,
+        tmp_commit: &Path,
+    ) -> Result<(), TransactionError>;
+
+    /// Abort the commit entry for the given version.
+    async fn abort_commit_entry(
         &self,
         version: i64,
         tmp_commit: &Path,
@@ -446,6 +453,16 @@ pub async fn write_commit_entry(
                 _ => TransactionError::from(err),
             }
         })?;
+    Ok(())
+}
+
+/// Default implementation for aborting a commit entry
+pub async fn abort_commit_entry(
+    storage: &dyn ObjectStore,
+    _version: i64,
+    tmp_commit: &Path,
+) -> Result<(), TransactionError> {
+    storage.delete_with_retries(tmp_commit, 15).await?;
     Ok(())
 }
 
