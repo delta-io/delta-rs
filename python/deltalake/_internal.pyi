@@ -174,6 +174,7 @@ def write_to_deltalake(
     data: pyarrow.RecordBatchReader,
     partition_by: Optional[List[str]],
     mode: str,
+    table: Optional[RawDeltaTable],
     schema_mode: Optional[str],
     predicate: Optional[str],
     name: Optional[str],
