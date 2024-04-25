@@ -13,6 +13,7 @@ use url::Url;
 
 mod config;
 pub mod error;
+mod storage;
 
 trait GcpOptions {
     fn as_gcp_options(&self) -> HashMap<GoogleConfigKey, String>;
@@ -43,6 +44,7 @@ impl ObjectStoreFactory for GcpFactory {
     ) -> DeltaResult<(ObjectStoreRef, Path)> {
         let config = config::GcpConfigHelper::try_new(options.as_gcp_options())?.build()?;
         let (store, prefix) = parse_url_opts(url, config)?;
+        let store = crate::storage::GcsStorageBackend::try_new(Arc::new(store))?;
         Ok((url_prefix_handler(store, prefix.clone())?, prefix))
     }
 }
