@@ -152,6 +152,8 @@ pub struct WriteBuilder {
     configuration: HashMap<String, Option<String>>,
 }
 
+impl super::Operation<()> for WriteBuilder {}
+
 impl WriteBuilder {
     /// Create a new [`WriteBuilder`]
     pub fn new(log_store: LogStoreRef, snapshot: Option<DeltaTableState>) -> Self {

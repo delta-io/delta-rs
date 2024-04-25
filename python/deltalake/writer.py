@@ -429,6 +429,7 @@ def write_deltalake(
             # We don't currently provide a way to set invariants
             # (and maybe never will), so only enforce if already exist.
             table_protocol = table.protocol()
+            table._table.check_can_write_timestamp_ntz(schema)
             if (
                 table_protocol.min_writer_version > MAX_SUPPORTED_PYARROW_WRITER_VERSION
                 or table_protocol.min_writer_version

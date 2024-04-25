@@ -89,6 +89,8 @@ pub struct RestoreBuilder {
     commit_properties: CommitProperties,
 }
 
+impl super::Operation<()> for RestoreBuilder {}
+
 impl RestoreBuilder {
     /// Create a new [`RestoreBuilder`]
     pub fn new(log_store: LogStoreRef, snapshot: DeltaTableState) -> Self {

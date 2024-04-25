@@ -41,6 +41,8 @@ pub struct ConstraintBuilder {
     commit_properties: CommitProperties,
 }
 
+impl super::Operation<()> for ConstraintBuilder {}
+
 impl ConstraintBuilder {
     /// Create a new builder
     pub fn new(log_store: LogStoreRef, snapshot: DeltaTableState) -> Self {
