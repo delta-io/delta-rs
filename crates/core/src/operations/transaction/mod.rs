@@ -550,6 +550,7 @@ impl<'a> std::future::IntoFuture for PreparedCommit<'a> {
                         );
                         match conflict_checker.check_conflicts() {
                             Ok(_) => {
+                                println!("Attempt {} failed: Version {} already exists", attempt_number, version);
                                 attempt_number += 1;
                             }
                             Err(err) => {
