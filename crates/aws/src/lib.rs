@@ -9,8 +9,8 @@ pub mod storage;
 use aws_config::SdkConfig;
 use aws_sdk_dynamodb::{
     operation::{
-        create_table::CreateTableError, get_item::GetItemError, put_item::PutItemError,
-        query::QueryError, update_item::UpdateItemError,
+        create_table::CreateTableError, delete_item::DeleteItemError, get_item::GetItemError,
+        put_item::PutItemError, query::QueryError, update_item::UpdateItemError,
     },
     types::{
         AttributeDefinition, AttributeValue, BillingMode, KeySchemaElement, KeyType,
@@ -416,6 +416,43 @@ impl DynamoDbLockClient {
         .await
     }
 
+    /// Delete existing log entry if it is not already complete
+    pub async fn delete_commit_entry(
+        &self,
+        version: i64,
+        table_path: &str,
+    ) -> Result<(), LockClientError> {
+        self.retry(|| async {
+            match self
+                .dynamodb_client
+                .delete_item()
+                .table_name(self.get_lock_table_name())
+                .set_key(Some(self.get_primary_key(version, table_path)))
+                .set_expression_attribute_values(Some(maplit::hashmap! {
+                    ":f".into() => string_attr("false"),
+                }))
+                .condition_expression(constants::CONDITION_DELETE_INCOMPLETE.as_str())
+                .send()
+                .await
+            {
+                Ok(_) => Ok(()),
+                Err(err) => match err.as_service_error() {
+                    Some(DeleteItemError::ProvisionedThroughputExceededException(_)) => Err(
+                        backoff::Error::transient(LockClientError::ProvisionedThroughputExceeded),
+                    ),
+                    Some(DeleteItemError::ConditionalCheckFailedException(_)) => Err(
+                        backoff::Error::permanent(LockClientError::VersionAlreadyCompleted {
+                            table_path: table_path.to_owned(),
+                            version,
+                        }),
+                    ),
+                    _ => Err(backoff::Error::permanent(err.into())),
+                },
+            }
+        })
+        .await
+    }
+
     async fn retry<I, E, Fn, Fut>(&self, operation: Fn) -> Result<I, E>
     where
         Fn: FnMut() -> Fut,
@@ -552,6 +589,10 @@ pub mod constants {
     lazy_static! {
         pub static ref CONDITION_EXPR_CREATE: String = format!(
             "attribute_not_exists({ATTR_TABLE_PATH}) and attribute_not_exists({ATTR_FILE_NAME})"
+        );
+
+        pub static ref CONDITION_DELETE_INCOMPLETE: String = format!(
+            "(complete = :f) or (attribute_not_exists({ATTR_TABLE_PATH}) and attribute_not_exists({ATTR_FILE_NAME}))"
         );
     }
 

@@ -79,4 +79,4 @@ pub trait ObjectStoreRetryExt: ObjectStore {
     }
 }
 
-impl<T: ObjectStore> ObjectStoreRetryExt for T {}
+impl<T: ObjectStore + ?Sized> ObjectStoreRetryExt for T {}
