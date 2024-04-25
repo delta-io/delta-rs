@@ -550,11 +550,9 @@ impl<'a> std::future::IntoFuture for PreparedCommit<'a> {
                         );
                         match conflict_checker.check_conflicts() {
                             Ok(_) => {
-                                println!("Attempt {} failed: Version {} already exists", attempt_number, version);
                                 attempt_number += 1;
                             }
                             Err(err) => {
-                                panic!();
                                 this.log_store
                                     .object_store()
                                     .delete_with_retries(tmp_commit, 15)
@@ -572,6 +570,7 @@ impl<'a> std::future::IntoFuture for PreparedCommit<'a> {
                     }
                 }
             }
+
             Err(TransactionError::MaxCommitAttempts(this.max_retries as i32).into())
         })
     }

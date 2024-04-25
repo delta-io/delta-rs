@@ -25,7 +25,6 @@ thiserror = { workspace = true }
 tokio = { workspace = true }
 regex = { workspace = true }
 url = { workspace = true }
-reqwest = "0.12.4"
 
 [dev-dependencies]
 chrono = { workspace = true }
