@@ -18,7 +18,9 @@ use crate::{
     kernel::Action,
     operations::transaction::TransactionError,
     protocol::{get_last_checkpoint, ProtocolError},
-    storage::{commit_uri_from_version, ObjectStoreRef, StorageOptions, retry_ext::ObjectStoreRetryExt},
+    storage::{
+        commit_uri_from_version, retry_ext::ObjectStoreRetryExt, ObjectStoreRef, StorageOptions,
+    },
     DeltaTableError,
 };
 use bytes::Bytes;
