@@ -90,7 +90,6 @@ use crate::kernel::{
 };
 use crate::logstore::LogStoreRef;
 use crate::protocol::DeltaOperation;
-use crate::storage::ObjectStoreRetryExt;
 use crate::table::config::TableConfig;
 use crate::table::state::DeltaTableState;
 use crate::{crate_version, DeltaResult};
@@ -559,19 +558,13 @@ impl<'a> std::future::IntoFuture for PreparedCommit<'a> {
                                 attempt_number += 1;
                             }
                             Err(err) => {
-                                this.log_store
-                                    .object_store()
-                                    .delete_with_retries(tmp_commit, 15)
-                                    .await?;
+                                this.log_store.abort_commit_entry(version, tmp_commit).await?;
                                 return Err(TransactionError::CommitConflict(err).into());
                             }
                         };
                     }
                     Err(err) => {
-                        this.log_store
-                            .object_store()
-                            .delete_with_retries(tmp_commit, 15)
-                            .await?;
+                        this.log_store.abort_commit_entry(version, tmp_commit).await?;
                         return Err(err.into());
                     }
                 }

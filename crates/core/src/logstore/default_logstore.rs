@@ -50,6 +50,14 @@ impl LogStore for DefaultLogStore {
         super::write_commit_entry(self.storage.as_ref(), version, tmp_commit).await
     }
 
+    async fn abort_commit_entry(
+        &self,
+        version: i64,
+        tmp_commit: &Path,
+    ) -> Result<(), TransactionError> {
+        super::abort_commit_entry(self.storage.as_ref(), version, tmp_commit).await
+    }
+
     async fn get_latest_version(&self, current_version: i64) -> DeltaResult<i64> {
         super::get_latest_version(self, current_version).await
     }
