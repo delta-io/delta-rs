@@ -1429,8 +1429,7 @@ fn write_to_deltalake(
         let table = if let Some(table) = table {
             DeltaOps(table._table.clone())
         } else {
-            rt()
-            .block_on(DeltaOps::try_from_uri_with_storage_options(
+            rt().block_on(DeltaOps::try_from_uri_with_storage_options(
                 &table_uri, options,
             ))
             .map_err(PythonError::from)?
