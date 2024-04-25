@@ -1410,6 +1410,7 @@ fn write_to_deltalake(
     table_uri: String,
     data: PyArrowType<ArrowArrayStreamReader>,
     mode: String,
+    table: Option<&RawDeltaTable>,
     schema_mode: Option<String>,
     partition_by: Option<Vec<String>>,
     predicate: Option<String>,
@@ -1425,11 +1426,14 @@ fn write_to_deltalake(
         let save_mode = mode.parse().map_err(PythonError::from)?;
 
         let options = storage_options.clone().unwrap_or_default();
-        let table = rt()
-            .block_on(DeltaOps::try_from_uri_with_storage_options(
+        let table = if let Some(table) = table {
+            DeltaOps(table._table.clone())
+        } else {
+            rt().block_on(DeltaOps::try_from_uri_with_storage_options(
                 &table_uri, options,
             ))
-            .map_err(PythonError::from)?;
+            .map_err(PythonError::from)?
+        };
 
         let mut builder = table.write(batches).with_save_mode(save_mode);
         if let Some(schema_mode) = schema_mode {
