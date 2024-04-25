@@ -318,6 +318,7 @@ def write_deltalake(
             data=data,
             partition_by=partition_by,
             mode=mode,
+            table=table._table if table is not None else None,
             schema_mode=schema_mode,
             predicate=predicate,
             name=name,
