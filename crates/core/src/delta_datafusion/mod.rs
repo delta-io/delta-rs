@@ -1089,8 +1089,7 @@ pub(crate) fn create_physical_expr_fix(
 
                 _ => Transformed::no(expr),
             })
-        })
-        .unwrap()
+        })?
         .data;
 
     datafusion_physical_expr::create_physical_expr(&expr, input_dfschema, execution_props)
