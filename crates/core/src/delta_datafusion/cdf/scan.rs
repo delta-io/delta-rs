@@ -73,7 +73,7 @@ impl ExecutionPlan for DeltaCdfScan {
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
-        vec![self.plan.clone()]
+        vec![]
     }
 
     fn with_new_children(

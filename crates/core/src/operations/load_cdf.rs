@@ -1,6 +1,5 @@
 //! Module for reading the change datafeed of delta tables
 
-use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 use std::time::SystemTime;
 
@@ -18,7 +17,7 @@ use tracing::log;
 use crate::delta_datafusion::cdf::*;
 use crate::delta_datafusion::{register_store, DataFusionMixins};
 use crate::errors::DeltaResult;
-use crate::kernel::{Action, Add, AddCDCFile, CommitInfo, Remove};
+use crate::kernel::{Action, Add, AddCDCFile, CommitInfo};
 use crate::logstore::{get_actions, LogStoreRef};
 use crate::table::state::DeltaTableState;
 use crate::DeltaTableError;
@@ -92,15 +91,15 @@ impl CdfLoadBuilder {
     /// than I have right now. I plan to extend the checks once we have a stable state of the initial implementation.
     async fn determine_files_to_read(
         &self,
-    ) -> DeltaResult<(
-        Vec<CdcDataSpec<AddCDCFile>>,
-        Vec<CdcDataSpec<Add>>,
-        Vec<CdcDataSpec<Remove>>,
-    )> {
+    ) -> DeltaResult<(Vec<CdcDataSpec<AddCDCFile>>, Vec<CdcDataSpec<Add>>)> {
         let start = self.starting_version;
         let end = self
             .ending_version
             .unwrap_or(self.log_store.get_latest_version(start).await?);
+
+        if end < start {
+            return Err(DeltaTableError::ChangeDataInvalidVersionRange { start, end });
+        }
 
         let starting_timestamp = self.starting_timestamp.unwrap_or(DateTime::UNIX_EPOCH);
         let ending_timestamp = self
@@ -116,7 +115,6 @@ impl CdfLoadBuilder {
 
         let mut change_files = vec![];
         let mut add_files = vec![];
-        let mut remove_files = vec![];
 
         for version in start..=end {
             let snapshot_bytes = self
@@ -153,7 +151,10 @@ impl CdfLoadBuilder {
                         log::info!("Metadata: {:?}", &md);
                         if let Some(Some(key)) = &md.configuration.get("delta.enableChangeDataFeed")
                         {
-                            if key.to_lowercase() == "false" {
+                            let key = key.to_lowercase();
+                            // Check here to ensure the CDC function is enabled for the first version of the read
+                            // and check in subsequent versions only that it was not disabled.
+                            if (version == start && key != "true") || key == "false" {
                                 return Err(DeltaTableError::ChangeDataNotRecorded {
                                     version,
                                     start,
@@ -185,14 +186,6 @@ impl CdfLoadBuilder {
                     })
                     .collect::<Vec<Add>>();
 
-                let remove_actions = version_actions
-                    .iter()
-                    .filter_map(|a| match a {
-                        Action::Remove(r) if r.data_change => Some(r.clone()),
-                        _ => None,
-                    })
-                    .collect::<Vec<Remove>>();
-
                 if !add_actions.is_empty() {
                     log::debug!(
                         "Located {} cdf actions for version: {}",
@@ -201,19 +194,10 @@ impl CdfLoadBuilder {
                     );
                     add_files.push(CdcDataSpec::new(version, ts, add_actions));
                 }
-
-                if !remove_actions.is_empty() {
-                    log::debug!(
-                        "Located {} cdf actions for version: {}",
-                        remove_actions.len(),
-                        version
-                    );
-                    remove_files.push(CdcDataSpec::new(version, ts, remove_actions));
-                }
             }
         }
 
-        Ok((change_files, add_files, remove_files))
+        Ok((change_files, add_files))
     }
 
     #[inline]
@@ -223,7 +207,7 @@ impl CdfLoadBuilder {
 
     /// Executes the scan
     pub async fn build(&self) -> DeltaResult<DeltaCdfScan> {
-        let (cdc, add, _remove) = self.determine_files_to_read().await?;
+        let (cdc, add) = self.determine_files_to_read().await?;
         register_store(
             self.log_store.clone(),
             self.ctx.state().runtime_env().clone(),
@@ -314,6 +298,7 @@ impl CdfLoadBuilder {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use std::error::Error;
     use std::str::FromStr;
 
@@ -475,6 +460,25 @@ mod tests {
              "+----+--------+------------+-------------------+---------------+--------------+----------------+------------------+-----------------+-------------------------+"],
             &batches
         }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_load_bad_version_range() -> TestResult {
+        let table = DeltaOps::try_from_uri("../test/tests/data/cdf-table-non-partitioned")
+            .await?
+            .load_cdf()
+            .with_starting_version(4)
+            .with_ending_version(1)
+            .build()
+            .await;
+
+        assert!(table.is_err());
+        assert!(matches!(
+            table.unwrap_err(),
+            DeltaTableError::ChangeDataInvalidVersionRange { .. }
+        ));
+
         Ok(())
     }
 }

@@ -5,7 +5,7 @@ use std::collections::HashMap;
 pub(crate) use scan::*;
 pub(crate) use scan_utils::*;
 
-use crate::kernel::{Add, AddCDCFile, Remove};
+use crate::kernel::{Add, AddCDCFile};
 
 mod scan;
 mod scan_utils;
@@ -30,7 +30,7 @@ impl<F: FileAction> CdcDataSpec<F> {
 /// This trait defines a generic set of operations used by CDF Reader
 pub trait FileAction {
     /// Adds partition values
-    fn partition_values(&self) -> HashMap<String, Option<String>>;
+    fn partition_values(&self) -> &HashMap<String, Option<String>>;
     /// Physical Path to the data
     fn path(&self) -> String;
     /// Byte size of the physical file
@@ -38,8 +38,8 @@ pub trait FileAction {
 }
 
 impl FileAction for Add {
-    fn partition_values(&self) -> HashMap<String, Option<String>> {
-        self.partition_values.clone()
+    fn partition_values(&self) -> &HashMap<String, Option<String>> {
+        &self.partition_values
     }
 
     fn path(&self) -> String {
@@ -52,8 +52,8 @@ impl FileAction for Add {
 }
 
 impl FileAction for AddCDCFile {
-    fn partition_values(&self) -> HashMap<String, Option<String>> {
-        self.partition_values.clone()
+    fn partition_values(&self) -> &HashMap<String, Option<String>> {
+        &self.partition_values
     }
 
     fn path(&self) -> String {
@@ -62,18 +62,5 @@ impl FileAction for AddCDCFile {
 
     fn size(&self) -> usize {
         self.size as usize
-    }
-}
-
-impl FileAction for Remove {
-    fn partition_values(&self) -> HashMap<String, Option<String>> {
-        self.partition_values.clone().unwrap_or_default()
-    }
-    fn path(&self) -> String {
-        self.path.clone()
-    }
-
-    fn size(&self) -> usize {
-        self.size.unwrap_or_default() as usize
     }
 }
