@@ -128,7 +128,7 @@ impl std::future::IntoFuture for ConstraintBuilder {
 
             let plan: Arc<dyn ExecutionPlan> = Arc::new(scan);
             let mut tasks = vec![];
-            for p in 0..plan.output_partitioning().partition_count() {
+            for p in 0..plan.properties().output_partitioning().partition_count() {
                 let inner_plan = plan.clone();
                 let inner_checker = checker.clone();
                 let task_ctx = Arc::new(TaskContext::from(&state));

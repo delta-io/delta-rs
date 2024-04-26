@@ -75,16 +75,12 @@ impl ExecutionPlan for MergeBarrierExec {
         self.input.schema()
     }
 
-    fn output_partitioning(&self) -> datafusion_physical_expr::Partitioning {
-        self.input.output_partitioning()
+    fn properties(&self) -> &datafusion::physical_plan::PlanProperties {
+        self.input.properties()
     }
 
     fn required_input_distribution(&self) -> Vec<Distribution> {
         vec![Distribution::HashPartitioned(vec![self.expr.clone()]); 1]
-    }
-
-    fn output_ordering(&self) -> Option<&[datafusion_physical_expr::PhysicalSortExpr]> {
-        None
     }
 
     fn children(&self) -> Vec<std::sync::Arc<dyn ExecutionPlan>> {

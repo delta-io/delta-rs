@@ -23,7 +23,6 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use crate::logstore::LogStoreRef;
 use datafusion::execution::context::{SessionContext, SessionState};
-use datafusion::physical_expr::create_physical_expr;
 use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::Expr;
@@ -37,7 +36,8 @@ use super::datafusion_utils::Expression;
 use super::transaction::{CommitBuilder, CommitProperties, PROTOCOL};
 use crate::delta_datafusion::expr::fmt_expr_to_sql;
 use crate::delta_datafusion::{
-    find_files, register_store, DataFusionMixins, DeltaScanBuilder, DeltaSessionContext,
+    create_physical_expr_fix, find_files, register_store, DataFusionMixins, DeltaScanBuilder,
+    DeltaSessionContext,
 };
 use crate::errors::DeltaResult;
 use crate::kernel::{Action, Add, Remove};
@@ -148,11 +148,8 @@ async fn excute_non_empty_expr(
     // Apply the negation of the filter and rewrite files
     let negated_expression = Expr::Not(Box::new(Expr::IsTrue(Box::new(expression.clone()))));
 
-    let predicate_expr = create_physical_expr(
-        &negated_expression,
-        &input_dfschema,
-        state.execution_props(),
-    )?;
+    let predicate_expr =
+        create_physical_expr_fix(negated_expression, &input_dfschema, state.execution_props())?;
     let filter: Arc<dyn ExecutionPlan> =
         Arc::new(FilterExec::try_new(predicate_expr, scan.clone())?);
 

@@ -1,17 +1,24 @@
 //! Api models for databricks unity catalog APIs
 
+use core::fmt;
 use std::collections::HashMap;
 
 use serde::Deserialize;
 
 /// Error response from unity API
-#[derive(Deserialize)]
+#[derive(Debug, Deserialize)]
 pub struct ErrorResponse {
     /// The error code
     pub error_code: String,
     /// The error message
     pub message: String,
 }
+impl fmt::Display for ErrorResponse {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        writeln!(f, "[{}] {}", self.error_code, self.message)
+    }
+}
+impl std::error::Error for ErrorResponse {}
 
 /// List catalogs response
 #[derive(Deserialize)]
