@@ -1,4 +1,4 @@
-//! AWS S3 storage backend.
+//! GCP GCS storage backend.
 
 use bytes::Bytes;
 use deltalake_core::storage::ObjectStoreRef;
