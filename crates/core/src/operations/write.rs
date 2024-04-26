@@ -34,7 +34,6 @@ use arrow_array::RecordBatch;
 use arrow_cast::can_cast_types;
 use arrow_schema::{ArrowError, DataType, Fields, SchemaRef as ArrowSchemaRef};
 use datafusion::execution::context::{SessionContext, SessionState, TaskContext};
-use datafusion::physical_expr::create_physical_expr;
 use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::{memory::MemoryExec, ExecutionPlan};
 use datafusion_common::DFSchema;
@@ -49,7 +48,9 @@ use super::writer::{DeltaWriter, WriterConfig};
 use super::CreateBuilder;
 use crate::delta_datafusion::expr::fmt_expr_to_sql;
 use crate::delta_datafusion::expr::parse_predicate_expression;
-use crate::delta_datafusion::{find_files, register_store, DeltaScanBuilder};
+use crate::delta_datafusion::{
+    create_physical_expr_fix, find_files, register_store, DeltaScanBuilder,
+};
 use crate::delta_datafusion::{DataFusionMixins, DeltaDataChecker};
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::{Action, Add, Metadata, PartitionsExt, Remove, StructType};
@@ -478,11 +479,8 @@ async fn execute_non_empty_expr(
     // Apply the negation of the filter and rewrite files
     let negated_expression = Expr::Not(Box::new(Expr::IsTrue(Box::new(expression.clone()))));
 
-    let predicate_expr = create_physical_expr(
-        &negated_expression,
-        &input_dfschema,
-        state.execution_props(),
-    )?;
+    let predicate_expr =
+        create_physical_expr_fix(negated_expression, &input_dfschema, state.execution_props())?;
     let filter: Arc<dyn ExecutionPlan> =
         Arc::new(FilterExec::try_new(predicate_expr, scan.clone())?);
 

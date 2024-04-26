@@ -144,7 +144,7 @@ impl<'a> AddContainer<'a> {
     /// so evaluating expressions is inexact. However, excluded files are guaranteed (for a correct log)
     /// to not contain matches by the predicate expression.
     pub fn predicate_matches(&self, predicate: Expr) -> DeltaResult<impl Iterator<Item = &Add>> {
-        let expr = logical_expr_to_physical_expr(&predicate, &self.schema);
+        let expr = logical_expr_to_physical_expr(predicate, &self.schema);
         let pruning_predicate = PruningPredicate::try_new(expr, self.schema.clone())?;
         Ok(self
             .inner

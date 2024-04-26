@@ -17,7 +17,6 @@ use datafusion::physical_planner::{DefaultPhysicalPlanner, ExtensionPlanner, Phy
 use datafusion::prelude::SessionContext;
 use datafusion_common::{DFSchemaRef, Result, ToDFSchema};
 use datafusion_expr::{col, Expr, LogicalPlan, UserDefinedLogicalNode};
-use datafusion_physical_expr::create_physical_expr;
 use lazy_static::lazy_static;
 
 use crate::delta_datafusion::find_files::logical::FindFilesNode;
@@ -28,6 +27,8 @@ use crate::delta_datafusion::{
 use crate::logstore::LogStoreRef;
 use crate::table::state::DeltaTableState;
 use crate::DeltaTableError;
+
+use super::create_physical_expr_fix;
 
 pub mod logical;
 pub mod physical;
@@ -160,8 +161,8 @@ async fn scan_table_by_files(
     let input_schema = scan.logical_schema.as_ref().to_owned();
     let input_dfschema = input_schema.clone().try_into()?;
 
-    let predicate_expr = create_physical_expr(
-        &Expr::IsTrue(Box::new(expression.clone())),
+    let predicate_expr = create_physical_expr_fix(
+        Expr::IsTrue(Box::new(expression.clone())),
         &input_dfschema,
         state.execution_props(),
     )?;

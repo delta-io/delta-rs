@@ -1,9 +1,5 @@
 [workspace]
-members = [
-    "crates/*",
-    "delta-inspect",
-    "python",
-]
+members = ["crates/*", "delta-inspect", "python"]
 exclude = ["proofs"]
 resolver = "2"
 
@@ -46,14 +42,14 @@ object_store = { version = "0.9" }
 parquet = { version = "51" }
 
 # datafusion
-datafusion = { version = "37" }
-datafusion-expr = { version = "37" }
-datafusion-common = { version = "37" }
-datafusion-proto = { version = "37" }
-datafusion-sql = { version = "37" }
-datafusion-physical-expr = { version = "37" }
-datafusion-functions = { version = "37" }
-datafusion-functions-array = { version = "37" }
+datafusion = { version = "37.1" }
+datafusion-expr = { version = "37.1" }
+datafusion-common = { version = "37.1" }
+datafusion-proto = { version = "37.1" }
+datafusion-sql = { version = "37.1" }
+datafusion-physical-expr = { version = "37.1" }
+datafusion-functions = { version = "37.1" }
+datafusion-functions-array = { version = "37.1" }
 
 # serde
 serde = { version = "1.0.194", features = ["derive"] }
