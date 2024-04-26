@@ -273,6 +273,10 @@ impl Scalar {
             | Dictionary(_, _)
             | RunEndEncoded(_, _)
             | Union(_, _)
+            | Utf8View
+            | BinaryView
+            | ListView(_)
+            | LargeListView(_)
             | Null => None,
         }
     }

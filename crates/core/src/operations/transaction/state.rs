@@ -144,7 +144,7 @@ impl<'a> AddContainer<'a> {
     /// so evaluating expressions is inexact. However, excluded files are guaranteed (for a correct log)
     /// to not contain matches by the predicate expression.
     pub fn predicate_matches(&self, predicate: Expr) -> DeltaResult<impl Iterator<Item = &Add>> {
-        let expr = logical_expr_to_physical_expr(&predicate, &self.schema);
+        let expr = logical_expr_to_physical_expr(predicate, &self.schema);
         let pruning_predicate = PruningPredicate::try_new(expr, self.schema.clone())?;
         Ok(self
             .inner
@@ -214,6 +214,21 @@ impl<'a> PruningStatistics for AddContainer<'a> {
         ScalarValue::iter_to_array(values).ok()
     }
 
+    /// return the number of rows for the named column in each container
+    /// as an `Option<UInt64Array>`.
+    ///
+    /// Note: the returned array must contain `num_containers()` rows
+    fn row_counts(&self, _column: &Column) -> Option<ArrayRef> {
+        let values = self.inner.iter().map(|add| {
+            if let Ok(Some(statistics)) = add.get_stats() {
+                ScalarValue::UInt64(Some(statistics.num_records as u64))
+            } else {
+                ScalarValue::UInt64(None)
+            }
+        });
+        ScalarValue::iter_to_array(values).ok()
+    }
+
     // This function is required since DataFusion 35.0, but is implemented as a no-op
     // https://github.com/apache/arrow-datafusion/blob/ec6abece2dcfa68007b87c69eefa6b0d7333f628/datafusion/core/src/datasource/physical_plan/parquet/page_filter.rs#L550
     fn contained(&self, _column: &Column, _value: &HashSet<ScalarValue>) -> Option<BooleanArray> {
@@ -257,6 +272,17 @@ impl PruningStatistics for EagerSnapshot {
         container.null_counts(column)
     }
 
+    /// return the number of rows for the named column in each container
+    /// as an `Option<UInt64Array>`.
+    ///
+    /// Note: the returned array must contain `num_containers()` rows
+    fn row_counts(&self, column: &Column) -> Option<ArrayRef> {
+        let files = self.file_actions().ok()?.collect_vec();
+        let partition_columns = &self.metadata().partition_columns;
+        let container = AddContainer::new(&files, partition_columns, self.arrow_schema().ok()?);
+        container.row_counts(column)
+    }
+
     // This function is required since DataFusion 35.0, but is implemented as a no-op
     // https://github.com/apache/arrow-datafusion/blob/ec6abece2dcfa68007b87c69eefa6b0d7333f628/datafusion/core/src/datasource/physical_plan/parquet/page_filter.rs#L550
     fn contained(&self, _column: &Column, _value: &HashSet<ScalarValue>) -> Option<BooleanArray> {
@@ -279,6 +305,10 @@ impl PruningStatistics for DeltaTableState {
 
     fn null_counts(&self, column: &Column) -> Option<ArrayRef> {
         self.snapshot.null_counts(column)
+    }
+
+    fn row_counts(&self, column: &Column) -> Option<ArrayRef> {
+        self.snapshot.row_counts(column)
     }
 
     fn contained(&self, column: &Column, values: &HashSet<ScalarValue>) -> Option<BooleanArray> {

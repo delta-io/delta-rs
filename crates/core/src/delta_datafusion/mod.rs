@@ -49,16 +49,15 @@ use datafusion::datasource::{listing::PartitionedFile, MemTable, TableProvider, 
 use datafusion::execution::context::{SessionConfig, SessionContext, SessionState, TaskContext};
 use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::execution::FunctionRegistry;
-use datafusion::physical_expr::PhysicalSortExpr;
 use datafusion::physical_optimizer::pruning::PruningPredicate;
 use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::limit::LocalLimitExec;
 use datafusion::physical_plan::{
-    DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning, SendableRecordBatchStream,
+    DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties, SendableRecordBatchStream,
     Statistics,
 };
 use datafusion_common::scalar::ScalarValue;
-use datafusion_common::tree_node::{TreeNode, TreeNodeVisitor, VisitRecursion};
+use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion, TreeNodeVisitor};
 use datafusion_common::{
     config::ConfigOptions, Column, DFSchema, DataFusionError, Result as DataFusionResult,
     ToDFSchema,
@@ -66,9 +65,14 @@ use datafusion_common::{
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::logical_plan::CreateExternalTable;
 use datafusion_expr::utils::conjunction;
-use datafusion_expr::{col, Expr, Extension, LogicalPlan, TableProviderFilterPushDown, Volatility};
+use datafusion_expr::{
+    col, Expr, Extension, GetFieldAccess, GetIndexedField, LogicalPlan,
+    TableProviderFilterPushDown, Volatility,
+};
+use datafusion_functions::expr_fn::get_field;
+use datafusion_functions_array::extract::{array_element, array_slice};
 use datafusion_physical_expr::execution_props::ExecutionProps;
-use datafusion_physical_expr::{create_physical_expr, PhysicalExpr};
+use datafusion_physical_expr::PhysicalExpr;
 use datafusion_proto::logical_plan::LogicalExtensionCodec;
 use datafusion_proto::physical_plan::PhysicalExtensionCodec;
 use datafusion_sql::planner::ParserOptions;
@@ -248,7 +252,7 @@ pub(crate) fn files_matching_predicate<'a>(
     if let Some(Some(predicate)) =
         (!filters.is_empty()).then_some(conjunction(filters.iter().cloned()))
     {
-        let expr = logical_expr_to_physical_expr(&predicate, snapshot.arrow_schema()?.as_ref());
+        let expr = logical_expr_to_physical_expr(predicate, snapshot.arrow_schema()?.as_ref());
         let pruning_predicate = PruningPredicate::try_new(expr, snapshot.arrow_schema()?)?;
         Ok(Either::Left(
             snapshot
@@ -528,7 +532,7 @@ impl<'a> DeltaScanBuilder<'a> {
 
         let logical_filter = self
             .filter
-            .map(|expr| logical_expr_to_physical_expr(&expr, &logical_schema));
+            .map(|expr| logical_expr_to_physical_expr(expr, &logical_schema));
 
         // Perform Pruning of files to scan
         let files = match self.files {
@@ -820,12 +824,8 @@ impl ExecutionPlan for DeltaScan {
         self.parquet_scan.schema()
     }
 
-    fn output_partitioning(&self) -> Partitioning {
-        self.parquet_scan.output_partitioning()
-    }
-
-    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
-        self.parquet_scan.output_ordering()
+    fn properties(&self) -> &PlanProperties {
+        self.parquet_scan.properties()
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
@@ -934,6 +934,10 @@ pub(crate) fn get_null_of_arrow_type(t: &ArrowDataType) -> DeltaResult<ScalarVal
         | ArrowDataType::Duration(_)
         | ArrowDataType::Interval(_)
         | ArrowDataType::RunEndEncoded(_, _)
+        | ArrowDataType::BinaryView
+        | ArrowDataType::Utf8View
+        | ArrowDataType::LargeListView(_)
+        | ArrowDataType::ListView(_)
         | ArrowDataType::Map(_, _) => Err(DeltaTableError::Generic(format!(
             "Unsupported data type for Delta Lake {}",
             t
@@ -1039,20 +1043,64 @@ pub(crate) fn to_correct_scalar_value(
 }
 
 pub(crate) fn logical_expr_to_physical_expr(
-    expr: &Expr,
+    expr: Expr,
     schema: &ArrowSchema,
 ) -> Arc<dyn PhysicalExpr> {
     let df_schema = schema.clone().to_dfschema().unwrap();
     let execution_props = ExecutionProps::new();
-    create_physical_expr(expr, &df_schema, &execution_props).unwrap()
+    create_physical_expr_fix(expr, &df_schema, &execution_props).unwrap()
+}
+
+// TODO This should be removed after datafusion v38
+pub(crate) fn create_physical_expr_fix(
+    expr: Expr,
+    input_dfschema: &DFSchema,
+    execution_props: &ExecutionProps,
+) -> Result<Arc<dyn PhysicalExpr>, DataFusionError> {
+    // Support Expr::struct by rewriting expressions.
+    let expr = expr
+        .transform_up(&|expr| {
+            // see https://github.com/apache/datafusion/issues/10181
+            // This is part of the function rewriter code in DataFusion inlined here temporarily
+            Ok(match expr {
+                Expr::GetIndexedField(GetIndexedField {
+                    expr,
+                    field: GetFieldAccess::NamedStructField { name },
+                }) => {
+                    let name = Expr::Literal(name);
+                    Transformed::yes(get_field(*expr, name))
+                }
+                // expr[idx] ==> array_element(expr, idx)
+                Expr::GetIndexedField(GetIndexedField {
+                    expr,
+                    field: GetFieldAccess::ListIndex { key },
+                }) => Transformed::yes(array_element(*expr, *key)),
+
+                // expr[start, stop, stride] ==> array_slice(expr, start, stop, stride)
+                Expr::GetIndexedField(GetIndexedField {
+                    expr,
+                    field:
+                        GetFieldAccess::ListRange {
+                            start,
+                            stop,
+                            stride,
+                        },
+                }) => Transformed::yes(array_slice(*expr, *start, *stop, *stride)),
+
+                _ => Transformed::no(expr),
+            })
+        })?
+        .data;
+
+    datafusion_physical_expr::create_physical_expr(&expr, input_dfschema, execution_props)
 }
 
 pub(crate) async fn execute_plan_to_batch(
     state: &SessionState,
     plan: Arc<dyn ExecutionPlan>,
 ) -> DeltaResult<arrow::record_batch::RecordBatch> {
-    let data =
-        futures::future::try_join_all((0..plan.output_partitioning().partition_count()).map(|p| {
+    let data = futures::future::try_join_all(
+        (0..plan.properties().output_partitioning().partition_count()).map(|p| {
             let plan_copy = plan.clone();
             let task_context = state.task_ctx().clone();
             async move {
@@ -1064,8 +1112,9 @@ pub(crate) async fn execute_plan_to_batch(
 
                 DataFusionResult::<_>::Ok(arrow::compute::concat_batches(&schema, batches.iter())?)
             }
-        }))
-        .await?;
+        }),
+    )
+    .await?;
 
     let batch = arrow::compute::concat_batches(&plan.schema(), data.iter())?;
 
@@ -1315,9 +1364,9 @@ pub(crate) struct FindFilesExprProperties {
 /// non-deterministic functions, and determine if the expression only contains
 /// partition columns
 impl TreeNodeVisitor for FindFilesExprProperties {
-    type N = Expr;
+    type Node = Expr;
 
-    fn pre_visit(&mut self, expr: &Self::N) -> datafusion_common::Result<VisitRecursion> {
+    fn f_down(&mut self, expr: &Self::Node) -> datafusion_common::Result<TreeNodeRecursion> {
         // TODO: We can likely relax the volatility to STABLE. Would require further
         // research to confirm the same value is generated during the scan and
         // rewrite phases.
@@ -1358,7 +1407,7 @@ impl TreeNodeVisitor for FindFilesExprProperties {
                         self.result = Err(DeltaTableError::Generic(format!(
                             "Cannot determine volatility of find files predicate function {n}",
                         )));
-                        return Ok(VisitRecursion::Stop);
+                        return Ok(TreeNodeRecursion::Stop);
                     }
                 };
                 if v > Volatility::Immutable {
@@ -1366,7 +1415,7 @@ impl TreeNodeVisitor for FindFilesExprProperties {
                         "Find files predicate contains nondeterministic function {}",
                         func_def.name()
                     )));
-                    return Ok(VisitRecursion::Stop);
+                    return Ok(TreeNodeRecursion::Stop);
                 }
             }
             _ => {
@@ -1374,11 +1423,11 @@ impl TreeNodeVisitor for FindFilesExprProperties {
                     "Find files predicate contains unsupported expression {}",
                     expr
                 )));
-                return Ok(VisitRecursion::Stop);
+                return Ok(TreeNodeRecursion::Stop);
             }
         }
 
-        Ok(VisitRecursion::Continue)
+        Ok(TreeNodeRecursion::Continue)
     }
 }
 
@@ -1478,8 +1527,8 @@ pub(crate) async fn find_files_scan<'a>(
     let input_schema = scan.logical_schema.as_ref().to_owned();
     let input_dfschema = input_schema.clone().try_into()?;
 
-    let predicate_expr = create_physical_expr(
-        &Expr::IsTrue(Box::new(expression.clone())),
+    let predicate_expr = create_physical_expr_fix(
+        Expr::IsTrue(Box::new(expression.clone())),
         &input_dfschema,
         state.execution_props(),
     )?;

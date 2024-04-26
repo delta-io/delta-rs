@@ -34,7 +34,6 @@ use datafusion::{
 use datafusion_common::{Column, DFSchema, ScalarValue};
 use datafusion_expr::{case, col, lit, when, Expr};
 use datafusion_physical_expr::{
-    create_physical_expr,
     expressions::{self},
     PhysicalExpr,
 };
@@ -49,8 +48,8 @@ use super::{
     transaction::{CommitBuilder, CommitProperties},
 };
 use crate::delta_datafusion::{
-    expr::fmt_expr_to_sql, physical::MetricObserverExec, DataFusionMixins, DeltaColumn,
-    DeltaSessionContext,
+    create_physical_expr_fix, expr::fmt_expr_to_sql, physical::MetricObserverExec,
+    DataFusionMixins, DeltaColumn, DeltaSessionContext,
 };
 use crate::delta_datafusion::{find_files, register_store, DeltaScanBuilder};
 use crate::kernel::{Action, Remove};
@@ -265,7 +264,8 @@ async fn execute(
 
     let predicate_null =
         when(predicate.clone(), lit(true)).otherwise(lit(ScalarValue::Boolean(None)))?;
-    let predicate_expr = create_physical_expr(&predicate_null, &input_dfschema, execution_props)?;
+    let predicate_expr =
+        create_physical_expr_fix(predicate_null, &input_dfschema, execution_props)?;
     expressions.push((predicate_expr, "__delta_rs_update_predicate".to_string()));
 
     let projection_predicate: Arc<dyn ExecutionPlan> =
@@ -312,7 +312,7 @@ async fn execute(
         let expr = case(col("__delta_rs_update_predicate"))
             .when(lit(true), expr.to_owned())
             .otherwise(col(column.to_owned()))?;
-        let predicate_expr = create_physical_expr(&expr, &input_dfschema, execution_props)?;
+        let predicate_expr = create_physical_expr_fix(expr, &input_dfschema, execution_props)?;
         map.insert(column.name.clone(), expressions.len());
         let c = "__delta_rs_".to_string() + &column.name;
         expressions.push((predicate_expr, c.clone()));
