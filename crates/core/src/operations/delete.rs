@@ -82,6 +82,8 @@ pub struct DeleteMetrics {
     pub rewrite_time_ms: u128,
 }
 
+impl super::Operation<()> for DeleteBuilder {}
+
 impl DeleteBuilder {
     /// Create a new [`DeleteBuilder`]
     pub fn new(log_store: LogStoreRef, snapshot: DeltaTableState) -> Self {

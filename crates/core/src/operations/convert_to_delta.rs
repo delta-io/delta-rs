@@ -116,6 +116,8 @@ impl Default for ConvertToDeltaBuilder {
     }
 }
 
+impl super::Operation<()> for ConvertToDeltaBuilder {}
+
 impl ConvertToDeltaBuilder {
     /// Create a new [`ConvertToDeltaBuilder`]
     pub fn new() -> Self {

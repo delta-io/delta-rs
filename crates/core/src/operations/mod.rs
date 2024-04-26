@@ -54,7 +54,9 @@ pub mod update;
 pub mod write;
 pub mod writer;
 
-// TODO make ops consume a snapshot ...
+/// The [Operation] trait defines common behaviors that all operations builders
+/// should have consistent
+pub(crate) trait Operation<State>: std::future::IntoFuture {}
 
 /// High level interface for executing commands against a DeltaTable
 pub struct DeltaOps(pub DeltaTable);

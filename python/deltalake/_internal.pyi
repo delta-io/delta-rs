@@ -154,6 +154,7 @@ class RawDeltaTable:
         custom_metadata: Optional[Dict[str, str]],
     ) -> None: ...
     def cleanup_metadata(self) -> None: ...
+    def check_can_write_timestamp_ntz(self, schema: pyarrow.Schema) -> None: ...
 
 def rust_core_version() -> str: ...
 def write_new_deltalake(
@@ -173,6 +174,7 @@ def write_to_deltalake(
     data: pyarrow.RecordBatchReader,
     partition_by: Optional[List[str]],
     mode: str,
+    table: Optional[RawDeltaTable],
     schema_mode: Optional[str],
     predicate: Optional[str],
     name: Optional[str],
