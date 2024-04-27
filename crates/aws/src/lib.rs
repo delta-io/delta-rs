@@ -38,7 +38,7 @@ use errors::{DynamoDbConfigError, LockClientError};
 use storage::{S3ObjectStoreFactory, S3StorageOptions};
 
 #[derive(Clone, Debug, Default)]
-struct S3LogStoreFactory {}
+pub struct S3LogStoreFactory {}
 
 impl LogStoreFactory for S3LogStoreFactory {
     fn with_options(

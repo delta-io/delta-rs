@@ -11,6 +11,7 @@ use deltalake_core::storage::{str_is_truthy, ObjectStoreFactory, ObjectStoreRef,
 use deltalake_core::{DeltaResult, ObjectStoreError, Path};
 use futures::stream::BoxStream;
 use futures::Future;
+use object_store::limit::LimitStore;
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::ops::Range;
@@ -76,22 +77,30 @@ impl ObjectStoreFactory for S3ObjectStoreFactory {
             }),
         )?;
 
-        if options
+        let copy_if_not_exists = options
             .0
-            .contains_key(AmazonS3ConfigKey::CopyIfNotExists.as_ref())
-        {
-            // If the copy-if-not-exists env var is set, we don't need to instantiate a locking client or check for allow-unsafe-rename.
-            return Ok((Arc::from(store), prefix));
-        }
+            .contains_key(AmazonS3ConfigKey::CopyIfNotExists.as_ref());
 
         let options = S3StorageOptions::from_map(&options.0)?;
 
-        let store = S3StorageBackend::try_new(
-            store.into(),
-            Some("dynamodb") == options.locking_provider.as_deref() || options.allow_unsafe_rename,
-        )?;
+        let store: ObjectStoreRef = if let Some(limit) = options.s3_concurrency_limit {
+            Arc::new(LimitStore::new(store, limit))
+        } else {
+            Arc::new(store)
+        };
 
-        Ok((Arc::new(store), prefix))
+        // If the copy-if-not-exists env var is set, we don't need to instantiate a locking client or check for allow-unsafe-rename.
+        if copy_if_not_exists {
+            Ok((Arc::from(store), prefix))
+        } else {
+            let store = S3StorageBackend::try_new(
+                store,
+                Some("dynamodb") == options.locking_provider.as_deref()
+                    || options.allow_unsafe_rename,
+            )?;
+
+            Ok((Arc::new(store), prefix))
+        }
     }
 }
 
@@ -107,6 +116,7 @@ pub struct S3StorageOptions {
     pub sts_pool_idle_timeout: Duration,
     pub s3_get_internal_server_error_retries: usize,
     pub allow_unsafe_rename: bool,
+    pub s3_concurrency_limit: Option<usize>,
     pub extra_opts: HashMap<String, String>,
     pub sdk_config: SdkConfig,
 }
@@ -121,6 +131,7 @@ impl PartialEq for S3StorageOptions {
             && self.s3_get_internal_server_error_retries
                 == other.s3_get_internal_server_error_retries
             && self.allow_unsafe_rename == other.allow_unsafe_rename
+            && self.s3_concurrency_limit == other.s3_concurrency_limit
             && self.extra_opts == other.extra_opts
             && self.sdk_config.endpoint_url() == other.sdk_config.endpoint_url()
             && self.sdk_config.region() == other.sdk_config.region()
@@ -165,6 +176,8 @@ impl S3StorageOptions {
         let allow_unsafe_rename = str_option(options, s3_constants::AWS_S3_ALLOW_UNSAFE_RENAME)
             .map(|val| str_is_truthy(&val))
             .unwrap_or(false);
+        let s3_concurrency_limit = str_option(options, s3_constants::AWS_S3_CONCURRENCY_LIMIT)
+            .and_then(|val| val.parse().ok());
         let disable_imds = str_option(options, s3_constants::AWS_EC2_METADATA_DISABLED)
             .map(|val| str_is_truthy(&val))
             .unwrap_or(true);
@@ -217,6 +230,7 @@ impl S3StorageOptions {
             sts_pool_idle_timeout: Duration::from_secs(sts_pool_idle_timeout),
             s3_get_internal_server_error_retries,
             allow_unsafe_rename,
+            s3_concurrency_limit,
             extra_opts,
             sdk_config,
         })
@@ -459,6 +473,10 @@ pub mod s3_constants {
     /// Only safe if there is one writer to a given table.
     pub const AWS_S3_ALLOW_UNSAFE_RENAME: &str = "AWS_S3_ALLOW_UNSAFE_RENAME";
 
+    /// The number of concurrent connections the underlying object store can create
+    /// Uses [LimitStore](https://docs.rs/object_store/latest/object_store/limit/struct.LimitStore.html) to achieve this
+    pub const AWS_S3_CONCURRENCY_LIMIT: &str = "AWS_S3_CONCURRENCY_LIMIT";
+
     /// If set to "true", disables the imds client
     /// Defaults to "true"
     pub const AWS_EC2_METADATA_DISABLED: &str = "AWS_EC2_METADATA_DISABLED";
@@ -591,6 +609,7 @@ mod tests {
                     s3_pool_idle_timeout: Duration::from_secs(15),
                     sts_pool_idle_timeout: Duration::from_secs(10),
                     s3_get_internal_server_error_retries: 10,
+                    s3_concurrency_limit: None,
                     extra_opts: HashMap::new(),
                     allow_unsafe_rename: false,
                 },
@@ -636,6 +655,7 @@ mod tests {
                 s3_constants::AWS_WEB_IDENTITY_TOKEN_FILE.to_string() => "another_token_file".to_string(),
                 s3_constants::AWS_S3_POOL_IDLE_TIMEOUT_SECONDS.to_string() => "1".to_string(),
                 s3_constants::AWS_STS_POOL_IDLE_TIMEOUT_SECONDS.to_string() => "2".to_string(),
+                s3_constants::AWS_S3_CONCURRENCY_LIMIT.to_string() => "500".to_string(),
                 s3_constants::AWS_S3_GET_INTERNAL_SERVER_ERROR_RETRIES.to_string() => "3".to_string(),
                 s3_constants::AWS_ACCESS_KEY_ID.to_string() => "test_id".to_string(),
                 s3_constants::AWS_SECRET_ACCESS_KEY.to_string() => "test_secret".to_string(),
@@ -656,6 +676,7 @@ mod tests {
                         s3_constants::AWS_S3_ADDRESSING_STYLE.to_string() => "virtual".to_string()
                     },
                     allow_unsafe_rename: false,
+                    s3_concurrency_limit: Some(500)
                 },
                 options
             );
@@ -704,6 +725,7 @@ mod tests {
                     s3_get_internal_server_error_retries: 3,
                     extra_opts: hashmap! {},
                     allow_unsafe_rename: false,
+                    s3_concurrency_limit: None
                 },
                 options
             );
