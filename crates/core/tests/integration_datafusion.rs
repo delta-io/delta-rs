@@ -440,7 +440,7 @@ mod local {
     ) -> Result<ExecutionMetricsCollector> {
         let mut metrics = ExecutionMetricsCollector::default();
         let scan = table.scan(state, None, e, None).await?;
-        if scan.output_partitioning().partition_count() > 0 {
+        if scan.properties().output_partitioning().partition_count() > 0 {
             let plan = CoalescePartitionsExec::new(scan);
             let task_ctx = Arc::new(TaskContext::from(state));
             let _result = collect(plan.execute(0, task_ctx)?).await?;

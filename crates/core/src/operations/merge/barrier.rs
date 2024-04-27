@@ -75,8 +75,8 @@ impl ExecutionPlan for MergeBarrierExec {
         self.input.schema()
     }
 
-    fn output_partitioning(&self) -> datafusion_physical_expr::Partitioning {
-        self.input.output_partitioning()
+    fn properties(&self) -> &datafusion::physical_plan::PlanProperties {
+        self.input.properties()
     }
 
     fn output_ordering(&self) -> Option<&[datafusion_physical_expr::PhysicalSortExpr]> {
