@@ -15,9 +15,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use arrow::pyarrow::PyArrowType;
 use chrono::{DateTime, Duration, FixedOffset, Utc};
 use deltalake::arrow::compute::concat_batches;
-use deltalake::arrow::ffi_stream::ArrowArrayStreamReader;
-use deltalake::arrow::record_batch::RecordBatch;
+use deltalake::arrow::ffi_stream::{ArrowArrayStreamReader, FFI_ArrowArrayStream};
 use deltalake::arrow::record_batch::RecordBatchReader;
+use deltalake::arrow::record_batch::{RecordBatch, RecordBatchIterator};
 use deltalake::arrow::{self, datatypes::Schema as ArrowSchema};
 use deltalake::checkpoints::{cleanup_metadata, create_checkpoint};
 use deltalake::datafusion::datasource::memory::MemTable;
@@ -544,7 +544,7 @@ impl RawDeltaTable {
         ending_version: Option<i64>,
         starting_timestamp: Option<String>,
         ending_timestamp: Option<String>,
-    ) -> PyResult<PyArrowType<RecordBatch>> {
+    ) -> PyResult<PyArrowType<ArrowArrayStreamReader>> {
         let ctx = SessionContext::new();
         let mut cdf_read = CdfLoadBuilder::new(
             self._table.log_store(),
@@ -582,7 +582,7 @@ impl RawDeltaTable {
             }
 
             // This is unfortunate.
-            let batches: Vec<_> = rt()
+            let batches = rt()
                 .block_on(join_all(tasks))
                 .into_iter()
                 .flatten()
@@ -590,10 +590,11 @@ impl RawDeltaTable {
                 .unwrap()
                 .into_iter()
                 .flatten()
-                .collect();
-
-            let final_batch = concat_batches(&batches[0].schema(), &batches).unwrap();
-            Ok(PyArrowType(final_batch))
+                .map(Ok);
+            let batch_iter = RecordBatchIterator::new(batches, plan.schema());
+            let ffi_stream = FFI_ArrowArrayStream::new(Box::new(batch_iter));
+            let reader = ArrowArrayStreamReader::try_new(ffi_stream).unwrap();
+            Ok(PyArrowType(reader))
         })
     }
 

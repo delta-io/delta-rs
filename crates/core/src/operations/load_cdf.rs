@@ -161,6 +161,8 @@ impl CdfLoadBuilder {
                                     end,
                                 });
                             }
+                        } else if version == start {
+                            return Err(DeltaTableError::ChangeDataNotEnabled { version });
                         };
                     }
                     Action::CommitInfo(ci) => {
@@ -292,7 +294,7 @@ impl CdfLoadBuilder {
         // The output batches are then unioned to create a single output. Coalesce partitions is only here for the time
         // being for development. I plan to parallelize the reads once the base idea is correct.
         let union_scan: Arc<dyn ExecutionPlan> = Arc::new(UnionExec::new(vec![cdc_scan, add_scan]));
-        Ok(DeltaCdfScan::new(union_scan, schema))
+        Ok(DeltaCdfScan::new(union_scan))
     }
 }
 
@@ -477,6 +479,24 @@ mod tests {
         assert!(matches!(
             table.unwrap_err(),
             DeltaTableError::ChangeDataInvalidVersionRange { .. }
+        ));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_load_non_cdf() -> TestResult {
+        let table = DeltaOps::try_from_uri("../test/tests/data/simple_table")
+            .await?
+            .load_cdf()
+            .with_starting_version(0)
+            .build()
+            .await;
+
+        assert!(table.is_err());
+        assert!(matches!(
+            table.unwrap_err(),
+            DeltaTableError::ChangeDataNotEnabled { .. }
         ));
 
         Ok(())

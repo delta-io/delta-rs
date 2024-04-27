@@ -9,7 +9,7 @@ use object_store::path::Path;
 use object_store::ObjectMeta;
 use serde_json::Value;
 
-use crate::delta_datafusion::cdf::scan::CHANGE_TYPE_COL;
+use crate::delta_datafusion::cdf::CHANGE_TYPE_COL;
 use crate::delta_datafusion::cdf::{CdcDataSpec, FileAction};
 use crate::delta_datafusion::{get_null_of_arrow_type, to_correct_scalar_value};
 use crate::DeltaResult;

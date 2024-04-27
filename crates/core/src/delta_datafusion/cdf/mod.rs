@@ -1,5 +1,7 @@
 //! Logical operators and physical executions for CDF
 
+use arrow_schema::{DataType, Field, TimeUnit};
+use lazy_static::lazy_static;
 use std::collections::HashMap;
 
 pub(crate) use scan::*;
@@ -9,6 +11,33 @@ use crate::kernel::{Add, AddCDCFile};
 
 mod scan;
 mod scan_utils;
+
+/// Change type column name
+pub const CHANGE_TYPE_COL: &str = "_change_type";
+/// Commit version column name
+pub const COMMIT_VERSION_COL: &str = "_commit_version";
+/// Commit Timestamp column name
+pub const COMMIT_TIMESTAMP_COL: &str = "_commit_timestamp";
+
+lazy_static! {
+    pub(crate) static ref CDC_PARTITION_SCHEMA: Vec<Field> = vec![
+        Field::new(COMMIT_VERSION_COL, DataType::Int64, true),
+        Field::new(
+            COMMIT_TIMESTAMP_COL,
+            DataType::Timestamp(TimeUnit::Millisecond, None),
+            true
+        )
+    ];
+    pub(crate) static ref ADD_PARTITION_SCHEMA: Vec<Field> = vec![
+        Field::new(CHANGE_TYPE_COL, DataType::Utf8, true),
+        Field::new(COMMIT_VERSION_COL, DataType::Int64, true),
+        Field::new(
+            COMMIT_TIMESTAMP_COL,
+            DataType::Timestamp(TimeUnit::Millisecond, None),
+            true
+        ),
+    ];
+}
 
 #[derive(Debug)]
 pub(crate) struct CdcDataSpec<F: FileAction> {

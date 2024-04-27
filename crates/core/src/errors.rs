@@ -221,6 +221,9 @@ pub enum DeltaTableError {
     #[error("Change Data not enabled for version: {version}, Start: {start}, End: {end}")]
     ChangeDataNotRecorded { version: i64, start: i64, end: i64 },
 
+    #[error("Reading a table version: {version} that does not have change data enabled")]
+    ChangeDataNotEnabled { version: i64 },
+
     #[error("Invalid version start version {start} is greater than version {end}")]
     ChangeDataInvalidVersionRange { start: i64, end: i64 },
 }

@@ -5,7 +5,7 @@ from deltalake import DeltaTable
 
 def test_read_cdf_partitioned():
     dt = DeltaTable("../crates/test/tests/data/cdf-table/")
-    b = dt.load_cdf(0, 3).to_pydict()
+    b = dt.load_cdf(0, 3).read_all().to_pydict()
     assert sorted(b["id"]) == [
         1,
         2,
@@ -160,7 +160,7 @@ def test_read_cdf_partitioned():
 
 def test_read_cdf_non_partitioned():
     dt = DeltaTable("../crates/test/tests/data/cdf-table-non-partitioned/")
-    b = dt.load_cdf(0, 3).to_pydict()
+    b = dt.load_cdf(0, 3).read_all().to_pydict()
 
     assert sorted(b["id"]) == [
         1,
