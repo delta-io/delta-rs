@@ -55,6 +55,7 @@ from .table import (
     NOT_SUPPORTED_PYARROW_WRITER_VERSIONS,
     SUPPORTED_WRITER_FEATURES,
     DeltaTable,
+    PostCommitHookProperties,
     WriterProperties,
 )
 
@@ -109,6 +110,7 @@ def write_deltalake(
     large_dtypes: bool = ...,
     engine: Literal["pyarrow"] = ...,
     custom_metadata: Optional[Dict[str, str]] = ...,
+    post_commithook_properties: Optional[PostCommitHookProperties] = ...,
 ) -> None: ...
 
 
@@ -137,6 +139,7 @@ def write_deltalake(
     engine: Literal["rust"],
     writer_properties: WriterProperties = ...,
     custom_metadata: Optional[Dict[str, str]] = ...,
+    post_commithook_properties: Optional[PostCommitHookProperties] = ...,
 ) -> None: ...
 
 
@@ -166,6 +169,7 @@ def write_deltalake(
     engine: Literal["rust"],
     writer_properties: WriterProperties = ...,
     custom_metadata: Optional[Dict[str, str]] = ...,
+    post_commithook_properties: Optional[PostCommitHookProperties] = ...,
 ) -> None: ...
 
 
@@ -201,6 +205,7 @@ def write_deltalake(
     engine: Literal["pyarrow", "rust"] = "pyarrow",
     writer_properties: Optional[WriterProperties] = None,
     custom_metadata: Optional[Dict[str, str]] = None,
+    post_commithook_properties: Optional[PostCommitHookProperties] = None,
 ) -> None:
     """Write to a Delta Lake table
 
@@ -329,6 +334,9 @@ def write_deltalake(
                 writer_properties._to_dict() if writer_properties else None
             ),
             custom_metadata=custom_metadata,
+            post_commithook_properties=post_commithook_properties.__dict__
+            if post_commithook_properties
+            else None,
         )
         if table:
             table.update_incremental()
@@ -556,6 +564,9 @@ def write_deltalake(
                 schema,
                 partition_filters,
                 custom_metadata,
+                post_commithook_properties=post_commithook_properties.__dict__
+                if post_commithook_properties
+                else None,
             )
             table.update_incremental()
     else:
