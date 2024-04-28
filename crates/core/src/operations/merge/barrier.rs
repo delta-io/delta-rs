@@ -79,10 +79,6 @@ impl ExecutionPlan for MergeBarrierExec {
         self.input.properties()
     }
 
-    fn output_ordering(&self) -> Option<&[datafusion_physical_expr::PhysicalSortExpr]> {
-        None
-    }
-
     fn required_input_distribution(&self) -> Vec<Distribution> {
         vec![Distribution::HashPartitioned(vec![self.expr.clone()]); 1]
     }

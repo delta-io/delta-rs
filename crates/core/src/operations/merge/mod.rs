@@ -1499,7 +1499,7 @@ impl std::future::IntoFuture for MergeBuilder {
     type IntoFuture = BoxFuture<'static, Self::Output>;
 
     fn into_future(self) -> Self::IntoFuture {
-        let mut this = self;
+        let this = self;
 
         Box::pin(async move {
             PROTOCOL.can_write_to(&this.snapshot.snapshot)?;

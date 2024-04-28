@@ -5,7 +5,6 @@ use std::sync::Arc;
 use arrow_schema::SchemaRef;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan};
-use datafusion_physical_expr::{Partitioning, PhysicalSortExpr};
 
 /// Physical execution of a scan
 #[derive(Debug, Clone)]
@@ -35,12 +34,8 @@ impl ExecutionPlan for DeltaCdfScan {
         self.plan.schema().clone()
     }
 
-    fn output_partitioning(&self) -> Partitioning {
-        self.plan.output_partitioning()
-    }
-
-    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
-        self.plan.output_ordering()
+    fn properties(&self) -> &datafusion::physical_plan::PlanProperties {
+        self.plan.properties()
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {

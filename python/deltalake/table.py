@@ -691,7 +691,7 @@ class DeltaTable:
         starting_timestamp: Optional[str] = None,
         ending_timestamp: Optional[str] = None,
     ) -> pyarrow.RecordBatchReader:
-        return self._table.read_cdf(
+        return self._table.load_cdf(
             starting_version, ending_version, starting_timestamp, ending_timestamp
         )
 

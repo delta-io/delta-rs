@@ -537,7 +537,7 @@ impl RawDeltaTable {
     }
 
     #[pyo3(signature = (starting_version = 0, ending_version = None, starting_timestamp = None, ending_timestamp = None))]
-    pub fn read_cdf(
+    pub fn load_cdf(
         &mut self,
         py: Python,
         starting_version: i64,
@@ -574,7 +574,7 @@ impl RawDeltaTable {
 
         py.allow_threads(|| {
             let mut tasks = vec![];
-            for p in 0..plan.output_partitioning().partition_count() {
+            for p in 0..plan.properties().output_partitioning().partition_count() {
                 let inner_plan = plan.clone();
                 let partition_batch = inner_plan.execute(p, ctx.task_ctx()).unwrap();
                 let handle = rt().spawn(collect_sendable_stream(partition_batch));

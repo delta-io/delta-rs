@@ -340,8 +340,12 @@ mod tests {
             .build()
             .await?;
 
-        let batches =
-            collect_batches(table.output_partitioning().partition_count(), table, ctx).await?;
+        let batches = collect_batches(
+            table.properties().output_partitioning().partition_count(),
+            table,
+            ctx,
+        )
+        .await?;
         assert_batches_sorted_eq! {
             ["+----+--------+------------------+-----------------+-------------------------+------------+",
              "| id | name   | _change_type     | _commit_version | _commit_timestamp       | birthday   |",
@@ -386,8 +390,12 @@ mod tests {
             .build()
             .await?;
 
-        let batches =
-            collect_batches(table.output_partitioning().partition_count(), table, ctx).await?;
+        let batches = collect_batches(
+            table.properties().output_partitioning().partition_count(),
+            table,
+            ctx,
+        )
+        .await?;
 
         assert_batches_sorted_eq! {
             ["+----+--------+------------------+-----------------+-------------------------+------------+",
@@ -427,8 +435,12 @@ mod tests {
             .build()
             .await?;
 
-        let batches =
-            collect_batches(table.output_partitioning().partition_count(), table, ctx).await?;
+        let batches = collect_batches(
+            table.properties().output_partitioning().partition_count(),
+            table,
+            ctx,
+        )
+        .await?;
 
         assert_batches_sorted_eq! {
             ["+----+--------+------------+-------------------+---------------+--------------+----------------+------------------+-----------------+-------------------------+",
