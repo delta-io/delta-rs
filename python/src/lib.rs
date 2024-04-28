@@ -379,6 +379,7 @@ impl RawDeltaTable {
     }
 
     /// Run the optimize command on the Delta Table: merge small files into a large file by bin-packing.
+    #[allow(clippy::too_many_arguments)]
     #[pyo3(signature = (
         partition_filters = None,
         target_size = None,
@@ -970,6 +971,7 @@ impl RawDeltaTable {
         PyFrozenSet::new(py, active_partitions)
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn create_write_transaction(
         &mut self,
         add_actions: Vec<PyAddAction>,
