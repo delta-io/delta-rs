@@ -100,14 +100,15 @@ def test_cleanup_metadata(tmp_path: pathlib.Path, sample_data: pa.Table):
     assert second_failed_log_path.exists()
 
 
+@pytest.mark.parametrize("engine", ["pyarrow", "rust"])
 def test_cleanup_metadata_log_cleanup_hook(
-    tmp_path: pathlib.Path, sample_data: pa.Table
+    tmp_path: pathlib.Path, sample_data: pa.Table, engine
 ):
     delta_table = setup_cleanup_metadata(tmp_path, sample_data)
     delta_table.create_checkpoint()
 
     sample_data = sample_data.drop(["binary"])
-    write_deltalake(delta_table, sample_data, mode="append", engine="rust")
+    write_deltalake(delta_table, sample_data, mode="append", engine=engine)
 
     tmp_table_path = tmp_path / "path" / "to" / "table"
     first_failed_log_path = (
@@ -127,8 +128,9 @@ def test_cleanup_metadata_log_cleanup_hook(
     assert second_failed_log_path.exists()
 
 
+@pytest.mark.parametrize("engine", ["pyarrow", "rust"])
 def test_cleanup_metadata_log_cleanup_hook_disabled(
-    tmp_path: pathlib.Path, sample_data: pa.Table
+    tmp_path: pathlib.Path, sample_data: pa.Table, engine
 ):
     delta_table = setup_cleanup_metadata(tmp_path, sample_data)
     delta_table.create_checkpoint()
@@ -138,7 +140,7 @@ def test_cleanup_metadata_log_cleanup_hook_disabled(
         delta_table,
         sample_data,
         mode="append",
-        engine="rust",
+        engine=engine,
         post_commithook_properties=PostCommitHookProperties(cleanup_expired_logs=False),
     )
 
