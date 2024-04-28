@@ -701,6 +701,7 @@ class DeltaTable:
             dry_run: when activated, list only the files, delete otherwise
             enforce_retention_duration: when disabled, accepts retention hours smaller than the value from `delta.deletedFileRetentionDuration`.
             custom_metadata: custom metadata that will be added to the transaction commit.
+            post_commithook_properties: properties for the post commit hook. If None, default values are used.
         Returns:
             the list of files no longer referenced by the Delta Table and are older than the retention threshold.
         """
@@ -738,6 +739,7 @@ class DeltaTable:
             writer_properties: Pass writer properties to the Rust parquet writer.
             error_on_type_mismatch: specify if update will return error if data types are mismatching :default = True
             custom_metadata: custom metadata that will be added to the transaction commit.
+            post_commithook_properties: properties for the post commit hook. If None, default values are used.
         Returns:
             the metrics from update
 
@@ -875,6 +877,7 @@ class DeltaTable:
             writer_properties: Pass writer properties to the Rust parquet writer
             large_dtypes: If True, the data schema is kept in large_dtypes.
             custom_metadata: custom metadata that will be added to the transaction commit.
+            post_commithook_properties: properties for the post commit hook. If None, default values are used.
 
         Returns:
             TableMerger: TableMerger Object
@@ -923,6 +926,7 @@ class DeltaTable:
             safe_cast=not error_on_type_mismatch,
             writer_properties=writer_properties,
             custom_metadata=custom_metadata,
+            post_commithook_properties=post_commithook_properties,
         )
 
     def restore(
@@ -1189,6 +1193,7 @@ class DeltaTable:
         predicate: Optional[str] = None,
         writer_properties: Optional[WriterProperties] = None,
         custom_metadata: Optional[Dict[str, str]] = None,
+        post_commithook_properties: Optional[PostCommitHookProperties] = None,
     ) -> Dict[str, Any]:
         """Delete records from a Delta Table that statisfy a predicate.
 
@@ -1201,6 +1206,7 @@ class DeltaTable:
             predicate: a SQL where clause. If not passed, will delete all rows.
             writer_properties: Pass writer properties to the Rust parquet writer.
             custom_metadata: custom metadata that will be added to the transaction commit.
+            post_commithook_properties: properties for the post commit hook. If None, default values are used.
 
         Returns:
             the metrics from delete.
@@ -1209,11 +1215,15 @@ class DeltaTable:
             predicate,
             writer_properties._to_dict() if writer_properties else None,
             custom_metadata,
+            post_commithook_properties.__dict__ if post_commithook_properties else None,
         )
         return json.loads(metrics)
 
     def repair(
-        self, dry_run: bool = False, custom_metadata: Optional[Dict[str, str]] = None
+        self,
+        dry_run: bool = False,
+        custom_metadata: Optional[Dict[str, str]] = None,
+        post_commithook_properties: Optional[PostCommitHookProperties] = None,
     ) -> Dict[str, Any]:
         """Repair the Delta Table by auditing active files that do not exist in the underlying
         filesystem and removes them. This can be useful when there are accidental deletions or corrupted files.
@@ -1225,6 +1235,8 @@ class DeltaTable:
         Args:
             dry_run: when activated, list only the files, otherwise add remove actions to transaction log. Defaults to False.
             custom_metadata: custom metadata that will be added to the transaction commit.
+            post_commithook_properties: properties for the post commit hook. If None, default values are used.
+
         Returns:
             The metrics from repair (FSCK) action.
 
@@ -1239,7 +1251,11 @@ class DeltaTable:
             {'dry_run': False, 'files_removed': ['6-0d084325-6885-4847-b008-82c1cf30674c-0.parquet', 5-4fba1d3e-3e20-4de1-933d-a8e13ac59f53-0.parquet']}
             ```
         """
-        metrics = self._table.repair(dry_run, custom_metadata)
+        metrics = self._table.repair(
+            dry_run,
+            custom_metadata,
+            post_commithook_properties.__dict__ if post_commithook_properties else None,
+        )
         return json.loads(metrics)
 
 
@@ -1781,6 +1797,8 @@ class TableAlterer:
         Args:
             constraints: mapping of constraint name to SQL-expression to evaluate on write
             custom_metadata: custom metadata that will be added to the transaction commit.
+            post_commithook_properties: properties for the post commit hook. If None, default values are used.
+
         Example:
             ```python
             from deltalake import DeltaTable
@@ -1822,6 +1840,8 @@ class TableAlterer:
             name: constraint name which to drop.
             raise_if_not_exists: set if should raise if not exists.
             custom_metadata: custom metadata that will be added to the transaction commit.
+            post_commithook_properties: properties for the post commit hook. If None, default values are used.
+
         Example:
             ```python
             from deltalake import DeltaTable
@@ -1924,6 +1944,7 @@ class TableOptimizer:
                                     want a commit per partition.
             writer_properties: Pass writer properties to the Rust parquet writer.
             custom_metadata: custom metadata that will be added to the transaction commit.
+            post_commithook_properties: properties for the post commit hook. If None, default values are used.
 
         Returns:
             the metrics from optimize
@@ -1991,6 +2012,7 @@ class TableOptimizer:
                                     want a commit per partition.
             writer_properties: Pass writer properties to the Rust parquet writer.
             custom_metadata: custom metadata that will be added to the transaction commit.
+            post_commithook_properties: properties for the post commit hook. If None, default values are used.
 
         Returns:
             the metrics from optimize

@@ -273,6 +273,7 @@ def write_deltalake(
             see up to 4x performance improvements over pyarrow.
         writer_properties: Pass writer properties to the Rust parquet writer.
         custom_metadata: Custom metadata to add to the commitInfo.
+        post_commithook_properties: properties for the post commit hook. If None, default values are used.
     """
     table, table_uri = try_get_table_and_table_uri(table_or_uri, storage_options)
     if table is not None:
