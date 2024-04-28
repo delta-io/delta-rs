@@ -340,6 +340,7 @@ impl RawDeltaTable {
                 cmd = cmd.with_retention_period(Duration::hours(retention_period as i64));
             }
 
+        if custom_metadata.is_some() || post_commithook_properties.is_some() {
             let mut commit_properties = CommitProperties::default();
             if let Some(metadata) = custom_metadata {
                 let json_metadata: Map<String, Value> =
@@ -352,10 +353,10 @@ impl RawDeltaTable {
                     set_post_commithook_properties(commit_properties, post_commit_hook_props)
             }
             cmd = cmd.with_commit_properties(commit_properties);
-
-
-            rt().block_on(cmd.into_future()).map_err(PythonError::from)
-        })?;
+        };
+        let (table, metrics) = rt()
+            .block_on(cmd.into_future())
+            .map_err(PythonError::from)?;
         self._table.state = table.state;
         Ok(metrics.files_deleted)
     }
@@ -408,8 +409,33 @@ impl RawDeltaTable {
             cmd = cmd.with_commit_properties(commit_properties);
         }
 
-            rt().block_on(cmd.into_future()).map_err(PythonError::from)
-        })?;
+        for (col_name, expression) in updates {
+            cmd = cmd.with_update(col_name.clone(), expression.clone());
+        }
+
+        if let Some(update_predicate) = predicate {
+            cmd = cmd.with_predicate(update_predicate);
+        }
+
+        if custom_metadata.is_some() || post_commithook_properties.is_some() {
+            let mut commit_properties = CommitProperties::default();
+            if let Some(metadata) = custom_metadata {
+                let json_metadata: Map<String, Value> =
+                    metadata.into_iter().map(|(k, v)| (k, v.into())).collect();
+                commit_properties = commit_properties.with_metadata(json_metadata);
+            };
+
+            if let Some(post_commit_hook_props) = post_commithook_properties {
+                commit_properties =
+                    set_post_commithook_properties(commit_properties, post_commit_hook_props)
+            }
+            cmd = cmd.with_commit_properties(commit_properties);
+        }
+
+        let (table, metrics) = rt()
+            .block_on(cmd.into_future())
+            .map_err(PythonError::from)?;
+>>>>>>> 29bfea1c (add clean up logs hook, expose PostCommitHookProps to python)
         self._table.state = table.state;
         Ok(serde_json::to_string(&metrics).unwrap())
     }
@@ -476,8 +502,28 @@ impl RawDeltaTable {
                     .map_err(PythonError::from)?;
             cmd = cmd.with_filters(&converted_filters);
 
-            rt().block_on(cmd.into_future()).map_err(PythonError::from)
-        })?;
+        if custom_metadata.is_some() || post_commithook_properties.is_some() {
+            let mut commit_properties = CommitProperties::default();
+            if let Some(metadata) = custom_metadata {
+                let json_metadata: Map<String, Value> =
+                    metadata.into_iter().map(|(k, v)| (k, v.into())).collect();
+                commit_properties = commit_properties.with_metadata(json_metadata);
+            };
+
+            if let Some(post_commit_hook_props) = post_commithook_properties {
+                commit_properties =
+                    set_post_commithook_properties(commit_properties, post_commit_hook_props)
+            }
+            cmd = cmd.with_commit_properties(commit_properties);
+        }
+
+        let converted_filters = convert_partition_filters(partition_filters.unwrap_or_default())
+            .map_err(PythonError::from)?;
+        cmd = cmd.with_filters(&converted_filters);
+
+        let (table, metrics) = rt()
+            .block_on(cmd.into_future())
+            .map_err(PythonError::from)?;
         self._table.state = table.state;
         Ok(serde_json::to_string(&metrics).unwrap())
     }
@@ -546,8 +592,28 @@ impl RawDeltaTable {
                     .map_err(PythonError::from)?;
             cmd = cmd.with_filters(&converted_filters);
 
-            rt().block_on(cmd.into_future()).map_err(PythonError::from)
-        })?;
+        if custom_metadata.is_some() || post_commithook_properties.is_some() {
+            let mut commit_properties = CommitProperties::default();
+            if let Some(metadata) = custom_metadata {
+                let json_metadata: Map<String, Value> =
+                    metadata.into_iter().map(|(k, v)| (k, v.into())).collect();
+                commit_properties = commit_properties.with_metadata(json_metadata);
+            };
+
+            if let Some(post_commit_hook_props) = post_commithook_properties {
+                commit_properties =
+                    set_post_commithook_properties(commit_properties, post_commit_hook_props)
+            }
+            cmd = cmd.with_commit_properties(commit_properties);
+        }
+
+        let converted_filters = convert_partition_filters(partition_filters.unwrap_or_default())
+            .map_err(PythonError::from)?;
+        cmd = cmd.with_filters(&converted_filters);
+
+        let (table, metrics) = rt()
+            .block_on(cmd.into_future())
+            .map_err(PythonError::from)?;
         self._table.state = table.state;
         Ok(serde_json::to_string(&metrics).unwrap())
     }
@@ -585,8 +651,24 @@ impl RawDeltaTable {
             cmd = cmd.with_commit_properties(commit_properties);
         }
 
-            rt().block_on(cmd.into_future()).map_err(PythonError::from)
-        })?;
+        if custom_metadata.is_some() || post_commithook_properties.is_some() {
+            let mut commit_properties = CommitProperties::default();
+            if let Some(metadata) = custom_metadata {
+                let json_metadata: Map<String, Value> =
+                    metadata.into_iter().map(|(k, v)| (k, v.into())).collect();
+                commit_properties = commit_properties.with_metadata(json_metadata);
+            };
+
+            if let Some(post_commit_hook_props) = post_commithook_properties {
+                commit_properties =
+                    set_post_commithook_properties(commit_properties, post_commit_hook_props)
+            }
+            cmd = cmd.with_commit_properties(commit_properties);
+        }
+
+        let table = rt()
+            .block_on(cmd.into_future())
+            .map_err(PythonError::from)?;
         self._table.state = table.state;
         Ok(())
     }
@@ -615,6 +697,13 @@ impl RawDeltaTable {
                     metadata.into_iter().map(|(k, v)| (k, v.into())).collect();
                 commit_properties = commit_properties.with_metadata(json_metadata);
             };
+
+            if let Some(post_commit_hook_props) = post_commithook_properties {
+                commit_properties =
+                    set_post_commithook_properties(commit_properties, post_commit_hook_props)
+            }
+            cmd = cmd.with_commit_properties(commit_properties);
+        }
 
             if let Some(post_commit_hook_props) = post_commithook_properties {
                 commit_properties =
@@ -1185,6 +1274,13 @@ impl RawDeltaTable {
             commit_properties = commit_properties.with_metadata(json_metadata);
         };
 
+        let mut commit_properties = CommitProperties::default();
+        if let Some(metadata) = custom_metadata {
+            let json_metadata: Map<String, Value> =
+                metadata.into_iter().map(|(k, v)| (k, v.into())).collect();
+            commit_properties = commit_properties.with_metadata(json_metadata);
+        };
+
         if let Some(post_commit_hook_props) = post_commithook_properties {
             commit_properties =
                 set_post_commithook_properties(commit_properties, post_commit_hook_props)
@@ -1266,11 +1362,20 @@ impl RawDeltaTable {
                 cmd = cmd.with_predicate(predicate);
             }
 
-            if let Some(writer_props) = writer_properties {
-                cmd = cmd.with_writer_properties(
-                    set_writer_properties(writer_props).map_err(PythonError::from)?,
-                );
+        if custom_metadata.is_some() || post_commithook_properties.is_some() {
+            let mut commit_properties = CommitProperties::default();
+            if let Some(metadata) = custom_metadata {
+                let json_metadata: Map<String, Value> =
+                    metadata.into_iter().map(|(k, v)| (k, v.into())).collect();
+                commit_properties = commit_properties.with_metadata(json_metadata);
+            };
+
+            if let Some(post_commit_hook_props) = post_commithook_properties {
+                commit_properties =
+                    set_post_commithook_properties(commit_properties, post_commit_hook_props)
             }
+            cmd = cmd.with_commit_properties(commit_properties);
+        }
 
             if let Some(metadata) = custom_metadata {
                 let json_metadata: Map<String, Value> =

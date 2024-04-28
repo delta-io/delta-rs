@@ -364,7 +364,7 @@ impl CommitProperties {
         self
     }
 
-    /// Configure the property to clean up expired transactions
+    /// Specify if it should clean up the logs when the logRetentionDuration interval is met
     pub fn with_cleanup_expired_logs(mut self, cleanup_expired_logs: Option<bool>) -> Self {
         self.cleanup_expired_logs = cleanup_expired_logs;
         self
