@@ -655,7 +655,8 @@ impl<'a> PostCommit<'a> {
                 cleanup_expired_logs_for(
                     self.version,
                     self.log_store.as_ref(),
-                    state.table_config().log_retention_duration().as_millis() as i64,
+                    Utc::now().timestamp_millis()
+                        - state.table_config().log_retention_duration().as_millis() as i64,
                 )
                 .await?;
             }

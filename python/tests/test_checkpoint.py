@@ -9,6 +9,7 @@ import pyarrow.parquet as pq
 import pytest
 
 from deltalake import DeltaTable, write_deltalake
+from deltalake.table import PostCommitHookProperties
 
 
 def test_checkpoint(tmp_path: pathlib.Path, sample_data: pa.Table):
@@ -94,6 +95,66 @@ def test_cleanup_metadata(tmp_path: pathlib.Path, sample_data: pa.Table):
 
     assert not first_log_path.exists()
     assert not first_failed_log_path.exists()
+    assert second_log_path.exists()
+    assert third_log_path.exists()
+    assert second_failed_log_path.exists()
+
+
+def test_cleanup_metadata_log_cleanup_hook(
+    tmp_path: pathlib.Path, sample_data: pa.Table
+):
+    delta_table = setup_cleanup_metadata(tmp_path, sample_data)
+    delta_table.create_checkpoint()
+
+    sample_data = sample_data.drop(["binary"])
+    write_deltalake(delta_table, sample_data, mode="append", engine="rust")
+
+    tmp_table_path = tmp_path / "path" / "to" / "table"
+    first_failed_log_path = (
+        tmp_table_path / "_delta_log" / "00000000000000000000.json.tmp"
+    )
+    first_log_path = tmp_table_path / "_delta_log" / "00000000000000000000.json"
+    second_log_path = tmp_table_path / "_delta_log" / "00000000000000000001.json"
+    second_failed_log_path = (
+        tmp_table_path / "_delta_log" / "00000000000000000002.json.tmp"
+    )
+    third_log_path = tmp_table_path / "_delta_log" / "00000000000000000002.json"
+
+    assert not first_log_path.exists()
+    assert not first_failed_log_path.exists()
+    assert second_log_path.exists()
+    assert third_log_path.exists()
+    assert second_failed_log_path.exists()
+
+
+def test_cleanup_metadata_log_cleanup_hook_disabled(
+    tmp_path: pathlib.Path, sample_data: pa.Table
+):
+    delta_table = setup_cleanup_metadata(tmp_path, sample_data)
+    delta_table.create_checkpoint()
+
+    sample_data = sample_data.drop(["binary"])
+    write_deltalake(
+        delta_table,
+        sample_data,
+        mode="append",
+        engine="rust",
+        post_commithook_properties=PostCommitHookProperties(cleanup_expired_logs=False),
+    )
+
+    tmp_table_path = tmp_path / "path" / "to" / "table"
+    first_failed_log_path = (
+        tmp_table_path / "_delta_log" / "00000000000000000000.json.tmp"
+    )
+    first_log_path = tmp_table_path / "_delta_log" / "00000000000000000000.json"
+    second_log_path = tmp_table_path / "_delta_log" / "00000000000000000001.json"
+    second_failed_log_path = (
+        tmp_table_path / "_delta_log" / "00000000000000000002.json.tmp"
+    )
+    third_log_path = tmp_table_path / "_delta_log" / "00000000000000000002.json"
+
+    assert first_log_path.exists()
+    assert first_failed_log_path.exists()
     assert second_log_path.exists()
     assert third_log_path.exists()
     assert second_failed_log_path.exists()
