@@ -141,6 +141,7 @@ def test_cleanup_metadata_log_cleanup_hook_disabled(
         sample_data,
         mode="append",
         engine=engine,
+        post_commithook_properties=PostCommitHookProperties(cleanup_expired_logs=False),
     )
 
     tmp_table_path = tmp_path / "path" / "to" / "table"
