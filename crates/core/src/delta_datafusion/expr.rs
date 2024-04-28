@@ -375,7 +375,7 @@ impl<'a> fmt::Display for ScalarValueFormat<'a> {
                     "'{}'::date",
                     DateTime::from_timestamp_millis((*e).into())
                         .ok_or(Error::default())?
-                        .date()
+                        .date_naive()
                         .format("%Y-%m-%d")
                 )?,
                 None => write!(f, "NULL")?,

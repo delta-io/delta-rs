@@ -47,7 +47,7 @@ impl LogStoreFactory for S3LogStoreFactory {
         location: &Url,
         options: &StorageOptions,
     ) -> DeltaResult<Arc<dyn LogStore>> {
-        let store = url_prefix_handler(store, Path::parse(location.path())?)?;
+        let store = url_prefix_handler(store, Path::parse(location.path())?);
 
         if options
             .0
