@@ -8,7 +8,8 @@ use std::ops::Range;
 use tokio::io::AsyncWrite;
 
 use deltalake_core::storage::object_store::{
-    Result as ObjectStoreResult, PutOptions, GetOptions, ListResult, MultipartId, ObjectMeta, PutResult, GetResult, ObjectStore
+    GetOptions, GetResult, ListResult, MultipartId, ObjectMeta, ObjectStore, PutOptions, PutResult,
+    Result as ObjectStoreResult,
 };
 
 pub(crate) struct GcsStorageBackend {
@@ -105,18 +106,17 @@ impl ObjectStore for GcsStorageBackend {
                         // Source would be a reqwest error which we don't have access to so the easiest thing to do is check
                         // for "429" in the error message
                         if format!("{:?}", source).contains("429") {
-                            Err(
-                                object_store::Error::AlreadyExists { path: to.to_string(), source }
-                            )
+                            Err(object_store::Error::AlreadyExists {
+                                path: to.to_string(),
+                                source,
+                            })
                         } else {
-                            Err(
-                                object_store::Error::Generic { store, source }
-                            )
+                            Err(object_store::Error::Generic { store, source })
                         }
                     }
-                    _ => Err(e)
+                    _ => Err(e),
                 }
-            },
+            }
         }
     }
 
