@@ -78,7 +78,7 @@ impl ObjectStoreFactory for S3ObjectStoreFactory {
             }),
         )?;
 
-        let store: ObjectStoreRef = limit_store_handler(inner, &options);
+        let store = limit_store_handler(inner, &options);
 
         // If the copy-if-not-exists env var is set, we don't need to instantiate a locking client or check for allow-unsafe-rename.
         if options

@@ -45,7 +45,7 @@ impl ObjectStoreFactory for GcpFactory {
         let config = config::GcpConfigHelper::try_new(options.as_gcp_options())?.build()?;
         let (inner, prefix) = parse_url_opts(url, config)?;
         let store = limit_store_handler(url_prefix_handler(inner, prefix.clone()), options);
-        Ok((url_prefix_handler(store, prefix.clone()), prefix))
+        Ok((store, prefix))
     }
 }
 

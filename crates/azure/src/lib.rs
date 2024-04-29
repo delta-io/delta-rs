@@ -45,7 +45,7 @@ impl ObjectStoreFactory for AzureFactory {
         let config = config::AzureConfigHelper::try_new(options.as_azure_options())?.build()?;
         let (inner, prefix) = parse_url_opts(url, config)?;
         let store = limit_store_handler(url_prefix_handler(inner, prefix.clone()), options);
-        Ok((url_prefix_handler(store, prefix.clone()), prefix))
+        Ok((store, prefix))
     }
 }
 
