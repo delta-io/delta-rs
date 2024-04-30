@@ -13,7 +13,7 @@ import pyarrow as pa
 import pyarrow.compute as pc
 import pytest
 from packaging import version
-from pyarrow.dataset import ParquetFileFormat, ParquetReadOptions
+from pyarrow.dataset import ParquetFileFormat, ParquetReadOptions, dataset
 from pyarrow.lib import RecordBatchReader
 
 from deltalake import DeltaTable, Schema, write_deltalake
@@ -1304,6 +1304,10 @@ def test_large_arrow_types(tmp_path: pathlib.Path):
 
     dt = DeltaTable(tmp_path)
     assert table.schema == dt.schema().to_pyarrow(as_large_types=True)
+
+    ds = dt.to_pyarrow_dataset(schema=schema)
+    union_ds = dataset([ds, dataset(table)])
+    assert union_ds.to_table().shape[0] == 4
 
 
 def test_partition_large_arrow_types(tmp_path: pathlib.Path):

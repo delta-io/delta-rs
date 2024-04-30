@@ -1030,6 +1030,7 @@ class DeltaTable:
         partitions: Optional[List[Tuple[str, str, Any]]] = None,
         filesystem: Optional[Union[str, pa_fs.FileSystem]] = None,
         parquet_read_options: Optional[ParquetReadOptions] = None,
+        schema: Optional[pyarrow.Schema] = None,
     ) -> pyarrow.dataset.Dataset:
         """
         Build a PyArrow Dataset using data from the DeltaTable.
@@ -1038,6 +1039,8 @@ class DeltaTable:
             partitions: A list of partition filters, see help(DeltaTable.files_by_partitions) for filter syntax
             filesystem: A concrete implementation of the Pyarrow FileSystem or a fsspec-compatible interface. If None, the first file path will be used to determine the right FileSystem
             parquet_read_options: Optional read options for Parquet. Use this to handle INT96 to timestamp conversion for edge cases like 0001-01-01 or 9999-12-31
+            schema: The schema to use for the dataset. If None, the schema of the DeltaTable will be used. This can be used to force reading of Parquet/Arrow datatypes
+                that DeltaLake can't represent in it's schema (e.g. LargeString).
 
          More info: https://arrow.apache.org/docs/python/generated/pyarrow.dataset.ParquetReadOptions.html
 
@@ -1107,7 +1110,7 @@ class DeltaTable:
             )
         ]
 
-        schema = self.schema().to_pyarrow()
+        schema = schema or self.schema().to_pyarrow()
 
         dictionary_columns = format.read_options.dictionary_columns or set()
         if dictionary_columns:
