@@ -908,6 +908,10 @@ pub(crate) fn get_null_of_arrow_type(t: &ArrowDataType) -> DeltaResult<ScalarVal
             precision.to_owned(),
             scale.to_owned(),
         )),
+        ArrowDataType::Time32(TimeUnit::Second) => Ok(ScalarValue::Time32Second(None)),
+        ArrowDataType::Time32(TimeUnit::Millisecond) => Ok(ScalarValue::Time32Millisecond(None)),
+        ArrowDataType::Time64(TimeUnit::Microsecond) => Ok(ScalarValue::Time64Microsecond(None)),
+        ArrowDataType::Time64(TimeUnit::Nanosecond) => Ok(ScalarValue::Time64Nanosecond(None)),
         ArrowDataType::Timestamp(unit, tz) => {
             let tz = tz.to_owned();
             Ok(match unit {

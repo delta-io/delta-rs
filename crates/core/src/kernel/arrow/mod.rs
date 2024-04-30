@@ -135,6 +135,7 @@ impl TryFrom<&DataType> for ArrowDataType {
                         // timezone. Stored as 4 bytes integer representing days since 1970-01-01
                         Ok(ArrowDataType::Date32)
                     }
+                    PrimitiveType::Time => Ok(ArrowDataType::Time64(TimeUnit::Nanosecond)),
                     PrimitiveType::Timestamp => Ok(ArrowDataType::Timestamp(
                         TimeUnit::Microsecond,
                         Some("UTC".into()),
@@ -223,6 +224,9 @@ impl TryFrom<&ArrowDataType> for DataType {
             }),
             ArrowDataType::Date32 => Ok(DataType::Primitive(PrimitiveType::Date)),
             ArrowDataType::Date64 => Ok(DataType::Primitive(PrimitiveType::Date)),
+            ArrowDataType::Time64(TimeUnit::Nanosecond) => {
+                Ok(DataType::Primitive(PrimitiveType::Time))
+            }
             ArrowDataType::Timestamp(TimeUnit::Microsecond, None) => {
                 Ok(DataType::Primitive(PrimitiveType::TimestampNtz))
             }
@@ -267,7 +271,7 @@ impl TryFrom<&ArrowDataType> for DataType {
             }
             ArrowDataType::Dictionary(_, value_type) => Ok(value_type.as_ref().try_into()?),
             s => Err(ArrowError::SchemaError(format!(
-                "Invalid data type for Delta Lake: {s}"
+                "Invalid data type for Delta Lake {s}"
             ))),
         }
     }
@@ -801,6 +805,15 @@ mod tests {
             .unwrap_err(),
             _
         ));
+    }
+
+    #[test]
+    fn test_arrow_from_delta_time_type() {
+        let time_field = DataType::Primitive(PrimitiveType::Time);
+        assert_eq!(
+            <ArrowDataType as TryFrom<&DataType>>::try_from(&time_field).unwrap(),
+            ArrowDataType::Time64(TimeUnit::Nanosecond)
+        );
     }
 
     #[test]
