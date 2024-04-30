@@ -93,6 +93,7 @@ use crate::protocol::DeltaOperation;
 use crate::table::config::TableConfig;
 use crate::table::state::DeltaTableState;
 use crate::{crate_version, DeltaResult};
+use tracing::debug;
 
 pub use self::protocol::INSTANCE as PROTOCOL;
 
@@ -499,6 +500,7 @@ impl<'a> std::future::IntoFuture for PreparedCommit<'a> {
             let tmp_commit = &this.path;
 
             if this.table_data.is_none() {
+                debug!("** Invoking write_commit_entry for version 0 **");
                 this.log_store.write_commit_entry(0, tmp_commit).await?;
                 return Ok(PostCommit {
                     version: 0,
@@ -522,6 +524,7 @@ impl<'a> std::future::IntoFuture for PreparedCommit<'a> {
             let mut attempt_number = 1;
             while attempt_number <= this.max_retries {
                 let version = read_snapshot.version() + attempt_number as i64;
+                debug!("** Invoking write_commit_entry for version ({version}) and tmp commit: ({tmp_commit}) **");
                 match this.log_store.write_commit_entry(version, tmp_commit).await {
                     Ok(()) => {
                         return Ok(PostCommit {

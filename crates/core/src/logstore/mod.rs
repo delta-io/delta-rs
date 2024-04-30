@@ -444,6 +444,7 @@ pub async fn write_commit_entry(
 ) -> Result<(), TransactionError> {
     // move temporary commit file to delta log directory
     // rely on storage to fail if the file already exists -
+    debug!("** Entering default implementation for write_commit_entry for commit: ({tmp_commit}) and version ({version}) **");
     storage
         .rename_if_not_exists(tmp_commit, &commit_uri_from_version(version))
         .await
@@ -464,6 +465,7 @@ pub async fn abort_commit_entry(
     _version: i64,
     tmp_commit: &Path,
 ) -> Result<(), TransactionError> {
+    debug!("** Entering default implementation for abort_commit_entry for commit: ({tmp_commit}) and version ({_version}) **");
     storage.delete_with_retries(tmp_commit, 15).await?;
     Ok(())
 }

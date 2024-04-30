@@ -19,6 +19,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::AsyncWrite;
 use url::Url;
+use tracing::{debug, warn};
 
 use crate::errors::DynamoDbConfigError;
 #[cfg(feature = "native-tls")]
@@ -372,6 +373,7 @@ impl ObjectStore for S3StorageBackend {
 
     async fn rename_if_not_exists(&self, from: &Path, to: &Path) -> ObjectStoreResult<()> {
         if self.allow_unsafe_rename {
+            debug!("** Calling rename_if_not_exists, renaming from ({from}) to ({to}) **");
             self.inner.rename(from, to).await
         } else {
             Err(ObjectStoreError::Generic {
