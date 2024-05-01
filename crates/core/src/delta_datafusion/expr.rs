@@ -363,9 +363,10 @@ impl<'a> fmt::Display for ScalarValueFormat<'a> {
             ScalarValue::Date32(e) => match e {
                 Some(e) => write!(
                     f,
-                    "{}",
+                    "'{}'::date",
                     NaiveDate::from_num_days_from_ce_opt((EPOCH_DAYS_FROM_CE + (*e)).into())
                         .ok_or(Error::default())?
+                        .format("%Y-%m-%d")
                 )?,
                 None => write!(f, "NULL")?,
             },
