@@ -364,8 +364,7 @@ impl<'a> fmt::Display for ScalarValueFormat<'a> {
                 Some(e) => write!(
                     f,
                     "{}",
-                    NaiveDate::from_num_days_from_ce_opt((EPOCH_DAYS_FROM_CE + (*e)).into())
-                        .ok_or(Error::default())?
+                    NaiveDate::from_num_days_from_ce_opt(EPOCH_DAYS_FROM_CE + (*e)).ok_or(Error)?
                 )?,
                 None => write!(f, "NULL")?,
             },
@@ -417,7 +416,7 @@ impl<'a> fmt::Display for ScalarValueFormat<'a> {
                 None => write!(f, "NULL")?,
             },
             ScalarValue::Null => write!(f, "NULL")?,
-            _ => return Err(fmt::Error),
+            _ => return Err(Error),
         };
         Ok(())
     }

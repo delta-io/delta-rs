@@ -273,7 +273,7 @@ impl std::future::IntoFuture for DeleteBuilder {
     type IntoFuture = BoxFuture<'static, Self::Output>;
 
     fn into_future(self) -> Self::IntoFuture {
-        let mut this = self;
+        let this = self;
 
         Box::pin(async move {
             PROTOCOL.check_append_only(&this.snapshot.snapshot)?;

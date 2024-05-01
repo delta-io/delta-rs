@@ -95,6 +95,7 @@ use crate::{open_table, open_table_with_storage_options, DeltaTable};
 
 const PATH_COLUMN: &str = "__delta_rs_path";
 
+pub mod cdf;
 pub mod expr;
 pub mod logical;
 pub mod physical;
@@ -146,6 +147,10 @@ impl DataFusionMixins for Snapshot {
         _arrow_schema(self, true)
     }
 
+    fn input_schema(&self) -> DeltaResult<ArrowSchemaRef> {
+        _arrow_schema(self, false)
+    }
+
     fn parse_predicate_expression(
         &self,
         expr: impl AsRef<str>,
@@ -154,15 +159,15 @@ impl DataFusionMixins for Snapshot {
         let schema = DFSchema::try_from(self.arrow_schema()?.as_ref().to_owned())?;
         parse_predicate_expression(&schema, expr, df_state)
     }
-
-    fn input_schema(&self) -> DeltaResult<ArrowSchemaRef> {
-        _arrow_schema(self, false)
-    }
 }
 
 impl DataFusionMixins for EagerSnapshot {
     fn arrow_schema(&self) -> DeltaResult<ArrowSchemaRef> {
         self.snapshot().arrow_schema()
+    }
+
+    fn input_schema(&self) -> DeltaResult<ArrowSchemaRef> {
+        self.snapshot().input_schema()
     }
 
     fn parse_predicate_expression(
@@ -171,10 +176,6 @@ impl DataFusionMixins for EagerSnapshot {
         df_state: &SessionState,
     ) -> DeltaResult<Expr> {
         self.snapshot().parse_predicate_expression(expr, df_state)
-    }
-
-    fn input_schema(&self) -> DeltaResult<ArrowSchemaRef> {
-        self.snapshot().input_schema()
     }
 }
 
@@ -993,6 +994,27 @@ pub(crate) fn partitioned_file_from_action(
     }
 }
 
+fn parse_date(
+    stat_val: &serde_json::Value,
+    field_dt: &ArrowDataType,
+) -> DataFusionResult<ScalarValue> {
+    let string = match stat_val {
+        serde_json::Value::String(s) => s.to_owned(),
+        _ => stat_val.to_string(),
+    };
+
+    let time_micro = ScalarValue::try_from_string(string, &ArrowDataType::Date32)?;
+    let cast_arr = cast_with_options(
+        &time_micro.to_array()?,
+        field_dt,
+        &CastOptions {
+            safe: false,
+            ..Default::default()
+        },
+    )?;
+    ScalarValue::try_from_array(&cast_arr, 0)
+}
+
 fn parse_timestamp(
     stat_val: &serde_json::Value,
     field_dt: &ArrowDataType,
@@ -1027,6 +1049,7 @@ pub(crate) fn to_correct_scalar_value(
         serde_json::Value::Null => Ok(Some(get_null_of_arrow_type(field_dt)?)),
         serde_json::Value::String(string_val) => match field_dt {
             ArrowDataType::Timestamp(_, _) => Ok(Some(parse_timestamp(stat_val, field_dt)?)),
+            ArrowDataType::Date32 => Ok(Some(parse_date(stat_val, field_dt)?)),
             _ => Ok(Some(ScalarValue::try_from_string(
                 string_val.to_owned(),
                 field_dt,
@@ -1034,6 +1057,7 @@ pub(crate) fn to_correct_scalar_value(
         },
         other => match field_dt {
             ArrowDataType::Timestamp(_, _) => Ok(Some(parse_timestamp(stat_val, field_dt)?)),
+            ArrowDataType::Date32 => Ok(Some(parse_date(stat_val, field_dt)?)),
             _ => Ok(Some(ScalarValue::try_from_string(
                 other.to_string(),
                 field_dt,

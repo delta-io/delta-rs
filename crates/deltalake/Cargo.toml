@@ -20,7 +20,7 @@ features = ["azure", "datafusion", "gcs", "hdfs", "json", "mount", "python", "s3
 deltalake-core = { version = "0.17.1", path = "../core" }
 deltalake-aws = { version = "0.1.0", path = "../aws", default-features = false, optional = true }
 deltalake-azure = { version = "0.1.0", path = "../azure", optional = true }
-deltalake-gcp = { version = "0.1.0", path = "../gcp", optional = true }
+deltalake-gcp = { version = "0.2", path = "../gcp", optional = true }
 deltalake-catalog-glue = { version = "0.1.0", path = "../catalog-glue", optional = true }
 deltalake-mount = { version = "0.1.0", path = "../mount", optional = true }
 
