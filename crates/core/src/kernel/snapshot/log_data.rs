@@ -473,7 +473,7 @@ mod datafusion {
     use super::*;
     use crate::kernel::arrow::extract::{extract_and_cast_opt, extract_column};
 
-    // TODO validate this works with "wide and narrow" boulds / stats
+    // TODO validate this works with "wide and narrow" builds / stats
 
     impl FileStatsAccessor<'_> {
         fn collect_count(&self, name: &str) -> Precision<usize> {
