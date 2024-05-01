@@ -1306,7 +1306,7 @@ def test_large_arrow_types(tmp_path: pathlib.Path):
     assert table.schema == dt.schema().to_pyarrow(as_large_types=True)
 
 
-@pytest.mark.skipif(int(pyarrow.__version__.split(".")[0]) < 10, reason="map casts require pyarrow >= 10")
+@pytest.mark.skipif(int(pa.__version__.split(".")[0]) < 10, reason="map casts require pyarrow >= 10")
 def test_large_arrow_types_dataset_as_large_types(tmp_path: pathlib.Path):
     pylist = [
         {"name": "Joey", "gender": b"M", "arr_type": ["x", "y"], "dict": {"a": b"M"}},
@@ -1330,7 +1330,7 @@ def test_large_arrow_types_dataset_as_large_types(tmp_path: pathlib.Path):
     assert union_ds.to_table().shape[0] == 4
 
 
-@pytest.mark.skipif(int(pyarrow.__version__.split(".")[0]) < 10, reason="map casts require pyarrow >= 10")
+@pytest.mark.skipif(int(pa.__version__.split(".")[0]) < 10, reason="map casts require pyarrow >= 10")
 def test_large_arrow_types_explicit_scan_schema(tmp_path: pathlib.Path):
     pylist = [
         {"name": "Joey", "gender": b"M", "arr_type": ["x", "y"], "dict": {"a": b"M"}},
