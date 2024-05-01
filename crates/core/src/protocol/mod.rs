@@ -396,6 +396,13 @@ pub enum DeltaOperation {
         not_matched_by_source_predicates: Vec<MergePredicate>,
     },
 
+    /// Sets the metadata of the table
+    #[serde(rename_all = "camelCase")]
+    SetMetadata {
+        /// Metadata associated with the new table
+        metadata: Metadata,
+    },
+
     /// Represents a Delta `StreamingUpdate` operation.
     #[serde(rename_all = "camelCase")]
     StreamingUpdate {
@@ -460,6 +467,7 @@ impl DeltaOperation {
             DeltaOperation::Delete { .. } => "DELETE",
             DeltaOperation::Update { .. } => "UPDATE",
             DeltaOperation::Merge { .. } => "MERGE",
+            DeltaOperation::SetMetadata { .. } => "SET METADATA",
             DeltaOperation::StreamingUpdate { .. } => "STREAMING UPDATE",
             DeltaOperation::Optimize { .. } => "OPTIMIZE",
             DeltaOperation::FileSystemCheck { .. } => "FSCK",
@@ -507,7 +515,8 @@ impl DeltaOperation {
             | Self::VacuumStart { .. }
             | Self::VacuumEnd { .. }
             | Self::AddConstraint { .. }
-            | Self::DropConstraint { .. } => false,
+            | Self::DropConstraint { .. }
+            | Self::SetMetadata { .. } => false,
             Self::Create { .. }
             | Self::FileSystemCheck {}
             | Self::StreamingUpdate { .. }

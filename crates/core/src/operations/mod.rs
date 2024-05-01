@@ -37,6 +37,7 @@ pub use ::datafusion::physical_plan::common::collect as collect_sendable_stream;
 use arrow::record_batch::RecordBatch;
 use optimize::OptimizeBuilder;
 use restore::RestoreBuilder;
+use crate::operations::set_metadata::SetMetadataBuilder;
 
 #[cfg(feature = "datafusion")]
 pub mod constraints;
@@ -51,6 +52,7 @@ pub mod update;
 #[cfg(feature = "datafusion")]
 pub mod write;
 pub mod writer;
+mod set_metadata;
 
 /// The [Operation] trait defines common behaviors that all operations builders
 /// should have consistent
@@ -159,6 +161,23 @@ impl DeltaOps {
     #[must_use]
     pub fn optimize<'a>(self) -> OptimizeBuilder<'a> {
         OptimizeBuilder::new(self.0.log_store, self.0.state.unwrap())
+    }
+
+    /// Sets the metadata for a table
+    ///
+    /// ```
+    /// use deltalake_core::DeltaOps;
+    ///
+    /// async {
+    ///     let ops = DeltaOps::try_from_uri("memory://").await.unwrap();
+    ///     let table = ops.create().with_table_name("my_table").await.unwrap();
+    ///     let table = DeltaOps(table).set_metadata().await.unwrap();
+    ///     assert_eq!(table.version(), 1);
+    /// };
+    /// ```
+    #[must_use]
+    pub fn set_metadata(self) -> SetMetadataBuilder {
+        SetMetadataBuilder::new(self.0.log_store, self.0.state.unwrap())
     }
 
     /// Delete data from Delta table
