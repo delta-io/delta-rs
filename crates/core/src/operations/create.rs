@@ -544,7 +544,7 @@ mod tests {
             .unwrap();
         table.load().await.unwrap();
         assert_eq!(table.version(), 1);
-        /// Checks if files got removed after overwrite
+        // Checks if files got removed after overwrite
         assert_eq!(table.get_files_count(), 0);
     }
 
@@ -569,7 +569,7 @@ mod tests {
             .unwrap();
         table.load().await.unwrap();
         assert_eq!(table.version(), 1);
-        /// Checks if files got removed after overwrite
+        // Checks if files got removed after overwrite
         assert_eq!(table.get_files_count(), 0);
     }
 }

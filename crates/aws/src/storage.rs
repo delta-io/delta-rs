@@ -7,7 +7,9 @@ use deltalake_core::storage::object_store::{
     aws::AmazonS3ConfigKey, parse_url_opts, GetOptions, GetResult, ListResult, MultipartId,
     ObjectMeta, ObjectStore, PutOptions, PutResult, Result as ObjectStoreResult,
 };
-use deltalake_core::storage::{str_is_truthy, ObjectStoreFactory, ObjectStoreRef, StorageOptions};
+use deltalake_core::storage::{
+    limit_store_handler, str_is_truthy, ObjectStoreFactory, ObjectStoreRef, StorageOptions,
+};
 use deltalake_core::{DeltaResult, ObjectStoreError, Path};
 use futures::stream::BoxStream;
 use futures::Future;
@@ -68,7 +70,7 @@ impl ObjectStoreFactory for S3ObjectStoreFactory {
         options: &StorageOptions,
     ) -> DeltaResult<(ObjectStoreRef, Path)> {
         let options = self.with_env_s3(options);
-        let (store, prefix) = parse_url_opts(
+        let (inner, prefix) = parse_url_opts(
             url,
             options.0.iter().filter_map(|(key, value)| {
                 let s3_key = AmazonS3ConfigKey::from_str(&key.to_ascii_lowercase()).ok()?;
@@ -76,22 +78,25 @@ impl ObjectStoreFactory for S3ObjectStoreFactory {
             }),
         )?;
 
+        let store = limit_store_handler(inner, &options);
+
+        // If the copy-if-not-exists env var is set, we don't need to instantiate a locking client or check for allow-unsafe-rename.
         if options
             .0
             .contains_key(AmazonS3ConfigKey::CopyIfNotExists.as_ref())
         {
-            // If the copy-if-not-exists env var is set, we don't need to instantiate a locking client or check for allow-unsafe-rename.
-            return Ok((Arc::from(store), prefix));
+            Ok((Arc::from(store), prefix))
+        } else {
+            let s3_options = S3StorageOptions::from_map(&options.0)?;
+
+            let store = S3StorageBackend::try_new(
+                store,
+                Some("dynamodb") == s3_options.locking_provider.as_deref()
+                    || s3_options.allow_unsafe_rename,
+            )?;
+
+            Ok((Arc::new(store), prefix))
         }
-
-        let options = S3StorageOptions::from_map(&options.0)?;
-
-        let store = S3StorageBackend::try_new(
-            store.into(),
-            Some("dynamodb") == options.locking_provider.as_deref() || options.allow_unsafe_rename,
-        )?;
-
-        Ok((Arc::new(store), prefix))
     }
 }
 
