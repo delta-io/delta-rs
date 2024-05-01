@@ -9,5 +9,3 @@ pub use deltalake_aws as aws;
 pub use deltalake_azure as azure;
 #[cfg(feature = "gcs")]
 pub use deltalake_gcp as gcp;
-#[cfg(feature = "mount")]
-pub use deltalake_mount as mount;
