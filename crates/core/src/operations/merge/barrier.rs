@@ -6,7 +6,7 @@
 //! To determine if a file contains zero changes, the input stream is
 //! exhausted. Afterwards, records are then dropped.
 //!
-//! Bookkeeping is maintained to determine which files have modifications so
+//! Bookkeeping is maintained to determine which files have modifications, so
 //! they can be removed from the delta log.
 
 use std::{

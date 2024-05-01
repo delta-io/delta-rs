@@ -41,7 +41,7 @@ use futures::future::BoxFuture;
 use parquet::file::properties::WriterProperties;
 use serde::Serialize;
 
-use super::transaction::{FinalizedCommit, PROTOCOL};
+use super::transaction::PROTOCOL;
 use super::write::write_execution_plan;
 use super::{
     datafusion_utils::Expression,
@@ -186,7 +186,6 @@ async fn execute(
 
     let exec_start = Instant::now();
     let mut metrics = UpdateMetrics::default();
-    let version = snapshot.version();
 
     if updates.is_empty() {
         return Ok((snapshot, metrics));
@@ -427,7 +426,7 @@ impl std::future::IntoFuture for UpdateBuilder {
     type IntoFuture = BoxFuture<'static, Self::Output>;
 
     fn into_future(self) -> Self::IntoFuture {
-        let mut this = self;
+        let this = self;
 
         Box::pin(async move {
             PROTOCOL.check_append_only(&this.snapshot.snapshot)?;
