@@ -23,6 +23,8 @@ pub struct LoadBuilder {
     columns: Option<Vec<String>>,
 }
 
+impl super::Operation<()> for LoadBuilder {}
+
 impl LoadBuilder {
     /// Create a new [`LoadBuilder`]
     pub fn new(log_store: LogStoreRef, snapshot: DeltaTableState) -> Self {

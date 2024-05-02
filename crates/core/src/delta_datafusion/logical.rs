@@ -34,10 +34,6 @@ impl UserDefinedLogicalNodeCore for MetricObserver {
         vec![]
     }
 
-    fn fmt_for_explain(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(f, "MetricObserver id={}", &self.id)
-    }
-
     fn prevent_predicate_push_down_columns(&self) -> HashSet<String> {
         if self.enable_pushdown {
             HashSet::new()
@@ -48,6 +44,10 @@ impl UserDefinedLogicalNodeCore for MetricObserver {
                 .map(|f| f.name().clone())
                 .collect()
         }
+    }
+
+    fn fmt_for_explain(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "MetricObserver id={}", &self.id)
     }
 
     fn from_template(

@@ -211,6 +211,8 @@ pub struct OptimizeBuilder<'a> {
     min_commit_interval: Option<Duration>,
 }
 
+impl super::Operation<()> for OptimizeBuilder<'_> {}
+
 impl<'a> OptimizeBuilder<'a> {
     /// Create a new [`OptimizeBuilder`]
     pub fn new(log_store: LogStoreRef, snapshot: DeltaTableState) -> Self {

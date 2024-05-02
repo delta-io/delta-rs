@@ -28,8 +28,8 @@ pub mod vacuum;
 #[cfg(feature = "datafusion")]
 use self::{
     constraints::ConstraintBuilder, datafusion_utils::Expression, delete::DeleteBuilder,
-    drop_constraints::DropConstraintBuilder, load::LoadBuilder, merge::MergeBuilder,
-    update::UpdateBuilder, write::WriteBuilder,
+    drop_constraints::DropConstraintBuilder, load::LoadBuilder, load_cdf::CdfLoadBuilder,
+    merge::MergeBuilder, update::UpdateBuilder, write::WriteBuilder,
 };
 #[cfg(feature = "datafusion")]
 pub use ::datafusion::physical_plan::common::collect as collect_sendable_stream;
@@ -45,6 +45,8 @@ pub mod delete;
 #[cfg(feature = "datafusion")]
 mod load;
 #[cfg(feature = "datafusion")]
+pub mod load_cdf;
+#[cfg(feature = "datafusion")]
 pub mod merge;
 #[cfg(feature = "datafusion")]
 pub mod update;
@@ -52,7 +54,9 @@ pub mod update;
 pub mod write;
 pub mod writer;
 
-// TODO make ops consume a snapshot ...
+/// The [Operation] trait defines common behaviors that all operations builders
+/// should have consistent
+pub(crate) trait Operation<State>: std::future::IntoFuture {}
 
 /// High level interface for executing commands against a DeltaTable
 pub struct DeltaOps(pub DeltaTable);
@@ -132,6 +136,13 @@ impl DeltaOps {
     #[must_use]
     pub fn load(self) -> LoadBuilder {
         LoadBuilder::new(self.0.log_store, self.0.state.unwrap())
+    }
+
+    /// Load a table with CDF Enabled
+    #[cfg(feature = "datafusion")]
+    #[must_use]
+    pub fn load_cdf(self) -> CdfLoadBuilder {
+        CdfLoadBuilder::new(self.0.log_store, self.0.state.unwrap())
     }
 
     /// Write data to Delta table

@@ -1,6 +1,6 @@
 [package]
 name = "deltalake-aws"
-version = "0.1.0"
+version = "0.1.1"
 authors.workspace = true
 keywords.workspace = true
 readme.workspace = true

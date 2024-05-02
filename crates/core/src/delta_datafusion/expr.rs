@@ -22,7 +22,7 @@
 //! Utility functions for Datafusion's Expressions
 
 use std::{
-    fmt::{self, format, Display, Error, Formatter, Write},
+    fmt::{self, Display, Error, Formatter, Write},
     sync::Arc,
 };
 
@@ -74,6 +74,18 @@ impl<'a> ContextProvider for DeltaContextProvider<'a> {
     }
 
     fn get_table_source(&self, _name: TableReference) -> DFResult<Arc<dyn TableSource>> {
+        unimplemented!()
+    }
+
+    fn udfs_names(&self) -> Vec<String> {
+        unimplemented!()
+    }
+
+    fn udafs_names(&self) -> Vec<String> {
+        unimplemented!()
+    }
+
+    fn udwfs_names(&self) -> Vec<String> {
         unimplemented!()
     }
 }
@@ -352,8 +364,7 @@ impl<'a> fmt::Display for ScalarValueFormat<'a> {
                 Some(e) => write!(
                     f,
                     "{}",
-                    NaiveDate::from_num_days_from_ce_opt((EPOCH_DAYS_FROM_CE + (*e)).into())
-                        .ok_or(Error::default())?
+                    NaiveDate::from_num_days_from_ce_opt(EPOCH_DAYS_FROM_CE + (*e)).ok_or(Error)?
                 )?,
                 None => write!(f, "NULL")?,
             },
@@ -363,7 +374,7 @@ impl<'a> fmt::Display for ScalarValueFormat<'a> {
                     "'{}'::date",
                     DateTime::from_timestamp_millis((*e).into())
                         .ok_or(Error::default())?
-                        .date()
+                        .date_naive()
                         .format("%Y-%m-%d")
                 )?,
                 None => write!(f, "NULL")?,
@@ -405,7 +416,7 @@ impl<'a> fmt::Display for ScalarValueFormat<'a> {
                 None => write!(f, "NULL")?,
             },
             ScalarValue::Null => write!(f, "NULL")?,
-            _ => return Err(fmt::Error),
+            _ => return Err(Error),
         };
         Ok(())
     }
@@ -416,8 +427,13 @@ mod test {
     use arrow_schema::DataType as ArrowDataType;
     use datafusion::prelude::SessionContext;
     use datafusion_common::{Column, ScalarValue, ToDFSchema};
-    use datafusion_expr::{cardinality, col, lit, substring, Cast, Expr, ExprSchemable};
+    use datafusion_expr::expr::ScalarFunction;
+    use datafusion_expr::{
+        col, lit, substring, BinaryExpr, Cast, Expr, ExprSchemable, ScalarFunctionDefinition,
+    };
+    use datafusion_functions::core::arrow_cast;
     use datafusion_functions::encoding::expr_fn::decode;
+    use datafusion_functions_array::expr_fn::cardinality;
 
     use crate::delta_datafusion::{DataFusionMixins, DeltaSessionContext};
     use crate::kernel::{ArrayType, DataType, PrimitiveType, StructField, StructType};
@@ -539,13 +555,24 @@ mod test {
 
         // String expression that we output must be parsable for conflict resolution.
         let tests = vec![
-            simple!(
-                Expr::Cast(Cast {
+            ParseTest {
+                expr: Expr::Cast(Cast {
                     expr: Box::new(lit(1_i64)),
                     data_type: ArrowDataType::Int32
                 }),
-                "arrow_cast(1, 'Int32')".to_string()
-            ),
+                expected: "arrow_cast(1, 'Int32')".to_string(),
+                override_expected_expr: Some(
+                    datafusion_expr::Expr::ScalarFunction(
+                        ScalarFunction {
+                            func_def: ScalarFunctionDefinition::UDF(arrow_cast()),
+                            args: vec![
+                                lit(ScalarValue::Int64(Some(1))),
+                                lit(ScalarValue::Utf8(Some("Int32".into())))
+                            ]
+                        }
+                    )
+                ),
+            },
             simple!(
                 Expr::Column(Column::from_qualified_name_ignore_case("Value3")).eq(lit(3_i64)),
                 "Value3 = 3".to_string()
@@ -624,9 +651,8 @@ mod test {
                 substring(col("modified"), lit(0_i64), lit(4_i64)).eq(lit("2021")),
                 "substr(modified, 0, 4) = '2021'".to_string()
             ),
-            simple!(
-                col("value")
-                    .cast_to(
+            ParseTest {
+                expr: col("value").cast_to(
                         &arrow_schema::DataType::Utf8,
                         &table
                             .snapshot()
@@ -640,8 +666,23 @@ mod test {
                     )
                     .unwrap()
                     .eq(lit("1")),
-                "arrow_cast(value, 'Utf8') = '1'".to_string()
-            ),
+                expected: "arrow_cast(value, 'Utf8') = '1'".to_string(),
+                override_expected_expr: Some(
+                    datafusion_expr::Expr::BinaryExpr(BinaryExpr {
+                        left: Box::new(datafusion_expr::Expr::ScalarFunction(
+                            ScalarFunction {
+                                func_def: ScalarFunctionDefinition::UDF(arrow_cast()),
+                                args: vec![
+                                    col("value"),
+                                    lit(ScalarValue::Utf8(Some("Utf8".into())))
+                                ]
+                            }
+                        )),
+                        op: datafusion_expr::Operator::Eq,
+                        right: Box::new(lit(ScalarValue::Utf8(Some("1".into()))))
+                    })
+                ),
+            },
             simple!(
                 col("_struct").field("a").eq(lit(20_i64)),
                 "_struct['a'] = 20".to_string()
@@ -662,11 +703,16 @@ mod test {
                 expr: col("_timestamp_ntz").gt(lit(ScalarValue::TimestampMicrosecond(Some(1262304000000000), None))),
                 expected: "_timestamp_ntz > arrow_cast('2010-01-01T00:00:00.000000', 'Timestamp(Microsecond, None)')".to_string(),
                 override_expected_expr: Some(col("_timestamp_ntz").gt(
-                    datafusion_expr::Expr::Cast( Cast {
-                        expr: Box::new(lit(ScalarValue::Utf8(Some("2010-01-01T00:00:00.000000".into())))),
-                        data_type:ArrowDataType::Timestamp(arrow_schema::TimeUnit::Microsecond, None)
-                    }
-                    ))),
+                    datafusion_expr::Expr::ScalarFunction(
+                        ScalarFunction {
+                            func_def: ScalarFunctionDefinition::UDF(arrow_cast()),
+                            args: vec![
+                                lit(ScalarValue::Utf8(Some("2010-01-01T00:00:00.000000".into()))),
+                                lit(ScalarValue::Utf8(Some("Timestamp(Microsecond, None)".into())))
+                            ]
+                        }
+                    )
+                )),
             },
             ParseTest {
                 expr: col("_timestamp").gt(lit(ScalarValue::TimestampMicrosecond(
@@ -675,10 +721,16 @@ mod test {
                 ))),
                 expected: "_timestamp > arrow_cast('2010-01-01T00:00:00.000000', 'Timestamp(Microsecond, Some(\"UTC\"))')".to_string(),
                 override_expected_expr: Some(col("_timestamp").gt(
-                    datafusion_expr::Expr::Cast( Cast {
-                        expr: Box::new(lit(ScalarValue::Utf8(Some("2010-01-01T00:00:00.000000".into())))),
-                        data_type:ArrowDataType::Timestamp(arrow_schema::TimeUnit::Microsecond, Some("UTC".into()))
-                    }))),
+                    datafusion_expr::Expr::ScalarFunction(
+                        ScalarFunction {
+                            func_def: ScalarFunctionDefinition::UDF(arrow_cast()),
+                            args: vec![
+                                lit(ScalarValue::Utf8(Some("2010-01-01T00:00:00.000000".into()))),
+                                lit(ScalarValue::Utf8(Some("Timestamp(Microsecond, Some(\"UTC\"))".into())))
+                            ]
+                        }
+                    )
+                )),
             },
         ];
 

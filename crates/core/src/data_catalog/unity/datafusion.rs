@@ -8,6 +8,7 @@ use dashmap::DashMap;
 use datafusion::catalog::schema::SchemaProvider;
 use datafusion::catalog::{CatalogProvider, CatalogProviderList};
 use datafusion::datasource::TableProvider;
+use datafusion_common::DataFusionError;
 use tracing::error;
 
 use super::models::{GetTableResponse, ListCatalogsResponse, ListTableSummariesResponse};
@@ -180,25 +181,24 @@ impl SchemaProvider for UnitySchemaProvider {
         self.table_names.clone()
     }
 
-    async fn table(&self, name: &str) -> Option<Arc<dyn TableProvider>> {
+    async fn table(&self, name: &str) -> datafusion_common::Result<Option<Arc<dyn TableProvider>>> {
         let maybe_table = self
             .client
             .get_table(&self.catalog_name, &self.schema_name, name)
             .await
-            .ok()?;
+            .map_err(|err| DataFusionError::External(Box::new(err)))?;
 
         match maybe_table {
             GetTableResponse::Success(table) => {
                 let table = DeltaTableBuilder::from_uri(table.storage_location)
                     .with_storage_options(self.storage_options.clone())
                     .load()
-                    .await
-                    .ok()?;
-                Some(Arc::new(table))
+                    .await?;
+                Ok(Some(Arc::new(table)))
             }
             GetTableResponse::Error(err) => {
                 error!("failed to fetch table from unity catalog: {}", err.message);
-                None
+                Err(DataFusionError::External(Box::new(err)))
             }
         }
     }

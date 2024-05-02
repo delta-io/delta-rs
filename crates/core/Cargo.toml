@@ -1,6 +1,6 @@
 [package]
 name = "deltalake-core"
-version = "0.17.1"
+version = "0.17.3"
 authors.workspace = true
 keywords.workspace = true
 readme.workspace = true
@@ -41,6 +41,7 @@ datafusion-proto = { workspace = true, optional = true }
 datafusion-sql = { workspace = true, optional = true }
 datafusion-physical-expr = { workspace = true, optional = true }
 datafusion-functions = { workspace = true, optional = true }
+datafusion-functions-array = { workspace = true, optional = true }
 
 # serde
 serde = { workspace = true, features = ["derive"] }
@@ -123,6 +124,7 @@ datafusion = [
     "datafusion-physical-expr",
     "datafusion-sql",
     "datafusion-functions",
+    "datafusion-functions-array",
     "sqlparser",
 ]
 datafusion-ext = ["datafusion"]

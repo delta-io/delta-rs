@@ -1,12 +1,15 @@
 //! AWS S3 storage backend.
 
+use aws_config::provider_config::ProviderConfig;
 use aws_config::{Region, SdkConfig};
 use bytes::Bytes;
 use deltalake_core::storage::object_store::{
     aws::AmazonS3ConfigKey, parse_url_opts, GetOptions, GetResult, ListResult, MultipartId,
     ObjectMeta, ObjectStore, PutOptions, PutResult, Result as ObjectStoreResult,
 };
-use deltalake_core::storage::{str_is_truthy, ObjectStoreFactory, ObjectStoreRef, StorageOptions};
+use deltalake_core::storage::{
+    limit_store_handler, str_is_truthy, ObjectStoreFactory, ObjectStoreRef, StorageOptions,
+};
 use deltalake_core::{DeltaResult, ObjectStoreError, Path};
 use futures::stream::BoxStream;
 use futures::Future;
@@ -67,7 +70,7 @@ impl ObjectStoreFactory for S3ObjectStoreFactory {
         options: &StorageOptions,
     ) -> DeltaResult<(ObjectStoreRef, Path)> {
         let options = self.with_env_s3(options);
-        let (store, prefix) = parse_url_opts(
+        let (inner, prefix) = parse_url_opts(
             url,
             options.0.iter().filter_map(|(key, value)| {
                 let s3_key = AmazonS3ConfigKey::from_str(&key.to_ascii_lowercase()).ok()?;
@@ -75,22 +78,25 @@ impl ObjectStoreFactory for S3ObjectStoreFactory {
             }),
         )?;
 
+        let store = limit_store_handler(inner, &options);
+
+        // If the copy-if-not-exists env var is set, we don't need to instantiate a locking client or check for allow-unsafe-rename.
         if options
             .0
             .contains_key(AmazonS3ConfigKey::CopyIfNotExists.as_ref())
         {
-            // If the copy-if-not-exists env var is set, we don't need to instantiate a locking client or check for allow-unsafe-rename.
-            return Ok((Arc::from(store), prefix));
+            Ok((Arc::from(store), prefix))
+        } else {
+            let s3_options = S3StorageOptions::from_map(&options.0)?;
+
+            let store = S3StorageBackend::try_new(
+                store,
+                Some("dynamodb") == s3_options.locking_provider.as_deref()
+                    || s3_options.allow_unsafe_rename,
+            )?;
+
+            Ok((Arc::new(store), prefix))
         }
-
-        let options = S3StorageOptions::from_map(&options.0)?;
-
-        let store = S3StorageBackend::try_new(
-            store.into(),
-            Some("dynamodb") == options.locking_provider.as_deref() || options.allow_unsafe_rename,
-        )?;
-
-        Ok((Arc::new(store), prefix))
     }
 }
 
@@ -166,11 +172,15 @@ impl S3StorageOptions {
             .unwrap_or(false);
         let disable_imds = str_option(options, s3_constants::AWS_EC2_METADATA_DISABLED)
             .map(|val| str_is_truthy(&val))
-            .unwrap_or(false);
+            .unwrap_or(true);
         let imds_timeout =
             Self::u64_or_default(options, s3_constants::AWS_EC2_METADATA_TIMEOUT, 100);
-        let credentials_provider =
-            crate::credentials::ConfiguredCredentialChain::new(disable_imds, imds_timeout, None);
+        let provider_config = ProviderConfig::default();
+        let credentials_provider = crate::credentials::ConfiguredCredentialChain::new(
+            disable_imds,
+            imds_timeout,
+            &provider_config,
+        );
         #[cfg(feature = "native-tls")]
         let sdk_config = execute_sdk_future(
             aws_config::from_env()
@@ -179,6 +189,11 @@ impl S3StorageOptions {
                         .map(|val| str_is_truthy(&val))
                         .unwrap_or(false),
                 ))
+                .region(crate::credentials::new_region_provider(
+                    &provider_config,
+                    disable_imds,
+                    imds_timeout,
+                ))
                 .credentials_provider(credentials_provider)
                 .load(),
         )?;
@@ -186,6 +201,11 @@ impl S3StorageOptions {
         let sdk_config = execute_sdk_future(
             aws_config::from_env()
                 .credentials_provider(credentials_provider)
+                .region(crate::credentials::new_region_provider(
+                    &provider_config,
+                    disable_imds,
+                    imds_timeout,
+                ))
                 .load(),
         )?;
 
@@ -445,7 +465,7 @@ pub mod s3_constants {
     pub const AWS_S3_ALLOW_UNSAFE_RENAME: &str = "AWS_S3_ALLOW_UNSAFE_RENAME";
 
     /// If set to "true", disables the imds client
-    /// Defaults to "false"
+    /// Defaults to "true"
     pub const AWS_EC2_METADATA_DISABLED: &str = "AWS_EC2_METADATA_DISABLED";
 
     /// The timeout in milliseconds for the EC2 metadata endpoint
@@ -793,7 +813,7 @@ mod tests {
                 default_time.as_micros(),
             );
             assert!(disabled_time < enabled_time);
-            assert!(disabled_time < default_time);
+            assert!(default_time < enabled_time);
         })
         .await;
     }

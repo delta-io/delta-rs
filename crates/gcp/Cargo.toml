@@ -1,6 +1,6 @@
 [package]
 name = "deltalake-gcp"
-version = "0.1.0"
+version = "0.2.1"
 authors.workspace = true
 keywords.workspace = true
 readme.workspace = true

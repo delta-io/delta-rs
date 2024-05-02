@@ -38,7 +38,7 @@ use errors::{DynamoDbConfigError, LockClientError};
 use storage::{S3ObjectStoreFactory, S3StorageOptions};
 
 #[derive(Clone, Debug, Default)]
-struct S3LogStoreFactory {}
+pub struct S3LogStoreFactory {}
 
 impl LogStoreFactory for S3LogStoreFactory {
     fn with_options(
@@ -47,7 +47,7 @@ impl LogStoreFactory for S3LogStoreFactory {
         location: &Url,
         options: &StorageOptions,
     ) -> DeltaResult<Arc<dyn LogStore>> {
-        let store = url_prefix_handler(store, Path::parse(location.path())?)?;
+        let store = url_prefix_handler(store, Path::parse(location.path())?);
 
         if options
             .0
