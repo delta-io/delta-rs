@@ -66,6 +66,7 @@ else:
     _has_pandas = True
 
 PYARROW_MAJOR_VERSION = int(pa.__version__.split(".", maxsplit=1)[0])
+DEFAULT_DATA_SKIPPING_NUM_INDEX_COLS = 32
 
 
 @dataclass
@@ -267,14 +268,13 @@ def write_deltalake(
         num_indexed_cols = table._table.get_num_index_cols()
         stats_cols = table._table.get_stats_columns()
     else:
-        DEFAULT_DATA_SKIPPING_NUM_INDEX_COLS = 32
+        num_indexed_cols = DEFAULT_DATA_SKIPPING_NUM_INDEX_COLS
+        stats_cols = None
         if configuration is not None:
             if "delta.dataSkippingNumIndexedCols" in configuration:
                 str_indexed_cols = configuration["delta.dataSkippingNumIndexedCols"]
                 if str_indexed_cols is not None:
                     num_indexed_cols = int(str_indexed_cols)
-            else:
-                num_indexed_cols = DEFAULT_DATA_SKIPPING_NUM_INDEX_COLS
             string_stats_cols = configuration.get("delta.dataSkippingStatsColumns")
             if isinstance(string_stats_cols, str):
                 stats_cols = string_stats_cols.split(",")
@@ -283,11 +283,7 @@ def write_deltalake(
                         raise ValueError(
                             "dataSkippingStatsColumns needs to be a comma-separated list of column names in string format. Example: 'foo,bar,baz'"
                         )
-            else:
-                stats_cols = None
-        else:
-            num_indexed_cols = DEFAULT_DATA_SKIPPING_NUM_INDEX_COLS
-            stats_cols = None
+
     __enforce_append_only(table=table, configuration=configuration, mode=mode)
     if overwrite_schema:
         schema_mode = "overwrite"

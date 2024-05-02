@@ -917,6 +917,7 @@ def test_merge_stats_columns_stats_provided(tmp_path: pathlib.Path, engine):
     assert stats["min.baz"] == 1
     assert stats["max.baz"] == 10
 
+
 def test_merge_field_special_characters_delete_2438(tmp_path: pathlib.Path):
     ## See issue: https://github.com/delta-io/delta-rs/issues/2438
     data = pa.table({"x": [1, 2, 3], "y--1": [4, 5, 6]})

@@ -1613,6 +1613,7 @@ def test_write_stats_columns_stats_provided(tmp_path: pathlib.Path, engine):
     assert dt.version() == 1
     _check_stats(dt)
 
+
 @pytest.mark.parametrize(
     "array",
     [

@@ -37,7 +37,9 @@ use deltalake::operations::load_cdf::CdfLoadBuilder;
 use deltalake::operations::merge::MergeBuilder;
 use deltalake::operations::optimize::{OptimizeBuilder, OptimizeType};
 use deltalake::operations::restore::RestoreBuilder;
-use deltalake::operations::transaction::{CommitBuilder, CommitProperties, PROTOCOL, TableReference};
+use deltalake::operations::transaction::{
+    CommitBuilder, CommitProperties, TableReference, PROTOCOL,
+};
 use deltalake::operations::update::UpdateBuilder;
 use deltalake::operations::vacuum::VacuumBuilder;
 use deltalake::parquet::basic::Compression;
