@@ -1202,8 +1202,10 @@ mod tests {
                 "part-00000-28925d3a-bdf2-411e-bca9-b067444cbcb0-c000.snappy.parquet",
                 "part-00000-7a509247-4f58-4453-9202-51d75dee59af-c000.snappy.parquet",
             ]));
-            let expected_num_records: ArrayRef = Arc::new(array::Int64Array::from(vec![None, Some(1)]));
-            let expected_null_count: ArrayRef = Arc::new(array::Int64Array::from(vec![None, Some(0)]));
+            let expected_num_records: ArrayRef =
+                Arc::new(array::Int64Array::from(vec![None, Some(1)]));
+            let expected_null_count: ArrayRef =
+                Arc::new(array::Int64Array::from(vec![None, Some(0)]));
 
             let path_column = actions.column(0);
             let num_records_column = actions.column(4);
