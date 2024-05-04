@@ -85,7 +85,7 @@ impl ObjectStoreFactory for S3ObjectStoreFactory {
             .0
             .contains_key(AmazonS3ConfigKey::CopyIfNotExists.as_ref())
         {
-            Ok((Arc::from(store), prefix))
+            Ok((store, prefix))
         } else {
             let s3_options = S3StorageOptions::from_map(&options.0)?;
 
