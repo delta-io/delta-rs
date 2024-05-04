@@ -175,7 +175,13 @@ impl S3StorageOptions {
             .unwrap_or(true);
         let imds_timeout =
             Self::u64_or_default(options, s3_constants::AWS_EC2_METADATA_TIMEOUT, 100);
-        let provider_config = ProviderConfig::default();
+        
+        let region_provider = crate::credentials::new_region_provider(
+            disable_imds,
+            imds_timeout,
+        );
+        let region = execute_sdk_future(region_provider.region())?;
+        let provider_config = ProviderConfig::default().with_region(region);
         let credentials_provider = crate::credentials::ConfiguredCredentialChain::new(
             disable_imds,
             imds_timeout,
@@ -189,23 +195,15 @@ impl S3StorageOptions {
                         .map(|val| str_is_truthy(&val))
                         .unwrap_or(false),
                 ))
-                .region(crate::credentials::new_region_provider(
-                    &provider_config,
-                    disable_imds,
-                    imds_timeout,
-                ))
                 .credentials_provider(credentials_provider)
+                .region(region_provider)
                 .load(),
         )?;
         #[cfg(feature = "rustls")]
         let sdk_config = execute_sdk_future(
             aws_config::from_env()
                 .credentials_provider(credentials_provider)
-                .region(crate::credentials::new_region_provider(
-                    &provider_config,
-                    disable_imds,
-                    imds_timeout,
-                ))
+                .region(region_provider)
                 .load(),
         )?;
 
@@ -252,16 +250,19 @@ impl S3StorageOptions {
     }
 }
 
-fn execute_sdk_future<F: Future<Output = SdkConfig> + Send + 'static>(
-    future: F,
-) -> DeltaResult<SdkConfig> {
+fn execute_sdk_future<F, T>(
+    future: F
+) -> DeltaResult<T> 
+where T : Send,
+    F : Future<Output = T> + Send,
+{
     match tokio::runtime::Handle::try_current() {
         Ok(handle) => match handle.runtime_flavor() {
             tokio::runtime::RuntimeFlavor::MultiThread => {
                 Ok(tokio::task::block_in_place(move || handle.block_on(future)))
             }
             _ => {
-                let mut cfg: Option<SdkConfig> = None;
+                let mut cfg: Option<T> = None;
                 std::thread::scope(|scope| {
                     scope.spawn(|| {
                         cfg = Some(handle.block_on(future));
