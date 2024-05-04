@@ -1031,6 +1031,7 @@ class DeltaTable:
         filesystem: Optional[Union[str, pa_fs.FileSystem]] = None,
         parquet_read_options: Optional[ParquetReadOptions] = None,
         schema: Optional[pyarrow.Schema] = None,
+        as_large_types: bool = False,
     ) -> pyarrow.dataset.Dataset:
         """
         Build a PyArrow Dataset using data from the DeltaTable.
@@ -1099,6 +1100,8 @@ class DeltaTable:
             default_fragment_scan_options=ParquetFragmentScanOptions(pre_buffer=True),
         )
 
+        schema = schema or self.schema().to_pyarrow(as_large_types=as_large_types)
+
         fragments = [
             format.make_fragment(
                 file,
@@ -1106,11 +1109,9 @@ class DeltaTable:
                 partition_expression=part_expression,
             )
             for file, part_expression in self._table.dataset_partitions(
-                self.schema().to_pyarrow(), partitions
+                schema, partitions
             )
         ]
-
-        schema = schema or self.schema().to_pyarrow()
 
         dictionary_columns = format.read_options.dictionary_columns or set()
         if dictionary_columns:

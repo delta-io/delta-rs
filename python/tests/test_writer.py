@@ -1325,6 +1325,8 @@ def test_large_arrow_types_dataset_as_large_types(tmp_path: pathlib.Path):
 
     write_deltalake(tmp_path, table)
 
+    dt = DeltaTable(tmp_path)
+
     ds = dt.to_pyarrow_dataset(as_large_types=True)
     union_ds = dataset([ds, dataset(table)])
     assert union_ds.to_table().shape[0] == 4
@@ -1348,6 +1350,8 @@ def test_large_arrow_types_explicit_scan_schema(tmp_path: pathlib.Path):
     table = pa.Table.from_pylist(pylist, schema=schema)
 
     write_deltalake(tmp_path, table)
+
+    dt = DeltaTable(tmp_path)
 
     ds = dt.to_pyarrow_dataset(schema=schema)
     union_ds = dataset([ds, dataset(table)])
