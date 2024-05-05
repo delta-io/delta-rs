@@ -1042,6 +1042,10 @@ class DeltaTable:
             parquet_read_options: Optional read options for Parquet. Use this to handle INT96 to timestamp conversion for edge cases like 0001-01-01 or 9999-12-31
             schema: The schema to use for the dataset. If None, the schema of the DeltaTable will be used. This can be used to force reading of Parquet/Arrow datatypes
                 that DeltaLake can't represent in it's schema (e.g. LargeString).
+                If you only need to read the schema with large types (e.g. for compatibility with Polars) you may want to use the `as_large_types` parameter instead.
+            as_large_types: get schema with all variable size types (list, binary, string) as large variants (with int64 indices).
+                This is for compatibility with systems like Polars that only support the large versions of Arrow types.
+                If `schema` is passed it takes precedence over this option.
 
          More info: https://arrow.apache.org/docs/python/generated/pyarrow.dataset.ParquetReadOptions.html
 
