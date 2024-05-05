@@ -13,7 +13,7 @@ import pyarrow as pa
 import pyarrow.compute as pc
 import pytest
 from packaging import version
-from pyarrow.dataset import ParquetFileFormat, ParquetReadOptions
+from pyarrow.dataset import ParquetFileFormat, ParquetReadOptions, dataset
 from pyarrow.lib import RecordBatchReader
 
 from deltalake import DeltaTable, Schema, write_deltalake
@@ -1304,6 +1304,62 @@ def test_large_arrow_types(tmp_path: pathlib.Path):
 
     dt = DeltaTable(tmp_path)
     assert table.schema == dt.schema().to_pyarrow(as_large_types=True)
+
+
+@pytest.mark.skipif(
+    int(pa.__version__.split(".")[0]) < 10, reason="map casts require pyarrow >= 10"
+)
+def test_large_arrow_types_dataset_as_large_types(tmp_path: pathlib.Path):
+    pylist = [
+        {"name": "Joey", "gender": b"M", "arr_type": ["x", "y"], "dict": {"a": b"M"}},
+        {"name": "Ivan", "gender": b"F", "arr_type": ["x", "z"]},
+    ]
+    schema = pa.schema(
+        [
+            pa.field("name", pa.large_string()),
+            pa.field("gender", pa.large_binary()),
+            pa.field("arr_type", pa.large_list(pa.large_string())),
+            pa.field("map_type", pa.map_(pa.large_string(), pa.large_binary())),
+            pa.field("struct", pa.struct([pa.field("sub", pa.large_string())])),
+        ]
+    )
+    table = pa.Table.from_pylist(pylist, schema=schema)
+
+    write_deltalake(tmp_path, table)
+
+    dt = DeltaTable(tmp_path)
+
+    ds = dt.to_pyarrow_dataset(as_large_types=True)
+    union_ds = dataset([ds, dataset(table)])
+    assert union_ds.to_table().shape[0] == 4
+
+
+@pytest.mark.skipif(
+    int(pa.__version__.split(".")[0]) < 10, reason="map casts require pyarrow >= 10"
+)
+def test_large_arrow_types_explicit_scan_schema(tmp_path: pathlib.Path):
+    pylist = [
+        {"name": "Joey", "gender": b"M", "arr_type": ["x", "y"], "dict": {"a": b"M"}},
+        {"name": "Ivan", "gender": b"F", "arr_type": ["x", "z"]},
+    ]
+    schema = pa.schema(
+        [
+            pa.field("name", pa.large_string()),
+            pa.field("gender", pa.large_binary()),
+            pa.field("arr_type", pa.large_list(pa.large_string())),
+            pa.field("map_type", pa.map_(pa.large_string(), pa.large_binary())),
+            pa.field("struct", pa.struct([pa.field("sub", pa.large_string())])),
+        ]
+    )
+    table = pa.Table.from_pylist(pylist, schema=schema)
+
+    write_deltalake(tmp_path, table)
+
+    dt = DeltaTable(tmp_path)
+
+    ds = dt.to_pyarrow_dataset(schema=schema)
+    union_ds = dataset([ds, dataset(table)])
+    assert union_ds.to_table().shape[0] == 4
 
 
 def test_partition_large_arrow_types(tmp_path: pathlib.Path):
