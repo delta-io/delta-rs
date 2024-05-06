@@ -97,7 +97,7 @@ reqwest = { version = "0.11.18", default-features = false, features = [
     "rustls-tls",
     "json",
 ], optional = true }
-sqlparser = { version = "0.44", optional = true }
+sqlparser = { version = "0.46", optional = true }
 
 [dev-dependencies]
 criterion = "0.5"
