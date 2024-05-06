@@ -1191,6 +1191,32 @@ mod tests {
         }
 
         #[tokio::test]
+        async fn test_table_not_always_with_stats() {
+            let path = "../test/tests/data/delta-stats-optional";
+            let mut table = crate::open_table(path).await.unwrap();
+            table.load().await.unwrap();
+            let actions = table.snapshot().unwrap().add_actions_table(true).unwrap();
+            let actions = sort_batch_by(&actions, "path").unwrap();
+            // get column-0 path, and column-4 num_records, and column_5 null_count.integer
+            let expected_path: ArrayRef = Arc::new(array::StringArray::from(vec![
+                "part-00000-28925d3a-bdf2-411e-bca9-b067444cbcb0-c000.snappy.parquet",
+                "part-00000-7a509247-4f58-4453-9202-51d75dee59af-c000.snappy.parquet",
+            ]));
+            let expected_num_records: ArrayRef =
+                Arc::new(array::Int64Array::from(vec![None, Some(1)]));
+            let expected_null_count: ArrayRef =
+                Arc::new(array::Int64Array::from(vec![None, Some(0)]));
+
+            let path_column = actions.column(0);
+            let num_records_column = actions.column(4);
+            let null_count_column = actions.column(5);
+
+            assert_eq!(&expected_path, path_column);
+            assert_eq!(&expected_num_records, num_records_column);
+            assert_eq!(&expected_null_count, null_count_column);
+        }
+
+        #[tokio::test]
         async fn test_only_struct_stats() {
             // test table with no json stats
             let path = "../test/tests/data/delta-1.2.1-only-struct-stats";
