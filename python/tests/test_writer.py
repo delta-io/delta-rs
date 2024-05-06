@@ -1626,3 +1626,22 @@ def test_write_timestamp_ntz_on_table_with_features_not_enabled(tmp_path: pathli
         write_deltalake(
             tmp_path, data, mode="overwrite", engine="pyarrow", schema_mode="overwrite"
         )
+
+
+@pytest.mark.parametrize("engine", ["pyarrow", "rust"])
+def test_parse_stats_with_new_schema(tmp_path, engine):
+    sample_data = pa.table(
+        {
+            "val": pa.array([1, 1], pa.int8()),
+        }
+    )
+    write_deltalake(tmp_path, sample_data)
+
+    sample_data = pa.table(
+        {
+            "val": pa.array([1000000000000, 1000000000000], pa.int64()),
+        }
+    )
+    write_deltalake(
+        tmp_path, sample_data, mode="overwrite", schema_mode="overwrite", engine=engine
+    )
