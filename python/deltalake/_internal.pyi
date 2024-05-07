@@ -721,7 +721,8 @@ class DeltaFileSystemHandler:
 
     def __init__(
         self,
-        table: RawDeltaTable,
+        table_uri: str,
+        table: Optional[RawDeltaTable] = None,
         options: dict[str, str] | None = None,
         known_sizes: dict[str, int] | None = None,
     ) -> None: ...

@@ -339,13 +339,18 @@ def write_deltalake(
                 "schema_mode 'merge' is not supported in pyarrow engine. Use engine=rust"
             )
         # We need to write against the latest table version
-        filesystem = pa_fs.PyFileSystem(DeltaStorageHandler(table_uri, storage_options))
 
         def sort_arrow_schema(schema: pa.schema) -> pa.schema:
             sorted_cols = sorted(iter(schema), key=lambda x: (x.name, str(x.type)))
             return pa.schema(sorted_cols)
 
         if table:  # already exists
+            filesystem = pa_fs.PyFileSystem(
+                DeltaStorageHandler(
+                    table_uri, table=table._table, options=storage_options
+                )
+            )
+
             if sort_arrow_schema(schema) != sort_arrow_schema(
                 table.schema().to_pyarrow(as_large_types=large_dtypes)
             ) and not (mode == "overwrite" and schema_mode == "overwrite"):
@@ -370,6 +375,9 @@ def write_deltalake(
                 partition_by = table.metadata().partition_columns
 
         else:  # creating a new table
+            filesystem = pa_fs.PyFileSystem(
+                DeltaStorageHandler(table_uri, options=storage_options)
+            )
             current_version = -1
 
         dtype_map = {

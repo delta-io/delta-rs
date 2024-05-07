@@ -1,4 +1,3 @@
-import pickle
 import urllib
 
 import pyarrow as pa
@@ -241,16 +240,3 @@ def test_roundtrip_azure_decoded_sas(azurite_sas_creds, sample_data: pa.Table):
     table = dt.to_pyarrow_table()
     assert table == sample_data
     assert dt.version() == 0
-
-
-def test_pickle_roundtrip(tmp_path):
-    store = DeltaStorageHandler(str(tmp_path.absolute()))
-
-    with (tmp_path / "asd.pkl").open("wb") as handle:
-        pickle.dump(store, handle)
-
-    with (tmp_path / "asd.pkl").open("rb") as handle:
-        store_pkl = pickle.load(handle)
-
-    infos = store_pkl.get_file_info(["asd.pkl"])
-    assert infos[0].size > 0

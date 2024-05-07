@@ -1,14 +1,14 @@
-use std::collections::HashMap;
-use std::sync::Arc;
-
 use crate::error::PythonError;
 use crate::utils::{delete_dir, rt, walk_tree};
 use crate::RawDeltaTable;
 use deltalake::storage::{DynObjectStore, ListResult, MultipartId, ObjectStoreError, Path};
+use deltalake::DeltaTableBuilder;
 use pyo3::exceptions::{PyIOError, PyNotImplementedError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{IntoPyDict, PyBytes};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::sync::Arc;
 use tokio::io::{AsyncWrite, AsyncWriteExt};
 
 const DEFAULT_MAX_BUFFER_SIZE: i64 = 4 * 1024 * 1024;
@@ -41,17 +41,27 @@ impl DeltaFileSystemHandler {
 #[pymethods]
 impl DeltaFileSystemHandler {
     #[new]
-    #[pyo3(signature = (table, options = None, known_sizes = None))]
+    #[pyo3(signature = (table_uri, table = None, options = None, known_sizes = None))]
     fn new(
-        table: &RawDeltaTable,
+        table_uri: String,
+        table: Option<&RawDeltaTable>,
         options: Option<HashMap<String, String>>,
         known_sizes: Option<HashMap<String, i64>>,
     ) -> PyResult<Self> {
-        let storage = table._table.object_store();
+        let storage = if let Some(table) = table {
+            table._table.object_store()
+        } else {
+            DeltaTableBuilder::from_uri(&table_uri)
+                .with_storage_options(options.clone().unwrap_or_default())
+                .build_storage()
+                .map_err(PythonError::from)?
+                .object_store()
+        };
+
         Ok(Self {
             inner: storage,
             config: FsConfig {
-                root_url: table._table.table_uri(),
+                root_url: table_uri.into(),
                 options: options.unwrap_or_default(),
             },
             known_sizes,
