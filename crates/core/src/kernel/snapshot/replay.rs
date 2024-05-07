@@ -21,6 +21,7 @@ use tracing::debug;
 
 use crate::kernel::arrow::extract::{self as ex, ProvidesColumnByName};
 use crate::kernel::arrow::json;
+use crate::kernel::StructType;
 use crate::{DeltaResult, DeltaTableConfig, DeltaTableError};
 
 use super::Snapshot;
@@ -41,7 +42,7 @@ pin_project! {
 
 impl<S> ReplayStream<S> {
     pub(super) fn try_new(commits: S, checkpoint: S, snapshot: &Snapshot) -> DeltaResult<Self> {
-        let stats_schema = Arc::new((&snapshot.stats_schema()?).try_into()?);
+        let stats_schema = Arc::new((&snapshot.stats_schema(None)?).try_into()?);
         let mapper = Arc::new(LogMapper {
             stats_schema,
             config: snapshot.config.clone(),
@@ -61,9 +62,12 @@ pub(super) struct LogMapper {
 }
 
 impl LogMapper {
-    pub(super) fn try_new(snapshot: &Snapshot) -> DeltaResult<Self> {
+    pub(super) fn try_new(
+        snapshot: &Snapshot,
+        table_schema: Option<&StructType>,
+    ) -> DeltaResult<Self> {
         Ok(Self {
-            stats_schema: Arc::new((&snapshot.stats_schema()?).try_into()?),
+            stats_schema: Arc::new((&snapshot.stats_schema(table_schema)?).try_into()?),
             config: snapshot.config.clone(),
         })
     }

@@ -287,11 +287,13 @@ impl Snapshot {
     }
 
     /// Get the statistics schema of the snapshot
-    pub fn stats_schema(&self) -> DeltaResult<StructType> {
+    pub fn stats_schema(&self, table_schema: Option<&StructType>) -> DeltaResult<StructType> {
+        let schema = table_schema.unwrap_or_else(|| self.schema());
+
         let stats_fields = if let Some(stats_cols) = self.table_config().stats_columns() {
             stats_cols
                 .iter()
-                .map(|col| match self.schema().field_with_name(col) {
+                .map(|col| match schema.field_with_name(col) {
                     Ok(field) => match field.data_type() {
                         DataType::Map(_) | DataType::Array(_) | &DataType::BINARY => {
                             Err(DeltaTableError::Generic(format!(
@@ -314,7 +316,7 @@ impl Snapshot {
                 .collect::<Result<Vec<_>, _>>()?
         } else {
             let num_indexed_cols = self.table_config().num_indexed_cols();
-            self.schema()
+            schema
                 .fields
                 .iter()
                 .enumerate()
@@ -362,7 +364,7 @@ impl EagerSnapshot {
         let mut files = Vec::new();
         let mut scanner = LogReplayScanner::new();
         files.push(scanner.process_files_batch(&batch, true)?);
-        let mapper = LogMapper::try_new(&snapshot)?;
+        let mapper = LogMapper::try_new(&snapshot, None)?;
         files = files
             .into_iter()
             .map(|b| mapper.map_batch(b))
@@ -401,7 +403,7 @@ impl EagerSnapshot {
                     )
                     .boxed()
             };
-            let mapper = LogMapper::try_new(&self.snapshot)?;
+            let mapper = LogMapper::try_new(&self.snapshot, None)?;
             let files = ReplayStream::try_new(log_stream, checkpoint_stream, &self.snapshot)?
                 .map(|batch| batch.and_then(|b| mapper.map_batch(b)))
                 .try_collect()
@@ -517,7 +519,13 @@ impl EagerSnapshot {
             files.push(scanner.process_files_batch(&batch?, true)?);
         }
 
-        let mapper = LogMapper::try_new(&self.snapshot)?;
+        let mapper = if let Some(metadata) = &metadata {
+            let new_schema: StructType = serde_json::from_str(&metadata.schema_string)?;
+            LogMapper::try_new(&self.snapshot, Some(&new_schema))?
+        } else {
+            LogMapper::try_new(&self.snapshot, None)?
+        };
+
         self.files = files
             .into_iter()
             .chain(

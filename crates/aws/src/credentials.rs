@@ -22,15 +22,9 @@ pub struct ConfiguredCredentialChain {
 #[derive(Debug)]
 pub struct NoOpCredentials {}
 
-pub fn new_region_provider(
-    configuration: &ProviderConfig,
-    disable_imds: bool,
-    imds_timeout: u64,
-) -> RegionProviderChain {
+pub fn new_region_provider(disable_imds: bool, imds_timeout: u64) -> RegionProviderChain {
     let env_provider = EnvironmentVariableRegionProvider::new();
-    let profile_file = aws_config::profile::region::Builder::default()
-        .configure(configuration)
-        .build();
+    let profile_file = aws_config::profile::region::ProfileFileRegionProvider::default();
     if disable_imds {
         return RegionProviderChain::first_try(env_provider).or_else(profile_file);
     }
@@ -39,7 +33,6 @@ pub fn new_region_provider(
         .or_else(profile_file)
         .or_else(
             aws_config::imds::region::Builder::default()
-                .configure(configuration)
                 .imds_client(
                     aws_config::imds::Client::builder()
                         .connect_timeout(Duration::from_millis(imds_timeout))
@@ -61,6 +54,7 @@ impl ConfiguredCredentialChain {
         let web_identity_token_provider = WebIdentityTokenCredentialsProvider::builder()
             .configure(conf)
             .build();
+
         let ecs_provider = EcsCredentialsProvider::builder().configure(conf).build();
 
         let provider_chain = CredentialsProviderChain::first_try("Environment", env_provider)

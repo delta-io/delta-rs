@@ -18,7 +18,7 @@ use deltalake_core::protocol::{DeltaOperation, SaveMode};
 use deltalake_core::storage::commit_uri_from_version;
 use deltalake_core::storage::StorageOptions;
 use deltalake_core::table::builder::ensure_table_uri;
-use deltalake_core::{DeltaOps, DeltaTable, DeltaTableBuilder};
+use deltalake_core::{DeltaOps, DeltaTable, DeltaTableBuilder, ObjectStoreError};
 use deltalake_test::utils::*;
 use lazy_static::lazy_static;
 use object_store::path::Path;
@@ -179,6 +179,80 @@ async fn test_repair_on_load() -> TestResult<()> {
     // table should fix the broken entry while loading a specific version
     assert_eq!(table.version(), 1);
     validate_lock_table_state(&table, 1).await?;
+    Ok(())
+}
+
+#[tokio::test]
+#[serial]
+async fn test_abort_commit_entry() -> TestResult<()> {
+    let context = IntegrationContext::new(Box::new(S3Integration::default()))?;
+    let client = make_client()?;
+    let table = prepare_table(&context, "abort_entry").await?;
+    let options: StorageOptions = OPTIONS.clone().into();
+    let log_store: S3DynamoDbLogStore = S3DynamoDbLogStore::try_new(
+        ensure_table_uri(table.table_uri())?,
+        options.clone(),
+        &S3_OPTIONS,
+        std::sync::Arc::new(table.object_store()),
+    )?;
+
+    let entry = create_incomplete_commit_entry(&table, 1, "unfinished_commit").await?;
+
+    log_store
+        .abort_commit_entry(entry.version, &entry.temp_path)
+        .await?;
+
+    // The entry should have been aborted - the latest entry should be one version lower
+    if let Some(new_entry) = client.get_latest_entry(&table.table_uri()).await? {
+        assert_eq!(entry.version - 1, new_entry.version);
+    }
+    // Temp commit file should have been deleted
+    assert!(matches!(
+        log_store.object_store().get(&entry.temp_path).await,
+        Err(ObjectStoreError::NotFound { .. })
+    ));
+
+    // Test abort commit is idempotent - still works if already aborted
+    log_store
+        .abort_commit_entry(entry.version, &entry.temp_path)
+        .await?;
+
+    Ok(())
+}
+
+#[tokio::test]
+#[serial]
+async fn test_abort_commit_entry_fail_to_delete_entry() -> TestResult<()> {
+    // Test abort commit does not delete the temp commit if the DynamoDB entry is not deleted
+    let context = IntegrationContext::new(Box::new(S3Integration::default()))?;
+    let client = make_client()?;
+    let table = prepare_table(&context, "abort_entry_fail").await?;
+    let options: StorageOptions = OPTIONS.clone().into();
+    let log_store: S3DynamoDbLogStore = S3DynamoDbLogStore::try_new(
+        ensure_table_uri(table.table_uri())?,
+        options.clone(),
+        &S3_OPTIONS,
+        std::sync::Arc::new(table.object_store()),
+    )?;
+
+    let entry = create_incomplete_commit_entry(&table, 1, "finished_commit").await?;
+
+    // Mark entry as complete
+    client
+        .update_commit_entry(entry.version, &table.table_uri())
+        .await?;
+
+    // Abort will fail since we marked the entry as complete
+    assert!(matches!(
+        log_store
+            .abort_commit_entry(entry.version, &entry.temp_path)
+            .await,
+        Err(_),
+    ));
+
+    // Check temp commit file still exists
+    assert!(log_store.object_store().get(&entry.temp_path).await.is_ok());
+
     Ok(())
 }
 

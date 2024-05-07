@@ -279,7 +279,7 @@ async fn execute(
             return Err(err.into());
         }
         Err(err) => {
-            log_store.object_store().delete(commit).await?;
+            log_store.abort_commit_entry(commit_version, commit).await?;
             return Err(err.into());
         }
     }
