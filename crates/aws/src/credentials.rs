@@ -1,7 +1,13 @@
 use std::{sync::Arc, time::Duration};
 
 use aws_config::{
-    ecs::EcsCredentialsProvider, environment::{EnvironmentVariableCredentialsProvider, EnvironmentVariableRegionProvider}, imds::credentials::ImdsCredentialsProvider, meta::{credentials::CredentialsProviderChain, region::RegionProviderChain}, profile::ProfileFileCredentialsProvider, provider_config::ProviderConfig, web_identity_token::WebIdentityTokenCredentialsProvider
+    ecs::EcsCredentialsProvider,
+    environment::{EnvironmentVariableCredentialsProvider, EnvironmentVariableRegionProvider},
+    imds::credentials::ImdsCredentialsProvider,
+    meta::{credentials::CredentialsProviderChain, region::RegionProviderChain},
+    profile::ProfileFileCredentialsProvider,
+    provider_config::ProviderConfig,
+    web_identity_token::WebIdentityTokenCredentialsProvider,
 };
 use aws_credential_types::provider::{self, ProvideCredentials};
 use tracing::Instrument;
@@ -16,10 +22,7 @@ pub struct ConfiguredCredentialChain {
 #[derive(Debug)]
 pub struct NoOpCredentials {}
 
-pub fn new_region_provider(
-    disable_imds: bool,
-    imds_timeout: u64,
-) -> RegionProviderChain {
+pub fn new_region_provider(disable_imds: bool, imds_timeout: u64) -> RegionProviderChain {
     let env_provider = EnvironmentVariableRegionProvider::new();
     let profile_file = aws_config::profile::region::ProfileFileRegionProvider::default();
     if disable_imds {
@@ -51,7 +54,7 @@ impl ConfiguredCredentialChain {
         let web_identity_token_provider = WebIdentityTokenCredentialsProvider::builder()
             .configure(conf)
             .build();
-        
+
         let ecs_provider = EcsCredentialsProvider::builder().configure(conf).build();
 
         let provider_chain = CredentialsProviderChain::first_try("Environment", env_provider)
