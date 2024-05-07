@@ -61,7 +61,7 @@ impl DeltaFileSystemHandler {
         Ok(Self {
             inner: storage,
             config: FsConfig {
-                root_url: table_uri.into(),
+                root_url: table_uri,
                 options: options.unwrap_or_default(),
             },
             known_sizes,
