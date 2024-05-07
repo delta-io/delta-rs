@@ -49,7 +49,7 @@ def test_s3_authenticated_read_write(s3_localstack_creds, monkeypatch):
     # Create unauthenticated handler
     storage_handler = DeltaStorageHandler(
         "s3://deltars/",
-        {
+        options={
             "AWS_ENDPOINT_URL": s3_localstack_creds["AWS_ENDPOINT_URL"],
             # Grants anonymous access. If we don't do this, will timeout trying
             # to reading from EC2 instance provider.
