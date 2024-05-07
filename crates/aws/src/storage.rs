@@ -175,11 +175,8 @@ impl S3StorageOptions {
             .unwrap_or(true);
         let imds_timeout =
             Self::u64_or_default(options, s3_constants::AWS_EC2_METADATA_TIMEOUT, 100);
-        
-        let region_provider = crate::credentials::new_region_provider(
-            disable_imds,
-            imds_timeout,
-        );
+
+        let region_provider = crate::credentials::new_region_provider(disable_imds, imds_timeout);
         let region = execute_sdk_future(region_provider.region())?;
         let provider_config = ProviderConfig::default().with_region(region);
         let credentials_provider = crate::credentials::ConfiguredCredentialChain::new(
@@ -250,11 +247,10 @@ impl S3StorageOptions {
     }
 }
 
-fn execute_sdk_future<F, T>(
-    future: F
-) -> DeltaResult<T> 
-where T : Send,
-    F : Future<Output = T> + Send,
+fn execute_sdk_future<F, T>(future: F) -> DeltaResult<T>
+where
+    T: Send,
+    F: Future<Output = T> + Send,
 {
     match tokio::runtime::Handle::try_current() {
         Ok(handle) => match handle.runtime_flavor() {
