@@ -1096,7 +1096,7 @@ class DeltaTable:
             }
             filesystem = pa_fs.PyFileSystem(
                 DeltaStorageHandler(
-                    self._table.table_uri(), self._storage_options, file_sizes
+                    self._table, self._storage_options, file_sizes
                 )
             )
         format = ParquetFileFormat(
