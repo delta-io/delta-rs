@@ -276,22 +276,19 @@ async fn regular_rename(from: &str, to: &str) -> Result<(), LocalFileSystemError
                     "Already exists",
                 )),
             })
+        } else if std::path::Path::new(&from_path).exists() {
+            std::fs::rename(&from_path, &to_path).map_err(|err| LocalFileSystemError::Generic {
+                store: STORE_NAME,
+                source: Box::new(err),
+            })
         } else {
-            std::fs::rename(&from_path, &to_path).map_err(|err| {
-                println!("err: {err:?}");
-                if err.kind() == std::io::ErrorKind::NotFound {
-                    LocalFileSystemError::NotFound {
-                        path: from_path.clone(),
-                        source: Box::new(err),
-                    }
-                } else {
-                    LocalFileSystemError::Generic {
-                        store: STORE_NAME,
-                        source: Box::new(err),
-                    }
-                }
-            })?;
-            Ok(())
+            Err(LocalFileSystemError::NotFound {
+                path: from_path.clone(),
+                source: Box::new(std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    format!("Could not find {from_path}"),
+                )),
+            })
         }
     })
     .await
