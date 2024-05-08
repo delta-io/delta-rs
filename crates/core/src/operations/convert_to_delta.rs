@@ -342,8 +342,9 @@ impl ConvertToDeltaBuilder {
                 &IndexMap::from_iter(partition_values.clone().into_iter()),
                 parquet_metadata.as_ref(),
             )
-            .unwrap();
-            let stats_string = serde_json::to_string(&stats).unwrap();
+            .map_err(|e| Error::DeltaTable(e.into()))?;
+            let stats_string =
+                serde_json::to_string(&stats).map_err(|e| Error::DeltaTable(e.into()))?;
 
             actions.push(
                 Add {
