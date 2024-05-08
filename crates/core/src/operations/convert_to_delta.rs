@@ -8,6 +8,7 @@ use crate::{
     protocol::SaveMode,
     table::builder::ensure_table_uri,
     table::config::DeltaConfigKey,
+    writer::stats::stats_from_parquet_metadata,
     DeltaResult, DeltaTable, DeltaTableError, ObjectStoreError, NULL_PARTITION_VALUE_DATA_PATH,
 };
 use arrow::{datatypes::Schema as ArrowSchema, error::ArrowError};
@@ -15,6 +16,7 @@ use futures::{
     future::{self, BoxFuture},
     TryStreamExt,
 };
+use indexmap::IndexMap;
 use parquet::{
     arrow::async_reader::{ParquetObjectReader, ParquetRecordBatchStreamBuilder},
     errors::ParquetError,
@@ -328,6 +330,21 @@ impl ConvertToDeltaBuilder {
                 subpath = iter.next();
             }
 
+            let batch_builder = ParquetRecordBatchStreamBuilder::new(ParquetObjectReader::new(
+                object_store.clone(),
+                file.clone(),
+            ))
+            .await?;
+
+            // Fetch the stats
+            let parquet_metadata = batch_builder.metadata();
+            let stats = stats_from_parquet_metadata(
+                &IndexMap::from_iter(partition_values.clone().into_iter()),
+                parquet_metadata.as_ref(),
+            )
+            .unwrap();
+            let stats_string = serde_json::to_string(&stats).unwrap();
+
             actions.push(
                 Add {
                     path: percent_decode_str(file.location.as_ref())
@@ -349,19 +366,13 @@ impl ConvertToDeltaBuilder {
                         .collect(),
                     modification_time: file.last_modified.timestamp_millis(),
                     data_change: true,
+                    stats: Some(stats_string),
                     ..Default::default()
                 }
                 .into(),
             );
 
-            let mut arrow_schema = ParquetRecordBatchStreamBuilder::new(ParquetObjectReader::new(
-                object_store.clone(),
-                file,
-            ))
-            .await?
-            .schema()
-            .as_ref()
-            .clone();
+            let mut arrow_schema = batch_builder.schema().as_ref().clone();
 
             // Arrow schema of Parquet files may have conflicting metatdata
             // Since Arrow schema metadata is not used to generate Delta table schema, we set the metadata field to an empty HashMap
@@ -583,6 +594,15 @@ mod tests {
             action.path(),
             "part-00000-d22c627d-9655-4153-9527-f8995620fa42-c000.snappy.parquet"
         );
+
+        let Some(Scalar::Struct(min_values, _)) = action.min_values() else {
+            panic!("Missing min values");
+        };
+        assert_eq!(min_values, vec![Scalar::Date(18628), Scalar::Integer(1)]);
+        let Some(Scalar::Struct(max_values, _)) = action.max_values() else {
+            panic!("Missing max values");
+        };
+        assert_eq!(max_values, vec![Scalar::Date(18632), Scalar::Integer(5)]);
 
         assert_delta_table(
             table,

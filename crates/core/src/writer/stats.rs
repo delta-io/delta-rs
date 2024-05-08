@@ -3,6 +3,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use std::{collections::HashMap, ops::AddAssign};
 
 use indexmap::IndexMap;
+use parquet::file::metadata::ParquetMetaData;
 use parquet::format::FileMetaData;
 use parquet::schema::types::{ColumnDescriptor, SchemaDescriptor};
 use parquet::{basic::LogicalType, errors::ParquetError};
@@ -58,6 +59,28 @@ pub fn create_add(
     })
 }
 
+// As opposed to `stats_from_file_metadata` which operates on `parquet::format::FileMetaData`,
+// this function produces the stats by reading the metadata from already written out files.
+//
+// Note that the file metadata used here is actually `parquet::file::metadata::FileMetaData`
+// which is a thrift decoding of the `parquet::format::FileMetaData` which is typically obtained
+// when flushing the write.
+pub(crate) fn stats_from_parquet_metadata(
+    partition_values: &IndexMap<String, Scalar>,
+    parquet_metadata: &ParquetMetaData,
+) -> Result<Stats, DeltaWriterError> {
+    let num_rows = parquet_metadata.file_metadata().num_rows();
+    let schema_descriptor = parquet_metadata.file_metadata().schema_descr_ptr();
+    let row_group_metadata = parquet_metadata.row_groups().to_vec();
+
+    stats_from_metadata(
+        partition_values,
+        schema_descriptor,
+        row_group_metadata,
+        num_rows,
+    )
+}
+
 fn stats_from_file_metadata(
     partition_values: &IndexMap<String, Scalar>,
     file_metadata: &FileMetaData,
@@ -65,16 +88,29 @@ fn stats_from_file_metadata(
     let type_ptr = parquet::schema::types::from_thrift(file_metadata.schema.as_slice());
     let schema_descriptor = type_ptr.map(|type_| Arc::new(SchemaDescriptor::new(type_)))?;
 
-    let mut min_values: HashMap<String, ColumnValueStat> = HashMap::new();
-    let mut max_values: HashMap<String, ColumnValueStat> = HashMap::new();
-    let mut null_count: HashMap<String, ColumnCountStat> = HashMap::new();
-
-    let row_group_metadata: Result<Vec<RowGroupMetaData>, ParquetError> = file_metadata
+    let row_group_metadata: Vec<RowGroupMetaData> = file_metadata
         .row_groups
         .iter()
         .map(|rg| RowGroupMetaData::from_thrift(schema_descriptor.clone(), rg.clone()))
-        .collect();
-    let row_group_metadata = row_group_metadata?;
+        .collect::<Result<Vec<RowGroupMetaData>, ParquetError>>()?;
+
+    stats_from_metadata(
+        partition_values,
+        schema_descriptor,
+        row_group_metadata,
+        file_metadata.num_rows,
+    )
+}
+
+fn stats_from_metadata(
+    partition_values: &IndexMap<String, Scalar>,
+    schema_descriptor: Arc<SchemaDescriptor>,
+    row_group_metadata: Vec<RowGroupMetaData>,
+    num_rows: i64,
+) -> Result<Stats, DeltaWriterError> {
+    let mut min_values: HashMap<String, ColumnValueStat> = HashMap::new();
+    let mut max_values: HashMap<String, ColumnValueStat> = HashMap::new();
+    let mut null_count: HashMap<String, ColumnCountStat> = HashMap::new();
 
     for i in 0..schema_descriptor.num_columns() {
         let column_descr = schema_descriptor.column(i);
@@ -118,7 +154,7 @@ fn stats_from_file_metadata(
     Ok(Stats {
         min_values,
         max_values,
-        num_records: file_metadata.num_rows,
+        num_records: num_rows,
         null_count,
     })
 }
