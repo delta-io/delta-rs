@@ -104,7 +104,7 @@ This is great for Daft users who want to run efficient queries on large-scale da
 
 Let's look at how this works.
 
-### File and Column Pruning
+### Partitioned Reads
 
 You may have noticed the Delta Lake warning at the top when we first called `collect()` on our DataFrame:
 
