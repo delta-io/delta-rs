@@ -21,7 +21,7 @@ Let's look at how to use Delta Lake with Daft.
 
 ## Installing Daft for Delta Lake
 
-The easiest way to use Delta Lake format with Daft DataFrames is to install Daft with the `[deltalake]` extras using `pip`:
+The easiest way to use the Delta Lake table format with Daft DataFrames is to install Daft with the `[deltalake]` extras using `pip`:
 
 ```python
 !pip install -U "getdaft[deltalake]"
