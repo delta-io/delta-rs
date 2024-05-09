@@ -1,6 +1,6 @@
 [package]
 name = "deltalake"
-version = "0.17.1"
+version = "0.17.3"
 authors.workspace = true
 keywords.workspace = true
 readme.workspace = true
@@ -14,15 +14,14 @@ rust-version.workspace = true
 [package.metadata.docs.rs]
 # We cannot use all_features because TLS features are mutually exclusive.
 # We cannot use hdfs feature because it requires Java to be installed.
-features = ["azure", "datafusion", "gcs", "hdfs", "json", "mount", "python", "s3", "unity-experimental"]
+features = ["azure", "datafusion", "gcs", "hdfs", "json", "python", "s3", "unity-experimental"]
 
 [dependencies]
-deltalake-core = { version = "0.17.1", path = "../core" }
-deltalake-aws = { version = "0.1.0", path = "../aws", default-features = false, optional = true }
-deltalake-azure = { version = "0.1.0", path = "../azure", optional = true }
-deltalake-gcp = { version = "0.1.0", path = "../gcp", optional = true }
+deltalake-core = { version = "0.17.3", path = "../core" }
+deltalake-aws = { version = "0.1.1", path = "../aws", default-features = false, optional = true }
+deltalake-azure = { version = "0.1.1", path = "../azure", optional = true }
+deltalake-gcp = { version = "0.2.1", path = "../gcp", optional = true }
 deltalake-catalog-glue = { version = "0.1.0", path = "../catalog-glue", optional = true }
-deltalake-mount = { version = "0.1.0", path = "../mount", optional = true }
 
 [features]
 # All of these features are just reflected into the core crate until that
@@ -35,7 +34,6 @@ gcs = ["deltalake-gcp"]
 glue = ["deltalake-catalog-glue"]
 hdfs = []
 json = ["deltalake-core/json"]
-mount = ["deltalake-mount"]
 python = ["deltalake-core/python"]
 s3-native-tls = ["deltalake-aws/native-tls"]
 s3 = ["deltalake-aws/rustls"]

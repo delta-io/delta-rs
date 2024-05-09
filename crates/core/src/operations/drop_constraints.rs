@@ -24,6 +24,8 @@ pub struct DropConstraintBuilder {
     commit_properties: CommitProperties,
 }
 
+impl super::Operation<()> for DropConstraintBuilder {}
+
 impl DropConstraintBuilder {
     /// Create a new builder
     pub fn new(log_store: LogStoreRef, snapshot: DeltaTableState) -> Self {
@@ -61,7 +63,7 @@ impl std::future::IntoFuture for DropConstraintBuilder {
     type IntoFuture = BoxFuture<'static, Self::Output>;
 
     fn into_future(self) -> Self::IntoFuture {
-        let mut this = self;
+        let this = self;
 
         Box::pin(async move {
             let name = this
@@ -89,9 +91,10 @@ impl std::future::IntoFuture for DropConstraintBuilder {
                 .build(Some(&this.snapshot), this.log_store.clone(), operation)?
                 .await?;
 
-            this.snapshot
-                .merge(commit.data.actions, &commit.data.operation, commit.version)?;
-            Ok(DeltaTable::new_with_state(this.log_store, this.snapshot))
+            Ok(DeltaTable::new_with_state(
+                this.log_store,
+                commit.snapshot(),
+            ))
         })
     }
 }

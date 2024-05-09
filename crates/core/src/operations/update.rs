@@ -34,7 +34,6 @@ use datafusion::{
 use datafusion_common::{Column, DFSchema, ScalarValue};
 use datafusion_expr::{case, col, lit, when, Expr};
 use datafusion_physical_expr::{
-    create_physical_expr,
     expressions::{self},
     PhysicalExpr,
 };
@@ -49,8 +48,8 @@ use super::{
     transaction::{CommitBuilder, CommitProperties},
 };
 use crate::delta_datafusion::{
-    expr::fmt_expr_to_sql, physical::MetricObserverExec, DataFusionMixins, DeltaColumn,
-    DeltaSessionContext,
+    create_physical_expr_fix, expr::fmt_expr_to_sql, physical::MetricObserverExec,
+    DataFusionMixins, DeltaColumn, DeltaSessionContext,
 };
 use crate::delta_datafusion::{find_files, register_store, DeltaScanBuilder};
 use crate::kernel::{Action, Remove};
@@ -97,6 +96,8 @@ pub struct UpdateMetrics {
     /// Time taken to scan the files for matches.
     pub scan_time_ms: u64,
 }
+
+impl super::Operation<()> for UpdateBuilder {}
 
 impl UpdateBuilder {
     /// Create a new ['UpdateBuilder']
@@ -167,12 +168,12 @@ async fn execute(
     predicate: Option<Expression>,
     updates: HashMap<Column, Expression>,
     log_store: LogStoreRef,
-    snapshot: &DeltaTableState,
+    snapshot: DeltaTableState,
     state: SessionState,
     writer_properties: Option<WriterProperties>,
     mut commit_properties: CommitProperties,
     safe_cast: bool,
-) -> DeltaResult<((Vec<Action>, i64, Option<DeltaOperation>), UpdateMetrics)> {
+) -> DeltaResult<(DeltaTableState, UpdateMetrics)> {
     // Validate the predicate and update expressions.
     //
     // If the predicate is not set, then all files need to be updated.
@@ -185,10 +186,9 @@ async fn execute(
 
     let exec_start = Instant::now();
     let mut metrics = UpdateMetrics::default();
-    let version = snapshot.version();
 
     if updates.is_empty() {
-        return Ok(((Vec::new(), version, None), metrics));
+        return Ok((snapshot, metrics));
     }
 
     let predicate = match predicate {
@@ -213,11 +213,11 @@ async fn execute(
     let table_partition_cols = current_metadata.partition_columns.clone();
 
     let scan_start = Instant::now();
-    let candidates = find_files(snapshot, log_store.clone(), &state, predicate.clone()).await?;
+    let candidates = find_files(&snapshot, log_store.clone(), &state, predicate.clone()).await?;
     metrics.scan_time_ms = Instant::now().duration_since(scan_start).as_millis() as u64;
 
     if candidates.candidates.is_empty() {
-        return Ok(((Vec::new(), version, None), metrics));
+        return Ok((snapshot, metrics));
     }
 
     let predicate = predicate.unwrap_or(Expr::Literal(ScalarValue::Boolean(Some(true))));
@@ -225,7 +225,7 @@ async fn execute(
     let execution_props = state.execution_props();
     // For each rewrite evaluate the predicate and then modify each expression
     // to either compute the new value or obtain the old one then write these batches
-    let scan = DeltaScanBuilder::new(snapshot, log_store.clone(), &state)
+    let scan = DeltaScanBuilder::new(&snapshot, log_store.clone(), &state)
         .with_files(&candidates.candidates)
         .build()
         .await?;
@@ -263,7 +263,8 @@ async fn execute(
 
     let predicate_null =
         when(predicate.clone(), lit(true)).otherwise(lit(ScalarValue::Boolean(None)))?;
-    let predicate_expr = create_physical_expr(&predicate_null, &input_dfschema, execution_props)?;
+    let predicate_expr =
+        create_physical_expr_fix(predicate_null, &input_dfschema, execution_props)?;
     expressions.push((predicate_expr, "__delta_rs_update_predicate".to_string()));
 
     let projection_predicate: Arc<dyn ExecutionPlan> =
@@ -310,7 +311,7 @@ async fn execute(
         let expr = case(col("__delta_rs_update_predicate"))
             .when(lit(true), expr.to_owned())
             .otherwise(col(column.to_owned()))?;
-        let predicate_expr = create_physical_expr(&expr, &input_dfschema, execution_props)?;
+        let predicate_expr = create_physical_expr_fix(expr, &input_dfschema, execution_props)?;
         map.insert(column.name.clone(), expressions.len());
         let c = "__delta_rs_".to_string() + &column.name;
         expressions.push((predicate_expr, c.clone()));
@@ -348,7 +349,7 @@ async fn execute(
     )?);
 
     let add_actions = write_execution_plan(
-        Some(snapshot),
+        Some(&snapshot),
         state.clone(),
         projection.clone(),
         table_partition_cols.clone(),
@@ -414,17 +415,10 @@ async fn execute(
 
     let commit = CommitBuilder::from(commit_properties)
         .with_actions(actions)
-        .build(Some(snapshot), log_store, operation)?
+        .build(Some(&snapshot), log_store, operation)?
         .await?;
 
-    Ok((
-        (
-            commit.data.actions,
-            commit.version,
-            Some(commit.data.operation),
-        ),
-        metrics,
-    ))
+    Ok((commit.snapshot(), metrics))
 }
 
 impl std::future::IntoFuture for UpdateBuilder {
@@ -432,7 +426,7 @@ impl std::future::IntoFuture for UpdateBuilder {
     type IntoFuture = BoxFuture<'static, Self::Output>;
 
     fn into_future(self) -> Self::IntoFuture {
-        let mut this = self;
+        let this = self;
 
         Box::pin(async move {
             PROTOCOL.check_append_only(&this.snapshot.snapshot)?;
@@ -447,11 +441,11 @@ impl std::future::IntoFuture for UpdateBuilder {
                 session.state()
             });
 
-            let ((actions, version, operation), metrics) = execute(
+            let (snapshot, metrics) = execute(
                 this.predicate,
                 this.updates,
                 this.log_store.clone(),
-                &this.snapshot,
+                this.snapshot,
                 state,
                 this.writer_properties,
                 this.commit_properties,
@@ -459,12 +453,10 @@ impl std::future::IntoFuture for UpdateBuilder {
             )
             .await?;
 
-            if let Some(op) = &operation {
-                this.snapshot.merge(actions, op, version)?;
-            }
-
-            let table = DeltaTable::new_with_state(this.log_store, this.snapshot);
-            Ok((table, metrics))
+            Ok((
+                DeltaTable::new_with_state(this.log_store, snapshot),
+                metrics,
+            ))
         })
     }
 }

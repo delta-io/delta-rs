@@ -133,6 +133,8 @@ pub struct MergeBuilder {
     safe_cast: bool,
 }
 
+impl super::Operation<()> for MergeBuilder {}
+
 impl MergeBuilder {
     /// Create a new [`MergeBuilder`]
     pub fn new<E: Into<Expression>>(
@@ -163,10 +165,10 @@ impl MergeBuilder {
     ///
     /// The update expressions can specify both source and target columns.
     ///
-    /// Multiple match clasues can be specified and their predicates are
+    /// Multiple match clauses can be specified and their predicates are
     /// evaluated to determine if the corresponding operation are performed.
-    /// Only the first clause that results in an satisfy predicate is executed.
-    /// Ther order of match clauses matter.
+    /// Only the first clause that results in a satisfy predicate is executed.
+    /// The order of match clauses matter.
     ///
     /// #Example
     /// ```rust ignore
@@ -201,10 +203,10 @@ impl MergeBuilder {
 
     /// Delete a target record when it matches with a source record
     ///
-    /// Multiple match clasues can be specified and their predicates are
+    /// Multiple match clauses can be specified and their predicates are
     /// evaluated to determine if the corresponding operation are performed.
-    /// Only the first clause that results in an satisfy predicate is executed.
-    /// Ther order of match clauses matter.
+    /// Only the first clause that results in a satisfy predicate is executed.
+    /// The order of match clauses matter.
     ///
     /// #Example
     /// ```rust ignore
@@ -234,10 +236,10 @@ impl MergeBuilder {
 
     /// Insert a source record when it does not match with a target record
     ///
-    /// Multiple not match clasues can be specified and their predicates are
+    /// Multiple not match clauses can be specified and their predicates are
     /// evaluated to determine if the corresponding operation are performed.
-    /// Only the first clause that results in an satisfy predicate is executed.
-    /// Ther order of not match clauses matter.
+    /// Only the first clause that results in a satisfy predicate is executed.
+    /// The order of not match clauses matter.
     ///
     /// #Example
     /// ```rust ignore
@@ -269,10 +271,10 @@ impl MergeBuilder {
     ///
     /// The update expressions can specify only target columns.
     ///
-    /// Multiple source not match clasues can be specified and their predicates
+    /// Multiple source not match clauses can be specified and their predicates
     /// are evaluated to determine if the corresponding operation are performed.
-    /// Only the first clause that results in an satisfy predicate is executed.
-    /// Ther order of source not match clauses matter.
+    /// Only the first clause that results in a satisfy predicate is executed.
+    /// The order of source not match clauses matter.
     ///
     /// #Example
     /// ```rust ignore
@@ -301,10 +303,10 @@ impl MergeBuilder {
 
     /// Delete a target record when it does not match with a source record
     ///
-    /// Multiple source not match clasues can be specified and their predicates
-    /// are evaluated to determine if the corresponding operation are performed.
-    /// Only the first clause that results in an satisfy predicate is executed.
-    /// Ther order of source not match clauses matter.
+    /// Multiple source "not match" clauses can be specified and their predicates
+    /// are evaluated to determine if the corresponding operations are performed.
+    /// Only the first clause that results in a satisfy predicate is executed.
+    /// The order of source "not match" clauses matter.
     ///
     /// #Example
     /// ```rust ignore
@@ -681,9 +683,9 @@ impl ExtensionPlanner for MergeMetricExtensionPlanner {
 /// `$date = target.date and frob > 42`
 ///
 /// This leaves us with a predicate that we can push into delta scan after expanding it out to
-/// a conjunction between the disinct partitions in the source input.
+/// a conjunction between the distinct partitions in the source input.
 ///
-/// TODO: A futher improvement here might be for non-partition columns to be replaced with min/max
+/// TODO: A further improvement here might be for non-partition columns to be replaced with min/max
 /// checks, so the above example could become:
 ///
 /// `$date = target.date and target.id between 12345 and 99999 and frob > 42`
@@ -848,11 +850,12 @@ fn replace_placeholders(expr: Expr, placeholders: &HashMap<String, ScalarValue>)
         Expr::Placeholder(Placeholder { id, .. }) => {
             let value = placeholders[&id].clone();
             // Replace the placeholder with the value
-            Ok(Transformed::Yes(Expr::Literal(value)))
+            Ok(Transformed::yes(Expr::Literal(value)))
         }
-        _ => Ok(Transformed::No(expr)),
+        _ => Ok(Transformed::no(expr)),
     })
     .unwrap()
+    .data
 }
 
 async fn try_construct_early_filter(
@@ -929,7 +932,7 @@ async fn execute(
     predicate: Expression,
     source: DataFrame,
     log_store: LogStoreRef,
-    snapshot: &DeltaTableState,
+    snapshot: DeltaTableState,
     state: SessionState,
     writer_properties: Option<WriterProperties>,
     mut commit_properties: CommitProperties,
@@ -939,7 +942,7 @@ async fn execute(
     match_operations: Vec<MergeOperationConfig>,
     not_match_target_operations: Vec<MergeOperationConfig>,
     not_match_source_operations: Vec<MergeOperationConfig>,
-) -> DeltaResult<((Vec<Action>, i64, Option<DeltaOperation>), MergeMetrics)> {
+) -> DeltaResult<(DeltaTableState, MergeMetrics)> {
     let mut metrics = MergeMetrics::default();
     let exec_start = Instant::now();
 
@@ -984,7 +987,7 @@ async fn execute(
     let scan_config = DeltaScanConfigBuilder::default()
         .with_file_column(true)
         .with_parquet_pushdown(false)
-        .build(snapshot)?;
+        .build(&snapshot)?;
 
     let target_provider = Arc::new(DeltaTableProvider::try_new(
         snapshot.clone(),
@@ -1014,7 +1017,7 @@ async fn execute(
     } else {
         try_construct_early_filter(
             predicate.clone(),
-            snapshot,
+            &snapshot,
             &state,
             &source,
             &source_name,
@@ -1218,10 +1221,8 @@ async fn execute(
         .end()?;
 
         let name = "__delta_rs_c_".to_owned() + delta_field.name();
-        write_projection.push(
-            Expr::Column(Column::from_qualified_name_ignore_case(name.clone()))
-                .alias(delta_field.name()),
-        );
+        write_projection
+            .push(Expr::Column(Column::from_name(name.clone())).alias(delta_field.name()));
         new_columns.push((name, case));
     }
 
@@ -1369,7 +1370,7 @@ async fn execute(
 
     let rewrite_start = Instant::now();
     let add_actions = write_execution_plan(
-        Some(snapshot),
+        Some(&snapshot),
         state.clone(),
         write,
         table_partition_cols.clone(),
@@ -1448,36 +1449,30 @@ async fn execute(
     };
 
     if actions.is_empty() {
-        return Ok(((actions, snapshot.version(), None), metrics));
+        return Ok((snapshot, metrics));
     }
 
     let commit = CommitBuilder::from(commit_properties)
         .with_actions(actions)
-        .build(Some(snapshot), log_store.clone(), operation)?
+        .build(Some(&snapshot), log_store.clone(), operation)?
         .await?;
-    Ok((
-        (
-            commit.data.actions,
-            commit.version,
-            Some(commit.data.operation),
-        ),
-        metrics,
-    ))
+    Ok((commit.snapshot(), metrics))
 }
 
 fn remove_table_alias(expr: Expr, table_alias: &str) -> Expr {
     expr.transform(&|expr| match expr {
         Expr::Column(c) => match c.relation {
-            Some(rel) if rel.table() == table_alias => Ok(Transformed::Yes(Expr::Column(
+            Some(rel) if rel.table() == table_alias => Ok(Transformed::yes(Expr::Column(
                 Column::new_unqualified(c.name),
             ))),
-            _ => Ok(Transformed::No(Expr::Column(Column::new(
+            _ => Ok(Transformed::no(Expr::Column(Column::new(
                 c.relation, c.name,
             )))),
         },
-        _ => Ok(Transformed::No(expr)),
+        _ => Ok(Transformed::no(expr)),
     })
     .unwrap()
+    .data
 }
 
 // TODO: Abstract MergePlanner into DeltaPlanner to support other delta operations in the future.
@@ -1504,7 +1499,7 @@ impl std::future::IntoFuture for MergeBuilder {
     type IntoFuture = BoxFuture<'static, Self::Output>;
 
     fn into_future(self) -> Self::IntoFuture {
-        let mut this = self;
+        let this = self;
 
         Box::pin(async move {
             PROTOCOL.can_write_to(&this.snapshot.snapshot)?;
@@ -1519,11 +1514,11 @@ impl std::future::IntoFuture for MergeBuilder {
                 session.state()
             });
 
-            let ((actions, version, operation), metrics) = execute(
+            let (snapshot, metrics) = execute(
                 this.predicate,
                 this.source,
                 this.log_store.clone(),
-                &this.snapshot,
+                this.snapshot,
                 state,
                 this.writer_properties,
                 this.commit_properties,
@@ -1536,12 +1531,10 @@ impl std::future::IntoFuture for MergeBuilder {
             )
             .await?;
 
-            if let Some(op) = &operation {
-                this.snapshot.merge(actions, op, version)?;
-            }
-            let table = DeltaTable::new_with_state(this.log_store, this.snapshot);
-
-            Ok((table, metrics))
+            Ok((
+                DeltaTable::new_with_state(this.log_store, snapshot),
+                metrics,
+            ))
         })
     }
 }

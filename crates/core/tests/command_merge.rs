@@ -177,17 +177,7 @@ async fn test_merge_concurrent_different_partition() {
 
     // TODO: Currently it throws a Version mismatch error, but the merge commit was successfully
     // This bug needs to be fixed, see pull request #2280
-    assert!(!matches!(
-        result.as_ref().unwrap_err(),
-        DeltaTableError::Transaction { .. }
-    ));
-    assert!(matches!(
-        result.as_ref().unwrap_err(),
-        DeltaTableError::Generic(_)
-    ));
-    if let DeltaTableError::Generic(msg) = result.unwrap_err() {
-        assert_eq!(msg, "Version mismatch");
-    }
+    assert!(matches!(result.as_ref().is_ok(), true));
 }
 
 #[tokio::test]

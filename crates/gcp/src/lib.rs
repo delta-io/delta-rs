@@ -4,7 +4,8 @@ use std::sync::Arc;
 
 use deltalake_core::logstore::{default_logstore, logstores, LogStore, LogStoreFactory};
 use deltalake_core::storage::{
-    factories, url_prefix_handler, ObjectStoreFactory, ObjectStoreRef, StorageOptions,
+    factories, limit_store_handler, url_prefix_handler, ObjectStoreFactory, ObjectStoreRef,
+    StorageOptions,
 };
 use deltalake_core::{DeltaResult, Path};
 use object_store::gcp::GoogleConfigKey;
@@ -13,6 +14,7 @@ use url::Url;
 
 mod config;
 pub mod error;
+mod storage;
 
 trait GcpOptions {
     fn as_gcp_options(&self) -> HashMap<GoogleConfigKey, String>;
@@ -42,8 +44,10 @@ impl ObjectStoreFactory for GcpFactory {
         options: &StorageOptions,
     ) -> DeltaResult<(ObjectStoreRef, Path)> {
         let config = config::GcpConfigHelper::try_new(options.as_gcp_options())?.build()?;
-        let (store, prefix) = parse_url_opts(url, config)?;
-        Ok((url_prefix_handler(store, prefix.clone())?, prefix))
+        let (inner, prefix) = parse_url_opts(url, config)?;
+        let gcs_backend = crate::storage::GcsStorageBackend::try_new(Arc::new(inner))?;
+        let store = limit_store_handler(url_prefix_handler(gcs_backend, prefix.clone()), options);
+        Ok((store, prefix))
     }
 }
 

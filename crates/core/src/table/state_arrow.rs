@@ -447,11 +447,12 @@ impl DeltaTableState {
             .map(|(path, datatype)| -> Result<ColStats, DeltaTableError> {
                 let null_count = stats
                     .iter()
-                    .flat_map(|maybe_stat| {
+                    .map(|maybe_stat| {
                         maybe_stat
                             .as_ref()
                             .map(|stat| resolve_column_count_stat(&stat.null_count, &path))
                     })
+                    .map(|null_count| null_count.flatten())
                     .collect::<Vec<Option<i64>>>();
                 let null_count = Some(value_vec_to_array(null_count, |values| {
                     Ok(Arc::new(arrow::array::Int64Array::from(values)))
@@ -463,11 +464,12 @@ impl DeltaTableState {
                 let min_values = if matches!(datatype, DeltaDataType::Primitive(_)) {
                     let min_values = stats
                         .iter()
-                        .flat_map(|maybe_stat| {
+                        .map(|maybe_stat| {
                             maybe_stat
                                 .as_ref()
                                 .map(|stat| resolve_column_value_stat(&stat.min_values, &path))
                         })
+                        .map(|min_value| min_value.flatten())
                         .collect::<Vec<Option<&serde_json::Value>>>();
 
                     Some(value_vec_to_array(min_values, |values| {
@@ -480,11 +482,12 @@ impl DeltaTableState {
                 let max_values = if matches!(datatype, DeltaDataType::Primitive(_)) {
                     let max_values = stats
                         .iter()
-                        .flat_map(|maybe_stat| {
+                        .map(|maybe_stat| {
                             maybe_stat
                                 .as_ref()
                                 .map(|stat| resolve_column_value_stat(&stat.max_values, &path))
                         })
+                        .map(|max_value| max_value.flatten())
                         .collect::<Vec<Option<&serde_json::Value>>>();
                     Some(value_vec_to_array(max_values, |values| {
                         json_value_to_array_general(&arrow_type, values.into_iter())

@@ -1,6 +1,6 @@
 [package]
 name = "deltalake-python"
-version = "0.16.4"
+version = "0.17.3"
 authors = ["Qingping Hou <dave2008713@gmail.com>", "Will Jones <willjones127@gmail.com>"]
 homepage = "https://github.com/delta-io/delta-rs"
 license = "Apache-2.0"
@@ -38,6 +38,8 @@ tokio = { workspace = true, features = ["rt-multi-thread"] }
 # for binary wheel best practice, statically link openssl
 reqwest = { version = "*", features = ["native-tls-vendored"] }
 
+deltalake-mount = { path = "../crates/mount" }
+
 [dependencies.pyo3]
 version = "0.20"
 features = ["extension-module", "abi3", "abi3-py38"]
@@ -45,7 +47,7 @@ features = ["extension-module", "abi3", "abi3-py38"]
 [dependencies.deltalake]
 path = "../crates/deltalake"
 version = "0"
-features = ["azure", "gcs", "python", "datafusion", "unity-experimental", "mount"]
+features = ["azure", "gcs", "python", "datafusion", "unity-experimental"]
 
 [features]
 default = ["rustls"]

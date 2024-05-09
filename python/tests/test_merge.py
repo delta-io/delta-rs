@@ -1,6 +1,7 @@
 import pathlib
 
 import pyarrow as pa
+import pytest
 
 from deltalake import DeltaTable, write_deltalake
 
@@ -763,3 +764,118 @@ def test_merge_multiple_when_not_matched_by_source_update_wo_predicate(
 
     assert last_action["operation"] == "MERGE"
     assert result == expected
+
+
+def test_merge_date_partitioned_2344(tmp_path: pathlib.Path):
+    from datetime import date
+
+    schema = pa.schema(
+        [
+            ("date", pa.date32()),
+            ("foo", pa.string()),
+            ("bar", pa.string()),
+        ]
+    )
+
+    dt = DeltaTable.create(
+        tmp_path, schema=schema, partition_by=["date"], mode="overwrite"
+    )
+
+    data = pa.table(
+        {
+            "date": pa.array([date(2022, 2, 1)]),
+            "foo": pa.array(["hello"]),
+            "bar": pa.array(["world"]),
+        }
+    )
+
+    dt.merge(
+        data,
+        predicate="s.date = t.date",
+        source_alias="s",
+        target_alias="t",
+    ).when_matched_update_all().when_not_matched_insert_all().execute()
+
+    result = dt.to_pyarrow_table()
+    last_action = dt.history(1)[0]
+
+    assert last_action["operation"] == "MERGE"
+    assert result == data
+    assert last_action["operationParameters"].get("predicate") == "2022-02-01 = date"
+
+
+@pytest.mark.parametrize(
+    "timezone,predicate",
+    [
+        (
+            None,
+            "arrow_cast('2022-02-01T00:00:00.000000', 'Timestamp(Microsecond, None)') = datetime",
+        ),
+        (
+            "UTC",
+            "arrow_cast('2022-02-01T00:00:00.000000', 'Timestamp(Microsecond, Some(\"UTC\"))') = datetime",
+        ),
+    ],
+)
+def test_merge_timestamps_partitioned_2344(tmp_path: pathlib.Path, timezone, predicate):
+    from datetime import datetime
+
+    schema = pa.schema(
+        [
+            ("datetime", pa.timestamp("us", tz=timezone)),
+            ("foo", pa.string()),
+            ("bar", pa.string()),
+        ]
+    )
+
+    dt = DeltaTable.create(
+        tmp_path, schema=schema, partition_by=["datetime"], mode="overwrite"
+    )
+
+    data = pa.table(
+        {
+            "datetime": pa.array(
+                [datetime(2022, 2, 1)], pa.timestamp("us", tz=timezone)
+            ),
+            "foo": pa.array(["hello"]),
+            "bar": pa.array(["world"]),
+        }
+    )
+
+    dt.merge(
+        data,
+        predicate="s.datetime = t.datetime",
+        source_alias="s",
+        target_alias="t",
+    ).when_matched_update_all().when_not_matched_insert_all().execute()
+
+    result = dt.to_pyarrow_table()
+    last_action = dt.history(1)[0]
+
+    assert last_action["operation"] == "MERGE"
+    assert result == data
+    assert last_action["operationParameters"].get("predicate") == predicate
+
+
+def test_merge_field_special_characters_delete_2438(tmp_path: pathlib.Path):
+    ## See issue: https://github.com/delta-io/delta-rs/issues/2438
+    data = pa.table({"x": [1, 2, 3], "y--1": [4, 5, 6]})
+    write_deltalake(tmp_path, data, mode="append")
+
+    dt = DeltaTable(tmp_path)
+    new_data = pa.table({"x": [2, 3]})
+
+    (
+        dt.merge(
+            source=new_data,
+            predicate="target.x = source.x",
+            source_alias="source",
+            target_alias="target",
+        )
+        .when_matched_delete()
+        .execute()
+    )
+
+    expected = pa.table({"x": [1], "y--1": [4]})
+
+    assert dt.to_pyarrow_table() == expected

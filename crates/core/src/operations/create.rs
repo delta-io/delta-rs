@@ -60,6 +60,8 @@ pub struct CreateBuilder {
     metadata: Option<HashMap<String, Value>>,
 }
 
+impl super::Operation<()> for CreateBuilder {}
+
 impl Default for CreateBuilder {
     fn default() -> Self {
         Self::new()
@@ -235,16 +237,12 @@ impl CreateBuilder {
             )
         };
 
-        let contains_timestampntz = &self
-            .columns
-            .iter()
-            .any(|f| f.data_type() == &DataType::TIMESTAMPNTZ);
-
+        let contains_timestampntz = PROTOCOL.contains_timestampntz(&self.columns);
         // TODO configure more permissive versions based on configuration. Also how should this ideally be handled?
         // We set the lowest protocol we can, and if subsequent writes use newer features we update metadata?
 
         let (min_reader_version, min_writer_version, writer_features, reader_features) =
-            if *contains_timestampntz {
+            if contains_timestampntz {
                 let mut converted_writer_features = self
                     .configuration
                     .keys()
@@ -310,6 +308,7 @@ impl CreateBuilder {
         };
 
         let mut actions = vec![Action::Protocol(protocol), Action::Metadata(metadata)];
+
         actions.extend(
             self.actions
                 .into_iter()
@@ -329,7 +328,7 @@ impl std::future::IntoFuture for CreateBuilder {
         Box::pin(async move {
             let mode = this.mode;
             let app_metadata = this.metadata.clone().unwrap_or_default();
-            let (mut table, actions, operation) = this.into_table_and_actions()?;
+            let (mut table, mut actions, operation) = this.into_table_and_actions()?;
             let log_store = table.log_store();
 
             let table_state = if log_store.is_delta_table_location().await? {
@@ -342,6 +341,12 @@ impl std::future::IntoFuture for CreateBuilder {
                     }
                     SaveMode::Overwrite => {
                         table.load().await?;
+                        let remove_actions = table
+                            .snapshot()?
+                            .log_data()
+                            .into_iter()
+                            .map(|p| p.remove_action(true).into());
+                        actions.extend(remove_actions);
                         Some(table.snapshot()?)
                     }
                 }
@@ -371,7 +376,7 @@ mod tests {
     use super::*;
     use crate::operations::DeltaOps;
     use crate::table::config::DeltaConfigKey;
-    use crate::writer::test_utils::get_delta_schema;
+    use crate::writer::test_utils::{get_delta_schema, get_record_batch};
     use tempfile::TempDir;
 
     #[tokio::test]
@@ -517,5 +522,54 @@ mod tests {
             .await
             .unwrap();
         assert_ne!(table.metadata().unwrap().id, first_id)
+    }
+
+    #[tokio::test]
+    async fn test_create_or_replace_existing_table() {
+        let batch = get_record_batch(None, false);
+        let schema = get_delta_schema();
+        let table = DeltaOps::new_in_memory()
+            .write(vec![batch.clone()])
+            .with_save_mode(SaveMode::ErrorIfExists)
+            .await
+            .unwrap();
+        assert_eq!(table.version(), 0);
+        assert_eq!(table.get_files_count(), 1);
+
+        let mut table = DeltaOps(table)
+            .create()
+            .with_columns(schema.fields().iter().cloned())
+            .with_save_mode(SaveMode::Overwrite)
+            .await
+            .unwrap();
+        table.load().await.unwrap();
+        assert_eq!(table.version(), 1);
+        // Checks if files got removed after overwrite
+        assert_eq!(table.get_files_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_create_or_replace_existing_table_partitioned() {
+        let batch = get_record_batch(None, false);
+        let schema = get_delta_schema();
+        let table = DeltaOps::new_in_memory()
+            .write(vec![batch.clone()])
+            .with_save_mode(SaveMode::ErrorIfExists)
+            .await
+            .unwrap();
+        assert_eq!(table.version(), 0);
+        assert_eq!(table.get_files_count(), 1);
+
+        let mut table = DeltaOps(table)
+            .create()
+            .with_columns(schema.fields().iter().cloned())
+            .with_save_mode(SaveMode::Overwrite)
+            .with_partition_columns(vec!["id"])
+            .await
+            .unwrap();
+        table.load().await.unwrap();
+        assert_eq!(table.version(), 1);
+        // Checks if files got removed after overwrite
+        assert_eq!(table.get_files_count(), 0);
     }
 }

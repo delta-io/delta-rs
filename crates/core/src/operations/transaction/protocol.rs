@@ -4,7 +4,9 @@ use lazy_static::lazy_static;
 use once_cell::sync::Lazy;
 
 use super::{TableReference, TransactionError};
-use crate::kernel::{Action, DataType, EagerSnapshot, ReaderFeatures, Schema, WriterFeatures};
+use crate::kernel::{
+    Action, DataType, EagerSnapshot, ReaderFeatures, Schema, StructField, WriterFeatures,
+};
 use crate::protocol::DeltaOperation;
 use crate::table::state::DeltaTableState;
 
@@ -77,17 +79,30 @@ impl ProtocolChecker {
         Ok(())
     }
 
+    /// checks if table contains timestamp_ntz in any field including nested fields.
+    pub fn contains_timestampntz(&self, fields: &Vec<StructField>) -> bool {
+        fn check_vec_fields(fields: &Vec<StructField>) -> bool {
+            fields.iter().any(|f| _check_type(f.data_type()))
+        }
+
+        fn _check_type(dtype: &DataType) -> bool {
+            match dtype {
+                &DataType::TIMESTAMPNTZ => true,
+                DataType::Array(inner) => _check_type(inner.element_type()),
+                DataType::Struct(inner) => check_vec_fields(inner.fields()),
+                _ => false,
+            }
+        }
+        check_vec_fields(fields)
+    }
+
     /// Check can write_timestamp_ntz
     pub fn check_can_write_timestamp_ntz(
         &self,
         snapshot: &DeltaTableState,
         schema: &Schema,
     ) -> Result<(), TransactionError> {
-        let contains_timestampntz = schema
-            .fields()
-            .iter()
-            .any(|f| f.data_type() == &DataType::TIMESTAMPNTZ);
-
+        let contains_timestampntz = self.contains_timestampntz(schema.fields());
         let required_features: Option<&HashSet<WriterFeatures>> =
             match snapshot.protocol().min_writer_version {
                 0..=6 => None,
