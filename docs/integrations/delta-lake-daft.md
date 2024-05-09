@@ -178,7 +178,7 @@ Instead, running a query on a partitioned column (`country` in this case) means 
 
 ### Z-Ordering for enhanced file skipping
 
-Z-ordering stores similar data close together to optimize query performance. This is especially useful when you're querying on one or multiple columns.
+[Z-ordering](https://delta.io/blog/2023-06-03-delta-lake-z-order/) stores similar data close together to optimize query performance. This is especially useful when you're querying on one or multiple columns.
 
 Using Z-Ordered Delta tables instead of regular Parquet can give Daft users significant speed-ups.
 
