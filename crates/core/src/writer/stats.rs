@@ -267,18 +267,8 @@ impl StatsScalar {
                     v.max_bytes()
                 };
 
-                let val = if val.len() <= 4 {
-                    let mut bytes = [0; 4];
-                    bytes[..val.len()].copy_from_slice(val);
-                    i32::from_be_bytes(bytes) as f64
-                } else if val.len() <= 8 {
-                    let mut bytes = [0; 8];
-                    bytes[..val.len()].copy_from_slice(val);
-                    i64::from_be_bytes(bytes) as f64
-                } else if val.len() <= 16 {
-                    let mut bytes = [0; 16];
-                    bytes[..val.len()].copy_from_slice(val);
-                    i128::from_be_bytes(bytes) as f64
+                let val = if val.len() <= 16 {
+                    i128::from_be_bytes(sign_extend_be(val)) as f64
                 } else {
                     return Err(DeltaWriterError::StatsParsingFailed {
                         debug_value: format!("{val:?}"),
@@ -318,6 +308,19 @@ impl StatsScalar {
             }),
         }
     }
+}
+
+/// Performs big endian sign extension
+/// Copied from arrow-rs repo/parquet crate:
+/// https://github.com/apache/arrow-rs/blob/b25c441745602c9967b1e3cc4a28bc469cfb1311/parquet/src/arrow/buffer/bit_util.rs#L54
+pub fn sign_extend_be<const N: usize>(b: &[u8]) -> [u8; N] {
+    assert!(b.len() <= N, "Array too large, expected less than {N}");
+    let is_negative = (b[0] & 128u8) == 128u8;
+    let mut result = if is_negative { [255u8; N] } else { [0u8; N] };
+    for (d, s) in result.iter_mut().skip(N - b.len()).zip(b) {
+        *d = *s;
+    }
+    result
 }
 
 impl From<StatsScalar> for serde_json::Value {
@@ -657,6 +660,17 @@ mod tests {
                     precision: 16,
                 }),
                 Value::from(1243124142314.423),
+            ),
+            (
+                simple_parquet_stat!(
+                    Statistics::FixedLenByteArray,
+                    FixedLenByteArray::from(vec![0, 39, 16])
+                ),
+                Some(LogicalType::Decimal {
+                    scale: 3,
+                    precision: 5,
+                }),
+                Value::from(10.0),
             ),
             (
                 simple_parquet_stat!(
