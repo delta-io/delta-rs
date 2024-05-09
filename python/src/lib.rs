@@ -14,6 +14,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use arrow::pyarrow::PyArrowType;
 use chrono::{DateTime, Duration, FixedOffset, Utc};
+use delta_kernel::expressions::Scalar;
 use deltalake::arrow::compute::concat_batches;
 use deltalake::arrow::ffi_stream::{ArrowArrayStreamReader, FFI_ArrowArrayStream};
 use deltalake::arrow::record_batch::RecordBatchReader;
@@ -26,7 +27,9 @@ use deltalake::datafusion::physical_plan::ExecutionPlan;
 use deltalake::datafusion::prelude::SessionContext;
 use deltalake::delta_datafusion::DeltaDataChecker;
 use deltalake::errors::DeltaTableError;
-use deltalake::kernel::{Action, Add, Invariant, LogicalFile, Remove, Scalar, StructType};
+use deltalake::kernel::{
+    scalars::ScalarExt, Action, Add, Invariant, LogicalFile, Remove, StructType,
+};
 use deltalake::operations::collect_sendable_stream;
 use deltalake::operations::constraints::ConstraintBuilder;
 use deltalake::operations::convert_to_delta::{ConvertToDeltaBuilder, PartitionStrategy};
@@ -53,7 +56,7 @@ use deltalake::{DeltaOps, DeltaResult};
 use futures::future::join_all;
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::{PyDict, PyFrozenSet};
+use pyo3::types::PyFrozenSet;
 use serde_json::{Map, Value};
 
 use crate::error::DeltaProtocolError;
@@ -949,7 +952,6 @@ impl RawDeltaTable {
             .get_schema()
             .map_err(|_| DeltaProtocolError::new_err("table does not yet have a schema"))?
             .fields()
-            .iter()
             .map(|field| field.name().as_str())
             .collect();
         let partition_columns: HashSet<&str> = self
@@ -1362,13 +1364,6 @@ fn scalar_to_py(value: &Scalar, py_date: &PyAny, py: Python) -> PyResult<PyObjec
             date.to_object(py)
         }
         Decimal(_, _, _) => value.serialize().to_object(py),
-        Struct(values, fields) => {
-            let py_struct = PyDict::new(py);
-            for (field, value) in fields.iter().zip(values.iter()) {
-                py_struct.set_item(field.name(), scalar_to_py(value, py_date, py)?)?;
-            }
-            py_struct.to_object(py)
-        }
     };
 
     Ok(val)
@@ -1424,77 +1419,6 @@ fn filestats_to_expression_next<'py>(
                 );
             } else {
                 expressions.push(py_field.call1((column,))?.call_method0("is_null"));
-            }
-        }
-    }
-
-    let mut has_nulls_set: HashSet<String> = HashSet::new();
-
-    // NOTE: null_counts should always return a struct scalar.
-    if let Some(Scalar::Struct(values, fields)) = file_info.null_counts() {
-        for (field, value) in fields.iter().zip(values.iter()) {
-            if let Scalar::Long(val) = value {
-                if *val == 0 {
-                    expressions.push(py_field.call1((field.name(),))?.call_method0("is_valid"));
-                } else if Some(*val as usize) == file_info.num_records() {
-                    expressions.push(py_field.call1((field.name(),))?.call_method0("is_null"));
-                } else {
-                    has_nulls_set.insert(field.name().to_string());
-                }
-            }
-        }
-    }
-
-    // NOTE: min_values should always return a struct scalar.
-    if let Some(Scalar::Struct(values, fields)) = file_info.min_values() {
-        for (field, value) in fields.iter().zip(values.iter()) {
-            match value {
-                // TODO: Handle nested field statistics.
-                Scalar::Struct(_, _) => {}
-                _ => {
-                    let maybe_minimum =
-                        cast_to_type(field.name(), scalar_to_py(value, py_date, py)?, &schema.0);
-                    if let Ok(minimum) = maybe_minimum {
-                        let field_expr = py_field.call1((field.name(),))?;
-                        let expr = field_expr.call_method1("__ge__", (minimum,));
-                        let expr = if has_nulls_set.contains(field.name()) {
-                            // col >= min_value OR col is null
-                            let is_null_expr = field_expr.call_method0("is_null");
-                            expr?.call_method1("__or__", (is_null_expr?,))
-                        } else {
-                            // col >= min_value
-                            expr
-                        };
-                        expressions.push(expr);
-                    }
-                }
-            }
-        }
-    }
-
-    // NOTE: max_values should always return a struct scalar.
-    if let Some(Scalar::Struct(values, fields)) = file_info.max_values() {
-        for (field, value) in fields.iter().zip(values.iter()) {
-            match value {
-                // TODO: Handle nested field statistics.
-                Scalar::Struct(_, _) => {}
-                _ => {
-                    let maybe_maximum =
-                        cast_to_type(field.name(), scalar_to_py(value, py_date, py)?, &schema.0);
-                    if let Ok(maximum) = maybe_maximum {
-                        let field_expr = py_field.call1((field.name(),))?;
-                        let expr = field_expr.call_method1("__le__", (maximum,));
-                        let expr = if has_nulls_set.contains(field.name()) {
-                            // col <= max_value OR col is null
-                            let is_null_expr = field_expr.call_method0("is_null");
-                            expr?.call_method1("__or__", (is_null_expr?,))
-                        } else {
-                            // col <= max_value
-                            expr
-                        };
-                        expressions.push(expr);
-                    }
-                }
             }
         }
     }
@@ -1668,7 +1592,7 @@ fn create_deltalake(
 
         let mut builder = DeltaOps(table)
             .create()
-            .with_columns(schema.fields().clone())
+            .with_columns(schema.fields().cloned())
             .with_save_mode(mode)
             .with_raise_if_key_not_exists(raise_if_key_not_exists)
             .with_partition_columns(partition_by);
@@ -1723,7 +1647,7 @@ fn write_new_deltalake(
 
         let mut builder = DeltaOps(table)
             .create()
-            .with_columns(schema.fields().clone())
+            .with_columns(schema.fields().cloned())
             .with_partition_columns(partition_by)
             .with_actions(add_actions.iter().map(|add| Action::Add(add.into())));
 
@@ -1770,7 +1694,7 @@ fn convert_to_deltalake(
 
         if let Some(part_schema) = partition_schema {
             let schema: StructType = (&part_schema.0).try_into().map_err(PythonError::from)?;
-            builder = builder.with_partition_schema(schema.fields().clone());
+            builder = builder.with_partition_schema(schema.fields().cloned());
         }
 
         if let Some(partition_strategy) = &partition_strategy {

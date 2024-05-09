@@ -8,7 +8,7 @@ use deltalake::arrow::error::ArrowError;
 use deltalake::arrow::pyarrow::PyArrowType;
 use deltalake::kernel::{
     ArrayType as DeltaArrayType, DataType, MapType as DeltaMapType, PrimitiveType as DeltaPrimitve,
-    StructField, StructType as DeltaStructType,
+    StructField, StructType as DeltaStructType, StructTypeExt,
 };
 use pyo3::exceptions::{PyException, PyNotImplementedError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
@@ -145,7 +145,7 @@ impl PrimitiveType {
 
     #[pyo3(text_signature = "($self)")]
     fn to_json(&self) -> PyResult<String> {
-        let inner_type = DataType::Primitive(self.inner_type);
+        let inner_type = DataType::Primitive(self.inner_type.clone());
         serde_json::to_string(&inner_type).map_err(|err| PyException::new_err(err.to_string()))
     }
 
@@ -160,7 +160,7 @@ impl PrimitiveType {
 
     #[pyo3(text_signature = "($self)")]
     fn to_pyarrow(&self) -> PyResult<PyArrowType<ArrowDataType>> {
-        let inner_type = DataType::Primitive(self.inner_type);
+        let inner_type = DataType::Primitive(self.inner_type.clone());
         Ok(PyArrowType((&inner_type).try_into().map_err(
             |err: ArrowError| PyException::new_err(err.to_string()),
         )?))
@@ -597,7 +597,6 @@ impl StructType {
         let inner_data: Vec<String> = self
             .inner_type
             .fields()
-            .iter()
             .map(|field| {
                 let field = Field {
                     inner: field.clone(),
@@ -628,7 +627,6 @@ impl StructType {
     fn fields(&self) -> Vec<Field> {
         self.inner_type
             .fields()
-            .iter()
             .map(|field| Field {
                 inner: field.clone(),
             })
@@ -672,7 +670,6 @@ impl StructType {
 pub fn schema_to_pyobject(schema: &DeltaStructType, py: Python) -> PyResult<PyObject> {
     let fields: Vec<Field> = schema
         .fields()
-        .iter()
         .map(|field| Field {
             inner: field.clone(),
         })
@@ -718,7 +715,6 @@ impl PySchema {
         let inner_data: Vec<String> = super_
             .inner_type
             .fields()
-            .iter()
             .map(|field| {
                 let field = Field {
                     inner: field.clone(),

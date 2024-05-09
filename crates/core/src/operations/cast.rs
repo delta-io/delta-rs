@@ -34,13 +34,12 @@ pub(crate) fn merge_struct(
     left: &StructType,
     right: &StructType,
 ) -> Result<StructType, ArrowError> {
-    let mut errors = Vec::with_capacity(left.fields().len());
+    let mut errors = Vec::new();
     let merged_fields: Result<Vec<StructField>, ArrowError> = left
         .fields()
-        .iter()
         .map(|field| {
-            let right_field = right.field_with_name(field.name());
-            if let Ok(right_field) = right_field {
+            let right_field = right.field(field.name());
+            if let Some(right_field) = right_field {
                 let type_or_not = merge_type(field.data_type(), right_field.data_type());
                 match type_or_not {
                     Err(e) => {
@@ -67,7 +66,7 @@ pub(crate) fn merge_struct(
     match merged_fields {
         Ok(mut fields) => {
             for field in right.fields() {
-                if !left.field_with_name(field.name()).is_ok() {
+                if !left.field(field.name()).is_some() {
                     fields.push(field.clone());
                 }
             }
@@ -200,18 +199,21 @@ pub fn cast_record_batch(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+    use std::sync::Arc;
+
+    use arrow::array::ArrayData;
+    use arrow_array::{Array, ArrayRef, ListArray, RecordBatch};
+    use arrow_buffer::Buffer;
+    use arrow_schema::{DataType, Field, FieldRef, Fields, Schema, SchemaRef};
+    use itertools::Itertools;
+
     use crate::kernel::{
         ArrayType as DeltaArrayType, DataType as DeltaDataType, StructField as DeltaStructField,
         StructType as DeltaStructType,
     };
     use crate::operations::cast::MetadataValue;
     use crate::operations::cast::{cast_record_batch, is_cast_required};
-    use arrow::array::ArrayData;
-    use arrow_array::{Array, ArrayRef, ListArray, RecordBatch};
-    use arrow_buffer::Buffer;
-    use arrow_schema::{DataType, Field, FieldRef, Fields, Schema, SchemaRef};
-    use std::collections::HashMap;
-    use std::sync::Arc;
 
     #[test]
     fn test_merge_schema_with_dict() {
@@ -253,13 +255,14 @@ mod tests {
         .with_metadata(right_meta)]);
 
         let result = super::merge_struct(&left_schema, &right_schema).unwrap();
-        assert_eq!(result.fields().len(), 1);
-        let delta_type = result.fields()[0].data_type();
+        let fields = result.fields().collect_vec();
+        assert_eq!(fields.len(), 1);
+        let delta_type = fields[0].data_type();
         assert_eq!(delta_type, &DeltaDataType::STRING);
         let mut expected_meta = HashMap::new();
         expected_meta.insert("a".to_string(), MetadataValue::String("a1".to_string()));
         expected_meta.insert("b".to_string(), MetadataValue::String("b2".to_string()));
-        assert_eq!(result.fields()[0].metadata(), &expected_meta);
+        assert_eq!(fields[0].metadata(), &expected_meta);
     }
 
     #[test]

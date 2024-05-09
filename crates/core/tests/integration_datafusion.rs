@@ -1,14 +1,10 @@
 #![cfg(feature = "datafusion")]
-
-use arrow::array::Int64Array;
-use deltalake_test::datafusion::*;
-use deltalake_test::utils::*;
-use serial_test::serial;
-
 use std::collections::{HashMap, HashSet};
+use std::error::Error;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use arrow::array::Int64Array;
 use arrow::array::*;
 use arrow::record_batch::RecordBatch;
 use arrow_schema::{
@@ -28,8 +24,6 @@ use datafusion_expr::Expr;
 use datafusion_proto::bytes::{
     physical_plan_from_bytes_with_extension_codec, physical_plan_to_bytes_with_extension_codec,
 };
-use url::Url;
-
 use deltalake_core::delta_datafusion::{DeltaPhysicalCodec, DeltaScan};
 use deltalake_core::kernel::{DataType, MapType, PrimitiveType, StructField, StructType};
 use deltalake_core::logstore::logstore_for;
@@ -41,7 +35,10 @@ use deltalake_core::{
     operations::{write::WriteBuilder, DeltaOps},
     DeltaTable, DeltaTableError,
 };
-use std::error::Error;
+use deltalake_test::datafusion::*;
+use deltalake_test::utils::*;
+use serial_test::serial;
+use url::Url;
 
 mod local {
     use datafusion::common::stats::Precision;
@@ -106,7 +103,7 @@ mod local {
             .unwrap()
             .create()
             .with_save_mode(SaveMode::Ignore)
-            .with_columns(table_schema.fields().clone())
+            .with_columns(table_schema.fields().cloned())
             .with_partition_columns(partitions)
             .await
             .unwrap();
@@ -198,10 +195,8 @@ mod local {
             &ctx,
             &DeltaPhysicalCodec {},
         )?;
-        let fields = StructType::try_from(source_scan.schema())
-            .unwrap()
-            .fields()
-            .clone();
+        let schema = StructType::try_from(source_scan.schema()).unwrap();
+        let fields = schema.fields().cloned();
 
         // Create target Delta Table
         let target_table = CreateBuilder::new()
@@ -1035,7 +1030,7 @@ mod local {
             deltalake_core::DeltaTableBuilder::from_uri("./tests/data/issue-1619").build()?;
         let _ = DeltaOps::from(table)
             .create()
-            .with_columns(schema.fields().to_owned())
+            .with_columns(schema.fields().cloned())
             .await?;
 
         let mut table = open_table("./tests/data/issue-1619").await?;

@@ -34,7 +34,7 @@ async fn prepare_table(
 
     let table = DeltaOps(table)
         .create()
-        .with_columns(schema.fields().clone())
+        .with_columns(schema.fields().cloned())
         .await?;
 
     assert_eq!(0, table.version());
