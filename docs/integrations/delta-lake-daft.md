@@ -108,7 +108,7 @@ Let's look at how this works.
 
 You may have noticed the Delta Lake warning at the top when we first called `collect()` on our DataFrame:
 
-<div class="alert alert-block alert-danger">WARNING: has partitioning keys = [PartitionField(country#Utf8)], but no partition filter was specified. This will result in a full table scan.</div>
+> `WARNING: has partitioning keys = [PartitionField(country#Utf8)], but no partition filter was specified. This will result in a full table scan.`
 
 Delta Lake is informing us that the data is partitioned on the `country` column.
 
