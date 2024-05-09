@@ -126,7 +126,7 @@ Daft does some nice magic here to help you out. The Daft query optimizer has acc
 
 You can use the `explain()` method to see how Daft is optimizing your query.
 
-Since we've already called `collect` on our DataFrame, it is already in memory. So below we copy the output of `explain(show_all=True)` **before** calling `collect`:
+> Since we've already called `collect` on our DataFrame, it is already in memory. So below we copy the output of `explain(show_all=True)` **before** calling `collect`:
 
 Running `df.where(df["continent"] == "Asia").explain(True)` returns:
 
