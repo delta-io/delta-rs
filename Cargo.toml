@@ -26,6 +26,8 @@ debug = true
 debug = "line-tables-only"
 
 [workspace.dependencies]
+delta_kernel = { git = "https://github.com/roeap/delta-kernel-rs", rev = "524262aa74d2f664bc5cc9b9ce06d7c6274bf7f4" }
+
 # arrow
 arrow = { version = "51" }
 arrow-arith = { version = "51" }

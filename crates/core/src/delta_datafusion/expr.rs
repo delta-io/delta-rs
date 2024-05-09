@@ -542,7 +542,7 @@ mod test {
 
         let table = DeltaOps::new_in_memory()
             .create()
-            .with_columns(schema.fields().clone())
+            .with_columns(schema.fields().cloned())
             .await
             .unwrap();
         assert_eq!(table.version(), 0);

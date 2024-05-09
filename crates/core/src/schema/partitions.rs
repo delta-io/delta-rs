@@ -1,12 +1,13 @@
 //! Delta Table partition handling logic.
-//!
+
+use delta_kernel::expressions::Scalar;
 use serde::{Serialize, Serializer};
 use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::convert::TryFrom;
 
 use crate::errors::DeltaTableError;
-use crate::kernel::{DataType, PrimitiveType, Scalar};
+use crate::kernel::{scalars::ScalarExt, DataType, PrimitiveType};
 
 /// A special value used in Hive to represent the null partition in partitioned tables
 pub const NULL_PARTITION_VALUE_DATA_PATH: &str = "__HIVE_DEFAULT_PARTITION__";

@@ -14,6 +14,7 @@ use arrow_array::ArrayRef;
 use arrow_row::{RowConverter, SortField};
 use arrow_schema::{ArrowError, Schema as ArrowSchema, SchemaRef as ArrowSchemaRef};
 use bytes::Bytes;
+use delta_kernel::expressions::Scalar;
 use indexmap::IndexMap;
 use object_store::{path::Path, ObjectStore};
 use parquet::{arrow::ArrowWriter, errors::ParquetError};
@@ -28,7 +29,7 @@ use super::utils::{
 };
 use super::{DeltaWriter, DeltaWriterError, WriteMode};
 use crate::errors::DeltaTableError;
-use crate::kernel::{Action, Add, PartitionsExt, Scalar, StructType};
+use crate::kernel::{scalars::ScalarExt, Action, Add, PartitionsExt, StructType};
 use crate::operations::cast::merge_schema;
 use crate::storage::ObjectStoreRetryExt;
 use crate::table::builder::DeltaTableBuilder;
@@ -539,7 +540,7 @@ mod tests {
         let table = DeltaOps(table)
             .create()
             .with_partition_columns(partition_cols.to_vec())
-            .with_columns(delta_schema.fields().clone())
+            .with_columns(delta_schema.fields().cloned())
             .await
             .unwrap();
 
@@ -659,7 +660,7 @@ mod tests {
             .with_location(table_path.to_str().unwrap())
             .with_table_name("test-table")
             .with_comment("A table for running tests")
-            .with_columns(table_schema.fields().clone())
+            .with_columns(table_schema.fields().cloned())
             .with_partition_columns(partition_cols)
             .await
             .unwrap();
@@ -735,7 +736,7 @@ mod tests {
                 .with_location(table_path.to_str().unwrap())
                 .with_table_name("test-table")
                 .with_comment("A table for running tests")
-                .with_columns(table_schema.fields().clone())
+                .with_columns(table_schema.fields().cloned())
                 .await
                 .unwrap();
             table.load().await.expect("Failed to load table");
@@ -779,8 +780,7 @@ mod tests {
 
             let new_schema = table.metadata().unwrap().schema().unwrap();
             let expected_columns = vec!["id", "value", "modified", "vid", "name"];
-            let found_columns: Vec<&String> =
-                new_schema.fields().iter().map(|f| f.name()).collect();
+            let found_columns: Vec<&String> = new_schema.fields().map(|f| f.name()).collect();
             assert_eq!(
                 expected_columns, found_columns,
                 "The new table schema does not contain all evolved columns as expected"
@@ -797,7 +797,7 @@ mod tests {
                 .with_location(table_path.to_str().unwrap())
                 .with_table_name("test-table")
                 .with_comment("A table for running tests")
-                .with_columns(table_schema.fields().clone())
+                .with_columns(table_schema.fields().cloned())
                 .with_partition_columns(["id"])
                 .await
                 .unwrap();
@@ -928,7 +928,7 @@ mod tests {
                 .with_location(table_path.to_str().unwrap())
                 .with_table_name("test-table")
                 .with_comment("A table for running tests")
-                .with_columns(table_schema.fields().clone())
+                .with_columns(table_schema.fields().cloned())
                 .await
                 .unwrap();
             table.load().await.expect("Failed to load table");

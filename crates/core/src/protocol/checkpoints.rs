@@ -8,6 +8,7 @@ use arrow_schema::ArrowError;
 
 use chrono::{Datelike, NaiveDate, NaiveDateTime, Utc};
 use futures::{StreamExt, TryStreamExt};
+use itertools::Itertools;
 use lazy_static::lazy_static;
 use object_store::{Error, ObjectStore};
 use parquet::arrow::ArrowWriter;
@@ -259,7 +260,8 @@ fn parquet_bytes_from_state(
 
     // Collect a map of paths that require special stats conversion.
     let mut stats_conversions: Vec<(SchemaPath, DataType)> = Vec::new();
-    collect_stats_conversions(&mut stats_conversions, schema.fields().as_slice());
+    let fields = schema.fields().collect_vec();
+    collect_stats_conversions(&mut stats_conversions, fields.as_slice());
 
     // if any, tombstones do not include extended file metadata, we must omit the extended metadata fields from the remove schema
     // See https://github.com/delta-io/delta/blob/master/PROTOCOL.md#add-file-and-remove-file
@@ -477,7 +479,7 @@ fn typed_partition_value_from_option_string(
     }
 }
 
-fn collect_stats_conversions(paths: &mut Vec<(SchemaPath, DataType)>, fields: &[StructField]) {
+fn collect_stats_conversions(paths: &mut Vec<(SchemaPath, DataType)>, fields: &[&StructField]) {
     let mut _path = SchemaPath::new();
     fields
         .iter()
@@ -498,9 +500,7 @@ fn collect_field_conversion(
         DataType::Struct(struct_field) => {
             let struct_fields = struct_field.fields();
             current_path.push(field.name().to_owned());
-            struct_fields
-                .iter()
-                .for_each(|f| collect_field_conversion(current_path, all_paths, f));
+            struct_fields.for_each(|f| collect_field_conversion(current_path, all_paths, f));
             current_path.pop();
         }
         _ => { /* noop */ }
@@ -560,7 +560,7 @@ mod tests {
 
         let table = DeltaOps::new_in_memory()
             .create()
-            .with_columns(table_schema.fields().clone())
+            .with_columns(table_schema.fields().cloned())
             .with_save_mode(crate::protocol::SaveMode::Ignore)
             .await
             .unwrap();
@@ -592,7 +592,7 @@ mod tests {
 
         let mut table = DeltaOps::new_in_memory()
             .create()
-            .with_columns(table_schema.fields().clone())
+            .with_columns(table_schema.fields().cloned())
             .with_save_mode(crate::protocol::SaveMode::Ignore)
             .await
             .unwrap();
@@ -668,7 +668,7 @@ mod tests {
 
         let table = DeltaOps::new_in_memory()
             .create()
-            .with_columns(table_schema.fields().clone())
+            .with_columns(table_schema.fields().cloned())
             .with_save_mode(crate::protocol::SaveMode::Ignore)
             .await
             .unwrap();
@@ -802,9 +802,8 @@ mod tests {
     #[test]
     fn collect_stats_conversions_test() {
         let delta_schema: StructType = serde_json::from_value(SCHEMA.clone()).unwrap();
-        let fields = delta_schema.fields();
+        let fields = delta_schema.fields().collect_vec();
         let mut paths = Vec::new();
-
         collect_stats_conversions(&mut paths, fields.as_slice());
 
         assert_eq!(2, paths.len());

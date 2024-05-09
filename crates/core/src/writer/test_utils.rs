@@ -276,7 +276,7 @@ pub async fn setup_table_with_configuration(
     let table_schema = get_delta_schema();
     DeltaOps::new_in_memory()
         .create()
-        .with_columns(table_schema.fields().clone())
+        .with_columns(table_schema.fields().cloned())
         .with_configuration_property(key, value)
         .await
         .expect("Failed to create table")
@@ -299,7 +299,7 @@ pub async fn create_initialized_table(partition_cols: &[String]) -> DeltaTable {
         .with_location(table_path.to_str().unwrap())
         .with_table_name("test-table")
         .with_comment("A table for running tests")
-        .with_columns(table_schema.fields().clone())
+        .with_columns(table_schema.fields().cloned())
         .with_partition_columns(partition_cols)
         .await
         .unwrap()
