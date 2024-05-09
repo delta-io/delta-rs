@@ -320,7 +320,7 @@ impl WriteBuilder {
                 }?;
                 let mut builder = CreateBuilder::new()
                     .with_log_store(self.log_store.clone())
-                    .with_columns(schema.fields().clone())
+                    .with_columns(schema.fields().cloned())
                     .with_configuration(self.configuration.clone());
                 if let Some(partition_columns) = self.partition_columns.as_ref() {
                     builder = builder.with_partition_columns(partition_columns.clone())
@@ -979,7 +979,7 @@ mod tests {
 
         let table = DeltaOps::new_in_memory()
             .create()
-            .with_columns(table_schema.fields().clone())
+            .with_columns(table_schema.fields().cloned())
             .await
             .unwrap();
         assert_eq!(table.version(), 0);
@@ -1242,7 +1242,7 @@ mod tests {
         assert_eq!(table.version(), 1);
         let new_schema = table.metadata().unwrap().schema().unwrap();
         let fields = new_schema.fields();
-        let names = fields.iter().map(|f| f.name()).collect::<Vec<_>>();
+        let names = fields.map(|f| f.name()).collect::<Vec<_>>();
         assert_eq!(names, vec!["id", "value", "modified", "inserted_by"]);
     }
 
@@ -1300,7 +1300,7 @@ mod tests {
         assert_eq!(table.version(), 1);
         let new_schema = table.metadata().unwrap().schema().unwrap();
         let fields = new_schema.fields();
-        let mut names = fields.iter().map(|f| f.name()).collect::<Vec<_>>();
+        let mut names = fields.map(|f| f.name()).collect::<Vec<_>>();
         names.sort();
         assert_eq!(names, vec!["id", "inserted_by", "modified", "value"]);
         let part_cols = table.metadata().unwrap().partition_columns.clone();
@@ -1417,7 +1417,7 @@ mod tests {
         let table = DeltaOps::new_in_memory()
             .create()
             .with_save_mode(SaveMode::ErrorIfExists)
-            .with_columns(schema.fields().clone())
+            .with_columns(schema.fields().cloned())
             .await
             .unwrap();
         assert_eq!(table.version(), 0);
@@ -1439,7 +1439,7 @@ mod tests {
         let table = DeltaOps::new_in_memory()
             .create()
             .with_save_mode(SaveMode::ErrorIfExists)
-            .with_columns(schema.fields().clone())
+            .with_columns(schema.fields().cloned())
             .await
             .unwrap();
         assert_eq!(table.version(), 0);
@@ -1455,7 +1455,7 @@ mod tests {
 
         let table = DeltaOps::new_in_memory()
             .create()
-            .with_columns(table_schema.fields().clone())
+            .with_columns(table_schema.fields().cloned())
             .await
             .unwrap();
         assert_eq!(table.version(), 0);

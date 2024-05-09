@@ -249,7 +249,7 @@ async fn test_optimize_with_partitions() -> Result<(), Box<dyn Error>> {
     let partition_values = partition_adds[0].partition_values()?;
     assert_eq!(
         partition_values.get("date"),
-        Some(&deltalake_core::kernel::Scalar::String(
+        Some(&delta_kernel::expressions::Scalar::String(
             "2022-05-22".to_string()
         ))
     );

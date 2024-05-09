@@ -19,7 +19,7 @@ async fn create_table(table_uri: &str, partition: Option<Vec<&str>>) -> DeltaTab
     let ops = DeltaOps::try_from_uri(table_uri).await.unwrap();
     let table = ops
         .create()
-        .with_columns(table_schema.fields().clone())
+        .with_columns(table_schema.fields().cloned())
         .with_partition_columns(partition.unwrap_or_default())
         .await
         .expect("Failed to create table");

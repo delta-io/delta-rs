@@ -81,20 +81,19 @@ impl ProtocolChecker {
     }
 
     /// checks if table contains timestamp_ntz in any field including nested fields.
-    pub fn contains_timestampntz(&self, fields: &[StructField]) -> bool {
-        fn check_vec_fields(fields: &[StructField]) -> bool {
-            fields.iter().any(|f| _check_type(f.data_type()))
-        }
-
+    pub fn contains_timestampntz<'a>(
+        &self,
+        mut fields: impl Iterator<Item = &'a StructField>,
+    ) -> bool {
         fn _check_type(dtype: &DataType) -> bool {
             match dtype {
-                &DataType::TIMESTAMPNTZ => true,
+                &DataType::TIMESTAMP_NTZ => true,
                 DataType::Array(inner) => _check_type(inner.element_type()),
-                DataType::Struct(inner) => check_vec_fields(inner.fields()),
+                DataType::Struct(inner) => inner.fields().any(|f| _check_type(f.data_type())),
                 _ => false,
             }
         }
-        check_vec_fields(fields)
+        fields.any(|f| _check_type(f.data_type()))
     }
 
     /// Check can write_timestamp_ntz
