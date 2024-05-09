@@ -172,9 +172,9 @@ Whereas running `df.where(df["country"] == "Germany").explain(True)` returns:
 |   Clustering spec = { Num partitions = 1 }
 ```
 
-Running a query on a non-partitioned column like `continent` will require reading in all partitions, totalling 3045 bytes in this case.
+Running a query on a non-partitioned column like `continent` will require reading in all partitions, totalling 3045 bytes in the case of this toy example.
 
-Instead, running a query on a partitioned column (`country` in this case) means Daft only has to read only the relevant partition, saving us a whopping 2000+ bytes in this toy example :)
+Instead, running a query on a partitioned column (`country` in this case) means Daft only has to read only the relevant partition, saving us a ~60% of the compute. This has huge impacts when you're working at scale.
 
 ### Z-Ordering for enhanced file skipping
 
