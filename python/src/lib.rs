@@ -1720,6 +1720,26 @@ fn convert_to_deltalake(
     Ok(())
 }
 
+#[pyfunction]
+fn get_num_idx_cols_and_stats_columns(
+    table: Option<&RawDeltaTable>,
+    configuration: Option<HashMap<String, Option<String>>>,
+) -> PyResult<(i32, Option<Vec<String>>)> {
+    let config = table
+        .as_ref()
+        .map(|table| table._table.snapshot())
+        .transpose()
+        .map_err(PythonError::from)?
+        .map(|snapshot| snapshot.table_config());
+
+    Ok(
+        deltalake::operations::write::get_num_idx_cols_and_stats_columns(
+            config,
+            configuration.unwrap_or_default(),
+        ),
+    )
+}
+
 #[pyclass(name = "DeltaDataChecker", module = "deltalake._internal")]
 struct PyDeltaDataChecker {
     inner: DeltaDataChecker,
@@ -1776,6 +1796,10 @@ fn _internal(py: Python, m: &PyModule) -> PyResult<()> {
     m.add_function(pyo3::wrap_pyfunction!(write_to_deltalake, m)?)?;
     m.add_function(pyo3::wrap_pyfunction!(convert_to_deltalake, m)?)?;
     m.add_function(pyo3::wrap_pyfunction!(batch_distinct, m)?)?;
+    m.add_function(pyo3::wrap_pyfunction!(
+        get_num_idx_cols_and_stats_columns,
+        m
+    )?)?;
     m.add_class::<RawDeltaTable>()?;
     m.add_class::<RawDeltaTableMetaData>()?;
     m.add_class::<PyDeltaDataChecker>()?;

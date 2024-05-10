@@ -215,6 +215,9 @@ def create_deltalake(
     custom_metadata: Optional[Dict[str, str]],
 ) -> None: ...
 def batch_distinct(batch: pyarrow.RecordBatch) -> pyarrow.RecordBatch: ...
+def get_num_idx_cols_and_stats_columns(
+    table: Optional[RawDeltaTable], configuration: Optional[Mapping[str, Optional[str]]]
+) -> Tuple[int, Optional[List[str]]]: ...
 
 # Can't implement inheritance (see note in src/schema.rs), so this is next
 # best thing.

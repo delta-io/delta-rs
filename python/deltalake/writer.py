@@ -41,6 +41,9 @@ from pyarrow.lib import RecordBatchReader
 from ._internal import DeltaDataChecker as _DeltaDataChecker
 from ._internal import batch_distinct
 from ._internal import convert_to_deltalake as _convert_to_deltalake
+from ._internal import (
+    get_num_idx_cols_and_stats_columns as get_num_idx_cols_and_stats_columns,
+)
 from ._internal import write_new_deltalake as write_deltalake_pyarrow
 from ._internal import write_to_deltalake as write_deltalake_rust
 from .exceptions import DeltaProtocolError, TableNotFoundError
@@ -260,30 +263,10 @@ def write_deltalake(
         custom_metadata: Custom metadata to add to the commitInfo.
     """
     table, table_uri = try_get_table_and_table_uri(table_or_uri, storage_options)
-    if table is not None:
-        storage_options = table._storage_options or {}
-        storage_options.update(storage_options or {})
-
-        table.update_incremental()
-        num_indexed_cols = table._table.get_num_index_cols()
-        stats_cols = table._table.get_stats_columns()
-    else:
-        num_indexed_cols = DEFAULT_DATA_SKIPPING_NUM_INDEX_COLS
-        stats_cols = None
-        if configuration is not None:
-            if "delta.dataSkippingNumIndexedCols" in configuration:
-                str_indexed_cols = configuration["delta.dataSkippingNumIndexedCols"]
-                if str_indexed_cols is not None:
-                    num_indexed_cols = int(str_indexed_cols)
-            string_stats_cols = configuration.get("delta.dataSkippingStatsColumns")
-            if isinstance(string_stats_cols, str):
-                stats_cols = string_stats_cols.split(",")
-                if stats_cols and isinstance(stats_cols, list):
-                    if not all(isinstance(inner, str) for inner in stats_cols):
-                        raise ValueError(
-                            "dataSkippingStatsColumns needs to be a comma-separated list of column names in string format. Example: 'foo,bar,baz'"
-                        )
-
+    num_indexed_cols, stats_cols = get_num_idx_cols_and_stats_columns(
+        table._table if table is not None else None, configuration
+    )
+    print(num_indexed_cols, stats_cols)
     __enforce_append_only(table=table, configuration=configuration, mode=mode)
     if overwrite_schema:
         schema_mode = "overwrite"
@@ -743,7 +726,12 @@ def get_file_stats_from_metadata(
 
     schema_columns = metadata.schema.names
     if columns_to_collect_stats is not None:
-        idx_to_iterate = [schema_columns.index(col) for col in columns_to_collect_stats]
+        idx_to_iterate = []
+        for col in columns_to_collect_stats:
+            try:
+                idx_to_iterate.append(schema_columns.index(col))
+            except ValueError:
+                pass
     elif num_indexed_cols == -1:
         idx_to_iterate = list(range(metadata.num_columns))
     elif num_indexed_cols >= 0:
