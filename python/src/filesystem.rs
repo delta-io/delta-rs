@@ -5,7 +5,7 @@ use deltalake::storage::{DynObjectStore, ListResult, MultipartId, ObjectStoreErr
 use deltalake::DeltaTableBuilder;
 use pyo3::exceptions::{PyIOError, PyNotImplementedError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::{IntoPyDict, PyBytes};
+use pyo3::types::{IntoPyDict, PyBytes, PyType};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -41,27 +41,41 @@ impl DeltaFileSystemHandler {
 #[pymethods]
 impl DeltaFileSystemHandler {
     #[new]
-    #[pyo3(signature = (table_uri, table = None, options = None, known_sizes = None))]
+    #[pyo3(signature = (table_uri, options = None, known_sizes = None))]
     fn new(
         table_uri: String,
-        table: Option<&RawDeltaTable>,
         options: Option<HashMap<String, String>>,
         known_sizes: Option<HashMap<String, i64>>,
     ) -> PyResult<Self> {
-        let storage = if let Some(table) = table {
-            table._table.object_store()
-        } else {
-            DeltaTableBuilder::from_uri(&table_uri)
-                .with_storage_options(options.clone().unwrap_or_default())
-                .build_storage()
-                .map_err(PythonError::from)?
-                .object_store()
-        };
+        let storage = DeltaTableBuilder::from_uri(&table_uri)
+            .with_storage_options(options.clone().unwrap_or_default())
+            .build_storage()
+            .map_err(PythonError::from)?
+            .object_store();
 
         Ok(Self {
             inner: storage,
             config: FsConfig {
                 root_url: table_uri,
+                options: options.unwrap_or_default(),
+            },
+            known_sizes,
+        })
+    }
+
+    #[classmethod]
+    #[pyo3(signature = (table, options = None, known_sizes = None))]
+    fn from_table(
+        _cls: &PyType,
+        table: &RawDeltaTable,
+        options: Option<HashMap<String, String>>,
+        known_sizes: Option<HashMap<String, i64>>,
+    ) -> PyResult<Self> {
+        let storage = table._table.object_store();
+        Ok(Self {
+            inner: storage,
+            config: FsConfig {
+                root_url: table._table.table_uri(),
                 options: options.unwrap_or_default(),
             },
             known_sizes,

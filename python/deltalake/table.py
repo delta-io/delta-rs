@@ -1095,8 +1095,7 @@ class DeltaTable:
                 x: y for x, y in zip(file_sizes["path"], file_sizes["size_bytes"])
             }
             filesystem = pa_fs.PyFileSystem(
-                DeltaStorageHandler(
-                    self._table.table_uri(),
+                DeltaStorageHandler.from_table(
                     self._table,
                     self._storage_options,
                     file_sizes,

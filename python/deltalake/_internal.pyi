@@ -722,10 +722,16 @@ class DeltaFileSystemHandler:
     def __init__(
         self,
         table_uri: str,
-        table: Optional[RawDeltaTable] = None,
         options: dict[str, str] | None = None,
         known_sizes: dict[str, int] | None = None,
     ) -> None: ...
+    @classmethod
+    def from_table(
+        cls,
+        table: RawDeltaTable,
+        options: dict[str, str] | None = None,
+        known_sizes: dict[str, int] | None = None,
+    ) -> "DeltaFileSystemHandler": ...
     def get_type_name(self) -> str: ...
     def copy_file(self, src: str, dst: str) -> None:
         """Copy a file.

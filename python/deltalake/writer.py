@@ -346,8 +346,8 @@ def write_deltalake(
 
         if table:  # already exists
             filesystem = pa_fs.PyFileSystem(
-                DeltaStorageHandler(
-                    table_uri, table=table._table, options=storage_options
+                DeltaStorageHandler.from_table(
+                    table=table._table, options=storage_options
                 )
             )
 
