@@ -721,10 +721,17 @@ class DeltaFileSystemHandler:
 
     def __init__(
         self,
-        root: str,
-        options: dict[str, str] | None = None,
-        known_sizes: dict[str, int] | None = None,
+        table_uri: str,
+        options: Dict[str, str] | None = None,
+        known_sizes: Dict[str, int] | None = None,
     ) -> None: ...
+    @classmethod
+    def from_table(
+        cls,
+        table: RawDeltaTable,
+        options: Dict[str, str] | None = None,
+        known_sizes: Dict[str, int] | None = None,
+    ) -> "DeltaFileSystemHandler": ...
     def get_type_name(self) -> str: ...
     def copy_file(self, src: str, dst: str) -> None:
         """Copy a file.
@@ -776,7 +783,7 @@ class DeltaFileSystemHandler:
     def open_input_file(self, path: str) -> ObjectInputFile:
         """Open an input file for random access reading."""
     def open_output_stream(
-        self, path: str, metadata: dict[str, str] | None = None
+        self, path: str, metadata: Dict[str, str] | None = None
     ) -> ObjectOutputStream:
         """Open an output stream for sequential writing."""
 
