@@ -86,7 +86,7 @@ impl std::future::IntoFuture for ConstraintBuilder {
     type IntoFuture = BoxFuture<'static, Self::Output>;
 
     fn into_future(self) -> Self::IntoFuture {
-        let mut this = self;
+        let this = self;
 
         Box::pin(async move {
             let name = match this.name {

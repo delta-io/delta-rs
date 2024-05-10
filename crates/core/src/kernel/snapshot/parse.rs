@@ -6,7 +6,7 @@ use arrow_array::{
 use percent_encoding::percent_decode_str;
 
 use crate::kernel::arrow::extract::{self as ex, ProvidesColumnByName};
-use crate::kernel::{Add, DeletionVectorDescriptor, Metadata, Protocol, Remove};
+use crate::kernel::{Add, AddCDCFile, DeletionVectorDescriptor, Metadata, Protocol, Remove};
 use crate::{DeltaResult, DeltaTableError};
 
 pub(super) fn read_metadata(batch: &dyn ProvidesColumnByName) -> DeltaResult<Option<Metadata>> {
@@ -126,6 +126,39 @@ pub(super) fn read_adds(array: &dyn ProvidesColumnByName) -> DeltaResult<Vec<Add
                     default_row_commit_version: None,
                     clustering_provider: None,
                     stats_parsed: None,
+                });
+            }
+        }
+    }
+
+    Ok(result)
+}
+
+pub(super) fn read_cdf_adds(array: &dyn ProvidesColumnByName) -> DeltaResult<Vec<AddCDCFile>> {
+    let mut result = Vec::new();
+
+    if let Some(arr) = ex::extract_and_cast_opt::<StructArray>(array, "cdc") {
+        let path = ex::extract_and_cast::<StringArray>(arr, "path")?;
+        let pvs = ex::extract_and_cast_opt::<MapArray>(arr, "partitionValues");
+        let size = ex::extract_and_cast::<Int64Array>(arr, "size")?;
+        let data_change = ex::extract_and_cast::<BooleanArray>(arr, "dataChange")?;
+        let tags = ex::extract_and_cast_opt::<MapArray>(arr, "tags");
+
+        for i in 0..arr.len() {
+            if arr.is_valid(i) {
+                let path_ = ex::read_str(path, i)?;
+                let path_ = percent_decode_str(path_)
+                    .decode_utf8()
+                    .map_err(|_| DeltaTableError::Generic("illegal path encoding".into()))?
+                    .to_string();
+                result.push(AddCDCFile {
+                    path: path_,
+                    size: ex::read_primitive(size, i)?,
+                    data_change: ex::read_bool(data_change, i)?,
+                    partition_values: pvs
+                        .and_then(|pv| collect_map(&pv.value(i)).map(|m| m.collect()))
+                        .unwrap_or_default(),
+                    tags: tags.and_then(|t| collect_map(&t.value(i)).map(|m| m.collect())),
                 });
             }
         }

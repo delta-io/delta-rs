@@ -63,7 +63,7 @@ impl std::future::IntoFuture for DropConstraintBuilder {
     type IntoFuture = BoxFuture<'static, Self::Output>;
 
     fn into_future(self) -> Self::IntoFuture {
-        let mut this = self;
+        let this = self;
 
         Box::pin(async move {
             let name = this

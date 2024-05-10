@@ -7,7 +7,9 @@ use deltalake_core::storage::object_store::{
     aws::AmazonS3ConfigKey, parse_url_opts, GetOptions, GetResult, ListResult, MultipartId,
     ObjectMeta, ObjectStore, PutOptions, PutResult, Result as ObjectStoreResult,
 };
-use deltalake_core::storage::{str_is_truthy, ObjectStoreFactory, ObjectStoreRef, StorageOptions};
+use deltalake_core::storage::{
+    limit_store_handler, str_is_truthy, ObjectStoreFactory, ObjectStoreRef, StorageOptions,
+};
 use deltalake_core::{DeltaResult, ObjectStoreError, Path};
 use futures::stream::BoxStream;
 use futures::Future;
@@ -68,7 +70,7 @@ impl ObjectStoreFactory for S3ObjectStoreFactory {
         options: &StorageOptions,
     ) -> DeltaResult<(ObjectStoreRef, Path)> {
         let options = self.with_env_s3(options);
-        let (store, prefix) = parse_url_opts(
+        let (inner, prefix) = parse_url_opts(
             url,
             options.0.iter().filter_map(|(key, value)| {
                 let s3_key = AmazonS3ConfigKey::from_str(&key.to_ascii_lowercase()).ok()?;
@@ -76,22 +78,25 @@ impl ObjectStoreFactory for S3ObjectStoreFactory {
             }),
         )?;
 
+        let store = limit_store_handler(inner, &options);
+
+        // If the copy-if-not-exists env var is set, we don't need to instantiate a locking client or check for allow-unsafe-rename.
         if options
             .0
             .contains_key(AmazonS3ConfigKey::CopyIfNotExists.as_ref())
         {
-            // If the copy-if-not-exists env var is set, we don't need to instantiate a locking client or check for allow-unsafe-rename.
-            return Ok((Arc::from(store), prefix));
+            Ok((store, prefix))
+        } else {
+            let s3_options = S3StorageOptions::from_map(&options.0)?;
+
+            let store = S3StorageBackend::try_new(
+                store,
+                Some("dynamodb") == s3_options.locking_provider.as_deref()
+                    || s3_options.allow_unsafe_rename,
+            )?;
+
+            Ok((Arc::new(store), prefix))
         }
-
-        let options = S3StorageOptions::from_map(&options.0)?;
-
-        let store = S3StorageBackend::try_new(
-            store.into(),
-            Some("dynamodb") == options.locking_provider.as_deref() || options.allow_unsafe_rename,
-        )?;
-
-        Ok((Arc::new(store), prefix))
     }
 }
 
@@ -170,7 +175,10 @@ impl S3StorageOptions {
             .unwrap_or(true);
         let imds_timeout =
             Self::u64_or_default(options, s3_constants::AWS_EC2_METADATA_TIMEOUT, 100);
-        let provider_config = ProviderConfig::default();
+
+        let region_provider = crate::credentials::new_region_provider(disable_imds, imds_timeout);
+        let region = execute_sdk_future(region_provider.region())?;
+        let provider_config = ProviderConfig::default().with_region(region);
         let credentials_provider = crate::credentials::ConfiguredCredentialChain::new(
             disable_imds,
             imds_timeout,
@@ -184,23 +192,15 @@ impl S3StorageOptions {
                         .map(|val| str_is_truthy(&val))
                         .unwrap_or(false),
                 ))
-                .region(crate::credentials::new_region_provider(
-                    &provider_config,
-                    disable_imds,
-                    imds_timeout,
-                ))
                 .credentials_provider(credentials_provider)
+                .region(region_provider)
                 .load(),
         )?;
         #[cfg(feature = "rustls")]
         let sdk_config = execute_sdk_future(
             aws_config::from_env()
                 .credentials_provider(credentials_provider)
-                .region(crate::credentials::new_region_provider(
-                    &provider_config,
-                    disable_imds,
-                    imds_timeout,
-                ))
+                .region(region_provider)
                 .load(),
         )?;
 
@@ -247,16 +247,18 @@ impl S3StorageOptions {
     }
 }
 
-fn execute_sdk_future<F: Future<Output = SdkConfig> + Send + 'static>(
-    future: F,
-) -> DeltaResult<SdkConfig> {
+fn execute_sdk_future<F, T>(future: F) -> DeltaResult<T>
+where
+    T: Send,
+    F: Future<Output = T> + Send,
+{
     match tokio::runtime::Handle::try_current() {
         Ok(handle) => match handle.runtime_flavor() {
             tokio::runtime::RuntimeFlavor::MultiThread => {
                 Ok(tokio::task::block_in_place(move || handle.block_on(future)))
             }
             _ => {
-                let mut cfg: Option<SdkConfig> = None;
+                let mut cfg: Option<T> = None;
                 std::thread::scope(|scope| {
                     scope.spawn(|| {
                         cfg = Some(handle.block_on(future));

@@ -1,6 +1,7 @@
 //! Object storage backend abstraction layer for Delta Table transaction logs and data
 
 use dashmap::DashMap;
+use object_store::limit::LimitStore;
 use std::collections::HashMap;
 use std::sync::{Arc, OnceLock};
 
@@ -50,18 +51,20 @@ impl ObjectStoreFactory for DefaultObjectStoreFactory {
     fn parse_url_opts(
         &self,
         url: &Url,
-        _options: &StorageOptions,
+        options: &StorageOptions,
     ) -> DeltaResult<(ObjectStoreRef, Path)> {
         match url.scheme() {
             "memory" => {
                 let path = Path::from_url_path(url.path())?;
-                let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new()) as ObjectStoreRef;
-                Ok((url_prefix_handler(store, path.clone())?, path))
+                let inner = Arc::new(InMemory::new()) as ObjectStoreRef;
+                let store = limit_store_handler(url_prefix_handler(inner, path.clone()), options);
+                Ok((store, path))
             }
             "file" => {
-                let store = Arc::new(LocalFileSystem::new_with_prefix(
+                let inner = Arc::new(LocalFileSystem::new_with_prefix(
                     url.to_file_path().unwrap(),
                 )?) as ObjectStoreRef;
+                let store = limit_store_handler(inner, options);
                 Ok((store, Path::from("/")))
             }
             _ => Err(DeltaTableError::InvalidTableLocation(url.clone().into())),
@@ -148,15 +151,42 @@ pub fn str_is_truthy(val: &str) -> bool {
 
 /// Simple function to wrap the given [ObjectStore] in a [PrefixStore] if necessary
 ///
-/// This simplifies the use of t he storage since it ensures that list/get/etc operations
+/// This simplifies the use of the storage since it ensures that list/get/etc operations
 /// start from the prefix in the object storage rather than from the root configured URI of the
 /// [ObjectStore]
-pub fn url_prefix_handler<T: ObjectStore>(store: T, prefix: Path) -> DeltaResult<ObjectStoreRef> {
+pub fn url_prefix_handler<T: ObjectStore>(store: T, prefix: Path) -> ObjectStoreRef {
     if prefix != Path::from("/") {
-        Ok(Arc::new(PrefixStore::new(store, prefix)))
+        Arc::new(PrefixStore::new(store, prefix))
     } else {
-        Ok(Arc::new(store))
+        Arc::new(store)
     }
+}
+
+/// Simple function to wrap the given [ObjectStore] in a [LimitStore] if configured
+///
+/// Limits the number of concurrent connections the underlying object store
+/// Reference [LimitStore](https://docs.rs/object_store/latest/object_store/limit/struct.LimitStore.html) for more information
+pub fn limit_store_handler<T: ObjectStore>(store: T, options: &StorageOptions) -> ObjectStoreRef {
+    let concurrency_limit = options
+        .0
+        .get(storage_constants::OBJECT_STORE_CONCURRENCY_LIMIT)
+        .and_then(|v| v.parse().ok());
+
+    if let Some(limit) = concurrency_limit {
+        Arc::new(LimitStore::new(store, limit))
+    } else {
+        Arc::new(store)
+    }
+}
+
+/// Storage option keys to use when creating [ObjectStore].
+/// The same key should be used whether passing a key in the hashmap or setting it as an environment variable.
+/// Must be implemented for a given storage provider
+pub mod storage_constants {
+
+    /// The number of concurrent connections the underlying object store can create
+    /// Reference [LimitStore](https://docs.rs/object_store/latest/object_store/limit/struct.LimitStore.html) for more information
+    pub const OBJECT_STORE_CONCURRENCY_LIMIT: &str = "OBJECT_STORE_CONCURRENCY_LIMIT";
 }
 
 #[cfg(test)]
@@ -168,7 +198,28 @@ mod tests {
         let store = InMemory::new();
         let path = Path::parse("/databases/foo/bar").expect("Failed to parse path");
 
-        let prefixed = url_prefix_handler(store, path);
-        assert!(prefixed.is_ok());
+        let prefixed = url_prefix_handler(store, path.clone());
+
+        assert_eq!(
+            String::from("PrefixObjectStore(databases/foo/bar)"),
+            format!("{prefixed}")
+        );
+    }
+
+    #[test]
+    fn test_limit_store_handler() {
+        let store = InMemory::new();
+
+        let options = StorageOptions(HashMap::from_iter(vec![(
+            "OBJECT_STORE_CONCURRENCY_LIMIT".into(),
+            "500".into(),
+        )]));
+
+        let limited = limit_store_handler(store, &options);
+
+        assert_eq!(
+            String::from("LimitStore(500, InMemory)"),
+            format!("{limited}")
+        );
     }
 }

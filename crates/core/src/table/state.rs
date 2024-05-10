@@ -11,9 +11,10 @@ use serde::{Deserialize, Serialize};
 use super::config::TableConfig;
 use super::{get_partition_col_data_types, DeltaTableConfig};
 use crate::kernel::{
-    Action, Add, DataType, EagerSnapshot, LogDataHandler, LogicalFile, Metadata, Protocol, Remove,
-    StructType,
+    Action, Add, AddCDCFile, DataType, EagerSnapshot, LogDataHandler, LogicalFile, Metadata,
+    Protocol, Remove, StructType,
 };
+
 use crate::logstore::LogStore;
 use crate::operations::transaction::CommitData;
 use crate::partitions::{DeltaTablePartition, PartitionFilter};
@@ -139,6 +140,11 @@ impl DeltaTableState {
     /// Get the number of files in the current table state
     pub fn files_count(&self) -> usize {
         self.snapshot.files_count()
+    }
+
+    /// Full list of all of the CDC files added as part of the changeDataFeed feature
+    pub fn cdc_files(&self) -> DeltaResult<Vec<AddCDCFile>> {
+        Ok(self.snapshot.cdc_files()?.collect())
     }
 
     /// Returns an iterator of file names present in the loaded state

@@ -1,6 +1,6 @@
 [package]
 name = "deltalake-azure"
-version = "0.1.0"
+version = "0.1.2"
 authors.workspace = true
 keywords.workspace = true
 readme.workspace = true

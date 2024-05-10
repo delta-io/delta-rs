@@ -275,12 +275,9 @@ class ProtocolVersions(NamedTuple):
 
 FilterLiteralType = Tuple[str, str, Any]
 
-
 FilterConjunctionType = List[FilterLiteralType]
 
-
 FilterDNFType = List[FilterConjunctionType]
-
 
 FilterType = Union[FilterConjunctionType, FilterDNFType]
 
@@ -709,6 +706,17 @@ class DeltaTable:
         )
         self._table.load_with_datetime(datetime_string)
 
+    def load_cdf(
+        self,
+        starting_version: int = 0,
+        ending_version: Optional[int] = None,
+        starting_timestamp: Optional[str] = None,
+        ending_timestamp: Optional[str] = None,
+    ) -> pyarrow.RecordBatchReader:
+        return self._table.load_cdf(
+            starting_version, ending_version, starting_timestamp, ending_timestamp
+        )
+
     @property
     def table_uri(self) -> str:
         return self._table.table_uri()
@@ -1055,6 +1063,8 @@ class DeltaTable:
         partitions: Optional[List[Tuple[str, str, Any]]] = None,
         filesystem: Optional[Union[str, pa_fs.FileSystem]] = None,
         parquet_read_options: Optional[ParquetReadOptions] = None,
+        schema: Optional[pyarrow.Schema] = None,
+        as_large_types: bool = False,
     ) -> pyarrow.dataset.Dataset:
         """
         Build a PyArrow Dataset using data from the DeltaTable.
@@ -1063,6 +1073,12 @@ class DeltaTable:
             partitions: A list of partition filters, see help(DeltaTable.files_by_partitions) for filter syntax
             filesystem: A concrete implementation of the Pyarrow FileSystem or a fsspec-compatible interface. If None, the first file path will be used to determine the right FileSystem
             parquet_read_options: Optional read options for Parquet. Use this to handle INT96 to timestamp conversion for edge cases like 0001-01-01 or 9999-12-31
+            schema: The schema to use for the dataset. If None, the schema of the DeltaTable will be used. This can be used to force reading of Parquet/Arrow datatypes
+                that DeltaLake can't represent in it's schema (e.g. LargeString).
+                If you only need to read the schema with large types (e.g. for compatibility with Polars) you may want to use the `as_large_types` parameter instead.
+            as_large_types: get schema with all variable size types (list, binary, string) as large variants (with int64 indices).
+                This is for compatibility with systems like Polars that only support the large versions of Arrow types.
+                If `schema` is passed it takes precedence over this option.
 
          More info: https://arrow.apache.org/docs/python/generated/pyarrow.dataset.ParquetReadOptions.html
 
@@ -1121,6 +1137,8 @@ class DeltaTable:
             default_fragment_scan_options=ParquetFragmentScanOptions(pre_buffer=True),
         )
 
+        schema = schema or self.schema().to_pyarrow(as_large_types=as_large_types)
+
         fragments = [
             format.make_fragment(
                 file,
@@ -1128,11 +1146,9 @@ class DeltaTable:
                 partition_expression=part_expression,
             )
             for file, part_expression in self._table.dataset_partitions(
-                self.schema().to_pyarrow(), partitions
+                schema, partitions
             )
         ]
-
-        schema = self.schema().to_pyarrow()
 
         dictionary_columns = format.read_options.dictionary_columns or set()
         if dictionary_columns:

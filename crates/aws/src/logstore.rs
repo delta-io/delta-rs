@@ -239,6 +239,36 @@ impl LogStore for S3DynamoDbLogStore {
         Ok(())
     }
 
+    /// Tries to abort an entry by first deleting the commit log entry, then deleting the temp commit file
+    async fn abort_commit_entry(
+        &self,
+        version: i64,
+        tmp_commit: &Path,
+    ) -> Result<(), TransactionError> {
+        self.lock_client
+            .delete_commit_entry(version, &self.table_path)
+            .await
+            .map_err(|err| match err {
+                LockClientError::ProvisionedThroughputExceeded => todo!(
+                    "deltalake-aws does not yet handle DynamoDB provisioned throughput errors"
+                ),
+                LockClientError::VersionAlreadyCompleted { version, .. } => {
+                    error!("Trying to abort a completed commit");
+                    TransactionError::LogStoreError {
+                        msg: format!("trying to abort a completed log entry: {}", version),
+                        source: Box::new(err),
+                    }
+                }
+                err => TransactionError::LogStoreError {
+                    msg: "dynamodb client failed to delete log entry".to_owned(),
+                    source: Box::new(err),
+                },
+            })?;
+
+        abort_commit_entry(&self.storage, version, tmp_commit).await?;
+        Ok(())
+    }
+
     async fn get_latest_version(&self, current_version: i64) -> DeltaResult<i64> {
         debug!("Retrieving latest version of {self:?} at v{current_version}");
         let entry = self

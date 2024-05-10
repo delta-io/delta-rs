@@ -4,7 +4,8 @@ use std::sync::Arc;
 
 use deltalake_core::logstore::{default_logstore, logstores, LogStore, LogStoreFactory};
 use deltalake_core::storage::{
-    factories, url_prefix_handler, ObjectStoreFactory, ObjectStoreRef, StorageOptions,
+    factories, limit_store_handler, url_prefix_handler, ObjectStoreFactory, ObjectStoreRef,
+    StorageOptions,
 };
 use deltalake_core::{DeltaResult, Path};
 use object_store::azure::AzureConfigKey;
@@ -42,8 +43,9 @@ impl ObjectStoreFactory for AzureFactory {
         options: &StorageOptions,
     ) -> DeltaResult<(ObjectStoreRef, Path)> {
         let config = config::AzureConfigHelper::try_new(options.as_azure_options())?.build()?;
-        let (store, prefix) = parse_url_opts(url, config)?;
-        Ok((url_prefix_handler(store, prefix.clone())?, prefix))
+        let (inner, prefix) = parse_url_opts(url, config)?;
+        let store = limit_store_handler(url_prefix_handler(inner, prefix.clone()), options);
+        Ok((store, prefix))
     }
 }
 
