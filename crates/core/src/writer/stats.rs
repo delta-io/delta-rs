@@ -1,3 +1,4 @@
+use datafusion::catalog::schema;
 use indexmap::IndexMap;
 use parquet::format::FileMetaData;
 use parquet::schema::types::{ColumnDescriptor, SchemaDescriptor};
@@ -6,6 +7,7 @@ use parquet::{
     file::{metadata::RowGroupMetaData, statistics::Statistics},
     format::TimeUnit,
 };
+use serde::de::value;
 use std::cmp::min;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -84,23 +86,30 @@ fn stats_from_file_metadata(
         .map(|rg| RowGroupMetaData::from_thrift(schema_descriptor.clone(), rg.clone()))
         .collect();
     let row_group_metadata = row_group_metadata?;
+    let schema_cols = file_metadata
+        .schema
+        .iter()
+        .map(|v| &v.name)
+        .collect::<Vec<_>>();
 
-    let number_to_iterate = if stats_columns.is_some() {
-        schema_descriptor.num_columns()
+    let idx_to_iterate = if let Some(stats_cols) = stats_columns {
+        stats_cols
+            .iter()
+            .map(|col| schema_cols[1..].iter().position(|value| *value == col))
+            .flatten()
+            .collect()
+    } else if num_indexed_cols == -1 {
+        (0..schema_descriptor.num_columns()).collect::<Vec<_>>()
+    } else if num_indexed_cols >= 0 {
+        (0..min(num_indexed_cols as usize, schema_descriptor.num_columns())).collect::<Vec<_>>()
     } else {
-        if num_indexed_cols == -1 {
-            schema_descriptor.num_columns()
-        } else if num_indexed_cols >= 0 {
-            min(num_indexed_cols as usize, schema_descriptor.num_columns())
-        } else {
-            return Err(DeltaWriterError::DeltaTable(DeltaTableError::Generic(
-                "delta.dataSkippingNumIndexedCols valid values are >=-1".to_string(),
-            )));
-        }
+        return Err(DeltaWriterError::DeltaTable(DeltaTableError::Generic(
+            "delta.dataSkippingNumIndexedCols valid values are >=-1".to_string(),
+        )));
     };
 
-    for i in 0..number_to_iterate {
-        let column_descr = schema_descriptor.column(i);
+    for idx in idx_to_iterate {
+        let column_descr = schema_descriptor.column(idx);
 
         let column_path = column_descr.path();
         let column_path_parts = column_path.parts();
@@ -110,16 +119,10 @@ fn stats_from_file_metadata(
             continue;
         }
 
-        if let Some(cols) = stats_columns {
-            if !cols.contains(&column_descr.name().to_string()) {
-                continue;
-            }
-        }
-
         let maybe_stats: Option<AggregatedStats> = row_group_metadata
             .iter()
             .map(|g| {
-                g.column(i)
+                g.column(idx)
                     .statistics()
                     .map(|s| AggregatedStats::from((s, &column_descr.logical_type())))
             })

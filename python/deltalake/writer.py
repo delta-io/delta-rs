@@ -741,22 +741,19 @@ def get_file_stats_from_metadata(
             if metadata.row_group(i).num_rows > 0:
                 yield metadata.row_group(i)
 
+    schema_columns = metadata.schema.names
     if columns_to_collect_stats is not None:
-        columns_to_iterate = metadata.num_columns
+        idx_to_iterate = [schema_columns.index(col) for col in columns_to_collect_stats]
+    elif num_indexed_cols == -1:
+        idx_to_iterate = list(range(metadata.num_columns))
+    elif num_indexed_cols >= 0:
+        idx_to_iterate = list(range(min(num_indexed_cols, metadata.num_columns)))
     else:
-        if num_indexed_cols == -1:
-            columns_to_iterate = metadata.num_columns
-        elif num_indexed_cols >= 0:
-            columns_to_iterate = min(num_indexed_cols, metadata.num_columns)
-        else:
-            raise ValueError("delta.dataSkippingNumIndexedCols valid values are >=-1")
+        raise ValueError("delta.dataSkippingNumIndexedCols valid values are >=-1")
 
-    for column_idx in range(columns_to_iterate):
+    for column_idx in idx_to_iterate:
         name = metadata.row_group(0).column(column_idx).path_in_schema
 
-        if columns_to_collect_stats is not None:
-            if name not in columns_to_collect_stats:
-                continue
         # If stats missing, then we can't know aggregate stats
         if all(
             group.column(column_idx).is_stats_set for group in iter_groups(metadata)
