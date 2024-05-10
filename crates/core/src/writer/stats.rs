@@ -1,4 +1,8 @@
-use datafusion::catalog::schema;
+use std::cmp::min;
+use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
+use std::{collections::HashMap, ops::AddAssign};
+
 use indexmap::IndexMap;
 use parquet::format::FileMetaData;
 use parquet::schema::types::{ColumnDescriptor, SchemaDescriptor};
@@ -7,11 +11,6 @@ use parquet::{
     file::{metadata::RowGroupMetaData, statistics::Statistics},
     format::TimeUnit,
 };
-use serde::de::value;
-use std::cmp::min;
-use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
-use std::{collections::HashMap, ops::AddAssign};
 
 use super::*;
 use crate::kernel::{Add, Scalar};
