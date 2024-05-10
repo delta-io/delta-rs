@@ -266,7 +266,7 @@ def write_deltalake(
     num_indexed_cols, stats_cols = get_num_idx_cols_and_stats_columns(
         table._table if table is not None else None, configuration
     )
-    print(num_indexed_cols, stats_cols)
+
     __enforce_append_only(table=table, configuration=configuration, mode=mode)
     if overwrite_schema:
         schema_mode = "overwrite"
