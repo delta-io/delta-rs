@@ -1,4 +1,4 @@
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Mapping, Optional
 
 import pyarrow as pa
 from pyarrow.fs import FileInfo, FileSelector, FileSystemHandler
@@ -152,5 +152,5 @@ class DeltaStorageHandler(FileSystemHandler):
             selector.base_dir, selector.allow_not_found, selector.recursive
         )
 
-    def open_append_stream(path: str, metadata: dict):
+    def open_append_stream(self, path: str, metadata: Mapping):
         raise NotImplementedError
