@@ -15,8 +15,8 @@ class DeltaStorageHandler(FileSystemHandler):
     def __init__(
         self,
         table_uri: str,
-        options: dict[str, str] | None = None,
-        known_sizes: dict[str, int] | None = None,
+        options: Dict[str, str] | None = None,
+        known_sizes: Dict[str, int] | None = None,
     ):
         self._handler = DeltaFileSystemHandler(
             table_uri=table_uri, options=options, known_sizes=known_sizes
@@ -26,8 +26,8 @@ class DeltaStorageHandler(FileSystemHandler):
     def from_table(
         cls,
         table: RawDeltaTable,
-        options: dict[str, str] | None = None,
-        known_sizes: dict[str, int] | None = None,
+        options: Dict[str, str] | None = None,
+        known_sizes: Dict[str, int] | None = None,
     ) -> "DeltaStorageHandler":
         self = cls.__new__(cls)
         self._handler = DeltaFileSystemHandler.from_table(table, options, known_sizes)
