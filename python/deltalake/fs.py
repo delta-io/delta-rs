@@ -138,7 +138,7 @@ class DeltaStorageHandler(FileSystemHandler):
         """
         return pa.PythonFile(self._handler.open_output_stream(path, metadata))
 
-    def get_file_info_selector(self, selector: FileSelector) -> List[FileInfo]:  # type: ignore
+    def get_file_info_selector(self, selector: FileSelector) -> List[FileInfo]:
         """
         Get info for the files defined by FileSelector.
 
@@ -152,5 +152,5 @@ class DeltaStorageHandler(FileSystemHandler):
             selector.base_dir, selector.allow_not_found, selector.recursive
         )
 
-    def open_append_stream(self, path: str, metadata: Mapping):
+    def open_append_stream(self, path: str, metadata: Mapping[str, str]) -> None:
         raise NotImplementedError
