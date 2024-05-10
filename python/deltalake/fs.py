@@ -76,7 +76,7 @@ class DeltaStorageHandler(FileSystemHandler):
         """Delete the root directory contents, recursively."""
         return self._handler.delete_root_dir_contents()
 
-    def get_file_info(self, paths: list[str]) -> list[FileInfo]:
+    def get_file_info(self, paths: List[str]) -> List[FileInfo]:
         """Get info for the given files.
 
         A non-existing or unreachable file returns a FileStat object and has a FileType of value NotFound.
