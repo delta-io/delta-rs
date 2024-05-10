@@ -758,7 +758,8 @@ impl std::future::IntoFuture for WriteBuilder {
                 .as_ref()
                 .map(|snapshot| snapshot.table_config());
 
-            let (num_indexed_cols, stats_columns) = get_num_idx_cols_and_stats_columns(config, this.configuration);
+            let (num_indexed_cols, stats_columns) =
+                get_num_idx_cols_and_stats_columns(config, this.configuration);
 
             let writer_stats_config = WriterStatsConfig {
                 num_indexed_cols,
@@ -922,7 +923,7 @@ fn try_cast_batch(from_fields: &Fields, to_fields: &Fields) -> Result<(), ArrowE
 }
 
 /// Get the num_idx_columns and stats_columns from the table configuration in the state
-/// If table_config does not exist (only can occur in the first write action) it takes 
+/// If table_config does not exist (only can occur in the first write action) it takes
 /// the configuration that was passed to the writerBuilder.
 pub fn get_num_idx_cols_and_stats_columns(
     config: Option<crate::table::config::TableConfig<'_>>,
