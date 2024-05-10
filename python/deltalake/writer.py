@@ -263,9 +263,10 @@ def write_deltalake(
         custom_metadata: Custom metadata to add to the commitInfo.
     """
     table, table_uri = try_get_table_and_table_uri(table_or_uri, storage_options)
-    num_indexed_cols, stats_cols = get_num_idx_cols_and_stats_columns(
-        table._table if table is not None else None, configuration
-    )
+    if table is not None:
+        storage_options = table._storage_options or {}
+        storage_options.update(storage_options or {})
+        table.update_incremental()
 
     __enforce_append_only(table=table, configuration=configuration, mode=mode)
     if overwrite_schema:
@@ -342,6 +343,10 @@ def write_deltalake(
             )
         # We need to write against the latest table version
         filesystem = pa_fs.PyFileSystem(DeltaStorageHandler(table_uri, storage_options))
+
+        num_indexed_cols, stats_cols = get_num_idx_cols_and_stats_columns(
+            table._table if table is not None else None, configuration
+        )
 
         def sort_arrow_schema(schema: pa.schema) -> pa.schema:
             sorted_cols = sorted(iter(schema), key=lambda x: (x.name, str(x.type)))
