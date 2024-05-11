@@ -14,7 +14,6 @@ use deltalake_core::storage::{
 use deltalake_core::{DeltaResult, ObjectStoreError, Path};
 use futures::stream::BoxStream;
 use futures::Future;
-use tracing::warn;
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::ops::Range;
@@ -22,6 +21,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::AsyncWrite;
+use tracing::warn;
 use url::Url;
 
 use crate::errors::DynamoDbConfigError;
@@ -176,20 +176,27 @@ impl S3StorageOptions {
             .unwrap_or(true);
         let imds_timeout =
             Self::u64_or_default(options, s3_constants::AWS_EC2_METADATA_TIMEOUT, 100);
-        let (loader, provider_config) = if let Some(endpoint_url) = str_option(options, s3_constants::AWS_ENDPOINT_URL) {
-            let (region_provider, provider_config) = Self::create_provider_config(
-                str_option(options, s3_constants::AWS_REGION)
-                .or_else(|| std::env::var("AWS_DEFAULT_REGION").ok())
-                .map_or(Region::from_static("custom"), Region::new))?;
-            let loader = aws_config::from_env()
-                .endpoint_url(endpoint_url)
-                .region(region_provider);
-            (loader, provider_config)
-        } else {
-            let (region_provider, provider_config) = Self::create_provider_config( crate::credentials::new_region_provider(disable_imds, imds_timeout))?;    
-            (aws_config::from_env().region(region_provider), provider_config)
-        };
-        
+        let (loader, provider_config) =
+            if let Some(endpoint_url) = str_option(options, s3_constants::AWS_ENDPOINT_URL) {
+                let (region_provider, provider_config) = Self::create_provider_config(
+                    str_option(options, s3_constants::AWS_REGION)
+                        .or_else(|| std::env::var("AWS_DEFAULT_REGION").ok())
+                        .map_or(Region::from_static("custom"), Region::new),
+                )?;
+                let loader = aws_config::from_env()
+                    .endpoint_url(endpoint_url)
+                    .region(region_provider);
+                (loader, provider_config)
+            } else {
+                let (region_provider, provider_config) = Self::create_provider_config(
+                    crate::credentials::new_region_provider(disable_imds, imds_timeout),
+                )?;
+                (
+                    aws_config::from_env().region(region_provider),
+                    provider_config,
+                )
+            };
+
         let credentials_provider = crate::credentials::ConfiguredCredentialChain::new(
             disable_imds,
             imds_timeout,
@@ -207,11 +214,8 @@ impl S3StorageOptions {
                 .load(),
         )?;
         #[cfg(feature = "rustls")]
-        let sdk_config = execute_sdk_future(
-            loader
-                .credentials_provider(credentials_provider)
-                .load(),
-        )?;
+        let sdk_config =
+            execute_sdk_future(loader.credentials_provider(credentials_provider).load())?;
 
         Ok(Self {
             virtual_hosted_style_request,
@@ -233,9 +237,14 @@ impl S3StorageOptions {
         self.sdk_config.region()
     }
 
-    fn create_provider_config<T: ProvideRegion>(region_provider: T) -> DeltaResult<(T, ProviderConfig)> {
+    fn create_provider_config<T: ProvideRegion>(
+        region_provider: T,
+    ) -> DeltaResult<(T, ProviderConfig)> {
         let region = execute_sdk_future(region_provider.region())?;
-        Ok((region_provider, ProviderConfig::default().with_region(region)))
+        Ok((
+            region_provider,
+            ProviderConfig::default().with_region(region),
+        ))
     }
 
     fn u64_or_default(map: &HashMap<String, String>, key: &str, default: u64) -> u64 {
@@ -510,7 +519,7 @@ pub(crate) fn str_option(map: &HashMap<String, String>, key: &str) -> Option<Str
         warn!("********** found lowercase **********: {} : {}", key, s);
         return Some(s.to_owned());
     }
-    
+
     std::env::var(key).ok()
 }
 
