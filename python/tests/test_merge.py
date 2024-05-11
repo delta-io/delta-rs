@@ -857,6 +857,67 @@ def test_merge_timestamps_partitioned_2344(tmp_path: pathlib.Path, timezone, pre
     assert last_action["operationParameters"].get("predicate") == predicate
 
 
+@pytest.mark.parametrize("engine", ["pyarrow", "rust"])
+def test_merge_stats_columns_stats_provided(tmp_path: pathlib.Path, engine):
+    data = pa.table(
+        {
+            "foo": pa.array(["a", "b", None, None]),
+            "bar": pa.array([1, 2, 3, None]),
+            "baz": pa.array([1, 1, None, None]),
+        }
+    )
+    write_deltalake(
+        tmp_path,
+        data,
+        mode="append",
+        engine=engine,
+        configuration={"delta.dataSkippingStatsColumns": "foo,baz"},
+    )
+    dt = DeltaTable(tmp_path)
+    add_actions_table = dt.get_add_actions(flatten=True)
+    stats = add_actions_table.to_pylist()[0]
+
+    assert stats["null_count.foo"] == 2
+    assert stats["min.foo"] == "a"
+    assert stats["max.foo"] == "b"
+    assert stats["null_count.bar"] is None
+    assert stats["min.bar"] is None
+    assert stats["max.bar"] is None
+    assert stats["null_count.baz"] == 2
+    assert stats["min.baz"] == 1
+    assert stats["max.baz"] == 1
+
+    data = pa.table(
+        {
+            "foo": pa.array(["a"]),
+            "bar": pa.array([10]),
+            "baz": pa.array([10]),
+        }
+    )
+
+    dt.merge(
+        data,
+        predicate="source.foo = target.foo",
+        source_alias="source",
+        target_alias="target",
+    ).when_matched_update_all().execute()
+
+    dt = DeltaTable(tmp_path)
+    add_actions_table = dt.get_add_actions(flatten=True)
+    stats = add_actions_table.to_pylist()[0]
+
+    assert dt.version() == 1
+    assert stats["null_count.foo"] == 2
+    assert stats["min.foo"] == "a"
+    assert stats["max.foo"] == "b"
+    assert stats["null_count.bar"] is None
+    assert stats["min.bar"] is None
+    assert stats["max.bar"] is None
+    assert stats["null_count.baz"] == 2
+    assert stats["min.baz"] == 1
+    assert stats["max.baz"] == 10
+
+
 def test_merge_field_special_characters_delete_2438(tmp_path: pathlib.Path):
     ## See issue: https://github.com/delta-io/delta-rs/issues/2438
     data = pa.table({"x": [1, 2, 3], "y--1": [4, 5, 6]})

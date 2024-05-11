@@ -41,12 +41,12 @@ use futures::future::BoxFuture;
 use parquet::file::properties::WriterProperties;
 use serde::Serialize;
 
-use super::transaction::PROTOCOL;
 use super::write::write_execution_plan;
 use super::{
     datafusion_utils::Expression,
     transaction::{CommitBuilder, CommitProperties},
 };
+use super::{transaction::PROTOCOL, write::WriterStatsConfig};
 use crate::delta_datafusion::{
     create_physical_expr_fix, expr::fmt_expr_to_sql, physical::MetricObserverExec,
     DataFusionMixins, DeltaColumn, DeltaSessionContext,
@@ -348,6 +348,14 @@ async fn execute(
         projection_update.clone(),
     )?);
 
+    let writer_stats_config = WriterStatsConfig::new(
+        snapshot.table_config().num_indexed_cols(),
+        snapshot
+            .table_config()
+            .stats_columns()
+            .map(|v| v.iter().map(|v| v.to_string()).collect::<Vec<String>>()),
+    );
+
     let add_actions = write_execution_plan(
         Some(&snapshot),
         state.clone(),
@@ -359,6 +367,7 @@ async fn execute(
         writer_properties,
         safe_cast,
         None,
+        writer_stats_config,
     )
     .await?;
 
