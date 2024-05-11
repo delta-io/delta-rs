@@ -1,7 +1,7 @@
 use std::fmt::{self, Debug, Display};
 use std::sync::Arc;
 
-use datafusion_common::{DFSchema, DFSchemaRef, OwnedTableReference};
+use datafusion_common::{DFSchema, DFSchemaRef, TableReference};
 use datafusion_expr::logical_plan::LogicalPlan;
 use datafusion_expr::{Expr, UserDefinedLogicalNodeCore};
 
@@ -107,7 +107,7 @@ impl UserDefinedLogicalNodeCore for DeltaStatement {
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub struct Vacuum {
     /// A reference to the table being vacuumed
-    pub table: OwnedTableReference,
+    pub table: TableReference,
     /// The retention threshold.
     pub retention_hours: Option<i32>,
     /// Return a list of up to 1000 files to be deleted.
@@ -117,7 +117,7 @@ pub struct Vacuum {
 }
 
 impl Vacuum {
-    pub fn new(table: OwnedTableReference, retention_hours: Option<i32>, dry_run: bool) -> Self {
+    pub fn new(table: TableReference, retention_hours: Option<i32>, dry_run: bool) -> Self {
         Self {
             table,
             retention_hours,
@@ -133,13 +133,13 @@ impl Vacuum {
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub struct DescribeHistory {
     /// A reference to the table
-    pub table: OwnedTableReference,
+    pub table: TableReference,
     /// Schema for commit provenence information
     pub schema: DFSchemaRef,
 }
 
 impl DescribeHistory {
-    pub fn new(table: OwnedTableReference) -> Self {
+    pub fn new(table: TableReference) -> Self {
         Self {
             table,
             // TODO: add proper schema
@@ -153,13 +153,13 @@ impl DescribeHistory {
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub struct DescribeDetails {
     /// A reference to the table
-    pub table: OwnedTableReference,
+    pub table: TableReference,
     /// Schema for commit provenence information
     pub schema: DFSchemaRef,
 }
 
 impl DescribeDetails {
-    pub fn new(table: OwnedTableReference) -> Self {
+    pub fn new(table: TableReference) -> Self {
         Self {
             table,
             // TODO: add proper schema
@@ -172,13 +172,13 @@ impl DescribeDetails {
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub struct DescribeFiles {
     /// A reference to the table
-    pub table: OwnedTableReference,
+    pub table: TableReference,
     /// Schema for commit provenence information
     pub schema: DFSchemaRef,
 }
 
 impl DescribeFiles {
-    pub fn new(table: OwnedTableReference) -> Self {
+    pub fn new(table: TableReference) -> Self {
         Self {
             table,
             // TODO: add proper schema

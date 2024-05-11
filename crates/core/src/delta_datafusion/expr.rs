@@ -429,10 +429,11 @@ mod test {
     use datafusion_common::{Column, ScalarValue, ToDFSchema};
     use datafusion_expr::expr::ScalarFunction;
     use datafusion_expr::{
-        col, lit, substring, BinaryExpr, Cast, Expr, ExprSchemable, ScalarFunctionDefinition,
+        col, lit, BinaryExpr, Cast, Expr, ExprSchemable, ScalarFunctionDefinition,
     };
     use datafusion_functions::core::arrow_cast;
     use datafusion_functions::encoding::expr_fn::decode;
+    use datafusion_functions::expr_fn::substring;
     use datafusion_functions_array::expr_fn::cardinality;
 
     use crate::delta_datafusion::{DataFusionMixins, DeltaSessionContext};

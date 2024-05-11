@@ -80,6 +80,7 @@ pub fn create_partition_values<F: FileAction>(
                     last_modified: chrono::Utc.timestamp_nanos(0),
                     version: None,
                 },
+                statistics: None,
                 partition_values: new_part_values.clone(),
                 extensions: None,
                 range: None,

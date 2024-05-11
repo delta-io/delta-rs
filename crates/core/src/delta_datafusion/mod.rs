@@ -697,11 +697,11 @@ impl TableProvider for DeltaTable {
         Ok(Arc::new(scan))
     }
 
-    fn supports_filter_pushdown(
+    fn supports_filters_pushdown(
         &self,
-        _filter: &Expr,
-    ) -> DataFusionResult<TableProviderFilterPushDown> {
-        Ok(TableProviderFilterPushDown::Inexact)
+        _filter: &[&Expr],
+    ) -> DataFusionResult<Vec<TableProviderFilterPushDown>> {
+        Ok(vec![TableProviderFilterPushDown::Inexact])
     }
 
     fn statistics(&self) -> Option<Statistics> {
@@ -776,11 +776,11 @@ impl TableProvider for DeltaTableProvider {
         Ok(Arc::new(scan))
     }
 
-    fn supports_filter_pushdown(
+    fn supports_filters_pushdown(
         &self,
-        _filter: &Expr,
-    ) -> DataFusionResult<TableProviderFilterPushDown> {
-        Ok(TableProviderFilterPushDown::Inexact)
+        _filter: &[&Expr],
+    ) -> DataFusionResult<Vec<TableProviderFilterPushDown>> {
+        Ok(vec![TableProviderFilterPushDown::Inexact])
     }
 
     fn statistics(&self) -> Option<Statistics> {
@@ -988,6 +988,7 @@ pub(crate) fn partitioned_file_from_action(
             ..action.try_into().unwrap()
         },
         partition_values,
+        statistics: None,
         range: None,
         extensions: None,
     }
@@ -1424,14 +1425,7 @@ impl TreeNodeVisitor for FindFilesExprProperties {
             | Expr::TryCast(_) => (),
             Expr::ScalarFunction(ScalarFunction { func_def, .. }) => {
                 let v = match func_def {
-                    datafusion_expr::ScalarFunctionDefinition::BuiltIn(f) => f.volatility(),
                     datafusion_expr::ScalarFunctionDefinition::UDF(u) => u.signature().volatility,
-                    datafusion_expr::ScalarFunctionDefinition::Name(n) => {
-                        self.result = Err(DeltaTableError::Generic(format!(
-                            "Cannot determine volatility of find files predicate function {n}",
-                        )));
-                        return Ok(TreeNodeRecursion::Stop);
-                    }
                 };
                 if v > Volatility::Immutable {
                     self.result = Err(DeltaTableError::Generic(format!(
@@ -1898,6 +1892,7 @@ mod tests {
                 version: None,
             },
             partition_values: [ScalarValue::Int64(Some(2015)), ScalarValue::Int64(Some(1))].to_vec(),
+            statistics: None,
             range: None,
             extensions: None,
         };
