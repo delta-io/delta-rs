@@ -424,6 +424,10 @@ pub struct MergeTaskParameters {
     file_schema: ArrowSchemaRef,
     /// Properties passed to parquet writer
     writer_properties: WriterProperties,
+    /// Num index cols to collect stats for
+    num_indexed_cols: i32,
+    /// Stats columns, specific columns to collect stats from, takes precedence over num_indexed_cols
+    stats_columns: Option<Vec<String>>,
 }
 
 /// A stream of record batches, with a ParquetError on failure.
@@ -483,7 +487,12 @@ impl MergePlan {
             Some(task_parameters.input_parameters.target_size as usize),
             None,
         )?;
-        let mut writer = PartitionWriter::try_with_config(object_store, writer_config)?;
+        let mut writer = PartitionWriter::try_with_config(
+            object_store,
+            writer_config,
+            task_parameters.num_indexed_cols,
+            task_parameters.stats_columns.clone(),
+        )?;
 
         let mut read_stream = read_stream.await?;
 
@@ -841,6 +850,11 @@ pub fn create_merge_plan(
             input_parameters,
             file_schema,
             writer_properties,
+            num_indexed_cols: snapshot.table_config().num_indexed_cols(),
+            stats_columns: snapshot
+                .table_config()
+                .stats_columns()
+                .map(|v| v.iter().map(|v| v.to_string()).collect::<Vec<String>>()),
         }),
         read_table_version: snapshot.version(),
     })

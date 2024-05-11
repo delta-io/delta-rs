@@ -27,6 +27,7 @@ use crate::errors::DeltaTableError;
 use crate::kernel::{Add, PartitionsExt, Scalar, StructType};
 use crate::storage::ObjectStoreRetryExt;
 use crate::table::builder::DeltaTableBuilder;
+use crate::table::config::DEFAULT_NUM_INDEX_COLS;
 use crate::writer::utils::ShareableBuffer;
 use crate::DeltaTable;
 
@@ -368,6 +369,8 @@ impl DeltaWriter<Vec<Value>> for JsonWriter {
                 path.to_string(),
                 file_size,
                 &metadata,
+                DEFAULT_NUM_INDEX_COLS,
+                &None,
             )?);
         }
         Ok(actions)
