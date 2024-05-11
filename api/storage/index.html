@@ -1278,8 +1278,71 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
+  <a href="#deltalake.fs.DeltaStorageHandler.copy_file" class="md-nav__link">
+    copy_file
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#deltalake.fs.DeltaStorageHandler.create_dir" class="md-nav__link">
+    create_dir
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#deltalake.fs.DeltaStorageHandler.delete_dir" class="md-nav__link">
+    delete_dir
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#deltalake.fs.DeltaStorageHandler.delete_dir_contents" class="md-nav__link">
+    delete_dir_contents
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#deltalake.fs.DeltaStorageHandler.delete_file" class="md-nav__link">
+    delete_file
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#deltalake.fs.DeltaStorageHandler.delete_root_dir_contents" class="md-nav__link">
+    delete_root_dir_contents
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#deltalake.fs.DeltaStorageHandler.get_file_info" class="md-nav__link">
+    get_file_info
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#deltalake.fs.DeltaStorageHandler.get_file_info_selector" class="md-nav__link">
     get_file_info_selector
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#deltalake.fs.DeltaStorageHandler.move" class="md-nav__link">
+    move
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#deltalake.fs.DeltaStorageHandler.normalize_path" class="md-nav__link">
+    normalize_path
   </a>
   
 </li>
@@ -1721,8 +1784,71 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
+  <a href="#deltalake.fs.DeltaStorageHandler.copy_file" class="md-nav__link">
+    copy_file
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#deltalake.fs.DeltaStorageHandler.create_dir" class="md-nav__link">
+    create_dir
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#deltalake.fs.DeltaStorageHandler.delete_dir" class="md-nav__link">
+    delete_dir
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#deltalake.fs.DeltaStorageHandler.delete_dir_contents" class="md-nav__link">
+    delete_dir_contents
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#deltalake.fs.DeltaStorageHandler.delete_file" class="md-nav__link">
+    delete_file
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#deltalake.fs.DeltaStorageHandler.delete_root_dir_contents" class="md-nav__link">
+    delete_root_dir_contents
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#deltalake.fs.DeltaStorageHandler.get_file_info" class="md-nav__link">
+    get_file_info
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#deltalake.fs.DeltaStorageHandler.get_file_info_selector" class="md-nav__link">
     get_file_info_selector
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#deltalake.fs.DeltaStorageHandler.move" class="md-nav__link">
+    move
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#deltalake.fs.DeltaStorageHandler.normalize_path" class="md-nav__link">
+    normalize_path
   </a>
   
 </li>
@@ -1784,12 +1910,12 @@
 
 
 </h3>
-<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">DeltaStorageHandler</span><span class="p">(</span><span class="n">root</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">options</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">known_sizes</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">int</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span>
+<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">DeltaStorageHandler</span><span class="p">(</span><span class="n">table_uri</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">options</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">known_sizes</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">int</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span>
 </span></code></pre></div>
 
   <div class="doc doc-contents first">
           <p class="doc doc-class-bases">
-            Bases: <code><span title="deltalake._internal.DeltaFileSystemHandler">DeltaFileSystemHandler</span></code>, <code><a class="autorefs autorefs-external" title="pyarrow.fs.FileSystemHandler" href="https://arrow.apache.org/docs/python/generated/pyarrow.fs.FileSystemHandler.html#pyarrow.fs.FileSystemHandler">FileSystemHandler</a></code></p>
+            Bases: <code><a class="autorefs autorefs-external" title="pyarrow.fs.FileSystemHandler" href="https://arrow.apache.org/docs/python/generated/pyarrow.fs.FileSystemHandler.html#pyarrow.fs.FileSystemHandler">FileSystemHandler</a></code></p>
 
   
       <p>DeltaStorageHandler is a concrete implementations of a PyArrow FileSystemHandler.</p>
@@ -1806,6 +1932,158 @@
 
 
 
+
+
+<div class="doc doc-object doc-function">
+
+
+
+<h4 id="deltalake.fs.DeltaStorageHandler.copy_file" class="doc doc-heading">
+          <span class="doc doc-object-name doc-function-name">copy_file</span>
+
+
+</h4>
+<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">copy_file</span><span class="p">(</span><span class="n">src</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">dst</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span>
+</span></code></pre></div>
+
+  <div class="doc doc-contents ">
+  
+      <p>Copy a file.</p>
+<p>If the destination exists and is a directory, an error is returned. Otherwise, it is replaced.</p>
+
+  </div>
+
+</div>
+
+
+<div class="doc doc-object doc-function">
+
+
+
+<h4 id="deltalake.fs.DeltaStorageHandler.create_dir" class="doc doc-heading">
+          <span class="doc doc-object-name doc-function-name">create_dir</span>
+
+
+</h4>
+<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">create_dir</span><span class="p">(</span><span class="n">path</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">recursive</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span>
+</span></code></pre></div>
+
+  <div class="doc doc-contents ">
+  
+      <p>Create a directory and subdirectories.</p>
+<p>This function succeeds if the directory already exists.</p>
+
+  </div>
+
+</div>
+
+
+<div class="doc doc-object doc-function">
+
+
+
+<h4 id="deltalake.fs.DeltaStorageHandler.delete_dir" class="doc doc-heading">
+          <span class="doc doc-object-name doc-function-name">delete_dir</span>
+
+
+</h4>
+<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">delete_dir</span><span class="p">(</span><span class="n">path</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span>
+</span></code></pre></div>
+
+  <div class="doc doc-contents ">
+  
+      <p>Delete a directory and its contents, recursively.</p>
+
+  </div>
+
+</div>
+
+
+<div class="doc doc-object doc-function">
+
+
+
+<h4 id="deltalake.fs.DeltaStorageHandler.delete_dir_contents" class="doc doc-heading">
+          <span class="doc doc-object-name doc-function-name">delete_dir_contents</span>
+
+
+</h4>
+<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">delete_dir_contents</span><span class="p">(</span><span class="n">path</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="o">*</span><span class="p">,</span> <span class="n">accept_root_dir</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span> <span class="n">missing_dir_ok</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span>
+</span></code></pre></div>
+
+  <div class="doc doc-contents ">
+  
+      <p>Delete a directory's contents, recursively.</p>
+<p>Like delete_dir, but doesn't delete the directory itself.</p>
+
+  </div>
+
+</div>
+
+
+<div class="doc doc-object doc-function">
+
+
+
+<h4 id="deltalake.fs.DeltaStorageHandler.delete_file" class="doc doc-heading">
+          <span class="doc doc-object-name doc-function-name">delete_file</span>
+
+
+</h4>
+<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">delete_file</span><span class="p">(</span><span class="n">path</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span>
+</span></code></pre></div>
+
+  <div class="doc doc-contents ">
+  
+      <p>Delete a file.</p>
+
+  </div>
+
+</div>
+
+
+<div class="doc doc-object doc-function">
+
+
+
+<h4 id="deltalake.fs.DeltaStorageHandler.delete_root_dir_contents" class="doc doc-heading">
+          <span class="doc doc-object-name doc-function-name">delete_root_dir_contents</span>
+
+
+</h4>
+<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">delete_root_dir_contents</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span>
+</span></code></pre></div>
+
+  <div class="doc doc-contents ">
+  
+      <p>Delete the root directory contents, recursively.</p>
+
+  </div>
+
+</div>
+
+
+<div class="doc doc-object doc-function">
+
+
+
+<h4 id="deltalake.fs.DeltaStorageHandler.get_file_info" class="doc doc-heading">
+          <span class="doc doc-object-name doc-function-name">get_file_info</span>
+
+
+</h4>
+<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">get_file_info</span><span class="p">(</span><span class="n">paths</span><span class="p">:</span> <span class="n">List</span><span class="p">[</span><span class="nb">str</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="n">List</span><span class="p">[</span><span class="n">FileInfo</span><span class="p">]</span>
+</span></code></pre></div>
+
+  <div class="doc doc-contents ">
+  
+      <p>Get info for the given files.</p>
+<p>A non-existing or unreachable file returns a FileStat object and has a FileType of value NotFound.
+An exception indicates a truly exceptional condition (low-level I/O error, etc.).</p>
+
+  </div>
+
+</div>
 
 
 <div class="doc doc-object doc-function">
@@ -1877,6 +2155,51 @@
         </tr>
     </tbody>
   </table>
+
+  </div>
+
+</div>
+
+
+<div class="doc doc-object doc-function">
+
+
+
+<h4 id="deltalake.fs.DeltaStorageHandler.move" class="doc doc-heading">
+          <span class="doc doc-object-name doc-function-name">move</span>
+
+
+</h4>
+<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">move</span><span class="p">(</span><span class="n">src</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">dest</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span>
+</span></code></pre></div>
+
+  <div class="doc doc-contents ">
+  
+      <p>Move / rename a file or directory.</p>
+<p>If the destination exists: - if it is a non-empty directory, an error is returned - otherwise,
+if it has the same type as the source, it is replaced - otherwise, behavior is
+unspecified (implementation-dependent).</p>
+
+  </div>
+
+</div>
+
+
+<div class="doc doc-object doc-function">
+
+
+
+<h4 id="deltalake.fs.DeltaStorageHandler.normalize_path" class="doc doc-heading">
+          <span class="doc doc-object-name doc-function-name">normalize_path</span>
+
+
+</h4>
+<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">normalize_path</span><span class="p">(</span><span class="n">path</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span>
+</span></code></pre></div>
+
+  <div class="doc doc-contents ">
+  
+      <p>Normalize filesystem path.</p>
 
   </div>
 
