@@ -58,6 +58,7 @@ use crate::logstore::LogStoreRef;
 use crate::operations::cast::{cast_record_batch, merge_schema};
 use crate::protocol::{DeltaOperation, SaveMode};
 use crate::storage::ObjectStoreRef;
+use crate::table::config::DEFAULT_NUM_INDEX_COLS;
 use crate::table::state::DeltaTableState;
 use crate::table::Constraint as DeltaConstraint;
 use crate::writer::record_batch::divide_by_partition_values;
@@ -337,6 +338,24 @@ impl WriteBuilder {
         }
     }
 }
+/// Configuration for the writer on how to collect stats
+#[derive(Clone)]
+pub struct WriterStatsConfig {
+    /// Number of columns to collect stats for, idx based
+    num_indexed_cols: i32,
+    /// Optional list of columns which to collect stats for, takes precedende over num_index_cols
+    stats_columns: Option<Vec<String>>,
+}
+
+impl WriterStatsConfig {
+    /// Create new writer stats config
+    pub fn new(num_indexed_cols: i32, stats_columns: Option<Vec<String>>) -> Self {
+        Self {
+            num_indexed_cols,
+            stats_columns,
+        }
+    }
+}
 
 #[allow(clippy::too_many_arguments)]
 async fn write_execution_plan_with_predicate(
@@ -351,6 +370,7 @@ async fn write_execution_plan_with_predicate(
     writer_properties: Option<WriterProperties>,
     safe_cast: bool,
     schema_mode: Option<SchemaMode>,
+    writer_stats_config: WriterStatsConfig,
 ) -> DeltaResult<Vec<Action>> {
     let schema: ArrowSchemaRef = if schema_mode.is_some() {
         plan.schema()
@@ -386,6 +406,8 @@ async fn write_execution_plan_with_predicate(
             writer_properties.clone(),
             target_file_size,
             write_batch_size,
+            writer_stats_config.num_indexed_cols,
+            writer_stats_config.stats_columns.clone(),
         );
         let mut writer = DeltaWriter::new(object_store.clone(), config);
         let checker_stream = checker.clone();
@@ -438,6 +460,7 @@ pub(crate) async fn write_execution_plan(
     writer_properties: Option<WriterProperties>,
     safe_cast: bool,
     schema_mode: Option<SchemaMode>,
+    writer_stats_config: WriterStatsConfig,
 ) -> DeltaResult<Vec<Action>> {
     write_execution_plan_with_predicate(
         None,
@@ -451,10 +474,12 @@ pub(crate) async fn write_execution_plan(
         writer_properties,
         safe_cast,
         schema_mode,
+        writer_stats_config,
     )
     .await
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn execute_non_empty_expr(
     snapshot: &DeltaTableState,
     log_store: LogStoreRef,
@@ -463,6 +488,7 @@ async fn execute_non_empty_expr(
     expression: &Expr,
     rewrite: &[Add],
     writer_properties: Option<WriterProperties>,
+    writer_stats_config: WriterStatsConfig,
 ) -> DeltaResult<Vec<Action>> {
     // For each identified file perform a parquet scan + filter + limit (1) + count.
     // If returned count is not zero then append the file to be rewritten and removed from the log. Otherwise do nothing to the file.
@@ -496,6 +522,7 @@ async fn execute_non_empty_expr(
         writer_properties,
         false,
         None,
+        writer_stats_config,
     )
     .await?;
 
@@ -503,6 +530,7 @@ async fn execute_non_empty_expr(
 }
 
 // This should only be called wth a valid predicate
+#[allow(clippy::too_many_arguments)]
 async fn prepare_predicate_actions(
     predicate: Expr,
     log_store: LogStoreRef,
@@ -511,6 +539,7 @@ async fn prepare_predicate_actions(
     partition_columns: Vec<String>,
     writer_properties: Option<WriterProperties>,
     deletion_timestamp: i64,
+    writer_stats_config: WriterStatsConfig,
 ) -> DeltaResult<Vec<Action>> {
     let candidates =
         find_files(snapshot, log_store.clone(), &state, Some(predicate.clone())).await?;
@@ -526,6 +555,7 @@ async fn prepare_predicate_actions(
             &predicate,
             &candidates.candidates,
             writer_properties,
+            writer_stats_config,
         )
         .await?
     };
@@ -723,6 +753,18 @@ impl std::future::IntoFuture for WriteBuilder {
                 _ => (None, None),
             };
 
+            let config: Option<crate::table::config::TableConfig<'_>> = this
+                .snapshot
+                .as_ref()
+                .map(|snapshot| snapshot.table_config());
+
+            let (num_indexed_cols, stats_columns) =
+                get_num_idx_cols_and_stats_columns(config, this.configuration);
+
+            let writer_stats_config = WriterStatsConfig {
+                num_indexed_cols,
+                stats_columns,
+            };
             // Here we need to validate if the new data conforms to a predicate if one is provided
             let add_actions = write_execution_plan_with_predicate(
                 predicate.clone(),
@@ -736,6 +778,7 @@ impl std::future::IntoFuture for WriteBuilder {
                 this.writer_properties.clone(),
                 this.safe_cast,
                 this.schema_mode,
+                writer_stats_config.clone(),
             )
             .await?;
             actions.extend(add_actions);
@@ -772,6 +815,7 @@ impl std::future::IntoFuture for WriteBuilder {
                                 partition_columns.clone(),
                                 this.writer_properties,
                                 deletion_timestamp,
+                                writer_stats_config,
                             )
                             .await?;
                             if !predicate_actions.is_empty() {
@@ -876,6 +920,33 @@ fn try_cast_batch(from_fields: &Fields, to_fields: &Fields) -> Result<(), ArrowE
         })
         .collect::<Result<Vec<_>, _>>()?;
     Ok(())
+}
+
+/// Get the num_idx_columns and stats_columns from the table configuration in the state
+/// If table_config does not exist (only can occur in the first write action) it takes
+/// the configuration that was passed to the writerBuilder.
+pub fn get_num_idx_cols_and_stats_columns(
+    config: Option<crate::table::config::TableConfig<'_>>,
+    configuration: HashMap<String, Option<String>>,
+) -> (i32, Option<Vec<String>>) {
+    let (num_index_cols, stats_columns) = match &config {
+        Some(conf) => (conf.num_indexed_cols(), conf.stats_columns()),
+        _ => (
+            configuration
+                .get("delta.dataSkippingNumIndexedCols")
+                .and_then(|v| v.clone().map(|v| v.parse::<i32>().unwrap()))
+                .unwrap_or(DEFAULT_NUM_INDEX_COLS),
+            configuration
+                .get("delta.dataSkippingStatsColumns")
+                .and_then(|v| v.as_ref().map(|v| v.split(',').collect::<Vec<&str>>())),
+        ),
+    };
+    (
+        num_index_cols,
+        stats_columns
+            .clone()
+            .map(|v| v.iter().map(|v| v.to_string()).collect::<Vec<String>>()),
+    )
 }
 
 #[cfg(test)]

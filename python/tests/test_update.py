@@ -234,3 +234,51 @@ def test_update_with_incorrect_updates_input(
         str(excinfo.value)
         == "Invalid datatype provided in new_values, only int, float, bool, list, str or datetime or accepted."
     )
+
+
+@pytest.mark.parametrize("engine", ["pyarrow", "rust"])
+def test_update_stats_columns_stats_provided(tmp_path: pathlib.Path, engine):
+    data = pa.table(
+        {
+            "foo": pa.array(["a", "b", None, None]),
+            "bar": pa.array([1, 2, 3, None]),
+            "baz": pa.array([1, 1, None, None]),
+        }
+    )
+    write_deltalake(
+        tmp_path,
+        data,
+        mode="append",
+        engine=engine,
+        configuration={"delta.dataSkippingStatsColumns": "foo,baz"},
+    )
+    dt = DeltaTable(tmp_path)
+    add_actions_table = dt.get_add_actions(flatten=True)
+    stats = add_actions_table.to_pylist()[0]
+
+    assert stats["null_count.foo"] == 2
+    assert stats["min.foo"] == "a"
+    assert stats["max.foo"] == "b"
+    assert stats["null_count.bar"] is None
+    assert stats["min.bar"] is None
+    assert stats["max.bar"] is None
+    assert stats["null_count.baz"] == 2
+    assert stats["min.baz"] == 1
+    assert stats["max.baz"] == 1
+
+    dt.update({"foo": "'hello world'"})
+
+    dt = DeltaTable(tmp_path)
+    add_actions_table = dt.get_add_actions(flatten=True)
+    stats = add_actions_table.to_pylist()[0]
+
+    assert dt.version() == 1
+    assert stats["null_count.foo"] == 0
+    assert stats["min.foo"] == "hello world"
+    assert stats["max.foo"] == "hello world"
+    assert stats["null_count.bar"] is None
+    assert stats["min.bar"] is None
+    assert stats["max.bar"] is None
+    assert stats["null_count.baz"] == 2
+    assert stats["min.baz"] == 1
+    assert stats["max.baz"] == 1
