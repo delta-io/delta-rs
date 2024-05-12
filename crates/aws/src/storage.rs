@@ -516,7 +516,6 @@ pub(crate) fn str_option(map: &HashMap<String, String>, key: &str) -> Option<Str
     }
 
     if let Some(s) = map.get(&key.to_ascii_lowercase()) {
-        warn!("********** found lowercase **********: {} : {}", key, s);
         return Some(s.to_owned());
     }
 
