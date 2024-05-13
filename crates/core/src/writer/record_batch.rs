@@ -32,6 +32,7 @@ use crate::kernel::{Action, Add, PartitionsExt, Scalar, StructType};
 use crate::operations::cast::merge_schema;
 use crate::storage::ObjectStoreRetryExt;
 use crate::table::builder::DeltaTableBuilder;
+use crate::table::config::DEFAULT_NUM_INDEX_COLS;
 use crate::DeltaTable;
 
 /// Writes messages to a delta lake table.
@@ -230,6 +231,8 @@ impl DeltaWriter<RecordBatch> for RecordBatchWriter {
                 path.to_string(),
                 file_size,
                 &metadata,
+                DEFAULT_NUM_INDEX_COLS,
+                &None,
             )?);
         }
         Ok(actions)

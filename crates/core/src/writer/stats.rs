@@ -1,3 +1,4 @@
+use std::cmp::min;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use std::{collections::HashMap, ops::AddAssign};
@@ -22,8 +23,15 @@ pub fn create_add(
     path: String,
     size: i64,
     file_metadata: &FileMetaData,
+    num_indexed_cols: i32,
+    stats_columns: &Option<Vec<String>>,
 ) -> Result<Add, DeltaTableError> {
-    let stats = stats_from_file_metadata(partition_values, file_metadata)?;
+    let stats = stats_from_file_metadata(
+        partition_values,
+        file_metadata,
+        num_indexed_cols,
+        stats_columns,
+    )?;
     let stats_string = serde_json::to_string(&stats)?;
 
     // Determine the modification timestamp to include in the add action - milliseconds since epoch
@@ -68,6 +76,8 @@ pub fn create_add(
 pub(crate) fn stats_from_parquet_metadata(
     partition_values: &IndexMap<String, Scalar>,
     parquet_metadata: &ParquetMetaData,
+    num_indexed_cols: i32,
+    stats_columns: &Option<Vec<String>>,
 ) -> Result<Stats, DeltaWriterError> {
     let num_rows = parquet_metadata.file_metadata().num_rows();
     let schema_descriptor = parquet_metadata.file_metadata().schema_descr_ptr();
@@ -78,12 +88,16 @@ pub(crate) fn stats_from_parquet_metadata(
         schema_descriptor,
         row_group_metadata,
         num_rows,
+        num_indexed_cols,
+        stats_columns,
     )
 }
 
 fn stats_from_file_metadata(
     partition_values: &IndexMap<String, Scalar>,
     file_metadata: &FileMetaData,
+    num_indexed_cols: i32,
+    stats_columns: &Option<Vec<String>>,
 ) -> Result<Stats, DeltaWriterError> {
     let type_ptr = parquet::schema::types::from_thrift(file_metadata.schema.as_slice());
     let schema_descriptor = type_ptr.map(|type_| Arc::new(SchemaDescriptor::new(type_)))?;
@@ -99,6 +113,8 @@ fn stats_from_file_metadata(
         schema_descriptor,
         row_group_metadata,
         file_metadata.num_rows,
+        num_indexed_cols,
+        stats_columns,
     )
 }
 
@@ -107,13 +123,38 @@ fn stats_from_metadata(
     schema_descriptor: Arc<SchemaDescriptor>,
     row_group_metadata: Vec<RowGroupMetaData>,
     num_rows: i64,
+    num_indexed_cols: i32,
+    stats_columns: &Option<Vec<String>>,
 ) -> Result<Stats, DeltaWriterError> {
     let mut min_values: HashMap<String, ColumnValueStat> = HashMap::new();
     let mut max_values: HashMap<String, ColumnValueStat> = HashMap::new();
     let mut null_count: HashMap<String, ColumnCountStat> = HashMap::new();
 
-    for i in 0..schema_descriptor.num_columns() {
-        let column_descr = schema_descriptor.column(i);
+    let idx_to_iterate = if let Some(stats_cols) = stats_columns {
+        schema_descriptor
+            .columns()
+            .into_iter()
+            .enumerate()
+            .filter_map(|(index, col)| {
+                if stats_cols.contains(&col.name().to_string()) {
+                    Some(index)
+                } else {
+                    None
+                }
+            })
+            .collect()
+    } else if num_indexed_cols == -1 {
+        (0..schema_descriptor.num_columns()).collect::<Vec<_>>()
+    } else if num_indexed_cols >= 0 {
+        (0..min(num_indexed_cols as usize, schema_descriptor.num_columns())).collect::<Vec<_>>()
+    } else {
+        return Err(DeltaWriterError::DeltaTable(DeltaTableError::Generic(
+            "delta.dataSkippingNumIndexedCols valid values are >=-1".to_string(),
+        )));
+    };
+
+    for idx in idx_to_iterate {
+        let column_descr = schema_descriptor.column(idx);
 
         let column_path = column_descr.path();
         let column_path_parts = column_path.parts();
@@ -126,7 +167,7 @@ fn stats_from_metadata(
         let maybe_stats: Option<AggregatedStats> = row_group_metadata
             .iter()
             .map(|g| {
-                g.column(i)
+                g.column(idx)
                     .statistics()
                     .map(|s| AggregatedStats::from((s, &column_descr.logical_type())))
             })

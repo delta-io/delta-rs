@@ -341,6 +341,8 @@ impl ConvertToDeltaBuilder {
             let stats = stats_from_parquet_metadata(
                 &IndexMap::from_iter(partition_values.clone().into_iter()),
                 parquet_metadata.as_ref(),
+                -1,
+                &None,
             )
             .map_err(|e| Error::DeltaTable(e.into()))?;
             let stats_string =
