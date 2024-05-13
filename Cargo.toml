@@ -46,7 +46,7 @@ datafusion = { version = "37.1" }
 datafusion-expr = { version = "37.1" }
 datafusion-common = { version = "37.1" }
 datafusion-proto = { version = "37.1" }
-datafusion-sql = { version = "37.1" }
+datafusion-sql = { version = "38.0" }
 datafusion-physical-expr = { version = "37.1" }
 datafusion-functions = { version = "37.1" }
 datafusion-functions-array = { version = "37.1" }
