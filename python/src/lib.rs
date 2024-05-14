@@ -356,10 +356,8 @@ impl RawDeltaTable {
                 );
             };
 
-            Ok::<(_, _), PythonError>(
-                rt().block_on(cmd.into_future())
-                    .map_err(PythonError::from)?,
-            )
+            rt().block_on(cmd.into_future())
+                    .map_err(PythonError::from)
         })?;
         self._table.state = table.state;
         Ok(metrics.files_deleted)
@@ -405,10 +403,8 @@ impl RawDeltaTable {
                 );
             };
 
-            Ok::<(_, _), PythonError>(
-                rt().block_on(cmd.into_future())
-                    .map_err(PythonError::from)?,
-            )
+            rt().block_on(cmd.into_future())
+                    .map_err(PythonError::from)
         })?;
         self._table.state = table.state;
         Ok(serde_json::to_string(&metrics).unwrap())
@@ -423,6 +419,8 @@ impl RawDeltaTable {
         writer_properties=None,
         custom_metadata=None,
     ))]
+
+    #[allow(clippy::too_many_arguments)]
     pub fn compact_optimize(
         &mut self,
         py: Python,
@@ -465,10 +463,8 @@ impl RawDeltaTable {
                     .map_err(PythonError::from)?;
             cmd = cmd.with_filters(&converted_filters);
 
-            Ok::<_, PythonError>(
-                rt().block_on(cmd.into_future())
-                    .map_err(PythonError::from)?,
-            )
+            rt().block_on(cmd.into_future())
+                    .map_err(PythonError::from)
         })?;
         self._table.state = table.state;
         Ok(serde_json::to_string(&metrics).unwrap())
@@ -530,10 +526,8 @@ impl RawDeltaTable {
                     .map_err(PythonError::from)?;
             cmd = cmd.with_filters(&converted_filters);
 
-            Ok::<_, PythonError>(
-                rt().block_on(cmd.into_future())
-                    .map_err(PythonError::from)?,
-            )
+            rt().block_on(cmd.into_future())
+                    .map_err(PythonError::from)
         })?;
         self._table.state = table.state;
         Ok(serde_json::to_string(&metrics).unwrap())
@@ -564,10 +558,8 @@ impl RawDeltaTable {
                 );
             };
 
-            Ok::<_, PythonError>(
-                rt().block_on(cmd.into_future())
-                    .map_err(PythonError::from)?,
-            )
+            rt().block_on(cmd.into_future())
+                    .map_err(PythonError::from)
         })?;
         self._table.state = table.state;
         Ok(())
@@ -597,10 +589,8 @@ impl RawDeltaTable {
                 );
             };
 
-            Ok::<_, PythonError>(
-                rt().block_on(cmd.into_future())
-                    .map_err(PythonError::from)?,
-            )
+            rt().block_on(cmd.into_future())
+                    .map_err(PythonError::from)
         })?;
         self._table.state = table.state;
         Ok(())
@@ -1043,6 +1033,7 @@ impl RawDeltaTable {
         PyFrozenSet::new(py, active_partitions)
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn create_write_transaction(
         &mut self,
         py: Python,
@@ -1231,10 +1222,8 @@ impl RawDeltaTable {
                 );
             };
 
-            Ok::<_, PythonError>(
-                rt().block_on(cmd.into_future())
-                    .map_err(PythonError::from)?,
-            )
+            rt().block_on(cmd.into_future())
+                    .map_err(PythonError::from)
         })?;
         self._table.state = table.state;
         Ok(serde_json::to_string(&metrics).unwrap())
