@@ -797,12 +797,12 @@ fn generalize_filter(
             match binary.op {
                 Operator::Eq => {
                     let name_min = format!("{column_name}_{}_min", placeholders.len());
-                    let name_max = format!("{column_name}_{}_max", placeholders.len());
-                    let placeholder_l = Expr::Placeholder(Placeholder {
+                    let placeholder_min = Expr::Placeholder(Placeholder {
                         id: name_min.clone(),
                         data_type: None,
                     });
-                    let placeholder_r = Expr::Placeholder(Placeholder {
+                    let name_max = format!("{column_name}_{}_max", placeholders.len());
+                    let placeholder_max = Expr::Placeholder(Placeholder {
                         id: name_max.clone(),
                         data_type: None,
                     });
@@ -814,8 +814,8 @@ fn generalize_filter(
                     let replaced = Expr::Between(Between {
                         expr: target_expr.into(),
                         negated: false,
-                        low: placeholder_l.into(),
-                        high: placeholder_r.into(),
+                        low: placeholder_min.into(),
+                        high: placeholder_max.into(),
                     });
 
                     placeholders.push(PredicatePlaceholder {
