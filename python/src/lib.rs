@@ -98,36 +98,39 @@ impl RawDeltaTable {
     #[new]
     #[pyo3(signature = (table_uri, version = None, storage_options = None, without_files = false, log_buffer_size = None))]
     fn new(
+        py: Python,
         table_uri: &str,
         version: Option<i64>,
         storage_options: Option<HashMap<String, String>>,
         without_files: bool,
         log_buffer_size: Option<usize>,
     ) -> PyResult<Self> {
-        let mut builder = deltalake::DeltaTableBuilder::from_uri(table_uri);
-        let options = storage_options.clone().unwrap_or_default();
-        if let Some(storage_options) = storage_options {
-            builder = builder.with_storage_options(storage_options)
-        }
-        if let Some(version) = version {
-            builder = builder.with_version(version)
-        }
-        if without_files {
-            builder = builder.without_files()
-        }
-        if let Some(buf_size) = log_buffer_size {
-            builder = builder
-                .with_log_buffer_size(buf_size)
-                .map_err(PythonError::from)?;
-        }
+        py.allow_threads(|| {
+            let mut builder = deltalake::DeltaTableBuilder::from_uri(table_uri);
+            let options = storage_options.clone().unwrap_or_default();
+            if let Some(storage_options) = storage_options {
+                builder = builder.with_storage_options(storage_options)
+            }
+            if let Some(version) = version {
+                builder = builder.with_version(version)
+            }
+            if without_files {
+                builder = builder.without_files()
+            }
+            if let Some(buf_size) = log_buffer_size {
+                builder = builder
+                    .with_log_buffer_size(buf_size)
+                    .map_err(PythonError::from)?;
+            }
 
-        let table = rt().block_on(builder.load()).map_err(PythonError::from)?;
-        Ok(RawDeltaTable {
-            _table: table,
-            _config: FsConfig {
-                root_url: table_uri.into(),
-                options,
-            },
+            let table = rt().block_on(builder.load()).map_err(PythonError::from)?;
+            Ok(RawDeltaTable {
+                _table: table,
+                _config: FsConfig {
+                    root_url: table_uri.into(),
+                    options,
+                },
+            })
         })
     }
 
@@ -194,16 +197,20 @@ impl RawDeltaTable {
             .map_err(PythonError::from)?)
     }
 
-    pub fn load_version(&mut self, version: i64) -> PyResult<()> {
-        Ok(rt()
-            .block_on(self._table.load_version(version))
-            .map_err(PythonError::from)?)
+    pub fn load_version(&mut self, py: Python, version: i64) -> PyResult<()> {
+        py.allow_threads(|| {
+            Ok(rt()
+                .block_on(self._table.load_version(version))
+                .map_err(PythonError::from)?)
+        })
     }
 
-    pub fn get_latest_version(&mut self) -> PyResult<i64> {
-        Ok(rt()
-            .block_on(self._table.get_latest_version())
-            .map_err(PythonError::from)?)
+    pub fn get_latest_version(&mut self, py: Python) -> PyResult<i64> {
+        py.allow_threads(|| {
+            Ok(rt()
+                .block_on(self._table.get_latest_version())
+                .map_err(PythonError::from)?)
+        })
     }
 
     pub fn get_num_index_cols(&mut self) -> PyResult<i32> {
@@ -225,64 +232,73 @@ impl RawDeltaTable {
             .map(|v| v.iter().map(|v| v.to_string()).collect::<Vec<String>>()))
     }
 
-    pub fn load_with_datetime(&mut self, ds: &str) -> PyResult<()> {
-        let datetime =
-            DateTime::<Utc>::from(DateTime::<FixedOffset>::parse_from_rfc3339(ds).map_err(
-                |err| PyValueError::new_err(format!("Failed to parse datetime string: {err}")),
-            )?);
-        Ok(rt()
-            .block_on(self._table.load_with_datetime(datetime))
-            .map_err(PythonError::from)?)
+    pub fn load_with_datetime(&mut self, py: Python, ds: &str) -> PyResult<()> {
+        py.allow_threads(|| {
+            let datetime =
+                DateTime::<Utc>::from(DateTime::<FixedOffset>::parse_from_rfc3339(ds).map_err(
+                    |err| PyValueError::new_err(format!("Failed to parse datetime string: {err}")),
+                )?);
+            Ok(rt()
+                .block_on(self._table.load_with_datetime(datetime))
+                .map_err(PythonError::from)?)
+        })
     }
 
     pub fn files_by_partitions(
         &self,
+        py: Python,
         partitions_filters: Vec<(&str, &str, PartitionFilterValue)>,
     ) -> PyResult<Vec<String>> {
-        let partition_filters: Result<Vec<PartitionFilter>, DeltaTableError> = partitions_filters
-            .into_iter()
-            .map(|filter| match filter {
-                (key, op, PartitionFilterValue::Single(v)) => {
-                    PartitionFilter::try_from((key, op, v))
-                }
-                (key, op, PartitionFilterValue::Multiple(v)) => {
-                    PartitionFilter::try_from((key, op, v.as_slice()))
-                }
-            })
-            .collect();
-        match partition_filters {
-            Ok(filters) => Ok(self
-                ._table
-                .get_files_by_partitions(&filters)
-                .map_err(PythonError::from)?
-                .into_iter()
-                .map(|p| p.to_string())
-                .collect()),
-            Err(err) => Err(PythonError::from(err).into()),
-        }
+        py.allow_threads(|| {
+            let partition_filters: Result<Vec<PartitionFilter>, DeltaTableError> =
+                partitions_filters
+                    .into_iter()
+                    .map(|filter| match filter {
+                        (key, op, PartitionFilterValue::Single(v)) => {
+                            PartitionFilter::try_from((key, op, v))
+                        }
+                        (key, op, PartitionFilterValue::Multiple(v)) => {
+                            PartitionFilter::try_from((key, op, v.as_slice()))
+                        }
+                    })
+                    .collect();
+            match partition_filters {
+                Ok(filters) => Ok(self
+                    ._table
+                    .get_files_by_partitions(&filters)
+                    .map_err(PythonError::from)?
+                    .into_iter()
+                    .map(|p| p.to_string())
+                    .collect()),
+                Err(err) => Err(PythonError::from(err).into()),
+            }
+        })
     }
 
     pub fn files(
         &self,
+        py: Python,
         partition_filters: Option<Vec<(&str, &str, PartitionFilterValue)>>,
     ) -> PyResult<Vec<String>> {
-        if let Some(filters) = partition_filters {
-            let filters = convert_partition_filters(filters).map_err(PythonError::from)?;
-            Ok(self
-                ._table
-                .get_files_by_partitions(&filters)
-                .map_err(PythonError::from)?
-                .into_iter()
-                .map(|p| p.to_string())
-                .collect())
-        } else {
-            Ok(self
-                ._table
-                .get_files_iter()
-                .map_err(PythonError::from)?
-                .map(|f| f.to_string())
-                .collect())
-        }
+        py.allow_threads(|| {
+            if let Some(filters) = partition_filters {
+                let filters = convert_partition_filters(filters).map_err(PythonError::from)?;
+                Ok(self
+                    ._table
+                    .get_files_by_partitions(&filters)
+                    .map_err(PythonError::from)?
+                    .into_iter()
+                    .map(|p| p.to_string())
+                    .collect())
+            } else {
+                Ok(self
+                    ._table
+                    .get_files_iter()
+                    .map_err(PythonError::from)?
+                    .map(|f| f.to_string())
+                    .collect())
+            }
+        })
     }
 
     pub fn file_uris(
@@ -339,9 +355,11 @@ impl RawDeltaTable {
                     CommitProperties::default().with_metadata(json_metadata),
                 );
             };
-            
-            Ok::<(_, _), PythonError>(rt().block_on(cmd.into_future())
-                .map_err(PythonError::from)?)
+
+            Ok::<(_, _), PythonError>(
+                rt().block_on(cmd.into_future())
+                    .map_err(PythonError::from)?,
+            )
         })?;
         self._table.state = table.state;
         Ok(metrics.files_deleted)
@@ -387,8 +405,10 @@ impl RawDeltaTable {
                 );
             };
 
-            Ok::<(_, _), PythonError>(rt().block_on(cmd.into_future())
-            .map_err(PythonError::from)?)
+            Ok::<(_, _), PythonError>(
+                rt().block_on(cmd.into_future())
+                    .map_err(PythonError::from)?,
+            )
         })?;
         self._table.state = table.state;
         Ok(serde_json::to_string(&metrics).unwrap())
@@ -445,8 +465,10 @@ impl RawDeltaTable {
                     .map_err(PythonError::from)?;
             cmd = cmd.with_filters(&converted_filters);
 
-            Ok::<_, PythonError>(rt().block_on(cmd.into_future())
-            .map_err(PythonError::from)?)
+            Ok::<_, PythonError>(
+                rt().block_on(cmd.into_future())
+                    .map_err(PythonError::from)?,
+            )
         })?;
         self._table.state = table.state;
         Ok(serde_json::to_string(&metrics).unwrap())
@@ -508,8 +530,10 @@ impl RawDeltaTable {
                     .map_err(PythonError::from)?;
             cmd = cmd.with_filters(&converted_filters);
 
-            Ok::<_, PythonError>(rt().block_on(cmd.into_future())
-            .map_err(PythonError::from)?)
+            Ok::<_, PythonError>(
+                rt().block_on(cmd.into_future())
+                    .map_err(PythonError::from)?,
+            )
         })?;
         self._table.state = table.state;
         Ok(serde_json::to_string(&metrics).unwrap())
@@ -540,8 +564,10 @@ impl RawDeltaTable {
                 );
             };
 
-            Ok::<_, PythonError>(rt().block_on(cmd.into_future())
-            .map_err(PythonError::from)?)
+            Ok::<_, PythonError>(
+                rt().block_on(cmd.into_future())
+                    .map_err(PythonError::from)?,
+            )
         })?;
         self._table.state = table.state;
         Ok(())
@@ -571,8 +597,10 @@ impl RawDeltaTable {
                 );
             };
 
-            Ok::<_, PythonError>(rt().block_on(cmd.into_future())
-            .map_err(PythonError::from)?)
+            Ok::<_, PythonError>(
+                rt().block_on(cmd.into_future())
+                    .map_err(PythonError::from)?,
+            )
         })?;
         self._table.state = table.state;
         Ok(())
@@ -868,13 +896,13 @@ impl RawDeltaTable {
         if let Some(metadata) = custom_metadata {
             let json_metadata: Map<String, Value> =
                 metadata.into_iter().map(|(k, v)| (k, v.into())).collect();
-            cmd = cmd.with_commit_properties(
-                CommitProperties::default().with_metadata(json_metadata),
-            );
+            cmd = cmd
+                .with_commit_properties(CommitProperties::default().with_metadata(json_metadata));
         };
-        
-        let (table, metrics) = rt().block_on(cmd.into_future())
-        .map_err(PythonError::from)?;
+
+        let (table, metrics) = rt()
+            .block_on(cmd.into_future())
+            .map_err(PythonError::from)?;
         self._table.state = table.state;
         Ok(serde_json::to_string(&metrics).unwrap())
     }
@@ -905,7 +933,7 @@ impl RawDeltaTable {
     ) -> PyResult<Vec<(String, Option<&'py PyAny>)>> {
         let path_set = match partition_filters {
             Some(filters) => Some(HashSet::<_>::from_iter(
-                self.files_by_partitions(filters)?.iter().cloned(),
+                self.files_by_partitions(py, filters)?.iter().cloned(),
             )),
             None => None,
         };
@@ -1139,16 +1167,24 @@ impl RawDeltaTable {
         })
     }
 
-    pub fn create_checkpoint(&self) -> PyResult<()> {
-        rt().block_on(create_checkpoint(&self._table))
-            .map_err(PythonError::from)?;
+    pub fn create_checkpoint(&self, py: Python) -> PyResult<()> {
+        py.allow_threads(|| {
+            Ok::<_, pyo3::PyErr>(
+                rt().block_on(create_checkpoint(&self._table))
+                    .map_err(PythonError::from)?,
+            )
+        })?;
 
         Ok(())
     }
 
-    pub fn cleanup_metadata(&self) -> PyResult<()> {
-        rt().block_on(cleanup_metadata(&self._table))
-            .map_err(PythonError::from)?;
+    pub fn cleanup_metadata(&self, py: Python) -> PyResult<()> {
+        py.allow_threads(|| {
+            Ok::<_, pyo3::PyErr>(
+                rt().block_on(cleanup_metadata(&self._table))
+                    .map_err(PythonError::from)?,
+            )
+        })?;
 
         Ok(())
     }
@@ -1195,8 +1231,10 @@ impl RawDeltaTable {
                 );
             };
 
-            Ok::<_, PythonError>(rt().block_on(cmd.into_future())
-            .map_err(PythonError::from)?)
+            Ok::<_, PythonError>(
+                rt().block_on(cmd.into_future())
+                    .map_err(PythonError::from)?,
+            )
         })?;
         self._table.state = table.state;
         Ok(serde_json::to_string(&metrics).unwrap())
@@ -1627,6 +1665,7 @@ fn write_to_deltalake(
 #[pyfunction]
 #[allow(clippy::too_many_arguments)]
 fn create_deltalake(
+    py: Python,
     table_uri: String,
     schema: PyArrowType<ArrowSchema>,
     partition_by: Vec<String>,
@@ -1637,47 +1676,50 @@ fn create_deltalake(
     storage_options: Option<HashMap<String, String>>,
     custom_metadata: Option<HashMap<String, String>>,
 ) -> PyResult<()> {
-    let table = DeltaTableBuilder::from_uri(table_uri)
-        .with_storage_options(storage_options.unwrap_or_default())
-        .build()
-        .map_err(PythonError::from)?;
+    py.allow_threads(|| {
+        let table = DeltaTableBuilder::from_uri(table_uri)
+            .with_storage_options(storage_options.unwrap_or_default())
+            .build()
+            .map_err(PythonError::from)?;
 
-    let mode = mode.parse().map_err(PythonError::from)?;
-    let schema: StructType = (&schema.0).try_into().map_err(PythonError::from)?;
+        let mode = mode.parse().map_err(PythonError::from)?;
+        let schema: StructType = (&schema.0).try_into().map_err(PythonError::from)?;
 
-    let mut builder = DeltaOps(table)
-        .create()
-        .with_columns(schema.fields().clone())
-        .with_save_mode(mode)
-        .with_partition_columns(partition_by);
+        let mut builder = DeltaOps(table)
+            .create()
+            .with_columns(schema.fields().clone())
+            .with_save_mode(mode)
+            .with_partition_columns(partition_by);
 
-    if let Some(name) = &name {
-        builder = builder.with_table_name(name);
-    };
+        if let Some(name) = &name {
+            builder = builder.with_table_name(name);
+        };
 
-    if let Some(description) = &description {
-        builder = builder.with_comment(description);
-    };
+        if let Some(description) = &description {
+            builder = builder.with_comment(description);
+        };
 
-    if let Some(config) = configuration {
-        builder = builder.with_configuration(config);
-    };
+        if let Some(config) = configuration {
+            builder = builder.with_configuration(config);
+        };
 
-    if let Some(metadata) = custom_metadata {
-        let json_metadata: Map<String, Value> =
-            metadata.into_iter().map(|(k, v)| (k, v.into())).collect();
-        builder = builder.with_metadata(json_metadata);
-    };
+        if let Some(metadata) = custom_metadata {
+            let json_metadata: Map<String, Value> =
+                metadata.into_iter().map(|(k, v)| (k, v.into())).collect();
+            builder = builder.with_metadata(json_metadata);
+        };
 
-    rt().block_on(builder.into_future())
-        .map_err(PythonError::from)?;
+        rt().block_on(builder.into_future())
+            .map_err(PythonError::from)?;
 
-    Ok(())
+        Ok(())
+    })
 }
 
 #[pyfunction]
 #[allow(clippy::too_many_arguments)]
 fn write_new_deltalake(
+    py: Python,
     table_uri: String,
     schema: PyArrowType<ArrowSchema>,
     add_actions: Vec<PyAddAction>,
@@ -1689,46 +1731,49 @@ fn write_new_deltalake(
     storage_options: Option<HashMap<String, String>>,
     custom_metadata: Option<HashMap<String, String>>,
 ) -> PyResult<()> {
-    let table = DeltaTableBuilder::from_uri(table_uri)
-        .with_storage_options(storage_options.unwrap_or_default())
-        .build()
-        .map_err(PythonError::from)?;
+    py.allow_threads(|| {
+        let table = DeltaTableBuilder::from_uri(table_uri)
+            .with_storage_options(storage_options.unwrap_or_default())
+            .build()
+            .map_err(PythonError::from)?;
 
-    let schema: StructType = (&schema.0).try_into().map_err(PythonError::from)?;
+        let schema: StructType = (&schema.0).try_into().map_err(PythonError::from)?;
 
-    let mut builder = DeltaOps(table)
-        .create()
-        .with_columns(schema.fields().clone())
-        .with_partition_columns(partition_by)
-        .with_actions(add_actions.iter().map(|add| Action::Add(add.into())));
+        let mut builder = DeltaOps(table)
+            .create()
+            .with_columns(schema.fields().clone())
+            .with_partition_columns(partition_by)
+            .with_actions(add_actions.iter().map(|add| Action::Add(add.into())));
 
-    if let Some(name) = &name {
-        builder = builder.with_table_name(name);
-    };
+        if let Some(name) = &name {
+            builder = builder.with_table_name(name);
+        };
 
-    if let Some(description) = &description {
-        builder = builder.with_comment(description);
-    };
+        if let Some(description) = &description {
+            builder = builder.with_comment(description);
+        };
 
-    if let Some(config) = configuration {
-        builder = builder.with_configuration(config);
-    };
+        if let Some(config) = configuration {
+            builder = builder.with_configuration(config);
+        };
 
-    if let Some(metadata) = custom_metadata {
-        let json_metadata: Map<String, Value> =
-            metadata.into_iter().map(|(k, v)| (k, v.into())).collect();
-        builder = builder.with_metadata(json_metadata);
-    };
+        if let Some(metadata) = custom_metadata {
+            let json_metadata: Map<String, Value> =
+                metadata.into_iter().map(|(k, v)| (k, v.into())).collect();
+            builder = builder.with_metadata(json_metadata);
+        };
 
-    rt().block_on(builder.into_future())
-        .map_err(PythonError::from)?;
+        rt().block_on(builder.into_future())
+            .map_err(PythonError::from)?;
 
-    Ok(())
+        Ok(())
+    })
 }
 
 #[pyfunction]
 #[allow(clippy::too_many_arguments)]
 fn convert_to_deltalake(
+    py: Python,
     uri: String,
     partition_schema: Option<PyArrowType<ArrowSchema>>,
     partition_strategy: Option<String>,
@@ -1738,43 +1783,46 @@ fn convert_to_deltalake(
     storage_options: Option<HashMap<String, String>>,
     custom_metadata: Option<HashMap<String, String>>,
 ) -> PyResult<()> {
-    let mut builder = ConvertToDeltaBuilder::new().with_location(uri);
+    py.allow_threads(|| {
+        let mut builder = ConvertToDeltaBuilder::new().with_location(uri);
 
-    if let Some(part_schema) = partition_schema {
-        let schema: StructType = (&part_schema.0).try_into().map_err(PythonError::from)?;
-        builder = builder.with_partition_schema(schema.fields().clone());
-    }
+        if let Some(part_schema) = partition_schema {
+            let schema: StructType = (&part_schema.0).try_into().map_err(PythonError::from)?;
+            builder = builder.with_partition_schema(schema.fields().clone());
+        }
 
-    if let Some(partition_strategy) = &partition_strategy {
-        let strategy: PartitionStrategy = partition_strategy.parse().map_err(PythonError::from)?;
-        builder = builder.with_partition_strategy(strategy);
-    }
+        if let Some(partition_strategy) = &partition_strategy {
+            let strategy: PartitionStrategy =
+                partition_strategy.parse().map_err(PythonError::from)?;
+            builder = builder.with_partition_strategy(strategy);
+        }
 
-    if let Some(name) = &name {
-        builder = builder.with_table_name(name);
-    }
+        if let Some(name) = &name {
+            builder = builder.with_table_name(name);
+        }
 
-    if let Some(description) = &description {
-        builder = builder.with_comment(description);
-    }
+        if let Some(description) = &description {
+            builder = builder.with_comment(description);
+        }
 
-    if let Some(config) = configuration {
-        builder = builder.with_configuration(config);
-    };
+        if let Some(config) = configuration {
+            builder = builder.with_configuration(config);
+        };
 
-    if let Some(strg_options) = storage_options {
-        builder = builder.with_storage_options(strg_options);
-    };
+        if let Some(strg_options) = storage_options {
+            builder = builder.with_storage_options(strg_options);
+        };
 
-    if let Some(metadata) = custom_metadata {
-        let json_metadata: Map<String, Value> =
-            metadata.into_iter().map(|(k, v)| (k, v.into())).collect();
-        builder = builder.with_metadata(json_metadata);
-    };
+        if let Some(metadata) = custom_metadata {
+            let json_metadata: Map<String, Value> =
+                metadata.into_iter().map(|(k, v)| (k, v.into())).collect();
+            builder = builder.with_metadata(json_metadata);
+        };
 
-    rt().block_on(builder.into_future())
-        .map_err(PythonError::from)?;
-    Ok(())
+        rt().block_on(builder.into_future())
+            .map_err(PythonError::from)?;
+        Ok(())
+    })
 }
 
 #[pyfunction]
