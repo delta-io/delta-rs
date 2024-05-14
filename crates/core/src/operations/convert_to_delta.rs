@@ -1,6 +1,7 @@
 //! Command for converting a Parquet table to a Delta table in place
 // https://github.com/delta-io/delta/blob/1d5dd774111395b0c4dc1a69c94abc169b1c83b6/spark/src/main/scala/org/apache/spark/sql/delta/commands/ConvertToDeltaCommand.scala
 
+use crate::operations::write::get_num_idx_cols_and_stats_columns;
 use crate::{
     kernel::{Add, DataType, Schema, StructField},
     logstore::{LogStore, LogStoreRef},
@@ -286,6 +287,10 @@ impl ConvertToDeltaBuilder {
         // A vector of StructField of all unique partition columns in a Parquet table
         let mut partition_schema_fields = HashMap::new();
 
+        // Obtain settings on which columns to skip collecting stats on if any
+        let (num_indexed_cols, stats_columns) =
+            get_num_idx_cols_and_stats_columns(None, self.configuration.clone());
+
         for file in files {
             // A HashMap from partition column to value for this parquet file only
             let mut partition_values = HashMap::new();
@@ -341,8 +346,8 @@ impl ConvertToDeltaBuilder {
             let stats = stats_from_parquet_metadata(
                 &IndexMap::from_iter(partition_values.clone().into_iter()),
                 parquet_metadata.as_ref(),
-                -1,
-                &None,
+                num_indexed_cols,
+                &stats_columns,
             )
             .map_err(|e| Error::DeltaTable(e.into()))?;
             let stats_string =
