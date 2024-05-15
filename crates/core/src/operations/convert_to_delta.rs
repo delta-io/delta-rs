@@ -1,6 +1,7 @@
 //! Command for converting a Parquet table to a Delta table in place
 // https://github.com/delta-io/delta/blob/1d5dd774111395b0c4dc1a69c94abc169b1c83b6/spark/src/main/scala/org/apache/spark/sql/delta/commands/ConvertToDeltaCommand.scala
 
+use crate::operations::write::get_num_idx_cols_and_stats_columns;
 use crate::{
     kernel::{Add, DataType, Schema, StructField},
     logstore::{LogStore, LogStoreRef},
@@ -8,6 +9,7 @@ use crate::{
     protocol::SaveMode,
     table::builder::ensure_table_uri,
     table::config::DeltaConfigKey,
+    writer::stats::stats_from_parquet_metadata,
     DeltaResult, DeltaTable, DeltaTableError, ObjectStoreError, NULL_PARTITION_VALUE_DATA_PATH,
 };
 use arrow::{datatypes::Schema as ArrowSchema, error::ArrowError};
@@ -15,6 +17,7 @@ use futures::{
     future::{self, BoxFuture},
     TryStreamExt,
 };
+use indexmap::IndexMap;
 use parquet::{
     arrow::async_reader::{ParquetObjectReader, ParquetRecordBatchStreamBuilder},
     errors::ParquetError,
@@ -284,6 +287,10 @@ impl ConvertToDeltaBuilder {
         // A vector of StructField of all unique partition columns in a Parquet table
         let mut partition_schema_fields = HashMap::new();
 
+        // Obtain settings on which columns to skip collecting stats on if any
+        let (num_indexed_cols, stats_columns) =
+            get_num_idx_cols_and_stats_columns(None, self.configuration.clone());
+
         for file in files {
             // A HashMap from partition column to value for this parquet file only
             let mut partition_values = HashMap::new();
@@ -328,6 +335,24 @@ impl ConvertToDeltaBuilder {
                 subpath = iter.next();
             }
 
+            let batch_builder = ParquetRecordBatchStreamBuilder::new(ParquetObjectReader::new(
+                object_store.clone(),
+                file.clone(),
+            ))
+            .await?;
+
+            // Fetch the stats
+            let parquet_metadata = batch_builder.metadata();
+            let stats = stats_from_parquet_metadata(
+                &IndexMap::from_iter(partition_values.clone().into_iter()),
+                parquet_metadata.as_ref(),
+                num_indexed_cols,
+                &stats_columns,
+            )
+            .map_err(|e| Error::DeltaTable(e.into()))?;
+            let stats_string =
+                serde_json::to_string(&stats).map_err(|e| Error::DeltaTable(e.into()))?;
+
             actions.push(
                 Add {
                     path: percent_decode_str(file.location.as_ref())
@@ -349,19 +374,13 @@ impl ConvertToDeltaBuilder {
                         .collect(),
                     modification_time: file.last_modified.timestamp_millis(),
                     data_change: true,
+                    stats: Some(stats_string),
                     ..Default::default()
                 }
                 .into(),
             );
 
-            let mut arrow_schema = ParquetRecordBatchStreamBuilder::new(ParquetObjectReader::new(
-                object_store.clone(),
-                file,
-            ))
-            .await?
-            .schema()
-            .as_ref()
-            .clone();
+            let mut arrow_schema = batch_builder.schema().as_ref().clone();
 
             // Arrow schema of Parquet files may have conflicting metatdata
             // Since Arrow schema metadata is not used to generate Delta table schema, we set the metadata field to an empty HashMap
@@ -583,6 +602,15 @@ mod tests {
             action.path(),
             "part-00000-d22c627d-9655-4153-9527-f8995620fa42-c000.snappy.parquet"
         );
+
+        let Some(Scalar::Struct(min_values, _)) = action.min_values() else {
+            panic!("Missing min values");
+        };
+        assert_eq!(min_values, vec![Scalar::Date(18628), Scalar::Integer(1)]);
+        let Some(Scalar::Struct(max_values, _)) = action.max_values() else {
+            panic!("Missing max values");
+        };
+        assert_eq!(max_values, vec![Scalar::Date(18632), Scalar::Integer(5)]);
 
         assert_delta_table(
             table,
