@@ -296,12 +296,15 @@ impl std::future::IntoFuture for SetTablePropertiesBuilder {
             }
 
             let commit = CommitBuilder::from(this.commit_properties)
-                .with_actions(actions)
-                .build(Some(&this.snapshot), this.log_store.clone(), operation)?
+                .with_actions(actions.clone())
+                .build(
+                    Some(&this.snapshot),
+                    this.log_store.clone(),
+                    operation.clone(),
+                )?
                 .await?;
 
-            this.snapshot
-                .merge(commit.data.actions, &commit.data.operation, commit.version)?;
+            this.snapshot.merge(actions, &operation, commit.version)?;
             Ok(DeltaTable::new_with_state(this.log_store, this.snapshot))
         })
     }

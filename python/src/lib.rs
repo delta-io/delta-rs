@@ -1196,7 +1196,7 @@ impl RawDeltaTable {
                 .with_commit_properties(CommitProperties::default().with_metadata(json_metadata));
         };
 
-        let table = rt()?
+        let table = rt()
             .block_on(cmd.into_future())
             .map_err(PythonError::from)?;
         self._table.state = table.state;
