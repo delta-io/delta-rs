@@ -32,6 +32,7 @@ use crate::kernel::{Action, Add, PartitionsExt, Scalar, StructType};
 use crate::operations::cast::merge_schema;
 use crate::storage::ObjectStoreRetryExt;
 use crate::table::builder::DeltaTableBuilder;
+use crate::table::config::DEFAULT_NUM_INDEX_COLS;
 use crate::DeltaTable;
 
 /// Writes messages to a delta lake table.
@@ -192,6 +193,12 @@ impl DeltaWriter<RecordBatch> for RecordBatchWriter {
         values: RecordBatch,
         mode: WriteMode,
     ) -> Result<(), DeltaTableError> {
+        if mode == WriteMode::MergeSchema && !self.partition_columns.is_empty() {
+            return Err(DeltaTableError::Generic(
+                "Merging Schemas with partition columns present is currently unsupported"
+                    .to_owned(),
+            ));
+        }
         // Set the should_evolve flag for later in case the writer should perform schema evolution
         // on its flush_and_commit
         self.should_evolve = mode == WriteMode::MergeSchema;
@@ -224,6 +231,8 @@ impl DeltaWriter<RecordBatch> for RecordBatchWriter {
                 path.to_string(),
                 file_size,
                 &metadata,
+                DEFAULT_NUM_INDEX_COLS,
+                &None,
             )?);
         }
         Ok(actions)
@@ -237,8 +246,12 @@ impl DeltaWriter<RecordBatch> for RecordBatchWriter {
 
         if self.arrow_schema_ref != self.original_schema_ref && self.should_evolve {
             let schema: StructType = self.arrow_schema_ref.clone().try_into()?;
-            // TODO: Handle partition columns somehow? Can we even evolve partition columns? Maybe
-            // this should just propagate the existing columns in the new action
+            if !self.partition_columns.is_empty() {
+                return Err(DeltaTableError::Generic(
+                    "Merging Schemas with partition columns present is currently unsupported"
+                        .to_owned(),
+                ));
+            }
             let part_cols: Vec<String> = vec![];
             let metadata = Metadata::try_new(schema, part_cols, HashMap::new())?;
             adds.push(Action::Metadata(metadata));
@@ -507,7 +520,7 @@ mod tests {
         use crate::DeltaOps;
 
         let table = crate::writer::test_utils::create_bare_table();
-        let partition_cols = vec!["modified".to_string()];
+        let partition_cols = ["modified".to_string()];
         let delta_schema = r#"
         {"type" : "struct",
         "fields" : [
@@ -662,6 +675,8 @@ mod tests {
     // The following sets of tests are related to #1386 and mergeSchema support
     // <https://github.com/delta-io/delta-rs/issues/1386>
     mod schema_evolution {
+        use itertools::Itertools;
+
         use super::*;
 
         #[tokio::test]
@@ -770,6 +785,80 @@ mod tests {
                 expected_columns, found_columns,
                 "The new table schema does not contain all evolved columns as expected"
             );
+        }
+
+        #[tokio::test]
+        async fn test_write_schema_evolution_with_partition_columns_should_fail_as_unsupported() {
+            let table_schema = get_delta_schema();
+            let table_dir = tempfile::tempdir().unwrap();
+            let table_path = table_dir.path();
+
+            let mut table = CreateBuilder::new()
+                .with_location(table_path.to_str().unwrap())
+                .with_table_name("test-table")
+                .with_comment("A table for running tests")
+                .with_columns(table_schema.fields().clone())
+                .with_partition_columns(["id"])
+                .await
+                .unwrap();
+            table.load().await.expect("Failed to load table");
+            assert_eq!(table.version(), 0);
+
+            let batch = get_record_batch(None, false);
+            let mut writer = RecordBatchWriter::for_table(&table).unwrap();
+
+            writer.write(batch).await.unwrap();
+            let version = writer.flush_and_commit(&mut table).await.unwrap();
+            assert_eq!(version, 1);
+            table.load().await.expect("Failed to load table");
+            assert_eq!(table.version(), 1);
+
+            // Create a second batch with appended columns
+            let second_batch = {
+                let second = get_record_batch(None, false);
+                let second_schema = ArrowSchema::new(
+                    second
+                        .schema()
+                        .fields
+                        .iter()
+                        .cloned()
+                        .chain([
+                            Field::new("vid", DataType::Int32, true).into(),
+                            Field::new("name", DataType::Utf8, true).into(),
+                        ])
+                        .collect_vec(),
+                );
+
+                let len = second.num_rows();
+
+                let second_arrays = second
+                    .columns()
+                    .iter()
+                    .cloned()
+                    .chain([
+                        Arc::new(Int32Array::from(vec![Some(1); len])) as _, // vid
+                        Arc::new(StringArray::from(vec![Some("will"); len])) as _, // name
+                    ])
+                    .collect_vec();
+
+                RecordBatch::try_new(second_schema.into(), second_arrays).unwrap()
+            };
+
+            let result = writer
+                .write_with_mode(second_batch, WriteMode::MergeSchema)
+                .await;
+
+            assert!(result.is_err());
+
+            match result.unwrap_err() {
+                DeltaTableError::Generic(s) => {
+                    assert_eq!(
+                        s,
+                        "Merging Schemas with partition columns present is currently unsupported"
+                    )
+                }
+                e => panic!("unexpected error: {e:?}"),
+            }
         }
 
         #[tokio::test]

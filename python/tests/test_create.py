@@ -3,7 +3,7 @@ import pathlib
 import pyarrow as pa
 import pytest
 
-from deltalake import DeltaTable
+from deltalake import DeltaTable, write_deltalake
 from deltalake.exceptions import DeltaError
 
 
@@ -123,3 +123,14 @@ def test_create_higher_protocol_versions(
     assert protocol.min_reader_version == 2
     assert protocol.min_writer_version == 5
     assert dt.history()[0]["userName"] == "John Doe"
+
+
+def test_create_or_replace_existing_table(
+    tmp_path: pathlib.Path, sample_data: pa.Table
+):
+    write_deltalake(table_or_uri=tmp_path, data=sample_data)
+    dt = DeltaTable.create(
+        tmp_path, sample_data.schema, partition_by=["utf8"], mode="overwrite"
+    )
+
+    assert dt.files() == []

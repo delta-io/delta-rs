@@ -28,7 +28,9 @@ use object_store::ObjectStore;
 use self::log_segment::{LogSegment, PathExt};
 use self::parse::{read_adds, read_removes};
 use self::replay::{LogMapper, LogReplayScanner, ReplayStream};
-use super::{Action, Add, CommitInfo, DataType, Metadata, Protocol, Remove, StructField};
+use super::{
+    Action, Add, AddCDCFile, CommitInfo, DataType, Metadata, Protocol, Remove, StructField,
+};
 use crate::kernel::StructType;
 use crate::logstore::LogStore;
 use crate::operations::transaction::CommitData;
@@ -41,6 +43,7 @@ pub(crate) mod parse;
 mod replay;
 mod serde;
 
+use crate::kernel::parse::read_cdf_adds;
 pub use log_data::*;
 
 /// A snapshot of a Delta table
@@ -284,11 +287,13 @@ impl Snapshot {
     }
 
     /// Get the statistics schema of the snapshot
-    pub fn stats_schema(&self) -> DeltaResult<StructType> {
+    pub fn stats_schema(&self, table_schema: Option<&StructType>) -> DeltaResult<StructType> {
+        let schema = table_schema.unwrap_or_else(|| self.schema());
+
         let stats_fields = if let Some(stats_cols) = self.table_config().stats_columns() {
             stats_cols
                 .iter()
-                .map(|col| match self.schema().field_with_name(col) {
+                .map(|col| match schema.field_with_name(col) {
                     Ok(field) => match field.data_type() {
                         DataType::Map(_) | DataType::Array(_) | &DataType::BINARY => {
                             Err(DeltaTableError::Generic(format!(
@@ -311,7 +316,7 @@ impl Snapshot {
                 .collect::<Result<Vec<_>, _>>()?
         } else {
             let num_indexed_cols = self.table_config().num_indexed_cols();
-            self.schema()
+            schema
                 .fields
                 .iter()
                 .enumerate()
@@ -359,7 +364,7 @@ impl EagerSnapshot {
         let mut files = Vec::new();
         let mut scanner = LogReplayScanner::new();
         files.push(scanner.process_files_batch(&batch, true)?);
-        let mapper = LogMapper::try_new(&snapshot)?;
+        let mapper = LogMapper::try_new(&snapshot, None)?;
         files = files
             .into_iter()
             .map(|b| mapper.map_batch(b))
@@ -398,7 +403,7 @@ impl EagerSnapshot {
                     )
                     .boxed()
             };
-            let mapper = LogMapper::try_new(&self.snapshot)?;
+            let mapper = LogMapper::try_new(&self.snapshot, None)?;
             let files = ReplayStream::try_new(log_stream, checkpoint_stream, &self.snapshot)?
                 .map(|batch| batch.and_then(|b| mapper.map_batch(b)))
                 .try_collect()
@@ -472,6 +477,11 @@ impl EagerSnapshot {
         self.log_data().into_iter()
     }
 
+    /// Get an iterator for the CDC files added in this version
+    pub fn cdc_files(&self) -> DeltaResult<impl Iterator<Item = AddCDCFile> + '_> {
+        Ok(self.files.iter().flat_map(|b| read_cdf_adds(b)).flatten())
+    }
+
     /// Advance the snapshot based on the given commit actions
     pub fn advance<'a>(
         &mut self,
@@ -509,7 +519,13 @@ impl EagerSnapshot {
             files.push(scanner.process_files_batch(&batch?, true)?);
         }
 
-        let mapper = LogMapper::try_new(&self.snapshot)?;
+        let mapper = if let Some(metadata) = &metadata {
+            let new_schema: StructType = serde_json::from_str(&metadata.schema_string)?;
+            LogMapper::try_new(&self.snapshot, Some(&new_schema))?
+        } else {
+            LogMapper::try_new(&self.snapshot, None)?
+        };
+
         self.files = files
             .into_iter()
             .chain(
@@ -597,7 +613,7 @@ mod tests {
     use futures::TryStreamExt;
     use itertools::Itertools;
 
-    use super::log_segment::tests::test_log_segment;
+    use super::log_segment::tests::{concurrent_checkpoint, test_log_segment};
     use super::replay::tests::test_log_replay;
     use super::*;
     use crate::kernel::Remove;
@@ -616,6 +632,13 @@ mod tests {
         test_snapshot(&context).await?;
         test_eager_snapshot(&context).await?;
 
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_concurrent_checkpoint() -> TestResult {
+        let context = IntegrationContext::new(Box::<LocalStorageIntegration>::default())?;
+        concurrent_checkpoint(&context).await?;
         Ok(())
     }
 

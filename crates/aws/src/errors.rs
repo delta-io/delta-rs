@@ -6,8 +6,8 @@ use aws_credential_types::provider::error::CredentialsError;
 use aws_sdk_dynamodb::{
     error::SdkError,
     operation::{
-        create_table::CreateTableError, get_item::GetItemError, put_item::PutItemError,
-        query::QueryError, update_item::UpdateItemError,
+        create_table::CreateTableError, delete_item::DeleteItemError, get_item::GetItemError,
+        put_item::PutItemError, query::QueryError, update_item::UpdateItemError,
     },
 };
 use aws_smithy_runtime_api::client::result::ServiceError;
@@ -89,6 +89,9 @@ pub enum LockClientError {
          to opt out of support for concurrent writers."
     )]
     LockClientRequired,
+
+    #[error("Log entry for table '{table_path}' and version '{version}' is already complete")]
+    VersionAlreadyCompleted { table_path: String, version: i64 },
 }
 
 impl From<GetItemError> for LockClientError {
@@ -164,7 +167,31 @@ impl From<UpdateItemError> for LockClientError {
     }
 }
 
+impl From<DeleteItemError> for LockClientError {
+    fn from(err: DeleteItemError) -> Self {
+        match err {
+            DeleteItemError::ConditionalCheckFailedException(_) => {
+                unreachable!("error must be handled explicitly")
+            }
+            DeleteItemError::InternalServerError(_) => err.into(),
+            DeleteItemError::ProvisionedThroughputExceededException(_) => {
+                LockClientError::ProvisionedThroughputExceeded
+            }
+            DeleteItemError::RequestLimitExceeded(_) => {
+                LockClientError::ProvisionedThroughputExceeded
+            }
+            DeleteItemError::ResourceNotFoundException(_) => LockClientError::LockTableNotFound,
+            DeleteItemError::ItemCollectionSizeLimitExceededException(_) => err.into(),
+            DeleteItemError::TransactionConflictException(_) => err.into(),
+            _ => LockClientError::GenericDynamoDb {
+                source: Box::new(err),
+            },
+        }
+    }
+}
+
 impl_from_service_error!(GetItemError);
 impl_from_service_error!(PutItemError);
 impl_from_service_error!(QueryError);
 impl_from_service_error!(UpdateItemError);
+impl_from_service_error!(DeleteItemError);

@@ -41,6 +41,9 @@ from pyarrow.lib import RecordBatchReader
 from ._internal import DeltaDataChecker as _DeltaDataChecker
 from ._internal import batch_distinct
 from ._internal import convert_to_deltalake as _convert_to_deltalake
+from ._internal import (
+    get_num_idx_cols_and_stats_columns as get_num_idx_cols_and_stats_columns,
+)
 from ._internal import write_new_deltalake as write_deltalake_pyarrow
 from ._internal import write_to_deltalake as write_deltalake_rust
 from .exceptions import DeltaProtocolError, TableNotFoundError
@@ -66,6 +69,7 @@ else:
     _has_pandas = True
 
 PYARROW_MAJOR_VERSION = int(pa.__version__.split(".", maxsplit=1)[0])
+DEFAULT_DATA_SKIPPING_NUM_INDEX_COLS = 32
 
 
 @dataclass
@@ -262,7 +266,6 @@ def write_deltalake(
     if table is not None:
         storage_options = table._storage_options or {}
         storage_options.update(storage_options or {})
-
         table.update_incremental()
 
     __enforce_append_only(table=table, configuration=configuration, mode=mode)
@@ -318,6 +321,7 @@ def write_deltalake(
             data=data,
             partition_by=partition_by,
             mode=mode,
+            table=table._table if table is not None else None,
             schema_mode=schema_mode,
             predicate=predicate,
             name=name,
@@ -338,13 +342,22 @@ def write_deltalake(
                 "schema_mode 'merge' is not supported in pyarrow engine. Use engine=rust"
             )
         # We need to write against the latest table version
-        filesystem = pa_fs.PyFileSystem(DeltaStorageHandler(table_uri, storage_options))
+
+        num_indexed_cols, stats_cols = get_num_idx_cols_and_stats_columns(
+            table._table if table is not None else None, configuration
+        )
 
         def sort_arrow_schema(schema: pa.schema) -> pa.schema:
             sorted_cols = sorted(iter(schema), key=lambda x: (x.name, str(x.type)))
             return pa.schema(sorted_cols)
 
         if table:  # already exists
+            filesystem = pa_fs.PyFileSystem(
+                DeltaStorageHandler.from_table(
+                    table=table._table, options=storage_options
+                )
+            )
+
             if sort_arrow_schema(schema) != sort_arrow_schema(
                 table.schema().to_pyarrow(as_large_types=large_dtypes)
             ) and not (mode == "overwrite" and schema_mode == "overwrite"):
@@ -369,6 +382,9 @@ def write_deltalake(
                 partition_by = table.metadata().partition_columns
 
         else:  # creating a new table
+            filesystem = pa_fs.PyFileSystem(
+                DeltaStorageHandler(table_uri, options=storage_options)
+            )
             current_version = -1
 
         dtype_map = {
@@ -404,7 +420,11 @@ def write_deltalake(
 
         def visitor(written_file: Any) -> None:
             path, partition_values = get_partitions_from_path(written_file.path)
-            stats = get_file_stats_from_metadata(written_file.metadata)
+            stats = get_file_stats_from_metadata(
+                written_file.metadata,
+                num_indexed_cols=num_indexed_cols,
+                columns_to_collect_stats=stats_cols,
+            )
 
             # PyArrow added support for written_file.size in 9.0.0
             if PYARROW_MAJOR_VERSION >= 9:
@@ -429,6 +449,7 @@ def write_deltalake(
             # We don't currently provide a way to set invariants
             # (and maybe never will), so only enforce if already exist.
             table_protocol = table.protocol()
+            table._table.check_can_write_timestamp_ntz(schema)
             if (
                 table_protocol.min_writer_version > MAX_SUPPORTED_PYARROW_WRITER_VERSION
                 or table_protocol.min_writer_version
@@ -701,6 +722,8 @@ def get_partitions_from_path(path: str) -> Tuple[str, Dict[str, Optional[str]]]:
 
 def get_file_stats_from_metadata(
     metadata: Any,
+    num_indexed_cols: int,
+    columns_to_collect_stats: Optional[List[str]],
 ) -> Dict[str, Union[int, Dict[str, Any]]]:
     stats = {
         "numRecords": metadata.num_rows,
@@ -714,8 +737,24 @@ def get_file_stats_from_metadata(
             if metadata.row_group(i).num_rows > 0:
                 yield metadata.row_group(i)
 
-    for column_idx in range(metadata.num_columns):
+    schema_columns = metadata.schema.names
+    if columns_to_collect_stats is not None:
+        idx_to_iterate = []
+        for col in columns_to_collect_stats:
+            try:
+                idx_to_iterate.append(schema_columns.index(col))
+            except ValueError:
+                pass
+    elif num_indexed_cols == -1:
+        idx_to_iterate = list(range(metadata.num_columns))
+    elif num_indexed_cols >= 0:
+        idx_to_iterate = list(range(min(num_indexed_cols, metadata.num_columns)))
+    else:
+        raise ValueError("delta.dataSkippingNumIndexedCols valid values are >=-1")
+
+    for column_idx in idx_to_iterate:
         name = metadata.row_group(0).column(column_idx).path_in_schema
+
         # If stats missing, then we can't know aggregate stats
         if all(
             group.column(column_idx).is_stats_set for group in iter_groups(metadata)

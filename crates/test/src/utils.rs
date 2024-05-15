@@ -154,6 +154,7 @@ pub enum TestTables {
     Delta0_8_0Partitioned,
     Delta0_8_0SpecialPartitioned,
     Checkpoints,
+    LatestNotCheckpointed,
     WithDvSmall,
     Custom(String),
 }
@@ -189,6 +190,11 @@ impl TestTables {
                 .unwrap()
                 .to_owned(),
             Self::Checkpoints => data_path.join("checkpoints").to_str().unwrap().to_owned(),
+            Self::LatestNotCheckpointed => data_path
+                .join("latest_not_checkpointed")
+                .to_str()
+                .unwrap()
+                .to_owned(),
             Self::WithDvSmall => data_path
                 .join("table-with-dv-small")
                 .to_str()
@@ -208,6 +214,7 @@ impl TestTables {
             Self::Delta0_8_0Partitioned => "delta-0.8.0-partitioned".into(),
             Self::Delta0_8_0SpecialPartitioned => "delta-0.8.0-special-partition".into(),
             Self::Checkpoints => "checkpoints".into(),
+            Self::LatestNotCheckpointed => "latest_not_checkpointed".into(),
             Self::WithDvSmall => "table-with-dv-small".into(),
             Self::Custom(name) => name.to_owned(),
         }

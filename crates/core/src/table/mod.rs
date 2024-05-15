@@ -1,12 +1,12 @@
 //! Delta Table read and write implementation
 
-use std::cmp::Ordering;
+use std::cmp::{min, Ordering};
 use std::collections::HashMap;
 use std::fmt;
 use std::fmt::Formatter;
 
 use chrono::{DateTime, Utc};
-use futures::TryStreamExt;
+use futures::{StreamExt, TryStreamExt};
 use object_store::{path::Path, ObjectStore};
 use serde::de::{Error, SeqAccess, Visitor};
 use serde::ser::SerializeSeq;
@@ -18,7 +18,7 @@ use self::state::DeltaTableState;
 use crate::kernel::{
     Action, CommitInfo, DataCheck, DataType, LogicalFile, Metadata, Protocol, StructType,
 };
-use crate::logstore::{self, LogStoreConfig, LogStoreRef};
+use crate::logstore::{self, extract_version_from_filename, LogStoreConfig, LogStoreRef};
 use crate::partitions::PartitionFilter;
 use crate::storage::{commit_uri_from_version, ObjectStoreRef};
 use crate::{DeltaResult, DeltaTableError};
@@ -514,9 +514,29 @@ impl DeltaTable {
         &mut self,
         datetime: DateTime<Utc>,
     ) -> Result<(), DeltaTableError> {
-        let mut min_version = 0;
+        let mut min_version: i64 = -1;
+        let log_store = self.log_store();
+        let prefix = Some(log_store.log_path());
+        let offset_path = commit_uri_from_version(min_version);
+        let object_store = log_store.object_store();
+        let mut files = object_store.list_with_offset(prefix, &offset_path);
+
+        while let Some(obj_meta) = files.next().await {
+            let obj_meta = obj_meta?;
+            if let Some(log_version) = extract_version_from_filename(obj_meta.location.as_ref()) {
+                if min_version == -1 {
+                    min_version = log_version
+                } else {
+                    min_version = min(min_version, log_version);
+                }
+            }
+            if min_version == 0 {
+                break;
+            }
+        }
         let mut max_version = self.get_latest_version().await?;
         let mut version = min_version;
+        let lowest_table_version = min_version;
         let target_ts = datetime.timestamp_millis();
 
         // binary search
@@ -538,8 +558,8 @@ impl DeltaTable {
             }
         }
 
-        if version < 0 {
-            version = 0;
+        if version < lowest_table_version {
+            version = lowest_table_version;
         }
 
         self.load_version(version).await

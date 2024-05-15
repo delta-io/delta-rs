@@ -41,6 +41,8 @@ pub struct ConstraintBuilder {
     commit_properties: CommitProperties,
 }
 
+impl super::Operation<()> for ConstraintBuilder {}
+
 impl ConstraintBuilder {
     /// Create a new builder
     pub fn new(log_store: LogStoreRef, snapshot: DeltaTableState) -> Self {
@@ -84,7 +86,7 @@ impl std::future::IntoFuture for ConstraintBuilder {
     type IntoFuture = BoxFuture<'static, Self::Output>;
 
     fn into_future(self) -> Self::IntoFuture {
-        let mut this = self;
+        let this = self;
 
         Box::pin(async move {
             let name = match this.name {
@@ -126,7 +128,7 @@ impl std::future::IntoFuture for ConstraintBuilder {
 
             let plan: Arc<dyn ExecutionPlan> = Arc::new(scan);
             let mut tasks = vec![];
-            for p in 0..plan.output_partitioning().partition_count() {
+            for p in 0..plan.properties().output_partitioning().partition_count() {
                 let inner_plan = plan.clone();
                 let inner_checker = checker.clone();
                 let task_ctx = Arc::new(TaskContext::from(&state));
@@ -196,9 +198,10 @@ impl std::future::IntoFuture for ConstraintBuilder {
                 .build(Some(&this.snapshot), this.log_store.clone(), operation)?
                 .await?;
 
-            this.snapshot
-                .merge(commit.data.actions, &commit.data.operation, commit.version)?;
-            Ok(DeltaTable::new_with_state(this.log_store, this.snapshot))
+            Ok(DeltaTable::new_with_state(
+                this.log_store,
+                commit.snapshot(),
+            ))
         })
     }
 }

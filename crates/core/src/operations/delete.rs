@@ -23,7 +23,6 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use crate::logstore::LogStoreRef;
 use datafusion::execution::context::{SessionContext, SessionState};
-use datafusion::physical_expr::create_physical_expr;
 use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::Expr;
@@ -35,9 +34,11 @@ use serde::Serialize;
 
 use super::datafusion_utils::Expression;
 use super::transaction::{CommitBuilder, CommitProperties, PROTOCOL};
+use super::write::WriterStatsConfig;
 use crate::delta_datafusion::expr::fmt_expr_to_sql;
 use crate::delta_datafusion::{
-    find_files, register_store, DataFusionMixins, DeltaScanBuilder, DeltaSessionContext,
+    create_physical_expr_fix, find_files, register_store, DataFusionMixins, DeltaScanBuilder,
+    DeltaSessionContext,
 };
 use crate::errors::DeltaResult;
 use crate::kernel::{Action, Add, Remove};
@@ -81,6 +82,8 @@ pub struct DeleteMetrics {
     /// Time taken to rewrite the matched files
     pub rewrite_time_ms: u128,
 }
+
+impl super::Operation<()> for DeleteBuilder {}
 
 impl DeleteBuilder {
     /// Create a new [`DeleteBuilder`]
@@ -146,13 +149,18 @@ async fn excute_non_empty_expr(
     // Apply the negation of the filter and rewrite files
     let negated_expression = Expr::Not(Box::new(Expr::IsTrue(Box::new(expression.clone()))));
 
-    let predicate_expr = create_physical_expr(
-        &negated_expression,
-        &input_dfschema,
-        state.execution_props(),
-    )?;
+    let predicate_expr =
+        create_physical_expr_fix(negated_expression, &input_dfschema, state.execution_props())?;
     let filter: Arc<dyn ExecutionPlan> =
         Arc::new(FilterExec::try_new(predicate_expr, scan.clone())?);
+
+    let writer_stats_config = WriterStatsConfig::new(
+        snapshot.table_config().num_indexed_cols(),
+        snapshot
+            .table_config()
+            .stats_columns()
+            .map(|v| v.iter().map(|v| v.to_string()).collect::<Vec<String>>()),
+    );
 
     let add_actions = write_execution_plan(
         Some(snapshot),
@@ -165,6 +173,7 @@ async fn excute_non_empty_expr(
         writer_properties,
         false,
         None,
+        writer_stats_config,
     )
     .await?
     .into_iter()
@@ -187,16 +196,16 @@ async fn excute_non_empty_expr(
 async fn execute(
     predicate: Option<Expr>,
     log_store: LogStoreRef,
-    snapshot: &DeltaTableState,
+    snapshot: DeltaTableState,
     state: SessionState,
     writer_properties: Option<WriterProperties>,
     mut commit_properties: CommitProperties,
-) -> DeltaResult<((Vec<Action>, i64, Option<DeltaOperation>), DeleteMetrics)> {
+) -> DeltaResult<(DeltaTableState, DeleteMetrics)> {
     let exec_start = Instant::now();
     let mut metrics = DeleteMetrics::default();
 
     let scan_start = Instant::now();
-    let candidates = find_files(snapshot, log_store.clone(), &state, predicate.clone()).await?;
+    let candidates = find_files(&snapshot, log_store.clone(), &state, predicate.clone()).await?;
     metrics.scan_time_ms = Instant::now().duration_since(scan_start).as_millis();
 
     let predicate = predicate.unwrap_or(Expr::Literal(ScalarValue::Boolean(Some(true))));
@@ -206,7 +215,7 @@ async fn execute(
     } else {
         let write_start = Instant::now();
         let add = excute_non_empty_expr(
-            snapshot,
+            &snapshot,
             log_store.clone(),
             &state,
             &predicate,
@@ -259,21 +268,14 @@ async fn execute(
         predicate: Some(fmt_expr_to_sql(&predicate)?),
     };
     if actions.is_empty() {
-        return Ok(((actions, snapshot.version(), None), metrics));
+        return Ok((snapshot.clone(), metrics));
     }
 
     let commit = CommitBuilder::from(commit_properties)
         .with_actions(actions)
-        .build(Some(snapshot), log_store, operation)?
+        .build(Some(&snapshot), log_store, operation)?
         .await?;
-    Ok((
-        (
-            commit.data.actions,
-            commit.version,
-            Some(commit.data.operation),
-        ),
-        metrics,
-    ))
+    Ok((commit.snapshot(), metrics))
 }
 
 impl std::future::IntoFuture for DeleteBuilder {
@@ -281,7 +283,7 @@ impl std::future::IntoFuture for DeleteBuilder {
     type IntoFuture = BoxFuture<'static, Self::Output>;
 
     fn into_future(self) -> Self::IntoFuture {
-        let mut this = self;
+        let this = self;
 
         Box::pin(async move {
             PROTOCOL.check_append_only(&this.snapshot.snapshot)?;
@@ -306,22 +308,20 @@ impl std::future::IntoFuture for DeleteBuilder {
                 None => None,
             };
 
-            let ((actions, version, operation), metrics) = execute(
+            let (new_snapshot, metrics) = execute(
                 predicate,
                 this.log_store.clone(),
-                &this.snapshot,
+                this.snapshot,
                 state,
                 this.writer_properties,
                 this.commit_properties,
             )
             .await?;
 
-            if let Some(op) = &operation {
-                this.snapshot.merge(actions, op, version)?;
-            }
-
-            let table = DeltaTable::new_with_state(this.log_store, this.snapshot);
-            Ok((table, metrics))
+            Ok((
+                DeltaTable::new_with_state(this.log_store, new_snapshot),
+                metrics,
+            ))
         })
     }
 }

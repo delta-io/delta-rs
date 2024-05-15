@@ -1,12 +1,16 @@
 //! AWS S3 storage backend.
 
+use aws_config::meta::region::ProvideRegion;
+use aws_config::provider_config::ProviderConfig;
 use aws_config::{Region, SdkConfig};
 use bytes::Bytes;
 use deltalake_core::storage::object_store::{
     aws::AmazonS3ConfigKey, parse_url_opts, GetOptions, GetResult, ListResult, MultipartId,
     ObjectMeta, ObjectStore, PutOptions, PutResult, Result as ObjectStoreResult,
 };
-use deltalake_core::storage::{str_is_truthy, ObjectStoreFactory, ObjectStoreRef, StorageOptions};
+use deltalake_core::storage::{
+    limit_store_handler, str_is_truthy, ObjectStoreFactory, ObjectStoreRef, StorageOptions,
+};
 use deltalake_core::{DeltaResult, ObjectStoreError, Path};
 use futures::stream::BoxStream;
 use futures::Future;
@@ -17,6 +21,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::AsyncWrite;
+use tracing::warn;
 use url::Url;
 
 use crate::errors::DynamoDbConfigError;
@@ -64,10 +69,10 @@ impl ObjectStoreFactory for S3ObjectStoreFactory {
     fn parse_url_opts(
         &self,
         url: &Url,
-        options: &StorageOptions,
+        storage_options: &StorageOptions,
     ) -> DeltaResult<(ObjectStoreRef, Path)> {
-        let options = self.with_env_s3(options);
-        let (store, prefix) = parse_url_opts(
+        let options = self.with_env_s3(storage_options);
+        let (inner, prefix) = parse_url_opts(
             url,
             options.0.iter().filter_map(|(key, value)| {
                 let s3_key = AmazonS3ConfigKey::from_str(&key.to_ascii_lowercase()).ok()?;
@@ -75,22 +80,25 @@ impl ObjectStoreFactory for S3ObjectStoreFactory {
             }),
         )?;
 
+        let store = limit_store_handler(inner, &options);
+
+        // If the copy-if-not-exists env var is set, we don't need to instantiate a locking client or check for allow-unsafe-rename.
         if options
             .0
             .contains_key(AmazonS3ConfigKey::CopyIfNotExists.as_ref())
         {
-            // If the copy-if-not-exists env var is set, we don't need to instantiate a locking client or check for allow-unsafe-rename.
-            return Ok((Arc::from(store), prefix));
+            Ok((store, prefix))
+        } else {
+            let s3_options = S3StorageOptions::from_map(&storage_options.0)?;
+
+            let store = S3StorageBackend::try_new(
+                store,
+                Some("dynamodb") == s3_options.locking_provider.as_deref()
+                    || s3_options.allow_unsafe_rename,
+            )?;
+
+            Ok((Arc::new(store), prefix))
         }
-
-        let options = S3StorageOptions::from_map(&options.0)?;
-
-        let store = S3StorageBackend::try_new(
-            store.into(),
-            Some("dynamodb") == options.locking_provider.as_deref() || options.allow_unsafe_rename,
-        )?;
-
-        Ok((Arc::new(store), prefix))
     }
 }
 
@@ -134,7 +142,6 @@ impl S3StorageOptions {
             .filter(|(k, _)| !s3_constants::S3_OPTS.contains(&k.as_str()))
             .map(|(k, v)| (k.to_owned(), v.to_owned()))
             .collect();
-
         // Copy web identity values provided in options but not the environment into the environment
         // to get picked up by the `from_k8s_env` call in `get_web_identity_provider`.
         Self::ensure_env_var(options, s3_constants::AWS_REGION);
@@ -164,26 +171,52 @@ impl S3StorageOptions {
         let allow_unsafe_rename = str_option(options, s3_constants::AWS_S3_ALLOW_UNSAFE_RENAME)
             .map(|val| str_is_truthy(&val))
             .unwrap_or(false);
+        let disable_imds = str_option(options, s3_constants::AWS_EC2_METADATA_DISABLED)
+            .map(|val| str_is_truthy(&val))
+            .unwrap_or(true);
+        let imds_timeout =
+            Self::u64_or_default(options, s3_constants::AWS_EC2_METADATA_TIMEOUT, 100);
+        let (loader, provider_config) =
+            if let Some(endpoint_url) = str_option(options, s3_constants::AWS_ENDPOINT_URL) {
+                let (region_provider, provider_config) = Self::create_provider_config(
+                    str_option(options, s3_constants::AWS_REGION)
+                        .or_else(|| std::env::var("AWS_DEFAULT_REGION").ok())
+                        .map_or(Region::from_static("custom"), Region::new),
+                )?;
+                let loader = aws_config::from_env()
+                    .endpoint_url(endpoint_url)
+                    .region(region_provider);
+                (loader, provider_config)
+            } else {
+                let (region_provider, provider_config) = Self::create_provider_config(
+                    crate::credentials::new_region_provider(disable_imds, imds_timeout),
+                )?;
+                (
+                    aws_config::from_env().region(region_provider),
+                    provider_config,
+                )
+            };
 
+        let credentials_provider = crate::credentials::ConfiguredCredentialChain::new(
+            disable_imds,
+            imds_timeout,
+            &provider_config,
+        );
         #[cfg(feature = "native-tls")]
         let sdk_config = execute_sdk_future(
-            aws_config::ConfigLoader::default()
+            loader
                 .http_client(native::use_native_tls_client(
                     str_option(options, s3_constants::AWS_ALLOW_HTTP)
                         .map(|val| str_is_truthy(&val))
                         .unwrap_or(false),
                 ))
+                .credentials_provider(credentials_provider)
                 .load(),
         )?;
         #[cfg(feature = "rustls")]
-        let sdk_config = execute_sdk_future(aws_config::load_from_env())?;
-
         let sdk_config =
-            if let Some(endpoint_url) = str_option(options, s3_constants::AWS_ENDPOINT_URL) {
-                sdk_config.to_builder().endpoint_url(endpoint_url).build()
-            } else {
-                sdk_config
-            };
+            execute_sdk_future(loader.credentials_provider(credentials_provider).load())?;
+
         Ok(Self {
             virtual_hosted_style_request,
             locking_provider: str_option(options, s3_constants::AWS_S3_LOCKING_PROVIDER),
@@ -204,6 +237,16 @@ impl S3StorageOptions {
         self.sdk_config.region()
     }
 
+    fn create_provider_config<T: ProvideRegion>(
+        region_provider: T,
+    ) -> DeltaResult<(T, ProviderConfig)> {
+        let region = execute_sdk_future(region_provider.region())?;
+        Ok((
+            region_provider,
+            ProviderConfig::default().with_region(region),
+        ))
+    }
+
     fn u64_or_default(map: &HashMap<String, String>, key: &str, default: u64) -> u64 {
         str_option(map, key)
             .and_then(|v| v.parse().ok())
@@ -221,16 +264,18 @@ impl S3StorageOptions {
     }
 }
 
-fn execute_sdk_future<F: Future<Output = SdkConfig> + Send + 'static>(
-    future: F,
-) -> DeltaResult<SdkConfig> {
+fn execute_sdk_future<F, T>(future: F) -> DeltaResult<T>
+where
+    T: Send,
+    F: Future<Output = T> + Send,
+{
     match tokio::runtime::Handle::try_current() {
         Ok(handle) => match handle.runtime_flavor() {
             tokio::runtime::RuntimeFlavor::MultiThread => {
                 Ok(tokio::task::block_in_place(move || handle.block_on(future)))
             }
             _ => {
-                let mut cfg: Option<SdkConfig> = None;
+                let mut cfg: Option<T> = None;
                 std::thread::scope(|scope| {
                     scope.spawn(|| {
                         cfg = Some(handle.block_on(future));
@@ -433,6 +478,14 @@ pub mod s3_constants {
     /// Only safe if there is one writer to a given table.
     pub const AWS_S3_ALLOW_UNSAFE_RENAME: &str = "AWS_S3_ALLOW_UNSAFE_RENAME";
 
+    /// If set to "true", disables the imds client
+    /// Defaults to "true"
+    pub const AWS_EC2_METADATA_DISABLED: &str = "AWS_EC2_METADATA_DISABLED";
+
+    /// The timeout in milliseconds for the EC2 metadata endpoint
+    /// Defaults to 100
+    pub const AWS_EC2_METADATA_TIMEOUT: &str = "AWS_EC2_METADATA_TIMEOUT";
+
     /// The list of option keys owned by the S3 module.
     /// Option keys not contained in this list will be added to the `extra_opts`
     /// field of [crate::storage::s3::S3StorageOptions].
@@ -452,18 +505,30 @@ pub mod s3_constants {
         AWS_S3_POOL_IDLE_TIMEOUT_SECONDS,
         AWS_STS_POOL_IDLE_TIMEOUT_SECONDS,
         AWS_S3_GET_INTERNAL_SERVER_ERROR_RETRIES,
+        AWS_EC2_METADATA_DISABLED,
+        AWS_EC2_METADATA_TIMEOUT,
     ];
 }
 
 pub(crate) fn str_option(map: &HashMap<String, String>, key: &str) -> Option<String> {
-    map.get(key)
-        .map_or_else(|| std::env::var(key).ok(), |v| Some(v.to_owned()))
+    if let Some(s) = map.get(key) {
+        return Some(s.to_owned());
+    }
+
+    if let Some(s) = map.get(&key.to_ascii_lowercase()) {
+        return Some(s.to_owned());
+    }
+
+    std::env::var(key).ok()
 }
 
 #[cfg(test)]
 mod tests {
+    use std::time::SystemTime;
+
     use super::*;
 
+    use aws_sdk_sts::config::ProvideCredentials;
     use maplit::hashmap;
     use serial_test::serial;
 
@@ -480,6 +545,15 @@ mod tests {
         pub fn run<T>(mut f: impl FnMut() -> T) -> T {
             let _env_scope = Self::new();
             f()
+        }
+
+        pub async fn run_async<F>(future: F) -> F::Output
+        where
+            F: Future + Send + 'static,
+            F::Output: Send + 'static,
+        {
+            let _env_scope = Self::new();
+            future.await
         }
     }
 
@@ -743,5 +817,49 @@ mod tests {
                 assert_eq!(v, "options_key");
             }
         });
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn storage_options_toggle_imds() {
+        ScopedEnv::run_async(async {
+            clear_env_of_aws_keys();
+            let disabled_time = storage_options_configure_imds(Some("true")).await;
+            let enabled_time = storage_options_configure_imds(Some("false")).await;
+            let default_time = storage_options_configure_imds(None).await;
+            println!(
+                "enabled_time: {}, disabled_time: {}, default_time: {}",
+                enabled_time.as_micros(),
+                disabled_time.as_micros(),
+                default_time.as_micros(),
+            );
+            assert!(disabled_time < enabled_time);
+            assert!(default_time < enabled_time);
+        })
+        .await;
+    }
+
+    async fn storage_options_configure_imds(value: Option<&str>) -> Duration {
+        let _options = match value {
+            Some(value) => S3StorageOptions::from_map(&hashmap! {
+                s3_constants::AWS_REGION.to_string() => "eu-west-1".to_string(),
+                s3_constants::AWS_EC2_METADATA_DISABLED.to_string() => value.to_string(),
+            })
+            .unwrap(),
+            None => S3StorageOptions::from_map(&hashmap! {
+                s3_constants::AWS_REGION.to_string() => "eu-west-1".to_string(),
+            })
+            .unwrap(),
+        };
+
+        assert_eq!(
+            "eu-west-1",
+            std::env::var(s3_constants::AWS_REGION).unwrap()
+        );
+
+        let provider = _options.sdk_config.credentials_provider().unwrap();
+        let now = SystemTime::now();
+        _ = provider.provide_credentials().await;
+        now.elapsed().unwrap()
     }
 }
