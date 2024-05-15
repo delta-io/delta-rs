@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use datafusion_common::{TableReference, Result as DFResult};
+use datafusion_common::{Result as DFResult, TableReference};
 use datafusion_expr::logical_plan::{Extension, LogicalPlan};
 use datafusion_sql::planner::{
     object_name_to_table_reference, ContextProvider, IdentNormalizer, ParserOptions, SqlToRel,
@@ -65,8 +65,7 @@ impl<'a, S: ContextProvider> DeltaSqlToRel<'a, S> {
 
     fn describe_to_plan(&self, describe: DescribeStatement) -> DFResult<LogicalPlan> {
         let table_ref = self.object_name_to_table_reference(describe.table)?;
-        let plan =
-            DeltaStatement::DescribeFiles(DescribeFiles::new(table_ref.clone()));
+        let plan = DeltaStatement::DescribeFiles(DescribeFiles::new(table_ref.clone()));
         Ok(LogicalPlan::Extension(Extension {
             node: Arc::new(plan),
         }))

@@ -7,10 +7,10 @@ use arrow::datatypes::Schema as ArrowSchema;
 use arrow_array::{RecordBatch, StringArray, UInt32Array};
 use chrono::Duration;
 use clap::{command, Args, Parser, Subcommand};
+use datafusion::functions::expr_fn::random;
 use datafusion::{datasource::MemTable, prelude::DataFrame};
 use datafusion_common::DataFusionError;
 use datafusion_expr::{cast, col, lit};
-use datafusion::functions::expr_fn::random;
 use deltalake_core::protocol::SaveMode;
 use deltalake_core::{
     arrow::{
