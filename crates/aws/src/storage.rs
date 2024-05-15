@@ -1,5 +1,6 @@
 //! AWS S3 storage backend.
 
+use aws_config::meta::region::ProvideRegion;
 use aws_config::provider_config::ProviderConfig;
 use aws_config::{Region, SdkConfig};
 use bytes::Bytes;
@@ -20,6 +21,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::AsyncWrite;
+use tracing::warn;
 use url::Url;
 
 use crate::errors::DynamoDbConfigError;
@@ -67,9 +69,9 @@ impl ObjectStoreFactory for S3ObjectStoreFactory {
     fn parse_url_opts(
         &self,
         url: &Url,
-        options: &StorageOptions,
+        storage_options: &StorageOptions,
     ) -> DeltaResult<(ObjectStoreRef, Path)> {
-        let options = self.with_env_s3(options);
+        let options = self.with_env_s3(storage_options);
         let (inner, prefix) = parse_url_opts(
             url,
             options.0.iter().filter_map(|(key, value)| {
@@ -87,7 +89,7 @@ impl ObjectStoreFactory for S3ObjectStoreFactory {
         {
             Ok((store, prefix))
         } else {
-            let s3_options = S3StorageOptions::from_map(&options.0)?;
+            let s3_options = S3StorageOptions::from_map(&storage_options.0)?;
 
             let store = S3StorageBackend::try_new(
                 store,
@@ -140,7 +142,6 @@ impl S3StorageOptions {
             .filter(|(k, _)| !s3_constants::S3_OPTS.contains(&k.as_str()))
             .map(|(k, v)| (k.to_owned(), v.to_owned()))
             .collect();
-
         // Copy web identity values provided in options but not the environment into the environment
         // to get picked up by the `from_k8s_env` call in `get_web_identity_provider`.
         Self::ensure_env_var(options, s3_constants::AWS_REGION);
@@ -175,10 +176,27 @@ impl S3StorageOptions {
             .unwrap_or(true);
         let imds_timeout =
             Self::u64_or_default(options, s3_constants::AWS_EC2_METADATA_TIMEOUT, 100);
+        let (loader, provider_config) =
+            if let Some(endpoint_url) = str_option(options, s3_constants::AWS_ENDPOINT_URL) {
+                let (region_provider, provider_config) = Self::create_provider_config(
+                    str_option(options, s3_constants::AWS_REGION)
+                        .or_else(|| std::env::var("AWS_DEFAULT_REGION").ok())
+                        .map_or(Region::from_static("custom"), Region::new),
+                )?;
+                let loader = aws_config::from_env()
+                    .endpoint_url(endpoint_url)
+                    .region(region_provider);
+                (loader, provider_config)
+            } else {
+                let (region_provider, provider_config) = Self::create_provider_config(
+                    crate::credentials::new_region_provider(disable_imds, imds_timeout),
+                )?;
+                (
+                    aws_config::from_env().region(region_provider),
+                    provider_config,
+                )
+            };
 
-        let region_provider = crate::credentials::new_region_provider(disable_imds, imds_timeout);
-        let region = execute_sdk_future(region_provider.region())?;
-        let provider_config = ProviderConfig::default().with_region(region);
         let credentials_provider = crate::credentials::ConfiguredCredentialChain::new(
             disable_imds,
             imds_timeout,
@@ -186,30 +204,19 @@ impl S3StorageOptions {
         );
         #[cfg(feature = "native-tls")]
         let sdk_config = execute_sdk_future(
-            aws_config::from_env()
+            loader
                 .http_client(native::use_native_tls_client(
                     str_option(options, s3_constants::AWS_ALLOW_HTTP)
                         .map(|val| str_is_truthy(&val))
                         .unwrap_or(false),
                 ))
                 .credentials_provider(credentials_provider)
-                .region(region_provider)
                 .load(),
         )?;
         #[cfg(feature = "rustls")]
-        let sdk_config = execute_sdk_future(
-            aws_config::from_env()
-                .credentials_provider(credentials_provider)
-                .region(region_provider)
-                .load(),
-        )?;
-
         let sdk_config =
-            if let Some(endpoint_url) = str_option(options, s3_constants::AWS_ENDPOINT_URL) {
-                sdk_config.to_builder().endpoint_url(endpoint_url).build()
-            } else {
-                sdk_config
-            };
+            execute_sdk_future(loader.credentials_provider(credentials_provider).load())?;
+
         Ok(Self {
             virtual_hosted_style_request,
             locking_provider: str_option(options, s3_constants::AWS_S3_LOCKING_PROVIDER),
@@ -228,6 +235,16 @@ impl S3StorageOptions {
 
     pub fn region(&self) -> Option<&Region> {
         self.sdk_config.region()
+    }
+
+    fn create_provider_config<T: ProvideRegion>(
+        region_provider: T,
+    ) -> DeltaResult<(T, ProviderConfig)> {
+        let region = execute_sdk_future(region_provider.region())?;
+        Ok((
+            region_provider,
+            ProviderConfig::default().with_region(region),
+        ))
     }
 
     fn u64_or_default(map: &HashMap<String, String>, key: &str, default: u64) -> u64 {
@@ -494,8 +511,15 @@ pub mod s3_constants {
 }
 
 pub(crate) fn str_option(map: &HashMap<String, String>, key: &str) -> Option<String> {
-    map.get(key)
-        .map_or_else(|| std::env::var(key).ok(), |v| Some(v.to_owned()))
+    if let Some(s) = map.get(key) {
+        return Some(s.to_owned());
+    }
+
+    if let Some(s) = map.get(&key.to_ascii_lowercase()) {
+        return Some(s.to_owned());
+    }
+
+    std::env::var(key).ok()
 }
 
 #[cfg(test)]
