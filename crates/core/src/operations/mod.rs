@@ -239,6 +239,33 @@ impl AsRef<DeltaTable> for DeltaOps {
     }
 }
 
+/// Get the num_idx_columns and stats_columns from the table configuration in the state
+/// If table_config does not exist (only can occur in the first write action) it takes
+/// the configuration that was passed to the writerBuilder.
+pub fn get_num_idx_cols_and_stats_columns(
+    config: Option<crate::table::config::TableConfig<'_>>,
+    configuration: HashMap<String, Option<String>>,
+) -> (i32, Option<Vec<String>>) {
+    let (num_index_cols, stats_columns) = match &config {
+        Some(conf) => (conf.num_indexed_cols(), conf.stats_columns()),
+        _ => (
+            configuration
+                .get("delta.dataSkippingNumIndexedCols")
+                .and_then(|v| v.clone().map(|v| v.parse::<i32>().unwrap()))
+                .unwrap_or(crate::table::config::DEFAULT_NUM_INDEX_COLS),
+            configuration
+                .get("delta.dataSkippingStatsColumns")
+                .and_then(|v| v.as_ref().map(|v| v.split(',').collect::<Vec<&str>>())),
+        ),
+    };
+    (
+        num_index_cols,
+        stats_columns
+            .clone()
+            .map(|v| v.iter().map(|v| v.to_string()).collect::<Vec<String>>()),
+    )
+}
+
 #[cfg(feature = "datafusion")]
 mod datafusion_utils {
     use datafusion::execution::context::SessionState;

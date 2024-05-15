@@ -1,7 +1,7 @@
 //! Command for converting a Parquet table to a Delta table in place
 // https://github.com/delta-io/delta/blob/1d5dd774111395b0c4dc1a69c94abc169b1c83b6/spark/src/main/scala/org/apache/spark/sql/delta/commands/ConvertToDeltaCommand.scala
 
-use crate::operations::write::get_num_idx_cols_and_stats_columns;
+use crate::operations::get_num_idx_cols_and_stats_columns;
 use crate::{
     kernel::{Add, DataType, Schema, StructField},
     logstore::{LogStore, LogStoreRef},
