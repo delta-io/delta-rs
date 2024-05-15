@@ -58,7 +58,6 @@ use crate::logstore::LogStoreRef;
 use crate::operations::cast::{cast_record_batch, merge_schema};
 use crate::protocol::{DeltaOperation, SaveMode};
 use crate::storage::ObjectStoreRef;
-use crate::table::config::DEFAULT_NUM_INDEX_COLS;
 use crate::table::state::DeltaTableState;
 use crate::table::Constraint as DeltaConstraint;
 use crate::writer::record_batch::divide_by_partition_values;
@@ -759,7 +758,7 @@ impl std::future::IntoFuture for WriteBuilder {
                 .map(|snapshot| snapshot.table_config());
 
             let (num_indexed_cols, stats_columns) =
-                get_num_idx_cols_and_stats_columns(config, this.configuration);
+                super::get_num_idx_cols_and_stats_columns(config, this.configuration);
 
             let writer_stats_config = WriterStatsConfig {
                 num_indexed_cols,
@@ -920,33 +919,6 @@ fn try_cast_batch(from_fields: &Fields, to_fields: &Fields) -> Result<(), ArrowE
         })
         .collect::<Result<Vec<_>, _>>()?;
     Ok(())
-}
-
-/// Get the num_idx_columns and stats_columns from the table configuration in the state
-/// If table_config does not exist (only can occur in the first write action) it takes
-/// the configuration that was passed to the writerBuilder.
-pub fn get_num_idx_cols_and_stats_columns(
-    config: Option<crate::table::config::TableConfig<'_>>,
-    configuration: HashMap<String, Option<String>>,
-) -> (i32, Option<Vec<String>>) {
-    let (num_index_cols, stats_columns) = match &config {
-        Some(conf) => (conf.num_indexed_cols(), conf.stats_columns()),
-        _ => (
-            configuration
-                .get("delta.dataSkippingNumIndexedCols")
-                .and_then(|v| v.clone().map(|v| v.parse::<i32>().unwrap()))
-                .unwrap_or(DEFAULT_NUM_INDEX_COLS),
-            configuration
-                .get("delta.dataSkippingStatsColumns")
-                .and_then(|v| v.as_ref().map(|v| v.split(',').collect::<Vec<&str>>())),
-        ),
-    };
-    (
-        num_index_cols,
-        stats_columns
-            .clone()
-            .map(|v| v.iter().map(|v| v.to_string()).collect::<Vec<String>>()),
-    )
 }
 
 #[cfg(test)]

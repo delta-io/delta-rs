@@ -1732,12 +1732,10 @@ fn get_num_idx_cols_and_stats_columns(
         .map_err(PythonError::from)?
         .map(|snapshot| snapshot.table_config());
 
-    Ok(
-        deltalake::operations::write::get_num_idx_cols_and_stats_columns(
-            config,
-            configuration.unwrap_or_default(),
-        ),
-    )
+    Ok(deltalake::operations::get_num_idx_cols_and_stats_columns(
+        config,
+        configuration.unwrap_or_default(),
+    ))
 }
 
 #[pyclass(name = "DeltaDataChecker", module = "deltalake._internal")]

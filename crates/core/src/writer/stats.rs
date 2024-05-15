@@ -133,7 +133,7 @@ fn stats_from_metadata(
     let idx_to_iterate = if let Some(stats_cols) = stats_columns {
         schema_descriptor
             .columns()
-            .into_iter()
+            .iter()
             .enumerate()
             .filter_map(|(index, col)| {
                 if stats_cols.contains(&col.name().to_string()) {

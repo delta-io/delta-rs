@@ -520,7 +520,7 @@ mod tests {
         use crate::DeltaOps;
 
         let table = crate::writer::test_utils::create_bare_table();
-        let partition_cols = vec!["modified".to_string()];
+        let partition_cols = ["modified".to_string()];
         let delta_schema = r#"
         {"type" : "struct",
         "fields" : [

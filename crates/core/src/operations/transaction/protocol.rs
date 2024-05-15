@@ -80,8 +80,8 @@ impl ProtocolChecker {
     }
 
     /// checks if table contains timestamp_ntz in any field including nested fields.
-    pub fn contains_timestampntz(&self, fields: &Vec<StructField>) -> bool {
-        fn check_vec_fields(fields: &Vec<StructField>) -> bool {
+    pub fn contains_timestampntz(&self, fields: &[StructField]) -> bool {
+        fn check_vec_fields(fields: &[StructField]) -> bool {
             fields.iter().any(|f| _check_type(f.data_type()))
         }
 
