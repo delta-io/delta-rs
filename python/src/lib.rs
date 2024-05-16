@@ -37,6 +37,7 @@ use deltalake::operations::load_cdf::CdfLoadBuilder;
 use deltalake::operations::merge::MergeBuilder;
 use deltalake::operations::optimize::{OptimizeBuilder, OptimizeType};
 use deltalake::operations::restore::RestoreBuilder;
+use deltalake::operations::set_tbl_properties::SetTablePropertiesBuilder;
 use deltalake::operations::transaction::{
     CommitBuilder, CommitProperties, TableReference, PROTOCOL,
 };
@@ -1172,6 +1173,34 @@ impl RawDeltaTable {
             .map_err(PythonError::from)?;
         self._table.state = table.state;
         Ok(serde_json::to_string(&metrics).unwrap())
+    }
+
+    #[pyo3(signature = (properties, raise_if_not_exists, custom_metadata=None))]
+    pub fn set_table_properties(
+        &mut self,
+        properties: HashMap<String, String>,
+        raise_if_not_exists: bool,
+        custom_metadata: Option<HashMap<String, String>>,
+    ) -> PyResult<()> {
+        let mut cmd = SetTablePropertiesBuilder::new(
+            self._table.log_store(),
+            self._table.snapshot().map_err(PythonError::from)?.clone(),
+        )
+        .with_properties(properties)
+        .with_raise_if_not_exists(raise_if_not_exists);
+
+        if let Some(metadata) = custom_metadata {
+            let json_metadata: Map<String, Value> =
+                metadata.into_iter().map(|(k, v)| (k, v.into())).collect();
+            cmd = cmd
+                .with_commit_properties(CommitProperties::default().with_metadata(json_metadata));
+        };
+
+        let table = rt()
+            .block_on(cmd.into_future())
+            .map_err(PythonError::from)?;
+        self._table.state = table.state;
+        Ok(())
     }
 
     /// Execute the File System Check command (FSCK) on the delta table: removes old reference to files that

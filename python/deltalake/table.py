@@ -1896,6 +1896,24 @@ class TableAlterer:
         """
         self.table._table.drop_constraints(name, raise_if_not_exists, custom_metadata)
 
+    def set_table_properties(
+        self,
+        properties: Dict[str, str],
+        raise_if_not_exists: bool = True,
+        custom_metadata: Optional[Dict[str, str]] = None,
+    ) -> None:
+        """
+        Unset properties from the table.
+        Args:
+            properties: properties which set
+            raise_if_not_exists: set if should raise if not exists.
+            custom_metadata: custom metadata that will be added to the transaction commit.
+        Example:
+        """
+        self.table._table.set_table_properties(
+            properties, raise_if_not_exists, custom_metadata
+        )
+
 
 class TableOptimizer:
     """API for various table optimization commands."""

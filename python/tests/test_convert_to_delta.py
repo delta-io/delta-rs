@@ -23,7 +23,7 @@ def test_local_convert_to_delta(tmp_path: pathlib.Path, sample_data: pa.Table):
         tmp_path,
         name=name,
         description=description,
-        configuration={"delta.AppendOnly": "True"},
+        configuration={"delta.appendOnly": "true"},
         custom_metadata={"userName": "John Doe"},
     )
 
@@ -33,7 +33,7 @@ def test_local_convert_to_delta(tmp_path: pathlib.Path, sample_data: pa.Table):
     assert dt.files() == ["part-0.parquet"]
     assert dt.metadata().name == name
     assert dt.metadata().description == description
-    assert dt.metadata().configuration == {"delta.AppendOnly": "True"}
+    assert dt.metadata().configuration == {"delta.appendOnly": "true"}
     assert dt.history()[0]["userName"] == "John Doe"
 
 
