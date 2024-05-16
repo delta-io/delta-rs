@@ -303,9 +303,10 @@ impl std::future::IntoFuture for SetTablePropertiesBuilder {
                     operation.clone(),
                 )?
                 .await?;
-
-            this.snapshot.merge(actions, &operation, commit.version)?;
-            Ok(DeltaTable::new_with_state(this.log_store, this.snapshot))
+            Ok(DeltaTable::new_with_state(
+                this.log_store,
+                commit.snapshot(),
+            ))
         })
     }
 }
