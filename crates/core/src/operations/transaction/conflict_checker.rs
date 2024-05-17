@@ -194,7 +194,7 @@ impl<'a> TransactionInfo<'a> {
     #[cfg(not(feature = "datafusion"))]
     /// Files read by the transaction
     pub fn read_files(&self) -> Result<impl Iterator<Item = Add> + '_, CommitConflictError> {
-        Ok(self.read_snapshot.file_actions().unwrap().into_iter())
+        Ok(self.read_snapshot.file_actions().unwrap())
     }
 
     /// Whether the whole table was read during the transaction
@@ -310,13 +310,6 @@ impl WinningCommitSummary {
             self.added_files()
         }
     }
-
-    // pub fn only_add_files(&self) -> bool {
-    //     !self
-    //         .actions
-    //         .iter()
-    //         .any(|action| matches!(action, Action::remove(_)))
-    // }
 
     pub fn is_blind_append(&self) -> Option<bool> {
         self.commit_info

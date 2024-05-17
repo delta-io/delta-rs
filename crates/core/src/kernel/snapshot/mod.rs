@@ -613,7 +613,7 @@ mod tests {
     use futures::TryStreamExt;
     use itertools::Itertools;
 
-    use super::log_segment::tests::test_log_segment;
+    use super::log_segment::tests::{concurrent_checkpoint, test_log_segment};
     use super::replay::tests::test_log_replay;
     use super::*;
     use crate::kernel::Remove;
@@ -632,6 +632,13 @@ mod tests {
         test_snapshot(&context).await?;
         test_eager_snapshot(&context).await?;
 
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_concurrent_checkpoint() -> TestResult {
+        let context = IntegrationContext::new(Box::<LocalStorageIntegration>::default())?;
+        concurrent_checkpoint(&context).await?;
         Ok(())
     }
 

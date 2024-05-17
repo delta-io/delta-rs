@@ -284,8 +284,8 @@ impl From<&str> for WriterFeatures {
     fn from(value: &str) -> Self {
         match value {
             "appendOnly" | "delta.appendOnly" => WriterFeatures::AppendOnly,
-            "invariants" | "delta.invariants" => WriterFeatures::Invariants,
-            "checkConstraints" | "delta.checkConstraints" => WriterFeatures::CheckConstraints,
+            "invariants" => WriterFeatures::Invariants,
+            "checkConstraints" => WriterFeatures::CheckConstraints,
             "changeDataFeed" | "delta.enableChangeDataFeed" => WriterFeatures::ChangeDataFeed,
             "generatedColumns" => WriterFeatures::GeneratedColumns,
             "columnMapping" => WriterFeatures::ColumnMapping,

@@ -1095,8 +1095,10 @@ class DeltaTable:
                 x: y for x, y in zip(file_sizes["path"], file_sizes["size_bytes"])
             }
             filesystem = pa_fs.PyFileSystem(
-                DeltaStorageHandler(
-                    self._table.table_uri(), self._storage_options, file_sizes
+                DeltaStorageHandler.from_table(
+                    self._table,
+                    self._storage_options,
+                    file_sizes,
                 )
             )
         format = ParquetFileFormat(
@@ -1893,6 +1895,24 @@ class TableAlterer:
             ```
         """
         self.table._table.drop_constraints(name, raise_if_not_exists, custom_metadata)
+
+    def set_table_properties(
+        self,
+        properties: Dict[str, str],
+        raise_if_not_exists: bool = True,
+        custom_metadata: Optional[Dict[str, str]] = None,
+    ) -> None:
+        """
+        Unset properties from the table.
+        Args:
+            properties: properties which set
+            raise_if_not_exists: set if should raise if not exists.
+            custom_metadata: custom metadata that will be added to the transaction commit.
+        Example:
+        """
+        self.table._table.set_table_properties(
+            properties, raise_if_not_exists, custom_metadata
+        )
 
 
 class TableOptimizer:

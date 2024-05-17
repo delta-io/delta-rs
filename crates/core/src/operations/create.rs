@@ -1,10 +1,11 @@
 //! Command for creating a new delta table
 // https://github.com/delta-io/delta/blob/master/core/src/main/scala/org/apache/spark/sql/delta/commands/CreateDeltaTableCommand.scala
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use futures::future::BoxFuture;
+use maplit::hashset;
 use serde_json::Value;
 
 use super::transaction::{CommitBuilder, TableReference, PROTOCOL};
@@ -13,6 +14,9 @@ use crate::kernel::{
     Action, DataType, Metadata, Protocol, ReaderFeatures, StructField, StructType, WriterFeatures,
 };
 use crate::logstore::{LogStore, LogStoreRef};
+use crate::operations::set_tbl_properties::{
+    apply_properties_to_protocol, convert_properties_to_features,
+};
 use crate::protocol::{DeltaOperation, SaveMode};
 use crate::table::builder::ensure_table_uri;
 use crate::table::config::DeltaConfigKey;
@@ -237,41 +241,28 @@ impl CreateBuilder {
             )
         };
 
+        let configuration = self.configuration;
         let contains_timestampntz = PROTOCOL.contains_timestampntz(&self.columns);
+
         // TODO configure more permissive versions based on configuration. Also how should this ideally be handled?
         // We set the lowest protocol we can, and if subsequent writes use newer features we update metadata?
 
-        let (min_reader_version, min_writer_version, writer_features, reader_features) =
-            if contains_timestampntz {
-                let mut converted_writer_features = self
-                    .configuration
-                    .keys()
-                    .map(|key| key.clone().into())
-                    .filter(|v| !matches!(v, WriterFeatures::Other(_)))
-                    .collect::<HashSet<WriterFeatures>>();
+        let current_protocol = if contains_timestampntz {
+            Protocol {
+                min_reader_version: 3,
+                min_writer_version: 7,
+                writer_features: Some(hashset! {WriterFeatures::TimestampWithoutTimezone}),
+                reader_features: Some(hashset! {ReaderFeatures::TimestampWithoutTimezone}),
+            }
+        } else {
+            Protocol {
+                min_reader_version: PROTOCOL.default_reader_version(),
+                min_writer_version: PROTOCOL.default_writer_version(),
+                reader_features: None,
+                writer_features: None,
+            }
+        };
 
-                let mut converted_reader_features = self
-                    .configuration
-                    .keys()
-                    .map(|key| key.clone().into())
-                    .filter(|v| !matches!(v, ReaderFeatures::Other(_)))
-                    .collect::<HashSet<ReaderFeatures>>();
-                converted_writer_features.insert(WriterFeatures::TimestampWithoutTimezone);
-                converted_reader_features.insert(ReaderFeatures::TimestampWithoutTimezone);
-                (
-                    3,
-                    7,
-                    Some(converted_writer_features),
-                    Some(converted_reader_features),
-                )
-            } else {
-                (
-                    PROTOCOL.default_reader_version(),
-                    PROTOCOL.default_writer_version(),
-                    None,
-                    None,
-                )
-            };
         let protocol = self
             .actions
             .iter()
@@ -280,17 +271,23 @@ impl CreateBuilder {
                 Action::Protocol(p) => p.clone(),
                 _ => unreachable!(),
             })
-            .unwrap_or_else(|| Protocol {
-                min_reader_version,
-                min_writer_version,
-                writer_features,
-                reader_features,
-            });
+            .unwrap_or_else(|| current_protocol);
+
+        let protocol = apply_properties_to_protocol(
+            &protocol,
+            &configuration
+                .iter()
+                .map(|(k, v)| (k.clone(), v.clone().unwrap()))
+                .collect::<HashMap<String, String>>(),
+            true,
+        )?;
+
+        let protocol = convert_properties_to_features(protocol, &configuration);
 
         let mut metadata = Metadata::try_new(
             StructType::new(self.columns),
             self.partition_columns.unwrap_or_default(),
-            self.configuration,
+            configuration,
         )?
         .with_created_time(chrono::Utc::now().timestamp_millis());
         if let Some(name) = self.name {

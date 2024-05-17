@@ -23,7 +23,7 @@ Delta Lake stores all the file paths in the transaction log.  So you can quickly
 
 ## Developer friendly features
 
-Many basic data operations are hard in data lakes but quite easy with Delta Lake.  The only data operation that’s easy with in data lake is appending data.  Delta Lake makes all data operations easy including the following:
+Many basic data operations are hard in data lakes but quite easy with Delta Lake.  The only data operation that’s easy with a data lake is appending data.  Delta Lake makes all data operations easy including the following:
 
 * Appends
 * Upserts
