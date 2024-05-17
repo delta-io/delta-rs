@@ -372,8 +372,8 @@ impl<'a> fmt::Display for ScalarValueFormat<'a> {
                 Some(e) => write!(
                     f,
                     "'{}'::date",
-                    DateTime::from_timestamp_millis((*e).into())
-                        .ok_or(Error::default())?
+                    DateTime::from_timestamp_millis(*e)
+                        .ok_or(Error)?
                         .date_naive()
                         .format("%Y-%m-%d")
                 )?,
@@ -385,14 +385,14 @@ impl<'a> fmt::Display for ScalarValueFormat<'a> {
                         f,
                         "arrow_cast('{}', 'Timestamp(Microsecond, Some(\"UTC\"))')",
                         DateTime::from_timestamp_micros(*e)
-                            .ok_or(Error::default())?
+                            .ok_or(Error)?
                             .format("%Y-%m-%dT%H:%M:%S%.6f")
                     )?,
                     None => write!(
                         f,
                         "arrow_cast('{}', 'Timestamp(Microsecond, None)')",
                         DateTime::from_timestamp_micros(*e)
-                            .ok_or(Error::default())?
+                            .ok_or(Error)?
                             .format("%Y-%m-%dT%H:%M:%S%.6f")
                     )?,
                 },

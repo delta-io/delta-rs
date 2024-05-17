@@ -262,7 +262,7 @@ impl std::future::IntoFuture for SetTablePropertiesBuilder {
     type IntoFuture = BoxFuture<'static, Self::Output>;
 
     fn into_future(self) -> Self::IntoFuture {
-        let mut this = self;
+        let this = self;
 
         Box::pin(async move {
             let mut metadata = this.snapshot.metadata().clone();
