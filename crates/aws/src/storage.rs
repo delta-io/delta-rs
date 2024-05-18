@@ -21,7 +21,6 @@ use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::AsyncWrite;
-use tracing::warn;
 use url::Url;
 
 use crate::errors::DynamoDbConfigError;

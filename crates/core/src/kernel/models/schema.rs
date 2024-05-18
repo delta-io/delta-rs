@@ -259,7 +259,19 @@ impl StructType {
 
     /// Returns a reference of a specific [`StructField`] instance selected by name.
     pub fn field_with_name(&self, name: &str) -> Result<&StructField, Error> {
-        Ok(&self.fields[self.index_of(name)?])
+        match name.split_once('.') {
+            Some((parent, children)) => {
+                let parent_field = &self.fields[self.index_of(parent)?];
+                match parent_field.data_type {
+                    DataType::Struct(ref inner) => Ok(inner.field_with_name(children)?),
+                    _ => Err(Error::Schema(format!(
+                        "Field {} is not a struct type",
+                        parent_field.name()
+                    ))),
+                }
+            }
+            None => Ok(&self.fields[self.index_of(name)?]),
+        }
     }
 
     /// Get all invariants in the schemas
@@ -982,5 +994,28 @@ mod tests {
             true,
         );
         assert_eq!(get_hash(&field_1), get_hash(&field_2));
+    }
+
+    #[test]
+    fn test_field_with_name() {
+        let schema = StructType::new(vec![
+            StructField::new("a", DataType::STRING, true),
+            StructField::new("b", DataType::INTEGER, true),
+        ]);
+        let field = schema.field_with_name("b").unwrap();
+        assert_eq!(*field, StructField::new("b", DataType::INTEGER, true));
+    }
+
+    #[test]
+    fn test_field_with_name_nested() {
+        let nested = StructType::new(vec![StructField::new("a", DataType::BOOLEAN, true)]);
+        let schema = StructType::new(vec![
+            StructField::new("a", DataType::STRING, true),
+            StructField::new("b", DataType::Struct(Box::new(nested)), true),
+        ]);
+
+        let field = schema.field_with_name("b.a").unwrap();
+
+        assert_eq!(*field, StructField::new("a", DataType::BOOLEAN, true));
     }
 }
