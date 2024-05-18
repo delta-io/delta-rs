@@ -226,8 +226,10 @@ impl DeltaWriter {
     }
 }
 
+
+/// Write configuration for partition writers
 #[derive(Debug)]
-pub(crate) struct PartitionWriterConfig {
+pub struct PartitionWriterConfig {
     /// Schema of the data written to disk
     file_schema: ArrowSchemaRef,
     /// Prefix applied to all paths
@@ -244,6 +246,7 @@ pub(crate) struct PartitionWriterConfig {
 }
 
 impl PartitionWriterConfig {
+    /// Create a new instance of [PartitionWriterConfig]
     pub fn try_new(
         file_schema: ArrowSchemaRef,
         partition_values: IndexMap<String, Scalar>,
@@ -272,8 +275,13 @@ impl PartitionWriterConfig {
     }
 }
 
+
+/// Partition writer implementation
+/// This writer takes in table data as RecordBatches and writes it out to partitioned parquet files.
+/// It buffers data in memory until it reaches a certain size, then writes it out to optimize file sizes.
+/// When you complete writing you get back a list of Add actions that can be used to update the Delta table commit log.
 #[derive(Debug)]
-pub(crate) struct PartitionWriter {
+pub struct PartitionWriter {
     object_store: ObjectStoreRef,
     writer_id: uuid::Uuid,
     config: PartitionWriterConfig,
@@ -412,6 +420,7 @@ impl PartitionWriter {
         Ok(())
     }
 
+    /// Close the writer and get the new [Add] actions.
     pub async fn close(mut self) -> DeltaResult<Vec<Add>> {
         self.flush_arrow_writer().await?;
         Ok(self.files_written)
