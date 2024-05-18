@@ -5,7 +5,7 @@ resolver = "2"
 
 [workspace.package]
 authors = ["Qingping Hou <dave2008713@gmail.com>"]
-rust-version = "1.72"
+rust-version = "1.75"
 keywords = ["deltalake", "delta", "datalake"]
 readme = "README.md"
 edition = "2021"
