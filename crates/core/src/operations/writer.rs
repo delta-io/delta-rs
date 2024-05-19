@@ -226,7 +226,6 @@ impl DeltaWriter {
     }
 }
 
-
 /// Write configuration for partition writers
 #[derive(Debug)]
 pub struct PartitionWriterConfig {
@@ -274,7 +273,6 @@ impl PartitionWriterConfig {
         })
     }
 }
-
 
 /// Partition writer implementation
 /// This writer takes in table data as RecordBatches and writes it out to partitioned parquet files.
