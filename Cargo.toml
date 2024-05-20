@@ -42,7 +42,7 @@ object_store = { version = "0.9" }
 parquet = { version = "51" }
 
 # datafusion
-datafusion = { version = "37.1" }
+datafusion = { version = "38.0" }
 datafusion-expr = { version = "37.1" }
 datafusion-common = { version = "37.1" }
 datafusion-proto = { version = "37.1" }
