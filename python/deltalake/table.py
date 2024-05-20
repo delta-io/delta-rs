@@ -715,7 +715,7 @@ class DeltaTable:
         """
         Get the files for each partition
 
-        ""
+        """
         return self._table.files_by_partitions(partition_filters)
 
     def metadata(self) -> Metadata:
