@@ -77,7 +77,7 @@ either = "1.8"
 fix-hidden-lifetime-bug = "0.2"
 hyper = { version = "0.14", optional = true }
 indexmap = "2.2.1"
-itertools = "0.12"
+itertools = "0.13"
 lazy_static = "1"
 libc = ">=0.2.90, <1"
 num-bigint = "0.4"
