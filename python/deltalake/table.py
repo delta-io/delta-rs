@@ -711,6 +711,13 @@ class DeltaTable:
         """
         return self._table.schema
 
+    def files_by_partitions(self, partition_filters:Option[FilterType]) -> List[str]:
+        """
+        Get the files for each partition
+
+        ""
+        return self._table.files_by_partitions(partition_filters)
+
     def metadata(self) -> Metadata:
         """
         Get the current metadata of the DeltaTable.
