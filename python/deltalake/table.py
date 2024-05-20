@@ -711,7 +711,7 @@ class DeltaTable:
         """
         return self._table.schema
 
-    def files_by_partitions(self, partition_filters:Option[FilterType]) -> List[str]:
+    def files_by_partitions(self, partition_filters:Optional[FilterType]) -> List[str]:
         """
         Get the files for each partition
 
