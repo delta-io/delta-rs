@@ -49,11 +49,14 @@ use datafusion::{
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{Column, DFSchema, ScalarValue, TableReference};
 use datafusion_expr::expr::Placeholder;
-use datafusion_expr::{col, conditional_expressions::CaseBuilder, lit, when, Expr, JoinType};
 use datafusion_expr::{
-    BinaryExpr, Distinct, Extension, LogicalPlan, LogicalPlanBuilder, Operator, Projection,
+    col, conditional_expressions::CaseBuilder, lit, max, min, when, Between, Expr, JoinType,
+};
+use datafusion_expr::{
+    Aggregate, BinaryExpr, Extension, LogicalPlan, LogicalPlanBuilder, Operator,
     UserDefinedLogicalNode, UNNAMED_TABLE,
 };
+use either::{Left, Right};
 use futures::future::BoxFuture;
 use itertools::Itertools;
 use parquet::file::properties::WriterProperties;
@@ -131,6 +134,9 @@ pub struct MergeBuilder {
     /// safe_cast determines how data types that do not match the underlying table are handled
     /// By default an error is returned
     safe_cast: bool,
+    /// Use merge predicates non-partition columns to calculate min-max values of source df and
+    /// use these in the early filter to reduce the number of scanned files from target delta table
+    extended_early_filter: bool,
 }
 
 impl super::Operation<()> for MergeBuilder {}
@@ -158,6 +164,7 @@ impl MergeBuilder {
             not_match_operations: Vec::new(),
             not_match_source_operations: Vec::new(),
             safe_cast: false,
+            extended_early_filter: true,
         }
     }
 
@@ -375,6 +382,14 @@ impl MergeBuilder {
     /// Test123     ->      null
     pub fn with_safe_cast(mut self, safe_cast: bool) -> Self {
         self.safe_cast = safe_cast;
+        self
+    }
+
+    /// Specify if merge operation should use merge predicates non-partition columns
+    /// to calculate min-max values of source df and use these in the early filter
+    /// to reduce the number of scanned files from target delta table
+    pub fn with_extended_early_filter(mut self, extended_early_filter: bool) -> Self {
+        self.extended_early_filter = extended_early_filter;
         self
     }
 }
@@ -666,13 +681,22 @@ impl ExtensionPlanner for MergeMetricExtensionPlanner {
     }
 }
 
-/// Takes the predicate provided and does two things:
+struct PredicatePlaceholder {
+    expr: Expr,
+    alias: String,
+    is_aggregate: bool,
+}
+
+/// Takes the predicate provided and does three things:
 ///
-/// 1. for any relations between a source column and a target column, if the target column is a
-/// partition column, then replace source with a placeholder matching the name of the partition
+/// 1. for any relations between a source column and a partition target column,
+/// replace source with a placeholder matching the name of the partition
 /// columns
 ///
-/// 2. for any other relation with a source column, remove them.
+/// 2. for any is equal relations between a source column and a non-partition target column,
+/// replace source with is between expression with min(source_column) and min(source_column) placeholders
+///
+/// 3. for any other relation with a source column, remove them.
 ///
 /// For example, for the predicate:
 ///
@@ -680,21 +704,18 @@ impl ExtensionPlanner for MergeMetricExtensionPlanner {
 ///
 /// where `date` is a partition column, would result in the expr:
 ///
-/// `$date = target.date and frob > 42`
+/// `$date_0 = target.date and target.id between $id_1_min and $id_1_max and frob > 42`
 ///
 /// This leaves us with a predicate that we can push into delta scan after expanding it out to
 /// a conjunction between the distinct partitions in the source input.
 ///
-/// TODO: A further improvement here might be for non-partition columns to be replaced with min/max
-/// checks, so the above example could become:
-///
-/// `$date = target.date and target.id between 12345 and 99999 and frob > 42`
 fn generalize_filter(
     predicate: Expr,
     partition_columns: &Vec<String>,
     source_name: &TableReference,
     target_name: &TableReference,
-    placeholders: &mut HashMap<String, Expr>,
+    placeholders: &mut Vec<PredicatePlaceholder>,
+    extended_filter: bool,
 ) -> Option<Expr> {
     #[derive(Debug)]
     enum ReferenceTableCheck {
@@ -738,29 +759,98 @@ fn generalize_filter(
         res
     }
 
+    fn construct_placeholder(
+        binary: BinaryExpr,
+        source_left: bool,
+        is_partition_column: bool,
+        column_name: String,
+        placeholders: &mut Vec<PredicatePlaceholder>,
+        extended_filter: bool,
+    ) -> Option<Expr> {
+        if is_partition_column {
+            let placeholder_name = format!("{column_name}_{}", placeholders.len());
+            let placeholder = Expr::Placeholder(Placeholder {
+                id: placeholder_name.clone(),
+                data_type: None,
+            });
+
+            let (left, right, source_expr): (Box<Expr>, Box<Expr>, Expr) = if source_left {
+                (placeholder.into(), binary.clone().right, *binary.left)
+            } else {
+                (binary.clone().left, placeholder.into(), *binary.right)
+            };
+
+            let replaced = Expr::BinaryExpr(BinaryExpr {
+                left,
+                op: binary.op,
+                right,
+            });
+
+            placeholders.push(PredicatePlaceholder {
+                expr: source_expr,
+                alias: placeholder_name,
+                is_aggregate: false,
+            });
+
+            Some(replaced)
+        } else if extended_filter {
+            match binary.op {
+                Operator::Eq => {
+                    let name_min = format!("{column_name}_{}_min", placeholders.len());
+                    let placeholder_min = Expr::Placeholder(Placeholder {
+                        id: name_min.clone(),
+                        data_type: None,
+                    });
+                    let name_max = format!("{column_name}_{}_max", placeholders.len());
+                    let placeholder_max = Expr::Placeholder(Placeholder {
+                        id: name_max.clone(),
+                        data_type: None,
+                    });
+                    let (source_expr, target_expr) = if source_left {
+                        (*binary.left, *binary.right)
+                    } else {
+                        (*binary.right, *binary.left)
+                    };
+                    let replaced = Expr::Between(Between {
+                        expr: target_expr.into(),
+                        negated: false,
+                        low: placeholder_min.into(),
+                        high: placeholder_max.into(),
+                    });
+
+                    placeholders.push(PredicatePlaceholder {
+                        expr: min(source_expr.clone()),
+                        alias: name_min,
+                        is_aggregate: true,
+                    });
+                    placeholders.push(PredicatePlaceholder {
+                        expr: max(source_expr),
+                        alias: name_max,
+                        is_aggregate: true,
+                    });
+                    Some(replaced)
+                }
+                _ => None,
+            }
+        } else {
+            None
+        }
+    }
+
     match predicate {
         Expr::BinaryExpr(binary) => {
             if references_table(&binary.right, source_name).has_reference() {
                 if let ReferenceTableCheck::HasReference(left_target) =
                     references_table(&binary.left, target_name)
                 {
-                    if partition_columns.contains(&left_target) {
-                        let placeholder_name = format!("{left_target}_{}", placeholders.len());
-
-                        let placeholder = Expr::Placeholder(datafusion_expr::expr::Placeholder {
-                            id: placeholder_name.clone(),
-                            data_type: None,
-                        });
-                        let replaced = Expr::BinaryExpr(BinaryExpr {
-                            left: binary.left,
-                            op: binary.op,
-                            right: placeholder.into(),
-                        });
-
-                        placeholders.insert(placeholder_name, *binary.right);
-
-                        return Some(replaced);
-                    }
+                    return construct_placeholder(
+                        binary,
+                        false,
+                        partition_columns.contains(&left_target),
+                        left_target,
+                        placeholders,
+                        extended_filter,
+                    );
                 }
                 return None;
             }
@@ -768,23 +858,14 @@ fn generalize_filter(
                 if let ReferenceTableCheck::HasReference(right_target) =
                     references_table(&binary.right, target_name)
                 {
-                    if partition_columns.contains(&right_target) {
-                        let placeholder_name = format!("{right_target}_{}", placeholders.len());
-
-                        let placeholder = Expr::Placeholder(datafusion_expr::expr::Placeholder {
-                            id: placeholder_name.clone(),
-                            data_type: None,
-                        });
-                        let replaced = Expr::BinaryExpr(BinaryExpr {
-                            right: binary.right,
-                            op: binary.op,
-                            left: placeholder.into(),
-                        });
-
-                        placeholders.insert(placeholder_name, *binary.left);
-
-                        return Some(replaced);
-                    }
+                    return construct_placeholder(
+                        binary,
+                        true,
+                        partition_columns.contains(&right_target),
+                        right_target,
+                        placeholders,
+                        extended_filter,
+                    );
                 }
                 return None;
             }
@@ -795,6 +876,7 @@ fn generalize_filter(
                 source_name,
                 target_name,
                 placeholders,
+                extended_filter,
             );
             let right = generalize_filter(
                 *binary.right,
@@ -802,6 +884,7 @@ fn generalize_filter(
                 source_name,
                 target_name,
                 placeholders,
+                extended_filter,
             );
 
             match (left, right) {
@@ -830,12 +913,16 @@ fn generalize_filter(
             ReferenceTableCheck::HasReference(col) => {
                 let placeholder_name = format!("{col}_{}", placeholders.len());
 
-                let placeholder = Expr::Placeholder(datafusion_expr::expr::Placeholder {
+                let placeholder = Expr::Placeholder(Placeholder {
                     id: placeholder_name.clone(),
                     data_type: None,
                 });
 
-                placeholders.insert(placeholder_name, other);
+                placeholders.push(PredicatePlaceholder {
+                    expr: other,
+                    alias: placeholder_name,
+                    is_aggregate: true,
+                });
 
                 Some(placeholder)
             }
@@ -865,11 +952,12 @@ async fn try_construct_early_filter(
     source: &LogicalPlan,
     source_name: &TableReference<'_>,
     target_name: &TableReference<'_>,
+    extended_filter: bool,
 ) -> DeltaResult<Option<Expr>> {
     let table_metadata = table_snapshot.metadata();
     let partition_columns = &table_metadata.partition_columns;
 
-    let mut placeholders = HashMap::default();
+    let mut placeholders = Vec::default();
 
     match generalize_filter(
         join_predicate,
@@ -877,25 +965,29 @@ async fn try_construct_early_filter(
         source_name,
         target_name,
         &mut placeholders,
+        extended_filter,
     ) {
         None => Ok(None),
         Some(filter) => {
             if placeholders.is_empty() {
-                // if we haven't recognised any partition-based predicates in the join predicate, return our reduced filter
+                // if we haven't recognised any source predicates in the join predicate, return our filter with static only predicates
                 Ok(Some(filter))
             } else {
-                // if we have some recognised partitions, then discover the distinct set of partitions in the source data and
-                // make a new filter, which expands out the placeholders for each distinct partition (and then OR these together)
-                let distinct_partitions = LogicalPlan::Distinct(Distinct::All(
-                    LogicalPlan::Projection(Projection::try_new(
-                        placeholders
-                            .into_iter()
-                            .map(|(alias, expr)| expr.alias(alias))
-                            .collect_vec(),
-                        source.clone().into(),
-                    )?)
-                    .into(),
-                ));
+                // if we have some filters, which depend on the source df, then collect the placeholders values from the source data
+                // We aggregate the distinct values for partitions with the group_columns and stats(min, max) for dynamic filter as agg_columns
+                // Can be translated into `SELECT partition1 as part1_0, min(id) as id_1_min, max(id) as id_1_max FROM source GROUP BY partition1`
+                let (agg_columns, group_columns) = placeholders.into_iter().partition_map(|p| {
+                    if p.is_aggregate {
+                        Left(p.expr.alias(p.alias))
+                    } else {
+                        Right(p.expr.alias(p.alias))
+                    }
+                });
+                let distinct_partitions = LogicalPlan::Aggregate(Aggregate::try_new(
+                    source.clone().into(),
+                    group_columns,
+                    agg_columns,
+                )?);
                 let execution_plan = session_state
                     .create_physical_plan(&distinct_partitions)
                     .await?;
@@ -942,6 +1034,7 @@ async fn execute(
     match_operations: Vec<MergeOperationConfig>,
     not_match_target_operations: Vec<MergeOperationConfig>,
     not_match_source_operations: Vec<MergeOperationConfig>,
+    extended_early_filter: bool,
 ) -> DeltaResult<(DeltaTableState, MergeMetrics)> {
     let mut metrics = MergeMetrics::default();
     let exec_start = Instant::now();
@@ -1022,6 +1115,7 @@ async fn execute(
             &source,
             &source_name,
             &target_name,
+            extended_early_filter,
         )
         .await?
     };
@@ -1537,6 +1631,7 @@ impl std::future::IntoFuture for MergeBuilder {
                 this.match_operations,
                 this.not_match_operations,
                 this.not_match_source_operations,
+                this.extended_early_filter,
             )
             .await?;
 
@@ -1583,7 +1678,6 @@ mod tests {
     use itertools::Itertools;
     use regex::Regex;
     use serde_json::json;
-    use std::collections::HashMap;
     use std::ops::Neg;
     use std::sync::Arc;
 
@@ -2063,7 +2157,10 @@ mod tests {
         let commit_info = table.history(None).await.unwrap();
         let last_commit = &commit_info[0];
         let parameters = last_commit.operation_parameters.clone().unwrap();
-        assert_eq!(parameters["predicate"], "modified = '2021-02-02'");
+        assert_eq!(
+            parameters["predicate"],
+            "id BETWEEN 'B' AND 'C' AND modified = '2021-02-02'"
+        );
         assert_eq!(
             parameters["mergePredicate"],
             "target.id = source.id AND target.modified = '2021-02-02'"
@@ -2204,7 +2301,7 @@ mod tests {
             extra_info["operationMetrics"],
             serde_json::to_value(&metrics).unwrap()
         );
-        assert!(!parameters.contains_key("predicate"));
+        assert_eq!(parameters["predicate"], "id BETWEEN 'B' AND 'X'");
         assert_eq!(parameters["mergePredicate"], json!("target.id = source.id"));
         assert_eq!(
             parameters["matchedPredicates"],
@@ -2486,7 +2583,10 @@ mod tests {
         let last_commit = &commit_info[0];
         let parameters = last_commit.operation_parameters.clone().unwrap();
 
-        assert_eq!(parameters["predicate"], json!("modified = '2021-02-02'"));
+        assert_eq!(
+            parameters["predicate"],
+            json!("id BETWEEN 'B' AND 'X' AND modified = '2021-02-02'")
+        );
 
         let expected = vec![
             "+----+-------+------------+",
@@ -2590,7 +2690,7 @@ mod tests {
         let parsed_filter = col(Column::new(source.clone().into(), "id"))
             .eq(col(Column::new(target.clone().into(), "id")));
 
-        let mut placeholders = HashMap::default();
+        let mut placeholders = Vec::default();
 
         let generalized = generalize_filter(
             parsed_filter,
@@ -2598,6 +2698,7 @@ mod tests {
             &source,
             &target,
             &mut placeholders,
+            true,
         )
         .unwrap();
 
@@ -2622,7 +2723,7 @@ mod tests {
         let parsed_filter = (source_id.clone().eq(target_id.clone()))
             .or(source_id.clone().is_null().and(target_id.clone().is_null()));
 
-        let mut placeholders = HashMap::default();
+        let mut placeholders = Vec::default();
 
         let generalized = generalize_filter(
             parsed_filter,
@@ -2630,6 +2731,7 @@ mod tests {
             &source,
             &target,
             &mut placeholders,
+            true,
         )
         .unwrap();
 
@@ -2645,9 +2747,9 @@ mod tests {
         })
         .and(target_id.clone().is_null()));
 
-        assert!(placeholders.len() == 2);
+        assert_eq!(placeholders.len(), 2);
 
-        let captured_expressions = placeholders.values().collect_vec();
+        let captured_expressions = placeholders.into_iter().map(|p| p.expr).collect_vec();
 
         assert!(captured_expressions.contains(&&source_id));
         assert!(captured_expressions.contains(&&source_id.is_null()));
@@ -2666,7 +2768,7 @@ mod tests {
             .neg()
             .eq(col(Column::new(target.clone().into(), "id")));
 
-        let mut placeholders = HashMap::default();
+        let mut placeholders = Vec::default();
 
         let generalized = generalize_filter(
             parsed_filter,
@@ -2674,6 +2776,7 @@ mod tests {
             &source,
             &target,
             &mut placeholders,
+            true,
         )
         .unwrap();
 
@@ -2686,12 +2789,13 @@ mod tests {
         assert_eq!(generalized, expected_filter);
 
         assert_eq!(placeholders.len(), 1);
-
-        let placeholder_expr = &placeholders["id_0"];
+        let placeholder_expr = placeholders.get(0).unwrap();
 
         let expected_placeholder = col(Column::new(source.clone().into(), "id")).neg();
 
-        assert_eq!(placeholder_expr, &expected_placeholder);
+        assert_eq!(placeholder_expr.expr, expected_placeholder);
+        assert_eq!(placeholder_expr.alias, "id_0");
+        assert_eq!(placeholder_expr.is_aggregate, false);
     }
 
     #[tokio::test]
@@ -2704,7 +2808,7 @@ mod tests {
             .eq(col(Column::new(target.clone().into(), "id")))
             .and(col(Column::new(target.clone().into(), "id")).eq(lit("C")));
 
-        let mut placeholders = HashMap::default();
+        let mut placeholders = Vec::default();
 
         let generalized = generalize_filter(
             parsed_filter,
@@ -2712,6 +2816,7 @@ mod tests {
             &source,
             &target,
             &mut placeholders,
+            true,
         )
         .unwrap();
 
@@ -2727,15 +2832,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_generalize_filter_keeps_only_static_target_references() {
+    async fn test_generalize_filter_with_dynamic_target_range_references() {
         let source = TableReference::parse_str("source");
         let target = TableReference::parse_str("target");
 
         let parsed_filter = col(Column::new(source.clone().into(), "id"))
-            .eq(col(Column::new(target.clone().into(), "id")))
-            .and(col(Column::new(target.clone().into(), "id")).eq(lit("C")));
+            .eq(col(Column::new(target.clone().into(), "id")));
 
-        let mut placeholders = HashMap::default();
+        let mut placeholders = Vec::default();
 
         let generalized = generalize_filter(
             parsed_filter,
@@ -2743,10 +2847,19 @@ mod tests {
             &source,
             &target,
             &mut placeholders,
+            true,
         )
         .unwrap();
-
-        let expected_filter = col(Column::new(target.clone().into(), "id")).eq(lit("C"));
+        let expected_filter_l = Expr::Placeholder(Placeholder {
+            id: "id_0_min".to_owned(),
+            data_type: None,
+        });
+        let expected_filter_h = Expr::Placeholder(Placeholder {
+            id: "id_0_max".to_owned(),
+            data_type: None,
+        });
+        let expected_filter = col(Column::new(target.clone().into(), "id"))
+            .between(expected_filter_l, expected_filter_h);
 
         assert_eq!(generalized, expected_filter);
     }
@@ -2760,7 +2873,7 @@ mod tests {
             .eq(col(Column::new(target.clone().into(), "id")))
             .and(col(Column::new(source.clone().into(), "id")).eq(lit("C")));
 
-        let mut placeholders = HashMap::default();
+        let mut placeholders = Vec::default();
 
         let generalized = generalize_filter(
             parsed_filter,
@@ -2768,6 +2881,7 @@ mod tests {
             &source,
             &target,
             &mut placeholders,
+            true,
         )
         .unwrap();
 
@@ -2832,6 +2946,7 @@ mod tests {
             &source,
             &source_name,
             &target_name,
+            true,
         )
         .await
         .unwrap();
@@ -2876,6 +2991,160 @@ mod tests {
         ];
 
         assert_eq!(split_pred, expected_pred_parts);
+    }
+
+    #[tokio::test]
+    async fn test_try_construct_early_filter_with_range() {
+        let schema = get_arrow_schema(&None);
+        let table = setup_table(Some(vec!["modified"])).await;
+
+        assert_eq!(table.version(), 0);
+        assert_eq!(table.get_files_count(), 0);
+
+        let ctx = SessionContext::new();
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(arrow::array::StringArray::from(vec!["B", "C"])),
+                Arc::new(arrow::array::Int32Array::from(vec![10, 20])),
+                Arc::new(arrow::array::StringArray::from(vec![
+                    "2023-07-04",
+                    "2023-07-04",
+                ])),
+            ],
+        )
+        .unwrap();
+        let source = ctx.read_batch(batch).unwrap();
+
+        let source_name = TableReference::parse_str("source");
+        let target_name = TableReference::parse_str("target");
+
+        let source = LogicalPlanBuilder::scan(
+            source_name.clone(),
+            provider_as_source(source.into_view()),
+            None,
+        )
+        .unwrap()
+        .build()
+        .unwrap();
+
+        let join_predicate = col(Column {
+            relation: Some(source_name.clone()),
+            name: "id".to_owned(),
+        })
+        .eq(col(Column {
+            relation: Some(target_name.clone()),
+            name: "id".to_owned(),
+        }));
+
+        let pred = try_construct_early_filter(
+            join_predicate,
+            table.snapshot().unwrap(),
+            &ctx.state(),
+            &source,
+            &source_name,
+            &target_name,
+            true,
+        )
+        .await
+        .unwrap();
+
+        assert!(pred.is_some());
+
+        let filter = col(Column {
+            relation: Some(target_name.clone()),
+            name: "id".to_owned(),
+        })
+        .between(
+            Expr::Literal(ScalarValue::Utf8(Some("B".to_string()))),
+            Expr::Literal(ScalarValue::Utf8(Some("C".to_string()))),
+        );
+        assert_eq!(pred.unwrap(), filter);
+    }
+
+    #[tokio::test]
+    async fn test_try_construct_early_filter_with_partition_and_range() {
+        let schema = get_arrow_schema(&None);
+        let table = setup_table(Some(vec!["modified"])).await;
+
+        assert_eq!(table.version(), 0);
+        assert_eq!(table.get_files_count(), 0);
+
+        let ctx = SessionContext::new();
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(arrow::array::StringArray::from(vec!["B", "C"])),
+                Arc::new(arrow::array::Int32Array::from(vec![10, 20])),
+                Arc::new(arrow::array::StringArray::from(vec![
+                    "2023-07-04",
+                    "2023-07-04",
+                ])),
+            ],
+        )
+        .unwrap();
+        let source = ctx.read_batch(batch).unwrap();
+
+        let source_name = TableReference::parse_str("source");
+        let target_name = TableReference::parse_str("target");
+
+        let source = LogicalPlanBuilder::scan(
+            source_name.clone(),
+            provider_as_source(source.into_view()),
+            None,
+        )
+        .unwrap()
+        .build()
+        .unwrap();
+
+        let join_predicate = col(Column {
+            relation: Some(source_name.clone()),
+            name: "id".to_owned(),
+        })
+        .eq(col(Column {
+            relation: Some(target_name.clone()),
+            name: "id".to_owned(),
+        }))
+        .and(
+            col(Column {
+                relation: Some(source_name.clone()),
+                name: "modified".to_owned(),
+            })
+            .eq(col(Column {
+                relation: Some(target_name.clone()),
+                name: "modified".to_owned(),
+            })),
+        );
+
+        let pred = try_construct_early_filter(
+            join_predicate,
+            table.snapshot().unwrap(),
+            &ctx.state(),
+            &source,
+            &source_name,
+            &target_name,
+            true,
+        )
+        .await
+        .unwrap();
+
+        assert!(pred.is_some());
+
+        let filter = col(Column {
+            relation: Some(target_name.clone()),
+            name: "id".to_owned(),
+        })
+        .between(
+            Expr::Literal(ScalarValue::Utf8(Some("B".to_string()))),
+            Expr::Literal(ScalarValue::Utf8(Some("C".to_string()))),
+        )
+        .and(
+            Expr::Literal(ScalarValue::Utf8(Some("2023-07-04".to_string()))).eq(col(Column {
+                relation: Some(target_name.clone()),
+                name: "modified".to_owned(),
+            })),
+        );
+        assert_eq!(pred.unwrap(), filter);
     }
 
     #[tokio::test]
