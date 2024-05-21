@@ -34,7 +34,7 @@ else:
 import pyarrow as pa
 import pyarrow.dataset as ds
 import pyarrow.fs as pa_fs
-from pyarrow.lib import RecordBatchReader
+from pyarrow import RecordBatchReader
 
 from ._internal import DeltaDataChecker as _DeltaDataChecker
 from ._internal import batch_distinct
@@ -285,6 +285,17 @@ def write_deltalake(
             data = convert_pyarrow_table(
                 pa.Table.from_pandas(data), large_dtypes=large_dtypes
             )
+    elif hasattr(data, "__arrow_c_array__"):
+        data = convert_pyarrow_recordbatch(pa.record_batch(data), large_dtypes)
+    elif hasattr(data, "__arrow_c_stream__"):
+        if not hasattr(RecordBatchReader, "from_stream"):
+            raise ValueError(
+                "pyarrow 15 or later required to read stream via pycapsule interface"
+            )
+
+        data = convert_pyarrow_recordbatchreader(
+            RecordBatchReader.from_stream(data), large_dtypes
+        )
     elif isinstance(data, Iterable):
         if schema is None:
             raise ValueError("You must provide schema if data is Iterable")
