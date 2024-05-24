@@ -5,7 +5,7 @@ use std::cmp::Ordering;
 use arrow_array::Array;
 use arrow_schema::TimeUnit;
 use chrono::{DateTime, TimeZone, Utc};
-use delta_kernel::expressions::Scalar;
+use delta_kernel::{expressions::Scalar, schema::StructField};
 use object_store::path::Path;
 
 use crate::NULL_PARTITION_VALUE_DATA_PATH;
@@ -181,6 +181,29 @@ impl ScalarExt for Scalar {
                     .map(|v| Self::Timestamp(v.clone().with_timezone("UTC").value(index))),
                 _ => None,
             },
+            Struct(fields) => {
+                let struct_fields = fields
+                    .iter()
+                    .flat_map(|f| TryFrom::try_from(f.as_ref()))
+                    .collect::<Vec<_>>();
+                let values = arr
+                    .as_any()
+                    .downcast_ref::<StructArray>()
+                    .and_then(|struct_arr| {
+                        struct_fields
+                            .iter()
+                            .map(|f: &StructField| {
+                                struct_arr
+                                    .column_by_name(f.name())
+                                    .and_then(|c| Self::from_array(c.as_ref(), index))
+                            })
+                            .collect::<Option<Vec<_>>>()
+                    })?;
+                if struct_fields.len() != values.len() {
+                    return None;
+                }
+                Some(Self::Struct(values, struct_fields))
+            }
             Float16
             | Decimal256(_, _)
             | List(_)
@@ -200,8 +223,6 @@ impl ScalarExt for Scalar {
             | BinaryView
             | ListView(_)
             | LargeListView(_)
-            // TODO - do we need / want structs back ?
-            | Struct(_)
             | Null => None,
         }
     }
