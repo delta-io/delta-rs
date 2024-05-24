@@ -5,7 +5,10 @@ use std::cmp::Ordering;
 use arrow_array::Array;
 use arrow_schema::TimeUnit;
 use chrono::{DateTime, TimeZone, Utc};
-use delta_kernel::{expressions::Scalar, schema::StructField};
+use delta_kernel::{
+    expressions::{Scalar, StructData},
+    schema::StructField,
+};
 use object_store::path::Path;
 
 use crate::NULL_PARTITION_VALUE_DATA_PATH;
@@ -70,7 +73,7 @@ impl ScalarExt for Scalar {
             },
             Self::Binary(val) => create_escaped_binary_string(val.as_slice()),
             Self::Null(_) => "null".to_string(),
-            Self::Struct(_, _) => todo!(),
+            Self::Struct(_) => unimplemented!(),
         }
     }
 
@@ -202,7 +205,9 @@ impl ScalarExt for Scalar {
                 if struct_fields.len() != values.len() {
                     return None;
                 }
-                Some(Self::Struct(values, struct_fields))
+                Some(Self::Struct(
+                    StructData::try_new(struct_fields, values).ok()?,
+                ))
             }
             Float16
             | Decimal256(_, _)
