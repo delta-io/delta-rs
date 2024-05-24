@@ -1458,7 +1458,7 @@ def test_invalid_decimals(tmp_path: pathlib.Path, engine):
 
     with pytest.raises(
         SchemaMismatchError,
-        match=re.escape("Invalid data type for Delta Lake: decimal(39,1)"),
+        match=re.escape("Invalid data type for Delta Lake: Decimal256(39, 1)"),
     ):
         write_deltalake(table_or_uri=tmp_path, mode="append", data=data, engine=engine)
 

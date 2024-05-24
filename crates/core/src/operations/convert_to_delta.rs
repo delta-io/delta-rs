@@ -597,14 +597,15 @@ mod tests {
             "part-00000-d22c627d-9655-4153-9527-f8995620fa42-c000.snappy.parquet"
         );
 
-        // let Some(Scalar::Struct(min_values, _)) = action.min_values() else {
-        //     panic!("Missing min values");
-        // };
-        // assert_eq!(min_values, vec![Scalar::Date(18628), Scalar::Integer(1)]);
-        // let Some(Scalar::Struct(max_values, _)) = action.max_values() else {
-        //     panic!("Missing max values");
-        // };
-        // assert_eq!(max_values, vec![Scalar::Date(18632), Scalar::Integer(5)]);
+        let Some(Scalar::Struct(min_values, _)) = action.min_values() else {
+            panic!("Missing min values");
+        };
+        assert_eq!(min_values, vec![Scalar::Date(18628), Scalar::Integer(1)]);
+
+        let Some(Scalar::Struct(max_values, _)) = action.max_values() else {
+            panic!("Missing max values");
+        };
+        assert_eq!(max_values, vec![Scalar::Date(18632), Scalar::Integer(5)]);
 
         assert_delta_table(
             table,
