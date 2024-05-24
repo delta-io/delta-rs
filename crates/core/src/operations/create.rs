@@ -4,6 +4,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use delta_kernel::schema::MetadataValue;
 use futures::future::BoxFuture;
 use maplit::hashset;
 use serde_json::Value;
@@ -128,7 +129,24 @@ impl CreateBuilder {
     ) -> Self {
         let mut field = StructField::new(name.into(), data_type, nullable);
         if let Some(meta) = metadata {
-            field = field.with_metadata(meta);
+            field = field.with_metadata(meta.iter().map(|(k, v)| {
+                (
+                    k,
+                    if let Value::Number(n) = v {
+                        n.as_i64().map_or_else(
+                            || MetadataValue::String(v.to_string()),
+                            |i| {
+                                i32::try_from(i)
+                                    .ok()
+                                    .map(MetadataValue::Number)
+                                    .unwrap_or_else(|| MetadataValue::String(v.to_string()))
+                            },
+                        )
+                    } else {
+                        MetadataValue::String(v.to_string())
+                    },
+                )
+            }));
         };
         self.columns.push(field);
         self

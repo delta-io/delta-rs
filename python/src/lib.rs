@@ -1364,6 +1364,7 @@ fn scalar_to_py(value: &Scalar, py_date: &PyAny, py: Python) -> PyResult<PyObjec
             date.to_object(py)
         }
         Decimal(_, _, _) => value.serialize().to_object(py),
+        Struct(_, _) => todo!(),
     };
 
     Ok(val)
