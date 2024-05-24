@@ -62,7 +62,7 @@ impl ScalarExt for Scalar {
                 }
                 Ordering::Less => {
                     let mut s = value.to_string();
-                    for _ in 0..(scale.abs()) {
+                    for _ in 0..*scale {
                         s.push('0');
                     }
                     s
@@ -70,6 +70,7 @@ impl ScalarExt for Scalar {
             },
             Self::Binary(val) => create_escaped_binary_string(val.as_slice()),
             Self::Null(_) => "null".to_string(),
+            Self::Struct(_, _) => todo!(),
         }
     }
 
@@ -161,7 +162,7 @@ impl ScalarExt for Scalar {
             Decimal128(precision, scale) => {
                 arr.as_any().downcast_ref::<Decimal128Array>().map(|v| {
                     let value = v.value(index);
-                    Self::Decimal(value, *precision, *scale)
+                    Self::Decimal(value, *precision, *scale as u8)
                 })
             }
             Date32 => arr

@@ -125,12 +125,6 @@ impl StructTypeExt for StructType {
     }
 }
 
-/// The maximum precision for [PrimitiveType::Decimal] values
-pub const DECIMAL_MAX_PRECISION: u8 = 38;
-
-/// The maximum scale for [PrimitiveType::Decimal] values
-pub const DECIMAL_MAX_SCALE: i8 = 38;
-
 #[cfg(test)]
 mod tests {
     use super::*;

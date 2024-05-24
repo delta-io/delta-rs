@@ -7,8 +7,8 @@ use deltalake::arrow::datatypes::{
 use deltalake::arrow::error::ArrowError;
 use deltalake::arrow::pyarrow::PyArrowType;
 use deltalake::kernel::{
-    ArrayType as DeltaArrayType, DataType, MapType as DeltaMapType, PrimitiveType as DeltaPrimitve,
-    StructField, StructType as DeltaStructType, StructTypeExt,
+    ArrayType as DeltaArrayType, DataType, MapType as DeltaMapType, MetadataValue,
+    PrimitiveType as DeltaPrimitve, StructField, StructType as DeltaStructType, StructTypeExt,
 };
 use pyo3::exceptions::{PyException, PyNotImplementedError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
@@ -98,30 +98,6 @@ impl PrimitiveType {
         Ok(Self {
             inner_type: data_type,
         })
-
-        // if data_type.starts_with("decimal") {
-        //     if try_parse_decimal_type(&data_type).is_none() {
-        //         Err(PyValueError::new_err(format!(
-        //             "invalid decimal type: {data_type}"
-        //         )))
-        //     } else {
-        //         Ok(Self {
-        //             inner_type: data_type,
-        //         })
-        //     }
-        // } else if !VALID_PRIMITIVE_TYPES
-        //     .iter()
-        //     .any(|&valid| data_type == valid)
-        // {
-        //     Err(PyValueError::new_err(format!(
-        //         "data_type must be one of decimal(<precision>, <scale>), {}.",
-        //         VALID_PRIMITIVE_TYPES.join(", ")
-        //     )))
-        // } else {
-        //     Ok(Self {
-        //         inner_type: data_type,
-        //     })
-        // }
     }
 
     #[getter]
@@ -455,7 +431,24 @@ impl Field {
         };
 
         let mut inner = StructField::new(name, ty, nullable);
-        inner = inner.with_metadata(metadata);
+        inner = inner.with_metadata(metadata.iter().map(|(k, v)| {
+            (
+                k,
+                if let serde_json::Value::Number(n) = v {
+                    n.as_i64().map_or_else(
+                        || MetadataValue::String(v.to_string()),
+                        |i| {
+                            i32::try_from(i)
+                                .ok()
+                                .map(MetadataValue::Number)
+                                .unwrap_or_else(|| MetadataValue::String(v.to_string()))
+                        },
+                    )
+                } else {
+                    MetadataValue::String(v.to_string())
+                },
+            )
+        }));
 
         Ok(Self { inner })
     }
