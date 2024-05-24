@@ -361,11 +361,7 @@ mod tests {
     use std::collections::HashMap;
     use std::sync::Arc;
 
-    use arrow::array::ArrayData;
-    use arrow_array::Array;
-    use arrow_array::{make_array, ArrayRef, MapArray, StringArray, StructArray};
-    use arrow_buffer::{Buffer, ToByteSlice};
-    use arrow_schema::{ArrowError, Field};
+    use arrow_array::{MapArray, RecordBatch};
     use delta_kernel::schema::{DataType, MapType, PrimitiveType, StructField, StructType};
 
     use super::*;
@@ -524,47 +520,7 @@ mod tests {
         let entry_offsets = vec![0u32, 1, 1, 4, 5, 5];
         let num_rows = keys.len();
 
-        // Copied the function `new_from_string` with the patched code from https://github.com/apache/arrow-rs/pull/4808
-        // This should be reverted back [`MapArray::new_from_strings`] once arrow is upgraded in this project.
-        fn new_from_strings<'a>(
-            keys: impl Iterator<Item = &'a str>,
-            values: &dyn Array,
-            entry_offsets: &[u32],
-        ) -> Result<MapArray, ArrowError> {
-            let entry_offsets_buffer = Buffer::from(entry_offsets.to_byte_slice());
-            let keys_data = StringArray::from_iter_values(keys);
-
-            let keys_field = Arc::new(Field::new("key", ArrowDataType::Utf8, false));
-            let values_field = Arc::new(Field::new(
-                "value",
-                values.data_type().clone(),
-                values.null_count() > 0,
-            ));
-
-            let entry_struct = StructArray::from(vec![
-                (keys_field, Arc::new(keys_data) as ArrayRef),
-                (values_field, make_array(values.to_data())),
-            ]);
-
-            let map_data_type = ArrowDataType::Map(
-                Arc::new(Field::new(
-                    "entries",
-                    entry_struct.data_type().clone(),
-                    false,
-                )),
-                false,
-            );
-
-            let map_data = ArrayData::builder(map_data_type)
-                .len(entry_offsets.len() - 1)
-                .add_buffer(entry_offsets_buffer)
-                .add_child_data(entry_struct.into_data())
-                .build()?;
-
-            Ok(MapArray::from(map_data))
-        }
-
-        let map_array = new_from_strings(
+        let map_array = MapArray::new_from_strings(
             keys.into_iter(),
             &arrow::array::BinaryArray::from(values),
             entry_offsets.as_slice(),
@@ -585,9 +541,8 @@ mod tests {
             ]))
             .expect("Could not get schema");
 
-        let record_batch =
-            arrow::record_batch::RecordBatch::try_new(Arc::new(schema), vec![Arc::new(map_array)])
-                .expect("Failed to create RecordBatch");
+        let record_batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(map_array)])
+            .expect("Failed to create RecordBatch");
 
         assert_eq!(record_batch.num_columns(), 1);
         assert_eq!(record_batch.num_rows(), num_rows);

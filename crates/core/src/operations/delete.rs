@@ -76,11 +76,11 @@ pub struct DeleteMetrics {
     /// Number of rows copied in the process of deleting files
     pub num_copied_rows: Option<usize>,
     /// Time taken to execute the entire operation
-    pub execution_time_ms: u128,
+    pub execution_time_ms: u64,
     /// Time taken to scan the file for matches
-    pub scan_time_ms: u128,
+    pub scan_time_ms: u64,
     /// Time taken to rewrite the matched files
-    pub rewrite_time_ms: u128,
+    pub rewrite_time_ms: u64,
 }
 
 impl super::Operation<()> for DeleteBuilder {}
@@ -207,7 +207,7 @@ async fn execute(
 
     let scan_start = Instant::now();
     let candidates = find_files(&snapshot, log_store.clone(), &state, predicate.clone()).await?;
-    metrics.scan_time_ms = Instant::now().duration_since(scan_start).as_millis();
+    metrics.scan_time_ms = Instant::now().duration_since(scan_start).as_millis() as u64;
 
     let predicate = predicate.unwrap_or(Expr::Literal(ScalarValue::Boolean(Some(true))));
 
@@ -225,7 +225,7 @@ async fn execute(
             writer_properties,
         )
         .await?;
-        metrics.rewrite_time_ms = Instant::now().duration_since(write_start).as_millis();
+        metrics.rewrite_time_ms = Instant::now().duration_since(write_start).as_millis() as u64;
         add
     };
     let remove = candidates.candidates;
@@ -254,7 +254,7 @@ async fn execute(
         }))
     }
 
-    metrics.execution_time_ms = Instant::now().duration_since(exec_start).as_millis();
+    metrics.execution_time_ms = Instant::now().duration_since(exec_start).as_millis() as u64;
 
     commit_properties
         .app_metadata
