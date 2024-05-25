@@ -34,13 +34,7 @@ impl ScalarExt for Scalar {
             Self::Long(l) => l.to_string(),
             Self::Float(f) => f.to_string(),
             Self::Double(d) => d.to_string(),
-            Self::Boolean(b) => {
-                if *b {
-                    "true".to_string()
-                } else {
-                    "false".to_string()
-                }
-            }
+            Self::Boolean(b) => if *b { "true" } else { "false" }.to_string(),
             Self::TimestampNtz(ts) | Self::Timestamp(ts) => {
                 let ts = Utc.timestamp_micros(*ts).single().unwrap();
                 ts.format("%Y-%m-%d %H:%M:%S%.6f").to_string()
@@ -172,18 +166,14 @@ impl ScalarExt for Scalar {
                 .as_any()
                 .downcast_ref::<Date32Array>()
                 .map(|v| Self::Date(v.value(index))),
-            // TODO handle timezones when implementing timestamp ntz feature.
-            Timestamp(TimeUnit::Microsecond, tz) => match tz {
-                None => arr
-                    .as_any()
-                    .downcast_ref::<TimestampMicrosecondArray>()
-                    .map(|v| Self::Timestamp(v.value(index))),
-                Some(tz_str) if tz_str.as_ref() == "UTC" => arr
-                    .as_any()
-                    .downcast_ref::<TimestampMicrosecondArray>()
-                    .map(|v| Self::Timestamp(v.clone().with_timezone("UTC").value(index))),
-                _ => None,
-            },
+            Timestamp(TimeUnit::Microsecond, None) => arr
+                .as_any()
+                .downcast_ref::<TimestampMicrosecondArray>()
+                .map(|v| Self::TimestampNtz(v.value(index))),
+            Timestamp(TimeUnit::Microsecond, Some(tz)) if tz.eq_ignore_ascii_case("utc") => arr
+                .as_any()
+                .downcast_ref::<TimestampMicrosecondArray>()
+                .map(|v| Self::Timestamp(v.clone().value(index))),
             Struct(fields) => {
                 let struct_fields = fields
                     .iter()
@@ -202,9 +192,6 @@ impl ScalarExt for Scalar {
                             })
                             .collect::<Option<Vec<_>>>()
                     })?;
-                if struct_fields.len() != values.len() {
-                    return None;
-                }
                 Some(Self::Struct(
                     StructData::try_new(struct_fields, values).ok()?,
                 ))

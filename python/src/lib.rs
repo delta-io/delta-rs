@@ -1364,9 +1364,9 @@ fn scalar_to_py(value: &Scalar, py_date: &PyAny, py: Python) -> PyResult<PyObjec
             date.to_object(py)
         }
         Decimal(_, _, _) => value.serialize().to_object(py),
-        Struct(values, fields) => {
+        Struct(data) => {
             let py_struct = PyDict::new(py);
-            for (field, value) in fields.iter().zip(values.iter()) {
+            for (field, value) in data.fields().iter().zip(data.values().iter()) {
                 py_struct.set_item(field.name(), scalar_to_py(value, py_date, py)?)?;
             }
             py_struct.to_object(py)
@@ -1433,8 +1433,8 @@ fn filestats_to_expression_next<'py>(
     let mut has_nulls_set: HashSet<String> = HashSet::new();
 
     // NOTE: null_counts should always return a struct scalar.
-    if let Some(Scalar::Struct(values, fields)) = file_info.null_counts() {
-        for (field, value) in fields.iter().zip(values.iter()) {
+    if let Some(Scalar::Struct(data)) = file_info.null_counts() {
+        for (field, value) in data.fields().iter().zip(data.values().iter()) {
             if let Scalar::Long(val) = value {
                 if *val == 0 {
                     expressions.push(py_field.call1((field.name(),))?.call_method0("is_valid"));
@@ -1448,11 +1448,11 @@ fn filestats_to_expression_next<'py>(
     }
 
     // NOTE: min_values should always return a struct scalar.
-    if let Some(Scalar::Struct(values, fields)) = file_info.min_values() {
-        for (field, value) in fields.iter().zip(values.iter()) {
+    if let Some(Scalar::Struct(data)) = file_info.min_values() {
+        for (field, value) in data.fields().iter().zip(data.values().iter()) {
             match value {
                 // TODO: Handle nested field statistics.
-                Scalar::Struct(_, _) => {}
+                Scalar::Struct(_) => {}
                 _ => {
                     let maybe_minimum =
                         cast_to_type(field.name(), scalar_to_py(value, py_date, py)?, &schema.0);
@@ -1475,11 +1475,11 @@ fn filestats_to_expression_next<'py>(
     }
 
     // NOTE: max_values should always return a struct scalar.
-    if let Some(Scalar::Struct(values, fields)) = file_info.max_values() {
-        for (field, value) in fields.iter().zip(values.iter()) {
+    if let Some(Scalar::Struct(data)) = file_info.max_values() {
+        for (field, value) in data.fields().iter().zip(data.values().iter()) {
             match value {
                 // TODO: Handle nested field statistics.
-                Scalar::Struct(_, _) => {}
+                Scalar::Struct(_) => {}
                 _ => {
                     let maybe_maximum =
                         cast_to_type(field.name(), scalar_to_py(value, py_date, py)?, &schema.0);
