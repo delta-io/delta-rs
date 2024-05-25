@@ -14,8 +14,8 @@ use super::config::TableConfig;
 use super::{get_partition_col_data_types, DeltaTableConfig};
 use crate::kernel::arrow::extract as ex;
 use crate::kernel::{
-    Action, Add, AddCDCFile, DataType, EagerSnapshot, LogDataHandler, LogicalFile, Metadata,
-    Protocol, Remove, ReplayVisitor, StructType,
+    Action, ActionType, Add, AddCDCFile, DataType, EagerSnapshot, LogDataHandler, LogicalFile,
+    Metadata, Protocol, Remove, ReplayVisitor, StructType, Txn,
 };
 
 use crate::logstore::LogStore;
@@ -25,7 +25,7 @@ use crate::protocol::DeltaOperation;
 use crate::{DeltaResult, DeltaTableError};
 
 pub(crate) struct AppTransactionVisitor {
-    app_transaction_version: HashMap<String, i64>,
+    app_transaction_version: HashMap<String, Txn>,
 }
 
 impl AppTransactionVisitor {
@@ -37,7 +37,7 @@ impl AppTransactionVisitor {
 }
 
 impl AppTransactionVisitor {
-    pub fn merge(self, map: &HashMap<String, i64>) -> HashMap<String, i64> {
+    pub fn merge(self, map: &HashMap<String, Txn>) -> HashMap<String, Txn> {
         let mut clone = map.clone();
         for (key, value) in self.app_transaction_version {
             clone.insert(key, value);
@@ -61,15 +61,30 @@ impl ReplayVisitor for AppTransactionVisitor {
 
         let id = ex::extract_and_cast::<StringArray>(arr, "appId")?;
         let version = ex::extract_and_cast::<Int64Array>(arr, "version")?;
+        let last_updated = ex::extract_and_cast_opt::<Int64Array>(arr, "lastUpdated");
 
         for idx in 0..id.len() {
-            let app = ex::read_str(id, idx)?;
-            let version = ex::read_primitive(version, idx)?;
-
-            self.app_transaction_version.insert(app.to_owned(), version);
+            if id.is_valid(idx) {
+                let app_id = ex::read_str(id, idx)?;
+                if self.app_transaction_version.contains_key(app_id) {
+                    continue;
+                }
+                self.app_transaction_version.insert(
+                    app_id.to_owned(),
+                    Txn {
+                        app_id: app_id.into(),
+                        version: ex::read_primitive(version, idx)?,
+                        last_updated: last_updated.and_then(|arr| ex::read_primitive_opt(arr, idx)),
+                    },
+                );
+            }
         }
 
         Ok(())
+    }
+
+    fn required_actions(&self) -> Vec<ActionType> {
+        vec![ActionType::Txn]
     }
 }
 
@@ -77,7 +92,7 @@ impl ReplayVisitor for AppTransactionVisitor {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DeltaTableState {
-    pub(crate) app_transaction_version: HashMap<String, i64>,
+    pub(crate) app_transaction_version: HashMap<String, Txn>,
     pub(crate) snapshot: EagerSnapshot,
 }
 
@@ -219,7 +234,7 @@ impl DeltaTableState {
 
     /// HashMap containing the last txn version stored for every app id writing txn
     /// actions.
-    pub fn app_transaction_version(&self) -> &HashMap<String, i64> {
+    pub fn app_transaction_version(&self) -> &HashMap<String, Txn> {
         &self.app_transaction_version
     }
 
