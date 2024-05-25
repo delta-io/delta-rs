@@ -26,7 +26,7 @@ debug = true
 debug = "line-tables-only"
 
 [workspace.dependencies]
-delta_kernel = { git = "https://github.com/roeap/delta-kernel-rs", rev = "400a6c6091b225f814894426b322360509f7df5c" }
+delta_kernel = { git = "https://github.com/roeap/delta-kernel-rs", rev = "06f767af3fe510a367eb63e35b76e99d1b3898e9" }
 # delta_kernel = { path = "../delta-kernel-rs/kernel" }
 
 # arrow
