@@ -25,13 +25,15 @@ use futures::{StreamExt, TryStreamExt};
 use object_store::path::Path;
 use object_store::ObjectStore;
 
+pub use self::log_data::*;
 use self::log_segment::{LogSegment, PathExt};
 use self::parse::{read_adds, read_removes};
 use self::replay::{LogMapper, LogReplayScanner, ReplayStream};
 use super::{
     Action, Add, AddCDCFile, CommitInfo, DataType, Metadata, Protocol, Remove, StructField,
 };
-use crate::kernel::StructType;
+use crate::kernel::parse::read_cdf_adds;
+use crate::kernel::{ActionType, StructType};
 use crate::logstore::LogStore;
 use crate::operations::transaction::CommitData;
 use crate::table::config::TableConfig;
@@ -42,9 +44,7 @@ mod log_segment;
 pub(crate) mod parse;
 mod replay;
 mod serde;
-
-use crate::kernel::parse::read_cdf_adds;
-pub use log_data::*;
+mod visitors;
 
 /// A snapshot of a Delta table
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
@@ -341,6 +341,9 @@ impl Snapshot {
 pub trait ReplayVisitor: Send {
     /// Process a batch
     fn visit_batch(&mut self, batch: &RecordBatch) -> DeltaResult<()>;
+
+    /// return all relevant actions for the visitor
+    fn required_actions(&self) -> Vec<ActionType>;
 }
 
 /// A snapshot of a Delta table that has been eagerly loaded into memory.
