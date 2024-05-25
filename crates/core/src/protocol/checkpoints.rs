@@ -21,7 +21,7 @@ use tracing::{debug, error};
 use super::{time_utils, ProtocolError};
 use crate::kernel::arrow::delta_log_schema_for_table;
 use crate::kernel::{
-    Action, Add as AddAction, DataType, PrimitiveType, Protocol, Remove, StructField, Txn,
+    Action, Add as AddAction, DataType, PrimitiveType, Protocol, Remove, StructField,
 };
 use crate::logstore::LogStore;
 use crate::table::state::DeltaTableState;
@@ -298,13 +298,7 @@ fn parquet_bytes_from_state(
         state
             .app_transaction_version()
             .iter()
-            .map(|(app_id, version)| {
-                Action::Txn(Txn {
-                    app_id: app_id.clone(),
-                    version: *version,
-                    last_updated: None,
-                })
-            }),
+            .map(|(_, txn)| Action::Txn(txn.clone())),
     )
     // removes
     .chain(tombstones.iter().map(|r| {

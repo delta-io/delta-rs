@@ -33,7 +33,7 @@ mod tests {
 
         let app_txns = table.get_app_transaction_version();
         assert_eq!(app_txns.len(), 1);
-        assert_eq!(app_txns.get("my-app"), Some(&1));
+        assert_eq!(app_txns.get("my-app").map(|t| t.version), Some(1));
 
         // Test Txn Id can be read from existing table
 
@@ -44,7 +44,7 @@ mod tests {
         let app_txns2 = table2.get_app_transaction_version();
 
         assert_eq!(app_txns2.len(), 1);
-        assert_eq!(app_txns2.get("my-app"), Some(&1));
+        assert_eq!(app_txns2.get("my-app").map(|t| t.version), Some(1));
 
         // Write new data to the table and check that `update` functions work
 
@@ -59,13 +59,13 @@ mod tests {
         assert_eq!(table.version(), 1);
         let app_txns = table.get_app_transaction_version();
         assert_eq!(app_txns.len(), 1);
-        assert_eq!(app_txns.get("my-app"), Some(&3));
+        assert_eq!(app_txns.get("my-app").map(|t| t.version), Some(3));
 
         table2.update_incremental(None).await.unwrap();
         assert_eq!(table2.version(), 1);
         let app_txns2 = table2.get_app_transaction_version();
         assert_eq!(app_txns2.len(), 1);
-        assert_eq!(app_txns2.get("my-app"), Some(&3));
+        assert_eq!(app_txns2.get("my-app").map(|t| t.version), Some(3));
 
         // Create a checkpoint and then load
         checkpoints::create_checkpoint(&table).await.unwrap();
@@ -75,7 +75,7 @@ mod tests {
             .unwrap();
         let app_txns3 = table2.get_app_transaction_version();
         assert_eq!(app_txns3.len(), 1);
-        assert_eq!(app_txns3.get("my-app"), Some(&3));
+        assert_eq!(app_txns3.get("my-app").map(|t| t.version), Some(3));
         assert_eq!(table3.version(), 1);
     }
 
