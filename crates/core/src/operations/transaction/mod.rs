@@ -97,6 +97,8 @@ use crate::{crate_version, DeltaResult};
 
 pub use self::protocol::INSTANCE as PROTOCOL;
 
+#[cfg(test)]
+pub(crate) mod application;
 mod conflict_checker;
 mod protocol;
 #[cfg(feature = "datafusion")]
@@ -611,20 +613,13 @@ impl<'a> PostCommit<'a> {
                 // This may only occur during concurrent write actions. We need to update the state first to - 1
                 // then we can advance.
                 snapshot
-                    .update(
-                        self.log_store.clone(),
-                        Some(self.version - 1),
-                        Default::default(),
-                    )
+                    .update(self.log_store.clone(), Some(self.version - 1))
                     .await?;
-                snapshot.advance(vec![&self.data], Default::default())?;
+                snapshot.advance(vec![&self.data])?;
             } else {
-                snapshot.advance(vec![&self.data], Default::default())?;
+                snapshot.advance(vec![&self.data])?;
             }
-            let state = DeltaTableState {
-                app_transaction_version: HashMap::new(),
-                snapshot,
-            };
+            let state = DeltaTableState { snapshot };
             // Execute each hook
             if self.create_checkpoint {
                 self.create_checkpoint(&state, &self.log_store, self.version)

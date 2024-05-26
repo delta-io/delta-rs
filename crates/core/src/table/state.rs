@@ -1,6 +1,6 @@
 //! The module for delta table state.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use chrono::Utc;
@@ -10,8 +10,8 @@ use serde::{Deserialize, Serialize};
 
 use super::{config::TableConfig, get_partition_col_data_types, DeltaTableConfig};
 use crate::kernel::{
-    Action, Add, AddCDCFile, AppTransactionVisitor, DataType, EagerSnapshot, LogDataHandler,
-    LogicalFile, Metadata, Protocol, Remove, ReplayVisitor, StructType, Transaction,
+    Action, ActionType, Add, AddCDCFile, DataType, EagerSnapshot, LogDataHandler, LogicalFile,
+    Metadata, Protocol, Remove, StructType, Transaction,
 };
 use crate::logstore::LogStore;
 use crate::operations::transaction::CommitData;
@@ -23,7 +23,6 @@ use crate::{DeltaResult, DeltaTableError};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DeltaTableState {
-    pub(crate) app_transaction_version: HashMap<String, Transaction>,
     pub(crate) snapshot: EagerSnapshot,
 }
 
@@ -35,20 +34,15 @@ impl DeltaTableState {
         config: DeltaTableConfig,
         version: Option<i64>,
     ) -> DeltaResult<Self> {
-        let mut app_visitor = AppTransactionVisitor::new();
-        let visitors: Vec<&mut dyn ReplayVisitor> = vec![&mut app_visitor];
         let snapshot = EagerSnapshot::try_new_with_visitor(
             table_root,
             store.clone(),
             config,
             version,
-            visitors,
+            HashSet::from([ActionType::Txn]),
         )
         .await?;
-        Ok(Self {
-            snapshot,
-            app_transaction_version: app_visitor.app_transaction_version,
-        })
+        Ok(Self { snapshot })
     }
 
     /// Return table version
@@ -95,10 +89,7 @@ impl DeltaTableState {
         )];
 
         let snapshot = EagerSnapshot::new_test(&commit_data).unwrap();
-        Ok(Self {
-            app_transaction_version: Default::default(),
-            snapshot,
-        })
+        Ok(Self { snapshot })
     }
 
     /// Returns a semantic accessor to the currently loaded log data.
@@ -162,10 +153,13 @@ impl DeltaTableState {
             .map(|add| add.object_store_path())
     }
 
-    /// HashMap containing the last txn version stored for every app id writing txn
-    /// actions.
-    pub fn app_transaction_version(&self) -> &HashMap<String, Transaction> {
-        &self.app_transaction_version
+    /// HashMap containing the last transaction stored for every application.
+    pub fn app_transaction_version(&self) -> DeltaResult<HashMap<String, Transaction>> {
+        Ok(self
+            .snapshot
+            .transactions()?
+            .map(|t| (t.app_id.clone(), t))
+            .collect())
     }
 
     /// The most recent protocol of the table.
@@ -210,12 +204,7 @@ impl DeltaTableState {
             app_transactions: Vec::new(),
         };
 
-        let mut app_txn_visitor = AppTransactionVisitor::new();
-        let new_version = self
-            .snapshot
-            .advance(&vec![commit_data], vec![&mut app_txn_visitor])?;
-
-        self.app_transaction_version = app_txn_visitor.merge(&self.app_transaction_version);
+        let new_version = self.snapshot.advance(&vec![commit_data])?;
 
         if new_version != version {
             return Err(DeltaTableError::Generic("Version mismatch".to_string()));
@@ -234,11 +223,7 @@ impl DeltaTableState {
         log_store: Arc<dyn LogStore>,
         version: Option<i64>,
     ) -> Result<(), DeltaTableError> {
-        let mut app_txn_visitor = AppTransactionVisitor::new();
-        self.snapshot
-            .update(log_store, version, vec![&mut app_txn_visitor])
-            .await?;
-        self.app_transaction_version = app_txn_visitor.merge(&self.app_transaction_version);
+        self.snapshot.update(log_store, version).await?;
         Ok(())
     }
 

@@ -15,6 +15,7 @@
 //!
 //!
 
+use std::collections::{HashMap, HashSet};
 use std::io::{BufRead, BufReader, Cursor};
 use std::sync::Arc;
 
@@ -22,7 +23,6 @@ use ::serde::{Deserialize, Serialize};
 use arrow_array::RecordBatch;
 use futures::stream::BoxStream;
 use futures::{StreamExt, TryStreamExt};
-use hashbrown::HashSet;
 use object_store::path::Path;
 use object_store::ObjectStore;
 
@@ -31,6 +31,7 @@ use self::parse::{read_adds, read_removes};
 use self::replay::{LogMapper, LogReplayScanner, ReplayStream};
 use super::{
     Action, Add, AddCDCFile, CommitInfo, DataType, Metadata, Protocol, Remove, StructField,
+    Transaction,
 };
 use crate::kernel::parse::read_cdf_adds;
 use crate::kernel::{ActionType, StructType};
@@ -206,7 +207,7 @@ impl Snapshot {
     pub fn files<'a>(
         &self,
         store: Arc<dyn ObjectStore>,
-        visitors: Vec<&'a mut dyn ReplayVisitor>,
+        visitors: &'a mut Vec<Box<dyn ReplayVisitor>>,
     ) -> DeltaResult<ReplayStream<'a, BoxStream<'_, DeltaResult<RecordBatch>>>> {
         let mut schema_actions: HashSet<_> =
             visitors.iter().flat_map(|v| v.required_actions()).collect();
@@ -361,6 +362,11 @@ impl Snapshot {
 #[derive(Debug, Clone, PartialEq)]
 pub struct EagerSnapshot {
     snapshot: Snapshot,
+    // additional actions that should be tracked during log replay.
+    tracked_actions: HashSet<ActionType>,
+
+    transactions: Option<HashMap<String, Transaction>>,
+
     // NOTE: this is a Vec of RecordBatch instead of a single RecordBatch because
     //       we do not yet enforce a consistent schema across all batches we read from the log.
     files: Vec<RecordBatch>,
@@ -374,7 +380,7 @@ impl EagerSnapshot {
         config: DeltaTableConfig,
         version: Option<i64>,
     ) -> DeltaResult<Self> {
-        Self::try_new_with_visitor(table_root, store, config, version, vec![]).await
+        Self::try_new_with_visitor(table_root, store, config, version, Default::default()).await
     }
 
     /// Create a new [`EagerSnapshot`] instance
@@ -383,11 +389,42 @@ impl EagerSnapshot {
         store: Arc<dyn ObjectStore>,
         config: DeltaTableConfig,
         version: Option<i64>,
-        visitors: Vec<&mut dyn ReplayVisitor>,
+        tracked_actions: HashSet<ActionType>,
     ) -> DeltaResult<Self> {
+        let mut visitors = tracked_actions
+            .iter()
+            .flat_map(|a| get_visitor(a))
+            .collect::<Vec<_>>();
         let snapshot = Snapshot::try_new(table_root, store.clone(), config, version).await?;
-        let files = snapshot.files(store, visitors)?.try_collect().await?;
-        Ok(Self { snapshot, files })
+        let files = snapshot.files(store, &mut visitors)?.try_collect().await?;
+
+        let mut sn = Self {
+            snapshot,
+            files,
+            tracked_actions,
+            transactions: None,
+        };
+
+        sn.process_visitors(visitors)?;
+
+        Ok(sn)
+    }
+
+    fn process_visitors(&mut self, visitors: Vec<Box<dyn ReplayVisitor>>) -> DeltaResult<()> {
+        for visitor in visitors {
+            if let Some(tv) = visitor
+                .as_ref()
+                .as_any()
+                .downcast_ref::<AppTransactionVisitor>()
+            {
+                if self.transactions.is_none() {
+                    self.transactions = Some(tv.app_transaction_version.clone());
+                } else {
+                    self.transactions = Some(tv.merge(self.transactions.as_ref().unwrap()));
+                }
+            }
+        }
+        Ok(())
     }
 
     #[cfg(test)]
@@ -401,7 +438,12 @@ impl EagerSnapshot {
             .into_iter()
             .map(|b| mapper.map_batch(b))
             .collect::<DeltaResult<Vec<_>>>()?;
-        Ok(Self { snapshot, files })
+        Ok(Self {
+            snapshot,
+            files,
+            tracked_actions: Default::default(),
+            transactions: None,
+        })
     }
 
     /// Update the snapshot to the given version
@@ -409,7 +451,6 @@ impl EagerSnapshot {
         &mut self,
         log_store: Arc<dyn LogStore>,
         target_version: Option<i64>,
-        visitors: Vec<&'a mut dyn ReplayVisitor>,
     ) -> DeltaResult<()> {
         if Some(self.version()) == target_version {
             return Ok(());
@@ -438,13 +479,23 @@ impl EagerSnapshot {
                     .boxed()
             };
             let mapper = LogMapper::try_new(&self.snapshot, None)?;
-            let files =
-                ReplayStream::try_new(log_stream, checkpoint_stream, &self.snapshot, visitors)?
-                    .map(|batch| batch.and_then(|b| mapper.map_batch(b)))
-                    .try_collect()
-                    .await?;
+            let mut visitors = self
+                .tracked_actions
+                .iter()
+                .flat_map(|a| get_visitor(a))
+                .collect::<Vec<_>>();
+            let files = ReplayStream::try_new(
+                log_stream,
+                checkpoint_stream,
+                &self.snapshot,
+                &mut visitors,
+            )?
+            .map(|batch| batch.and_then(|b| mapper.map_batch(b)))
+            .try_collect()
+            .await?;
 
             self.files = files;
+            self.process_visitors(visitors)?;
         }
         Ok(())
     }
@@ -517,11 +568,21 @@ impl EagerSnapshot {
         Ok(self.files.iter().flat_map(|b| read_cdf_adds(b)).flatten())
     }
 
+    /// Iterate over all latest app transactions
+    pub fn transactions(&self) -> DeltaResult<impl Iterator<Item = Transaction> + '_> {
+        self.transactions
+            .as_ref()
+            .map(|t| t.values().cloned())
+            .ok_or(DeltaTableError::Generic(
+                "Transactions are not available. Please enable tracking of transactions."
+                    .to_string(),
+            ))
+    }
+
     /// Advance the snapshot based on the given commit actions
     pub fn advance<'a>(
         &mut self,
         commits: impl IntoIterator<Item = &'a CommitData>,
-        mut visitors: Vec<&'a mut dyn ReplayVisitor>,
     ) -> DeltaResult<i64> {
         let mut metadata = None;
         let mut protocol = None;
@@ -550,6 +611,11 @@ impl EagerSnapshot {
 
         let mut files = Vec::new();
         let mut scanner = LogReplayScanner::new();
+        let mut visitors = self
+            .tracked_actions
+            .iter()
+            .flat_map(|a| get_visitor(a))
+            .collect::<Vec<_>>();
 
         for batch in actions {
             let batch = batch?;
@@ -583,6 +649,7 @@ impl EagerSnapshot {
         if let Some(protocol) = protocol {
             self.snapshot.protocol = protocol;
         }
+        self.process_visitors(visitors)?;
 
         Ok(self.snapshot.version())
     }
@@ -715,7 +782,7 @@ mod tests {
         assert_eq!(tombstones.len(), 31);
 
         let batches = snapshot
-            .files(store.clone(), vec![])?
+            .files(store.clone(), &mut vec![])?
             .try_collect::<Vec<_>>()
             .await?;
         let expected = [
@@ -745,7 +812,7 @@ mod tests {
             )
             .await?;
             let batches = snapshot
-                .files(store.clone(), vec![])?
+                .files(store.clone(), &mut vec![])?
                 .try_collect::<Vec<_>>()
                 .await?;
             let num_files = batches.iter().map(|b| b.num_rows() as i64).sum::<i64>();
@@ -848,7 +915,7 @@ mod tests {
             Vec::new(),
         )];
 
-        let new_version = snapshot.advance(&actions, vec![])?;
+        let new_version = snapshot.advance(&actions)?;
         assert_eq!(new_version, version + 1);
 
         let new_files = snapshot.file_actions()?.map(|f| f.path).collect::<Vec<_>>();
