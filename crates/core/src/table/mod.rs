@@ -15,7 +15,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use self::builder::DeltaTableConfig;
 use self::state::DeltaTableState;
 use crate::kernel::{
-    Action, CommitInfo, DataCheck, DataType, LogicalFile, Metadata, Protocol, StructType, Txn,
+    Action, CommitInfo, DataCheck, DataType, LogicalFile, Metadata, Protocol, StructType, Transaction,
 };
 use crate::logstore::{self, extract_version_from_filename, LogStoreConfig, LogStoreRef};
 use crate::partitions::PartitionFilter;
@@ -482,7 +482,7 @@ impl DeltaTable {
     }
 
     /// Returns the current version of the DeltaTable based on the loaded metadata.
-    pub fn get_app_transaction_version(&self) -> HashMap<String, Txn> {
+    pub fn get_app_transaction_version(&self) -> HashMap<String, Transaction> {
         self.state
             .as_ref()
             .map(|s| s.app_transaction_version().clone())
