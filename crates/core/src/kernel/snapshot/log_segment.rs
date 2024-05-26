@@ -27,15 +27,6 @@ lazy_static! {
     static ref CHECKPOINT_FILE_PATTERN: Regex =
         Regex::new(r"\d+\.checkpoint(\.\d+\.\d+)?\.parquet").unwrap();
     static ref DELTA_FILE_PATTERN: Regex = Regex::new(r"^\d+\.json$").unwrap();
-    pub(super) static ref COMMIT_SCHEMA: StructType = StructType::new(vec![
-        ActionType::Add.schema_field().clone(),
-        ActionType::Remove.schema_field().clone(),
-        ActionType::Txn.schema_field().clone(),
-    ]);
-    pub(super) static ref CHECKPOINT_SCHEMA: StructType = StructType::new(vec![
-        ActionType::Add.schema_field().clone(),
-        ActionType::Txn.schema_field().clone(),
-    ]);
     pub(super) static ref TOMBSTONE_SCHEMA: StructType =
         StructType::new(vec![ActionType::Remove.schema_field().clone(),]);
 }

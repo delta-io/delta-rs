@@ -460,43 +460,66 @@ impl EagerSnapshot {
             .snapshot
             .update_inner(log_store.clone(), target_version)
             .await?;
-        if let Some(new_slice) = new_slice {
-            let files = std::mem::take(&mut self.files);
-            let log_stream = new_slice.commit_stream(
-                log_store.object_store().clone(),
-                &log_segment::COMMIT_SCHEMA,
-                &self.snapshot.config,
-            )?;
-            let checkpoint_stream = if new_slice.checkpoint_files.is_empty() {
-                futures::stream::iter(files.into_iter().map(Ok)).boxed()
-            } else {
-                new_slice
-                    .checkpoint_stream(
-                        log_store.object_store(),
-                        &log_segment::CHECKPOINT_SCHEMA,
-                        &self.snapshot.config,
-                    )
-                    .boxed()
-            };
-            let mapper = LogMapper::try_new(&self.snapshot, None)?;
-            let mut visitors = self
-                .tracked_actions
-                .iter()
-                .flat_map(|a| get_visitor(a))
-                .collect::<Vec<_>>();
-            let files = ReplayStream::try_new(
-                log_stream,
-                checkpoint_stream,
-                &self.snapshot,
-                &mut visitors,
-            )?
-            .map(|batch| batch.and_then(|b| mapper.map_batch(b)))
-            .try_collect()
-            .await?;
 
-            self.files = files;
-            self.process_visitors(visitors)?;
+        if new_slice.is_none() {
+            return Ok(());
         }
+        let new_slice = new_slice.unwrap();
+
+        let mut visitors = self
+            .tracked_actions
+            .iter()
+            .flat_map(|a| get_visitor(a))
+            .collect::<Vec<_>>();
+
+        let mut schema_actions: HashSet<_> =
+            visitors.iter().flat_map(|v| v.required_actions()).collect();
+        let files = std::mem::take(&mut self.files);
+
+        schema_actions.insert(ActionType::Add);
+        let checkpoint_stream = if new_slice.checkpoint_files.is_empty() {
+            // NOTE: we don't need to add the visitor relevant data here, as it is repüresented in teh state already
+            futures::stream::iter(files.into_iter().map(Ok)).boxed()
+        } else {
+            let read_schema = StructType::new(
+                schema_actions
+                    .iter()
+                    .map(|a| a.schema_field().clone())
+                    .collect(),
+            );
+            new_slice
+                .checkpoint_stream(
+                    log_store.object_store(),
+                    &read_schema,
+                    &self.snapshot.config,
+                )
+                .boxed()
+        };
+
+        schema_actions.insert(ActionType::Remove);
+        let read_schema = StructType::new(
+            schema_actions
+                .iter()
+                .map(|a| a.schema_field().clone())
+                .collect(),
+        );
+        let log_stream = new_slice.commit_stream(
+            log_store.object_store().clone(),
+            &read_schema,
+            &self.snapshot.config,
+        )?;
+
+        let mapper = LogMapper::try_new(&self.snapshot, None)?;
+
+        let files =
+            ReplayStream::try_new(log_stream, checkpoint_stream, &self.snapshot, &mut visitors)?
+                .map(|batch| batch.and_then(|b| mapper.map_batch(b)))
+                .try_collect()
+                .await?;
+
+        self.files = files;
+        self.process_visitors(visitors)?;
+
         Ok(())
     }
 
@@ -602,20 +625,30 @@ impl EagerSnapshot {
             }
             send.push(commit);
         }
-        let actions = self.snapshot.log_segment.advance(
-            send,
-            &self.table_root(),
-            &log_segment::COMMIT_SCHEMA,
-            &self.snapshot.config,
-        )?;
 
-        let mut files = Vec::new();
-        let mut scanner = LogReplayScanner::new();
         let mut visitors = self
             .tracked_actions
             .iter()
             .flat_map(|a| get_visitor(a))
             .collect::<Vec<_>>();
+        let mut schema_actions: HashSet<_> =
+            visitors.iter().flat_map(|v| v.required_actions()).collect();
+        schema_actions.extend([ActionType::Add, ActionType::Remove]);
+        let read_schema = StructType::new(
+            schema_actions
+                .iter()
+                .map(|a| a.schema_field().clone())
+                .collect(),
+        );
+        let actions = self.snapshot.log_segment.advance(
+            send,
+            &self.table_root(),
+            &read_schema,
+            &self.snapshot.config,
+        )?;
+
+        let mut files = Vec::new();
+        let mut scanner = LogReplayScanner::new();
 
         for batch in actions {
             let batch = batch?;

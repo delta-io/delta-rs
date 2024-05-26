@@ -9,14 +9,14 @@ use object_store::{path::Path, ObjectStore};
 use serde::{Deserialize, Serialize};
 
 use super::{config::TableConfig, get_partition_col_data_types, DeltaTableConfig};
+#[cfg(test)]
+use crate::kernel::Action;
 use crate::kernel::{
-    Action, ActionType, Add, AddCDCFile, DataType, EagerSnapshot, LogDataHandler, LogicalFile,
-    Metadata, Protocol, Remove, StructType, Transaction,
+    ActionType, Add, AddCDCFile, DataType, EagerSnapshot, LogDataHandler, LogicalFile, Metadata,
+    Protocol, Remove, StructType, Transaction,
 };
 use crate::logstore::LogStore;
-use crate::operations::transaction::CommitData;
 use crate::partitions::{DeltaTablePartition, PartitionFilter};
-use crate::protocol::DeltaOperation;
 use crate::{DeltaResult, DeltaTableError};
 
 /// State snapshot currently held by the Delta Table instance.
@@ -60,7 +60,9 @@ impl DeltaTableState {
     /// Construct a delta table state object from a list of actions
     #[cfg(test)]
     pub fn from_actions(actions: Vec<Action>) -> DeltaResult<Self> {
-        use crate::protocol::SaveMode;
+        use crate::operations::transaction::CommitData;
+        use crate::protocol::{DeltaOperation, SaveMode};
+
         let metadata = actions
             .iter()
             .find_map(|a| match a {
@@ -180,36 +182,6 @@ impl DeltaTableState {
     /// Well known table configuration
     pub fn table_config(&self) -> TableConfig<'_> {
         self.snapshot.table_config()
-    }
-
-    /// Merges new state information into our state
-    ///
-    /// The DeltaTableState also carries the version information for the given state,
-    /// as there is a one-to-one match between a table state and a version. In merge/update
-    /// scenarios we cannot infer the intended / correct version number. By default this
-    /// function will update the tracked version if the version on `new_state` is larger then the
-    /// currently set version however it is up to the caller to update the `version` field according
-    /// to the version the merged state represents.
-    pub(crate) fn merge(
-        &mut self,
-        actions: Vec<Action>,
-        operation: &DeltaOperation,
-        version: i64,
-    ) -> Result<(), DeltaTableError> {
-        // TODO: Maybe change this interface to just use CommitData..
-        let commit_data = CommitData {
-            actions,
-            operation: operation.clone(),
-            app_metadata: HashMap::new(),
-            app_transactions: Vec::new(),
-        };
-
-        let new_version = self.snapshot.advance(&vec![commit_data])?;
-
-        if new_version != version {
-            return Err(DeltaTableError::Generic("Version mismatch".to_string()));
-        }
-        Ok(())
     }
 
     /// Obtain the Eager snapshot of the state
