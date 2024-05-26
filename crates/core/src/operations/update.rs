@@ -250,6 +250,7 @@ async fn execute(
     let mut expressions: Vec<(Arc<dyn PhysicalExpr>, String)> = Vec::new();
     let scan_schema = scan.schema();
     for (i, field) in scan_schema.fields().into_iter().enumerate() {
+        println!("GIN: {:#?}", field.name());
         expressions.push((
             Arc::new(expressions::Column::new(field.name(), i)),
             field.name().to_owned(),
@@ -328,12 +329,14 @@ async fn execute(
         if !control_columns.contains(field.name()) {
             match map.get(field.name()) {
                 Some(value) => {
+                    println!("PUSH {:#?}", field.name());
                     expressions.push((
                         Arc::new(expressions::Column::new(field.name(), *value)),
                         field.name().to_owned(),
                     ));
                 }
                 None => {
+                    println!("NONE {:#?}", field.name());
                     expressions.push((
                         Arc::new(expressions::Column::new(field.name(), i)),
                         field.name().to_owned(),
