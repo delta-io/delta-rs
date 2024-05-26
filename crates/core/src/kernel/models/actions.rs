@@ -659,7 +659,7 @@ pub struct AddCDCFile {
 /// enable idempotency.
 #[derive(Serialize, Deserialize, Debug, Default, Clone, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-pub struct Txn {
+pub struct Transaction {
     /// A unique identifier for the application performing the transaction.
     pub app_id: String,
 
@@ -671,7 +671,7 @@ pub struct Txn {
     pub last_updated: Option<i64>,
 }
 
-impl Txn {
+impl Transaction {
     /// Create a new application transactions. See [`Txn`] for details.
     pub fn new(app_id: impl ToString, version: i64) -> Self {
         Self::new_with_last_update(app_id, version, None)
@@ -683,7 +683,7 @@ impl Txn {
         version: i64,
         last_updated: Option<i64>,
     ) -> Self {
-        Txn {
+        Transaction {
             app_id: app_id.to_string(),
             version,
             last_updated,

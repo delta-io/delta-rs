@@ -6,7 +6,7 @@ use super::CommitInfo;
 use crate::delta_datafusion::DataFusionMixins;
 use crate::errors::DeltaResult;
 use crate::kernel::EagerSnapshot;
-use crate::kernel::Txn;
+use crate::kernel::Transaction;
 use crate::kernel::{Action, Add, Metadata, Protocol, Remove};
 use crate::logstore::{get_actions, LogStore};
 use crate::protocol::DeltaOperation;
@@ -125,7 +125,7 @@ impl<'a> TransactionInfo<'a> {
 
         let mut read_app_ids = HashSet::<String>::new();
         for action in actions.iter() {
-            if let Action::Txn(Txn { app_id, .. }) = action {
+            if let Action::Txn(Transaction { app_id, .. }) = action {
                 read_app_ids.insert(app_id.clone());
             }
         }
@@ -150,7 +150,7 @@ impl<'a> TransactionInfo<'a> {
     ) -> Self {
         let mut read_app_ids = HashSet::<String>::new();
         for action in actions.iter() {
-            if let Action::Txn(Txn { app_id, .. }) = action {
+            if let Action::Txn(Transaction { app_id, .. }) = action {
                 read_app_ids.insert(app_id.clone());
             }
         }
@@ -173,7 +173,7 @@ impl<'a> TransactionInfo<'a> {
     ) -> DeltaResult<Self> {
         let mut read_app_ids = HashSet::<String>::new();
         for action in actions.iter() {
-            if let Action::Txn(Txn { app_id, .. }) = action {
+            if let Action::Txn(Transaction { app_id, .. }) = action {
                 read_app_ids.insert(app_id.clone());
             }
         }

@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use super::{config::TableConfig, get_partition_col_data_types, DeltaTableConfig};
 use crate::kernel::{
     Action, Add, AddCDCFile, AppTransactionVisitor, DataType, EagerSnapshot, LogDataHandler,
-    LogicalFile, Metadata, Protocol, Remove, ReplayVisitor, StructType, Txn,
+    LogicalFile, Metadata, Protocol, Remove, ReplayVisitor, StructType, Transaction,
 };
 use crate::logstore::LogStore;
 use crate::operations::transaction::CommitData;
@@ -23,7 +23,7 @@ use crate::{DeltaResult, DeltaTableError};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DeltaTableState {
-    pub(crate) app_transaction_version: HashMap<String, Txn>,
+    pub(crate) app_transaction_version: HashMap<String, Transaction>,
     pub(crate) snapshot: EagerSnapshot,
 }
 
@@ -164,7 +164,7 @@ impl DeltaTableState {
 
     /// HashMap containing the last txn version stored for every app id writing txn
     /// actions.
-    pub fn app_transaction_version(&self) -> &HashMap<String, Txn> {
+    pub fn app_transaction_version(&self) -> &HashMap<String, Transaction> {
         &self.app_transaction_version
     }
 

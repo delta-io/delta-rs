@@ -86,7 +86,8 @@ use self::conflict_checker::{CommitConflictError, TransactionInfo, WinningCommit
 use crate::checkpoints::create_checkpoint_for;
 use crate::errors::DeltaTableError;
 use crate::kernel::{
-    Action, CommitInfo, EagerSnapshot, Metadata, Protocol, ReaderFeatures, Txn, WriterFeatures,
+    Action, CommitInfo, EagerSnapshot, Metadata, Protocol, ReaderFeatures, Transaction,
+    WriterFeatures,
 };
 use crate::logstore::LogStoreRef;
 use crate::protocol::DeltaOperation;
@@ -255,7 +256,7 @@ pub struct CommitData {
     /// The Metadata
     pub app_metadata: HashMap<String, Value>,
     /// Application specific transaction
-    pub app_transactions: Vec<Txn>,
+    pub app_transactions: Vec<Transaction>,
 }
 
 impl CommitData {
@@ -264,7 +265,7 @@ impl CommitData {
         mut actions: Vec<Action>,
         operation: DeltaOperation,
         mut app_metadata: HashMap<String, Value>,
-        app_transactions: Vec<Txn>,
+        app_transactions: Vec<Transaction>,
     ) -> Self {
         if !actions.iter().any(|a| matches!(a, Action::CommitInfo(..))) {
             let mut commit_info = operation.get_commit_info();
@@ -313,7 +314,7 @@ pub struct PostCommitHookProperties {
 /// Enable controling commit behaviour and modifying metadata that is written during a commit.
 pub struct CommitProperties {
     pub(crate) app_metadata: HashMap<String, Value>,
-    pub(crate) app_transaction: Vec<Txn>,
+    pub(crate) app_transaction: Vec<Transaction>,
     max_retries: usize,
     create_checkpoint: bool,
 }
@@ -346,13 +347,13 @@ impl CommitProperties {
     }
 
     /// Add an additonal application transaction to the commit
-    pub fn with_application_transaction(mut self, txn: Txn) -> Self {
+    pub fn with_application_transaction(mut self, txn: Transaction) -> Self {
         self.app_transaction.push(txn);
         self
     }
 
     /// Override application transactions for the commit
-    pub fn with_application_transactions(mut self, txn: Vec<Txn>) -> Self {
+    pub fn with_application_transactions(mut self, txn: Vec<Transaction>) -> Self {
         self.app_transaction = txn;
         self
     }
@@ -376,7 +377,7 @@ impl From<CommitProperties> for CommitBuilder {
 pub struct CommitBuilder {
     actions: Vec<Action>,
     app_metadata: HashMap<String, Value>,
-    app_transaction: Vec<Txn>,
+    app_transaction: Vec<Transaction>,
     max_retries: usize,
     post_commit_hook: Option<PostCommitHookProperties>,
 }

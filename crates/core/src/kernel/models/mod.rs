@@ -49,7 +49,7 @@ pub enum Action {
     Add(Add),
     Remove(Remove),
     Cdc(AddCDCFile),
-    Txn(Txn),
+    Txn(Transaction),
     CommitInfo(CommitInfo),
     DomainMetadata(DomainMetadata),
 }
@@ -94,8 +94,8 @@ impl From<Protocol> for Action {
     }
 }
 
-impl From<Txn> for Action {
-    fn from(a: Txn) -> Self {
+impl From<Transaction> for Action {
+    fn from(a: Transaction) -> Self {
         Self::Txn(a)
     }
 }
