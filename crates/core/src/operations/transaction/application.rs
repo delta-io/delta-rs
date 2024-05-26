@@ -1,8 +1,8 @@
 #[cfg(test)]
 mod tests {
     use crate::{
-        checkpoints, kernel::Txn, operations::transaction::CommitProperties, protocol::SaveMode,
-        writer::test_utils::get_record_batch, DeltaOps, DeltaTableBuilder,
+        checkpoints, kernel::Transaction, operations::transaction::CommitProperties,
+        protocol::SaveMode, writer::test_utils::get_record_batch, DeltaOps, DeltaTableBuilder,
     };
 
     #[tokio::test]
@@ -24,7 +24,8 @@ mod tests {
             .with_save_mode(SaveMode::ErrorIfExists)
             .with_partition_columns(["modified"])
             .with_commit_properties(
-                CommitProperties::default().with_application_transaction(Txn::new("my-app", 1)),
+                CommitProperties::default()
+                    .with_application_transaction(Transaction::new("my-app", 1)),
             )
             .await
             .unwrap();
@@ -51,7 +52,8 @@ mod tests {
         let table = DeltaOps::from(table)
             .write(vec![get_record_batch(None, false)])
             .with_commit_properties(
-                CommitProperties::default().with_application_transaction(Txn::new("my-app", 3)),
+                CommitProperties::default()
+                    .with_application_transaction(Transaction::new("my-app", 3)),
             )
             .await
             .unwrap();
@@ -94,7 +96,8 @@ mod tests {
             .with_save_mode(SaveMode::ErrorIfExists)
             .with_partition_columns(["modified"])
             .with_commit_properties(
-                CommitProperties::default().with_application_transaction(Txn::new(&"my-app", 1)),
+                CommitProperties::default()
+                    .with_application_transaction(Transaction::new(&"my-app", 1)),
             )
             .await
             .unwrap();
@@ -109,7 +112,8 @@ mod tests {
         let table = DeltaOps::from(table)
             .write(vec![get_record_batch(None, false)])
             .with_commit_properties(
-                CommitProperties::default().with_application_transaction(Txn::new(&"my-app", 2)),
+                CommitProperties::default()
+                    .with_application_transaction(Transaction::new(&"my-app", 2)),
             )
             .await
             .unwrap();
@@ -118,7 +122,8 @@ mod tests {
         let res = DeltaOps::from(table2)
             .write(vec![get_record_batch(None, false)])
             .with_commit_properties(
-                CommitProperties::default().with_application_transaction(Txn::new(&"my-app", 3)),
+                CommitProperties::default()
+                    .with_application_transaction(Transaction::new(&"my-app", 3)),
             )
             .await;
 

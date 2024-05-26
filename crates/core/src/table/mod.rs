@@ -15,7 +15,8 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use self::builder::DeltaTableConfig;
 use self::state::DeltaTableState;
 use crate::kernel::{
-    Action, CommitInfo, DataCheck, DataType, LogicalFile, Metadata, Protocol, StructType, Transaction,
+    Action, CommitInfo, DataCheck, DataType, LogicalFile, Metadata, Protocol, StructType,
+    Transaction,
 };
 use crate::logstore::{self, extract_version_from_filename, LogStoreConfig, LogStoreRef};
 use crate::partitions::PartitionFilter;
@@ -485,7 +486,7 @@ impl DeltaTable {
     pub fn get_app_transaction_version(&self) -> HashMap<String, Transaction> {
         self.state
             .as_ref()
-            .map(|s| s.app_transaction_version().clone())
+            .and_then(|s| s.app_transaction_version().ok())
             .unwrap_or_default()
     }
 

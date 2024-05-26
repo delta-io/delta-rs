@@ -14,11 +14,21 @@ use crate::kernel::Transaction;
 
 /// Allows hooking into the reading of commit files and checkpoints whenever a table is loaded or updated.
 pub trait ReplayVisitor: std::fmt::Debug + Send + Sync {
+    fn as_any(&self) -> &dyn std::any::Any;
+
     /// Process a batch
     fn visit_batch(&mut self, batch: &RecordBatch) -> DeltaResult<()>;
 
     /// return all relevant actions for the visitor
     fn required_actions(&self) -> Vec<ActionType>;
+}
+
+/// Get the relevant visitor for the given action type
+pub fn get_visitor(action: &ActionType) -> Option<Box<dyn ReplayVisitor>> {
+    match action {
+        ActionType::Txn => Some(Box::new(AppTransactionVisitor::new())),
+        _ => None,
+    }
 }
 
 #[derive(Debug, Default)]
@@ -35,17 +45,20 @@ impl AppTransactionVisitor {
 }
 
 impl AppTransactionVisitor {
-    pub fn merge(self, map: &HashMap<String, Transaction>) -> HashMap<String, Transaction> {
+    pub fn merge(&self, map: &HashMap<String, Transaction>) -> HashMap<String, Transaction> {
         let mut clone = map.clone();
-        for (key, value) in self.app_transaction_version {
-            clone.insert(key, value);
+        for (key, value) in &self.app_transaction_version {
+            clone.insert(key.clone(), value.clone());
         }
-
         return clone;
     }
 }
 
 impl ReplayVisitor for AppTransactionVisitor {
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
     fn visit_batch(&mut self, batch: &arrow_array::RecordBatch) -> DeltaResult<()> {
         if batch.column_by_name("txn").is_none() {
             return Ok(());

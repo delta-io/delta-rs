@@ -56,6 +56,9 @@ enum CheckpointError {
         #[from]
         source: ArrowError,
     },
+
+    #[error("missing rewquired action type in snapshot: {0}")]
+    MissingActionType(String),
 }
 
 impl From<CheckpointError> for ProtocolError {
@@ -65,6 +68,7 @@ impl From<CheckpointError> for ProtocolError {
             CheckpointError::Arrow { source } => Self::Arrow { source },
             CheckpointError::StaleTableVersion(..) => Self::Generic(value.to_string()),
             CheckpointError::Parquet { source } => Self::ParquetParseError { source },
+            CheckpointError::MissingActionType(_) => Self::Generic(value.to_string()),
         }
     }
 }
@@ -297,7 +301,8 @@ fn parquet_bytes_from_state(
     .chain(
         state
             .app_transaction_version()
-            .iter()
+            .map_err(|_| CheckpointError::MissingActionType("txn".to_string()))?
+            .into_iter()
             .map(|(_, txn)| Action::Txn(txn.clone())),
     )
     // removes
