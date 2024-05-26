@@ -33,7 +33,7 @@ pin_project! {
 
         mapper: Arc<LogMapper>,
 
-        visitors: Vec<&'a mut dyn ReplayVisitor>,
+        visitors: &'a mut Vec<Box<dyn ReplayVisitor>>,
 
         #[pin]
         commits: S,
@@ -48,7 +48,7 @@ impl<'a, S> ReplayStream<'a, S> {
         commits: S,
         checkpoint: S,
         snapshot: &Snapshot,
-        visitors: Vec<&'a mut dyn ReplayVisitor>,
+        visitors: &'a mut Vec<Box<dyn ReplayVisitor>>,
     ) -> DeltaResult<Self> {
         let stats_schema = Arc::new((&snapshot.stats_schema(None)?).try_into()?);
         let mapper = Arc::new(LogMapper {
