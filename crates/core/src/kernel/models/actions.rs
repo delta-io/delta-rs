@@ -673,13 +673,13 @@ pub struct Txn {
 
 impl Txn {
     /// Create a new application transactions. See [`Txn`] for details.
-    pub fn new(app_id: &dyn ToString, version: i64) -> Self {
+    pub fn new(app_id: impl ToString, version: i64) -> Self {
         Self::new_with_last_update(app_id, version, None)
     }
 
     /// Create a new application transactions. See [`Txn`] for details.
     pub fn new_with_last_update(
-        app_id: &dyn ToString,
+        app_id: impl ToString,
         version: i64,
         last_updated: Option<i64>,
     ) -> Self {

@@ -88,7 +88,7 @@ impl std::future::IntoFuture for DropConstraintBuilder {
 
             let commit = CommitBuilder::from(this.commit_properties)
                 .with_actions(actions)
-                .build(Some(&this.snapshot), this.log_store.clone(), operation)?
+                .build(Some(&this.snapshot), this.log_store.clone(), operation)
                 .await?;
 
             Ok(DeltaTable::new_with_state(

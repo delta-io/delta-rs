@@ -616,7 +616,6 @@ mod tests {
                 table.log_store(),
                 operation,
             )
-            .unwrap()
             .await
             .unwrap()
             .version();
