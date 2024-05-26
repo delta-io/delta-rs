@@ -267,7 +267,7 @@ async fn execute(
 
     let prepared_commit = CommitBuilder::from(commit_properties)
         .with_actions(actions)
-        .build(Some(&snapshot), log_store.clone(), operation)?
+        .build(Some(&snapshot), log_store.clone(), operation)
         .into_prepared_commit_future()
         .await?;
 

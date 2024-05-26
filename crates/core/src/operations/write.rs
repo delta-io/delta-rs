@@ -848,7 +848,7 @@ impl std::future::IntoFuture for WriteBuilder {
                     this.snapshot.as_ref().map(|f| f as &dyn TableReference),
                     this.log_store.clone(),
                     operation.clone(),
-                )?
+                )
                 .await?;
 
             Ok(DeltaTable::new_with_state(this.log_store, commit.snapshot))
@@ -924,20 +924,16 @@ fn try_cast_batch(from_fields: &Fields, to_fields: &Fields) -> Result<(), ArrowE
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::kernel::Txn;
     use crate::operations::{collect_sendable_stream, DeltaOps};
     use crate::protocol::SaveMode;
-    use crate::writer::test_utils::datafusion::write_batch;
-    use crate::writer::test_utils::datafusion::{get_data, get_data_sorted};
+    use crate::writer::test_utils::datafusion::{get_data, get_data_sorted, write_batch};
     use crate::writer::test_utils::{
         get_arrow_schema, get_delta_schema, get_delta_schema_with_nested_struct, get_record_batch,
         get_record_batch_with_nested_struct, setup_table_with_configuration,
     };
-    use crate::{checkpoints, DeltaConfigKey, DeltaTableBuilder};
-    use arrow::datatypes::Field;
-    use arrow::datatypes::Schema as ArrowSchema;
+    use crate::DeltaConfigKey;
     use arrow_array::{Int32Array, StringArray, TimestampMicrosecondArray};
-    use arrow_schema::{DataType, TimeUnit};
+    use arrow_schema::{DataType, Field, Schema as ArrowSchema, TimeUnit};
     use datafusion::prelude::*;
     use datafusion::{assert_batches_eq, assert_batches_sorted_eq};
     use serde_json::{json, Value};

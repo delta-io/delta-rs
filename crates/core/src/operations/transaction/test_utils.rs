@@ -165,7 +165,6 @@ pub async fn create_initialized_table(
     CommitBuilder::default()
         .with_actions(actions)
         .build(None, log_store.clone(), operation)
-        .unwrap()
         .await
         .unwrap();
     DeltaTable::new_with_state(log_store, state)

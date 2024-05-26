@@ -5,21 +5,25 @@
 use std::collections::HashMap;
 
 use arrow::compute::{filter_record_batch, is_not_null};
-use arrow_array::{Array, Int64Array, StringArray, StructArray};
+use arrow_array::{Array, Int64Array, RecordBatch, StringArray, StructArray};
 
-use super::{ActionType, ReplayVisitor};
+use super::ActionType;
 use crate::errors::DeltaResult;
 use crate::kernel::arrow::extract as ex;
 use crate::kernel::Txn;
 
-pub(crate) struct AppTransactionVisitor {
-    app_transaction_version: HashMap<String, Txn>,
+/// Allows hooking into the reading of commit files and checkpoints whenever a table is loaded or updated.
+pub trait ReplayVisitor: std::fmt::Debug + Send + Sync {
+    /// Process a batch
+    fn visit_batch(&mut self, batch: &RecordBatch) -> DeltaResult<()>;
+
+    /// return all relevant actions for the visitor
+    fn required_actions(&self) -> Vec<ActionType>;
 }
 
-impl Default for AppTransactionVisitor {
-    fn default() -> Self {
-        Self::new()
-    }
+#[derive(Debug, Default)]
+pub(crate) struct AppTransactionVisitor {
+    pub(crate) app_transaction_version: HashMap<String, Txn>,
 }
 
 impl AppTransactionVisitor {
