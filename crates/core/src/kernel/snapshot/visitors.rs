@@ -10,7 +10,7 @@ use arrow_array::{Array, Int64Array, RecordBatch, StringArray, StructArray};
 use super::ActionType;
 use crate::errors::DeltaResult;
 use crate::kernel::arrow::extract as ex;
-use crate::kernel::Txn;
+use crate::kernel::Transaction;
 
 /// Allows hooking into the reading of commit files and checkpoints whenever a table is loaded or updated.
 pub trait ReplayVisitor: std::fmt::Debug + Send + Sync {
@@ -23,7 +23,7 @@ pub trait ReplayVisitor: std::fmt::Debug + Send + Sync {
 
 #[derive(Debug, Default)]
 pub(crate) struct AppTransactionVisitor {
-    pub(crate) app_transaction_version: HashMap<String, Txn>,
+    pub(crate) app_transaction_version: HashMap<String, Transaction>,
 }
 
 impl AppTransactionVisitor {
@@ -35,7 +35,7 @@ impl AppTransactionVisitor {
 }
 
 impl AppTransactionVisitor {
-    pub fn merge(self, map: &HashMap<String, Txn>) -> HashMap<String, Txn> {
+    pub fn merge(self, map: &HashMap<String, Transaction>) -> HashMap<String, Transaction> {
         let mut clone = map.clone();
         for (key, value) in self.app_transaction_version {
             clone.insert(key, value);
@@ -67,7 +67,7 @@ impl ReplayVisitor for AppTransactionVisitor {
                 }
                 self.app_transaction_version.insert(
                     app_id.to_owned(),
-                    Txn {
+                    Transaction {
                         app_id: app_id.into(),
                         version: ex::read_primitive(version, idx)?,
                         last_updated: last_updated.and_then(|arr| ex::read_primitive_opt(arr, idx)),
