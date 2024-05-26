@@ -29,6 +29,7 @@ use object_store::ObjectStore;
 use self::log_segment::{LogSegment, PathExt};
 use self::parse::{read_adds, read_removes};
 use self::replay::{LogMapper, LogReplayScanner, ReplayStream};
+use self::visitors::*;
 use super::{
     Action, Add, AddCDCFile, CommitInfo, DataType, Metadata, Protocol, Remove, StructField,
     Transaction,
@@ -41,7 +42,6 @@ use crate::table::config::TableConfig;
 use crate::{DeltaResult, DeltaTableConfig, DeltaTableError};
 
 pub use self::log_data::*;
-pub(crate) use self::visitors::*;
 
 mod log_data;
 mod log_segment;

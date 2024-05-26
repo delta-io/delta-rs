@@ -487,6 +487,7 @@ impl DeltaTable {
         self.state
             .as_ref()
             .and_then(|s| s.app_transaction_version().ok())
+            .map(|it| it.map(|t| (t.app_id.clone(), t)).collect())
             .unwrap_or_default()
     }
 
