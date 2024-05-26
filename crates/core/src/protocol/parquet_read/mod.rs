@@ -9,7 +9,8 @@ use tracing::{debug, error, warn};
 
 use crate::kernel::models::actions::serde_path::decode_path;
 use crate::kernel::{
-    Action, Add, AddCDCFile, DeletionVectorDescriptor, Metadata, Protocol, Remove, StorageType, Transaction,
+    Action, Add, AddCDCFile, DeletionVectorDescriptor, Metadata, Protocol, Remove, StorageType,
+    Transaction,
 };
 use crate::protocol::{ColumnCountStat, ColumnValueStat, ProtocolError, Stats};
 
