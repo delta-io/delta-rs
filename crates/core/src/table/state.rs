@@ -137,14 +137,20 @@ impl DeltaTableState {
         Ok(self.snapshot.file_actions()?.collect())
     }
 
+    /// Full list of add actions representing all parquet files that are part of the current
+    /// delta table state.
+    pub fn file_actions_iter(&self) -> DeltaResult<impl Iterator<Item = Add> + '_> {
+        self.snapshot.file_actions()
+    }
+
     /// Get the number of files in the current table state
     pub fn files_count(&self) -> usize {
         self.snapshot.files_count()
     }
 
     /// Full list of all of the CDC files added as part of the changeDataFeed feature
-    pub fn cdc_files(&self) -> DeltaResult<Vec<AddCDCFile>> {
-        Ok(self.snapshot.cdc_files()?.collect())
+    pub fn cdc_files(&self) -> DeltaResult<impl Iterator<Item = AddCDCFile> + '_> {
+        self.snapshot.cdc_files()
     }
 
     /// Returns an iterator of file names present in the loaded state
@@ -156,12 +162,8 @@ impl DeltaTableState {
     }
 
     /// HashMap containing the last transaction stored for every application.
-    pub fn app_transaction_version(&self) -> DeltaResult<HashMap<String, Transaction>> {
-        Ok(self
-            .snapshot
-            .transactions()?
-            .map(|t| (t.app_id.clone(), t))
-            .collect())
+    pub fn app_transaction_version(&self) -> DeltaResult<impl Iterator<Item = Transaction> + '_> {
+        self.snapshot.transactions()
     }
 
     /// The most recent protocol of the table.
