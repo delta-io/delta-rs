@@ -1,11 +1,11 @@
 //! Add a commit entry to the Delta Table.
 //! This module provides a unified interface for modifying commit behavior and attributes
 //!
-//! [`CommitProperties`] provides an unified client interface for
-//!  all Delta opeartions. Internally this is used to initialize a [`CommitBuilder`]
+//! [`CommitProperties`] provides an unified client interface for all Delta opeartions.
+//! Internally this is used to initialize a [`CommitBuilder`].
 //!  
-//!  For advanced use cases [`CommitBuilder`] can be used which allows
-//!  finer control over the commit process. The builder can be converted
+//! For advanced use cases [`CommitBuilder`] can be used which allows
+//! finer control over the commit process. The builder can be converted
 //! into a future the yield either a [`PreparedCommit`] or a [`FinalizedCommit`].
 //!
 //! A [`PreparedCommit`] represents a temporary commit marker written to storage.
@@ -96,8 +96,6 @@ use crate::{crate_version, DeltaResult};
 
 pub use self::protocol::INSTANCE as PROTOCOL;
 
-#[cfg(test)]
-pub(crate) mod application;
 mod conflict_checker;
 mod protocol;
 #[cfg(feature = "datafusion")]
@@ -267,7 +265,7 @@ impl CommitData {
         operation: DeltaOperation,
         mut app_metadata: HashMap<String, Value>,
         app_transactions: Vec<Txn>,
-    ) -> Result<Self, CommitBuilderError> {
+    ) -> Self {
         if !actions.iter().any(|a| matches!(a, Action::CommitInfo(..))) {
             let mut commit_info = operation.get_commit_info();
             commit_info.timestamp = Some(Utc::now().timestamp_millis());
@@ -284,32 +282,23 @@ impl CommitData {
             actions.push(Action::Txn(txn.clone()))
         }
 
-        Ok(CommitData {
+        CommitData {
             actions,
             operation,
             app_metadata,
             app_transactions,
-        })
-    }
-
-    /// Convert actions to their json representation
-    pub fn log_entry_from_actions<'a>(
-        actions: impl IntoIterator<Item = &'a Action>,
-    ) -> Result<String, TransactionError> {
-        let mut jsons = Vec::<String>::new();
-        for action in actions {
-            let json = serde_json::to_string(action)
-                .map_err(|e| TransactionError::SerializeLogJson { json_err: e })?;
-            jsons.push(json);
         }
-        Ok(jsons.join("\n"))
     }
 
     /// Obtain the byte representation of the commit.
     pub fn get_bytes(&self) -> Result<bytes::Bytes, TransactionError> {
-        // Data MUST be read from the passed `CommitData`. Don't add data that is not sourced from there.
-        let actions = &self.actions;
-        Ok(bytes::Bytes::from(Self::log_entry_from_actions(actions)?))
+        let mut jsons = Vec::<String>::new();
+        for action in &self.actions {
+            let json = serde_json::to_string(action)
+                .map_err(|e| TransactionError::SerializeLogJson { json_err: e })?;
+            jsons.push(json);
+        }
+        Ok(bytes::Bytes::from(jsons.join("\n")))
     }
 }
 
@@ -374,10 +363,9 @@ impl From<CommitProperties> for CommitBuilder {
         CommitBuilder {
             max_retries: value.max_retries,
             app_metadata: value.app_metadata,
-            post_commit_hook: PostCommitHookProperties {
+            post_commit_hook: Some(PostCommitHookProperties {
                 create_checkpoint: value.create_checkpoint,
-            }
-            .into(),
+            }),
             app_transaction: value.app_transaction,
             ..Default::default()
         }
@@ -426,7 +414,7 @@ impl<'a> CommitBuilder {
 
     /// Specify all the post commit hook properties
     pub fn with_post_commit_hook(mut self, post_commit_hook: PostCommitHookProperties) -> Self {
-        self.post_commit_hook = post_commit_hook.into();
+        self.post_commit_hook = Some(post_commit_hook);
         self
     }
 
@@ -436,20 +424,20 @@ impl<'a> CommitBuilder {
         table_data: Option<&'a dyn TableReference>,
         log_store: LogStoreRef,
         operation: DeltaOperation,
-    ) -> Result<PreCommit<'a>, CommitBuilderError> {
+    ) -> PreCommit<'a> {
         let data = CommitData::new(
             self.actions,
             operation,
             self.app_metadata,
             self.app_transaction,
-        )?;
-        Ok(PreCommit {
+        );
+        PreCommit {
             log_store,
             table_data,
             max_retries: self.max_retries,
             data,
             post_commit_hook: self.post_commit_hook,
-        })
+        }
     }
 }
 
@@ -467,9 +455,7 @@ impl<'a> std::future::IntoFuture for PreCommit<'a> {
     type IntoFuture = BoxFuture<'a, Self::Output>;
 
     fn into_future(self) -> Self::IntoFuture {
-        let this = self;
-
-        Box::pin(async move { this.into_prepared_commit_future().await?.await?.await })
+        Box::pin(async move { self.into_prepared_commit_future().await?.await?.await })
     }
 }
 
@@ -483,14 +469,11 @@ impl<'a> PreCommit<'a> {
                 PROTOCOL.can_commit(table_reference, &this.data.actions, &this.data.operation)?;
             }
 
-            // Serialize all actions that are part of this log entry.
-            let log_entry = this.data.get_bytes()?;
-
             // Write delta log entry as temporary file to storage. For the actual commit,
             // the temporary file is moved (atomic rename) to the delta log folder within `commit` function.
+            let log_entry = this.data.get_bytes()?;
             let token = uuid::Uuid::new_v4().to_string();
-            let file_name = format!("_commit_{token}.json.tmp");
-            let path = Path::from_iter([DELTA_LOG_FOLDER, &file_name]);
+            let path = Path::from_iter([DELTA_LOG_FOLDER, &format!("_commit_{token}.json.tmp")]);
             this.log_store.object_store().put(&path, log_entry).await?;
 
             Ok(PreparedCommit {
@@ -715,7 +698,6 @@ impl<'a> std::future::IntoFuture for PostCommit<'a> {
 mod tests {
     use std::{collections::HashMap, sync::Arc};
 
-    use self::test_utils::init_table_actions;
     use super::*;
     use crate::{
         logstore::{default_logstore::DefaultLogStore, LogStore},
@@ -730,15 +712,6 @@ mod tests {
         assert_eq!(version, Path::from("_delta_log/00000000000000000000.json"));
         let version = commit_uri_from_version(123);
         assert_eq!(version, Path::from("_delta_log/00000000000000000123.json"))
-    }
-
-    #[test]
-    fn test_log_entry_from_actions() {
-        let actions = init_table_actions(None);
-        let entry = CommitData::log_entry_from_actions(&actions).unwrap();
-        let lines: Vec<_> = entry.lines().collect();
-        // writes every action to a line
-        assert_eq!(actions.len(), lines.len())
     }
 
     #[tokio::test]

@@ -157,10 +157,10 @@ where
                 }
                 match this.scanner.process_files_batch(&batch, true) {
                     Ok(filtered) => Some(this.mapper.map_batch(filtered)),
-                    Err(e) => Some(Err(e)),
+                    err => Some(err),
                 }
             }
-            Some(Err(e)) => Some(Err(e)),
+            Some(e) => Some(e),
             None => None,
         });
         if matches!(res, Poll::Ready(None)) {
@@ -173,10 +173,10 @@ where
                     }
                     match this.scanner.process_files_batch(&batch, false) {
                         Ok(filtered) => Some(this.mapper.map_batch(filtered)),
-                        Err(e) => Some(Err(e)),
+                        err => Some(err),
                     }
                 }
-                Some(Err(e)) => Some(Err(e)),
+                Some(e) => Some(e),
                 None => None,
             })
         } else {

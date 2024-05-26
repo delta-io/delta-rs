@@ -24,7 +24,7 @@ mod tests {
             .with_save_mode(SaveMode::ErrorIfExists)
             .with_partition_columns(["modified"])
             .with_commit_properties(
-                CommitProperties::default().with_application_transaction(Txn::new(&"my-app", 1)),
+                CommitProperties::default().with_application_transaction(Txn::new("my-app", 1)),
             )
             .await
             .unwrap();
@@ -51,7 +51,7 @@ mod tests {
         let table = DeltaOps::from(table)
             .write(vec![get_record_batch(None, false)])
             .with_commit_properties(
-                CommitProperties::default().with_application_transaction(Txn::new(&"my-app", 3)),
+                CommitProperties::default().with_application_transaction(Txn::new("my-app", 3)),
             )
             .await
             .unwrap();

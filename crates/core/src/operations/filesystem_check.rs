@@ -190,7 +190,7 @@ impl FileSystemCheckPlan {
                 Some(snapshot),
                 self.log_store.clone(),
                 DeltaOperation::FileSystemCheck {},
-            )?
+            )
             .await?;
 
         Ok(metrics)

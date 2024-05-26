@@ -3,90 +3,21 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use arrow::compute::{filter_record_batch, is_not_null};
-use arrow_array::{Array, Int64Array, StringArray, StructArray};
 use chrono::Utc;
 use futures::TryStreamExt;
 use object_store::{path::Path, ObjectStore};
 use serde::{Deserialize, Serialize};
 
-use super::config::TableConfig;
-use super::{get_partition_col_data_types, DeltaTableConfig};
-use crate::kernel::arrow::extract as ex;
+use super::{config::TableConfig, get_partition_col_data_types, DeltaTableConfig};
 use crate::kernel::{
-    Action, ActionType, Add, AddCDCFile, DataType, EagerSnapshot, LogDataHandler, LogicalFile,
-    Metadata, Protocol, Remove, ReplayVisitor, StructType, Txn,
+    Action, Add, AddCDCFile, AppTransactionVisitor, DataType, EagerSnapshot, LogDataHandler,
+    LogicalFile, Metadata, Protocol, Remove, ReplayVisitor, StructType, Txn,
 };
-
 use crate::logstore::LogStore;
 use crate::operations::transaction::CommitData;
 use crate::partitions::{DeltaTablePartition, PartitionFilter};
 use crate::protocol::DeltaOperation;
 use crate::{DeltaResult, DeltaTableError};
-
-pub(crate) struct AppTransactionVisitor {
-    app_transaction_version: HashMap<String, Txn>,
-}
-
-impl AppTransactionVisitor {
-    pub(crate) fn new() -> Self {
-        Self {
-            app_transaction_version: HashMap::new(),
-        }
-    }
-}
-
-impl AppTransactionVisitor {
-    pub fn merge(self, map: &HashMap<String, Txn>) -> HashMap<String, Txn> {
-        let mut clone = map.clone();
-        for (key, value) in self.app_transaction_version {
-            clone.insert(key, value);
-        }
-
-        return clone;
-    }
-}
-
-impl ReplayVisitor for AppTransactionVisitor {
-    fn visit_batch(&mut self, batch: &arrow_array::RecordBatch) -> DeltaResult<()> {
-        if batch.column_by_name("txn").is_none() {
-            return Ok(());
-        }
-
-        let txn_col = ex::extract_and_cast::<StructArray>(batch, "txn")?;
-        let filter = is_not_null(txn_col)?;
-
-        let filtered = filter_record_batch(batch, &filter)?;
-        let arr = ex::extract_and_cast::<StructArray>(&filtered, "txn")?;
-
-        let id = ex::extract_and_cast::<StringArray>(arr, "appId")?;
-        let version = ex::extract_and_cast::<Int64Array>(arr, "version")?;
-        let last_updated = ex::extract_and_cast_opt::<Int64Array>(arr, "lastUpdated");
-
-        for idx in 0..id.len() {
-            if id.is_valid(idx) {
-                let app_id = ex::read_str(id, idx)?;
-                if self.app_transaction_version.contains_key(app_id) {
-                    continue;
-                }
-                self.app_transaction_version.insert(
-                    app_id.to_owned(),
-                    Txn {
-                        app_id: app_id.into(),
-                        version: ex::read_primitive(version, idx)?,
-                        last_updated: last_updated.and_then(|arr| ex::read_primitive_opt(arr, idx)),
-                    },
-                );
-            }
-        }
-
-        Ok(())
-    }
-
-    fn required_actions(&self) -> Vec<ActionType> {
-        vec![ActionType::Txn]
-    }
-}
 
 /// State snapshot currently held by the Delta Table instance.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -161,8 +92,7 @@ impl DeltaTableState {
             },
             HashMap::new(),
             Vec::new(),
-        )
-        .unwrap()];
+        )];
 
         let snapshot = EagerSnapshot::new_test(&commit_data).unwrap();
         Ok(Self {

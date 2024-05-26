@@ -152,7 +152,6 @@ impl<'de> Visitor<'de> for EagerSnapshotVisitor {
     where
         V: SeqAccess<'de>,
     {
-        println!("eager: {:?}", "start");
         let snapshot = seq
             .next_element()?
             .ok_or_else(|| de::Error::invalid_length(0, &self))?;

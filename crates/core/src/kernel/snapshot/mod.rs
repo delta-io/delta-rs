@@ -22,10 +22,10 @@ use ::serde::{Deserialize, Serialize};
 use arrow_array::RecordBatch;
 use futures::stream::BoxStream;
 use futures::{StreamExt, TryStreamExt};
+use hashbrown::HashSet;
 use object_store::path::Path;
 use object_store::ObjectStore;
 
-pub use self::log_data::*;
 use self::log_segment::{LogSegment, PathExt};
 use self::parse::{read_adds, read_removes};
 use self::replay::{LogMapper, LogReplayScanner, ReplayStream};
@@ -38,6 +38,9 @@ use crate::logstore::LogStore;
 use crate::operations::transaction::CommitData;
 use crate::table::config::TableConfig;
 use crate::{DeltaResult, DeltaTableConfig, DeltaTableError};
+
+pub use self::log_data::*;
+pub(crate) use self::visitors::*;
 
 mod log_data;
 mod log_segment;
@@ -205,16 +208,33 @@ impl Snapshot {
         store: Arc<dyn ObjectStore>,
         visitors: Vec<&'a mut dyn ReplayVisitor>,
     ) -> DeltaResult<ReplayStream<'a, BoxStream<'_, DeltaResult<RecordBatch>>>> {
-        let log_stream = self.log_segment.commit_stream(
-            store.clone(),
-            &log_segment::COMMIT_SCHEMA,
-            &self.config,
-        )?;
+        let mut schema_actions: HashSet<_> =
+            visitors.iter().flat_map(|v| v.required_actions()).collect();
+
+        schema_actions.insert(ActionType::Add);
         let checkpoint_stream = self.log_segment.checkpoint_stream(
-            store,
-            &log_segment::CHECKPOINT_SCHEMA,
+            store.clone(),
+            &StructType::new(
+                schema_actions
+                    .iter()
+                    .map(|a| a.schema_field().clone())
+                    .collect(),
+            ),
             &self.config,
         );
+
+        schema_actions.insert(ActionType::Remove);
+        let log_stream = self.log_segment.commit_stream(
+            store.clone(),
+            &StructType::new(
+                schema_actions
+                    .iter()
+                    .map(|a| a.schema_field().clone())
+                    .collect(),
+            ),
+            &self.config,
+        )?;
+
         ReplayStream::try_new(log_stream, checkpoint_stream, self, visitors)
     }
 
@@ -335,15 +355,6 @@ impl Snapshot {
             ),
         ]))
     }
-}
-
-/// Allows hooking into the reading of commit files and checkpoints whenever a table is loaded or updated.
-pub trait ReplayVisitor: Send {
-    /// Process a batch
-    fn visit_batch(&mut self, batch: &RecordBatch) -> DeltaResult<()>;
-
-    /// return all relevant actions for the visitor
-    fn required_actions(&self) -> Vec<ActionType>;
 }
 
 /// A snapshot of a Delta table that has been eagerly loaded into memory.
@@ -830,8 +841,12 @@ mod tests {
             predicate: None,
         };
 
-        let actions =
-            vec![CommitData::new(removes, operation, HashMap::new(), Vec::new()).unwrap()];
+        let actions = vec![CommitData::new(
+            removes,
+            operation,
+            HashMap::new(),
+            Vec::new(),
+        )];
 
         let new_version = snapshot.advance(&actions, vec![])?;
         assert_eq!(new_version, version + 1);
