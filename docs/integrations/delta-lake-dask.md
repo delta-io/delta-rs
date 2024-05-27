@@ -5,6 +5,7 @@ Delta Lake is a great storage format for Dask analyses. This page explains why a
 You will learn how to read Delta Lakes into Dask DataFrames, how to query Delta tables with Dask, and the unique advantages Delta Lake offers the Dask community.
 
 Here are some of the benefits that Delta Lake provides Dask users:
+
 - better performance with file skipping
 - enhanced file skipping via Z Ordering
 - ACID transactions for reliable writes
@@ -20,10 +21,9 @@ To use Delta Lake with Dask, first install the library using
 pip install dask-deltatable
 ```
 
-
 ## Reading Delta Tables into a Dask DataFrame
 
-You can read data stored in a Delta Lake into a Dask DataFrame using `dask-deltatable.read_deltalake`. 
+You can read data stored in a Delta Lake into a Dask DataFrame using `dask-deltatable.read_deltalake`.
 
 Let's read in a toy dataset to see what we can do with Delta Lake and Dask. You can access the data stored as a Delta Lake [on Github](https://github.com/rrpelgrim/delta-examples/tree/master/data)
 
@@ -49,7 +49,6 @@ Dask is a library for efficient distributed computing and works with lazy evalua
 |  0 | Wolfgang     | Manche      | Germany   | NaN         |
 |  1 | Soraya       | Jala        | Germany   | NaN         |
 ```
-
 
 You can read in specific versions of Delta tables by specifying a `version` number or a timestamp:
 
@@ -113,7 +112,7 @@ You can inspect a single partition using `dask.dataframe.get_partition()`:
 
 ## Perform Dask Operations
 
-Let's perform some basic computations over the Delta Lake data that's now stored in our Dask DataFrame. 
+Let's perform some basic computations over the Delta Lake data that's now stored in our Dask DataFrame.
 
 Suppose you want to group the dataset by the `country` column:
 
@@ -127,11 +126,11 @@ Suppose you want to group the dataset by the `country` column:
 | Germany   |            2 |           2 |           2 |
 ```
 
-Dask executes this `groupby` operation in parallel across all available cores. 
+Dask executes this `groupby` operation in parallel across all available cores.
 
 ## Map Functions over Partitions
 
-You can also use Dask's `map_partitions` method to map a custom Python function over all the partitions. 
+You can also use Dask's `map_partitions` method to map a custom Python function over all the partitions.
 
 Let's write a function that will replace the missing `continent` values with the right continent names.
 
@@ -151,7 +150,7 @@ def replace_proper(partition, na_string):
         partition.loc[partition.country=="Germany"] = partition.loc[partition.country=="Germany"].replace(na_string, "Europe")
     else:
         pass
-    return partition        
+    return partition
 ```
 
 Now map this over all partitions in the Dask DataFrame:
@@ -172,11 +171,13 @@ Now map this over all partitions in the Dask DataFrame:
 ```
 
 ## Write to Delta Lake
+
 After doing your data processing in Dask, you can write the data back out to Delta Lake using `to_deltalake`:
 
 ```
-ddt.to_deltalake(ddf, "tmp/test_write")
+ddt.to_deltalake("tmp/test_write", ddf)
 ```
 
 ## Contribute to `dask-deltalake`
+
 To contribute, go to the [`dask-deltalake` Github repository](https://github.com/rrpelgrim/dask-deltatable).
