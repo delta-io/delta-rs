@@ -125,6 +125,8 @@ impl Serialize for EagerSnapshot {
     {
         let mut seq = serializer.serialize_seq(None)?;
         seq.serialize_element(&self.snapshot)?;
+        seq.serialize_element(&self.tracked_actions)?;
+        seq.serialize_element(&self.transactions)?;
         for batch in self.files.iter() {
             let mut buffer = vec![];
             let mut writer = FileWriter::try_new(&mut buffer, batch.schema().as_ref())
@@ -152,10 +154,15 @@ impl<'de> Visitor<'de> for EagerSnapshotVisitor {
     where
         V: SeqAccess<'de>,
     {
-        println!("eager: {:?}", "start");
         let snapshot = seq
             .next_element()?
             .ok_or_else(|| de::Error::invalid_length(0, &self))?;
+        let tracked_actions = seq
+            .next_element()?
+            .ok_or_else(|| de::Error::invalid_length(1, &self))?;
+        let transactions = seq
+            .next_element()?
+            .ok_or_else(|| de::Error::invalid_length(2, &self))?;
         let mut files = Vec::new();
         while let Some(elem) = seq.next_element::<Vec<u8>>()? {
             let mut reader =
@@ -170,7 +177,12 @@ impl<'de> Visitor<'de> for EagerSnapshotVisitor {
                 })?;
             files.push(rb);
         }
-        Ok(EagerSnapshot { snapshot, files })
+        Ok(EagerSnapshot {
+            snapshot,
+            files,
+            tracked_actions,
+            transactions,
+        })
     }
 }
 

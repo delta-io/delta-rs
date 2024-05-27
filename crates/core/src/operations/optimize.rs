@@ -793,7 +793,7 @@ impl MergePlan {
                         Some(snapshot),
                         log_store.clone(),
                         self.task_parameters.input_parameters.clone().into(),
-                    )?
+                    )
                     .await?;
 
                 commits_made += 1;
