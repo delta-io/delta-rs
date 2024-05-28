@@ -152,7 +152,6 @@ pub async fn add_file(
         CommitBuilder::default()
             .with_actions(actions)
             .build(Some(snapshot), table.log_store(), operation)
-            .unwrap()
             .await
             .unwrap();
         table.update().await.unwrap();
@@ -189,7 +188,6 @@ pub async fn remove_file(
     CommitBuilder::default()
         .with_actions(actions)
         .build(Some(snapshot), table.log_store(), operation)
-        .unwrap()
         .await
         .unwrap();
     table.update().await.unwrap();

@@ -397,8 +397,7 @@ impl DeltaTableState {
         flatten: bool,
     ) -> Result<arrow::record_batch::RecordBatch, DeltaTableError> {
         let stats: Vec<Option<Stats>> = self
-            .file_actions()?
-            .iter()
+            .file_actions_iter()?
             .map(|f| {
                 f.get_stats()
                     .map_err(|err| DeltaTableError::InvalidStatsJson { json_err: err })

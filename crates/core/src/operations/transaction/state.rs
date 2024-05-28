@@ -31,11 +31,20 @@ impl DeltaTableState {
         &self,
         object_store: Arc<dyn ObjectStore>,
     ) -> DeltaResult<ArrowSchemaRef> {
-        if let Some(add) = self
-            .file_actions()?
-            .iter()
-            .max_by_key(|obj| obj.modification_time)
-        {
+        self.snapshot.physical_arrow_schema(object_store).await
+    }
+}
+
+impl EagerSnapshot {
+    /// Get the physical table schema.
+    ///
+    /// This will construct a schema derived from the parquet schema of the latest data file,
+    /// and fields for partition columns from the schema defined in table meta data.
+    pub async fn physical_arrow_schema(
+        &self,
+        object_store: Arc<dyn ObjectStore>,
+    ) -> DeltaResult<ArrowSchemaRef> {
+        if let Some(add) = self.file_actions()?.max_by_key(|obj| obj.modification_time) {
             let file_meta = add.try_into()?;
             let file_reader = ParquetObjectReader::new(object_store, file_meta);
             let file_schema = ParquetRecordBatchStreamBuilder::new_with_options(

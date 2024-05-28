@@ -15,6 +15,7 @@
 //!
 //!
 
+use std::collections::{HashMap, HashSet};
 use std::io::{BufRead, BufReader, Cursor};
 use std::sync::Arc;
 
@@ -28,23 +29,26 @@ use object_store::ObjectStore;
 use self::log_segment::{LogSegment, PathExt};
 use self::parse::{read_adds, read_removes};
 use self::replay::{LogMapper, LogReplayScanner, ReplayStream};
+use self::visitors::*;
 use super::{
     Action, Add, AddCDCFile, CommitInfo, DataType, Metadata, Protocol, Remove, StructField,
+    Transaction,
 };
-use crate::kernel::StructType;
+use crate::kernel::parse::read_cdf_adds;
+use crate::kernel::{ActionType, StructType};
 use crate::logstore::LogStore;
 use crate::operations::transaction::CommitData;
 use crate::table::config::TableConfig;
 use crate::{DeltaResult, DeltaTableConfig, DeltaTableError};
+
+pub use self::log_data::*;
 
 mod log_data;
 mod log_segment;
 pub(crate) mod parse;
 mod replay;
 mod serde;
-
-use crate::kernel::parse::read_cdf_adds;
-pub use log_data::*;
+mod visitors;
 
 /// A snapshot of a Delta table
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
@@ -200,21 +204,39 @@ impl Snapshot {
     }
 
     /// Get the files in the snapshot
-    pub fn files(
+    pub fn files<'a>(
         &self,
         store: Arc<dyn ObjectStore>,
-    ) -> DeltaResult<ReplayStream<BoxStream<'_, DeltaResult<RecordBatch>>>> {
-        let log_stream = self.log_segment.commit_stream(
-            store.clone(),
-            &log_segment::COMMIT_SCHEMA,
-            &self.config,
-        )?;
+        visitors: &'a mut Vec<Box<dyn ReplayVisitor>>,
+    ) -> DeltaResult<ReplayStream<'a, BoxStream<'_, DeltaResult<RecordBatch>>>> {
+        let mut schema_actions: HashSet<_> =
+            visitors.iter().flat_map(|v| v.required_actions()).collect();
+
+        schema_actions.insert(ActionType::Add);
         let checkpoint_stream = self.log_segment.checkpoint_stream(
-            store,
-            &log_segment::CHECKPOINT_SCHEMA,
+            store.clone(),
+            &StructType::new(
+                schema_actions
+                    .iter()
+                    .map(|a| a.schema_field().clone())
+                    .collect(),
+            ),
             &self.config,
         );
-        ReplayStream::try_new(log_stream, checkpoint_stream, self)
+
+        schema_actions.insert(ActionType::Remove);
+        let log_stream = self.log_segment.commit_stream(
+            store.clone(),
+            &StructType::new(
+                schema_actions
+                    .iter()
+                    .map(|a| a.schema_field().clone())
+                    .collect(),
+            ),
+            &self.config,
+        )?;
+
+        ReplayStream::try_new(log_stream, checkpoint_stream, self, visitors)
     }
 
     /// Get the commit infos in the snapshot
@@ -340,6 +362,11 @@ impl Snapshot {
 #[derive(Debug, Clone, PartialEq)]
 pub struct EagerSnapshot {
     snapshot: Snapshot,
+    // additional actions that should be tracked during log replay.
+    tracked_actions: HashSet<ActionType>,
+
+    transactions: Option<HashMap<String, Transaction>>,
+
     // NOTE: this is a Vec of RecordBatch instead of a single RecordBatch because
     //       we do not yet enforce a consistent schema across all batches we read from the log.
     files: Vec<RecordBatch>,
@@ -353,9 +380,51 @@ impl EagerSnapshot {
         config: DeltaTableConfig,
         version: Option<i64>,
     ) -> DeltaResult<Self> {
+        Self::try_new_with_visitor(table_root, store, config, version, Default::default()).await
+    }
+
+    /// Create a new [`EagerSnapshot`] instance
+    pub async fn try_new_with_visitor(
+        table_root: &Path,
+        store: Arc<dyn ObjectStore>,
+        config: DeltaTableConfig,
+        version: Option<i64>,
+        tracked_actions: HashSet<ActionType>,
+    ) -> DeltaResult<Self> {
+        let mut visitors = tracked_actions
+            .iter()
+            .flat_map(|a| get_visitor(a))
+            .collect::<Vec<_>>();
         let snapshot = Snapshot::try_new(table_root, store.clone(), config, version).await?;
-        let files = snapshot.files(store)?.try_collect().await?;
-        Ok(Self { snapshot, files })
+        let files = snapshot.files(store, &mut visitors)?.try_collect().await?;
+
+        let mut sn = Self {
+            snapshot,
+            files,
+            tracked_actions,
+            transactions: None,
+        };
+
+        sn.process_visitors(visitors)?;
+
+        Ok(sn)
+    }
+
+    fn process_visitors(&mut self, visitors: Vec<Box<dyn ReplayVisitor>>) -> DeltaResult<()> {
+        for visitor in visitors {
+            if let Some(tv) = visitor
+                .as_ref()
+                .as_any()
+                .downcast_ref::<AppTransactionVisitor>()
+            {
+                if self.transactions.is_none() {
+                    self.transactions = Some(tv.app_transaction_version.clone());
+                } else {
+                    self.transactions = Some(tv.merge(self.transactions.as_ref().unwrap()));
+                }
+            }
+        }
+        Ok(())
     }
 
     #[cfg(test)]
@@ -369,11 +438,16 @@ impl EagerSnapshot {
             .into_iter()
             .map(|b| mapper.map_batch(b))
             .collect::<DeltaResult<Vec<_>>>()?;
-        Ok(Self { snapshot, files })
+        Ok(Self {
+            snapshot,
+            files,
+            tracked_actions: Default::default(),
+            transactions: None,
+        })
     }
 
     /// Update the snapshot to the given version
-    pub async fn update(
+    pub async fn update<'a>(
         &mut self,
         log_store: Arc<dyn LogStore>,
         target_version: Option<i64>,
@@ -381,36 +455,71 @@ impl EagerSnapshot {
         if Some(self.version()) == target_version {
             return Ok(());
         }
+
         let new_slice = self
             .snapshot
             .update_inner(log_store.clone(), target_version)
             .await?;
-        if let Some(new_slice) = new_slice {
-            let files = std::mem::take(&mut self.files);
-            let log_stream = new_slice.commit_stream(
-                log_store.object_store().clone(),
-                &log_segment::COMMIT_SCHEMA,
-                &self.snapshot.config,
-            )?;
-            let checkpoint_stream = if new_slice.checkpoint_files.is_empty() {
-                futures::stream::iter(files.into_iter().map(Ok)).boxed()
-            } else {
-                new_slice
-                    .checkpoint_stream(
-                        log_store.object_store(),
-                        &log_segment::CHECKPOINT_SCHEMA,
-                        &self.snapshot.config,
-                    )
-                    .boxed()
-            };
-            let mapper = LogMapper::try_new(&self.snapshot, None)?;
-            let files = ReplayStream::try_new(log_stream, checkpoint_stream, &self.snapshot)?
+
+        if new_slice.is_none() {
+            return Ok(());
+        }
+        let new_slice = new_slice.unwrap();
+
+        let mut visitors = self
+            .tracked_actions
+            .iter()
+            .flat_map(|a| get_visitor(a))
+            .collect::<Vec<_>>();
+
+        let mut schema_actions: HashSet<_> =
+            visitors.iter().flat_map(|v| v.required_actions()).collect();
+        let files = std::mem::take(&mut self.files);
+
+        schema_actions.insert(ActionType::Add);
+        let checkpoint_stream = if new_slice.checkpoint_files.is_empty() {
+            // NOTE: we don't need to add the visitor relevant data here, as it is repüresented in teh state already
+            futures::stream::iter(files.into_iter().map(Ok)).boxed()
+        } else {
+            let read_schema = StructType::new(
+                schema_actions
+                    .iter()
+                    .map(|a| a.schema_field().clone())
+                    .collect(),
+            );
+            new_slice
+                .checkpoint_stream(
+                    log_store.object_store(),
+                    &read_schema,
+                    &self.snapshot.config,
+                )
+                .boxed()
+        };
+
+        schema_actions.insert(ActionType::Remove);
+        let read_schema = StructType::new(
+            schema_actions
+                .iter()
+                .map(|a| a.schema_field().clone())
+                .collect(),
+        );
+        let log_stream = new_slice.commit_stream(
+            log_store.object_store().clone(),
+            &read_schema,
+            &self.snapshot.config,
+        )?;
+
+        let mapper = LogMapper::try_new(&self.snapshot, None)?;
+
+        let files =
+            ReplayStream::try_new(log_stream, checkpoint_stream, &self.snapshot, &mut visitors)?
                 .map(|batch| batch.and_then(|b| mapper.map_batch(b)))
                 .try_collect()
                 .await?;
 
-            self.files = files;
-        }
+        self.files = files;
+        self.process_visitors(visitors)?;
+
         Ok(())
     }
 
@@ -482,6 +591,17 @@ impl EagerSnapshot {
         Ok(self.files.iter().flat_map(|b| read_cdf_adds(b)).flatten())
     }
 
+    /// Iterate over all latest app transactions
+    pub fn transactions(&self) -> DeltaResult<impl Iterator<Item = Transaction> + '_> {
+        self.transactions
+            .as_ref()
+            .map(|t| t.values().cloned())
+            .ok_or(DeltaTableError::Generic(
+                "Transactions are not available. Please enable tracking of transactions."
+                    .to_string(),
+            ))
+    }
+
     /// Advance the snapshot based on the given commit actions
     pub fn advance<'a>(
         &mut self,
@@ -505,10 +625,25 @@ impl EagerSnapshot {
             }
             send.push(commit);
         }
+
+        let mut visitors = self
+            .tracked_actions
+            .iter()
+            .flat_map(|a| get_visitor(a))
+            .collect::<Vec<_>>();
+        let mut schema_actions: HashSet<_> =
+            visitors.iter().flat_map(|v| v.required_actions()).collect();
+        schema_actions.extend([ActionType::Add, ActionType::Remove]);
+        let read_schema = StructType::new(
+            schema_actions
+                .iter()
+                .map(|a| a.schema_field().clone())
+                .collect(),
+        );
         let actions = self.snapshot.log_segment.advance(
             send,
             &self.table_root(),
-            &log_segment::COMMIT_SCHEMA,
+            &read_schema,
             &self.snapshot.config,
         )?;
 
@@ -516,7 +651,11 @@ impl EagerSnapshot {
         let mut scanner = LogReplayScanner::new();
 
         for batch in actions {
-            files.push(scanner.process_files_batch(&batch?, true)?);
+            let batch = batch?;
+            files.push(scanner.process_files_batch(&batch, true)?);
+            for visitor in &mut visitors {
+                visitor.visit_batch(&batch)?;
+            }
         }
 
         let mapper = if let Some(metadata) = &metadata {
@@ -543,6 +682,7 @@ impl EagerSnapshot {
         if let Some(protocol) = protocol {
             self.snapshot.protocol = protocol;
         }
+        self.process_visitors(visitors)?;
 
         Ok(self.snapshot.version())
     }
@@ -675,7 +815,7 @@ mod tests {
         assert_eq!(tombstones.len(), 31);
 
         let batches = snapshot
-            .files(store.clone())?
+            .files(store.clone(), &mut vec![])?
             .try_collect::<Vec<_>>()
             .await?;
         let expected = [
@@ -705,7 +845,7 @@ mod tests {
             )
             .await?;
             let batches = snapshot
-                .files(store.clone())?
+                .files(store.clone(), &mut vec![])?
                 .try_collect::<Vec<_>>()
                 .await?;
             let num_files = batches.iter().map(|b| b.num_rows() as i64).sum::<i64>();
@@ -801,7 +941,12 @@ mod tests {
             predicate: None,
         };
 
-        let actions = vec![CommitData::new(removes, operation, HashMap::new()).unwrap()];
+        let actions = vec![CommitData::new(
+            removes,
+            operation,
+            HashMap::new(),
+            Vec::new(),
+        )];
 
         let new_version = snapshot.advance(&actions)?;
         assert_eq!(new_version, version + 1);

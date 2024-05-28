@@ -21,7 +21,7 @@ use tracing::{debug, error};
 use super::{time_utils, ProtocolError};
 use crate::kernel::arrow::delta_log_schema_for_table;
 use crate::kernel::{
-    Action, Add as AddAction, DataType, PrimitiveType, Protocol, Remove, StructField, Txn,
+    Action, Add as AddAction, DataType, PrimitiveType, Protocol, Remove, StructField,
 };
 use crate::logstore::LogStore;
 use crate::table::state::DeltaTableState;
@@ -56,6 +56,9 @@ enum CheckpointError {
         #[from]
         source: ArrowError,
     },
+
+    #[error("missing rewquired action type in snapshot: {0}")]
+    MissingActionType(String),
 }
 
 impl From<CheckpointError> for ProtocolError {
@@ -65,6 +68,7 @@ impl From<CheckpointError> for ProtocolError {
             CheckpointError::Arrow { source } => Self::Arrow { source },
             CheckpointError::StaleTableVersion(..) => Self::Generic(value.to_string()),
             CheckpointError::Parquet { source } => Self::ParquetParseError { source },
+            CheckpointError::MissingActionType(_) => Self::Generic(value.to_string()),
         }
     }
 }
@@ -297,14 +301,8 @@ fn parquet_bytes_from_state(
     .chain(
         state
             .app_transaction_version()
-            .iter()
-            .map(|(app_id, version)| {
-                Action::Txn(Txn {
-                    app_id: app_id.clone(),
-                    version: *version,
-                    last_updated: None,
-                })
-            }),
+            .map_err(|_| CheckpointError::MissingActionType("txn".to_string()))?
+            .map(|txn| Action::Txn(txn)),
     )
     // removes
     .chain(tombstones.iter().map(|r| {
@@ -622,7 +620,6 @@ mod tests {
                 table.log_store(),
                 operation,
             )
-            .unwrap()
             .await
             .unwrap()
             .version();

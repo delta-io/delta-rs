@@ -1463,7 +1463,7 @@ async fn execute(
 
     let commit = CommitBuilder::from(commit_properties)
         .with_actions(actions)
-        .build(Some(&snapshot), log_store.clone(), operation)?
+        .build(Some(&snapshot), log_store.clone(), operation)
         .await?;
     Ok((commit.snapshot(), metrics))
 }

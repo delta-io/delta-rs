@@ -301,7 +301,7 @@ impl std::future::IntoFuture for SetTablePropertiesBuilder {
                     Some(&this.snapshot),
                     this.log_store.clone(),
                     operation.clone(),
-                )?
+                )
                 .await?;
             Ok(DeltaTable::new_with_state(
                 this.log_store,

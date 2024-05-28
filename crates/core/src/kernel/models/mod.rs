@@ -14,7 +14,7 @@ mod schema;
 pub use actions::*;
 pub use schema::*;
 
-#[derive(Debug)]
+#[derive(Debug, Hash, PartialEq, Eq, Clone, Serialize, Deserialize)]
 /// The type of action that was performed on the table
 pub enum ActionType {
     /// modify the data in a table by adding individual logical files
@@ -49,7 +49,7 @@ pub enum Action {
     Add(Add),
     Remove(Remove),
     Cdc(AddCDCFile),
-    Txn(Txn),
+    Txn(Transaction),
     CommitInfo(CommitInfo),
     DomainMetadata(DomainMetadata),
 }
@@ -94,8 +94,8 @@ impl From<Protocol> for Action {
     }
 }
 
-impl From<Txn> for Action {
-    fn from(a: Txn) -> Self {
+impl From<Transaction> for Action {
+    fn from(a: Transaction) -> Self {
         Self::Txn(a)
     }
 }

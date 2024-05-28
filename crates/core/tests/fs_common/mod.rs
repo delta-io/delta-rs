@@ -126,7 +126,6 @@ pub async fn commit_actions(
             table.log_store().clone(),
             operation,
         )
-        .unwrap()
         .await
         .unwrap()
         .version();

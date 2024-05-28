@@ -544,8 +544,7 @@ impl<'a> DeltaScanBuilder<'a> {
                         PruningPredicate::try_new(predicate.clone(), logical_schema.clone())?;
                     let files_to_prune = pruning_predicate.prune(self.snapshot)?;
                     self.snapshot
-                        .file_actions()?
-                        .iter()
+                        .file_actions_iter()?
                         .zip(files_to_prune.into_iter())
                         .filter_map(
                             |(action, keep)| {
@@ -1517,8 +1516,7 @@ pub(crate) async fn find_files_scan<'a>(
     expression: Expr,
 ) -> DeltaResult<Vec<Add>> {
     let candidate_map: HashMap<String, Add> = snapshot
-        .file_actions()?
-        .iter()
+        .file_actions_iter()?
         .map(|add| (add.path.clone(), add.to_owned()))
         .collect();
 

@@ -358,7 +358,7 @@ impl std::future::IntoFuture for CreateBuilder {
                     table_state.map(|f| f as &dyn TableReference),
                     table.log_store.clone(),
                     operation,
-                )?
+                )
                 .await?
                 .version();
             table.load_version(version).await?;

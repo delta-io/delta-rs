@@ -1134,7 +1134,6 @@ impl RawDeltaTable {
                     self._table.log_store(),
                     operation,
                 )
-                .map_err(|err| PythonError::from(DeltaTableError::from(err)))?
                 .into_future(),
             )
             .map_err(PythonError::from)?;

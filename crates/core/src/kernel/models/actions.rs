@@ -659,7 +659,7 @@ pub struct AddCDCFile {
 /// enable idempotency.
 #[derive(Serialize, Deserialize, Debug, Default, Clone, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-pub struct Txn {
+pub struct Transaction {
     /// A unique identifier for the application performing the transaction.
     pub app_id: String,
 
@@ -669,6 +669,26 @@ pub struct Txn {
     /// The time when this transaction action was created in milliseconds since the Unix epoch.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_updated: Option<i64>,
+}
+
+impl Transaction {
+    /// Create a new application transactions. See [`Txn`] for details.
+    pub fn new(app_id: impl ToString, version: i64) -> Self {
+        Self::new_with_last_update(app_id, version, None)
+    }
+
+    /// Create a new application transactions. See [`Txn`] for details.
+    pub fn new_with_last_update(
+        app_id: impl ToString,
+        version: i64,
+        last_updated: Option<i64>,
+    ) -> Self {
+        Transaction {
+            app_id: app_id.to_string(),
+            version,
+            last_updated,
+        }
+    }
 }
 
 /// The commitInfo is a fairly flexible action within the delta specification, where arbitrary data can be stored.
