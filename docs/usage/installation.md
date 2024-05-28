@@ -6,7 +6,7 @@ The `deltalake` project can be installed via pip for Python or Cargo for Rust.
 
 With pip:
 
-``` bash
+```bash
 pip install deltalake
 ```
 
@@ -20,7 +20,7 @@ conda install -c conda-forge deltalake
 
 With Cargo:
 
-``` bash
+```bash
 cargo add deltalake
 ```
 
@@ -41,9 +41,7 @@ dependencies:
   - pandas
   - polars
   - jupyterlab
-  - pip
-  - pip:
-    - deltalake
+  - deltalake
 ```
 
 Create a virtual environment with the dependencies:
