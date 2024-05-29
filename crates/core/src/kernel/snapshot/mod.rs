@@ -393,7 +393,7 @@ impl EagerSnapshot {
     ) -> DeltaResult<Self> {
         let mut visitors = tracked_actions
             .iter()
-            .flat_map(|a| get_visitor(a))
+            .flat_map(get_visitor)
             .collect::<Vec<_>>();
         let snapshot = Snapshot::try_new(table_root, store.clone(), config, version).await?;
         let files = snapshot.files(store, &mut visitors)?.try_collect().await?;
@@ -469,7 +469,7 @@ impl EagerSnapshot {
         let mut visitors = self
             .tracked_actions
             .iter()
-            .flat_map(|a| get_visitor(a))
+            .flat_map(get_visitor)
             .collect::<Vec<_>>();
 
         let mut schema_actions: HashSet<_> =
@@ -629,7 +629,7 @@ impl EagerSnapshot {
         let mut visitors = self
             .tracked_actions
             .iter()
-            .flat_map(|a| get_visitor(a))
+            .flat_map(get_visitor)
             .collect::<Vec<_>>();
         let mut schema_actions: HashSet<_> =
             visitors.iter().flat_map(|v| v.required_actions()).collect();

@@ -613,7 +613,7 @@ mod tests {
 
         match result {
             Ok(_) => {
-                assert!(false, "Should not have successfully written");
+                panic!("Should not have successfully written");
             }
             Err(e) => {
                 match e {
@@ -621,7 +621,7 @@ mod tests {
                         // this is expected
                     }
                     others => {
-                        assert!(false, "Got the wrong error: {others:?}");
+                        panic!("Got the wrong error: {others:?}");
                     }
                 }
             }
