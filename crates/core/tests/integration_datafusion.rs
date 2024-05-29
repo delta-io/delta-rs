@@ -114,7 +114,7 @@ mod local {
         for batch in batches {
             table = DeltaOps(table)
                 .write(vec![batch])
-                .with_save_mode(save_mode.clone())
+                .with_save_mode(save_mode)
                 .await
                 .unwrap();
         }

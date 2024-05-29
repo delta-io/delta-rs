@@ -50,7 +50,7 @@ impl AppTransactionVisitor {
         for (key, value) in &self.app_transaction_version {
             clone.insert(key.clone(), value.clone());
         }
-        return clone;
+        clone
     }
 }
 
