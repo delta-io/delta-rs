@@ -97,7 +97,7 @@ mod tests {
             .with_partition_columns(["modified"])
             .with_commit_properties(
                 CommitProperties::default()
-                    .with_application_transaction(Transaction::new(&"my-app", 1)),
+                    .with_application_transaction(Transaction::new("my-app", 1)),
             )
             .await
             .unwrap();
@@ -113,7 +113,7 @@ mod tests {
             .write(vec![get_record_batch(None, false)])
             .with_commit_properties(
                 CommitProperties::default()
-                    .with_application_transaction(Transaction::new(&"my-app", 2)),
+                    .with_application_transaction(Transaction::new("my-app", 2)),
             )
             .await
             .unwrap();
@@ -123,7 +123,7 @@ mod tests {
             .write(vec![get_record_batch(None, false)])
             .with_commit_properties(
                 CommitProperties::default()
-                    .with_application_transaction(Transaction::new(&"my-app", 3)),
+                    .with_application_transaction(Transaction::new("my-app", 3)),
             )
             .await;
 

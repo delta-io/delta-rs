@@ -566,7 +566,7 @@ mod tests {
         let mut writer = RecordBatchWriter::for_table(&table).unwrap();
         let partitions = writer.divide_by_partition_values(&batch).unwrap();
 
-        let expected_keys = vec![
+        let expected_keys = [
             String::from("modified=2021-02-01"),
             String::from("modified=2021-02-02"),
         ];
@@ -710,7 +710,7 @@ mod tests {
 
             match result {
                 Ok(_) => {
-                    assert!(false, "Should not have successfully written");
+                    panic!("Should not have successfully written");
                 }
                 Err(e) => {
                     match e {
@@ -718,7 +718,7 @@ mod tests {
                             // this is expected
                         }
                         others => {
-                            assert!(false, "Got the wrong error: {others:?}");
+                            panic!("Got the wrong error: {others:?}");
                         }
                     }
                 }
