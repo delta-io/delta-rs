@@ -230,7 +230,7 @@ mod tests {
         assert_eq!(result.fields().len(), 1);
         let delta_type: DeltaDataType = result.fields()[0].data_type().try_into().unwrap();
         assert_eq!(delta_type, DeltaDataType::STRING);
-        assert_eq!(result.fields()[0].is_nullable(), true);
+        assert!(result.fields()[0].is_nullable());
     }
 
     #[test]
@@ -282,7 +282,7 @@ mod tests {
             delta_type,
             DeltaDataType::Array(Box::new(DeltaArrayType::new(DeltaDataType::STRING, false)))
         );
-        assert_eq!(result.fields()[0].is_nullable(), true);
+        assert!(result.fields()[0].is_nullable());
     }
 
     #[test]

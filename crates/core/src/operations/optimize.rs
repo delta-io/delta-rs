@@ -1345,7 +1345,7 @@ pub(super) mod zorder {
                     "+-----+-----+-----------+",
                 ];
 
-                let expected = vec![expected_1, expected_2, expected_3];
+                let expected = [expected_1, expected_2, expected_3];
 
                 let indices = Int32Array::from(shuffled_indices().to_vec());
                 let shuffled_columns = batch

@@ -572,7 +572,7 @@ impl DeltaTableState {
                 // into StructArrays, until it is consolidated into a single array.
                 columnar_stats = columnar_stats
                     .into_iter()
-                    .group_by(|col_stat| {
+                    .chunk_by(|col_stat| {
                         if col_stat.path.len() < level {
                             col_stat.path.clone()
                         } else {

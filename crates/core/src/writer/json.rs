@@ -600,11 +600,8 @@ mod tests {
                 }
             );
 
-            match writer.write(vec![second_data]).await {
-                Ok(_) => {
-                    assert!(false, "Should not have successfully written");
-                }
-                _ => {}
+            if writer.write(vec![second_data]).await.is_ok() {
+                panic!("Should not have successfully written");
             }
         }
 

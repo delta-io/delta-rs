@@ -302,7 +302,7 @@ fn parquet_bytes_from_state(
         state
             .app_transaction_version()
             .map_err(|_| CheckpointError::MissingActionType("txn".to_string()))?
-            .map(|txn| Action::Txn(txn)),
+            .map(Action::Txn),
     )
     // removes
     .chain(tombstones.iter().map(|r| {
