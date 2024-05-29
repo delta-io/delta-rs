@@ -31,8 +31,6 @@ if sys.version_info >= (3, 8):
 else:
     from typing_extensions import Literal
 
-import warnings
-
 import pyarrow as pa
 import pyarrow.dataset as ds
 import pyarrow.fs as pa_fs
@@ -106,7 +104,6 @@ def write_deltalake(
     name: Optional[str] = ...,
     description: Optional[str] = ...,
     configuration: Optional[Mapping[str, Optional[str]]] = ...,
-    overwrite_schema: bool = ...,
     schema_mode: Optional[Literal["overwrite"]] = ...,
     storage_options: Optional[Dict[str, str]] = ...,
     partition_filters: Optional[List[Tuple[str, str, Any]]] = ...,
@@ -134,7 +131,6 @@ def write_deltalake(
     name: Optional[str] = ...,
     description: Optional[str] = ...,
     configuration: Optional[Mapping[str, Optional[str]]] = ...,
-    overwrite_schema: bool = ...,
     schema_mode: Optional[Literal["merge", "overwrite"]] = ...,
     storage_options: Optional[Dict[str, str]] = ...,
     large_dtypes: bool = ...,
@@ -162,7 +158,6 @@ def write_deltalake(
     name: Optional[str] = ...,
     description: Optional[str] = ...,
     configuration: Optional[Mapping[str, Optional[str]]] = ...,
-    overwrite_schema: bool = ...,
     schema_mode: Optional[Literal["merge", "overwrite"]] = ...,
     storage_options: Optional[Dict[str, str]] = ...,
     predicate: Optional[str] = ...,
@@ -196,7 +191,6 @@ def write_deltalake(
     name: Optional[str] = None,
     description: Optional[str] = None,
     configuration: Optional[Mapping[str, Optional[str]]] = None,
-    overwrite_schema: bool = False,
     schema_mode: Optional[Literal["merge", "overwrite"]] = None,
     storage_options: Optional[Dict[str, str]] = None,
     partition_filters: Optional[List[Tuple[str, str, Any]]] = None,
@@ -251,7 +245,6 @@ def write_deltalake(
         name: User-provided identifier for this table.
         description: User-provided description for this table.
         configuration: A map containing configuration options for the metadata action.
-        overwrite_schema: Deprecated, use schema_mode instead.
         schema_mode: If set to "overwrite", allows replacing the schema of the table. Set to "merge" to merge with existing schema.
         storage_options: options passed to the native delta filesystem.
         predicate: When using `Overwrite` mode, replace data that matches a predicate. Only used in rust engine.
@@ -269,14 +262,6 @@ def write_deltalake(
         table.update_incremental()
 
     __enforce_append_only(table=table, configuration=configuration, mode=mode)
-    if overwrite_schema:
-        schema_mode = "overwrite"
-
-        warnings.warn(
-            "overwrite_schema is deprecated, use schema_mode instead. ",
-            category=DeprecationWarning,
-            stacklevel=2,
-        )
     if isinstance(partition_by, str):
         partition_by = [partition_by]
 
