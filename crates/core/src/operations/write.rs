@@ -431,7 +431,9 @@ async fn write_execution_plan_with_predicate(
                     )?;
 
                     if let Some(s) = sendable.as_ref() {
-                        let _ = s.send(arr.clone()).await;
+                        if let Err(e) = s.send(arr.clone()).await {
+                            error!("Failed to send data to observer: {e:#?}");
+                        }
                     } else {
                         debug!("write_execution_plan_with_predicate did not send any batches, no sender.");
                     }

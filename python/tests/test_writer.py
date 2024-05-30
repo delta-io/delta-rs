@@ -5,6 +5,7 @@ import pathlib
 import random
 import threading
 from datetime import date, datetime
+from decimal import Decimal
 from math import inf
 from typing import Any, Dict, Iterable, List, Literal
 from unittest.mock import Mock
@@ -1450,7 +1451,6 @@ def test_issue_1651_roundtrip_timestamp(tmp_path: pathlib.Path):
 @pytest.mark.parametrize("engine", ["rust", "pyarrow"])
 def test_invalid_decimals(tmp_path: pathlib.Path, engine):
     import re
-    from decimal import Decimal
 
     data = pa.table(
         {"x": pa.array([Decimal("10000000000000000000000000000000000000.0")])}
@@ -1558,7 +1558,6 @@ def test_empty(existing_table: DeltaTable):
 
 def test_rust_decimal_cast(tmp_path: pathlib.Path):
     import re
-    from decimal import Decimal
 
     data = pa.table({"x": pa.array([Decimal("100.1")])})
 
@@ -1729,3 +1728,48 @@ def test_parse_stats_with_new_schema(tmp_path, engine):
     write_deltalake(
         tmp_path, sample_data, mode="overwrite", schema_mode="overwrite", engine=engine
     )
+
+
+def test_roundtrip_cdc_evolution(tmp_path: pathlib.Path):
+    """
+    This test is used as a CDC integration test from Python to ensure,
+    approximately, that CDC files are being written
+    """
+    raw_commit = r"""{"metaData":{"id":"bb0fdeb2-76dd-4f5e-b1ea-845ecec8fa7e","format":{"provider":"parquet","options":{}},"schemaString":"{\"type\":\"struct\",\"fields\":[{\"name\":\"id\",\"type\":\"integer\",\"nullable\":true,\"metadata\":{}}]}","partitionColumns":[],"configuration":{"delta.enableChangeDataFeed":"true"},"createdTime":1713110303902}}
+{"protocol":{"minReaderVersion":1,"minWriterVersion":4,"writerFeatures":["changeDataFeed"]}}
+"""
+    # timestampNtz looks like it might be an unnecessary requirement to write from Python
+    os.mkdir(os.path.join(tmp_path, "_delta_log"))
+    # This is a stupid hack to make sure we have a CDC capable table from the jump
+    with open(
+        os.path.join(tmp_path, "_delta_log", "00000000000000000000.json"), "w+"
+    ) as fd:
+        fd.write(raw_commit)
+    assert ("0" * 20 + ".json") in os.listdir(tmp_path / "_delta_log")
+
+    # Make sure the _change_data doesn't exist
+    assert not os.path.isdir(os.path.join(tmp_path, "_change_data"))
+
+    nrows = 5
+    sample_data = pa.table(
+        {
+            "utf8": pa.array([str(x) for x in range(nrows)]),
+            "int64": pa.array(list(range(nrows)), pa.int64()),
+            # See <https://github.com/delta-io/delta-rs/issues/2568>
+            # "struct": pa.array([{"x": x, "y": str(x)} for x in range(nrows)]),
+            # "list": pa.array([list(range(x + 1)) for x in range(nrows)]),
+        }
+    )
+
+    write_deltalake(
+        tmp_path, sample_data, mode="append", schema_mode="merge", engine="rust"
+    )
+    assert ("0" * 19 + "1.json") in os.listdir(tmp_path / "_delta_log")
+
+    delta_table = DeltaTable(tmp_path)
+    delta_table.update(predicate="utf8 = '1'", updates={"utf8": "'hello world'"})
+
+    delta_table = DeltaTable(tmp_path)
+    print(os.listdir(tmp_path))
+    # This is kind of a weak test to verify that CDFs were written
+    assert os.path.isdir(os.path.join(tmp_path, "_change_data"))
