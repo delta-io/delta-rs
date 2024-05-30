@@ -445,7 +445,10 @@ async fn execute(
 
     match tracker.collect().await {
         Ok(batches) => {
-            if !batches.is_empty() {
+            if batches.is_empty() {
+                debug!("CDCObserver collected zero batches");
+            }
+            else {
                 debug!(
                     "Collected {} batches to write as part of this transaction:",
                     batches.len()
