@@ -1,7 +1,9 @@
 # Writing to S3 with a locking provider
 
-A locking mechanism is needed to prevent unsafe concurrent writes to a
-delta lake directory when writing to S3.
+Delta lake guarantees :ref:`ACID transactions`
+when writing data. This is done by default when writing to all supported object stores except S3.
+
+To enable safe concurrent writes to S3, we must provide an external locking mechanism.
 
 ### DynamoDB
 DynamoDB is the only available locking provider at the moment in delta-rs. To enable DynamoDB as the locking provider, you need to set the ``AWS_S3_LOCKING_PROVIDER`` to 'dynamodb' as a ``storage_options`` or as an environment variable.
