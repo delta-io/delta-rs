@@ -8,7 +8,7 @@ async fn main() -> Result<(), deltalake::errors::DeltaTableError> {
     let ops = if let Ok(table_uri) = std::env::var("TABLE_URI") {
         DeltaOps::try_from_uri(table_uri).await?
     } else {
-        DeltaOps::try_from_uri("./rust/tests/data/delta-0.8.0").await?
+        DeltaOps::try_from_uri("../test/tests/data/delta-0.8.0").await?
     };
 
     let (_table, stream) = ops.load().await?;
