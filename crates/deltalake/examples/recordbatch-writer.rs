@@ -88,7 +88,7 @@ impl WeatherRecord {
         vec![
             StructField::new(
                 "timestamp".to_string(),
-                DataType::Primitive(PrimitiveType::Timestamp),
+                DataType::Primitive(PrimitiveType::TimestampNtz),
                 true,
             ),
             StructField::new(
@@ -98,12 +98,12 @@ impl WeatherRecord {
             ),
             StructField::new(
                 "lat".to_string(),
-                DataType::Primitive(PrimitiveType::Float),
+                DataType::Primitive(PrimitiveType::Double),
                 true,
             ),
             StructField::new(
                 "long".to_string(),
-                DataType::Primitive(PrimitiveType::Float),
+                DataType::Primitive(PrimitiveType::Double),
                 true,
             ),
         ]
