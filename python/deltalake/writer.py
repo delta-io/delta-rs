@@ -208,9 +208,9 @@ def write_deltalake(
     For higher protocol support use engine='rust', this will become the default
     eventually.
 
-    A locking mechanism is needed to prevent unsafe concurrent writes to a
-    delta lake directory when writing to S3. For more information on the setup, follow
-    this usage guide: https://delta-io.github.io/delta-rs/usage/writing/writing-to-s3-with-locking-provider/
+    To enable safe concurrent writes when writing to S3, an additional locking
+    mechanism must be supplied. For more information on enabling concurrent writing to S3, follow
+    [this guide](https://delta-io.github.io/delta-rs/usage/writing/writing-to-s3-with-locking-provider/)
 
     Args:
         table_or_uri: URI of a table or a DeltaTable object.
