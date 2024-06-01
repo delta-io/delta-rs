@@ -1,6 +1,6 @@
 # Writing to S3 with a locking provider
 
-Delta lake guarantees [ACID transactions](https://delta-io.github.io/delta-rs/how-delta-lake-works/delta-lake-acid-transactions/) when writing data. This is done by default when writing to all supported object stores except AWS S3. (Some S3 clients like CloudFlare R2 or MinIO may enable atomic renames, refer to [this section](#enabling-concurrent-writes-for-alternative-clients) for more information).
+Delta lake guarantees [ACID transactions](../../how-delta-lake-works/delta-lake-acid-transactions.md) when writing data. This is done by default when writing to all supported object stores except AWS S3. (Some S3 clients like CloudFlare R2 or MinIO may enable atomic renames, refer to [this section](#enabling-concurrent-writes-for-alternative-clients) for more information).
 
 When writing to S3, delta-rs provides a locking mechanism to ensure that concurrent writes are safe. This is done by default when writing to S3, but you can opt-out by setting the `AWS_S3_ALLOW_UNSAFE_RENAME` variable to ``true``.
 
