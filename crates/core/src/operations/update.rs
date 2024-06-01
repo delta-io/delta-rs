@@ -447,8 +447,7 @@ async fn execute(
         Ok(batches) => {
             if batches.is_empty() {
                 debug!("CDCObserver collected zero batches");
-            }
-            else {
+            } else {
                 debug!(
                     "Collected {} batches to write as part of this transaction:",
                     batches.len()
