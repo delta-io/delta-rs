@@ -1,9 +1,10 @@
 # Writing to S3 with a locking provider
 
-Delta lake guarantees :ref:`ACID transactions`
-when writing data. This is done by default when writing to all supported object stores except S3.
+Delta lake guarantees [ACID transactions](https://delta-io.github.io/delta-rs/how-delta-lake-works/delta-lake-acid-transactions/) when writing data. This is done by default when writing to all supported object stores except AWS S3. (Some S3 clients like CloudFlare R2 or MinIO may enable atomic renames, refer to [this section](#enabling-concurrent-writes-for-alternative-clients) for more information).
 
-To enable safe concurrent writes to S3, we must provide an external locking mechanism.
+When writing to S3, delta-rs provides a locking mechanism to ensure that concurrent writes are safe. This is done by default when writing to S3, but you can opt-out by setting the `AWS_S3_ALLOW_UNSAFE_RENAME` variable to ``true``.
+
+To enable safe concurrent writes to AWS S3, we must provide an external locking mechanism.
 
 ### DynamoDB
 DynamoDB is the only available locking provider at the moment in delta-rs. To enable DynamoDB as the locking provider, you need to set the ``AWS_S3_LOCKING_PROVIDER`` to 'dynamodb' as a ``storage_options`` or as an environment variable.
@@ -82,3 +83,19 @@ In DynamoDB, you need those permissions:
 - dynamodb:Query
 - dynamodb:PutItem
 - dynamodb:UpdateItem
+
+### Enabling concurrent writes for alternative clients
+
+Unlike AWS S3, some S3 clients support atomic renames by passing some headers
+in requests.
+
+For CloudFlare R2 passing this in the storage_options will enable concurrent writes:
+
+```python
+storage_options = {
+    "copy_if_not_exists": "header: cf-copy-destination-if-none-match: *",
+}
+```
+
+Something similar can be done with MinIO but the header to pass should be verified
+in the MinIO documentation.
