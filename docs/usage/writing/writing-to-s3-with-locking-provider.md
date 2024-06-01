@@ -46,8 +46,15 @@ Here is an example writing to s3 using this mechanism:
 ```python
 from deltalake import write_deltalake
 df = pd.DataFrame({'x': [1, 2, 3]})
-storage_options = {'AWS_S3_LOCKING_PROVIDER': 'dynamodb', 'DELTA_DYNAMO_TABLE_NAME': 'custom_table_name'}
-write_deltalake('s3a://path/to/table', df, 'storage_options'= storage_options)
+storage_options = {
+    'AWS_S3_LOCKING_PROVIDER': 'dynamodb',
+    'DELTA_DYNAMO_TABLE_NAME': 'custom_table_name'
+}
+write_deltalake(
+    's3a://path/to/table',
+    df,
+    storage_options=storage_options
+)
 ```
 
 This locking mechanism is compatible with the one used by Apache Spark. The `tablePath` property, denoting the root url of the delta table itself, is part of the primary key, and all writers intending to write to the same table must match this property precisely. In Spark, S3 URLs are prefixed with `s3a://`, and a table in delta-rs must be configured accordingly.
@@ -74,11 +81,13 @@ choose to set the `AWS_S3_ALLOW_UNSAFE_RENAME` variable to ``true`` in order to 
 You need to have permissions to get, put and delete objects in the S3 bucket you're storing your data in. Please note that you must be allowed to delete objects even if you're just appending to the deltalake, because there are temporary files into the log folder that are deleted after usage.
 
 In AWS, those would be the required permissions:
+
 - s3:GetObject
 - s3:PutObject
 - s3:DeleteObject
 
 In DynamoDB, you need those permissions:
+
 - dynamodb:GetItem
 - dynamodb:Query
 - dynamodb:PutItem
