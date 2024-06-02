@@ -1,4 +1,4 @@
-//! Add a check constraint to a table
+//! Add a new column to a table
 
 use futures::future::BoxFuture;
 use itertools::Itertools;
