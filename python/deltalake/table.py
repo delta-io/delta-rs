@@ -44,6 +44,7 @@ from deltalake._util import encode_partition_value
 from deltalake.data_catalog import DataCatalog
 from deltalake.exceptions import DeltaProtocolError
 from deltalake.fs import DeltaStorageHandler
+from deltalake.schema import Field as DeltaField
 from deltalake.schema import Schema as DeltaSchema
 
 try:
@@ -1827,6 +1828,16 @@ class TableAlterer:
 
     def __init__(self, table: DeltaTable) -> None:
         self.table = table
+
+    def alter_column(
+        self,
+        fields: DeltaField | List[DeltaField],
+        custom_metadata: Optional[Dict[str, str]] = None,
+    ) -> None:
+        if isinstance(fields, DeltaField):
+            fields = [fields]
+
+        self.table._table.alter_column(fields, custom_metadata)
 
     def add_constraint(
         self,

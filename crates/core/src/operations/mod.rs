@@ -15,6 +15,7 @@ use crate::table::builder::DeltaTableBuilder;
 use crate::DeltaTable;
 use std::collections::HashMap;
 
+pub mod alter_column;
 pub mod cast;
 pub mod convert_to_delta;
 pub mod create;

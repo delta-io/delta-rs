@@ -26,7 +26,10 @@ use deltalake::datafusion::physical_plan::ExecutionPlan;
 use deltalake::datafusion::prelude::SessionContext;
 use deltalake::delta_datafusion::DeltaDataChecker;
 use deltalake::errors::DeltaTableError;
-use deltalake::kernel::{Action, Add, Invariant, LogicalFile, Remove, Scalar, StructType};
+use deltalake::kernel::{
+    Action, Add, Invariant, LogicalFile, Remove, Scalar, StructField, StructType,
+};
+use deltalake::operations::alter_column::AlterColumnBuilder;
 use deltalake::operations::collect_sendable_stream;
 use deltalake::operations::constraints::ConstraintBuilder;
 use deltalake::operations::convert_to_delta::{ConvertToDeltaBuilder, PartitionStrategy};
@@ -59,7 +62,7 @@ use serde_json::{Map, Value};
 use crate::error::DeltaProtocolError;
 use crate::error::PythonError;
 use crate::filesystem::FsConfig;
-use crate::schema::schema_to_pyobject;
+use crate::schema::{schema_to_pyobject, Field};
 use crate::utils::rt;
 
 #[derive(FromPyObject)]
@@ -526,6 +529,40 @@ impl RawDeltaTable {
         })?;
         self._table.state = table.state;
         Ok(serde_json::to_string(&metrics).unwrap())
+    }
+
+    #[pyo3(signature = (fields, custom_metadata=None))]
+    pub fn alter_column(
+        &mut self,
+        py: Python,
+        fields: Vec<Field>,
+        custom_metadata: Option<HashMap<String, String>>,
+    ) -> PyResult<()> {
+        let table = py.allow_threads(|| {
+            let mut cmd = AlterColumnBuilder::new(
+                self._table.log_store(),
+                self._table.snapshot().map_err(PythonError::from)?.clone(),
+            );
+
+            let new_fields = fields
+                .iter()
+                .map(|v| v.inner.clone())
+                .collect::<Vec<StructField>>();
+
+            cmd = cmd.with_fields(new_fields);
+
+            if let Some(metadata) = custom_metadata {
+                let json_metadata: Map<String, Value> =
+                    metadata.into_iter().map(|(k, v)| (k, v.into())).collect();
+                cmd = cmd.with_commit_properties(
+                    CommitProperties::default().with_metadata(json_metadata),
+                );
+            };
+
+            rt().block_on(cmd.into_future()).map_err(PythonError::from)
+        })?;
+        self._table.state = table.state;
+        Ok(())
     }
 
     #[pyo3(signature = (constraints, custom_metadata=None))]
