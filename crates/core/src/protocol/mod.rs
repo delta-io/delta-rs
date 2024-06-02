@@ -521,7 +521,7 @@ impl DeltaOperation {
         match self {
             Self::Optimize { .. }
             | Self::SetTableProperties { .. }
-            | Self::AlterColumn { .. }
+            | Self::AddColumn { .. }
             | Self::VacuumStart { .. }
             | Self::VacuumEnd { .. }
             | Self::AddConstraint { .. }
