@@ -29,7 +29,7 @@ use deltalake::errors::DeltaTableError;
 use deltalake::kernel::{
     Action, Add, Invariant, LogicalFile, Remove, Scalar, StructField, StructType,
 };
-use deltalake::operations::add_column::{AddColumnBuilder, AlterColumnBuilder};
+use deltalake::operations::add_column::AddColumnBuilder;
 use deltalake::operations::collect_sendable_stream;
 use deltalake::operations::constraints::ConstraintBuilder;
 use deltalake::operations::convert_to_delta::{ConvertToDeltaBuilder, PartitionStrategy};

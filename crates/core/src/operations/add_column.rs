@@ -10,7 +10,7 @@ use super::transaction::{CommitBuilder, CommitProperties, PROTOCOL};
 use crate::kernel::{Protocol, ReaderFeatures, StructField, WriterFeatures};
 use crate::logstore::LogStoreRef;
 use crate::operations::set_tbl_properties::convert_properties_to_features;
-use crate::protocol::{self, DeltaOperation};
+use crate::protocol::DeltaOperation;
 use crate::table::state::DeltaTableState;
 use crate::{DeltaResult, DeltaTable, DeltaTableError};
 

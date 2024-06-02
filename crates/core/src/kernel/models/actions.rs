@@ -140,7 +140,7 @@ impl Protocol {
     pub fn new(min_reader_version: i32, min_writer_version: i32) -> Self {
         Self {
             min_reader_version,
-            min_writer_version: min_writer_version,
+            min_writer_version,
             reader_features: None,
             writer_features: None,
         }
