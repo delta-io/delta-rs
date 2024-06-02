@@ -11,23 +11,23 @@ use futures::future::BoxFuture;
 use futures::StreamExt;
 use itertools::Itertools;
 
+use super::cast::merge_struct;
+use super::datafusion_utils::into_expr;
+use super::transaction::{CommitBuilder, CommitProperties, PROTOCOL};
 use crate::delta_datafusion::expr::fmt_expr_to_sql;
 use crate::delta_datafusion::{
     register_store, DeltaDataChecker, DeltaScanBuilder, DeltaSessionContext,
 };
-use crate::kernel::{Protocol, StructField, StructType, WriterFeatures};
+use crate::kernel::{Protocol, ReaderFeatures, StructField, StructType, WriterFeatures};
 use crate::logstore::LogStoreRef;
-use crate::protocol::DeltaOperation;
+use crate::operations::set_tbl_properties::convert_properties_to_features;
+use crate::protocol::{self, DeltaOperation};
 use crate::table::state::DeltaTableState;
 use crate::table::Constraint;
 use crate::{DeltaResult, DeltaTable, DeltaTableError};
 
-use super::cast::merge_struct;
-use super::datafusion_utils::into_expr;
-use super::transaction::{CommitBuilder, CommitProperties};
-
 /// Build a constraint to add to a table
-pub struct AlterColumnBuilder {
+pub struct AddColumnBuilder {
     /// A snapshot of the table's state
     snapshot: DeltaTableState,
     /// Fields to add/merge into schema
@@ -38,9 +38,9 @@ pub struct AlterColumnBuilder {
     commit_properties: CommitProperties,
 }
 
-impl super::Operation<()> for AlterColumnBuilder {}
+impl super::Operation<()> for AddColumnBuilder {}
 
-impl AlterColumnBuilder {
+impl AddColumnBuilder {
     /// Create a new builder
     pub fn new(log_store: LogStoreRef, snapshot: DeltaTableState) -> Self {
         Self {
@@ -63,7 +63,7 @@ impl AlterColumnBuilder {
     }
 }
 
-impl std::future::IntoFuture for AlterColumnBuilder {
+impl std::future::IntoFuture for AddColumnBuilder {
     type Output = DeltaResult<DeltaTable>;
 
     type IntoFuture = BoxFuture<'static, Self::Output>;
@@ -73,16 +73,42 @@ impl std::future::IntoFuture for AlterColumnBuilder {
 
         Box::pin(async move {
             let mut metadata = this.snapshot.metadata().clone();
-            let fields: StructType = match this.fields {
-                Some(v) => v.into_iter().collect(),
+            let fields = match this.fields {
+                Some(v) => v,
                 None => return Err(DeltaTableError::Generic("No fields provided".to_string())),
             };
 
             let table_schema = this.snapshot.schema();
+            let new_table_schema = merge_struct(table_schema, &fields.into_iter().collect())?;
 
-            let new_table_schema = merge_struct(table_schema, &fields)?;
+            // TODO(ion): Think of a way how we can simply this checking through the API or centralize some checks.
+            let contains_timestampntz = PROTOCOL.contains_timestampntz(&fields);
+            let protocol = this.snapshot.protocol();
 
-            dbg!(&new_table_schema);
+            let maybe_new_protocol = if contains_timestampntz {
+                if protocol.min_reader_version == 3 && protocol.min_writer_version == 7 {
+                    let mut new_protocol = protocol.clone();
+                    new_protocol = new_protocol
+                        .with_reader_features(&ReaderFeatures::TimestampWithoutTimezone);
+                    new_protocol = new_protocol
+                        .with_writer_features(&WriterFeatures::TimestampWithoutTimezone);
+                    Some(new_protocol)
+                } else {
+                    let new_protocol = Protocol {
+                        min_reader_version: 3,
+                        min_writer_version: 7,
+                        writer_features: Some(hashset! {WriterFeatures::TimestampWithoutTimezone}),
+                        reader_features: Some(hashset! {ReaderFeatures::TimestampWithoutTimezone}),
+                    };
+                    // Convert existing properties to features since we advance the protocol to v3,7
+                    Some(convert_properties_to_features(
+                        new_protocol,
+                        &metadata.configuration,
+                    ))
+                }
+            } else {
+                None
+            };
 
             let operation = DeltaOperation::AlterColumn {
                 fields: fields.into_iter().cloned().collect_vec(),
@@ -91,6 +117,10 @@ impl std::future::IntoFuture for AlterColumnBuilder {
             metadata.schema_string = serde_json::to_string(&new_table_schema)?;
 
             let actions = vec![metadata.into()];
+
+            if let Some(new_protocol) = maybe_new_protocol {
+                actions.push(new_protocol.into())
+            }
 
             let commit = CommitBuilder::from(this.commit_properties)
                 .with_actions(actions)

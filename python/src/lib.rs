@@ -29,7 +29,7 @@ use deltalake::errors::DeltaTableError;
 use deltalake::kernel::{
     Action, Add, Invariant, LogicalFile, Remove, Scalar, StructField, StructType,
 };
-use deltalake::operations::alter_column::AlterColumnBuilder;
+use deltalake::operations::add_column::{AddColumnBuilder, AlterColumnBuilder};
 use deltalake::operations::collect_sendable_stream;
 use deltalake::operations::constraints::ConstraintBuilder;
 use deltalake::operations::convert_to_delta::{ConvertToDeltaBuilder, PartitionStrategy};
@@ -532,14 +532,14 @@ impl RawDeltaTable {
     }
 
     #[pyo3(signature = (fields, custom_metadata=None))]
-    pub fn alter_column(
+    pub fn add_column(
         &mut self,
         py: Python,
         fields: Vec<Field>,
         custom_metadata: Option<HashMap<String, String>>,
     ) -> PyResult<()> {
         let table = py.allow_threads(|| {
-            let mut cmd = AlterColumnBuilder::new(
+            let mut cmd = AddColumnBuilder::new(
                 self._table.log_store(),
                 self._table.snapshot().map_err(PythonError::from)?.clone(),
             );

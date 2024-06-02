@@ -81,7 +81,7 @@ class RawDeltaTable:
         writer_properties: Optional[Dict[str, Optional[str]]],
         custom_metadata: Optional[Dict[str, str]],
     ) -> str: ...
-    def alter_column(
+    def add_column(
         self, fields: List[Field], custom_metadata: Optional[Dict[str, str]]
     ) -> None: ...
     def add_constraints(
