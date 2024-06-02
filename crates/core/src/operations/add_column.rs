@@ -14,7 +14,7 @@ use crate::protocol::DeltaOperation;
 use crate::table::state::DeltaTableState;
 use crate::{DeltaResult, DeltaTable, DeltaTableError};
 
-/// Build a constraint to add to a table
+/// Add new columns and/or nested fields to a table
 pub struct AddColumnBuilder {
     /// A snapshot of the table's state
     snapshot: DeltaTableState,
@@ -39,7 +39,7 @@ impl AddColumnBuilder {
         }
     }
 
-    /// Specify the constraint to be added
+    /// Specify the fields to be added
     pub fn with_fields(mut self, fields: Vec<StructField>) -> Self {
         self.fields = Some(fields);
         self
@@ -122,17 +122,4 @@ impl std::future::IntoFuture for AddColumnBuilder {
             ))
         })
     }
-}
-
-#[cfg(feature = "datafusion")]
-#[cfg(test)]
-mod tests {
-    use std::sync::Arc;
-
-    use arrow_array::{Array, Int32Array, RecordBatch, StringArray};
-    use arrow_schema::{DataType as ArrowDataType, Field, Schema as ArrowSchema};
-    use datafusion_expr::{col, lit};
-
-    use crate::writer::test_utils::{create_bare_table, get_arrow_schema, get_record_batch};
-    use crate::{DeltaOps, DeltaResult, DeltaTable};
 }
