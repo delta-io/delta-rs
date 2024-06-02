@@ -326,9 +326,9 @@ pub struct MergePredicate {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
 pub enum DeltaOperation {
-    /// Represents a Delta `Alter Column` operation.
-    /// Used to add columns or alter existing columns
-    AlterColumn {
+    /// Represents a Delta `Add Column` operation.
+    /// Used to add new columns or field in a struct
+    AddColumn {
         /// Fields added to existing schema
         fields: Vec<StructField>,
     },
@@ -465,7 +465,7 @@ impl DeltaOperation {
     pub fn name(&self) -> &str {
         // operation names taken from https://learn.microsoft.com/en-us/azure/databricks/delta/history#--operation-metrics-keys
         match &self {
-            DeltaOperation::AlterColumn { .. } => "ALTER COLUMN",
+            DeltaOperation::AddColumn { .. } => "ADD COLUMN",
             DeltaOperation::Create {
                 mode: SaveMode::Overwrite,
                 ..

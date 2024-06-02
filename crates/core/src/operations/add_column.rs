@@ -99,7 +99,7 @@ impl std::future::IntoFuture for AddColumnBuilder {
                 None
             };
 
-            let operation = DeltaOperation::AlterColumn {
+            let operation = DeltaOperation::AddColumn {
                 fields: fields.into_iter().collect_vec(),
             };
 
