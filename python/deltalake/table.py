@@ -1831,7 +1831,7 @@ class TableAlterer:
 
     def add_column(
         self,
-        fields: DeltaField | List[DeltaField],
+        fields: Union[DeltaField, List[DeltaField]],
         custom_metadata: Optional[Dict[str, str]] = None,
     ) -> None:
         """Add new columns and/or update the fields of a stuctcolumn
