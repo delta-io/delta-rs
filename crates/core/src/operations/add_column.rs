@@ -1,29 +1,17 @@
 //! Add a check constraint to a table
 
-use std::sync::Arc;
-
-use datafusion::execution::context::SessionState;
-use datafusion::execution::{SendableRecordBatchStream, TaskContext};
-use datafusion::physical_plan::ExecutionPlan;
-use datafusion::prelude::SessionContext;
-use datafusion_common::ToDFSchema;
 use futures::future::BoxFuture;
-use futures::StreamExt;
 use itertools::Itertools;
+use maplit::hashset;
 
 use super::cast::merge_struct;
-use super::datafusion_utils::into_expr;
 use super::transaction::{CommitBuilder, CommitProperties, PROTOCOL};
-use crate::delta_datafusion::expr::fmt_expr_to_sql;
-use crate::delta_datafusion::{
-    register_store, DeltaDataChecker, DeltaScanBuilder, DeltaSessionContext,
-};
-use crate::kernel::{Protocol, ReaderFeatures, StructField, StructType, WriterFeatures};
+
+use crate::kernel::{Protocol, ReaderFeatures, StructField, WriterFeatures};
 use crate::logstore::LogStoreRef;
 use crate::operations::set_tbl_properties::convert_properties_to_features;
 use crate::protocol::{self, DeltaOperation};
 use crate::table::state::DeltaTableState;
-use crate::table::Constraint;
 use crate::{DeltaResult, DeltaTable, DeltaTableError};
 
 /// Build a constraint to add to a table
@@ -79,7 +67,8 @@ impl std::future::IntoFuture for AddColumnBuilder {
             };
 
             let table_schema = this.snapshot.schema();
-            let new_table_schema = merge_struct(table_schema, &fields.into_iter().collect())?;
+            let new_table_schema =
+                merge_struct(table_schema, &fields.clone().into_iter().collect())?;
 
             // TODO(ion): Think of a way how we can simply this checking through the API or centralize some checks.
             let contains_timestampntz = PROTOCOL.contains_timestampntz(&fields);
@@ -89,9 +78,9 @@ impl std::future::IntoFuture for AddColumnBuilder {
                 if protocol.min_reader_version == 3 && protocol.min_writer_version == 7 {
                     let mut new_protocol = protocol.clone();
                     new_protocol = new_protocol
-                        .with_reader_features(&ReaderFeatures::TimestampWithoutTimezone);
+                        .with_reader_features(vec![ReaderFeatures::TimestampWithoutTimezone]);
                     new_protocol = new_protocol
-                        .with_writer_features(&WriterFeatures::TimestampWithoutTimezone);
+                        .with_writer_features(vec![WriterFeatures::TimestampWithoutTimezone]);
                     Some(new_protocol)
                 } else {
                     let new_protocol = Protocol {
@@ -111,12 +100,12 @@ impl std::future::IntoFuture for AddColumnBuilder {
             };
 
             let operation = DeltaOperation::AlterColumn {
-                fields: fields.into_iter().cloned().collect_vec(),
+                fields: fields.into_iter().collect_vec(),
             };
 
             metadata.schema_string = serde_json::to_string(&new_table_schema)?;
 
-            let actions = vec![metadata.into()];
+            let mut actions = vec![metadata.into()];
 
             if let Some(new_protocol) = maybe_new_protocol {
                 actions.push(new_protocol.into())

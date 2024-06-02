@@ -25,6 +25,7 @@ pub mod filesystem_check;
 pub mod optimize;
 pub mod restore;
 pub mod transaction;
+pub mod vacuum;
 
 #[cfg(feature = "datafusion")]
 use self::{
