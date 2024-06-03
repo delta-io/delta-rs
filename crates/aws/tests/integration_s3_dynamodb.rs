@@ -7,7 +7,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use aws_sdk_dynamodb::types::BillingMode;
 use deltalake_aws::logstore::{RepairLogEntryResult, S3DynamoDbLogStore};
-use deltalake_aws::storage::S3StorageOptions;
+use deltalake_aws::storage::{s3_constants, S3StorageOptions};
 use deltalake_aws::{CommitEntry, DynamoDbConfig, DynamoDbLockClient};
 use deltalake_core::kernel::{Action, Add, DataType, PrimitiveType, StructField, StructType};
 use deltalake_core::logstore::LogStore;
@@ -72,6 +72,35 @@ fn client_configs_via_env_variables() -> TestResult<()> {
         },
         *config,
     );
+    std::env::remove_var(deltalake_aws::constants::LOCK_TABLE_KEY_NAME);
+    std::env::remove_var(deltalake_aws::constants::MAX_ELAPSED_REQUEST_TIME_KEY_NAME);
+    std::env::remove_var(deltalake_aws::constants::BILLING_MODE_KEY_NAME);
+    Ok(())
+}
+
+#[test]
+#[serial]
+fn client_configs_with_dynamodb_url_override() -> TestResult<()> {
+    std::env::set_var(
+        deltalake_aws::constants::MAX_ELAPSED_REQUEST_TIME_KEY_NAME,
+        "64",
+    );
+    std::env::set_var(
+        deltalake_aws::constants::LOCK_TABLE_KEY_NAME,
+        "some_table".to_owned(),
+    );
+    std::env::set_var(
+        deltalake_aws::constants::BILLING_MODE_KEY_NAME,
+        "PAY_PER_REQUEST".to_owned(),
+    );
+    std::env::set_var(s3_constants::AWS_ENDPOINT_URL_DYNAMODB, "http://localhost:5678");
+
+    let client = make_client()?;
+    let config = client.get_dynamodb_config();
+    let options: S3StorageOptions = S3StorageOptions::try_default().unwrap();
+
+    assert_eq!(options.sdk_config.endpoint_url(), Some("http://localhost:5678"));
+
     std::env::remove_var(deltalake_aws::constants::LOCK_TABLE_KEY_NAME);
     std::env::remove_var(deltalake_aws::constants::MAX_ELAPSED_REQUEST_TIME_KEY_NAME);
     std::env::remove_var(deltalake_aws::constants::BILLING_MODE_KEY_NAME);

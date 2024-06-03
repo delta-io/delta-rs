@@ -421,6 +421,9 @@ impl ObjectStore for S3StorageBackend {
 pub mod s3_constants {
     /// Custom S3 endpoint.
     pub const AWS_ENDPOINT_URL: &str = "AWS_ENDPOINT_URL";
+    // Custom DynamoDB endpoint.
+    // This endpoint takes precedence over the global endpoint set in AWS_ENDPOINT_URL for DynamoDB
+    pub const AWS_ENDPOINT_URL_DYNAMODB: &str = "AWS_ENDPOINT_URL_DYNAMODB";
     /// The AWS region.
     pub const AWS_REGION: &str = "AWS_REGION";
     /// The AWS profile.
@@ -490,6 +493,7 @@ pub mod s3_constants {
     /// field of [crate::storage::s3::S3StorageOptions].
     pub const S3_OPTS: &[&str] = &[
         AWS_ENDPOINT_URL,
+        AWS_ENDPOINT_URL_DYNAMODB,
         AWS_REGION,
         AWS_PROFILE,
         AWS_ACCESS_KEY_ID,
