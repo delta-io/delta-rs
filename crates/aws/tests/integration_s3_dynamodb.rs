@@ -82,20 +82,8 @@ fn client_configs_via_env_variables() -> TestResult<()> {
 #[serial]
 fn client_configs_with_dynamodb_url_override() -> TestResult<()> {
     std::env::set_var(
-        deltalake_aws::constants::MAX_ELAPSED_REQUEST_TIME_KEY_NAME,
-        "64",
-    );
-    std::env::set_var(
-        deltalake_aws::constants::LOCK_TABLE_KEY_NAME,
-        "some_table".to_owned(),
-    );
-    std::env::set_var(
-        deltalake_aws::constants::BILLING_MODE_KEY_NAME,
-        "PAY_PER_REQUEST".to_owned(),
-    );
-    std::env::set_var(
         s3_constants::AWS_ENDPOINT_URL_DYNAMODB,
-        "http://localhost:5678"
+        "http://localhost"
     );
 
 
@@ -104,13 +92,10 @@ fn client_configs_with_dynamodb_url_override() -> TestResult<()> {
     let options: S3StorageOptions = S3StorageOptions::try_default().unwrap();
 
     assert_eq!(
-        options.sdk_config.endpoint_url(),
-        Some("http://localhost:5678"))
+        config.sdk_config.endpoint_url(),
+        Some("http://localhost"))
     ;
 
-    std::env::remove_var(deltalake_aws::constants::LOCK_TABLE_KEY_NAME);
-    std::env::remove_var(deltalake_aws::constants::MAX_ELAPSED_REQUEST_TIME_KEY_NAME);
-    std::env::remove_var(deltalake_aws::constants::BILLING_MODE_KEY_NAME);
     Ok(())
 }
 
