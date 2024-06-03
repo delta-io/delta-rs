@@ -81,13 +81,13 @@ fn client_configs_via_env_variables() -> TestResult<()> {
 #[test]
 #[serial]
 fn client_configs_with_dynamodb_url_override() -> TestResult<()> {
-    std::env::set_var(s3_constants::AWS_ENDPOINT_URL_DYNAMODB, "http://localhost");
+    std::env::set_var(s3_constants::AWS_ENDPOINT_URL_DYNAMODB, "http://localhost:8080");
 
     let client = make_client()?;
     let config = client.get_dynamodb_config();
     let options: S3StorageOptions = S3StorageOptions::try_default().unwrap();
 
-    assert_eq!(config.sdk_config.endpoint_url(), Some("http://localhost"));
+    assert_eq!(config.sdk_config.endpoint_url(), Some("http://localhost:8080"));
 
     Ok(())
 }
