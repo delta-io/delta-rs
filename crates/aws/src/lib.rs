@@ -27,6 +27,7 @@ use std::{
     sync::Arc,
     time::{Duration, SystemTime},
 };
+use std::ops::Deref;
 use tracing::debug;
 
 use deltalake_core::logstore::{logstores, LogStore, LogStoreFactory};
@@ -36,6 +37,7 @@ use url::Url;
 
 use errors::{DynamoDbConfigError, LockClientError};
 use storage::{S3ObjectStoreFactory, S3StorageOptions};
+use crate::storage::s3_constants;
 
 #[derive(Clone, Debug, Default)]
 pub struct S3LogStoreFactory {}
@@ -141,7 +143,15 @@ impl DynamoDbLockClient {
         lock_table_name: Option<String>,
         billing_mode: Option<String>,
         max_elapsed_request_time: Option<String>,
+        dynamodb_override_endpoint: Option<String>,
     ) -> Result<Self, DynamoDbConfigError> {
+        if (dynamodb_override_endpoint.is_some()) {
+            std::env::set_var(
+                s3_constants::AWS_ENDPOINT_URL_DYNAMODB,
+                dynamodb_override_endpoint.unwrap()
+            );
+        }
+
         let dynamodb_client = aws_sdk_dynamodb::Client::new(sdk_config);
 
         let lock_table_name = lock_table_name

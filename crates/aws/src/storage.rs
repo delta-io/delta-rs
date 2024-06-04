@@ -22,6 +22,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::AsyncWrite;
 use url::Url;
+use crate::DynamoDbConfig;
 
 use crate::errors::DynamoDbConfigError;
 #[cfg(feature = "native-tls")]
@@ -109,6 +110,7 @@ impl ObjectStoreFactory for S3ObjectStoreFactory {
 pub struct S3StorageOptions {
     pub virtual_hosted_style_request: bool,
     pub locking_provider: Option<String>,
+    pub dynamodb_endpoint: Option<String>,
     pub s3_pool_idle_timeout: Duration,
     pub sts_pool_idle_timeout: Duration,
     pub s3_get_internal_server_error_retries: usize,
@@ -122,6 +124,7 @@ impl PartialEq for S3StorageOptions {
     fn eq(&self, other: &Self) -> bool {
         self.virtual_hosted_style_request == other.virtual_hosted_style_request
             && self.locking_provider == other.locking_provider
+            && self.dynamodb_endpoint == other.dynamodb_endpoint
             && self.s3_pool_idle_timeout == other.s3_pool_idle_timeout
             && self.sts_pool_idle_timeout == other.sts_pool_idle_timeout
             && self.s3_get_internal_server_error_retries
@@ -219,6 +222,7 @@ impl S3StorageOptions {
         Ok(Self {
             virtual_hosted_style_request,
             locking_provider: str_option(options, s3_constants::AWS_S3_LOCKING_PROVIDER),
+            dynamodb_endpoint: str_option(options, s3_constants::AWS_ENDPOINT_URL_DYNAMODB),
             s3_pool_idle_timeout: Duration::from_secs(s3_pool_idle_timeout),
             sts_pool_idle_timeout: Duration::from_secs(sts_pool_idle_timeout),
             s3_get_internal_server_error_retries,
@@ -601,6 +605,7 @@ mod tests {
             std::env::set_var(s3_constants::AWS_ACCESS_KEY_ID, "default_key_id");
             std::env::set_var(s3_constants::AWS_SECRET_ACCESS_KEY, "default_secret_key");
             std::env::set_var(s3_constants::AWS_S3_LOCKING_PROVIDER, "dynamodb");
+            std::env::set_var(s3_constants::AWS_ENDPOINT_URL_DYNAMODB, "http://localhost");
             std::env::set_var(
                 s3_constants::AWS_S3_ASSUME_ROLE_ARN,
                 "arn:aws:iam::123456789012:role/some_role",
@@ -617,6 +622,7 @@ mod tests {
                         .build(),
                     virtual_hosted_style_request: false,
                     locking_provider: Some("dynamodb".to_string()),
+                    dynamodb_endpoint: Some("http://localhost".to_string()),
                     s3_pool_idle_timeout: Duration::from_secs(15),
                     sts_pool_idle_timeout: Duration::from_secs(10),
                     s3_get_internal_server_error_retries: 10,
@@ -656,6 +662,7 @@ mod tests {
             clear_env_of_aws_keys();
             let options = S3StorageOptions::from_map(&hashmap! {
                 s3_constants::AWS_ENDPOINT_URL.to_string() => "http://localhost:1234".to_string(),
+                s3_constants::AWS_ENDPOINT_URL_DYNAMODB.to_string() => "http://localhost:4567".to_string(),
                 s3_constants::AWS_REGION.to_string() => "us-west-2".to_string(),
                 s3_constants::AWS_PROFILE.to_string() => "default".to_string(),
                 s3_constants::AWS_S3_ADDRESSING_STYLE.to_string() => "virtual".to_string(),
@@ -678,6 +685,7 @@ mod tests {
                         .build(),
                     virtual_hosted_style_request: true,
                     locking_provider: Some("another_locking_provider".to_string()),
+                    dynamodb_endpoint: Some("http://localhost:4567".to_string()),
                     s3_pool_idle_timeout: Duration::from_secs(1),
                     sts_pool_idle_timeout: Duration::from_secs(2),
                     s3_get_internal_server_error_retries: 3,
@@ -728,6 +736,7 @@ mod tests {
                         .build(),
                     virtual_hosted_style_request: false,
                     locking_provider: Some("dynamodb".to_string()),
+                    dynamodb_endpoint: None,
                     s3_pool_idle_timeout: Duration::from_secs(1),
                     sts_pool_idle_timeout: Duration::from_secs(2),
                     s3_get_internal_server_error_retries: 3,
