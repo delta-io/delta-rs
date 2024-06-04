@@ -62,6 +62,7 @@ pub struct CreateBuilder {
     log_store: Option<LogStoreRef>,
     configuration: HashMap<String, Option<String>>,
     metadata: Option<HashMap<String, Value>>,
+    raise_if_key_not_exists: bool,
 }
 
 impl super::Operation<()> for CreateBuilder {}
@@ -87,6 +88,7 @@ impl CreateBuilder {
             log_store: None,
             configuration: Default::default(),
             metadata: Default::default(),
+            raise_if_key_not_exists: true,
         }
     }
 
@@ -196,6 +198,12 @@ impl CreateBuilder {
         self
     }
 
+    /// Specify whether to raise an error if the table properties in the configuration are not DeltaConfigKeys
+    pub fn with_raise_if_not_exists(mut self, raise_if_key_not_exists: bool) -> Self {
+        self.raise_if_key_not_exists = raise_if_key_not_exists;
+        self
+    }
+
     /// Specify additional actions to be added to the commit.
     ///
     /// This method is mainly meant for internal use. Manually adding inconsistent
@@ -279,7 +287,7 @@ impl CreateBuilder {
                 .iter()
                 .map(|(k, v)| (k.clone(), v.clone().unwrap()))
                 .collect::<HashMap<String, String>>(),
-            true,
+            self.raise_if_key_not_exists,
         )?;
 
         let protocol = convert_properties_to_features(protocol, &configuration);
@@ -568,5 +576,44 @@ mod tests {
         assert_eq!(table.version(), 1);
         // Checks if files got removed after overwrite
         assert_eq!(table.get_files_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_create_table_metadata_raise_if_key_not_exists() {
+        let schema = get_delta_schema();
+        let config: HashMap<String, Option<String>> =
+            vec![("key".to_string(), Some("value".to_string()))]
+                .into_iter()
+                .collect();
+
+        // Fail to create table with unknown Delta key
+        let table = CreateBuilder::new()
+            .with_location("memory://")
+            .with_columns(schema.fields().clone())
+            .with_configuration(config.clone())
+            .await;
+        assert!(table.is_err());
+
+        // Succeed in creating table with unknown Delta key since we set raise_if_key_not_exists to false
+        let table = CreateBuilder::new()
+            .with_location("memory://")
+            .with_columns(schema.fields().clone())
+            .with_raise_if_not_exists(false)
+            .with_configuration(config)
+            .await;
+        assert!(table.is_ok());
+
+        // Ensure the non-Delta key was set correctly
+        let value = table
+            .unwrap()
+            .metadata()
+            .unwrap()
+            .configuration
+            .get("key")
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .clone();
+        assert_eq!(String::from("value"), value);
     }
 }
