@@ -199,7 +199,7 @@ impl CreateBuilder {
     }
 
     /// Specify whether to raise an error if the table properties in the configuration are not DeltaConfigKeys
-    pub fn with_raise_if_not_exists(mut self, raise_if_key_not_exists: bool) -> Self {
+    pub fn with_raise_if_key_not_exists(mut self, raise_if_key_not_exists: bool) -> Self {
         self.raise_if_key_not_exists = raise_if_key_not_exists;
         self
     }
@@ -598,7 +598,7 @@ mod tests {
         let table = CreateBuilder::new()
             .with_location("memory://")
             .with_columns(schema.fields().clone())
-            .with_raise_if_not_exists(false)
+            .with_raise_if_key_not_exists(false)
             .with_configuration(config)
             .await;
         assert!(table.is_ok());

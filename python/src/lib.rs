@@ -1670,7 +1670,7 @@ fn create_deltalake(
             .create()
             .with_columns(schema.fields().clone())
             .with_save_mode(mode)
-            .with_raise_if_not_exists(raise_if_key_not_exists)
+            .with_raise_if_key_not_exists(raise_if_key_not_exists)
             .with_partition_columns(partition_by);
 
         if let Some(name) = &name {
