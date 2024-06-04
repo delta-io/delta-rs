@@ -12,7 +12,6 @@ pub async fn setup_s3_context() -> TestContext {
     let rand: u16 = rand::thread_rng().gen();
     let cli = S3Cli::default();
     let endpoint = "http://localhost:4566".to_string();
-    let dynamodb_endpoint = "http://localhost:4567".to_string();
     let bucket_name = "delta-rs-tests";
     let uri = format!("s3://{}/{}/{}/", bucket_name, Utc::now().timestamp(), rand);
     let lock_table = format!("delta_rs_lock_table_{rand}");
