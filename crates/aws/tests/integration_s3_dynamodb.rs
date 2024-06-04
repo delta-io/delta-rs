@@ -83,7 +83,7 @@ fn client_configs_via_env_variables() -> TestResult<()> {
 fn client_configs_with_dynamodb_url_override() -> TestResult<()> {
     std::env::set_var(
         s3_constants::AWS_ENDPOINT_URL_DYNAMODB,
-        "http://localhost:4566"
+        "http://localhost:4566",
     );
 
     let client = make_client()?;
