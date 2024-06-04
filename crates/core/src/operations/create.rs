@@ -606,7 +606,7 @@ mod tests {
         // Fail to create table with unknown Delta key
         let table = CreateBuilder::new()
             .with_location("memory://")
-            .with_columns(schema.fields().clone())
+            .with_columns(schema.fields().cloned())
             .with_configuration(config.clone())
             .await;
         assert!(table.is_err());
@@ -614,7 +614,7 @@ mod tests {
         // Succeed in creating table with unknown Delta key since we set raise_if_key_not_exists to false
         let table = CreateBuilder::new()
             .with_location("memory://")
-            .with_columns(schema.fields().clone())
+            .with_columns(schema.fields().cloned())
             .with_raise_if_key_not_exists(false)
             .with_configuration(config)
             .await;

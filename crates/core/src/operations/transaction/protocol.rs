@@ -163,7 +163,7 @@ impl ProtocolChecker {
         if (4..7).contains(&min_writer_version) {
             debug!("min_writer_version is less 4-6, checking for unsupported table features");
             if let Ok(schema) = snapshot.metadata().schema() {
-                for field in schema.fields.iter() {
+                for field in schema.fields() {
                     if field.metadata.contains_key(
                         crate::kernel::ColumnMetadataKey::GenerationExpression.as_ref(),
                     ) {
