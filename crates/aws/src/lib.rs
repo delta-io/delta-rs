@@ -35,9 +35,9 @@ use deltalake_core::storage::{factories, url_prefix_handler, ObjectStoreRef, Sto
 use deltalake_core::{DeltaResult, Path};
 use url::Url;
 
+use crate::storage::s3_constants;
 use errors::{DynamoDbConfigError, LockClientError};
 use storage::{S3ObjectStoreFactory, S3StorageOptions};
-use crate::storage::s3_constants;
 
 #[derive(Clone, Debug, Default)]
 pub struct S3LogStoreFactory {}
@@ -145,10 +145,11 @@ impl DynamoDbLockClient {
         max_elapsed_request_time: Option<String>,
         dynamodb_override_endpoint: Option<String>,
     ) -> Result<Self, DynamoDbConfigError> {
-        if (dynamodb_override_endpoint.is_some()) {
+
+        if dynamodb_override_endpoint.is_some() {
             std::env::set_var(
                 s3_constants::AWS_ENDPOINT_URL_DYNAMODB,
-                dynamodb_override_endpoint.unwrap()
+                dynamodb_override_endpoint.unwrap(),
             );
         }
 

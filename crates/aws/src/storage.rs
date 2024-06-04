@@ -22,7 +22,6 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::AsyncWrite;
 use url::Url;
-use crate::DynamoDbConfig;
 
 use crate::errors::DynamoDbConfigError;
 #[cfg(feature = "native-tls")]
@@ -662,7 +661,7 @@ mod tests {
             clear_env_of_aws_keys();
             let options = S3StorageOptions::from_map(&hashmap! {
                 s3_constants::AWS_ENDPOINT_URL.to_string() => "http://localhost:1234".to_string(),
-                s3_constants::AWS_ENDPOINT_URL_DYNAMODB.to_string() => "http://localhost:4567".to_string(),
+                s3_constants::AWS_ENDPOINT_URL_DYNAMODB.to_string() => "http://localhost:2345".to_string(),
                 s3_constants::AWS_REGION.to_string() => "us-west-2".to_string(),
                 s3_constants::AWS_PROFILE.to_string() => "default".to_string(),
                 s3_constants::AWS_S3_ADDRESSING_STYLE.to_string() => "virtual".to_string(),
@@ -685,7 +684,7 @@ mod tests {
                         .build(),
                     virtual_hosted_style_request: true,
                     locking_provider: Some("another_locking_provider".to_string()),
-                    dynamodb_endpoint: Some("http://localhost:4567".to_string()),
+                    dynamodb_endpoint: Some("http://localhost:2345".to_string()),
                     s3_pool_idle_timeout: Duration::from_secs(1),
                     sts_pool_idle_timeout: Duration::from_secs(2),
                     s3_get_internal_server_error_retries: 3,
