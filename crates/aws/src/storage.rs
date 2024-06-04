@@ -604,7 +604,6 @@ mod tests {
             std::env::set_var(s3_constants::AWS_ACCESS_KEY_ID, "default_key_id");
             std::env::set_var(s3_constants::AWS_SECRET_ACCESS_KEY, "default_secret_key");
             std::env::set_var(s3_constants::AWS_S3_LOCKING_PROVIDER, "dynamodb");
-            std::env::set_var(s3_constants::AWS_ENDPOINT_URL_DYNAMODB, "http://localhost");
             std::env::set_var(
                 s3_constants::AWS_S3_ASSUME_ROLE_ARN,
                 "arn:aws:iam::123456789012:role/some_role",
@@ -621,7 +620,7 @@ mod tests {
                         .build(),
                     virtual_hosted_style_request: false,
                     locking_provider: Some("dynamodb".to_string()),
-                    dynamodb_endpoint: Some("http://localhost".to_string()),
+                    dynamodb_endpoint: None,
                     s3_pool_idle_timeout: Duration::from_secs(15),
                     sts_pool_idle_timeout: Duration::from_secs(10),
                     s3_get_internal_server_error_retries: 10,
@@ -657,6 +656,49 @@ mod tests {
     #[test]
     #[serial]
     fn storage_options_from_map_test() {
+        ScopedEnv::run(|| {
+            clear_env_of_aws_keys();
+            let options = S3StorageOptions::from_map(&hashmap! {
+                s3_constants::AWS_ENDPOINT_URL.to_string() => "http://localhost:1234".to_string(),
+                s3_constants::AWS_REGION.to_string() => "us-west-2".to_string(),
+                s3_constants::AWS_PROFILE.to_string() => "default".to_string(),
+                s3_constants::AWS_S3_ADDRESSING_STYLE.to_string() => "virtual".to_string(),
+                s3_constants::AWS_S3_LOCKING_PROVIDER.to_string() => "another_locking_provider".to_string(),
+                s3_constants::AWS_S3_ASSUME_ROLE_ARN.to_string() => "arn:aws:iam::123456789012:role/another_role".to_string(),
+                s3_constants::AWS_S3_ROLE_SESSION_NAME.to_string() => "another_session_name".to_string(),
+                s3_constants::AWS_WEB_IDENTITY_TOKEN_FILE.to_string() => "another_token_file".to_string(),
+                s3_constants::AWS_S3_POOL_IDLE_TIMEOUT_SECONDS.to_string() => "1".to_string(),
+                s3_constants::AWS_STS_POOL_IDLE_TIMEOUT_SECONDS.to_string() => "2".to_string(),
+                s3_constants::AWS_S3_GET_INTERNAL_SERVER_ERROR_RETRIES.to_string() => "3".to_string(),
+                s3_constants::AWS_ACCESS_KEY_ID.to_string() => "test_id".to_string(),
+                s3_constants::AWS_SECRET_ACCESS_KEY.to_string() => "test_secret".to_string(),
+            }).unwrap();
+
+            assert_eq!(
+                S3StorageOptions {
+                    sdk_config: SdkConfig::builder()
+                        .endpoint_url("http://localhost:1234".to_string())
+                        .region(Region::from_static("us-west-2"))
+                        .build(),
+                    virtual_hosted_style_request: true,
+                    locking_provider: Some("another_locking_provider".to_string()),
+                    dynamodb_endpoint: None,
+                    s3_pool_idle_timeout: Duration::from_secs(1),
+                    sts_pool_idle_timeout: Duration::from_secs(2),
+                    s3_get_internal_server_error_retries: 3,
+                    extra_opts: hashmap! {
+                        s3_constants::AWS_S3_ADDRESSING_STYLE.to_string() => "virtual".to_string()
+                    },
+                    allow_unsafe_rename: false,
+                },
+                options
+            );
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn storage_options_from_map_with_dynamodb_endpoint_test() {
         ScopedEnv::run(|| {
             clear_env_of_aws_keys();
             let options = S3StorageOptions::from_map(&hashmap! {
@@ -704,6 +746,10 @@ mod tests {
         ScopedEnv::run(|| {
             clear_env_of_aws_keys();
             std::env::set_var(s3_constants::AWS_ENDPOINT_URL, "http://localhost");
+            std::env::set_var(
+                s3_constants::AWS_ENDPOINT_URL_DYNAMODB,
+                "http://localhost:dynamodb",
+            );
             std::env::set_var(s3_constants::AWS_REGION, "us-west-1");
             std::env::set_var(s3_constants::AWS_PROFILE, "default");
             std::env::set_var(s3_constants::AWS_ACCESS_KEY_ID, "wrong_key_id");
@@ -735,7 +781,7 @@ mod tests {
                         .build(),
                     virtual_hosted_style_request: false,
                     locking_provider: Some("dynamodb".to_string()),
-                    dynamodb_endpoint: None,
+                    dynamodb_endpoint: Some("http://localhost:dynamodb".to_string()),
                     s3_pool_idle_timeout: Duration::from_secs(1),
                     sts_pool_idle_timeout: Duration::from_secs(2),
                     s3_get_internal_server_error_retries: 3,
