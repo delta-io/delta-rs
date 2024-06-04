@@ -137,10 +137,10 @@ pub struct Protocol {
 
 impl Protocol {
     /// Create a new protocol action
-    pub fn new(min_reader_version: i32, min_wrriter_version: i32) -> Self {
+    pub fn new(min_reader_version: i32, min_writer_version: i32) -> Self {
         Self {
             min_reader_version,
-            min_writer_version: min_wrriter_version,
+            min_writer_version,
             reader_features: None,
             writer_features: None,
         }

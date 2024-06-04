@@ -44,6 +44,7 @@ from deltalake._util import encode_partition_value
 from deltalake.data_catalog import DataCatalog
 from deltalake.exceptions import DeltaProtocolError
 from deltalake.fs import DeltaStorageHandler
+from deltalake.schema import Field as DeltaField
 from deltalake.schema import Schema as DeltaSchema
 
 try:
@@ -1830,6 +1831,36 @@ class TableAlterer:
 
     def __init__(self, table: DeltaTable) -> None:
         self.table = table
+
+    def add_column(
+        self,
+        fields: Union[DeltaField, List[DeltaField]],
+        custom_metadata: Optional[Dict[str, str]] = None,
+    ) -> None:
+        """Add new columns and/or update the fields of a stuctcolumn
+
+        Args:
+            fields: fields to merge into schema
+            custom_metadata: custom metadata that will be added to the transaction commit.
+
+        Example:
+            ```python
+            from deltalake import DeltaTable
+            from deltalake.schema import Field, PrimitiveType, StructType
+            dt = DeltaTable("test_table")
+            new_fields = [
+                Field("baz", StructType([Field("bar", PrimitiveType("integer"))])),
+                Field("bar", PrimitiveType("integer"))
+            ]
+            dt.alter.add_column(
+                new_fields
+            )
+            ```
+        """
+        if isinstance(fields, DeltaField):
+            fields = [fields]
+
+        self.table._table.add_column(fields, custom_metadata)
 
     def add_constraint(
         self,
