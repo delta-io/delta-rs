@@ -42,6 +42,7 @@ fn make_client() -> TestResult<DynamoDbLockClient> {
         None,
         None,
         None,
+        None,
     )?)
 }
 
