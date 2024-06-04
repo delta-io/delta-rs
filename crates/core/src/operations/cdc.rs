@@ -89,6 +89,24 @@ impl CDCTracker {
         // Create a new schema which represents the input batch along with the CDC
         // columns
         let mut fields: Vec<Arc<Field>> = self.schema.fields().to_vec().clone();
+
+        let mut has_struct = false;
+        for field in fields.iter() {
+            match field.data_type() {
+                DataType::Struct(_) => {
+                    has_struct = true;
+                }
+                DataType::List(_) => {
+                    has_struct = true;
+                }
+                _ => {}
+            }
+        }
+
+        if has_struct {
+            warn!("The schema contains a Struct or List type, which unfortunately means a change data file cannot be captured in this release of delta-rs: <https://github.com/delta-io/delta-rs/issues/2568>. The write operation will complete properly, but no CDC data will be generated for schema: {fields:?}");
+        }
+
         fields.push(Arc::new(Field::new("_change_type", DataType::Utf8, true)));
         let schema = Arc::new(Schema::new(fields));
 
@@ -458,7 +476,6 @@ mod tests {
     #[ignore]
     #[tokio::test]
     async fn test_sanity_check_with_pure_df() {
-        let _ = pretty_env_logger::try_init();
         let nested_schema = Arc::new(Schema::new(vec![
             Field::new("id", DataType::Int32, true),
             Field::new("lat", DataType::Int32, true),
@@ -537,7 +554,6 @@ mod tests {
     #[ignore]
     #[tokio::test]
     async fn test_sanity_check_with_struct() {
-        let _ = pretty_env_logger::try_init();
         let nested_schema = Arc::new(Schema::new(vec![
             Field::new("id", DataType::Int32, true),
             Field::new("lat", DataType::Int32, true),
