@@ -1,0 +1,32 @@
+[package]
+name = "deltalake-hdfs-native"
+version = "0.1.0"
+authors.workspace = true
+keywords.workspace = true
+readme.workspace = true
+edition.workspace = true
+homepage.workspace = true
+description.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+deltalake-core = { version = ">=0.17.0, <0.19.0", path = "../core" }
+hdfs-native = "0.9" #{ version = "0.9", path = "../../../hdfs-native/rust" }
+hdfs-native-object-store = "0.9" #{ version = "0.9", path = "../../../hdfs-native-object-store" }
+
+# workspace dependecies
+object_store = { workspace = true }
+thiserror = { workspace = true }
+url = { workspace = true }
+tokio = { workspace = true }
+
+[dev-dependencies]
+serial_test = "3"
+deltalake-test = { path = "../test" }
+which = "4"
+
+[features]
+kerberos = ["hdfs-native/kerberos"]
+integration_test = ["hdfs-native/integration-test"]

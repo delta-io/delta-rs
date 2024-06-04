@@ -21,6 +21,7 @@ deltalake-core = { version = "~0.18.0", path = "../core" }
 deltalake-aws = { version = "0.1.1", path = "../aws", default-features = false, optional = true }
 deltalake-azure = { version = "0.1.1", path = "../azure", optional = true }
 deltalake-gcp = { version = "0.2.1", path = "../gcp", optional = true }
+deltalake-hdfs-native = { version = "0.1.0", path = "../hdfs-native", optional = true }
 deltalake-catalog-glue = { version = "0.1.0", path = "../catalog-glue", optional = true }
 
 [features]
@@ -32,7 +33,8 @@ datafusion = ["deltalake-core/datafusion"]
 datafusion-ext = ["datafusion"]
 gcs = ["deltalake-gcp"]
 glue = ["deltalake-catalog-glue"]
-hdfs = []
+hdfs = ["deltalake-hdfs-native"]
+hdfs-kerberos = ["deltalake-hdfs-native/kerberos"]
 json = ["deltalake-core/json"]
 python = ["deltalake-core/python"]
 s3-native-tls = ["deltalake-aws/native-tls"]
