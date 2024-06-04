@@ -27,7 +27,6 @@ use std::{
     sync::Arc,
     time::{Duration, SystemTime},
 };
-use std::ops::Deref;
 use tracing::debug;
 
 use deltalake_core::logstore::{logstores, LogStore, LogStoreFactory};
@@ -145,7 +144,6 @@ impl DynamoDbLockClient {
         max_elapsed_request_time: Option<String>,
         dynamodb_override_endpoint: Option<String>,
     ) -> Result<Self, DynamoDbConfigError> {
-
         if dynamodb_override_endpoint.is_some() {
             std::env::set_var(
                 s3_constants::AWS_ENDPOINT_URL_DYNAMODB,
