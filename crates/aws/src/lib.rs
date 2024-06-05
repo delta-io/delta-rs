@@ -148,10 +148,12 @@ impl DynamoDbLockClient {
         use dynamodb_override_endpoint to create dynamodb client
         */
         let dynamodb_sdk_config = match dynamodb_override_endpoint {
-            Some(dynamodb_endpoint_url) => {
-                sdk_config.to_owned().to_builder().endpoint_url(dynamodb_endpoint_url).build()
-            },
-            None => { sdk_config.to_owned() }
+            Some(dynamodb_endpoint_url) => sdk_config
+                .to_owned()
+                .to_builder()
+                .endpoint_url(dynamodb_endpoint_url)
+                .build(),
+            None => sdk_config.to_owned(),
         };
 
         let dynamodb_client = aws_sdk_dynamodb::Client::new(&dynamodb_sdk_config);
