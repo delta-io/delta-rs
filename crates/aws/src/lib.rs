@@ -34,7 +34,6 @@ use deltalake_core::storage::{factories, url_prefix_handler, ObjectStoreRef, Sto
 use deltalake_core::{DeltaResult, Path};
 use url::Url;
 
-use crate::storage::s3_constants;
 use errors::{DynamoDbConfigError, LockClientError};
 use storage::{S3ObjectStoreFactory, S3StorageOptions};
 
@@ -144,14 +143,18 @@ impl DynamoDbLockClient {
         max_elapsed_request_time: Option<String>,
         dynamodb_override_endpoint: Option<String>,
     ) -> Result<Self, DynamoDbConfigError> {
-        if dynamodb_override_endpoint.is_some() {
-            std::env::set_var(
-                s3_constants::AWS_ENDPOINT_URL_DYNAMODB,
-                dynamodb_override_endpoint.unwrap(),
-            );
-        }
+        /*
+        if dynamodb_override_endpoint exists/AWS_ENDPOINT_URL_DYNAMODB is specified by user
+        use dynamodb_override_endpoint to create dynamodb client
+        */
+        let dynamodb_sdk_config = match dynamodb_override_endpoint {
+            Some(dynamodb_endpoint_url) => {
+                sdk_config.to_owned().to_builder().endpoint_url(dynamodb_endpoint_url).build()
+            },
+            None => { sdk_config.to_owned() }
+        };
 
-        let dynamodb_client = aws_sdk_dynamodb::Client::new(sdk_config);
+        let dynamodb_client = aws_sdk_dynamodb::Client::new(&dynamodb_sdk_config);
 
         let lock_table_name = lock_table_name
             .or_else(|| std::env::var(constants::LOCK_TABLE_KEY_NAME).ok())
