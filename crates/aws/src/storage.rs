@@ -424,8 +424,9 @@ impl ObjectStore for S3StorageBackend {
 pub mod s3_constants {
     /// Custom S3 endpoint.
     pub const AWS_ENDPOINT_URL: &str = "AWS_ENDPOINT_URL";
-    // Custom DynamoDB endpoint.
-    // This endpoint takes precedence over the global endpoint set in AWS_ENDPOINT_URL for DynamoDB
+    /// Custom DynamoDB endpoint.
+    /// If DynamoDB endpoint is not supplied, will use S3 endpoint (AWS_ENDPOINT_URL)
+    /// If it is supplied, this endpoint takes precedence over the global endpoint set in AWS_ENDPOINT_URL for DynamoDB
     pub const AWS_ENDPOINT_URL_DYNAMODB: &str = "AWS_ENDPOINT_URL_DYNAMODB";
     /// The AWS region.
     pub const AWS_REGION: &str = "AWS_REGION";

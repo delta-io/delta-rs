@@ -143,18 +143,8 @@ impl DynamoDbLockClient {
         max_elapsed_request_time: Option<String>,
         dynamodb_override_endpoint: Option<String>,
     ) -> Result<Self, DynamoDbConfigError> {
-        /*
-        if dynamodb_override_endpoint exists/AWS_ENDPOINT_URL_DYNAMODB is specified by user
-        use dynamodb_override_endpoint to create dynamodb client
-        */
-        let dynamodb_sdk_config = match dynamodb_override_endpoint {
-            Some(dynamodb_endpoint_url) => sdk_config
-                .to_owned()
-                .to_builder()
-                .endpoint_url(dynamodb_endpoint_url)
-                .build(),
-            None => sdk_config.to_owned(),
-        };
+        let dynamodb_sdk_config =
+            Self::create_dynamodb_sdk_config(sdk_config, dynamodb_override_endpoint);
 
         let dynamodb_client = aws_sdk_dynamodb::Client::new(&dynamodb_sdk_config);
 
@@ -190,6 +180,24 @@ impl DynamoDbLockClient {
             dynamodb_client,
             config,
         })
+    }
+    fn create_dynamodb_sdk_config(
+        sdk_config: &SdkConfig,
+        dynamodb_override_endpoint: Option<String>,
+    ) -> SdkConfig {
+        /*
+        if dynamodb_override_endpoint exists/AWS_ENDPOINT_URL_DYNAMODB is specified by user
+        use dynamodb_override_endpoint to create dynamodb client
+        */
+        let dynamodb_sdk_config = match dynamodb_override_endpoint {
+            Some(dynamodb_endpoint_url) => sdk_config
+                .to_owned()
+                .to_builder()
+                .endpoint_url(dynamodb_endpoint_url)
+                .build(),
+            None => sdk_config.to_owned(),
+        };
+        dynamodb_sdk_config
     }
 
     /// Create the lock table where DynamoDb stores the commit information for all delta tables.
@@ -677,6 +685,7 @@ fn extract_version_from_filename(name: &str) -> Option<i64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use aws_config::Region;
     use object_store::memory::InMemory;
     use serial_test::serial;
 
@@ -724,5 +733,32 @@ mod tests {
             .with_options(Arc::new(store), &url, &StorageOptions::from(HashMap::new()))
             .unwrap();
         assert_eq!(logstore.name(), "DefaultLogStore");
+    }
+
+    #[test]
+    #[serial]
+    fn test_create_dynamodb_sdk_config() {
+        let sdk_config = SdkConfig::builder()
+            .region(Region::from_static("eu-west-1"))
+            .endpoint_url("http://localhost:1234")
+            .build();
+        let dynamodb_sdk_config = DynamoDbLockClient::create_dynamodb_sdk_config(
+            &sdk_config,
+            Some("http://localhost:2345".to_string()),
+        );
+        assert_eq!(
+            dynamodb_sdk_config.endpoint_url(),
+            Some("http://localhost:2345"),
+        );
+        assert_eq!(
+            dynamodb_sdk_config.region().unwrap().to_string(),
+            "eu-west-1".to_string(),
+        );
+        let dynamodb_sdk_no_override_config =
+            DynamoDbLockClient::create_dynamodb_sdk_config(&sdk_config, None);
+        assert_eq!(
+            dynamodb_sdk_no_override_config.endpoint_url(),
+            Some("http://localhost:1234"),
+        );
     }
 }
