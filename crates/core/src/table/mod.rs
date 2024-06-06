@@ -163,7 +163,6 @@ pub(crate) fn get_partition_col_data_types<'a>(
     // When loading `partitionValues_parsed` we have to convert the stringified partition values back to the correct data type.
     schema
         .fields()
-        .iter()
         .filter_map(|f| {
             if metadata
                 .partition_columns

@@ -39,6 +39,8 @@ use optimize::OptimizeBuilder;
 use restore::RestoreBuilder;
 use set_tbl_properties::SetTablePropertiesBuilder;
 
+#[cfg(all(feature = "cdf", feature = "datafusion"))]
+mod cdc;
 #[cfg(feature = "datafusion")]
 pub mod constraints;
 #[cfg(feature = "datafusion")]

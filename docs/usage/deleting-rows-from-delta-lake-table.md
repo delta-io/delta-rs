@@ -32,3 +32,7 @@ Here are the contents of the Delta table after the delete operation has been per
 |     2 | b        |
 +-------+----------+
 ```
+
+`dt.delete()` accepts any `SQL where` clause. If no predicate is provided, all rows will be deleted.
+
+Read more in the [API docs](https://delta-io.github.io/delta-rs/api/delta_table/#deltalake.DeltaTable.delete)

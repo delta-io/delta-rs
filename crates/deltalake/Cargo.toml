@@ -54,4 +54,3 @@ required-features = ["datafusion"]
 
 [[example]]
 name = "recordbatch-writer"
-required-features = ["arrow"]

@@ -315,8 +315,8 @@ impl Snapshot {
         let stats_fields = if let Some(stats_cols) = self.table_config().stats_columns() {
             stats_cols
                 .iter()
-                .map(|col| match schema.field_with_name(col) {
-                    Ok(field) => match field.data_type() {
+                .map(|col| match schema.field(col) {
+                    Some(field) => match field.data_type() {
                         DataType::Map(_) | DataType::Array(_) | &DataType::BINARY => {
                             Err(DeltaTableError::Generic(format!(
                                 "Stats column {} has unsupported type {}",
@@ -340,7 +340,7 @@ impl Snapshot {
             let num_indexed_cols = self.table_config().num_indexed_cols();
             schema
                 .fields
-                .iter()
+                .values()
                 .enumerate()
                 .filter_map(|(idx, f)| stats_field(idx, num_indexed_cols, f))
                 .collect()
@@ -699,7 +699,6 @@ fn stats_field(idx: usize, num_indexed_cols: i32, field: &StructField) -> Option
             StructType::new(
                 dt_struct
                     .fields()
-                    .iter()
                     .flat_map(|f| stats_field(idx, num_indexed_cols, f))
                     .collect(),
             ),
@@ -718,12 +717,7 @@ fn to_count_field(field: &StructField) -> Option<StructField> {
         DataType::Map(_) | DataType::Array(_) | &DataType::BINARY => None,
         DataType::Struct(s) => Some(StructField::new(
             field.name(),
-            StructType::new(
-                s.fields()
-                    .iter()
-                    .filter_map(to_count_field)
-                    .collect::<Vec<_>>(),
-            ),
+            StructType::new(s.fields().filter_map(to_count_field).collect::<Vec<_>>()),
             true,
         )),
         _ => Some(StructField::new(field.name(), DataType::LONG, true)),

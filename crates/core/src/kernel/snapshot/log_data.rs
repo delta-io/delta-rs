@@ -4,14 +4,16 @@ use std::sync::Arc;
 
 use arrow_array::{Array, Int32Array, Int64Array, MapArray, RecordBatch, StringArray, StructArray};
 use chrono::{DateTime, Utc};
+use delta_kernel::expressions::Scalar;
 use indexmap::IndexMap;
 use object_store::path::Path;
 use object_store::ObjectMeta;
 use percent_encoding::percent_decode_str;
 
+use super::super::scalars::ScalarExt;
 use crate::kernel::arrow::extract::{extract_and_cast, extract_and_cast_opt};
 use crate::kernel::{
-    DataType, DeletionVectorDescriptor, Metadata, Remove, Scalar, StructField, StructType,
+    DataType, DeletionVectorDescriptor, Metadata, Remove, StructField, StructType,
 };
 use crate::{DeltaResult, DeltaTableError};
 
@@ -351,7 +353,16 @@ impl<'a> FileStatsAccessor<'a> {
             metadata
                 .partition_columns
                 .iter()
-                .map(|c| Ok((c.as_str(), schema.field_with_name(c.as_str())?)))
+                .map(|c| {
+                    Ok((
+                        c.as_str(),
+                        schema
+                            .field(c.as_str())
+                            .ok_or(DeltaTableError::PartitionError {
+                                partition: c.clone(),
+                            })?,
+                    ))
+                })
                 .collect::<DeltaResult<IndexMap<_, _>>>()?,
         );
         let deletion_vector = extract_and_cast_opt::<StructArray>(data, "add.deletionVector");
@@ -670,7 +681,6 @@ mod datafusion {
             let column_statistics = self
                 .schema
                 .fields()
-                .iter()
                 .map(|f| self.column_stats(f.name()))
                 .collect::<Option<Vec<_>>>()?;
             Some(Statistics {

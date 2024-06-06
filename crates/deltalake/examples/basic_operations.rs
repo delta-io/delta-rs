@@ -27,7 +27,7 @@ fn get_table_columns() -> Vec<StructField> {
         ),
         StructField::new(
             String::from("timestamp"),
-            DataType::Primitive(PrimitiveType::Timestamp),
+            DataType::Primitive(PrimitiveType::TimestampNtz),
             true,
         ),
     ]
