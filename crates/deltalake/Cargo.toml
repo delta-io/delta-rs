@@ -1,6 +1,6 @@
 [package]
 name = "deltalake"
-version = "0.17.3"
+version = "0.18.0"
 authors.workspace = true
 keywords.workspace = true
 readme.workspace = true
@@ -17,7 +17,7 @@ rust-version.workspace = true
 features = ["azure", "datafusion", "gcs", "hdfs", "json", "python", "s3", "unity-experimental"]
 
 [dependencies]
-deltalake-core = { version = "0.17.3", path = "../core" }
+deltalake-core = { version = "~0.18.0", path = "../core" }
 deltalake-aws = { version = "0.1.1", path = "../aws", default-features = false, optional = true }
 deltalake-azure = { version = "0.1.1", path = "../azure", optional = true }
 deltalake-gcp = { version = "0.2.1", path = "../gcp", optional = true }
@@ -54,4 +54,3 @@ required-features = ["datafusion"]
 
 [[example]]
 name = "recordbatch-writer"
-required-features = ["arrow"]

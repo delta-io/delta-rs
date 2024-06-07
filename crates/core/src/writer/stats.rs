@@ -3,6 +3,7 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use std::{collections::HashMap, ops::AddAssign};
 
+use delta_kernel::expressions::Scalar;
 use indexmap::IndexMap;
 use parquet::file::metadata::ParquetMetaData;
 use parquet::format::FileMetaData;
@@ -14,7 +15,7 @@ use parquet::{
 };
 
 use super::*;
-use crate::kernel::{Add, Scalar};
+use crate::kernel::{scalars::ScalarExt, Add};
 use crate::protocol::{ColumnValueStat, Stats};
 
 /// Creates an [`Add`] log action struct.

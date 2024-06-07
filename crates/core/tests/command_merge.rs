@@ -14,18 +14,18 @@ use deltalake_core::protocol::SaveMode;
 use deltalake_core::{open_table, DeltaOps, DeltaResult, DeltaTable, DeltaTableError};
 use std::sync::Arc;
 
-async fn create_table(table_uri: &String, partition: Option<Vec<&str>>) -> DeltaTable {
+async fn create_table(table_uri: &str, partition: Option<Vec<&str>>) -> DeltaTable {
     let table_schema = get_delta_schema();
-    let ops = DeltaOps::try_from_uri(table_uri.clone()).await.unwrap();
+    let ops = DeltaOps::try_from_uri(table_uri).await.unwrap();
     let table = ops
         .create()
-        .with_columns(table_schema.fields().clone())
+        .with_columns(table_schema.fields().cloned())
         .with_partition_columns(partition.unwrap_or_default())
         .await
         .expect("Failed to create table");
 
     let schema = get_arrow_schema();
-    return write_data(table, &schema).await;
+    write_data(table, &schema).await
 }
 
 fn get_delta_schema() -> StructType {
@@ -49,11 +49,11 @@ fn get_delta_schema() -> StructType {
 }
 
 fn get_arrow_schema() -> Arc<ArrowSchema> {
-    return Arc::new(ArrowSchema::new(vec![
+    Arc::new(ArrowSchema::new(vec![
         Field::new("id", DataType::Utf8, true),
         Field::new("value", DataType::Int32, true),
         Field::new("event_date", DataType::Utf8, true),
-    ]));
+    ]))
 }
 
 async fn write_data(table: DeltaTable, schema: &Arc<ArrowSchema>) -> DeltaTable {
@@ -108,7 +108,7 @@ fn create_test_data() -> (DataFrame, DataFrame) {
     )
     .unwrap();
     let df2 = ctx.read_batch(batch).unwrap();
-    return (df1, df2);
+    (df1, df2)
 }
 
 async fn merge(
@@ -116,7 +116,7 @@ async fn merge(
     df: DataFrame,
     predicate: Expr,
 ) -> DeltaResult<(DeltaTable, MergeMetrics)> {
-    return DeltaOps(table)
+    DeltaOps(table)
         .merge(df, predicate)
         .with_source_alias("source")
         .with_target_alias("target")
@@ -133,7 +133,7 @@ async fn merge(
                 .set("event_date", col("source.event_date"))
         })
         .unwrap()
-        .await;
+        .await
 }
 
 #[tokio::test]
@@ -142,7 +142,7 @@ async fn test_merge_concurrent_conflict() {
     let tmp_dir = tempfile::tempdir().unwrap();
     let table_uri = tmp_dir.path().to_str().to_owned().unwrap();
 
-    let table_ref1 = create_table(&table_uri.to_string(), Some(vec!["event_date"])).await;
+    let table_ref1 = create_table(table_uri, Some(vec!["event_date"])).await;
     let table_ref2 = open_table(table_uri).await.unwrap();
     let (df1, df2) = create_test_data();
 
@@ -165,7 +165,7 @@ async fn test_merge_concurrent_different_partition() {
     let tmp_dir = tempfile::tempdir().unwrap();
     let table_uri = tmp_dir.path().to_str().to_owned().unwrap();
 
-    let table_ref1 = create_table(&table_uri.to_string(), Some(vec!["event_date"])).await;
+    let table_ref1 = create_table(table_uri, Some(vec!["event_date"])).await;
     let table_ref2 = open_table(table_uri).await.unwrap();
     let (df1, df2) = create_test_data();
 
@@ -177,7 +177,7 @@ async fn test_merge_concurrent_different_partition() {
 
     // TODO: Currently it throws a Version mismatch error, but the merge commit was successfully
     // This bug needs to be fixed, see pull request #2280
-    assert!(matches!(result.as_ref().is_ok(), true));
+    assert!(result.as_ref().is_ok());
 }
 
 #[tokio::test]
@@ -186,7 +186,7 @@ async fn test_merge_concurrent_with_overlapping_files() {
     let tmp_dir = tempfile::tempdir().unwrap();
     let table_uri = tmp_dir.path().to_str().to_owned().unwrap();
 
-    let table_ref1 = create_table(&table_uri.to_string(), None).await;
+    let table_ref1 = create_table(table_uri, None).await;
     let table_ref2 = open_table(table_uri).await.unwrap();
     let (df1, _df2) = create_test_data();
 

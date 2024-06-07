@@ -36,7 +36,6 @@ use arrow::record_batch::RecordBatch;
 use arrow_array::types::UInt16Type;
 use arrow_array::{Array, DictionaryArray, StringArray, TypedDictionaryArray};
 use arrow_cast::display::array_value_to_string;
-
 use arrow_schema::Field;
 use async_trait::async_trait;
 use chrono::{DateTime, TimeZone, Utc};
@@ -78,7 +77,6 @@ use datafusion_proto::physical_plan::PhysicalExtensionCodec;
 use datafusion_sql::planner::ParserOptions;
 use either::Either;
 use futures::TryStreamExt;
-
 use itertools::Itertools;
 use object_store::ObjectMeta;
 use serde::{Deserialize, Serialize};
@@ -86,7 +84,7 @@ use url::Url;
 
 use crate::delta_datafusion::expr::parse_predicate_expression;
 use crate::errors::{DeltaResult, DeltaTableError};
-use crate::kernel::{Add, DataCheck, EagerSnapshot, Invariant, Snapshot};
+use crate::kernel::{Add, DataCheck, EagerSnapshot, Invariant, Snapshot, StructTypeExt};
 use crate::logstore::LogStoreRef;
 use crate::table::builder::ensure_table_uri;
 use crate::table::state::DeltaTableState;
@@ -202,13 +200,11 @@ fn _arrow_schema(snapshot: &Snapshot, wrap_partitions: bool) -> DeltaResult<Arro
     let fields = meta
         .schema()?
         .fields()
-        .iter()
         .filter(|f| !meta.partition_columns.contains(&f.name().to_string()))
         .map(|f| f.try_into())
         .chain(
             meta.schema()?
                 .fields()
-                .iter()
                 .filter(|f| meta.partition_columns.contains(&f.name().to_string()))
                 .map(|f| {
                     let field = Field::try_from(f)?;
@@ -506,6 +502,12 @@ impl<'a> DeltaScanBuilder<'a> {
 
     pub fn with_scan_config(mut self, config: DeltaScanConfig) -> Self {
         self.config = config;
+        self
+    }
+
+    /// Use the provided [SchemaRef] for the [DeltaScan]
+    pub fn with_schema(mut self, schema: SchemaRef) -> Self {
+        self.schema = Some(schema);
         self
     }
 
@@ -2038,7 +2040,7 @@ mod tests {
 
         let table = crate::DeltaOps::new_in_memory()
             .create()
-            .with_columns(get_delta_schema().fields().clone())
+            .with_columns(get_delta_schema().fields().cloned())
             .with_partition_columns(["modified", "id"])
             .await
             .unwrap();

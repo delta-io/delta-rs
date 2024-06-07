@@ -26,6 +26,9 @@ debug = true
 debug = "line-tables-only"
 
 [workspace.dependencies]
+delta_kernel = { version = "0.1" }
+# delta_kernel = { path = "../delta-kernel-rs/kernel" }
+
 # arrow
 arrow = { version = "51" }
 arrow-arith = { version = "51" }

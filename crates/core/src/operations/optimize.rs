@@ -27,6 +27,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use arrow::datatypes::SchemaRef as ArrowSchemaRef;
 use arrow_array::RecordBatch;
+use delta_kernel::expressions::Scalar;
 use futures::future::BoxFuture;
 use futures::stream::BoxStream;
 use futures::{Future, StreamExt, TryStreamExt};
@@ -43,7 +44,7 @@ use tracing::debug;
 use super::transaction::PROTOCOL;
 use super::writer::{PartitionWriter, PartitionWriterConfig};
 use crate::errors::{DeltaResult, DeltaTableError};
-use crate::kernel::{Action, PartitionsExt, Remove, Scalar};
+use crate::kernel::{scalars::ScalarExt, Action, PartitionsExt, Remove};
 use crate::logstore::LogStoreRef;
 use crate::operations::transaction::{CommitBuilder, CommitProperties, DEFAULT_RETRIES};
 use crate::protocol::DeltaOperation;
@@ -1001,7 +1002,6 @@ fn build_zorder_plan(
     let field_names = snapshot
         .schema()
         .fields()
-        .iter()
         .map(|field| field.name().to_string())
         .collect_vec();
     let unknown_columns = zorder_columns
@@ -1345,7 +1345,7 @@ pub(super) mod zorder {
                     "+-----+-----+-----------+",
                 ];
 
-                let expected = vec![expected_1, expected_2, expected_3];
+                let expected = [expected_1, expected_2, expected_3];
 
                 let indices = Int32Array::from(shuffled_indices().to_vec());
                 let shuffled_columns = batch

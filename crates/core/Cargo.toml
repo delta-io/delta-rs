@@ -1,6 +1,6 @@
 [package]
 name = "deltalake-core"
-version = "0.17.3"
+version = "0.18.0"
 authors.workspace = true
 keywords.workspace = true
 readme.workspace = true
@@ -15,6 +15,8 @@ rust-version.workspace = true
 features = ["datafusion", "json", "unity-experimental"]
 
 [dependencies]
+delta_kernel.workspace = true
+
 # arrow
 arrow = { workspace = true }
 arrow-arith = { workspace = true }
@@ -97,7 +99,7 @@ reqwest = { version = "0.11.18", default-features = false, features = [
     "rustls-tls",
     "json",
 ], optional = true }
-sqlparser = { version = "0.46", optional = true }
+sqlparser = { version = "0.47", optional = true }
 
 [dev-dependencies]
 criterion = "0.5"
@@ -115,7 +117,8 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 utime = "0.3"
 
 [features]
-default = []
+cdf = []
+default = ["cdf"]
 datafusion = [
     "dep:datafusion",
     "datafusion-expr",

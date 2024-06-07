@@ -214,6 +214,7 @@ def create_deltalake(
     schema: pyarrow.Schema,
     partition_by: List[str],
     mode: str,
+    raise_if_key_not_exists: bool,
     name: Optional[str],
     description: Optional[str],
     configuration: Optional[Mapping[str, Optional[str]]],

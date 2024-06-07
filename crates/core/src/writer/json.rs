@@ -6,6 +6,7 @@ use std::sync::Arc;
 use arrow::datatypes::{Schema as ArrowSchema, SchemaRef as ArrowSchemaRef};
 use arrow::record_batch::*;
 use bytes::Bytes;
+use delta_kernel::expressions::Scalar;
 use indexmap::IndexMap;
 use object_store::path::Path;
 use object_store::ObjectStore;
@@ -24,7 +25,7 @@ use super::utils::{
 };
 use super::{DeltaWriter, DeltaWriterError, WriteMode};
 use crate::errors::DeltaTableError;
-use crate::kernel::{Add, PartitionsExt, Scalar, StructType};
+use crate::kernel::{scalars::ScalarExt, Add, PartitionsExt, StructType};
 use crate::storage::ObjectStoreRetryExt;
 use crate::table::builder::DeltaTableBuilder;
 use crate::table::config::DEFAULT_NUM_INDEX_COLS;
@@ -600,11 +601,8 @@ mod tests {
                 }
             );
 
-            match writer.write(vec![second_data]).await {
-                Ok(_) => {
-                    assert!(false, "Should not have successfully written");
-                }
-                _ => {}
+            if writer.write(vec![second_data]).await.is_ok() {
+                panic!("Should not have successfully written");
             }
         }
 
@@ -619,7 +617,7 @@ mod tests {
                 .with_location(&path)
                 .with_table_name("test-table")
                 .with_comment("A table for running tests")
-                .with_columns(schema.fields().clone())
+                .with_columns(schema.fields().cloned())
                 .await
                 .unwrap();
             table.load().await.expect("Failed to load table");

@@ -6,6 +6,7 @@ use arrow::datatypes::SchemaRef as ArrowSchemaRef;
 use arrow::error::ArrowError;
 use arrow::record_batch::RecordBatch;
 use bytes::Bytes;
+use delta_kernel::expressions::Scalar;
 use indexmap::IndexMap;
 use object_store::{path::Path, ObjectStore};
 use parquet::arrow::ArrowWriter;
@@ -15,7 +16,7 @@ use tracing::debug;
 
 use crate::crate_version;
 use crate::errors::{DeltaResult, DeltaTableError};
-use crate::kernel::{Add, PartitionsExt, Scalar};
+use crate::kernel::{Add, PartitionsExt};
 use crate::storage::ObjectStoreRef;
 use crate::writer::record_batch::{divide_by_partition_values, PartitionResult};
 use crate::writer::stats::create_add;
@@ -613,7 +614,7 @@ mod tests {
 
         match result {
             Ok(_) => {
-                assert!(false, "Should not have successfully written");
+                panic!("Should not have successfully written");
             }
             Err(e) => {
                 match e {
@@ -621,7 +622,7 @@ mod tests {
                         // this is expected
                     }
                     others => {
-                        assert!(false, "Got the wrong error: {others:?}");
+                        panic!("Got the wrong error: {others:?}");
                     }
                 }
             }

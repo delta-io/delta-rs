@@ -55,7 +55,7 @@ pub async fn create_test_table(
         .with_location(path)
         .with_table_name("test-table")
         .with_comment("A table for running tests")
-        .with_columns(schema.fields().clone())
+        .with_columns(schema.fields().cloned())
         .with_partition_columns(partition_columns)
         .with_configuration(config)
         .await
