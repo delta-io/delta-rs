@@ -7,7 +7,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use aws_sdk_dynamodb::types::BillingMode;
 use deltalake_aws::logstore::{RepairLogEntryResult, S3DynamoDbLogStore};
-use deltalake_aws::storage::S3StorageOptions;
+use deltalake_aws::storage::{s3_constants, S3StorageOptions};
 use deltalake_aws::{CommitEntry, DynamoDbConfig, DynamoDbLockClient};
 use deltalake_core::kernel::{Action, Add, DataType, PrimitiveType, StructField, StructType};
 use deltalake_core::logstore::LogStore;
@@ -39,6 +39,7 @@ fn make_client() -> TestResult<DynamoDbLockClient> {
     let options: S3StorageOptions = S3StorageOptions::try_default().unwrap();
     Ok(DynamoDbLockClient::try_new(
         &options.sdk_config,
+        None,
         None,
         None,
         None,

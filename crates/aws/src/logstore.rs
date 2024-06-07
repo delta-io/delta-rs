@@ -58,6 +58,7 @@ impl S3DynamoDbLogStore {
                 .extra_opts
                 .get(constants::MAX_ELAPSED_REQUEST_TIME_KEY_NAME)
                 .cloned(),
+            s3_options.dynamodb_endpoint.clone(),
         )
         .map_err(|err| DeltaTableError::ObjectStore {
             source: ObjectStoreError::Generic {
