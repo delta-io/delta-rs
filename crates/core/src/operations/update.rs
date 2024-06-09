@@ -20,6 +20,7 @@
 
 use std::{
     collections::HashMap,
+    iter,
     sync::Arc,
     time::{Instant, SystemTime, UNIX_EPOCH},
 };
@@ -265,23 +266,30 @@ async fn execute(
     let input_schema = Arc::new(ArrowSchema::new(fields));
     let input_dfschema: DFSchema = input_schema.as_ref().clone().try_into()?;
 
-    let mut expressions: Vec<(Arc<dyn PhysicalExpr>, String)> = Vec::new();
-    let scan_schema = scan.schema();
-    for (i, field) in scan_schema.fields().into_iter().enumerate() {
-        expressions.push((
-            Arc::new(expressions::Column::new(field.name(), i)),
-            field.name().to_owned(),
-        ));
-    }
-
     // Take advantage of how null counts are tracked in arrow arrays use the
     // null count to track how many records do NOT statisfy the predicate.  The
     // count is then exposed through the metrics through the `UpdateCountExec`
     // execution plan
     let predicate_null =
         when(predicate.clone(), lit(true)).otherwise(lit(ScalarValue::Boolean(None)))?;
-    let predicate_expr = state.create_physical_expr(predicate_null, &input_dfschema)?;
-    expressions.push((predicate_expr, UPDATE_PREDICATE_COLNAME.to_string()));
+    let update_predicate_expr = state.create_physical_expr(predicate_null, &input_dfschema)?;
+
+    let expressions: Vec<(Arc<dyn PhysicalExpr>, String)> = scan
+        .schema()
+        .fields()
+        .into_iter()
+        .enumerate()
+        .map(|(idx, field)| -> (Arc<dyn PhysicalExpr>, String) {
+            (
+                Arc::new(expressions::Column::new(field.name(), idx)),
+                field.name().to_owned(),
+            )
+        })
+        .chain(iter::once((
+            update_predicate_expr,
+            UPDATE_PREDICATE_COLNAME.to_string(),
+        )))
+        .collect();
 
     let projection_predicate: Arc<dyn ExecutionPlan> =
         Arc::new(ProjectionExec::try_new(expressions, scan.clone())?);
@@ -304,24 +312,28 @@ async fn execute(
         },
     ));
 
-    let mut expressions: Vec<(Arc<dyn PhysicalExpr>, String)> = Vec::new();
-    let scan_schema = count_plan.schema();
-    for (i, field) in scan_schema.fields().into_iter().enumerate() {
-        let field_name = field.name();
-        let expr = match updates.get(field_name) {
-            Some(expr) => {
-                let expr = case(col(UPDATE_PREDICATE_COLNAME))
-                    .when(lit(true), expr.to_owned())
-                    .otherwise(col(Column::from_qualified_name_ignore_case(field_name)))?;
-                state.create_physical_expr(expr, &input_dfschema)?
-            }
-            None => Arc::new(expressions::Column::new(field_name, i)),
-        };
-        expressions.push((expr, field_name.to_owned()));
-    }
+    let expressions: DeltaResult<Vec<(Arc<dyn PhysicalExpr>, String)>> = count_plan
+        .schema()
+        .fields()
+        .into_iter()
+        .enumerate()
+        .map(|(idx, field)| {
+            let field_name = field.name();
+            let expr = match updates.get(field_name) {
+                Some(expr) => {
+                    let expr = case(col(UPDATE_PREDICATE_COLNAME))
+                        .when(lit(true), expr.to_owned())
+                        .otherwise(col(Column::from_qualified_name_ignore_case(field_name)))?;
+                    state.create_physical_expr(expr, &input_dfschema)?
+                }
+                None => Arc::new(expressions::Column::new(field_name, idx)),
+            };
+            Ok((expr, field_name.to_owned()))
+        })
+        .collect();
 
     let projection: Arc<dyn ExecutionPlan> =
-        Arc::new(ProjectionExec::try_new(expressions, count_plan.clone())?);
+        Arc::new(ProjectionExec::try_new(expressions?, count_plan.clone())?);
 
     let writer_stats_config = WriterStatsConfig::new(
         snapshot.table_config().num_indexed_cols(),

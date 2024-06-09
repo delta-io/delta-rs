@@ -75,7 +75,7 @@ async fn read_write_test_onelake(context: &IntegrationContext, path: &Path) -> T
 
     let expected = Bytes::from_static(b"test world from delta-rs on friday");
 
-    delta_store.put(path, expected.clone()).await.unwrap();
+    delta_store.put(path, expected.clone().into()).await.unwrap();
     let fetched = delta_store.get(path).await.unwrap().bytes().await.unwrap();
     assert_eq!(expected, fetched);
 
