@@ -531,7 +531,9 @@ impl ObjectOutputStream {
 impl ObjectOutputStream {
     fn close(&mut self, py: Python<'_>) -> PyResult<()> {
         self.closed = true;
-        self.flush(py)?;
+        if !self.buffer.is_empty() {
+            self.flush(py)?;
+        }
         py.allow_threads(|| match rt().block_on(self.upload.complete()) {
             Ok(_) => Ok(()),
             Err(err) => Err(PyIOError::new_err(err.to_string())),
@@ -582,9 +584,9 @@ impl ObjectOutputStream {
         self.check_closed()?;
         let py = data.py();
         let bytes = data.as_bytes();
-        self.buffer.extend_from_slice(bytes);
         let len = bytes.len();
-        if self.max_buffer_size >= self.buffer.content_length() {
+        py.allow_threads(|| self.buffer.extend_from_slice(bytes));
+        if self.buffer.content_length() >= self.max_buffer_size {
             self.flush(py)?;
         }
         Ok(len as i64)
