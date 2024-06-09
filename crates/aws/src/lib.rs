@@ -189,15 +189,15 @@ impl DynamoDbLockClient {
         if dynamodb_override_endpoint exists/AWS_ENDPOINT_URL_DYNAMODB is specified by user
         use dynamodb_override_endpoint to create dynamodb client
         */
-        let dynamodb_sdk_config = match dynamodb_override_endpoint {
+
+        match dynamodb_override_endpoint {
             Some(dynamodb_endpoint_url) => sdk_config
                 .to_owned()
                 .to_builder()
                 .endpoint_url(dynamodb_endpoint_url)
                 .build(),
             None => sdk_config.to_owned(),
-        };
-        dynamodb_sdk_config
+        }
     }
 
     /// Create the lock table where DynamoDb stores the commit information for all delta tables.

@@ -1,7 +1,8 @@
 use crate::error::PythonError;
 use crate::utils::{delete_dir, rt, walk_tree};
 use crate::RawDeltaTable;
-use deltalake::storage::{DynObjectStore, ListResult, MultipartId, ObjectStoreError, Path};
+use deltalake::storage::object_store::MultipartUpload;
+use deltalake::storage::{DynObjectStore, ListResult, ObjectStoreError, Path};
 use deltalake::DeltaTableBuilder;
 use pyo3::exceptions::{PyIOError, PyNotImplementedError, PyValueError};
 use pyo3::prelude::*;
@@ -9,7 +10,6 @@ use pyo3::types::{IntoPyDict, PyBytes, PyType};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::io::{AsyncWrite, AsyncWriteExt};
 
 const DEFAULT_MAX_BUFFER_SIZE: i64 = 4 * 1024 * 1024;
 
@@ -492,10 +492,7 @@ impl ObjectInputFile {
 // TODO add buffer to store data ...
 #[pyclass(weakref, module = "deltalake._internal")]
 pub struct ObjectOutputStream {
-    store: Arc<DynObjectStore>,
-    path: Path,
-    writer: Box<dyn AsyncWrite + Send + Unpin>,
-    multipart_id: MultipartId,
+    upload: Box<dyn MultipartUpload>,
     pos: i64,
     #[pyo3(get)]
     closed: bool,
@@ -511,12 +508,9 @@ impl ObjectOutputStream {
         path: Path,
         max_buffer_size: i64,
     ) -> Result<Self, ObjectStoreError> {
-        let (multipart_id, writer) = store.put_multipart(&path).await?;
+        let upload = store.put_multipart(&path).await?;
         Ok(Self {
-            store,
-            path,
-            writer,
-            multipart_id,
+            upload,
             pos: 0,
             closed: false,
             mode: "wb".into(),
@@ -538,13 +532,9 @@ impl ObjectOutputStream {
 impl ObjectOutputStream {
     fn close(&mut self, py: Python<'_>) -> PyResult<()> {
         self.closed = true;
-        py.allow_threads(|| match rt().block_on(self.writer.shutdown()) {
+        py.allow_threads(|| match rt().block_on(self.upload.abort()) {
             Ok(_) => Ok(()),
-            Err(err) => {
-                rt().block_on(self.store.abort_multipart(&self.path, &self.multipart_id))
-                    .map_err(PythonError::from)?;
-                Err(PyIOError::new_err(err.to_string()))
-            }
+            Err(err) => Err(PyIOError::new_err(err.to_string())),
         })
     }
 
@@ -589,35 +579,41 @@ impl ObjectOutputStream {
     }
 
     fn write(&mut self, data: &PyBytes) -> PyResult<i64> {
+        todo!();
+        /*
         self.check_closed()?;
-        let len = data.as_bytes().len() as i64;
         let py = data.py();
-        let data = data.as_bytes();
-        let res = py.allow_threads(|| match rt().block_on(self.writer.write_all(data)) {
+        let bytes = PutPayload::from_bytes(data.into());
+        let len = data.as_bytes().len() as i64;
+        let res = match rt().block_on(self.upload.put_part(bytes)) {
             Ok(_) => Ok(len),
             Err(err) => {
-                rt().block_on(self.store.abort_multipart(&self.path, &self.multipart_id))
+                rt().block_on(self.upload.abort())
                     .map_err(PythonError::from)?;
                 Err(PyIOError::new_err(err.to_string()))
             }
-        })?;
+        }?;
         self.buffer_size += len;
         if self.buffer_size >= self.max_buffer_size {
             let _ = self.flush(py);
             self.buffer_size = 0;
         }
         Ok(res)
+        */
     }
 
     fn flush(&mut self, py: Python<'_>) -> PyResult<()> {
-        py.allow_threads(|| match rt().block_on(self.writer.flush()) {
+        todo!();
+        /*
+        py.allow_threads(|| match rt().block_on(self.upload.flush()) {
             Ok(_) => Ok(()),
             Err(err) => {
-                rt().block_on(self.store.abort_multipart(&self.path, &self.multipart_id))
+                rt().block_on(self.upload.abort())
                     .map_err(PythonError::from)?;
                 Err(PyIOError::new_err(err.to_string()))
             }
         })
+        */
     }
 
     fn fileno(&self) -> PyResult<()> {

@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use datafusion_common::{OwnedTableReference, Result as DFResult};
+use datafusion_common::{Result as DFResult, TableReference};
 use datafusion_expr::logical_plan::{Extension, LogicalPlan};
 use datafusion_sql::planner::{
     object_name_to_table_reference, ContextProvider, IdentNormalizer, ParserOptions, SqlToRel,
@@ -54,7 +54,7 @@ impl<'a, S: ContextProvider> DeltaSqlToRel<'a, S> {
     fn vacuum_to_plan(&self, vacuum: VacuumStatement) -> DFResult<LogicalPlan> {
         let table_ref = self.object_name_to_table_reference(vacuum.table)?;
         let plan = DeltaStatement::Vacuum(Vacuum::new(
-            table_ref.to_owned_reference(),
+            table_ref.clone(),
             vacuum.retention_hours,
             vacuum.dry_run,
         ));
@@ -65,8 +65,7 @@ impl<'a, S: ContextProvider> DeltaSqlToRel<'a, S> {
 
     fn describe_to_plan(&self, describe: DescribeStatement) -> DFResult<LogicalPlan> {
         let table_ref = self.object_name_to_table_reference(describe.table)?;
-        let plan =
-            DeltaStatement::DescribeFiles(DescribeFiles::new(table_ref.to_owned_reference()));
+        let plan = DeltaStatement::DescribeFiles(DescribeFiles::new(table_ref.clone()));
         Ok(LogicalPlan::Extension(Extension {
             node: Arc::new(plan),
         }))
@@ -75,7 +74,7 @@ impl<'a, S: ContextProvider> DeltaSqlToRel<'a, S> {
     pub(crate) fn object_name_to_table_reference(
         &self,
         object_name: ObjectName,
-    ) -> DFResult<OwnedTableReference> {
+    ) -> DFResult<TableReference> {
         object_name_to_table_reference(object_name, self.options.enable_ident_normalization)
     }
 }
@@ -122,10 +121,6 @@ mod tests {
     }
 
     impl ContextProvider for TestSchemaProvider {
-        fn get_table_provider(&self, name: TableReference) -> DFResult<Arc<dyn TableSource>> {
-            self.get_table_source(name)
-        }
-
         fn get_table_source(&self, name: TableReference) -> DFResult<Arc<dyn TableSource>> {
             match self.tables.get(name.table()) {
                 Some(table) => Ok(table.clone()),
@@ -156,15 +151,15 @@ mod tests {
             None
         }
 
-        fn udfs_names(&self) -> Vec<String> {
+        fn udf_names(&self) -> Vec<String> {
             Vec::new()
         }
 
-        fn udafs_names(&self) -> Vec<String> {
+        fn udaf_names(&self) -> Vec<String> {
             Vec::new()
         }
 
-        fn udwfs_names(&self) -> Vec<String> {
+        fn udwf_names(&self) -> Vec<String> {
             Vec::new()
         }
     }

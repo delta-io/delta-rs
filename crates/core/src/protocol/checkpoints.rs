@@ -170,14 +170,16 @@ pub async fn create_checkpoint_for(
 
     let object_store = log_store.object_store();
     debug!("Writing checkpoint to {:?}.", checkpoint_path);
-    object_store.put(&checkpoint_path, parquet_bytes).await?;
+    object_store
+        .put(&checkpoint_path, parquet_bytes.into())
+        .await?;
 
     let last_checkpoint_content: Value = serde_json::to_value(checkpoint)?;
     let last_checkpoint_content = bytes::Bytes::from(serde_json::to_vec(&last_checkpoint_content)?);
 
     debug!("Writing _last_checkpoint to {:?}.", last_checkpoint_path);
     object_store
-        .put(&last_checkpoint_path, last_checkpoint_content)
+        .put(&last_checkpoint_path, last_checkpoint_content.into())
         .await?;
 
     Ok(())

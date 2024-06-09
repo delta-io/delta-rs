@@ -1,7 +1,6 @@
 //! Retry extension for [`ObjectStore`]
 
-use bytes::Bytes;
-use object_store::{path::Path, Error, ObjectStore, PutResult, Result};
+use object_store::{path::Path, Error, ObjectStore, PutPayload, PutResult, Result};
 use tracing::log::*;
 
 /// Retry extension for [`ObjectStore`]
@@ -29,7 +28,7 @@ pub trait ObjectStoreRetryExt: ObjectStore {
     async fn put_with_retries(
         &self,
         location: &Path,
-        bytes: Bytes,
+        bytes: PutPayload,
         max_retries: usize,
     ) -> Result<PutResult> {
         let mut attempt_number = 1;

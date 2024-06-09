@@ -92,7 +92,16 @@ impl UserDefinedLogicalNodeCore for FindFilesNode {
         )
     }
 
-    fn from_template(&self, _exprs: &[Expr], _inputs: &[LogicalPlan]) -> Self {
-        self.clone()
+    fn from_template(&self, exprs: &[Expr], inputs: &[LogicalPlan]) -> Self {
+        self.with_exprs_and_inputs(exprs.to_vec(), inputs.to_vec())
+            .unwrap()
+    }
+
+    fn with_exprs_and_inputs(
+        &self,
+        _exprs: Vec<Expr>,
+        _inputs: Vec<LogicalPlan>,
+    ) -> datafusion_common::Result<Self> {
+        Ok(self.clone())
     }
 }

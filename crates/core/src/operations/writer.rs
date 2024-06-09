@@ -369,7 +369,7 @@ impl PartitionWriter {
         let file_size = buffer.len() as i64;
 
         // write file to object store
-        self.object_store.put(&path, buffer).await?;
+        self.object_store.put(&path, buffer.into()).await?;
         self.files_written.push(
             create_add(
                 &self.config.partition_values,
