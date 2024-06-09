@@ -579,41 +579,33 @@ impl ObjectOutputStream {
     }
 
     fn write(&mut self, data: &PyBytes) -> PyResult<i64> {
-        todo!();
-        /*
         self.check_closed()?;
         let py = data.py();
-        let bytes = PutPayload::from_bytes(data.into());
-        let len = data.as_bytes().len() as i64;
-        let res = match rt().block_on(self.upload.put_part(bytes)) {
+        let bytes = data.as_bytes().to_owned();
+        let len = bytes.len() as i64;
+        let res = py.allow_threads(|| match rt().block_on(self.upload.put_part(bytes.into())) {
             Ok(_) => Ok(len),
             Err(err) => {
                 rt().block_on(self.upload.abort())
                     .map_err(PythonError::from)?;
                 Err(PyIOError::new_err(err.to_string()))
             }
-        }?;
+        })?;
         self.buffer_size += len;
         if self.buffer_size >= self.max_buffer_size {
             let _ = self.flush(py);
             self.buffer_size = 0;
         }
         Ok(res)
-        */
     }
 
     fn flush(&mut self, py: Python<'_>) -> PyResult<()> {
-        todo!();
-        /*
-        py.allow_threads(|| match rt().block_on(self.upload.flush()) {
+        py.allow_threads(|| match rt().block_on(self.upload.abort()) {
             Ok(_) => Ok(()),
             Err(err) => {
-                rt().block_on(self.upload.abort())
-                    .map_err(PythonError::from)?;
                 Err(PyIOError::new_err(err.to_string()))
             }
         })
-        */
     }
 
     fn fileno(&self) -> PyResult<()> {
