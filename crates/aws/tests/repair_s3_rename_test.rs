@@ -228,10 +228,7 @@ impl ObjectStore for DelayedObjectStore {
         self.inner.rename_if_not_exists(from, to).await
     }
 
-    async fn put_multipart(
-        &self,
-        location: &Path,
-    ) -> ObjectStoreResult<Box<dyn MultipartUpload>> {
+    async fn put_multipart(&self, location: &Path) -> ObjectStoreResult<Box<dyn MultipartUpload>> {
         self.inner.put_multipart(location).await
     }
 
