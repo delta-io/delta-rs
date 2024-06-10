@@ -36,7 +36,7 @@ arrow-array = { version = "51", features = ["chrono-tz"] }
 arrow-buffer = { version = "51" }
 arrow-cast = { version = "51" }
 arrow-ipc = { version = "51" }
-arrow-json = { version = "51" }
+arrow-json = { version = "52" }
 arrow-ord = { version = "51" }
 arrow-row = { version = "51" }
 arrow-schema = { version = "51" }
