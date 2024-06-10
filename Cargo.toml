@@ -40,7 +40,7 @@ arrow-json = { version = "51" }
 arrow-ord = { version = "51" }
 arrow-row = { version = "51" }
 arrow-schema = { version = "51" }
-arrow-select = { version = "51" }
+arrow-select = { version = "52" }
 object_store = { version = "0.9" }
 parquet = { version = "51" }
 
