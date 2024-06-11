@@ -363,7 +363,9 @@ impl DeltaWriter<Vec<Value>> for JsonWriter {
             let path = next_data_path(&prefix, 0, &uuid, &writer.writer_properties);
             let obj_bytes = Bytes::from(writer.buffer.to_vec());
             let file_size = obj_bytes.len() as i64;
-            self.storage.put_with_retries(&path, obj_bytes, 15).await?;
+            self.storage
+                .put_with_retries(&path, obj_bytes.into(), 15)
+                .await?;
 
             actions.push(create_add(
                 &writer.partition_values,

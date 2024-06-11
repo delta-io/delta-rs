@@ -5,8 +5,8 @@ use aws_config::provider_config::ProviderConfig;
 use aws_config::{Region, SdkConfig};
 use bytes::Bytes;
 use deltalake_core::storage::object_store::{
-    aws::AmazonS3ConfigKey, parse_url_opts, GetOptions, GetResult, ListResult, MultipartId,
-    ObjectMeta, ObjectStore, PutOptions, PutResult, Result as ObjectStoreResult,
+    aws::AmazonS3ConfigKey, parse_url_opts, GetOptions, GetResult, ListResult, ObjectMeta,
+    ObjectStore, PutOptions, PutResult, Result as ObjectStoreResult,
 };
 use deltalake_core::storage::{
     limit_store_handler, str_is_truthy, ObjectStoreFactory, ObjectStoreRef, StorageOptions,
@@ -14,13 +14,13 @@ use deltalake_core::storage::{
 use deltalake_core::{DeltaResult, ObjectStoreError, Path};
 use futures::stream::BoxStream;
 use futures::Future;
+use object_store::{MultipartUpload, PutMultipartOpts, PutPayload};
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::ops::Range;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::io::AsyncWrite;
 use url::Url;
 
 use crate::errors::DynamoDbConfigError;
@@ -334,14 +334,14 @@ impl std::fmt::Debug for S3StorageBackend {
 
 #[async_trait::async_trait]
 impl ObjectStore for S3StorageBackend {
-    async fn put(&self, location: &Path, bytes: Bytes) -> ObjectStoreResult<PutResult> {
+    async fn put(&self, location: &Path, bytes: PutPayload) -> ObjectStoreResult<PutResult> {
         self.inner.put(location, bytes).await
     }
 
     async fn put_opts(
         &self,
         location: &Path,
-        bytes: Bytes,
+        bytes: PutPayload,
         options: PutOptions,
     ) -> ObjectStoreResult<PutResult> {
         self.inner.put_opts(location, bytes, options).await
@@ -402,19 +402,16 @@ impl ObjectStore for S3StorageBackend {
         }
     }
 
-    async fn put_multipart(
-        &self,
-        location: &Path,
-    ) -> ObjectStoreResult<(MultipartId, Box<dyn AsyncWrite + Unpin + Send>)> {
+    async fn put_multipart(&self, location: &Path) -> ObjectStoreResult<Box<dyn MultipartUpload>> {
         self.inner.put_multipart(location).await
     }
 
-    async fn abort_multipart(
+    async fn put_multipart_opts(
         &self,
         location: &Path,
-        multipart_id: &MultipartId,
-    ) -> ObjectStoreResult<()> {
-        self.inner.abort_multipart(location, multipart_id).await
+        options: PutMultipartOpts,
+    ) -> ObjectStoreResult<Box<dyn MultipartUpload>> {
+        self.inner.put_multipart_opts(location, options).await
     }
 }
 

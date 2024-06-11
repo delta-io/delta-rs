@@ -477,7 +477,10 @@ impl<'a> PreCommit<'a> {
             let log_entry = this.data.get_bytes()?;
             let token = uuid::Uuid::new_v4().to_string();
             let path = Path::from_iter([DELTA_LOG_FOLDER, &format!("_commit_{token}.json.tmp")]);
-            this.log_store.object_store().put(&path, log_entry).await?;
+            this.log_store
+                .object_store()
+                .put(&path, log_entry.into())
+                .await?;
 
             Ok(PreparedCommit {
                 path,
@@ -699,7 +702,7 @@ mod tests {
         logstore::{default_logstore::DefaultLogStore, LogStore},
         storage::commit_uri_from_version,
     };
-    use object_store::memory::InMemory;
+    use object_store::{memory::InMemory, PutPayload};
     use url::Url;
 
     #[test]
@@ -723,8 +726,8 @@ mod tests {
         );
         let tmp_path = Path::from("_delta_log/tmp");
         let version_path = Path::from("_delta_log/00000000000000000000.json");
-        store.put(&tmp_path, bytes::Bytes::new()).await.unwrap();
-        store.put(&version_path, bytes::Bytes::new()).await.unwrap();
+        store.put(&tmp_path, PutPayload::new()).await.unwrap();
+        store.put(&version_path, PutPayload::new()).await.unwrap();
 
         let res = log_store.write_commit_entry(0, &tmp_path).await;
         // fails if file version already exists

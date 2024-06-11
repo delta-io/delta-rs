@@ -1,5 +1,3 @@
-#![deny(warnings)]
-
 mod error;
 mod filesystem;
 mod schema;

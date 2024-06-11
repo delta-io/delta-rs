@@ -1,7 +1,7 @@
 use std::fmt::{self, Debug, Display};
 use std::sync::Arc;
 
-use datafusion_common::{DFSchema, DFSchemaRef, OwnedTableReference};
+use datafusion_common::{DFSchema, DFSchemaRef, DataFusionError, TableReference};
 use datafusion_expr::logical_plan::LogicalPlan;
 use datafusion_expr::{Expr, UserDefinedLogicalNodeCore};
 
@@ -90,13 +90,31 @@ impl UserDefinedLogicalNodeCore for DeltaStatement {
     }
 
     fn from_template(&self, exprs: &[Expr], inputs: &[LogicalPlan]) -> Self {
+        self.with_exprs_and_inputs(exprs.to_vec(), inputs.to_vec())
+            .unwrap()
+    }
+
+    fn with_exprs_and_inputs(
+        &self,
+        exprs: Vec<Expr>,
+        inputs: Vec<LogicalPlan>,
+    ) -> datafusion_common::Result<Self> {
         match self {
             Self::Vacuum(_) | Self::DescribeHistory(_) => {
-                assert_eq!(inputs.len(), 0, "input size inconsistent");
-                assert_eq!(exprs.len(), 0, "expression size inconsistent");
-                self.clone()
+                if !inputs.is_empty() {
+                    return Err(DataFusionError::External("Input size inconsistent".into()));
+                }
+                if !exprs.is_empty() {
+                    return Err(DataFusionError::External(
+                        "Expression size inconsistent".into(),
+                    ));
+                }
+                Ok(self.clone())
             }
-            _ => todo!(),
+            _ => Err(DataFusionError::NotImplemented(format!(
+                "with_exprs_and_inputs not implemented for {:?}",
+                self
+            ))),
         }
     }
 }
@@ -107,7 +125,7 @@ impl UserDefinedLogicalNodeCore for DeltaStatement {
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub struct Vacuum {
     /// A reference to the table being vacuumed
-    pub table: OwnedTableReference,
+    pub table: TableReference,
     /// The retention threshold.
     pub retention_hours: Option<i32>,
     /// Return a list of up to 1000 files to be deleted.
@@ -117,7 +135,7 @@ pub struct Vacuum {
 }
 
 impl Vacuum {
-    pub fn new(table: OwnedTableReference, retention_hours: Option<i32>, dry_run: bool) -> Self {
+    pub fn new(table: TableReference, retention_hours: Option<i32>, dry_run: bool) -> Self {
         Self {
             table,
             retention_hours,
@@ -133,13 +151,13 @@ impl Vacuum {
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub struct DescribeHistory {
     /// A reference to the table
-    pub table: OwnedTableReference,
+    pub table: TableReference,
     /// Schema for commit provenence information
     pub schema: DFSchemaRef,
 }
 
 impl DescribeHistory {
-    pub fn new(table: OwnedTableReference) -> Self {
+    pub fn new(table: TableReference) -> Self {
         Self {
             table,
             // TODO: add proper schema
@@ -153,13 +171,13 @@ impl DescribeHistory {
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub struct DescribeDetails {
     /// A reference to the table
-    pub table: OwnedTableReference,
+    pub table: TableReference,
     /// Schema for commit provenence information
     pub schema: DFSchemaRef,
 }
 
 impl DescribeDetails {
-    pub fn new(table: OwnedTableReference) -> Self {
+    pub fn new(table: TableReference) -> Self {
         Self {
             table,
             // TODO: add proper schema
@@ -172,13 +190,13 @@ impl DescribeDetails {
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub struct DescribeFiles {
     /// A reference to the table
-    pub table: OwnedTableReference,
+    pub table: TableReference,
     /// Schema for commit provenence information
     pub schema: DFSchemaRef,
 }
 
 impl DescribeFiles {
-    pub fn new(table: OwnedTableReference) -> Self {
+    pub fn new(table: TableReference) -> Self {
         Self {
             table,
             // TODO: add proper schema

@@ -97,7 +97,7 @@ impl ExecutionPlan for FindFilesExec {
         &self.plan_properties
     }
 
-    fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
+    fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
         vec![]
     }
 

@@ -9,6 +9,7 @@ use deltalake_core::storage::object_store::{
 use deltalake_core::{DeltaTableBuilder, ObjectStore, Path};
 use deltalake_test::utils::IntegrationContext;
 use futures::stream::BoxStream;
+use object_store::{MultipartUpload, PutMultipartOpts, PutPayload};
 use serial_test::serial;
 use std::ops::Range;
 use std::sync::{Arc, Mutex};
@@ -60,8 +61,8 @@ async fn run_repair_test_case(path: &str, pause_copy: bool) -> Result<(), Object
     };
     let (s3_2, _) = create_s3_backend(&context, "w2", None, None);
 
-    s3_1.put(&src1, Bytes::from("test1")).await.unwrap();
-    s3_2.put(&src2, Bytes::from("test2")).await.unwrap();
+    s3_1.put(&src1, Bytes::from("test1").into()).await.unwrap();
+    s3_2.put(&src2, Bytes::from("test2").into()).await.unwrap();
 
     let rename1 = rename(s3_1, &src1, &dst1);
     // to ensure that first one is started actually first
@@ -166,14 +167,14 @@ impl ObjectStore for DelayedObjectStore {
         self.delete(from).await
     }
 
-    async fn put(&self, location: &Path, bytes: Bytes) -> ObjectStoreResult<PutResult> {
+    async fn put(&self, location: &Path, bytes: PutPayload) -> ObjectStoreResult<PutResult> {
         self.inner.put(location, bytes).await
     }
 
     async fn put_opts(
         &self,
         location: &Path,
-        bytes: Bytes,
+        bytes: PutPayload,
         options: PutOptions,
     ) -> ObjectStoreResult<PutResult> {
         self.inner.put_opts(location, bytes, options).await
@@ -227,19 +228,16 @@ impl ObjectStore for DelayedObjectStore {
         self.inner.rename_if_not_exists(from, to).await
     }
 
-    async fn put_multipart(
-        &self,
-        location: &Path,
-    ) -> ObjectStoreResult<(MultipartId, Box<dyn AsyncWrite + Unpin + Send>)> {
+    async fn put_multipart(&self, location: &Path) -> ObjectStoreResult<Box<dyn MultipartUpload>> {
         self.inner.put_multipart(location).await
     }
 
-    async fn abort_multipart(
+    async fn put_multipart_opts(
         &self,
         location: &Path,
-        multipart_id: &MultipartId,
-    ) -> ObjectStoreResult<()> {
-        self.inner.abort_multipart(location, multipart_id).await
+        options: PutMultipartOpts,
+    ) -> ObjectStoreResult<Box<dyn MultipartUpload>> {
+        self.inner.put_multipart_opts(location, options).await
     }
 }
 
