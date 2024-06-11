@@ -39,7 +39,7 @@ pub async fn sync_stores(
     while let Some(file) = meta_stream.next().await {
         if let Ok(meta) = file {
             let bytes = from_store.get(&meta.location).await?.bytes().await?;
-            to_store.put(&meta.location, bytes).await?;
+            to_store.put(&meta.location, bytes.into()).await?;
         }
     }
     Ok(())

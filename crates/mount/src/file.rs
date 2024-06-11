@@ -6,12 +6,12 @@ use bytes::Bytes;
 use futures::stream::BoxStream;
 use object_store::{
     local::LocalFileSystem, path::Path as ObjectStorePath, Error as ObjectStoreError, GetOptions,
-    GetResult, ListResult, MultipartId, ObjectMeta, ObjectStore, PutOptions, PutResult,
+    GetResult, ListResult, ObjectMeta, ObjectStore, PutOptions, PutResult,
     Result as ObjectStoreResult,
 };
+use object_store::{MultipartUpload, PutMultipartOpts, PutPayload};
 use std::ops::Range;
 use std::sync::Arc;
-use tokio::io::AsyncWrite;
 use url::Url;
 
 pub(crate) const STORE_NAME: &str = "MountObjectStore";
@@ -156,14 +156,18 @@ impl std::fmt::Display for MountFileStorageBackend {
 
 #[async_trait::async_trait]
 impl ObjectStore for MountFileStorageBackend {
-    async fn put(&self, location: &ObjectStorePath, bytes: Bytes) -> ObjectStoreResult<PutResult> {
+    async fn put(
+        &self,
+        location: &ObjectStorePath,
+        bytes: PutPayload,
+    ) -> ObjectStoreResult<PutResult> {
         self.inner.put(location, bytes).await
     }
 
     async fn put_opts(
         &self,
         location: &ObjectStorePath,
-        bytes: Bytes,
+        bytes: PutPayload,
         options: PutOptions,
     ) -> ObjectStoreResult<PutResult> {
         self.inner.put_opts(location, bytes, options).await
@@ -244,16 +248,16 @@ impl ObjectStore for MountFileStorageBackend {
     async fn put_multipart(
         &self,
         location: &ObjectStorePath,
-    ) -> ObjectStoreResult<(MultipartId, Box<dyn AsyncWrite + Unpin + Send>)> {
+    ) -> ObjectStoreResult<Box<dyn MultipartUpload>> {
         self.inner.put_multipart(location).await
     }
 
-    async fn abort_multipart(
+    async fn put_multipart_opts(
         &self,
         location: &ObjectStorePath,
-        multipart_id: &MultipartId,
-    ) -> ObjectStoreResult<()> {
-        self.inner.abort_multipart(location, multipart_id).await
+        options: PutMultipartOpts,
+    ) -> ObjectStoreResult<Box<dyn MultipartUpload>> {
+        self.inner.put_multipart_opts(location, options).await
     }
 }
 

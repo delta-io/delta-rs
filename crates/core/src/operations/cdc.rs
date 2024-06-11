@@ -208,8 +208,8 @@ impl ExecutionPlan for CDCObserver {
         self.parent.properties()
     }
 
-    fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
-        vec![self.parent.clone()]
+    fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
+        vec![&self.parent]
     }
 
     fn execute(

@@ -1463,6 +1463,19 @@ def test_invalid_decimals(tmp_path: pathlib.Path, engine):
         write_deltalake(table_or_uri=tmp_path, mode="append", data=data, engine=engine)
 
 
+@pytest.mark.parametrize("engine", ["pyarrow", "rust"])
+def test_write_large_decimal(tmp_path: pathlib.Path, engine):
+    data = pa.table(
+        {
+            "decimal_column": pa.array(
+                [Decimal(11111111111111111), Decimal(22222), Decimal("333333333333.33")]
+            )
+        }
+    )
+
+    write_deltalake(tmp_path, data, engine=engine)
+
+
 def test_float_values(tmp_path: pathlib.Path):
     data = pa.table(
         {

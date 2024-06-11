@@ -52,13 +52,22 @@ impl UserDefinedLogicalNodeCore for MetricObserver {
 
     fn from_template(
         &self,
-        _exprs: &[datafusion_expr::Expr],
+        exprs: &[datafusion_expr::Expr],
         inputs: &[datafusion_expr::LogicalPlan],
     ) -> Self {
-        MetricObserver {
+        self.with_exprs_and_inputs(exprs.to_vec(), inputs.to_vec())
+            .unwrap()
+    }
+
+    fn with_exprs_and_inputs(
+        &self,
+        _exprs: Vec<datafusion_expr::Expr>,
+        inputs: Vec<datafusion_expr::LogicalPlan>,
+    ) -> datafusion_common::Result<Self> {
+        Ok(MetricObserver {
             id: self.id.clone(),
             input: inputs[0].clone(),
             enable_pushdown: self.enable_pushdown,
-        }
+        })
     }
 }

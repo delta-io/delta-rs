@@ -119,7 +119,7 @@ pub async fn add_file(
     commit_to_log: bool,
 ) {
     let backend = table.object_store();
-    backend.put(path, data.clone()).await.unwrap();
+    backend.put(path, data.clone().into()).await.unwrap();
 
     if commit_to_log {
         let mut part_values = HashMap::new();

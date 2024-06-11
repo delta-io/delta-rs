@@ -119,7 +119,7 @@ def test_update_wrong_types_cast(tmp_path: pathlib.Path, sample_table: pa.Table)
 
     assert (
         str(excinfo.value)
-        == "Cast error: Cannot cast value 'hello_world' to value of Boolean type"
+        == "Generic DeltaTable error: Error during planning: Failed to coerce then ([Utf8]) and else (Some(Boolean)) to common types in CASE WHEN expression"
     )
 
 

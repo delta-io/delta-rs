@@ -19,7 +19,8 @@
 //! ````
 
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashMap,
+    iter,
     sync::Arc,
     time::{Instant, SystemTime, UNIX_EPOCH},
 };
@@ -50,8 +51,8 @@ use super::{
 };
 use super::{transaction::PROTOCOL, write::WriterStatsConfig};
 use crate::delta_datafusion::{
-    create_physical_expr_fix, expr::fmt_expr_to_sql, physical::MetricObserverExec,
-    DataFusionMixins, DeltaColumn, DeltaSessionContext,
+    expr::fmt_expr_to_sql, physical::MetricObserverExec, DataFusionMixins, DeltaColumn,
+    DeltaSessionContext,
 };
 use crate::delta_datafusion::{find_files, register_store, DeltaScanBuilder};
 use crate::kernel::{Action, AddCDCFile, Remove};
@@ -206,15 +207,15 @@ async fn execute(
         None => None,
     };
 
-    let updates: HashMap<Column, Expr> = updates
+    let updates = updates
         .into_iter()
         .map(|(key, expr)| match expr {
-            Expression::DataFusion(e) => Ok((key, e)),
+            Expression::DataFusion(e) => Ok((key.name, e)),
             Expression::String(s) => snapshot
                 .parse_predicate_expression(s, &state)
-                .map(|e| (key, e)),
+                .map(|e| (key.name, e)),
         })
-        .collect::<Result<HashMap<Column, Expr>, _>>()?;
+        .collect::<Result<HashMap<String, Expr>, _>>()?;
 
     let current_metadata = snapshot.metadata();
     let table_partition_cols = current_metadata.partition_columns.clone();
@@ -233,7 +234,6 @@ async fn execute(
     let input_schema = snapshot.input_schema()?;
     let tracker = CDCTracker::new(input_schema.clone());
 
-    let execution_props = state.execution_props();
     // For each rewrite evaluate the predicate and then modify each expression
     // to either compute the new value or obtain the old one then write these batches
     let scan = DeltaScanBuilder::new(&snapshot, log_store.clone(), &state)
@@ -266,25 +266,30 @@ async fn execute(
     let input_schema = Arc::new(ArrowSchema::new(fields));
     let input_dfschema: DFSchema = input_schema.as_ref().clone().try_into()?;
 
-    let mut expressions: Vec<(Arc<dyn PhysicalExpr>, String)> = Vec::new();
-    let scan_schema = scan.schema();
-    for (i, field) in scan_schema.fields().into_iter().enumerate() {
-        expressions.push((
-            Arc::new(expressions::Column::new(field.name(), i)),
-            field.name().to_owned(),
-        ));
-    }
-
     // Take advantage of how null counts are tracked in arrow arrays use the
     // null count to track how many records do NOT statisfy the predicate.  The
     // count is then exposed through the metrics through the `UpdateCountExec`
     // execution plan
-
     let predicate_null =
         when(predicate.clone(), lit(true)).otherwise(lit(ScalarValue::Boolean(None)))?;
-    let predicate_expr =
-        create_physical_expr_fix(predicate_null, &input_dfschema, execution_props)?;
-    expressions.push((predicate_expr, UPDATE_PREDICATE_COLNAME.to_string()));
+    let update_predicate_expr = state.create_physical_expr(predicate_null, &input_dfschema)?;
+
+    let expressions: Vec<(Arc<dyn PhysicalExpr>, String)> = scan
+        .schema()
+        .fields()
+        .into_iter()
+        .enumerate()
+        .map(|(idx, field)| -> (Arc<dyn PhysicalExpr>, String) {
+            (
+                Arc::new(expressions::Column::new(field.name(), idx)),
+                field.name().to_owned(),
+            )
+        })
+        .chain(iter::once((
+            update_predicate_expr,
+            UPDATE_PREDICATE_COLNAME.to_string(),
+        )))
+        .collect();
 
     let projection_predicate: Arc<dyn ExecutionPlan> =
         Arc::new(ProjectionExec::try_new(expressions, scan.clone())?);
@@ -307,66 +312,28 @@ async fn execute(
         },
     ));
 
-    // Perform another projection but instead calculate updated values based on
-    // the predicate value.  If the predicate is true then evalute the user
-    // provided expression otherwise return the original column value
-    //
-    // For each update column a new column with a name of __delta_rs_ + `original name` is created
-    let mut expressions: Vec<(Arc<dyn PhysicalExpr>, String)> = Vec::new();
-    let scan_schema = count_plan.schema();
-    for (i, field) in scan_schema.fields().into_iter().enumerate() {
-        expressions.push((
-            Arc::new(expressions::Column::new(field.name(), i)),
-            field.name().to_owned(),
-        ));
-    }
-
-    // Maintain a map from the original column name to its temporary column index
-    let mut map = HashMap::<String, usize>::new();
-    let mut control_columns = HashSet::<String>::new();
-    control_columns.insert(UPDATE_PREDICATE_COLNAME.to_string());
-
-    for (column, expr) in updates {
-        let expr = case(col(UPDATE_PREDICATE_COLNAME))
-            .when(lit(true), expr.to_owned())
-            .otherwise(col(column.to_owned()))?;
-        let predicate_expr = create_physical_expr_fix(expr, &input_dfschema, execution_props)?;
-        map.insert(column.name.clone(), expressions.len());
-        let c = "__delta_rs_".to_string() + &column.name;
-        expressions.push((predicate_expr, c.clone()));
-        control_columns.insert(c);
-    }
-
-    let projection_update: Arc<dyn ExecutionPlan> =
-        Arc::new(ProjectionExec::try_new(expressions, count_plan.clone())?);
-
-    // Project again to remove __delta_rs columns and rename update columns to their original name
-    let mut expressions: Vec<(Arc<dyn PhysicalExpr>, String)> = Vec::new();
-    let scan_schema = projection_update.schema();
-
-    for (i, field) in scan_schema.fields().into_iter().enumerate() {
-        if !control_columns.contains(field.name()) {
-            match map.get(field.name()) {
-                Some(value) => {
-                    expressions.push((
-                        Arc::new(expressions::Column::new(field.name(), *value)),
-                        field.name().to_owned(),
-                    ));
+    let expressions: DeltaResult<Vec<(Arc<dyn PhysicalExpr>, String)>> = count_plan
+        .schema()
+        .fields()
+        .into_iter()
+        .enumerate()
+        .map(|(idx, field)| {
+            let field_name = field.name();
+            let expr = match updates.get(field_name) {
+                Some(expr) => {
+                    let expr = case(col(UPDATE_PREDICATE_COLNAME))
+                        .when(lit(true), expr.to_owned())
+                        .otherwise(col(Column::from_qualified_name_ignore_case(field_name)))?;
+                    state.create_physical_expr(expr, &input_dfschema)?
                 }
-                None => {
-                    expressions.push((
-                        Arc::new(expressions::Column::new(field.name(), i)),
-                        field.name().to_owned(),
-                    ));
-                }
-            }
-        }
-    }
+                None => Arc::new(expressions::Column::new(field_name, idx)),
+            };
+            Ok((expr, field_name.to_owned()))
+        })
+        .collect();
 
-    let projection: Arc<dyn ExecutionPlan> = Arc::new(ProjectionExec::try_new(
-        expressions,
-        projection_update.clone(),
-    )?);
+    let projection: Arc<dyn ExecutionPlan> =
+        Arc::new(ProjectionExec::try_new(expressions?, count_plan.clone())?);
 
     let writer_stats_config = WriterStatsConfig::new(
         snapshot.table_config().num_indexed_cols(),
