@@ -72,7 +72,7 @@ aws dynamodb create-table \
 --provisioned-throughput ReadCapacityUnits=5,WriteCapacityUnits=5
 ```
 
-You can find additional information in the [delta-rs-documentation](https://docs.delta.io/latest/delta-storage.html#multi-cluster-setup), which also includes recommendations on configuring a time-to-live (TTL) for the table to avoid growing the table indefinitely.
+You can find additional information in the [Delta Lake documentation](https://docs.delta.io/latest/delta-storage.html#multi-cluster-setup), which also includes recommendations on configuring a time-to-live (TTL) for the table to avoid growing the table indefinitely.
 
 ### Enable unsafe writes in S3 (opt-in)
 
