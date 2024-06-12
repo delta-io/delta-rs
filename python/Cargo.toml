@@ -1,6 +1,6 @@
 [package]
 name = "deltalake-python"
-version = "0.18.0"
+version = "0.18.1"
 authors = ["Qingping Hou <dave2008713@gmail.com>", "Will Jones <willjones127@gmail.com>"]
 homepage = "https://github.com/delta-io/delta-rs"
 license = "Apache-2.0"
@@ -15,6 +15,8 @@ crate-type = ["cdylib"]
 doc = false
 
 [dependencies]
+delta_kernel.workspace = true
+
 # arrow
 arrow-schema = { workspace = true, features = ["serde"] }
 
@@ -41,8 +43,8 @@ reqwest = { version = "*", features = ["native-tls-vendored"] }
 deltalake-mount = { path = "../crates/mount" }
 
 [dependencies.pyo3]
-version = "0.20"
-features = ["extension-module", "abi3", "abi3-py38"]
+version = "0.21.1"
+features = ["extension-module", "abi3", "abi3-py38", "gil-refs"]
 
 [dependencies.deltalake]
 path = "../crates/deltalake"

@@ -32,7 +32,7 @@ use datafusion::execution::context::SessionState;
 use datafusion_common::Result as DFResult;
 use datafusion_common::{config::ConfigOptions, DFSchema, Result, ScalarValue, TableReference};
 use datafusion_expr::{
-    expr::InList, AggregateUDF, Between, BinaryExpr, Cast, Expr, GetIndexedField, Like, TableSource,
+    expr::InList, AggregateUDF, Between, BinaryExpr, Cast, Expr, Like, TableSource,
 };
 use datafusion_sql::planner::{ContextProvider, SqlToRel};
 use datafusion_sql::sqlparser::ast::escape_quoted_string;
@@ -49,7 +49,7 @@ pub(crate) struct DeltaContextProvider<'a> {
 }
 
 impl<'a> ContextProvider for DeltaContextProvider<'a> {
-    fn get_table_provider(&self, _name: TableReference) -> DFResult<Arc<dyn TableSource>> {
+    fn get_table_source(&self, _name: TableReference) -> DFResult<Arc<dyn TableSource>> {
         unimplemented!()
     }
 
@@ -73,19 +73,15 @@ impl<'a> ContextProvider for DeltaContextProvider<'a> {
         self.state.window_functions().get(name).cloned()
     }
 
-    fn get_table_source(&self, _name: TableReference) -> DFResult<Arc<dyn TableSource>> {
+    fn udf_names(&self) -> Vec<String> {
         unimplemented!()
     }
 
-    fn udfs_names(&self) -> Vec<String> {
+    fn udaf_names(&self) -> Vec<String> {
         unimplemented!()
     }
 
-    fn udafs_names(&self) -> Vec<String> {
-        unimplemented!()
-    }
-
-    fn udwfs_names(&self) -> Vec<String> {
+    fn udwf_names(&self) -> Vec<String> {
         unimplemented!()
     }
 }
@@ -198,7 +194,7 @@ impl<'a> Display for SqlFormat<'a> {
             Expr::IsNotFalse(expr) => write!(f, "{} IS NOT FALSE", SqlFormat { expr }),
             Expr::IsNotUnknown(expr) => write!(f, "{} IS NOT UNKNOWN", SqlFormat { expr }),
             Expr::BinaryExpr(expr) => write!(f, "{}", BinaryExprFormat { expr }),
-            Expr::ScalarFunction(func) => fmt_function(f, func.func_def.name(), false, &func.args),
+            Expr::ScalarFunction(func) => fmt_function(f, func.func.name(), false, &func.args),
             Expr::Cast(Cast { expr, data_type }) => {
                 write!(f, "arrow_cast({}, '{}')", SqlFormat { expr }, data_type)
             }
@@ -276,33 +272,6 @@ impl<'a> Display for SqlFormat<'a> {
                     write!(f, "{expr} IN ({})", expr_vec_fmt!(list))
                 }
             }
-            Expr::GetIndexedField(GetIndexedField { expr, field }) => match field {
-                datafusion_expr::GetFieldAccess::NamedStructField { name } => {
-                    write!(
-                        f,
-                        "{}[{}]",
-                        SqlFormat { expr },
-                        ScalarValueFormat { scalar: name }
-                    )
-                }
-                datafusion_expr::GetFieldAccess::ListIndex { key } => {
-                    write!(f, "{}[{}]", SqlFormat { expr }, SqlFormat { expr: key })
-                }
-                datafusion_expr::GetFieldAccess::ListRange {
-                    start,
-                    stop,
-                    stride,
-                } => {
-                    write!(
-                        f,
-                        "{expr}[{start}:{stop}:{stride}]",
-                        expr = SqlFormat { expr },
-                        start = SqlFormat { expr: start },
-                        stop = SqlFormat { expr: stop },
-                        stride = SqlFormat { expr: stride }
-                    )
-                }
-            },
             _ => Err(fmt::Error),
         }
     }
@@ -428,11 +397,12 @@ mod test {
     use datafusion::prelude::SessionContext;
     use datafusion_common::{Column, ScalarValue, ToDFSchema};
     use datafusion_expr::expr::ScalarFunction;
-    use datafusion_expr::{
-        col, lit, substring, BinaryExpr, Cast, Expr, ExprSchemable, ScalarFunctionDefinition,
-    };
+    use datafusion_expr::{col, lit, BinaryExpr, Cast, Expr, ExprSchemable};
     use datafusion_functions::core::arrow_cast;
+    use datafusion_functions::core::expr_ext::FieldAccessor;
     use datafusion_functions::encoding::expr_fn::decode;
+    use datafusion_functions::expr_fn::substring;
+    use datafusion_functions_array::expr_ext::{IndexAccessor, SliceAccessor};
     use datafusion_functions_array::expr_fn::cardinality;
 
     use crate::delta_datafusion::{DataFusionMixins, DeltaSessionContext};
@@ -542,7 +512,7 @@ mod test {
 
         let table = DeltaOps::new_in_memory()
             .create()
-            .with_columns(schema.fields().clone())
+            .with_columns(schema.fields().cloned())
             .await
             .unwrap();
         assert_eq!(table.version(), 0);
@@ -564,7 +534,7 @@ mod test {
                 override_expected_expr: Some(
                     datafusion_expr::Expr::ScalarFunction(
                         ScalarFunction {
-                            func_def: ScalarFunctionDefinition::UDF(arrow_cast()),
+                            func: arrow_cast(),
                             args: vec![
                                 lit(ScalarValue::Int64(Some(1))),
                                 lit(ScalarValue::Utf8(Some("Int32".into())))
@@ -671,7 +641,7 @@ mod test {
                     datafusion_expr::Expr::BinaryExpr(BinaryExpr {
                         left: Box::new(datafusion_expr::Expr::ScalarFunction(
                             ScalarFunction {
-                                func_def: ScalarFunctionDefinition::UDF(arrow_cast()),
+                                func: arrow_cast(),
                                 args: vec![
                                     col("value"),
                                     lit(ScalarValue::Utf8(Some("Utf8".into())))
@@ -685,19 +655,19 @@ mod test {
             },
             simple!(
                 col("_struct").field("a").eq(lit(20_i64)),
-                "_struct['a'] = 20".to_string()
+                "get_field(_struct, 'a') = 20".to_string()
             ),
             simple!(
                 col("_struct").field("nested").field("b").eq(lit(20_i64)),
-                "_struct['nested']['b'] = 20".to_string()
+                "get_field(get_field(_struct, 'nested'), 'b') = 20".to_string()
             ),
             simple!(
                 col("_list").index(lit(1_i64)).eq(lit(20_i64)),
-                "_list[1] = 20".to_string()
+                "array_element(_list, 1) = 20".to_string()
             ),
             simple!(
                 cardinality(col("_list").range(col("value"), lit(10_i64))),
-                "cardinality(_list[value:10:1])".to_string()
+                "cardinality(array_slice(_list, value, 10))".to_string()
             ),
             ParseTest {
                 expr: col("_timestamp_ntz").gt(lit(ScalarValue::TimestampMicrosecond(Some(1262304000000000), None))),
@@ -705,7 +675,7 @@ mod test {
                 override_expected_expr: Some(col("_timestamp_ntz").gt(
                     datafusion_expr::Expr::ScalarFunction(
                         ScalarFunction {
-                            func_def: ScalarFunctionDefinition::UDF(arrow_cast()),
+                            func: arrow_cast(),
                             args: vec![
                                 lit(ScalarValue::Utf8(Some("2010-01-01T00:00:00.000000".into()))),
                                 lit(ScalarValue::Utf8(Some("Timestamp(Microsecond, None)".into())))
@@ -723,7 +693,7 @@ mod test {
                 override_expected_expr: Some(col("_timestamp").gt(
                     datafusion_expr::Expr::ScalarFunction(
                         ScalarFunction {
-                            func_def: ScalarFunctionDefinition::UDF(arrow_cast()),
+                            func: arrow_cast(),
                             args: vec![
                                 lit(ScalarValue::Utf8(Some("2010-01-01T00:00:00.000000".into()))),
                                 lit(ScalarValue::Utf8(Some("Timestamp(Microsecond, Some(\"UTC\"))".into())))

@@ -4,12 +4,11 @@
 
 pub mod arrow;
 pub mod error;
-pub mod expressions;
 pub mod models;
+pub mod scalars;
 mod snapshot;
 
 pub use error::*;
-pub use expressions::*;
 pub use models::*;
 pub use snapshot::*;
 

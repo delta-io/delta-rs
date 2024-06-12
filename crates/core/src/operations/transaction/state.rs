@@ -5,19 +5,17 @@ use arrow::array::{ArrayRef, BooleanArray};
 use arrow::datatypes::{
     DataType, Field as ArrowField, Schema as ArrowSchema, SchemaRef as ArrowSchemaRef,
 };
+use datafusion::execution::context::SessionContext;
 use datafusion::physical_optimizer::pruning::{PruningPredicate, PruningStatistics};
 use datafusion_common::scalar::ScalarValue;
-use datafusion_common::Column;
+use datafusion_common::{Column, ToDFSchema};
 use datafusion_expr::Expr;
 use itertools::Itertools;
 use object_store::ObjectStore;
 use parquet::arrow::arrow_reader::ArrowReaderOptions;
 use parquet::arrow::async_reader::{ParquetObjectReader, ParquetRecordBatchStreamBuilder};
 
-use crate::delta_datafusion::{
-    get_null_of_arrow_type, logical_expr_to_physical_expr, to_correct_scalar_value,
-    DataFusionMixins,
-};
+use crate::delta_datafusion::{get_null_of_arrow_type, to_correct_scalar_value, DataFusionMixins};
 use crate::errors::DeltaResult;
 use crate::kernel::{Add, EagerSnapshot};
 use crate::table::state::DeltaTableState;
@@ -153,7 +151,9 @@ impl<'a> AddContainer<'a> {
     /// so evaluating expressions is inexact. However, excluded files are guaranteed (for a correct log)
     /// to not contain matches by the predicate expression.
     pub fn predicate_matches(&self, predicate: Expr) -> DeltaResult<impl Iterator<Item = &Add>> {
-        let expr = logical_expr_to_physical_expr(predicate, &self.schema);
+        //let expr = logical_expr_to_physical_expr(predicate, &self.schema);
+        let expr = SessionContext::new()
+            .create_physical_expr(predicate, &self.schema.clone().to_dfschema()?)?;
         let pruning_predicate = PruningPredicate::try_new(expr, self.schema.clone())?;
         Ok(self
             .inner

@@ -2,12 +2,12 @@
 use std::time::Duration;
 use std::{collections::HashMap, str::FromStr};
 
+use delta_kernel::column_mapping::ColumnMappingMode;
 use lazy_static::lazy_static;
 use serde::{Deserialize, Serialize};
 
-use crate::errors::DeltaTableError;
-
 use super::Constraint;
+use crate::errors::DeltaTableError;
 
 /// Typed property keys that can be defined on a delta table
 /// <https://docs.delta.io/latest/table-properties.html#delta-table-properties-reference>
@@ -458,49 +458,6 @@ impl FromStr for CheckpointPolicy {
             "v2" => Ok(Self::V2),
             _ => Err(DeltaTableError::Generic(
                 "Invalid string for CheckpointPolicy".into(),
-            )),
-        }
-    }
-}
-
-#[derive(Serialize, Deserialize, Debug, Copy, Clone, PartialEq)]
-/// The Column Mapping modes used for reading and writing data
-#[serde(rename_all = "camelCase")]
-pub enum ColumnMappingMode {
-    /// No column mapping is applied
-    None,
-    /// Columns are mapped by their field_id in parquet
-    Id,
-    /// Columns are mapped to a physical name
-    Name,
-}
-
-impl Default for ColumnMappingMode {
-    fn default() -> Self {
-        Self::None
-    }
-}
-
-impl AsRef<str> for ColumnMappingMode {
-    fn as_ref(&self) -> &str {
-        match self {
-            Self::None => "none",
-            Self::Id => "id",
-            Self::Name => "name",
-        }
-    }
-}
-
-impl FromStr for ColumnMappingMode {
-    type Err = DeltaTableError;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.to_ascii_lowercase().as_str() {
-            "none" => Ok(Self::None),
-            "id" => Ok(Self::Id),
-            "name" => Ok(Self::Name),
-            _ => Err(DeltaTableError::Generic(
-                "Invalid string for ColumnMappingMode".into(),
             )),
         }
     }

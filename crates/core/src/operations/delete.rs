@@ -37,8 +37,7 @@ use super::transaction::{CommitBuilder, CommitProperties, PROTOCOL};
 use super::write::WriterStatsConfig;
 use crate::delta_datafusion::expr::fmt_expr_to_sql;
 use crate::delta_datafusion::{
-    create_physical_expr_fix, find_files, register_store, DataFusionMixins, DeltaScanBuilder,
-    DeltaSessionContext,
+    find_files, register_store, DataFusionMixins, DeltaScanBuilder, DeltaSessionContext,
 };
 use crate::errors::DeltaResult;
 use crate::kernel::{Action, Add, Remove};
@@ -76,11 +75,11 @@ pub struct DeleteMetrics {
     /// Number of rows copied in the process of deleting files
     pub num_copied_rows: Option<usize>,
     /// Time taken to execute the entire operation
-    pub execution_time_ms: u128,
+    pub execution_time_ms: u64,
     /// Time taken to scan the file for matches
-    pub scan_time_ms: u128,
+    pub scan_time_ms: u64,
     /// Time taken to rewrite the matched files
-    pub rewrite_time_ms: u128,
+    pub rewrite_time_ms: u64,
 }
 
 impl super::Operation<()> for DeleteBuilder {}
@@ -149,8 +148,7 @@ async fn excute_non_empty_expr(
     // Apply the negation of the filter and rewrite files
     let negated_expression = Expr::Not(Box::new(Expr::IsTrue(Box::new(expression.clone()))));
 
-    let predicate_expr =
-        create_physical_expr_fix(negated_expression, &input_dfschema, state.execution_props())?;
+    let predicate_expr = state.create_physical_expr(negated_expression, &input_dfschema)?;
     let filter: Arc<dyn ExecutionPlan> =
         Arc::new(FilterExec::try_new(predicate_expr, scan.clone())?);
 
@@ -174,6 +172,7 @@ async fn excute_non_empty_expr(
         false,
         None,
         writer_stats_config,
+        None,
     )
     .await?
     .into_iter()
@@ -206,7 +205,7 @@ async fn execute(
 
     let scan_start = Instant::now();
     let candidates = find_files(&snapshot, log_store.clone(), &state, predicate.clone()).await?;
-    metrics.scan_time_ms = Instant::now().duration_since(scan_start).as_millis();
+    metrics.scan_time_ms = Instant::now().duration_since(scan_start).as_millis() as u64;
 
     let predicate = predicate.unwrap_or(Expr::Literal(ScalarValue::Boolean(Some(true))));
 
@@ -224,7 +223,7 @@ async fn execute(
             writer_properties,
         )
         .await?;
-        metrics.rewrite_time_ms = Instant::now().duration_since(write_start).as_millis();
+        metrics.rewrite_time_ms = Instant::now().duration_since(write_start).as_millis() as u64;
         add
     };
     let remove = candidates.candidates;
@@ -253,7 +252,7 @@ async fn execute(
         }))
     }
 
-    metrics.execution_time_ms = Instant::now().duration_since(exec_start).as_millis();
+    metrics.execution_time_ms = Instant::now().duration_since(exec_start).as_millis() as u64;
 
     commit_properties
         .app_metadata
@@ -354,7 +353,7 @@ mod tests {
 
         let table = DeltaOps::new_in_memory()
             .create()
-            .with_columns(table_schema.fields().clone())
+            .with_columns(table_schema.fields().cloned())
             .with_partition_columns(partitions.unwrap_or_default())
             .await
             .unwrap();

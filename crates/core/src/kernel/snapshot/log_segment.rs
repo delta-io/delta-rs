@@ -655,13 +655,11 @@ pub(super) mod tests {
     mod slow_store {
         use std::sync::Arc;
 
-        use bytes::Bytes;
         use futures::stream::BoxStream;
         use object_store::{
-            path::Path, GetOptions, GetResult, ListResult, MultipartId, ObjectMeta, ObjectStore,
-            PutOptions, PutResult, Result,
+            path::Path, GetOptions, GetResult, ListResult, MultipartUpload, ObjectMeta,
+            ObjectStore, PutMultipartOpts, PutOptions, PutPayload, PutResult, Result,
         };
-        use tokio::io::AsyncWrite;
 
         #[derive(Debug)]
         pub(super) struct SlowListStore {
@@ -679,24 +677,21 @@ pub(super) mod tests {
             async fn put_opts(
                 &self,
                 location: &Path,
-                bytes: Bytes,
+                bytes: PutPayload,
                 opts: PutOptions,
             ) -> Result<PutResult> {
                 self.store.put_opts(location, bytes, opts).await
             }
-            async fn put_multipart(
-                &self,
-                location: &Path,
-            ) -> Result<(MultipartId, Box<dyn AsyncWrite + Unpin + Send>)> {
+            async fn put_multipart(&self, location: &Path) -> Result<Box<dyn MultipartUpload>> {
                 self.store.put_multipart(location).await
             }
 
-            async fn abort_multipart(
+            async fn put_multipart_opts(
                 &self,
                 location: &Path,
-                multipart_id: &MultipartId,
-            ) -> Result<()> {
-                self.store.abort_multipart(location, multipart_id).await
+                opts: PutMultipartOpts,
+            ) -> Result<Box<dyn MultipartUpload>> {
+                self.store.put_multipart_opts(location, opts).await
             }
 
             async fn get_opts(&self, location: &Path, options: GetOptions) -> Result<GetResult> {

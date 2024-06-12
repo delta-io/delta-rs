@@ -83,6 +83,7 @@ pub fn create_partition_values<F: FileAction>(
                 partition_values: new_part_values.clone(),
                 extensions: None,
                 range: None,
+                statistics: None,
             };
 
             file_groups.entry(new_part_values).or_default().push(part);

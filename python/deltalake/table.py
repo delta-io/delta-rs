@@ -457,6 +457,7 @@ class DeltaTable:
         configuration: Optional[Mapping[str, Optional[str]]] = None,
         storage_options: Optional[Dict[str, str]] = None,
         custom_metadata: Optional[Dict[str, str]] = None,
+        raise_if_key_not_exists: bool = True,
     ) -> "DeltaTable":
         """`CREATE` or `CREATE_OR_REPLACE` a delta table given a table_uri.
 
@@ -471,8 +472,9 @@ class DeltaTable:
             name: User-provided identifier for this table.
             description: User-provided description for this table.
             configuration:  A map containing configuration options for the metadata action.
-            storage_options: options passed to the object store crate.
-            custom_metadata: custom metadata that will be added to the transaction commit.
+            storage_options: Options passed to the object store crate.
+            custom_metadata: Custom metadata that will be added to the transaction commit.
+            raise_if_key_not_exists: Whether to raise an error if the configuration uses keys that are not Delta keys
 
         Returns:
             DeltaTable: created delta table
@@ -506,6 +508,7 @@ class DeltaTable:
             schema,
             partition_by or [],
             mode,
+            raise_if_key_not_exists,
             name,
             description,
             configuration,
@@ -707,6 +710,13 @@ class DeltaTable:
             the current Schema registered in the transaction log
         """
         return self._table.schema
+
+    def files_by_partitions(self, partition_filters: Optional[FilterType]) -> List[str]:
+        """
+        Get the files for each partition
+
+        """
+        return self._table.files_by_partitions(partition_filters)
 
     def metadata(self) -> Metadata:
         """

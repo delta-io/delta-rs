@@ -11,6 +11,9 @@ pub type DeltaResult<T> = Result<T, DeltaTableError>;
 #[allow(missing_docs)]
 #[derive(thiserror::Error, Debug)]
 pub enum DeltaTableError {
+    #[error("Kernel error: {0}")]
+    KernelError(#[from] delta_kernel::error::Error),
+
     #[error("Delta protocol violation: {source}")]
     Protocol { source: ProtocolError },
 

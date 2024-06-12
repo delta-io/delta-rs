@@ -8,7 +8,9 @@ use deltalake_core::protocol::{DeltaOperation, SaveMode};
 use deltalake_core::storage::{GetResult, ObjectStoreResult};
 use deltalake_core::DeltaTable;
 use object_store::path::Path as StorePath;
-use object_store::{ObjectStore, PutOptions, PutResult};
+use object_store::{
+    MultipartUpload, ObjectStore, PutMultipartOpts, PutOptions, PutPayload, PutResult,
+};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::fs;
@@ -55,7 +57,7 @@ pub async fn create_test_table(
         .with_location(path)
         .with_table_name("test-table")
         .with_comment("A table for running tests")
-        .with_columns(schema.fields().clone())
+        .with_columns(schema.fields().cloned())
         .with_partition_columns(partition_columns)
         .with_configuration(config)
         .await
@@ -158,14 +160,14 @@ impl SlowStore {
 #[async_trait::async_trait]
 impl ObjectStore for SlowStore {
     /// Save the provided bytes to the specified location.
-    async fn put(&self, location: &StorePath, bytes: bytes::Bytes) -> ObjectStoreResult<PutResult> {
+    async fn put(&self, location: &StorePath, bytes: PutPayload) -> ObjectStoreResult<PutResult> {
         self.inner.put(location, bytes).await
     }
 
     async fn put_opts(
         &self,
         location: &StorePath,
-        bytes: bytes::Bytes,
+        bytes: PutPayload,
         options: PutOptions,
     ) -> ObjectStoreResult<PutResult> {
         self.inner.put_opts(location, bytes, options).await
@@ -272,18 +274,15 @@ impl ObjectStore for SlowStore {
     async fn put_multipart(
         &self,
         location: &StorePath,
-    ) -> ObjectStoreResult<(
-        object_store::MultipartId,
-        Box<dyn tokio::io::AsyncWrite + Unpin + Send>,
-    )> {
+    ) -> ObjectStoreResult<Box<dyn MultipartUpload>> {
         self.inner.put_multipart(location).await
     }
 
-    async fn abort_multipart(
+    async fn put_multipart_opts(
         &self,
         location: &StorePath,
-        multipart_id: &object_store::MultipartId,
-    ) -> ObjectStoreResult<()> {
-        self.inner.abort_multipart(location, multipart_id).await
+        options: PutMultipartOpts,
+    ) -> ObjectStoreResult<Box<dyn MultipartUpload>> {
+        self.inner.put_multipart_opts(location, options).await
     }
 }

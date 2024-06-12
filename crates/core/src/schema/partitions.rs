@@ -1,12 +1,13 @@
 //! Delta Table partition handling logic.
-//!
+
+use delta_kernel::expressions::Scalar;
 use serde::{Serialize, Serializer};
 use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::convert::TryFrom;
 
 use crate::errors::DeltaTableError;
-use crate::kernel::{DataType, PrimitiveType, Scalar};
+use crate::kernel::{scalars::ScalarExt, DataType, PrimitiveType};
 
 /// A special value used in Hive to represent the null partition in partitioned tables
 pub const NULL_PARTITION_VALUE_DATA_PATH: &str = "__HIVE_DEFAULT_PARTITION__";
@@ -32,6 +33,42 @@ pub enum PartitionValue {
     NotIn(Vec<String>),
 }
 
+#[derive(Clone, Debug, PartialEq)]
+struct ScalarHelper<'a>(&'a Scalar);
+
+impl PartialOrd for ScalarHelper<'_> {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        use Scalar::*;
+        match (self.0, other.0) {
+            (Null(_), Null(_)) => Some(Ordering::Equal),
+            (Integer(a), Integer(b)) => a.partial_cmp(b),
+            (Long(a), Long(b)) => a.partial_cmp(b),
+            (Short(a), Short(b)) => a.partial_cmp(b),
+            (Byte(a), Byte(b)) => a.partial_cmp(b),
+            (Float(a), Float(b)) => a.partial_cmp(b),
+            (Double(a), Double(b)) => a.partial_cmp(b),
+            (String(a), String(b)) => a.partial_cmp(b),
+            (Boolean(a), Boolean(b)) => a.partial_cmp(b),
+            (Timestamp(a), Timestamp(b)) => a.partial_cmp(b),
+            (TimestampNtz(a), TimestampNtz(b)) => a.partial_cmp(b),
+            (Date(a), Date(b)) => a.partial_cmp(b),
+            (Binary(a), Binary(b)) => a.partial_cmp(b),
+            (Decimal(a, p1, s1), Decimal(b, p2, s2)) => {
+                // TODO implement proper decimal comparison
+                if p1 != p2 || s1 != s2 {
+                    return None;
+                };
+                a.partial_cmp(b)
+            }
+            // TODO should we make an assumption about the ordering of nulls?
+            // rigth now this is only used for internal purposes.
+            (Null(_), _) => Some(Ordering::Less),
+            (_, Null(_)) => Some(Ordering::Greater),
+            _ => None,
+        }
+    }
+}
+
 /// A Struct used for filtering a DeltaTable partition by key and value.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PartitionFilter {
@@ -49,7 +86,7 @@ fn compare_typed_value(
     match data_type {
         DataType::Primitive(primitive_type) => {
             let other = primitive_type.parse_scalar(filter_value).ok()?;
-            partition_value.partial_cmp(&other)
+            ScalarHelper(partition_value).partial_cmp(&ScalarHelper(&other))
         }
         // NOTE: complex types are not supported as partition columns
         _ => None,

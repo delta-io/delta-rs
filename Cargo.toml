@@ -26,30 +26,33 @@ debug = true
 debug = "line-tables-only"
 
 [workspace.dependencies]
+delta_kernel = { version = "0.1.1" }
+# delta_kernel = { path = "../delta-kernel-rs/kernel" }
+
 # arrow
-arrow = { version = "51" }
-arrow-arith = { version = "51" }
-arrow-array = { version = "51", features = ["chrono-tz"] }
-arrow-buffer = { version = "51" }
-arrow-cast = { version = "51" }
-arrow-ipc = { version = "51" }
-arrow-json = { version = "51" }
-arrow-ord = { version = "51" }
-arrow-row = { version = "51" }
-arrow-schema = { version = "51" }
-arrow-select = { version = "51" }
-object_store = { version = "0.9" }
-parquet = { version = "51" }
+arrow = { version = "52" }
+arrow-arith = { version = "52" }
+arrow-array = { version = "52", features = ["chrono-tz"] }
+arrow-buffer = { version = "52" }
+arrow-cast = { version = "52" }
+arrow-ipc = { version = "52" }
+arrow-json = { version = "52" }
+arrow-ord = { version = "52" }
+arrow-row = { version = "52" }
+arrow-schema = { version = "52" }
+arrow-select = { version = "52" }
+object_store = { version = "0.10.1" }
+parquet = { version = "52" }
 
 # datafusion
-datafusion = { version = "37.1" }
-datafusion-expr = { version = "37.1" }
-datafusion-common = { version = "37.1" }
-datafusion-proto = { version = "37.1" }
-datafusion-sql = { version = "37.1" }
-datafusion-physical-expr = { version = "37.1" }
-datafusion-functions = { version = "37.1" }
-datafusion-functions-array = { version = "37.1" }
+datafusion = { version = "39" }
+datafusion-expr = { version = "39" }
+datafusion-common = { version = "39" }
+datafusion-proto = { version = "39" }
+datafusion-sql = { version = "39" }
+datafusion-physical-expr = { version = "39" }
+datafusion-functions = { version = "39" }
+datafusion-functions-array = { version = "39" }
 
 # serde
 serde = { version = "1.0.194", features = ["derive"] }

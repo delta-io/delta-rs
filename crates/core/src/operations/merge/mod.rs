@@ -502,7 +502,7 @@ impl MergeOperation {
                             relation: Some(TableReference::Bare { table }),
                             name,
                         } => {
-                            if table.eq(alias) {
+                            if table.as_ref() == alias {
                                 Column {
                                     relation: Some(r),
                                     name,
@@ -863,8 +863,8 @@ async fn try_construct_early_filter(
     table_snapshot: &DeltaTableState,
     session_state: &SessionState,
     source: &LogicalPlan,
-    source_name: &TableReference<'_>,
-    target_name: &TableReference<'_>,
+    source_name: &TableReference,
+    target_name: &TableReference,
 ) -> DeltaResult<Option<Expr>> {
     let table_metadata = table_snapshot.metadata();
     let partition_columns = &table_metadata.partition_columns;
@@ -1324,9 +1324,9 @@ async fn execute(
         let plan = projection.into_unoptimized_plan();
         let mut fields: Vec<Expr> = plan
             .schema()
-            .fields()
+            .columns()
             .iter()
-            .map(|f| col(f.qualified_column()))
+            .map(|f| col(f.clone()))
             .collect();
 
         fields.extend(new_columns.into_iter().map(|(name, ex)| ex.alias(name)));
@@ -1389,6 +1389,7 @@ async fn execute(
         safe_cast,
         None,
         writer_stats_config,
+        None,
     )
     .await?;
 
@@ -1594,7 +1595,7 @@ mod tests {
 
         let table = DeltaOps::new_in_memory()
             .create()
-            .with_columns(table_schema.fields().clone())
+            .with_columns(table_schema.fields().cloned())
             .with_partition_columns(partitions.unwrap_or_default())
             .await
             .unwrap();
