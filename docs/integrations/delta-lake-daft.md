@@ -77,6 +77,16 @@ The Delta table we have just loaded only has 5 rows. You can materialize it in m
 |  4 | Soraya       | Jala        | Germany   | NaN         |
 ```
 
+## Write to Delta Lake
+
+You can use `write_deltalake` to write a Daft DataFrame to a Delta table:
+
+```
+df.write_deltalake("tmp/daft-table", mode="overwrite")
+```
+
+Daft supports multiple write modes. See the [Daft documentation](https://www.getdaft.io/projects/docs/en/latest/api_docs/doc_gen/dataframe_methods/daft.DataFrame.write_deltalake.html#daft.DataFrame.write_deltalake) for more information.
+
 ## What can I do with a Daft DataFrame?
 
 Daft gives you [full-featured DataFrame functionality](https://www.getdaft.io/projects/docs/en/latest/user_guide/basic_concepts.html), similar to what you might be used to from pandas, Dask or PySpark.
