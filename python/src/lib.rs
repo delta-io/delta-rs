@@ -54,6 +54,7 @@ use deltalake::{DeltaOps, DeltaResult};
 use futures::future::join_all;
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
+use pyo3::pybacked::PyBackedStr;
 use pyo3::types::{PyDict, PyFrozenSet};
 use serde_json::{Map, Value};
 
@@ -64,9 +65,9 @@ use crate::schema::schema_to_pyobject;
 use crate::utils::rt;
 
 #[derive(FromPyObject)]
-enum PartitionFilterValue<'a> {
-    Single(&'a str),
-    Multiple(Vec<&'a str>),
+enum PartitionFilterValue {
+    Single(PyBackedStr),
+    Multiple(Vec<PyBackedStr>),
 }
 
 #[pyclass(module = "deltalake._internal")]
@@ -248,21 +249,10 @@ impl RawDeltaTable {
     pub fn files_by_partitions(
         &self,
         py: Python,
-        partitions_filters: Vec<(&str, &str, PartitionFilterValue)>,
+        partitions_filters: Vec<(PyBackedStr, PyBackedStr, PartitionFilterValue)>,
     ) -> PyResult<Vec<String>> {
         py.allow_threads(|| {
-            let partition_filters: Result<Vec<PartitionFilter>, DeltaTableError> =
-                partitions_filters
-                    .into_iter()
-                    .map(|filter| match filter {
-                        (key, op, PartitionFilterValue::Single(v)) => {
-                            PartitionFilter::try_from((key, op, v))
-                        }
-                        (key, op, PartitionFilterValue::Multiple(v)) => {
-                            PartitionFilter::try_from((key, op, v.as_slice()))
-                        }
-                    })
-                    .collect();
+            let partition_filters = convert_partition_filters(partitions_filters);
             match partition_filters {
                 Ok(filters) => Ok(self
                     ._table
@@ -279,7 +269,7 @@ impl RawDeltaTable {
     pub fn files(
         &self,
         py: Python,
-        partition_filters: Option<Vec<(&str, &str, PartitionFilterValue)>>,
+        partition_filters: Option<Vec<(PyBackedStr, PyBackedStr, PartitionFilterValue)>>,
     ) -> PyResult<Vec<String>> {
         py.allow_threads(|| {
             if let Some(filters) = partition_filters {
@@ -304,7 +294,7 @@ impl RawDeltaTable {
 
     pub fn file_uris(
         &self,
-        partition_filters: Option<Vec<(&str, &str, PartitionFilterValue)>>,
+        partition_filters: Option<Vec<(PyBackedStr, PyBackedStr, PartitionFilterValue)>>,
     ) -> PyResult<Vec<String>> {
         if let Some(filters) = partition_filters {
             let filters = convert_partition_filters(filters).map_err(PythonError::from)?;
@@ -322,9 +312,9 @@ impl RawDeltaTable {
     }
 
     #[getter]
-    pub fn schema(&self, py: Python) -> PyResult<PyObject> {
+    pub fn schema<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let schema: &StructType = self._table.get_schema().map_err(PythonError::from)?;
-        schema_to_pyobject(schema, py)
+        schema_to_pyobject(schema.to_owned(), py)
     }
 
     /// Run the Vacuum command on the Delta Table: list and delete files no longer referenced
@@ -422,7 +412,7 @@ impl RawDeltaTable {
     pub fn compact_optimize(
         &mut self,
         py: Python,
-        partition_filters: Option<Vec<(&str, &str, PartitionFilterValue)>>,
+        partition_filters: Option<Vec<(PyBackedStr, PyBackedStr, PartitionFilterValue)>>,
         target_size: Option<i64>,
         max_concurrent_tasks: Option<usize>,
         min_commit_interval: Option<u64>,
@@ -481,7 +471,7 @@ impl RawDeltaTable {
         &mut self,
         py: Python,
         z_order_columns: Vec<String>,
-        partition_filters: Option<Vec<(&str, &str, PartitionFilterValue)>>,
+        partition_filters: Option<Vec<(PyBackedStr, PyBackedStr, PartitionFilterValue)>>,
         target_size: Option<i64>,
         max_concurrent_tasks: Option<usize>,
         max_spill_size: usize,
@@ -852,7 +842,7 @@ impl RawDeltaTable {
     #[pyo3(signature = (target, *, ignore_missing_files = false, protocol_downgrade_allowed = false, custom_metadata=None))]
     pub fn restore(
         &mut self,
-        target: Option<&PyAny>,
+        target: Option<&Bound<'_, PyAny>>,
         ignore_missing_files: bool,
         protocol_downgrade_allowed: bool,
         custom_metadata: Option<HashMap<String, String>>,
@@ -865,9 +855,9 @@ impl RawDeltaTable {
             if let Ok(version) = val.extract::<i64>() {
                 cmd = cmd.with_version_to_restore(version)
             }
-            if let Ok(ds) = val.extract::<&str>() {
+            if let Ok(ds) = val.extract::<PyBackedStr>() {
                 let datetime = DateTime::<Utc>::from(
-                    DateTime::<FixedOffset>::parse_from_rfc3339(ds).map_err(|err| {
+                    DateTime::<FixedOffset>::parse_from_rfc3339(ds.as_ref()).map_err(|err| {
                         PyValueError::new_err(format!("Failed to parse datetime string: {err}"))
                     })?,
                 );
@@ -913,8 +903,8 @@ impl RawDeltaTable {
         &mut self,
         py: Python<'py>,
         schema: PyArrowType<ArrowSchema>,
-        partition_filters: Option<Vec<(&str, &str, PartitionFilterValue)>>,
-    ) -> PyResult<Vec<(String, Option<&'py PyAny>)>> {
+        partition_filters: Option<Vec<(PyBackedStr, PyBackedStr, PartitionFilterValue)>>,
+    ) -> PyResult<Vec<(String, Option<Bound<'py, PyAny>>)>> {
         let path_set = match partition_filters {
             Some(filters) => Some(HashSet::<_>::from_iter(
                 self.files_by_partitions(py, filters)?.iter().cloned(),
@@ -942,9 +932,9 @@ impl RawDeltaTable {
 
     fn get_active_partitions<'py>(
         &self,
-        partitions_filters: Option<Vec<(&str, &str, PartitionFilterValue)>>,
+        partitions_filters: Option<Vec<(PyBackedStr, PyBackedStr, PartitionFilterValue)>>,
         py: Python<'py>,
-    ) -> PyResult<&'py PyFrozenSet> {
+    ) -> PyResult<Bound<'py, PyFrozenSet>> {
         let column_names: HashSet<&str> = self
             ._table
             .get_schema()
@@ -962,10 +952,13 @@ impl RawDeltaTable {
             .collect();
 
         if let Some(filters) = &partitions_filters {
-            let unknown_columns: Vec<&str> = filters
+            let unknown_columns: Vec<&PyBackedStr> = filters
                 .iter()
-                .map(|(column_name, _, _)| *column_name)
-                .filter(|column_name| !column_names.contains(column_name))
+                .map(|(column_name, _, _)| column_name)
+                .filter(|column_name| {
+                    let column_name: &'_ str = column_name.as_ref();
+                    !column_names.contains(column_name)
+                })
                 .collect();
             if !unknown_columns.is_empty() {
                 return Err(PyValueError::new_err(format!(
@@ -973,10 +966,13 @@ impl RawDeltaTable {
                 )));
             }
 
-            let non_partition_columns: Vec<&str> = filters
+            let non_partition_columns: Vec<&PyBackedStr> = filters
                 .iter()
-                .map(|(column_name, _, _)| *column_name)
-                .filter(|column_name| !partition_columns.contains(column_name))
+                .map(|(column_name, _, _)| column_name)
+                .filter(|column_name| {
+                    let column_name: &'_ str = column_name.as_ref();
+                    !partition_columns.contains(column_name)
+                })
                 .collect();
 
             if !non_partition_columns.is_empty() {
@@ -1019,11 +1015,11 @@ impl RawDeltaTable {
             })
             .collect();
 
-        let active_partitions: Vec<&'py PyFrozenSet> = active_partitions
+        let active_partitions = active_partitions
             .into_iter()
-            .map(|part| PyFrozenSet::new(py, part.iter()))
-            .collect::<Result<_, PyErr>>()?;
-        PyFrozenSet::new(py, active_partitions)
+            .map(|part| PyFrozenSet::new_bound(py, part.iter()))
+            .collect::<Result<Vec<Bound<'py, _>>, PyErr>>()?;
+        PyFrozenSet::new_bound(py, &active_partitions)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1034,7 +1030,7 @@ impl RawDeltaTable {
         mode: &str,
         partition_by: Vec<String>,
         schema: PyArrowType<ArrowSchema>,
-        partitions_filters: Option<Vec<(&str, &str, PartitionFilterValue)>>,
+        partitions_filters: Option<Vec<(PyBackedStr, PyBackedStr, PartitionFilterValue)>>,
         custom_metadata: Option<HashMap<String, String>>,
     ) -> PyResult<()> {
         py.allow_threads(|| {
@@ -1253,7 +1249,6 @@ impl RawDeltaTable {
     #[pyo3(signature = (dry_run = true, custom_metadata = None))]
     pub fn repair(
         &mut self,
-        _py: Python,
         dry_run: bool,
         custom_metadata: Option<HashMap<String, String>>,
     ) -> PyResult<String> {
@@ -1317,23 +1312,32 @@ fn set_writer_properties(
     Ok(properties.build())
 }
 
-fn convert_partition_filters<'a>(
-    partitions_filters: Vec<(&'a str, &'a str, PartitionFilterValue)>,
+fn convert_partition_filters(
+    partitions_filters: Vec<(PyBackedStr, PyBackedStr, PartitionFilterValue)>,
 ) -> Result<Vec<PartitionFilter>, DeltaTableError> {
     partitions_filters
         .into_iter()
         .map(|filter| match filter {
-            (key, op, PartitionFilterValue::Single(v)) => PartitionFilter::try_from((key, op, v)),
+            (key, op, PartitionFilterValue::Single(v)) => {
+                let key: &'_ str = key.as_ref();
+                let op: &'_ str = op.as_ref();
+                let v: &'_ str = v.as_ref();
+                PartitionFilter::try_from((key, op, v))
+            }
             (key, op, PartitionFilterValue::Multiple(v)) => {
+                let key: &'_ str = key.as_ref();
+                let op: &'_ str = op.as_ref();
+                let v: Vec<&'_ str> = v.iter().map(|v| v.as_ref()).collect();
                 PartitionFilter::try_from((key, op, v.as_slice()))
             }
         })
         .collect()
 }
 
-fn scalar_to_py(value: &Scalar, py_date: &PyAny, py: Python) -> PyResult<PyObject> {
+fn scalar_to_py<'py>(value: &Scalar, py_date: &Bound<'py, PyAny>) -> PyResult<Bound<'py, PyAny>> {
     use Scalar::*;
 
+    let py = py_date.py();
     let val = match value {
         Null(_) => py.None(),
         Boolean(val) => val.to_object(py),
@@ -1363,15 +1367,15 @@ fn scalar_to_py(value: &Scalar, py_date: &PyAny, py: Python) -> PyResult<PyObjec
         }
         Decimal(_, _, _) => value.serialize().to_object(py),
         Struct(data) => {
-            let py_struct = PyDict::new(py);
+            let py_struct = PyDict::new_bound(py);
             for (field, value) in data.fields().iter().zip(data.values().iter()) {
-                py_struct.set_item(field.name(), scalar_to_py(value, py_date, py)?)?;
+                py_struct.set_item(field.name(), scalar_to_py(value, py_date)?)?;
             }
             py_struct.to_object(py)
         }
     };
 
-    Ok(val)
+    Ok(val.into_bound(py))
 }
 
 /// Create expression that file statistics guarantee to be true.
@@ -1390,14 +1394,14 @@ fn filestats_to_expression_next<'py>(
     py: Python<'py>,
     schema: &PyArrowType<ArrowSchema>,
     file_info: LogicalFile<'_>,
-) -> PyResult<Option<&'py PyAny>> {
-    let ds = PyModule::import(py, "pyarrow.dataset")?;
+) -> PyResult<Option<Bound<'py, PyAny>>> {
+    let ds = PyModule::import_bound(py, "pyarrow.dataset")?;
     let py_field = ds.getattr("field")?;
-    let pa = PyModule::import(py, "pyarrow")?;
-    let py_date = Python::import(py, "datetime")?.getattr("date")?;
-    let mut expressions: Vec<PyResult<&PyAny>> = Vec::new();
+    let pa = PyModule::import_bound(py, "pyarrow")?;
+    let py_date = Python::import_bound(py, "datetime")?.getattr("date")?;
+    let mut expressions = Vec::new();
 
-    let cast_to_type = |column_name: &String, value: PyObject, schema: &ArrowSchema| {
+    let cast_to_type = |column_name: &String, value: &Bound<'py, PyAny>, schema: &ArrowSchema| {
         let column_type = schema
             .field_with_name(column_name)
             .map_err(|_| {
@@ -1416,7 +1420,7 @@ fn filestats_to_expression_next<'py>(
             if !value.is_null() {
                 // value is a string, but needs to be parsed into appropriate type
                 let converted_value =
-                    cast_to_type(&column, scalar_to_py(value, py_date, py)?, &schema.0)?;
+                    cast_to_type(&column, &scalar_to_py(value, &py_date)?, &schema.0)?;
                 expressions.push(
                     py_field
                         .call1((&column,))?
@@ -1453,7 +1457,7 @@ fn filestats_to_expression_next<'py>(
                 Scalar::Struct(_) => {}
                 _ => {
                     let maybe_minimum =
-                        cast_to_type(field.name(), scalar_to_py(value, py_date, py)?, &schema.0);
+                        cast_to_type(field.name(), &scalar_to_py(value, &py_date)?, &schema.0);
                     if let Ok(minimum) = maybe_minimum {
                         let field_expr = py_field.call1((field.name(),))?;
                         let expr = field_expr.call_method1("__ge__", (minimum,));
@@ -1480,7 +1484,7 @@ fn filestats_to_expression_next<'py>(
                 Scalar::Struct(_) => {}
                 _ => {
                     let maybe_maximum =
-                        cast_to_type(field.name(), scalar_to_py(value, py_date, py)?, &schema.0);
+                        cast_to_type(field.name(), &scalar_to_py(value, &py_date)?, &schema.0);
                     if let Ok(maximum) = maybe_maximum {
                         let field_expr = py_field.call1((field.name(),))?;
                         let expr = field_expr.call_method1("__le__", (maximum,));
@@ -1859,29 +1863,41 @@ impl PyDeltaDataChecker {
 
 #[pymodule]
 // module name need to match project name
-fn _internal(py: Python, m: &PyModule) -> PyResult<()> {
+fn _internal(m: &Bound<'_, PyModule>) -> PyResult<()> {
     use crate::error::{CommitFailedError, DeltaError, SchemaMismatchError, TableNotFoundError};
-
     deltalake::aws::register_handlers(None);
     deltalake::azure::register_handlers(None);
     deltalake::gcp::register_handlers(None);
     deltalake_mount::register_handlers(None);
 
-    m.add("DeltaError", py.get_type::<DeltaError>())?;
-    m.add("CommitFailedError", py.get_type::<CommitFailedError>())?;
-    m.add("DeltaProtocolError", py.get_type::<DeltaProtocolError>())?;
-    m.add("TableNotFoundError", py.get_type::<TableNotFoundError>())?;
-    m.add("SchemaMismatchError", py.get_type::<SchemaMismatchError>())?;
+    let py = m.py();
+    m.add("DeltaError", py.get_type_bound::<DeltaError>())?;
+    m.add(
+        "CommitFailedError",
+        py.get_type_bound::<CommitFailedError>(),
+    )?;
+    m.add(
+        "DeltaProtocolError",
+        py.get_type_bound::<DeltaProtocolError>(),
+    )?;
+    m.add(
+        "TableNotFoundError",
+        py.get_type_bound::<TableNotFoundError>(),
+    )?;
+    m.add(
+        "SchemaMismatchError",
+        py.get_type_bound::<SchemaMismatchError>(),
+    )?;
 
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn")).init();
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
-    m.add_function(pyo3::wrap_pyfunction!(rust_core_version, m)?)?;
-    m.add_function(pyo3::wrap_pyfunction!(create_deltalake, m)?)?;
-    m.add_function(pyo3::wrap_pyfunction!(write_new_deltalake, m)?)?;
-    m.add_function(pyo3::wrap_pyfunction!(write_to_deltalake, m)?)?;
-    m.add_function(pyo3::wrap_pyfunction!(convert_to_deltalake, m)?)?;
-    m.add_function(pyo3::wrap_pyfunction!(batch_distinct, m)?)?;
-    m.add_function(pyo3::wrap_pyfunction!(
+    m.add_function(pyo3::wrap_pyfunction_bound!(rust_core_version, m)?)?;
+    m.add_function(pyo3::wrap_pyfunction_bound!(create_deltalake, m)?)?;
+    m.add_function(pyo3::wrap_pyfunction_bound!(write_new_deltalake, m)?)?;
+    m.add_function(pyo3::wrap_pyfunction_bound!(write_to_deltalake, m)?)?;
+    m.add_function(pyo3::wrap_pyfunction_bound!(convert_to_deltalake, m)?)?;
+    m.add_function(pyo3::wrap_pyfunction_bound!(batch_distinct, m)?)?;
+    m.add_function(pyo3::wrap_pyfunction_bound!(
         get_num_idx_cols_and_stats_columns,
         m
     )?)?;
