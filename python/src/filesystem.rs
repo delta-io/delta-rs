@@ -65,8 +65,8 @@ impl DeltaFileSystemHandler {
 
     #[classmethod]
     #[pyo3(signature = (table, options = None, known_sizes = None))]
-    fn from_table<'py>(
-        _cls: &Bound<'py, PyType>,
+    fn from_table(
+        _cls: &Bound<'_, PyType>,
         table: &RawDeltaTable,
         options: Option<HashMap<String, String>>,
         known_sizes: Option<HashMap<String, i64>>,
@@ -610,7 +610,7 @@ impl ObjectOutputStream {
             Ok(_) => Ok(()),
             Err(err) => {
                 rt().block_on(self.upload.abort())
-                    .map_err(|err| PythonError::from(err))?;
+                    .map_err(PythonError::from)?;
                 Err(PyIOError::new_err(err.to_string()))
             }
         })

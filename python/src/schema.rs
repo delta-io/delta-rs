@@ -22,10 +22,7 @@ use std::collections::HashMap;
 
 // Decimal is separate special case, since it has parameters
 
-fn schema_type_to_python<'py>(
-    schema_type: DataType,
-    py: Python<'py>,
-) -> PyResult<Bound<'py, PyAny>> {
+fn schema_type_to_python(schema_type: DataType, py: Python<'_>) -> PyResult<Bound<'_, PyAny>> {
     match schema_type {
         DataType::Primitive(data_type) => Ok((PrimitiveType::new(data_type.to_string())?)
             .into_py(py)
@@ -666,10 +663,7 @@ impl StructType {
     }
 }
 
-pub fn schema_to_pyobject<'py>(
-    schema: DeltaStructType,
-    py: Python<'py>,
-) -> PyResult<Bound<'py, PyAny>> {
+pub fn schema_to_pyobject(schema: DeltaStructType, py: Python<'_>) -> PyResult<Bound<'_, PyAny>> {
     let fields = schema.fields().map(|field| Field {
         inner: field.clone(),
     });
@@ -816,10 +810,10 @@ impl PySchema {
 
     #[staticmethod]
     #[pyo3(text_signature = "(data_type)")]
-    fn from_pyarrow<'py>(
+    fn from_pyarrow(
         data_type: PyArrowType<ArrowSchema>,
-        py: Python<'py>,
-    ) -> PyResult<Bound<'py, PyAny>> {
+        py: Python<'_>,
+    ) -> PyResult<Bound<'_, PyAny>> {
         let inner_type: DeltaStructType = (&data_type.0)
             .try_into()
             .map_err(|err: ArrowError| PyException::new_err(err.to_string()))?;

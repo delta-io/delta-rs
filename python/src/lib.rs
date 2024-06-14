@@ -1317,20 +1317,18 @@ fn convert_partition_filters(
 ) -> Result<Vec<PartitionFilter>, DeltaTableError> {
     partitions_filters
         .into_iter()
-        .map(|filter| {
-            match filter {
-                (key, op, PartitionFilterValue::Single(v)) => {
-                    let key: &'_ str = key.as_ref();
-                    let op: &'_ str = op.as_ref();
-                    let v: &'_ str = v.as_ref();
-                    PartitionFilter::try_from((key, op, v))
-                }
-                (key, op, PartitionFilterValue::Multiple(v)) => {
-                    let key: &'_ str = key.as_ref();
-                    let op: &'_ str = op.as_ref();
-                    let v: Vec<&'_ str> = v.iter().map(|v| v.as_ref()).collect();
-                    PartitionFilter::try_from((key, op, v.as_slice()))
-                }
+        .map(|filter| match filter {
+            (key, op, PartitionFilterValue::Single(v)) => {
+                let key: &'_ str = key.as_ref();
+                let op: &'_ str = op.as_ref();
+                let v: &'_ str = v.as_ref();
+                PartitionFilter::try_from((key, op, v))
+            }
+            (key, op, PartitionFilterValue::Multiple(v)) => {
+                let key: &'_ str = key.as_ref();
+                let op: &'_ str = op.as_ref();
+                let v: Vec<&'_ str> = v.iter().map(|v| v.as_ref()).collect();
+                PartitionFilter::try_from((key, op, v.as_slice()))
             }
         })
         .collect()
