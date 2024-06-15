@@ -698,9 +698,12 @@ impl TableProvider for DeltaTable {
 
     fn supports_filters_pushdown(
         &self,
-        _filter: &[&Expr],
+        filter: &[&Expr],
     ) -> DataFusionResult<Vec<TableProviderFilterPushDown>> {
-        Ok(vec![TableProviderFilterPushDown::Inexact])
+        Ok(filter
+            .into_iter()
+            .map(|_| TableProviderFilterPushDown::Inexact)
+            .collect())
     }
 
     fn statistics(&self) -> Option<Statistics> {
@@ -2109,5 +2112,48 @@ mod tests {
         let actual = df.collect().await.unwrap();
         assert_batches_sorted_eq!(&expected, &actual);
         */
+    }
+
+    #[tokio::test]
+    async fn test_multiple_predicate_pushdown() {
+        use crate::{datafusion::prelude::SessionContext, DeltaTableBuilder};
+        let schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("moDified", DataType::Utf8, true),
+            Field::new("id", DataType::Utf8, true),
+            Field::new("vaLue", DataType::Int32, true),
+        ]));
+
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(arrow::array::StringArray::from(vec![
+                    "2021-02-01",
+                    "2021-02-01",
+                    "2021-02-02",
+                    "2021-02-02",
+                ])),
+                Arc::new(arrow::array::StringArray::from(vec!["A", "B", "C", "D"])),
+                Arc::new(arrow::array::Int32Array::from(vec![1, 10, 20, 100])),
+            ],
+        )
+        .unwrap();
+        // write some data
+        let table = crate::DeltaOps::new_in_memory()
+            .write(vec![batch.clone()])
+            .with_save_mode(crate::protocol::SaveMode::Append)
+            .await
+            .unwrap();
+
+        let datafusion = SessionContext::new();
+        let table = Arc::new(table);
+
+        datafusion.register_table("snapshot", table).unwrap();
+
+        let df = datafusion
+            .sql("select * from snapshot where id > 10000 and id < 20000")
+            .await
+            .unwrap();
+
+        df.collect().await.unwrap();
     }
 }
