@@ -1,3 +1,4 @@
+#![cfg(feature = "integration_test")]
 use deltalake_hdfs::register_handlers;
 use deltalake_test::utils::*;
 use hdfs_native::{minidfs::MiniDfs, Client};

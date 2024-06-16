@@ -43,13 +43,13 @@ jobs:
           override: true
 
       - name: build and lint with clippy
-        run: cargo clippy --features azure,datafusion,s3,gcs,glue --tests
+        run: cargo clippy --features azure,datafusion,s3,gcs,glue,hdfs --tests
 
       - name: Spot-check build for native-tls features
         run: cargo clippy --no-default-features --features azure,datafusion,s3-native-tls,gcs,glue --tests
 
       - name: Check docs
-        run: cargo doc --features azure,datafusion,s3,gcs,glue
+        run: cargo doc --features azure,datafusion,s3,gcs,glue,hdfs
 
       - name: Check no default features (except rustls)
         run: cargo check --no-default-features --features rustls
