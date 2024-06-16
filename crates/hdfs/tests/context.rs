@@ -1,4 +1,4 @@
-use deltalake_hdfs_native::register_handlers;
+use deltalake_hdfs::register_handlers;
 use deltalake_test::utils::*;
 use hdfs_native::{minidfs::MiniDfs, Client};
 use std::{
