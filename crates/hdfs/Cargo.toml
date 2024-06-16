@@ -1,5 +1,5 @@
 [package]
-name = "deltalake-hdfs-native"
+name = "deltalake-hdfs"
 version = "0.1.0"
 authors.workspace = true
 keywords.workspace = true
