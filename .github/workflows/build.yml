@@ -114,12 +114,24 @@ jobs:
           toolchain: stable
           override: true
 
+      # Install Java and Hadoop for HDFS integration tests
+      - uses: actions/setup-java@v4
+        with:
+          distribution: "temurin"
+          java-version: "17"
+
+      - name: Download Hadoop
+        run: |
+          wget -q https://dlcdn.apache.org/hadoop/common/hadoop-3.4.0/hadoop-3.4.0.tar.gz
+          tar -xf hadoop-3.4.0.tar.gz -C $GITHUB_WORKSPACE
+          echo "$GITHUB_WORKSPACE/hadoop-3.4.0/bin" >> $GITHUB_PATH
+
       - name: Start emulated services
         run: docker-compose up -d
 
       - name: Run tests with rustls (default)
         run: |
-          cargo test --features integration_test,azure,s3,gcs,datafusion
+          cargo test --features integration_test,azure,s3,gcs,datafusion,hdfs
 
       - name: Run tests with native-tls
         run: |
