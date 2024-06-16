@@ -12,8 +12,9 @@ use deltalake::kernel::{
 };
 use pyo3::exceptions::{PyException, PyNotImplementedError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::IntoPyDict;
 use std::collections::HashMap;
+
+use crate::utils::warn;
 
 // PyO3 doesn't yet support converting classes with inheritance with Python
 // objects within Rust code, which we need here. So for now, we implement
@@ -717,16 +718,11 @@ impl PySchema {
     }
 
     fn json<'py>(self_: PyRef<'_, Self>, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        let warnings_warn = PyModule::import_bound(py, "warnings")?.getattr("warn")?;
-        let deprecation_warning =
-            PyModule::import_bound(py, "builtins")?.getattr("DeprecationWarning")?;
-        let kwargs: [(&str, Bound<'py, PyAny>); 2] = [
-            ("category", deprecation_warning),
-            ("stacklevel", 2.to_object(py).into_bound(py)),
-        ];
-        warnings_warn.call(
-            ("Schema.json() is deprecated. Use json.loads(Schema.to_json()) instead.",),
-            Some(&kwargs.into_py_dict_bound(py)),
+        warn(
+            py,
+            "DeprecationWarning",
+            "Schema.json() is deprecated. Use json.loads(Schema.to_json()) instead.",
+            Some(2),
         )?;
 
         let super_ = self_.as_ref();
