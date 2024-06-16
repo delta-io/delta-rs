@@ -21,9 +21,8 @@ impl ObjectStoreFactory for HdfsFactory {
         options: &StorageOptions,
     ) -> DeltaResult<(ObjectStoreRef, Path)> {
         let client = Client::new_with_config(url.as_str(), options.0.clone()).unwrap();
-        let store: ObjectStoreRef = Arc::new(HdfsObjectStore::new(client));
+        let store: ObjectStoreRef = Arc::new(HdfsObjectStore::new(Arc::new(client)));
         let prefix = Path::parse(url.path())?;
-        println!("Creating store with prefix {} from url {}", prefix, url);
         Ok((url_prefix_handler(store, prefix.clone()), prefix))
     }
 }
@@ -44,7 +43,6 @@ pub fn register_handlers(_additional_prefixes: Option<Url>) {
     let factory = Arc::new(HdfsFactory {});
     for scheme in ["hdfs", "viewfs"].iter() {
         let url = Url::parse(&format!("{}://", scheme)).unwrap();
-        println!("Registering {}", url);
         factories().insert(url.clone(), factory.clone());
         logstores().insert(url.clone(), factory.clone());
     }
