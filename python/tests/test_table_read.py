@@ -507,7 +507,11 @@ def test_delta_table_with_filters():
 
     filter_expr = ds.field("date") > "2021-02-20"
     data = dataset.to_table(filter=filter_expr)
-    assert len(dt.to_pandas(filters=[("date", ">", "2021-02-20")])) == data.num_rows
+    assert (
+        len(dt.to_pandas(filters=[("date", ">", "2021-02-20")]))
+        == len(dt.to_pandas(filters=filter_expr))
+        == data.num_rows
+    )
 
     filter_expr = (ds.field("date") > "2021-02-20") | (
         ds.field("state").isin(["Alabama", "Wyoming"])
@@ -522,6 +526,7 @@ def test_delta_table_with_filters():
                 ]
             )
         )
+        == len(dt.to_pandas(filters=filter_expr))
         == data.num_rows
     )
 
@@ -538,6 +543,7 @@ def test_delta_table_with_filters():
                 ]
             )
         )
+        == len(dt.to_pandas(filters=filter_expr))
         == data.num_rows
     )
 
