@@ -88,7 +88,8 @@ use self::conflict_checker::{CommitConflictError, TransactionInfo, WinningCommit
 use crate::checkpoints::create_checkpoint_for;
 use crate::errors::DeltaTableError;
 use crate::kernel::{
-    Action, ActionType, CommitInfo, EagerSnapshot, Metadata, Protocol, ReaderFeatures, Snapshot, Transaction, WriterFeatures
+    Action, ActionType, CommitInfo, EagerSnapshot, Metadata, Protocol, ReaderFeatures, Snapshot,
+    Transaction, WriterFeatures,
 };
 use crate::logstore::LogStoreRef;
 use crate::protocol::DeltaOperation;
@@ -227,7 +228,11 @@ pub struct LazySnapshot {
 
 impl LazySnapshot {
     /// TODO
-    pub fn new(inner: Snapshot, store: Arc<dyn ObjectStore>, tracked_actions: HashSet<ActionType>) -> Self {
+    pub fn new(
+        inner: Snapshot,
+        store: Arc<dyn ObjectStore>,
+        tracked_actions: HashSet<ActionType>,
+    ) -> Self {
         Self {
             inner,
             store,
@@ -235,7 +240,6 @@ impl LazySnapshot {
             eager: tokio::sync::OnceCell::new(),
         }
     }
-
 }
 
 #[async_trait]
@@ -253,10 +257,17 @@ impl TableReference for LazySnapshot {
     }
 
     async fn eager_snapshot(&self) -> DeltaResult<&EagerSnapshot> {
-        self.eager.get_or_try_init(|| async {
-            let eager = EagerSnapshot::try_from_snapshot(&self.inner, self.store.clone(), self.tracked_actions.clone()).await?;
-            Ok::<_, DeltaTableError>(eager)
-        }).await
+        self.eager
+            .get_or_try_init(|| async {
+                let eager = EagerSnapshot::try_from_snapshot(
+                    &self.inner,
+                    self.store.clone(),
+                    self.tracked_actions.clone(),
+                )
+                .await?;
+                Ok::<_, DeltaTableError>(eager)
+            })
+            .await
     }
 
     fn version(&self) -> i64 {
