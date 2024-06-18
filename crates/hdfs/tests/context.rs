@@ -1,7 +1,7 @@
 #![cfg(feature = "integration_test")]
 use deltalake_hdfs::register_handlers;
 use deltalake_test::utils::*;
-use hdfs_native::{minidfs::MiniDfs, Client};
+use hdfs_native_object_store::minidfs::MiniDfs;
 use std::{
     collections::HashSet,
     process::{Command, ExitStatus},
@@ -9,19 +9,15 @@ use std::{
 
 use which::which;
 
-/// Kinds of storage integration
-#[allow(dead_code)]
 pub struct HdfsIntegration {
     minidfs: MiniDfs,
-    client: Client,
 }
 
 impl Default for HdfsIntegration {
     fn default() -> Self {
         register_handlers(None);
         let minidfs = MiniDfs::with_features(&HashSet::new());
-        let client = Client::new(&minidfs.url).unwrap();
-        Self { minidfs, client }
+        Self { minidfs }
     }
 }
 

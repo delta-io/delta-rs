@@ -5,7 +5,6 @@ use deltalake_core::storage::{
     factories, url_prefix_handler, ObjectStoreFactory, ObjectStoreRef, StorageOptions,
 };
 use deltalake_core::{DeltaResult, Path};
-use hdfs_native::Client;
 use hdfs_native_object_store::HdfsObjectStore;
 use url::Url;
 
@@ -20,8 +19,10 @@ impl ObjectStoreFactory for HdfsFactory {
         url: &Url,
         options: &StorageOptions,
     ) -> DeltaResult<(ObjectStoreRef, Path)> {
-        let client = Client::new_with_config(url.as_str(), options.0.clone()).unwrap();
-        let store: ObjectStoreRef = Arc::new(HdfsObjectStore::new(Arc::new(client)));
+        let store: ObjectStoreRef = Arc::new(HdfsObjectStore::with_config(
+            url.as_str(),
+            options.0.clone(),
+        )?);
         let prefix = Path::parse(url.path())?;
         Ok((url_prefix_handler(store, prefix.clone()), prefix))
     }
