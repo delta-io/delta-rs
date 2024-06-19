@@ -8,8 +8,6 @@ use deltalake_core::{DeltaResult, Path};
 use hdfs_native_object_store::HdfsObjectStore;
 use url::Url;
 
-pub mod error;
-
 #[derive(Clone, Default, Debug)]
 pub struct HdfsFactory {}
 
