@@ -3,6 +3,8 @@ use std::sync::{Arc, OnceLock};
 use deltalake::storage::{ListResult, ObjectStore, ObjectStoreError, ObjectStoreResult, Path};
 use futures::future::{join_all, BoxFuture, FutureExt};
 use futures::StreamExt;
+use pyo3::types::{IntoPyDict, PyAnyMethods, PyModule};
+use pyo3::{Bound, PyAny, PyResult, Python, ToPyObject};
 use tokio::runtime::Runtime;
 
 #[inline]
@@ -78,5 +80,22 @@ pub async fn delete_dir(storage: &dyn ObjectStore, prefix: &Path) -> ObjectStore
         let meta = maybe_meta?;
         storage.delete(&meta.location).await?;
     }
+    Ok(())
+}
+
+pub fn warn<'py>(
+    py: Python<'py>,
+    warning_type: &str,
+    message: &str,
+    stack_level: Option<u8>,
+) -> PyResult<()> {
+    let warnings_warn = PyModule::import_bound(py, "warnings")?.getattr("warn")?;
+    let warning_type = PyModule::import_bound(py, "builtins")?.getattr(warning_type)?;
+    let stack_level = stack_level.unwrap_or(1);
+    let kwargs: [(&str, Bound<'py, PyAny>); 2] = [
+        ("category", warning_type),
+        ("stacklevel", stack_level.to_object(py).into_bound(py)),
+    ];
+    warnings_warn.call((message,), Some(&kwargs.into_py_dict_bound(py)))?;
     Ok(())
 }
