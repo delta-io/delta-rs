@@ -232,6 +232,20 @@ def test_roundtrip_azure_decoded_sas(azurite_sas_creds, sample_data: pa.Table):
     assert dt.version() == 0
 
 
+@pytest.mark.parametrize("storage_size", [1, 4 * 1024 * 1024, 5 * 1024 * 1024 - 1])
+def test_warning_for_small_max_buffer_size(tmp_path, storage_size):
+    storage_opts = {"max_buffer_size": str(storage_size)}
+    store = DeltaStorageHandler(str(tmp_path.absolute()), options=storage_opts)
+    with pytest.warns(UserWarning) as warnings:
+        store.open_output_stream("test")
+
+    assert len(warnings) == 1
+    assert (
+        f"You specified a `max_buffer_size` of {storage_size} bits less than {5*1024*1024} bits"
+        in str(warnings[0].message)
+    )
+
+
 def test_pickle_roundtrip(tmp_path):
     store = DeltaStorageHandler(str(tmp_path.absolute()))
 

@@ -1,5 +1,5 @@
 use crate::error::PythonError;
-use crate::utils::{delete_dir, rt, walk_tree};
+use crate::utils::{delete_dir, rt, walk_tree, warn};
 use crate::RawDeltaTable;
 use deltalake::storage::object_store::{MultipartUpload, PutPayloadMut};
 use deltalake::storage::{DynObjectStore, ListResult, ObjectStoreError, Path};
@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 
-const DEFAULT_MAX_BUFFER_SIZE: usize = 4 * 1024 * 1024;
+const DEFAULT_MAX_BUFFER_SIZE: usize = 5 * 1024 * 1024;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct FsConfig {
@@ -297,6 +297,7 @@ impl DeltaFileSystemHandler {
         &self,
         path: String,
         #[allow(unused)] metadata: Option<HashMap<String, String>>,
+        py: Python<'_>,
     ) -> PyResult<ObjectOutputStream> {
         let path = Self::parse_path(&path);
         let max_buffer_size = self
@@ -306,6 +307,19 @@ impl DeltaFileSystemHandler {
             .map_or(DEFAULT_MAX_BUFFER_SIZE, |v| {
                 v.parse::<usize>().unwrap_or(DEFAULT_MAX_BUFFER_SIZE)
             });
+        if max_buffer_size < DEFAULT_MAX_BUFFER_SIZE {
+            warn(
+                py,
+                "UserWarning",
+                format!(
+                    "You specified a `max_buffer_size` of {} bits less than {} bits. Most object 
+                    stores expect greater than that number, you may experience issues",
+                    max_buffer_size, DEFAULT_MAX_BUFFER_SIZE
+                )
+                .as_str(),
+                Some(2),
+            )?;
+        }
         let file = rt()
             .block_on(ObjectOutputStream::try_new(
                 self.inner.clone(),
@@ -537,18 +551,37 @@ impl ObjectOutputStream {
 
         Ok(())
     }
+
+    fn abort(&mut self) -> PyResult<()> {
+        rt().block_on(self.upload.abort())
+            .map_err(PythonError::from)?;
+        Ok(())
+    }
+
+    fn upload_buffer(&mut self) -> PyResult<()> {
+        let payload = std::mem::take(&mut self.buffer).freeze();
+        match rt().block_on(self.upload.put_part(payload)) {
+            Ok(_) => Ok(()),
+            Err(err) => {
+                self.abort()?;
+                Err(PyIOError::new_err(err.to_string()))
+            }
+        }
+    }
 }
 
 #[pymethods]
 impl ObjectOutputStream {
     fn close(&mut self, py: Python<'_>) -> PyResult<()> {
-        self.closed = true;
-        if !self.buffer.is_empty() {
-            self.flush(py)?;
-        }
-        py.allow_threads(|| match rt().block_on(self.upload.complete()) {
-            Ok(_) => Ok(()),
-            Err(err) => Err(PyIOError::new_err(err.to_string())),
+        py.allow_threads(|| {
+            self.closed = true;
+            if !self.buffer.is_empty() {
+                self.upload_buffer()?;
+            }
+            match rt().block_on(self.upload.complete()) {
+                Ok(_) => Ok(()),
+                Err(err) => Err(PyIOError::new_err(err.to_string())),
+            }
         })
     }
 
@@ -596,24 +629,33 @@ impl ObjectOutputStream {
         self.check_closed()?;
         let py = data.py();
         let bytes = data.as_bytes();
-        let len = bytes.len();
-        py.allow_threads(|| self.buffer.extend_from_slice(bytes));
-        if self.buffer.content_length() >= self.max_buffer_size {
-            self.flush(py)?;
-        }
-        Ok(len as i64)
+        py.allow_threads(|| {
+            let len = bytes.len();
+            for chunk in bytes.chunks(self.max_buffer_size) {
+                // this will never overflow
+                let remaining = self.max_buffer_size - self.buffer.content_length();
+                // if we have enough space to store this chunk, just append it
+                if chunk.len() < remaining {
+                    self.buffer.extend_from_slice(chunk);
+                    break;
+                }
+                // if we don't, fill as much as we can, flush the buffer, and then append the rest
+                // this won't panic since we've checked the size of the chunk
+                let (first, second) = chunk.split_at(remaining);
+                self.buffer.extend_from_slice(first);
+                self.upload_buffer()?;
+                // len(second) will always be < max_buffer_size, and we just
+                // emptied the buffer by flushing, so we won't overflow
+                // if len(chunk) just happened to be == remaining,
+                // the second slice is empty. this is a no-op
+                self.buffer.extend_from_slice(second);
+            }
+            Ok(len as i64)
+        })
     }
 
     fn flush(&mut self, py: Python<'_>) -> PyResult<()> {
-        let payload = std::mem::take(&mut self.buffer).freeze();
-        py.allow_threads(|| match rt().block_on(self.upload.put_part(payload)) {
-            Ok(_) => Ok(()),
-            Err(err) => {
-                rt().block_on(self.upload.abort())
-                    .map_err(PythonError::from)?;
-                Err(PyIOError::new_err(err.to_string()))
-            }
-        })
+        py.allow_threads(|| self.upload_buffer())
     }
 
     fn fileno(&self) -> PyResult<()> {
