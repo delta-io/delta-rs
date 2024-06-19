@@ -635,7 +635,7 @@ impl ObjectOutputStream {
                 // this will never overflow
                 let remaining = self.max_buffer_size - self.buffer.content_length();
                 // if we have enough space to store this chunk, just append it
-                if chunk.len() <= remaining {
+                if chunk.len() < remaining {
                     self.buffer.extend_from_slice(chunk);
                     break;
                 }
@@ -646,6 +646,8 @@ impl ObjectOutputStream {
                 self.upload_buffer()?;
                 // len(second) will always be < max_buffer_size, and we just
                 // emptied the buffer by flushing, so we won't overflow
+                // if len(chunk) just happened to be == remaining,
+                // the second slice is empty. this is a no-op
                 self.buffer.extend_from_slice(second);
             }
             Ok(len as i64)
