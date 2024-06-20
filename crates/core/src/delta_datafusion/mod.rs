@@ -218,7 +218,7 @@ fn _arrow_schema(snapshot: &Snapshot, wrap_partitions: bool) -> DeltaResult<Arro
                     field.data_type().clone()
                 };
                 Ok(field.with_data_type(corrected))
-            })
+            }),
         )
         .collect::<Result<Vec<Field>, _>>()?;
 
