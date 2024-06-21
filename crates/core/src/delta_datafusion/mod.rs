@@ -507,11 +507,7 @@ impl<'a> DeltaScanBuilder<'a> {
         let config = self.config;
         let schema = match self.schema {
             Some(schema) => schema,
-            None => {
-                self.snapshot
-                    .physical_arrow_schema(self.log_store.object_store())
-                    .await?
-            }
+            None => self.snapshot.arrow_schema()?,
         };
         let logical_schema = df_logical_schema(self.snapshot, &config)?;
 
