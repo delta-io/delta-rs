@@ -49,7 +49,7 @@ features = ["extension-module", "abi3", "abi3-py38"]
 [dependencies.deltalake]
 path = "../crates/deltalake"
 version = "0"
-features = ["azure", "gcs", "python", "datafusion", "unity-experimental"]
+features = ["azure", "gcs", "python", "datafusion", "unity-experimental", "hdfs"]
 
 [features]
 default = ["rustls"]
