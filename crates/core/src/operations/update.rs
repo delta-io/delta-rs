@@ -236,7 +236,7 @@ async fn execute(
 
     // For each rewrite evaluate the predicate and then modify each expression
     // to either compute the new value or obtain the old one then write these batches
-    let scan = DeltaScanBuilder::new(&snapshot, log_store.clone(), &state)
+    let scan = DeltaScanBuilder::new(&snapshot, log_store.clone())
         .with_files(&candidates.candidates)
         .build()
         .await?;
