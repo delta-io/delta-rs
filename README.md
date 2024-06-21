@@ -141,6 +141,7 @@ of features outlined in the Delta [protocol][protocol] is also [tracked](#protoc
 | Azure ADLS Gen2      | ![done] | ![done] |                                                                  |
 | Microsoft OneLake    | ![done] | ![done] |                                                                  |
 | Google Cloud Storage | ![done] | ![done] |                                                                  |
+| HDFS                 | ![done] | ![done] |                                                                  |
 
 ### Supported Operations
 
