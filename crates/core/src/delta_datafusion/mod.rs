@@ -547,19 +547,18 @@ impl<'a> DeltaScanBuilder<'a> {
                         PruningPredicate::try_new(predicate.clone(), logical_schema.clone())?;
                     let files_to_prune = pruning_predicate.prune(self.snapshot)?;
                     let mut files_pruned = 0usize;
-                    let files = self.snapshot
+                    let files = self
+                        .snapshot
                         .file_actions_iter()?
                         .zip(files_to_prune.into_iter())
-                        .filter_map(
-                            |(action, keep)| {
-                                if keep {
-                                    Some(action.to_owned())
-                                } else {
-                                    files_pruned += 1;
-                                    None
-                                }
-                            },
-                        )
+                        .filter_map(|(action, keep)| {
+                            if keep {
+                                Some(action.to_owned())
+                            } else {
+                                files_pruned += 1;
+                                None
+                            }
+                        })
                         .collect::<Vec<_>>();
 
                     let files_scanned = files.len();
@@ -656,8 +655,12 @@ impl<'a> DeltaScanBuilder<'a> {
             .await?;
 
         let metrics = ExecutionPlanMetricsSet::new();
-        MetricBuilder::new(&metrics).global_counter("files_scanned").add(files_scanned);
-        MetricBuilder::new(&metrics).global_counter("files_pruned").add(files_pruned);
+        MetricBuilder::new(&metrics)
+            .global_counter("files_scanned")
+            .add(files_scanned);
+        MetricBuilder::new(&metrics)
+            .global_counter("files_pruned")
+            .add(files_pruned);
 
         Ok(DeltaScan {
             table_uri: ensure_table_uri(self.log_store.root_uri())?.as_str().into(),
