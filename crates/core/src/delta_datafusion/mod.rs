@@ -39,6 +39,7 @@ use arrow_cast::display::array_value_to_string;
 use arrow_schema::Field;
 use async_trait::async_trait;
 use chrono::{DateTime, TimeZone, Utc};
+use datafusion::config::TableParquetOptions;
 use datafusion::datasource::file_format::FileFormat;
 use datafusion::datasource::physical_plan::parquet::ParquetExecBuilder;
 use datafusion::datasource::physical_plan::{
@@ -451,6 +452,7 @@ pub(crate) struct DeltaScanBuilder<'a> {
     snapshot: &'a DeltaTableState,
     log_store: LogStoreRef,
     filter: Option<Expr>,
+    state: &'a SessionState,
     projection: Option<&'a Vec<usize>>,
     limit: Option<usize>,
     files: Option<&'a [Add]>,
@@ -459,11 +461,16 @@ pub(crate) struct DeltaScanBuilder<'a> {
 }
 
 impl<'a> DeltaScanBuilder<'a> {
-    pub fn new(snapshot: &'a DeltaTableState, log_store: LogStoreRef) -> Self {
+    pub fn new(
+        snapshot: &'a DeltaTableState,
+        log_store: LogStoreRef,
+        state: &'a SessionState,
+    ) -> Self {
         DeltaScanBuilder {
             snapshot,
             log_store,
             filter: None,
+            state,
             files: None,
             projection: None,
             limit: None,
@@ -611,6 +618,11 @@ impl<'a> DeltaScanBuilder<'a> {
             .datafusion_table_statistics()
             .unwrap_or(Statistics::new_unknown(&schema));
 
+        let parquet_options = TableParquetOptions {
+            global: self.state.config().options().execution.parquet.clone(),
+            ..Default::default()
+        };
+
         let mut exec_plan_builder = ParquetExecBuilder::new(FileScanConfig {
             object_store_url: self.log_store.object_store_url(),
             file_schema,
@@ -621,7 +633,8 @@ impl<'a> DeltaScanBuilder<'a> {
             table_partition_cols,
             output_ordering: vec![],
         })
-        .with_schema_adapter_factory(Arc::new(DeltaSchemaAdapterFactory {}));
+        .with_schema_adapter_factory(Arc::new(DeltaSchemaAdapterFactory {}))
+        .with_table_parquet_options(parquet_options);
 
         // Sometimes (i.e Merge) we want to prune files that don't make the
         // filter and read the entire contents for files that do match the
@@ -674,7 +687,7 @@ impl TableProvider for DeltaTable {
         register_store(self.log_store(), session.runtime_env().clone());
         let filter_expr = conjunction(filters.iter().cloned());
 
-        let scan = DeltaScanBuilder::new(self.snapshot()?, self.log_store())
+        let scan = DeltaScanBuilder::new(self.snapshot()?, self.log_store(), session)
             .with_projection(projection)
             .with_limit(limit)
             .with_filter(filter_expr)
@@ -752,7 +765,7 @@ impl TableProvider for DeltaTableProvider {
         register_store(self.log_store.clone(), session.runtime_env().clone());
         let filter_expr = conjunction(filters.iter().cloned());
 
-        let scan = DeltaScanBuilder::new(&self.snapshot, self.log_store.clone())
+        let scan = DeltaScanBuilder::new(&self.snapshot, self.log_store.clone(), session)
             .with_projection(projection)
             .with_limit(limit)
             .with_filter(filter_expr)
@@ -1464,7 +1477,7 @@ pub(crate) async fn find_files_scan<'a>(
     // Add path column
     used_columns.push(logical_schema.index_of(scan_config.file_column_name.as_ref().unwrap())?);
 
-    let scan = DeltaScanBuilder::new(snapshot, log_store)
+    let scan = DeltaScanBuilder::new(snapshot, log_store, state)
         .with_filter(Some(expression.clone()))
         .with_projection(Some(&used_columns))
         .with_scan_config(scan_config)

@@ -114,7 +114,7 @@ impl std::future::IntoFuture for ConstraintBuilder {
                 session.state()
             });
 
-            let scan = DeltaScanBuilder::new(&this.snapshot, this.log_store.clone())
+            let scan = DeltaScanBuilder::new(&this.snapshot, this.log_store.clone(), &state)
                 .build()
                 .await?;
 
