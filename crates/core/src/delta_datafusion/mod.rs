@@ -822,6 +822,7 @@ pub struct DeltaScan {
     pub parquet_scan: Arc<dyn ExecutionPlan>,
     /// The schema of the table to be used when evaluating expressions
     pub logical_schema: Arc<ArrowSchema>,
+    /// Metrics for scan reported via DataFusion
     metrics: ExecutionPlanMetricsSet,
 }
 
