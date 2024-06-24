@@ -95,7 +95,7 @@ z85 = "3.0.5"
 maplit = "1"
 
 # Unity
-reqwest = { version = "0.11.18", default-features = false, features = [
+reqwest = { version = "0.12.5", default-features = false, features = [
     "rustls-tls",
     "json",
 ], optional = true }
