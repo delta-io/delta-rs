@@ -51,9 +51,9 @@ use datafusion::execution::FunctionRegistry;
 use datafusion::physical_optimizer::pruning::PruningPredicate;
 use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::limit::LocalLimitExec;
+use datafusion::physical_plan::metrics::{ExecutionPlanMetricsSet, MetricBuilder, MetricsSet};
 use datafusion::physical_plan::{
-    DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties, SendableRecordBatchStream,
-    Statistics,
+    DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties, SendableRecordBatchStream, Statistics
 };
 use datafusion_common::scalar::ScalarValue;
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion, TreeNodeVisitor};
@@ -535,14 +535,19 @@ impl<'a> DeltaScanBuilder<'a> {
             .map(|expr| context.create_physical_expr(expr, &df_schema).unwrap());
 
         // Perform Pruning of files to scan
-        let files = match self.files {
-            Some(files) => files.to_owned(),
+        let (files, files_scanned, files_pruned) = match self.files {
+            Some(files) => {
+                let files = files.to_owned();
+                let files_scanned = files.len();
+                (files, files_scanned, 0)
+            }
             None => {
                 if let Some(predicate) = &logical_filter {
                     let pruning_predicate =
                         PruningPredicate::try_new(predicate.clone(), logical_schema.clone())?;
                     let files_to_prune = pruning_predicate.prune(self.snapshot)?;
-                    self.snapshot
+                    let mut files_pruned = 0usize;
+                    let files = self.snapshot
                         .file_actions_iter()?
                         .zip(files_to_prune.into_iter())
                         .filter_map(
@@ -550,13 +555,19 @@ impl<'a> DeltaScanBuilder<'a> {
                                 if keep {
                                     Some(action.to_owned())
                                 } else {
+                                    files_pruned += 1;
                                     None
                                 }
                             },
                         )
-                        .collect()
+                        .collect::<Vec<_>>();
+
+                    let files_scanned = files.len();
+                    (files, files_scanned, files_pruned)
                 } else {
-                    self.snapshot.file_actions()?
+                    let files = self.snapshot.file_actions()?;
+                    let files_scanned = files.len();
+                    (files, files_scanned, 0)
                 }
             }
         };
@@ -644,11 +655,16 @@ impl<'a> DeltaScanBuilder<'a> {
             )
             .await?;
 
+        let metrics = ExecutionPlanMetricsSet::new();
+        MetricBuilder::new(&metrics).global_counter("files_scanned").add(files_scanned);
+        MetricBuilder::new(&metrics).global_counter("files_pruned").add(files_pruned);
+
         Ok(DeltaScan {
             table_uri: ensure_table_uri(self.log_store.root_uri())?.as_str().into(),
             parquet_scan: scan,
             config,
             logical_schema,
+            metrics,
         })
     }
 }
@@ -802,6 +818,7 @@ pub struct DeltaScan {
     pub parquet_scan: Arc<dyn ExecutionPlan>,
     /// The schema of the table to be used when evaluating expressions
     pub logical_schema: Arc<ArrowSchema>,
+    metrics: ExecutionPlanMetricsSet,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -849,6 +866,7 @@ impl ExecutionPlan for DeltaScan {
             config: self.config.clone(),
             parquet_scan: children[0].clone(),
             logical_schema: self.logical_schema.clone(),
+            metrics: self.metrics.clone(),
         }))
     }
 
@@ -858,6 +876,10 @@ impl ExecutionPlan for DeltaScan {
         context: Arc<TaskContext>,
     ) -> DataFusionResult<SendableRecordBatchStream> {
         self.parquet_scan.execute(partition, context)
+    }
+
+    fn metrics(&self) -> Option<MetricsSet> {
+        Some(self.metrics.clone_inner())
     }
 
     fn statistics(&self) -> DataFusionResult<Statistics> {
@@ -875,6 +897,7 @@ impl ExecutionPlan for DeltaScan {
                 config: self.config.clone(),
                 parquet_scan,
                 logical_schema: self.logical_schema.clone(),
+                metrics: self.metrics.clone(),
             })))
         } else {
             Ok(None)
@@ -1236,6 +1259,7 @@ impl PhysicalExtensionCodec for DeltaPhysicalCodec {
             parquet_scan: (*inputs)[0].clone(),
             config: wire.config,
             logical_schema: wire.logical_schema,
+            metrics: ExecutionPlanMetricsSet::new(),
         };
         Ok(Arc::new(delta_scan))
     }
@@ -1928,6 +1952,7 @@ mod tests {
             parquet_scan: Arc::from(EmptyExec::new(schema.clone())),
             config: DeltaScanConfig::default(),
             logical_schema: schema.clone(),
+            metrics: ExecutionPlanMetricsSet::new(),
         });
         let proto: protobuf::PhysicalPlanNode =
             protobuf::PhysicalPlanNode::try_from_physical_plan(exec_plan.clone(), &codec)
