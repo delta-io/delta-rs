@@ -390,14 +390,13 @@ impl DeltaScanConfigBuilder {
 
     /// Build a DeltaScanConfig and ensure no column name conflicts occur during downstream processing
     pub fn build(&self, snapshot: &DeltaTableState) -> DeltaResult<DeltaScanConfig> {
-        let input_schema = snapshot.input_schema()?;
-        let mut file_column_name = None;
-        let mut column_names: HashSet<&String> = HashSet::new();
-        for field in input_schema.fields.iter() {
-            column_names.insert(field.name());
-        }
+        let file_column_name = if self.include_file_column {
+            let input_schema = snapshot.input_schema()?;
+            let mut column_names: HashSet<&String> = HashSet::new();
+            for field in input_schema.fields.iter() {
+                column_names.insert(field.name());
+            }
 
-        if self.include_file_column {
             match &self.file_column_name {
                 Some(name) => {
                     if column_names.contains(name) {
@@ -407,7 +406,7 @@ impl DeltaScanConfigBuilder {
                         )));
                     }
 
-                    file_column_name = Some(name.to_owned())
+                    Some(name.to_owned())
                 }
                 None => {
                     let prefix = PATH_COLUMN;
@@ -419,10 +418,12 @@ impl DeltaScanConfigBuilder {
                         name = format!("{}_{}", prefix, idx);
                     }
 
-                    file_column_name = Some(name);
+                    Some(name)
                 }
             }
-        }
+        } else {
+            None
+        };
 
         Ok(DeltaScanConfig {
             file_column_name,
@@ -452,7 +453,7 @@ pub(crate) struct DeltaScanBuilder<'a> {
     projection: Option<&'a Vec<usize>>,
     limit: Option<usize>,
     files: Option<&'a [Add]>,
-    config: DeltaScanConfig,
+    config: Option<DeltaScanConfig>,
     schema: Option<SchemaRef>,
 }
 
@@ -470,7 +471,7 @@ impl<'a> DeltaScanBuilder<'a> {
             files: None,
             projection: None,
             limit: None,
-            config: DeltaScanConfig::default(),
+            config: None,
             schema: None,
         }
     }
@@ -496,7 +497,7 @@ impl<'a> DeltaScanBuilder<'a> {
     }
 
     pub fn with_scan_config(mut self, config: DeltaScanConfig) -> Self {
-        self.config = config;
+        self.config = Some(config);
         self
     }
 
@@ -507,7 +508,11 @@ impl<'a> DeltaScanBuilder<'a> {
     }
 
     pub async fn build(self) -> DeltaResult<DeltaScan> {
-        let config = self.config;
+        let config = match self.config {
+            Some(config) => config,
+            None => DeltaScanConfigBuilder::new().build(self.snapshot)?,
+        };
+
         let schema = match self.schema {
             Some(schema) => schema,
             None => {
