@@ -666,7 +666,13 @@ impl std::future::IntoFuture for WriteBuilder {
                             try_cast_batch(schema.fields(), table_schema.fields())
                         {
                             schema_drift = true;
-                            if this.mode == SaveMode::Overwrite && this.schema_mode.is_some() {
+                            if this.mode == SaveMode::Overwrite
+                                && this.schema_mode == Some(SchemaMode::Merge)
+                            {
+                                new_schema =
+                                    Some(merge_schema(table_schema.clone(), schema.clone())?);
+                            } else if this.mode == SaveMode::Overwrite && this.schema_mode.is_some()
+                            {
                                 new_schema = None // we overwrite anyway, so no need to cast
                             } else if this.schema_mode == Some(SchemaMode::Merge) {
                                 new_schema =
