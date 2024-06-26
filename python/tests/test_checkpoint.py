@@ -249,6 +249,29 @@ def test_checkpoint_partition_timestamp_2380(
     assert checkpoint_path.exists()
 
 
+def test_checkpoint_with_binary_column(tmp_path: pathlib.Path):
+    data = pa.table(
+        {
+            "intColumn": pa.array([1]),
+            "binaryColumn": pa.array([b"a"]),
+        }
+    )
+
+    write_deltalake(
+        str(tmp_path),
+        data,
+        partition_by=["intColumn"],
+        mode="append",
+    )
+
+    dt = DeltaTable(tmp_path)
+    dt.create_checkpoint()
+
+    dt = DeltaTable(tmp_path)
+
+    assert dt.to_pyarrow_table().equals(data)
+
+
 def test_checkpoint_post_commit_config(tmp_path: pathlib.Path, sample_data: pa.Table):
     """Checks whether checkpoints are properly written based on commit_interval"""
     tmp_table_path = tmp_path / "path" / "to" / "table"
