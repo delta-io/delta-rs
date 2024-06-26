@@ -304,6 +304,34 @@ def test_update_schema_rust_writer_invalid(existing_table: DeltaTable):
     assert existing_table.schema().to_pyarrow() == new_data.schema
 
 
+def test_merge_schema_rust_writer_with_overwrite(tmp_path: pathlib.Path):
+    data = pa.table(
+        {
+            "a": pa.array([1, 2, 3, 4]),
+            "b": pa.array([1, 1, 2, 2]),
+            "c": pa.array([10, 11, 12, 13]),
+        }
+    )
+    write_deltalake(
+        tmp_path,
+        data,
+        engine="rust",
+    )
+
+    new_data = pa.table({"a": pa.array([100, 200, 300]), "b": pa.array([1, 1, 1])})
+
+    write_deltalake(
+        tmp_path,
+        new_data,
+        mode="overwrite",
+        schema_mode="merge",
+        engine="rust",
+    )
+    assert set(DeltaTable(tmp_path).to_pyarrow_table().column_names) == set(
+        ["a", "b", "c"]
+    )
+
+
 @pytest.mark.parametrize("engine", ["pyarrow", "rust"])
 def test_local_path(
     tmp_path: pathlib.Path,
