@@ -250,13 +250,15 @@ pub(crate) fn delta_log_schema_for_table(
             .iter()
             .for_each(|f| max_min_schema_for_fields(&mut max_min_vec, f));
 
-        stats_parsed_fields.extend(["minValues", "maxValues"].into_iter().map(|name| {
-            ArrowField::new(
-                name,
-                ArrowDataType::Struct(max_min_vec.clone().into()),
-                true,
-            )
-        }));
+        if max_min_vec.len() > 0 {
+            stats_parsed_fields.extend(["minValues", "maxValues"].into_iter().map(|name| {
+                ArrowField::new(
+                    name,
+                    ArrowDataType::Struct(max_min_vec.clone().into()),
+                    true,
+                )
+            }));
+        }
 
         let mut null_count_vec = Vec::new();
         non_partition_fields
