@@ -1753,7 +1753,10 @@ mod tests {
     use arrow::datatypes::{DataType, Field, Schema};
     use chrono::{TimeZone, Utc};
     use datafusion::assert_batches_sorted_eq;
+    use datafusion::datasource::physical_plan::ParquetExec;
     use datafusion::physical_plan::empty::EmptyExec;
+    use datafusion::physical_plan::{visit_execution_plan, ExecutionPlanVisitor};
+    use datafusion_expr::lit;
     use datafusion_proto::physical_plan::AsExecutionPlan;
     use datafusion_proto::protobuf;
     use object_store::path::Path;
@@ -2190,5 +2193,84 @@ mod tests {
             .unwrap();
 
         df.collect().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_delta_scan_builder_no_scan_config() {
+        use crate::datafusion::prelude::SessionContext;
+        let arr: Arc<dyn Array> = Arc::new(arrow::array::StringArray::from(vec!["s"]));
+        let batch = RecordBatch::try_from_iter_with_nullable(vec![("a", arr, false)]).unwrap();
+        let table = crate::DeltaOps::new_in_memory()
+            .write(vec![batch])
+            .with_save_mode(crate::protocol::SaveMode::Append)
+            .await
+            .unwrap();
+
+        let ctx = SessionContext::new();
+        let scan =
+            DeltaScanBuilder::new(table.snapshot().unwrap(), table.log_store(), &ctx.state())
+                .with_filter(Some(col("a").eq(lit("s"))))
+                .build()
+                .await
+                .unwrap();
+
+        let mut visitor = ParquetPredicateVisitor::default();
+        visit_execution_plan(&scan, &mut visitor).unwrap();
+
+        assert_eq!(visitor.predicate.unwrap().to_string(), "a@0 = s");
+        assert_eq!(
+            visitor.pruning_predicate.unwrap().orig_expr().to_string(),
+            "a@0 = s"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_delta_scan_builder_scan_config_disable_pushdown() {
+        use crate::datafusion::prelude::SessionContext;
+        let arr: Arc<dyn Array> = Arc::new(arrow::array::StringArray::from(vec!["s"]));
+        let batch = RecordBatch::try_from_iter_with_nullable(vec![("a", arr, false)]).unwrap();
+        let table = crate::DeltaOps::new_in_memory()
+            .write(vec![batch])
+            .with_save_mode(crate::protocol::SaveMode::Append)
+            .await
+            .unwrap();
+
+        let ctx = SessionContext::new();
+        let snapshot = table.snapshot().unwrap();
+        let scan = DeltaScanBuilder::new(snapshot, table.log_store(), &ctx.state())
+            .with_filter(Some(col("a").eq(lit("s"))))
+            .with_scan_config(
+                DeltaScanConfigBuilder::new()
+                    .with_parquet_pushdown(false)
+                    .build(snapshot)
+                    .unwrap(),
+            )
+            .build()
+            .await
+            .unwrap();
+
+        let mut visitor = ParquetPredicateVisitor::default();
+        visit_execution_plan(&scan, &mut visitor).unwrap();
+
+        assert!(visitor.predicate.is_none());
+        assert!(visitor.pruning_predicate.is_none());
+    }
+
+    #[derive(Default)]
+    struct ParquetPredicateVisitor {
+        predicate: Option<Arc<dyn PhysicalExpr>>,
+        pruning_predicate: Option<Arc<PruningPredicate>>,
+    }
+
+    impl ExecutionPlanVisitor for ParquetPredicateVisitor {
+        type Error = DataFusionError;
+
+        fn pre_visit(&mut self, plan: &dyn ExecutionPlan) -> Result<bool, Self::Error> {
+            if let Some(parquet_exec) = plan.as_any().downcast_ref::<ParquetExec>() {
+                self.predicate = parquet_exec.predicate().cloned();
+                self.pruning_predicate = parquet_exec.pruning_predicate().cloned();
+            }
+            Ok(true)
+        }
     }
 }
