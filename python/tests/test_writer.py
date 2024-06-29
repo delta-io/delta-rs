@@ -1535,6 +1535,30 @@ def test_with_deltalake_schema(tmp_path: pathlib.Path, sample_data: pa.Table):
     assert delta_table.schema().to_pyarrow() == sample_data.schema
 
 
+def test_with_deltalake_json_schema(tmp_path: pathlib.Path):
+    json_schema = '{"type": "struct","fields": [{"name": "campaign", "type": "string", "nullable": true, "metadata": {}},{"name": "account", "type": "string", "nullable": true, "metadata": {}}]}'
+    table_schema = Schema.from_json(json_schema)
+    table = pa.table(
+        {
+            "campaign": pa.array([]),
+            "account": pa.array([]),
+        }
+    )
+    write_deltalake(tmp_path, table, schema=table_schema)
+    table = pa.table(
+        {
+            "campaign": pa.array(["deltaLake"]),
+            "account": pa.array(["admin"]),
+        }
+    )
+
+    write_deltalake(tmp_path, data=table, schema=table_schema, mode="append")
+
+    delta_table = DeltaTable(tmp_path)
+    assert delta_table.schema() == table_schema
+    assert delta_table.to_pyarrow_table() == table
+
+
 def test_write_stats_empty_rowgroups(tmp_path: pathlib.Path):
     # https://github.com/delta-io/delta-rs/issues/2169
     data = pa.table(
