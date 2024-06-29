@@ -266,7 +266,7 @@ def write_deltalake(
         partition_by = [partition_by]
 
     if isinstance(schema, DeltaSchema):
-        schema = schema.to_pyarrow(as_large_types=True)
+        schema = schema.to_pyarrow(as_large_types=large_dtypes)
 
     if isinstance(data, RecordBatchReader):
         data = convert_pyarrow_recordbatchreader(data, large_dtypes)
