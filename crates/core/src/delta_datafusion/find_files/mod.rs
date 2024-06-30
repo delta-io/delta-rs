@@ -141,7 +141,7 @@ async fn scan_table_by_files(
 
     // Identify which columns we need to project
     let mut used_columns = expression
-        .to_columns()?
+        .column_refs()
         .into_iter()
         .map(|column| logical_schema.index_of(&column.name))
         .collect::<std::result::Result<Vec<usize>, ArrowError>>()?;
