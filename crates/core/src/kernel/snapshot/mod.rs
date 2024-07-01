@@ -410,6 +410,30 @@ impl EagerSnapshot {
         Ok(sn)
     }
 
+    /// TODO
+    pub async fn try_from_snapshot(
+        snapshot: &Snapshot,
+        store: Arc<dyn ObjectStore>,
+        tracked_actions: HashSet<ActionType>,
+    ) -> DeltaResult<Self> {
+        let mut visitors = tracked_actions
+            .iter()
+            .flat_map(get_visitor)
+            .collect::<Vec<_>>();
+        let files = snapshot.files(store, &mut visitors)?.try_collect().await?;
+
+        let mut sn = Self {
+            snapshot: snapshot.clone(),
+            files,
+            tracked_actions,
+            transactions: None,
+        };
+
+        sn.process_visitors(visitors)?;
+
+        Ok(sn)
+    }
+
     fn process_visitors(&mut self, visitors: Vec<Box<dyn ReplayVisitor>>) -> DeltaResult<()> {
         for visitor in visitors {
             if let Some(tv) = visitor
