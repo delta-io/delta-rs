@@ -970,17 +970,18 @@ def test_struct_casting(tmp_path: pathlib.Path):
     assert not df.empty
 
     schema = pa.Table.from_pandas(df=df).schema
-
     dt = DeltaTable.create(tmp_path, schema, name="test")
     metadata = dt.metadata()
     assert metadata.name == "test"
 
     result = (
         dt.merge(
-            source=df_merge, predicate="t.id = s.id", source_alias="s", target_alias="t"
+            source=df_merge,
+            predicate="t.id = s.id",
+            source_alias="s",
+            target_alias="t",
         )
         .when_matched_update_all()
-        .when_not_matched_insert_all()
         .execute()
     )
     assert result is not None

@@ -825,7 +825,7 @@ class DeltaTable:
         target_alias: Optional[str] = None,
         error_on_type_mismatch: bool = True,
         writer_properties: Optional[WriterProperties] = None,
-        large_dtypes: bool = True,
+        large_dtypes: bool = False,
         custom_metadata: Optional[Dict[str, str]] = None,
     ) -> "TableMerger":
         """Pass the source data which you want to merge on the target delta table, providing a
