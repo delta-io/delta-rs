@@ -287,8 +287,14 @@
   
     
     
+      
+  
+  
+  
+    
+    
       <li class="md-tabs__item">
-        <a href="../../../integrations/delta-lake-arrow/" class="md-tabs__link">
+        <a href="../../../integrations/object-storage/hdfs/" class="md-tabs__link">
           
   
     
@@ -297,6 +303,9 @@
 
         </a>
       </li>
+    
+  
+
     
   
 
@@ -1243,6 +1252,13 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#deltalake.table.TableAlterer.set_table_properties" class="md-nav__link">
+    set_table_properties
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -1374,6 +1390,8 @@
       
         
       
+        
+      
     
     
     
@@ -1408,6 +1426,76 @@
             Integrations
           </label>
           <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+    
+    
+      
+        
+      
+    
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4_1" >
+        
+          
+          <label class="md-nav__link" for="__nav_4_1" id="__nav_4_1_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    Object Storage
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_4_1_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4_1">
+            <span class="md-nav__icon md-icon"></span>
+            Object Storage
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../integrations/object-storage/hdfs/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    HDFS Storage Backend
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
             
               
                 
@@ -1720,6 +1808,13 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#deltalake.table.TableAlterer.set_table_properties" class="md-nav__link">
+    set_table_properties
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -1945,6 +2040,32 @@ dt.metadata().configuration
 {}
 ```
 </code></pre></div>
+
+  </div>
+
+</div>
+
+
+<div class="doc doc-object doc-function">
+
+
+
+<h4 id="deltalake.table.TableAlterer.set_table_properties" class="doc doc-heading">
+          <span class="doc doc-object-name doc-function-name">set_table_properties</span>
+
+
+</h4>
+<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">set_table_properties</span><span class="p">(</span><span class="n">properties</span><span class="p">:</span> <span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">],</span> <span class="n">raise_if_not_exists</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span> <span class="n">custom_metadata</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span>
+</span></code></pre></div>
+
+  <div class="doc doc-contents ">
+  
+      <p>Unset properties from the table.
+Args:
+    properties: properties which set
+    raise_if_not_exists: set if should raise if not exists.
+    custom_metadata: custom metadata that will be added to the transaction commit.
+Example:</p>
 
   </div>
 

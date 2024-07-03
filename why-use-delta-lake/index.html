@@ -287,8 +287,14 @@
   
     
     
+      
+  
+  
+  
+    
+    
       <li class="md-tabs__item">
-        <a href="../integrations/delta-lake-arrow/" class="md-tabs__link">
+        <a href="../integrations/object-storage/hdfs/" class="md-tabs__link">
           
   
     
@@ -297,6 +303,9 @@
 
         </a>
       </li>
+    
+  
+
     
   
 
@@ -1396,6 +1405,8 @@
       
         
       
+        
+      
     
     
     
@@ -1430,6 +1441,76 @@
             Integrations
           </label>
           <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+    
+    
+      
+        
+      
+    
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4_1" >
+        
+          
+          <label class="md-nav__link" for="__nav_4_1" id="__nav_4_1_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    Object Storage
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_4_1_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4_1">
+            <span class="md-nav__icon md-icon"></span>
+            Object Storage
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../integrations/object-storage/hdfs/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    HDFS Storage Backend
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
             
               
                 
@@ -1802,7 +1883,7 @@
 <p>For data lakes, you need to run file listing operations to get the file paths before you can actually read the data.  Listing all the files in a data lake can take a long time, especially if there are a lot of files and they are stored in Hive-style partitions.</p>
 <p>Delta Lake stores all the file paths in the transaction log.  So you can quickly get the file paths directly from the log and then run your query.  Delta Lake also stores the file-level metadata in the transaction log which is quicker than opening all the files in the data lake and grabbing the metadata from the file footer.</p>
 <h2 id="developer-friendly-features">Developer friendly features</h2>
-<p>Many basic data operations are hard in data lakes but quite easy with Delta Lake.  The only data operation that’s easy with in data lake is appending data.  Delta Lake makes all data operations easy including the following:</p>
+<p>Many basic data operations are hard in data lakes but quite easy with Delta Lake.  The only data operation that’s easy with a data lake is appending data.  Delta Lake makes all data operations easy including the following:</p>
 <ul>
 <li>Appends</li>
 <li>Upserts</li>

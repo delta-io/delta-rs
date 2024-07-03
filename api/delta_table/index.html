@@ -287,8 +287,14 @@
   
     
     
+      
+  
+  
+  
+    
+    
       <li class="md-tabs__item">
-        <a href="../../integrations/delta-lake-arrow/" class="md-tabs__link">
+        <a href="../../integrations/object-storage/hdfs/" class="md-tabs__link">
           
   
     
@@ -297,6 +303,9 @@
 
         </a>
       </li>
+    
+  
+
     
   
 
@@ -1307,6 +1316,8 @@
       
         
       
+        
+      
     
     
     
@@ -1341,6 +1352,76 @@
             Integrations
           </label>
           <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+    
+    
+      
+        
+      
+    
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4_1" >
+        
+          
+          <label class="md-nav__link" for="__nav_4_1" id="__nav_4_1_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    Object Storage
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_4_1_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4_1">
+            <span class="md-nav__icon md-icon"></span>
+            Object Storage
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../integrations/object-storage/hdfs/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    HDFS Storage Backend
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
             
               
                 
@@ -1684,6 +1765,13 @@
           <li class="md-nav__item">
   <a href="#deltalake.DeltaTable.files" class="md-nav__link">
     files
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#deltalake.DeltaTable.files_by_partitions" class="md-nav__link">
+    files_by_partitions
   </a>
   
 </li>
@@ -2107,7 +2195,7 @@ the <code>configuration.logRetentionDuration</code> value, 30 days by default.</
   </span>
 
 </h4>
-<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">create</span><span class="p">(</span><span class="n">table_uri</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Path</span><span class="p">],</span> <span class="n">schema</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="n">pyarrow</span><span class="o">.</span><span class="n">Schema</span><span class="p">,</span> <span class="n">DeltaSchema</span><span class="p">],</span> <span class="n">mode</span><span class="p">:</span> <span class="n">Literal</span><span class="p">[</span><span class="s1">&#39;error&#39;</span><span class="p">,</span> <span class="s1">&#39;append&#39;</span><span class="p">,</span> <span class="s1">&#39;overwrite&#39;</span><span class="p">,</span> <span class="s1">&#39;ignore&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="s1">&#39;error&#39;</span><span class="p">,</span> <span class="n">partition_by</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Union</span><span class="p">[</span><span class="n">List</span><span class="p">[</span><span class="nb">str</span><span class="p">],</span> <span class="nb">str</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">name</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">description</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">configuration</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Mapping</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">str</span><span class="p">]]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">storage_options</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">custom_metadata</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">DeltaTable</span>
+<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">create</span><span class="p">(</span><span class="n">table_uri</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Path</span><span class="p">],</span> <span class="n">schema</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="n">pyarrow</span><span class="o">.</span><span class="n">Schema</span><span class="p">,</span> <span class="n">DeltaSchema</span><span class="p">],</span> <span class="n">mode</span><span class="p">:</span> <span class="n">Literal</span><span class="p">[</span><span class="s1">&#39;error&#39;</span><span class="p">,</span> <span class="s1">&#39;append&#39;</span><span class="p">,</span> <span class="s1">&#39;overwrite&#39;</span><span class="p">,</span> <span class="s1">&#39;ignore&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="s1">&#39;error&#39;</span><span class="p">,</span> <span class="n">partition_by</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Union</span><span class="p">[</span><span class="n">List</span><span class="p">[</span><span class="nb">str</span><span class="p">],</span> <span class="nb">str</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">name</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">description</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">configuration</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Mapping</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">str</span><span class="p">]]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">storage_options</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">custom_metadata</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">raise_if_key_not_exists</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">DeltaTable</span>
 </span></code></pre></div>
 
   <div class="doc doc-contents ">
@@ -2235,7 +2323,7 @@ If 'ignore', will not do anything if table already exists. Defaults to "error".<
           </td>
           <td>
             <div class="doc-md-description">
-              <p>options passed to the object store crate.</p>
+              <p>Options passed to the object store crate.</p>
             </div>
           </td>
           <td>
@@ -2249,11 +2337,25 @@ If 'ignore', will not do anything if table already exists. Defaults to "error".<
           </td>
           <td>
             <div class="doc-md-description">
-              <p>custom metadata that will be added to the transaction commit.</p>
+              <p>Custom metadata that will be added to the transaction commit.</p>
             </div>
           </td>
           <td>
                 <code>None</code>
+          </td>
+        </tr>
+        <tr>
+          <td><code>raise_if_key_not_exists</code></td>
+          <td>
+                <code>bool</code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>Whether to raise an error if the configuration uses keys that are not Delta keys</p>
+            </div>
+          </td>
+          <td>
+                <code>True</code>
           </td>
         </tr>
     </tbody>
@@ -2595,6 +2697,27 @@ The supported type for value is str. Use empty string <code>''</code> for Null p
 </span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>(&quot;z&quot;, &quot;not in&quot;, [&quot;a&quot;,&quot;b&quot;])
 </span></code></pre></div>
 </details>
+  </div>
+
+</div>
+
+
+<div class="doc doc-object doc-function">
+
+
+
+<h4 id="deltalake.DeltaTable.files_by_partitions" class="doc doc-heading">
+          <span class="doc doc-object-name doc-function-name">files_by_partitions</span>
+
+
+</h4>
+<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">files_by_partitions</span><span class="p">(</span><span class="n">partition_filters</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">FilterType</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="n">List</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span>
+</span></code></pre></div>
+
+  <div class="doc doc-contents ">
+  
+      <p>Get the files for each partition</p>
+
   </div>
 
 </div>
@@ -3610,7 +3733,7 @@ Results in
 
 
 </h4>
-<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">to_pandas</span><span class="p">(</span><span class="n">partitions</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">List</span><span class="p">[</span><span class="n">Tuple</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">columns</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">List</span><span class="p">[</span><span class="nb">str</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">filesystem</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Union</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">pa_fs</span><span class="o">.</span><span class="n">FileSystem</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">filters</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">FilterType</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span>
+<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">to_pandas</span><span class="p">(</span><span class="n">partitions</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">List</span><span class="p">[</span><span class="n">Tuple</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">columns</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">List</span><span class="p">[</span><span class="nb">str</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">filesystem</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Union</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">pa_fs</span><span class="o">.</span><span class="n">FileSystem</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">filters</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Union</span><span class="p">[</span><span class="n">FilterType</span><span class="p">,</span> <span class="n">Expression</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span>
 </span></code></pre></div>
 
   <div class="doc doc-contents ">
@@ -3675,11 +3798,11 @@ Results in
         <tr>
           <td><code>filters</code></td>
           <td>
-                <code><span title="typing.Optional">Optional</span>[<span title="deltalake.table.FilterType">FilterType</span>]</code>
+                <code><span title="typing.Optional">Optional</span>[<span title="typing.Union">Union</span>[<span title="deltalake.table.FilterType">FilterType</span>, <a class="autorefs autorefs-external" title="pyarrow.dataset.Expression" href="https://arrow.apache.org/docs/python/generated/pyarrow.dataset.Expression.html#pyarrow.dataset.Expression">Expression</a>]]</code>
           </td>
           <td>
             <div class="doc-md-description">
-              <p>A disjunctive normal form (DNF) predicate for filtering rows. If you pass a filter you do not need to pass <code>partitions</code></p>
+              <p>A disjunctive normal form (DNF) predicate for filtering rows, or directly a pyarrow.dataset.Expression. If you pass a filter you do not need to pass <code>partitions</code></p>
             </div>
           </td>
           <td>
@@ -3855,7 +3978,7 @@ a :class:<code>pyarrow.fs.SubTreeFileSystem</code>.
 
 
 </h4>
-<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">to_pyarrow_table</span><span class="p">(</span><span class="n">partitions</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">List</span><span class="p">[</span><span class="n">Tuple</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">columns</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">List</span><span class="p">[</span><span class="nb">str</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">filesystem</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Union</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">pa_fs</span><span class="o">.</span><span class="n">FileSystem</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">filters</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">FilterType</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">pyarrow</span><span class="o">.</span><span class="n">Table</span>
+<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">to_pyarrow_table</span><span class="p">(</span><span class="n">partitions</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">List</span><span class="p">[</span><span class="n">Tuple</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">columns</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">List</span><span class="p">[</span><span class="nb">str</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">filesystem</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Union</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">pa_fs</span><span class="o">.</span><span class="n">FileSystem</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">filters</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Union</span><span class="p">[</span><span class="n">FilterType</span><span class="p">,</span> <span class="n">Expression</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">pyarrow</span><span class="o">.</span><span class="n">Table</span>
 </span></code></pre></div>
 
   <div class="doc doc-contents ">
@@ -3920,11 +4043,11 @@ a :class:<code>pyarrow.fs.SubTreeFileSystem</code>.
         <tr>
           <td><code>filters</code></td>
           <td>
-                <code><span title="typing.Optional">Optional</span>[<span title="deltalake.table.FilterType">FilterType</span>]</code>
+                <code><span title="typing.Optional">Optional</span>[<span title="typing.Union">Union</span>[<span title="deltalake.table.FilterType">FilterType</span>, <a class="autorefs autorefs-external" title="pyarrow.dataset.Expression" href="https://arrow.apache.org/docs/python/generated/pyarrow.dataset.Expression.html#pyarrow.dataset.Expression">Expression</a>]]</code>
           </td>
           <td>
             <div class="doc-md-description">
-              <p>A disjunctive normal form (DNF) predicate for filtering rows. If you pass a filter you do not need to pass <code>partitions</code></p>
+              <p>A disjunctive normal form (DNF) predicate for filtering rows, or directly a pyarrow.dataset.Expression. If you pass a filter you do not need to pass <code>partitions</code></p>
             </div>
           </td>
           <td>

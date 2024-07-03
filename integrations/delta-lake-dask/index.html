@@ -287,8 +287,16 @@
   
     
     
+      
+  
+  
+    
+  
+  
+    
+    
       <li class="md-tabs__item md-tabs__item--active">
-        <a href="../delta-lake-arrow/" class="md-tabs__link">
+        <a href="../object-storage/hdfs/" class="md-tabs__link">
           
   
     
@@ -297,6 +305,9 @@
 
         </a>
       </li>
+    
+  
+
     
   
 
@@ -1309,6 +1320,8 @@
       
         
       
+        
+      
     
     
     
@@ -1341,6 +1354,76 @@
             Integrations
           </label>
           <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+    
+    
+      
+        
+      
+    
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4_1" >
+        
+          
+          <label class="md-nav__link" for="__nav_4_1" id="__nav_4_1_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    Object Storage
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_4_1_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4_1">
+            <span class="md-nav__icon md-icon"></span>
+            Object Storage
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../object-storage/hdfs/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    HDFS Storage Backend
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
             
               
                 
@@ -1790,11 +1873,13 @@
 <h1 id="using-delta-lake-with-dask">Using Delta Lake with Dask</h1>
 <p>Delta Lake is a great storage format for Dask analyses. This page explains why and how to use Delta Lake with Dask.</p>
 <p>You will learn how to read Delta Lakes into Dask DataFrames, how to query Delta tables with Dask, and the unique advantages Delta Lake offers the Dask community.</p>
-<p>Here are some of the benefits that Delta Lake provides Dask users:
-- better performance with file skipping
-- enhanced file skipping via Z Ordering
-- ACID transactions for reliable writes
-- easy time-travel functionality</p>
+<p>Here are some of the benefits that Delta Lake provides Dask users:</p>
+<ul>
+<li>better performance with file skipping</li>
+<li>enhanced file skipping via Z Ordering</li>
+<li>ACID transactions for reliable writes</li>
+<li>easy time-travel functionality</li>
+</ul>
 <blockquote>
 <p>❗️ dask-deltatable currently works with deltalake&lt;=13.0. See https://github.com/dask-contrib/dask-deltatable/issues/65</p>
 </blockquote>
@@ -1803,7 +1888,7 @@
 <div class="language-text highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>pip install dask-deltatable
 </span></code></pre></div>
 <h2 id="reading-delta-tables-into-a-dask-dataframe">Reading Delta Tables into a Dask DataFrame</h2>
-<p>You can read data stored in a Delta Lake into a Dask DataFrame using <code>dask-deltatable.read_deltalake</code>. </p>
+<p>You can read data stored in a Delta Lake into a Dask DataFrame using <code>dask-deltatable.read_deltalake</code>.</p>
 <p>Let's read in a toy dataset to see what we can do with Delta Lake and Dask. You can access the data stored as a Delta Lake <a href="https://github.com/rrpelgrim/delta-examples/tree/master/data">on Github</a></p>
 <div class="language-text highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>import dask_deltatable as ddt
 </span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>
@@ -1863,7 +1948,7 @@
 </span><span id="__span-8-6"><a id="__codelineno-8-6" name="__codelineno-8-6" href="#__codelineno-8-6"></a>|  1 | Jack         | Ma          | China     | Asia        |
 </span></code></pre></div>
 <h2 id="perform-dask-operations">Perform Dask Operations</h2>
-<p>Let's perform some basic computations over the Delta Lake data that's now stored in our Dask DataFrame. </p>
+<p>Let's perform some basic computations over the Delta Lake data that's now stored in our Dask DataFrame.</p>
 <p>Suppose you want to group the dataset by the <code>country</code> column:</p>
 <div class="language-text highlight"><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a>&gt; ddf.groupby([&#39;country&#39;]).count().compute()
 </span><span id="__span-9-2"><a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a>
@@ -1873,9 +1958,9 @@
 </span><span id="__span-9-6"><a id="__codelineno-9-6" name="__codelineno-9-6" href="#__codelineno-9-6"></a>| China     |            2 |           2 |           2 |
 </span><span id="__span-9-7"><a id="__codelineno-9-7" name="__codelineno-9-7" href="#__codelineno-9-7"></a>| Germany   |            2 |           2 |           2 |
 </span></code></pre></div>
-<p>Dask executes this <code>groupby</code> operation in parallel across all available cores. </p>
+<p>Dask executes this <code>groupby</code> operation in parallel across all available cores.</p>
 <h2 id="map-functions-over-partitions">Map Functions over Partitions</h2>
-<p>You can also use Dask's <code>map_partitions</code> method to map a custom Python function over all the partitions. </p>
+<p>You can also use Dask's <code>map_partitions</code> method to map a custom Python function over all the partitions.</p>
 <p>Let's write a function that will replace the missing <code>continent</code> values with the right continent names.</p>
 <div class="language-text highlight"><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a># define custom python function
 </span><span id="__span-10-2"><a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a>
@@ -1892,7 +1977,7 @@
 </span><span id="__span-10-13"><a id="__codelineno-10-13" name="__codelineno-10-13" href="#__codelineno-10-13"></a>        partition.loc[partition.country==&quot;Germany&quot;] = partition.loc[partition.country==&quot;Germany&quot;].replace(na_string, &quot;Europe&quot;)
 </span><span id="__span-10-14"><a id="__codelineno-10-14" name="__codelineno-10-14" href="#__codelineno-10-14"></a>    else:
 </span><span id="__span-10-15"><a id="__codelineno-10-15" name="__codelineno-10-15" href="#__codelineno-10-15"></a>        pass
-</span><span id="__span-10-16"><a id="__codelineno-10-16" name="__codelineno-10-16" href="#__codelineno-10-16"></a>    return partition        
+</span><span id="__span-10-16"><a id="__codelineno-10-16" name="__codelineno-10-16" href="#__codelineno-10-16"></a>    return partition
 </span></code></pre></div>
 <p>Now map this over all partitions in the Dask DataFrame:</p>
 <div class="language-text highlight"><pre><span></span><code><span id="__span-11-1"><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a># define metadata and map function over partitions
@@ -1910,7 +1995,7 @@
 </span></code></pre></div>
 <h2 id="write-to-delta-lake">Write to Delta Lake</h2>
 <p>After doing your data processing in Dask, you can write the data back out to Delta Lake using <code>to_deltalake</code>:</p>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-12-1"><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a>ddt.to_deltalake(ddf, &quot;tmp/test_write&quot;)
+<div class="language-text highlight"><pre><span></span><code><span id="__span-12-1"><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a>ddt.to_deltalake(&quot;tmp/test_write&quot;, ddf)
 </span></code></pre></div>
 <h2 id="contribute-to-dask-deltalake">Contribute to <code>dask-deltalake</code></h2>
 <p>To contribute, go to the <a href="https://github.com/rrpelgrim/dask-deltatable"><code>dask-deltalake</code> Github repository</a>.</p>
