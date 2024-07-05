@@ -377,7 +377,7 @@ struct CheckpointMetadata {
     /// The number of fragments if the last checkpoint was written in multiple parts.
     pub(crate) parts: Option<i32>,
     /// The number of bytes of the checkpoint.
-    pub(crate) size_in_bytes: Option<i32>,
+    pub(crate) size_in_bytes: Option<i64>,
     /// The number of AddFile actions in the checkpoint.
     pub(crate) num_of_add_files: Option<i32>,
     /// The schema of the checkpoint file.
