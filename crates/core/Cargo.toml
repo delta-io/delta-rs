@@ -77,7 +77,7 @@ dashmap = "6"
 errno = "0.3"
 either = "1.8"
 fix-hidden-lifetime-bug = "0.2"
-hyper = { version = "0.14", optional = true }
+hyper = { version = "1.4", optional = true }
 indexmap = "2.2.1"
 itertools = "0.13"
 lazy_static = "1"
@@ -106,7 +106,7 @@ criterion = "0.5"
 ctor = "0"
 deltalake-test = { path = "../test", features = ["datafusion"] }
 dotenvy = "0"
-hyper = { version = "0.14", features = ["server"] }
+hyper = { version = "1.4", features = ["server"] }
 maplit = "1"
 pretty_assertions = "1.2.1"
 pretty_env_logger = "0.5.0"
