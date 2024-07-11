@@ -76,7 +76,7 @@ The Parquet file stores the data that was written.  The `_delta_log` directory s
 }
 ```
 
-The tranasction log file contains the following information:
+The transaction log file contains the following information:
 
 * the files added to the Delta table
 * schema of the files
