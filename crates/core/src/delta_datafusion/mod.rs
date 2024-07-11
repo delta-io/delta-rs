@@ -51,6 +51,7 @@ use datafusion::execution::FunctionRegistry;
 use datafusion::physical_optimizer::pruning::PruningPredicate;
 use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::limit::LocalLimitExec;
+use datafusion::physical_plan::metrics::{ExecutionPlanMetricsSet, MetricBuilder, MetricsSet};
 use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties, SendableRecordBatchStream,
     Statistics,
@@ -390,14 +391,13 @@ impl DeltaScanConfigBuilder {
 
     /// Build a DeltaScanConfig and ensure no column name conflicts occur during downstream processing
     pub fn build(&self, snapshot: &DeltaTableState) -> DeltaResult<DeltaScanConfig> {
-        let input_schema = snapshot.input_schema()?;
-        let mut file_column_name = None;
-        let mut column_names: HashSet<&String> = HashSet::new();
-        for field in input_schema.fields.iter() {
-            column_names.insert(field.name());
-        }
+        let file_column_name = if self.include_file_column {
+            let input_schema = snapshot.input_schema()?;
+            let mut column_names: HashSet<&String> = HashSet::new();
+            for field in input_schema.fields.iter() {
+                column_names.insert(field.name());
+            }
 
-        if self.include_file_column {
             match &self.file_column_name {
                 Some(name) => {
                     if column_names.contains(name) {
@@ -407,7 +407,7 @@ impl DeltaScanConfigBuilder {
                         )));
                     }
 
-                    file_column_name = Some(name.to_owned())
+                    Some(name.to_owned())
                 }
                 None => {
                     let prefix = PATH_COLUMN;
@@ -419,10 +419,12 @@ impl DeltaScanConfigBuilder {
                         name = format!("{}_{}", prefix, idx);
                     }
 
-                    file_column_name = Some(name);
+                    Some(name)
                 }
             }
-        }
+        } else {
+            None
+        };
 
         Ok(DeltaScanConfig {
             file_column_name,
@@ -452,7 +454,7 @@ pub(crate) struct DeltaScanBuilder<'a> {
     projection: Option<&'a Vec<usize>>,
     limit: Option<usize>,
     files: Option<&'a [Add]>,
-    config: DeltaScanConfig,
+    config: Option<DeltaScanConfig>,
     schema: Option<SchemaRef>,
 }
 
@@ -470,7 +472,7 @@ impl<'a> DeltaScanBuilder<'a> {
             files: None,
             projection: None,
             limit: None,
-            config: DeltaScanConfig::default(),
+            config: None,
             schema: None,
         }
     }
@@ -496,7 +498,7 @@ impl<'a> DeltaScanBuilder<'a> {
     }
 
     pub fn with_scan_config(mut self, config: DeltaScanConfig) -> Self {
-        self.config = config;
+        self.config = Some(config);
         self
     }
 
@@ -507,7 +509,11 @@ impl<'a> DeltaScanBuilder<'a> {
     }
 
     pub async fn build(self) -> DeltaResult<DeltaScan> {
-        let config = self.config;
+        let config = match self.config {
+            Some(config) => config,
+            None => DeltaScanConfigBuilder::new().build(self.snapshot)?,
+        };
+
         let schema = match self.schema {
             Some(schema) => schema,
             None => {
@@ -535,28 +541,38 @@ impl<'a> DeltaScanBuilder<'a> {
             .map(|expr| context.create_physical_expr(expr, &df_schema).unwrap());
 
         // Perform Pruning of files to scan
-        let files = match self.files {
-            Some(files) => files.to_owned(),
+        let (files, files_scanned, files_pruned) = match self.files {
+            Some(files) => {
+                let files = files.to_owned();
+                let files_scanned = files.len();
+                (files, files_scanned, 0)
+            }
             None => {
                 if let Some(predicate) = &logical_filter {
                     let pruning_predicate =
                         PruningPredicate::try_new(predicate.clone(), logical_schema.clone())?;
                     let files_to_prune = pruning_predicate.prune(self.snapshot)?;
-                    self.snapshot
+                    let mut files_pruned = 0usize;
+                    let files = self
+                        .snapshot
                         .file_actions_iter()?
                         .zip(files_to_prune.into_iter())
-                        .filter_map(
-                            |(action, keep)| {
-                                if keep {
-                                    Some(action.to_owned())
-                                } else {
-                                    None
-                                }
-                            },
-                        )
-                        .collect()
+                        .filter_map(|(action, keep)| {
+                            if keep {
+                                Some(action.to_owned())
+                            } else {
+                                files_pruned += 1;
+                                None
+                            }
+                        })
+                        .collect::<Vec<_>>();
+
+                    let files_scanned = files.len();
+                    (files, files_scanned, files_pruned)
                 } else {
-                    self.snapshot.file_actions()?
+                    let files = self.snapshot.file_actions()?;
+                    let files_scanned = files.len();
+                    (files, files_scanned, 0)
                 }
             }
         };
@@ -644,11 +660,20 @@ impl<'a> DeltaScanBuilder<'a> {
             )
             .await?;
 
+        let metrics = ExecutionPlanMetricsSet::new();
+        MetricBuilder::new(&metrics)
+            .global_counter("files_scanned")
+            .add(files_scanned);
+        MetricBuilder::new(&metrics)
+            .global_counter("files_pruned")
+            .add(files_pruned);
+
         Ok(DeltaScan {
             table_uri: ensure_table_uri(self.log_store.root_uri())?.as_str().into(),
             parquet_scan: scan,
             config,
             logical_schema,
+            metrics,
         })
     }
 }
@@ -698,9 +723,12 @@ impl TableProvider for DeltaTable {
 
     fn supports_filters_pushdown(
         &self,
-        _filter: &[&Expr],
+        filter: &[&Expr],
     ) -> DataFusionResult<Vec<TableProviderFilterPushDown>> {
-        Ok(vec![TableProviderFilterPushDown::Inexact])
+        Ok(filter
+            .into_iter()
+            .map(|_| TableProviderFilterPushDown::Inexact)
+            .collect())
     }
 
     fn statistics(&self) -> Option<Statistics> {
@@ -799,6 +827,8 @@ pub struct DeltaScan {
     pub parquet_scan: Arc<dyn ExecutionPlan>,
     /// The schema of the table to be used when evaluating expressions
     pub logical_schema: Arc<ArrowSchema>,
+    /// Metrics for scan reported via DataFusion
+    metrics: ExecutionPlanMetricsSet,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -846,6 +876,7 @@ impl ExecutionPlan for DeltaScan {
             config: self.config.clone(),
             parquet_scan: children[0].clone(),
             logical_schema: self.logical_schema.clone(),
+            metrics: self.metrics.clone(),
         }))
     }
 
@@ -855,6 +886,10 @@ impl ExecutionPlan for DeltaScan {
         context: Arc<TaskContext>,
     ) -> DataFusionResult<SendableRecordBatchStream> {
         self.parquet_scan.execute(partition, context)
+    }
+
+    fn metrics(&self) -> Option<MetricsSet> {
+        Some(self.metrics.clone_inner())
     }
 
     fn statistics(&self) -> DataFusionResult<Statistics> {
@@ -872,6 +907,7 @@ impl ExecutionPlan for DeltaScan {
                 config: self.config.clone(),
                 parquet_scan,
                 logical_schema: self.logical_schema.clone(),
+                metrics: self.metrics.clone(),
             })))
         } else {
             Ok(None)
@@ -1233,6 +1269,7 @@ impl PhysicalExtensionCodec for DeltaPhysicalCodec {
             parquet_scan: (*inputs)[0].clone(),
             config: wire.config,
             logical_schema: wire.logical_schema,
+            metrics: ExecutionPlanMetricsSet::new(),
         };
         Ok(Arc::new(delta_scan))
     }
@@ -1716,7 +1753,10 @@ mod tests {
     use arrow::datatypes::{DataType, Field, Schema};
     use chrono::{TimeZone, Utc};
     use datafusion::assert_batches_sorted_eq;
+    use datafusion::datasource::physical_plan::ParquetExec;
     use datafusion::physical_plan::empty::EmptyExec;
+    use datafusion::physical_plan::{visit_execution_plan, ExecutionPlanVisitor};
+    use datafusion_expr::lit;
     use datafusion_proto::physical_plan::AsExecutionPlan;
     use datafusion_proto::protobuf;
     use object_store::path::Path;
@@ -1925,6 +1965,7 @@ mod tests {
             parquet_scan: Arc::from(EmptyExec::new(schema.clone())),
             config: DeltaScanConfig::default(),
             logical_schema: schema.clone(),
+            metrics: ExecutionPlanMetricsSet::new(),
         });
         let proto: protobuf::PhysicalPlanNode =
             protobuf::PhysicalPlanNode::try_from_physical_plan(exec_plan.clone(), &codec)
@@ -2109,5 +2150,127 @@ mod tests {
         let actual = df.collect().await.unwrap();
         assert_batches_sorted_eq!(&expected, &actual);
         */
+    }
+
+    #[tokio::test]
+    async fn test_multiple_predicate_pushdown() {
+        use crate::{datafusion::prelude::SessionContext, DeltaTableBuilder};
+        let schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("moDified", DataType::Utf8, true),
+            Field::new("id", DataType::Utf8, true),
+            Field::new("vaLue", DataType::Int32, true),
+        ]));
+
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(arrow::array::StringArray::from(vec![
+                    "2021-02-01",
+                    "2021-02-01",
+                    "2021-02-02",
+                    "2021-02-02",
+                ])),
+                Arc::new(arrow::array::StringArray::from(vec!["A", "B", "C", "D"])),
+                Arc::new(arrow::array::Int32Array::from(vec![1, 10, 20, 100])),
+            ],
+        )
+        .unwrap();
+        // write some data
+        let table = crate::DeltaOps::new_in_memory()
+            .write(vec![batch.clone()])
+            .with_save_mode(crate::protocol::SaveMode::Append)
+            .await
+            .unwrap();
+
+        let datafusion = SessionContext::new();
+        let table = Arc::new(table);
+
+        datafusion.register_table("snapshot", table).unwrap();
+
+        let df = datafusion
+            .sql("select * from snapshot where id > 10000 and id < 20000")
+            .await
+            .unwrap();
+
+        df.collect().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_delta_scan_builder_no_scan_config() {
+        use crate::datafusion::prelude::SessionContext;
+        let arr: Arc<dyn Array> = Arc::new(arrow::array::StringArray::from(vec!["s"]));
+        let batch = RecordBatch::try_from_iter_with_nullable(vec![("a", arr, false)]).unwrap();
+        let table = crate::DeltaOps::new_in_memory()
+            .write(vec![batch])
+            .with_save_mode(crate::protocol::SaveMode::Append)
+            .await
+            .unwrap();
+
+        let ctx = SessionContext::new();
+        let scan =
+            DeltaScanBuilder::new(table.snapshot().unwrap(), table.log_store(), &ctx.state())
+                .with_filter(Some(col("a").eq(lit("s"))))
+                .build()
+                .await
+                .unwrap();
+
+        let mut visitor = ParquetPredicateVisitor::default();
+        visit_execution_plan(&scan, &mut visitor).unwrap();
+
+        assert_eq!(visitor.predicate.unwrap().to_string(), "a@0 = s");
+        assert_eq!(
+            visitor.pruning_predicate.unwrap().orig_expr().to_string(),
+            "a@0 = s"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_delta_scan_builder_scan_config_disable_pushdown() {
+        use crate::datafusion::prelude::SessionContext;
+        let arr: Arc<dyn Array> = Arc::new(arrow::array::StringArray::from(vec!["s"]));
+        let batch = RecordBatch::try_from_iter_with_nullable(vec![("a", arr, false)]).unwrap();
+        let table = crate::DeltaOps::new_in_memory()
+            .write(vec![batch])
+            .with_save_mode(crate::protocol::SaveMode::Append)
+            .await
+            .unwrap();
+
+        let ctx = SessionContext::new();
+        let snapshot = table.snapshot().unwrap();
+        let scan = DeltaScanBuilder::new(snapshot, table.log_store(), &ctx.state())
+            .with_filter(Some(col("a").eq(lit("s"))))
+            .with_scan_config(
+                DeltaScanConfigBuilder::new()
+                    .with_parquet_pushdown(false)
+                    .build(snapshot)
+                    .unwrap(),
+            )
+            .build()
+            .await
+            .unwrap();
+
+        let mut visitor = ParquetPredicateVisitor::default();
+        visit_execution_plan(&scan, &mut visitor).unwrap();
+
+        assert!(visitor.predicate.is_none());
+        assert!(visitor.pruning_predicate.is_none());
+    }
+
+    #[derive(Default)]
+    struct ParquetPredicateVisitor {
+        predicate: Option<Arc<dyn PhysicalExpr>>,
+        pruning_predicate: Option<Arc<PruningPredicate>>,
+    }
+
+    impl ExecutionPlanVisitor for ParquetPredicateVisitor {
+        type Error = DataFusionError;
+
+        fn pre_visit(&mut self, plan: &dyn ExecutionPlan) -> Result<bool, Self::Error> {
+            if let Some(parquet_exec) = plan.as_any().downcast_ref::<ParquetExec>() {
+                self.predicate = parquet_exec.predicate().cloned();
+                self.pruning_predicate = parquet_exec.pruning_predicate().cloned();
+            }
+            Ok(true)
+        }
     }
 }

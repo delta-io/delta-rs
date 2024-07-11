@@ -7,6 +7,7 @@ __pycache__/
 # Unit test / coverage reports
 .coverage
 .pytest_cache/
+.benchmarks/
 
 # mypy
 .mypy_cache/

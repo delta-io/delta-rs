@@ -940,3 +940,48 @@ def test_merge_field_special_characters_delete_2438(tmp_path: pathlib.Path):
     expected = pa.table({"x": [1], "y--1": [4]})
 
     assert dt.to_pyarrow_table() == expected
+
+
+@pytest.mark.pandas
+def test_struct_casting(tmp_path: pathlib.Path):
+    import pandas as pd
+
+    cols = ["id", "name", "address", "scores"]
+    data = [
+        (
+            2,
+            "Marry Doe",
+            {"street": "123 Main St", "city": "Anytown", "state": "CA"},
+            [0, 0, 0],
+        )
+    ]
+    df = pd.DataFrame(data, columns=cols)
+    df_merge = pd.DataFrame(
+        [
+            (
+                2,
+                "Merged",
+                {"street": "1 Front", "city": "San Francisco", "state": "CA"},
+                [7, 0, 7],
+            )
+        ],
+        columns=cols,
+    )
+    assert not df.empty
+
+    schema = pa.Table.from_pandas(df=df).schema
+    dt = DeltaTable.create(tmp_path, schema, name="test")
+    metadata = dt.metadata()
+    assert metadata.name == "test"
+
+    result = (
+        dt.merge(
+            source=df_merge,
+            predicate="t.id = s.id",
+            source_alias="s",
+            target_alias="t",
+        )
+        .when_matched_update_all()
+        .execute()
+    )
+    assert result is not None
