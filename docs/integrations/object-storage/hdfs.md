@@ -3,12 +3,14 @@ HDFS support is provided via the [hdfs-native-object-store](https://github.com/d
 
 ## Supported Configurations
 By default, the client looks for existing Hadoop configs in following manner:
+
 - If the `HADOOP_CONF_DIR` environment variable is defined, load configs from `$HADOOP_CONF_DIR/core-site.xml` and `$HADOOP_CONF_DIR/hdfs-site.xml`
 - Otherwise, if the `HADOOP_HOME` environment variable is set, load configs from `$HADOOP_HOME/etc/hadoop/core-site.xml` and `$HADOOP_HOME/etc/hadoop/hdfs-site.xml`
 
 Additionally, you can pass Hadoop configs as `storage_options` and these will take precedence over the above configs.
 
 Currently the supported client configuration parameters are:
+
 - `dfs.ha.namenodes.*` - name service support
 - `dfs.namenode.rpc-address.*` - name service support
 - `fs.viewfs.mounttable.*.link.*` - ViewFS links

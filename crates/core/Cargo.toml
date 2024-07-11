@@ -73,7 +73,7 @@ tokio = { workspace = true, features = [
 
 # other deps (these should be organized and pulled into workspace.dependencies as necessary)
 cfg-if = "1"
-dashmap = "5"
+dashmap = "6"
 errno = "0.3"
 either = "1.8"
 fix-hidden-lifetime-bug = "0.2"
