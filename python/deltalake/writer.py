@@ -60,7 +60,7 @@ from .table import (
 )
 
 try:
-    import pandas as pd  # noqa: F811
+    import pandas as pd
 except ModuleNotFoundError:
     _has_pandas = False
 else:

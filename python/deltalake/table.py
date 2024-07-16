@@ -49,7 +49,7 @@ from deltalake.fs import DeltaStorageHandler
 from deltalake.schema import Schema as DeltaSchema
 
 try:
-    import pandas as pd  # noqa: F811
+    import pandas as pd
 except ModuleNotFoundError:
     _has_pandas = False
 else:

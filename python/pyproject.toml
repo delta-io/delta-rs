@@ -83,7 +83,9 @@ select = [
     # pyflakes
     "F",
     # isort
-    "I"
+    "I",
+    # ruff
+    "RUF"
 ]
 ignore = ["E501"]
 
