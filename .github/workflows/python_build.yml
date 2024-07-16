@@ -22,7 +22,7 @@ jobs:
 
       - name: Check Python
         run: |
-          pip install ruff black mypy types-dataclasses typing-extensions
+          pip install ruff mypy types-dataclasses typing-extensions
           make check-python
 
       - name: Install minimal stable with clippy and rustfmt
