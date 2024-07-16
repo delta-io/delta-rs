@@ -15,30 +15,22 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
-      
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v2
         with:
-          python-version: 3.11
-
-      - name: Install latest nightly
-        uses: actions-rs/toolchain@v1
-        with:
-          toolchain: stable
-          override: true
-          components: rustfmt, clippy
-
-      - uses: Swatinem/rust-cache@v2
-
-      - name: Build and install deltalake
-        run: |
-          pip install virtualenv
-          virtualenv venv
-          source venv/bin/activate
-          make develop
+          python-version: "3.10"
 
       - name: Check Python
-        run: make check-python
+        run: |
+          pip install ruff==0.5.2 mypy==1.10.1 types-dataclasses typing-extensions
+          make check-python
+
+      - name: Install minimal stable with clippy and rustfmt
+        uses: actions-rs/toolchain@v1
+        with:
+          profile: default
+          toolchain: stable
+          override: true
 
       - name: Check Rust
         run: make check-rust
