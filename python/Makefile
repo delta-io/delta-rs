@@ -53,7 +53,7 @@ format: ## Format the code
 	$(info --- Rust format ---)
 	cargo fmt
 	$(info --- Python format ---)
-	ruff . --fix
+	ruff check . --fix
 	ruff format .
 
 .PHONY: check-rust
