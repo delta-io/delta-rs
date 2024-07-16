@@ -34,7 +34,7 @@ def test_file_info(file_systems, table_data):
     info = store.get_file_info(file_path)
     arrow_info = arrow_fs.get_file_info(file_path)
 
-    assert type(info) == type(arrow_info)
+    assert type(info) is type(arrow_info)
     assert info.path == arrow_info.path
     assert info.type == arrow_info.type
     assert info.size == arrow_info.size
