@@ -84,7 +84,7 @@ select = [
     "F",
     # isort
     "I",
-    # ruff
+    # ruff-specific rules
     "RUF"
 ]
 ignore = ["E501"]
