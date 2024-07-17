@@ -36,6 +36,7 @@
     <img alt="#delta-rs in the Delta Lake Slack workspace" src="https://img.shields.io/badge/slack-delta-blue.svg?logo=slack&style=flat-square&color=F75101">
   </a>
 </p>
+Delta Lake is an open-source storage format that runs on top of existing data lakes. Delta Lake is compatible with processing engines like Apache Spark and provides benefits such as ACID transaction guarantees, schema enforcement, and scalable data handling.
 
 The Delta Lake project aims to unlock the power of the Deltalake for as many users and projects as possible
 by providing native low-level APIs aimed at developers and integrators, as well as a high-level operations
