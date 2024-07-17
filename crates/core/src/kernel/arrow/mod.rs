@@ -351,7 +351,7 @@ fn null_count_schema_for_fields(dest: &mut Vec<ArrowField>, f: &ArrowField) {
             ));
         }
         _ => {
-            let f: ArrowField = ArrowField::new(f.name(), ArrowDataType::Int64, true);
+            let f = ArrowField::new(f.name(), ArrowDataType::Int64, true);
             dest.push(f);
         }
     }
