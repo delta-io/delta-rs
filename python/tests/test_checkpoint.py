@@ -378,3 +378,30 @@ def test_checkpoint_post_commit_config_multiple_operations(
 
     delta_table = DeltaTable(str(tmp_table_path))
     assert delta_table.version() == 9
+
+
+def test_checkpoint_with_nullable_false(tmp_path: pathlib.Path):
+    tmp_table_path = tmp_path / "path" / "to" / "table"
+    checkpoint_path = tmp_table_path / "_delta_log" / "_last_checkpoint"
+
+    pylist = [{"year": 2023, "n_party": 0}, {"year": 2024, "n_party": 1}]
+    my_schema = pa.schema(
+        [
+            pa.field("year", pa.int64(), nullable=False),
+            pa.field("n_party", pa.int64(), nullable=False),
+        ]
+    )
+
+    data = pa.Table.from_pylist(pylist, schema=my_schema)
+
+    write_deltalake(
+        str(tmp_table_path),
+        data,
+        configuration={"delta.dataSkippingNumIndexedCols": "1"},
+    )
+
+    DeltaTable(str(tmp_table_path)).create_checkpoint()
+
+    assert checkpoint_path.exists()
+
+    assert DeltaTable(str(tmp_table_path)).to_pyarrow_table() == data
