@@ -79,7 +79,9 @@ select = [
     # pyflakes
     "F",
     # isort
-    "I"
+    "I",
+    # ruff-specific rules
+    "RUF"
 ]
 ignore = ["E501"]
 
