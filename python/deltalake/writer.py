@@ -77,7 +77,9 @@ class ArrowStreamExportable(Protocol):
     https://arrow.apache.org/docs/format/CDataInterface/PyCapsuleInterface.html
     """
 
-    def __arrow_c_stream__(self, requested_schema: Optional[object] = None) -> object: ...
+    def __arrow_c_stream__(
+        self, requested_schema: Optional[object] = None
+    ) -> object: ...
 
 
 @dataclass
