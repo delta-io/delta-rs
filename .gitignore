@@ -22,6 +22,7 @@ __blobstorage__
 .githubchangeloggenerator.cache.log
 .githubchangeloggenerator.cache/
 .githubchangeloggenerator*
+data
 
 # Add all Cargo.lock files except for those in binary crates
 Cargo.lock
