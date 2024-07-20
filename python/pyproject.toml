@@ -94,7 +94,7 @@ ignore = ["E501"]
 known-first-party = ["deltalake"]
 
 [tool.pytest.ini_options]
-addopts = "--cov=deltalake -v -m 'not integration and not benchmark'"
+addopts = "-v -m 'not integration and not benchmark'"
 testpaths = [
     "tests",
     "deltalake",
@@ -106,3 +106,7 @@ markers = [
     "pandas: marks tests that require pandas",
     "pyspark: marks tests that require pyspark",
 ]
+
+[tool.coverage.run]
+branch = true
+source = ["deltalake"]
