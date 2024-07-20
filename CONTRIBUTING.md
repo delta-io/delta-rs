@@ -17,34 +17,40 @@ If you want to claim an issue to work on, you can write the word `take` as a com
 - Install Rust, e.g. as described [here](https://doc.rust-lang.org/cargo/getting-started/installation.html)
 - Have a compatible Python version installed (check `python/pyproject.toml` for current requirement)
 - Create a Python virtual environment (required for development builds), e.g. as described [here](https://packaging.python.org/en/latest/guides/installing-using-pip-and-virtual-environments/)
+    ```sh
+    python -m venv .venv
+    ```
+
 - Build the project for development (this requires an active virtual environment and will also install `deltalake` in that virtual environment)
-```
-cd python
-make develop
-```
+    ```sh
+    cd python
+    make develop
+    ```
 
 - Run some Python code, e.g. to run a specific test
-```
-python -m pytest tests/test_writer.py -s -k "test_with_deltalake_schema"
-```
+    ```sh
+    python -m pytest tests/test_writer.py -s -k "test_with_deltalake_schema"
+    ```
 
 - Run some Rust code, e.g. run an example
-```
-cd crates/deltalake
-cargo run --example basic_operations --features="datafusion"
-```
+    ```sh
+    cd crates/deltalake
+    cargo run --example basic_operations --features="datafusion"
+    ```
 
 ## Run the docs locally
-*This serves your local contens of docs via a web browser, handy for checking what they look like if you are making changes to docs or docstings*
-```
+*This serves your local contents of docs via a web browser, handy for checking what they look like if you are making changes to docs or docstings*
+
+```sh
 (cd python; make develop)
 pip install -r docs/requirements.txt
 mkdocs serve
 ```
 
 ## To make a pull request (PR)
-- Make sure all the following steps run/pass locally before submitting a PR
-```
+Make sure all the following steps run/pass locally before submitting a PR
+
+```sh
 cargo fmt -- --check
 cd python
 make check-rust
@@ -62,7 +68,7 @@ make build-docs
 - For debugging Rust code, install [CodeLLDB](https://marketplace.visualstudio.com/items?itemName=vadimcn.vscode-lldb). The extension should even create Debug launch configurations for the project if you allow it, an easy way to get started. Just set a breakpoint and run the relevant configuration.
 - For debugging from Python into Rust, follow this procedure:
 1. Add this to `.vscode/launch.json`
-```
+```json
 {
             "type": "lldb",
             "request": "attach",
