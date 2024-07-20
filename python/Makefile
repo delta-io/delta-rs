@@ -77,6 +77,11 @@ unit-test: ## Run unit test
 	$(info --- Run Python unit-test ---)
 	python -m pytest --doctest-modules 
 
+.PHONY: test-cov
+test-cov: ## Create coverage report
+	$(info --- Run Python unit-test ---)
+	python -m pytest --doctest-modules --cov --cov-config=pyproject.toml --cov-report=term --cov-report=html
+
 .PHONY: test-pyspark
 test-pyspark:
 	python -m pytest -m 'pyspark and integration'

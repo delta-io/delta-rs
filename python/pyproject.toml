@@ -106,3 +106,7 @@ markers = [
     "pandas: marks tests that require pandas",
     "pyspark: marks tests that require pyspark",
 ]
+
+[tool.coverage.run]
+branch = true
+source = ["deltalake"]
