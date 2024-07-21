@@ -12,6 +12,7 @@ tlaplus/*.toolbox/*/[0-9]*-[0-9]*-[0-9]*-[0-9]*-[0-9]*-[0-9]*/
 .vscode
 .env
 .venv
+venv
 **/.DS_Store
 **/.python-version
 .coverage
@@ -21,6 +22,7 @@ __blobstorage__
 .githubchangeloggenerator.cache.log
 .githubchangeloggenerator.cache/
 .githubchangeloggenerator*
+data
 
 # Add all Cargo.lock files except for those in binary crates
 Cargo.lock

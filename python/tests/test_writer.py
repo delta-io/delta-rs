@@ -1838,3 +1838,9 @@ def test_roundtrip_cdc_evolution(tmp_path: pathlib.Path):
     print(os.listdir(tmp_path))
     # This is kind of a weak test to verify that CDFs were written
     assert os.path.isdir(os.path.join(tmp_path, "_change_data"))
+
+
+def test_empty_dataset_write(tmp_path: pathlib.Path, sample_data: pa.Table):
+    empty_arrow_table = sample_data.schema.empty_table()
+    empty_dataset = dataset(empty_arrow_table)
+    write_deltalake(tmp_path, empty_dataset, mode="append")
