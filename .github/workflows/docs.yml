@@ -31,9 +31,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
-      - uses: psf/black@stable
-        with:
-          src: docs/src/python
+      - run: |
+          cd docs
+          make check
 
   build-deploy:
     needs:
