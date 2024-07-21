@@ -330,8 +330,7 @@ fn max_min_schema_for_fields(dest: &mut Vec<ArrowField>, f: &ArrowField) {
         // don't compute min or max for list, map or binary types
         ArrowDataType::List(_) | ArrowDataType::Map(_, _) | ArrowDataType::Binary => { /* noop */ }
         _ => {
-            let f = f.clone();
-            dest.push(f);
+            dest.push(ArrowField::new(f.name(), f.data_type().clone(), true));
         }
     }
 }
