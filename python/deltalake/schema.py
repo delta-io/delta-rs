@@ -85,7 +85,9 @@ def _cast_schema_to_recordbatchreader(
 ) -> Generator[pa.RecordBatch, None, None]:
     """Creates recordbatch generator."""
     for batch in reader:
-        yield pa.Table.from_batches([batch]).cast(schema).to_batches()[0]
+        batchs = pa.Table.from_batches([batch]).cast(schema).to_batches()
+        if len(batchs) > 0:
+            yield batchs[0]
 
 
 def convert_pyarrow_recordbatchreader(
