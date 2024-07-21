@@ -1,10 +1,4 @@
-import sys
-from typing import Any, Dict, List, Mapping, Optional, Tuple, Union
-
-if sys.version_info >= (3, 8):
-    from typing import Literal
-else:
-    from typing_extensions import Literal
+from typing import Any, Dict, List, Literal, Mapping, Optional, Tuple, Union
 
 import pyarrow
 import pyarrow.fs as fs

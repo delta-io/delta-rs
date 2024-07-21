@@ -1,5 +1,4 @@
 import json
-import sys
 import uuid
 from dataclasses import dataclass
 from datetime import date, datetime
@@ -13,6 +12,7 @@ from typing import (
     Iterable,
     Iterator,
     List,
+    Literal,
     Mapping,
     Optional,
     Protocol,
@@ -22,20 +22,13 @@ from typing import (
 )
 from urllib.parse import unquote
 
-from deltalake import Schema as DeltaSchema
-from deltalake.fs import DeltaStorageHandler
-
-from ._util import encode_partition_value
-
-if sys.version_info >= (3, 8):
-    from typing import Literal
-else:
-    from typing_extensions import Literal
-
 import pyarrow as pa
 import pyarrow.dataset as ds
 import pyarrow.fs as pa_fs
 from pyarrow import RecordBatchReader
+
+from deltalake import Schema as DeltaSchema
+from deltalake.fs import DeltaStorageHandler
 
 from ._internal import DeltaDataChecker as _DeltaDataChecker
 from ._internal import batch_distinct
@@ -45,6 +38,7 @@ from ._internal import (
 )
 from ._internal import write_new_deltalake as write_deltalake_pyarrow
 from ._internal import write_to_deltalake as write_deltalake_rust
+from ._util import encode_partition_value
 from .exceptions import DeltaProtocolError, TableNotFoundError
 from .schema import (
     convert_pyarrow_dataset,
