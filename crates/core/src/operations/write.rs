@@ -511,7 +511,7 @@ async fn execute_non_empty_expr(
     let input_schema = snapshot.input_schema()?;
     let input_dfschema: DFSchema = input_schema.clone().as_ref().clone().try_into()?;
 
-    let scan = DeltaScanBuilder::new(snapshot, log_store.clone(), &state)
+    let scan = DeltaScanBuilder::new(snapshot, log_store.clone())
         .with_files(rewrite)
         .build()
         .await?;
