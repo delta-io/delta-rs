@@ -634,27 +634,26 @@ def __convert_data_and_schema(
     schema: Optional[Union[pa.Schema, DeltaSchema]],
     large_dtypes: bool,
 ) -> tuple[pa.RecordBatchReader, pa.Schema]:
-    output_data = None
 
     if isinstance(data, RecordBatchReader):
-        output_data = convert_pyarrow_recordbatchreader(data, large_dtypes)
+        data = convert_pyarrow_recordbatchreader(data, large_dtypes)
     elif isinstance(data, pa.RecordBatch):
-        output_data = convert_pyarrow_recordbatch(data, large_dtypes)
+        data = convert_pyarrow_recordbatch(data, large_dtypes)
     elif isinstance(data, pa.Table):
-        output_data = convert_pyarrow_table(data, large_dtypes)
+        data = convert_pyarrow_table(data, large_dtypes)
     elif isinstance(data, ds.Dataset):
-        output_data = convert_pyarrow_dataset(data, large_dtypes)
+        data = convert_pyarrow_dataset(data, large_dtypes)
     elif _has_pandas and isinstance(data, pd.DataFrame):
         if schema is not None:
-            output_data = convert_pyarrow_table(
+            data = convert_pyarrow_table(
                 pa.Table.from_pandas(data, schema=schema), large_dtypes=large_dtypes
             )
         else:
-            output_data = convert_pyarrow_table(
+            data = convert_pyarrow_table(
                 pa.Table.from_pandas(data), large_dtypes=large_dtypes
             )
     elif hasattr(data, "__arrow_c_array__"):
-        output_data = convert_pyarrow_recordbatch(
+        data = convert_pyarrow_recordbatch(
             pa.record_batch(data),  # type:ignore[attr-defined]
             large_dtypes,
         )
@@ -664,7 +663,7 @@ def __convert_data_and_schema(
                 "pyarrow 15 or later required to read stream via pycapsule interface"
             )
 
-        output_data = convert_pyarrow_recordbatchreader(
+        data = convert_pyarrow_recordbatchreader(
             RecordBatchReader.from_stream(data), large_dtypes
         )
     elif isinstance(data, Iterable):
@@ -676,13 +675,11 @@ def __convert_data_and_schema(
         )
 
     if isinstance(schema, DeltaSchema):
-        output_schema = schema.to_pyarrow(as_large_types=large_dtypes)
-    elif schema is None and output_data is not None:
-        output_schema = output_data.schema
-    else:
-        output_schema = schema
+        schema = schema.to_pyarrow(as_large_types=large_dtypes)
+    elif schema is None:
+        schema = data.schema
 
-    return output_data, output_schema
+    return data, schema
 
 
 class DeltaJSONEncoder(json.JSONEncoder):
