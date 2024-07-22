@@ -64,6 +64,9 @@ else:
 PYARROW_MAJOR_VERSION = int(pa.__version__.split(".", maxsplit=1)[0])
 DEFAULT_DATA_SKIPPING_NUM_INDEX_COLS = 32
 
+DTYPE_MAP = {
+        pa.large_string(): pa.string(),
+    }
 
 class ArrowStreamExportable(Protocol):
     """Type hint for object exporting Arrow C Stream via Arrow PyCapsule Interface.
@@ -315,10 +318,6 @@ def write_deltalake(
             table._table if table is not None else None, configuration
         )
 
-        def sort_arrow_schema(schema: pa.schema) -> pa.schema:
-            sorted_cols = sorted(iter(schema), key=lambda x: (x.name, str(x.type)))
-            return pa.schema(sorted_cols)
-
         if table:  # already exists
             filesystem = pa_fs.PyFileSystem(
                 DeltaStorageHandler.from_table(
@@ -326,7 +325,7 @@ def write_deltalake(
                 )
             )
 
-            if sort_arrow_schema(schema) != sort_arrow_schema(
+            if __sort_arrow_schema(schema) != __sort_arrow_schema(
                 table.schema().to_pyarrow(as_large_types=large_dtypes)
             ) and not (mode == "overwrite" and schema_mode == "overwrite"):
                 raise ValueError(
@@ -355,23 +354,13 @@ def write_deltalake(
             )
             current_version = -1
 
-        dtype_map = {
-            pa.large_string(): pa.string(),
-        }
-
-        def _large_to_normal_dtype(dtype: pa.DataType) -> pa.DataType:
-            try:
-                return dtype_map[dtype]
-            except KeyError:
-                return dtype
-
         if partition_by:
             table_schema: pa.Schema = schema
             if PYARROW_MAJOR_VERSION < 12:
                 partition_schema = pa.schema(
                     [
                         pa.field(
-                            name, _large_to_normal_dtype(table_schema.field(name).type)
+                            name, __large_to_normal_dtype(table_schema.field(name).type)
                         )
                         for name in partition_by
                     ]
@@ -681,7 +670,13 @@ def __convert_data_and_schema(
 
     return data, schema
 
+def __sort_arrow_schema(schema: pa.schema) -> pa.schema:
+    sorted_cols = sorted(iter(schema), key=lambda x: (x.name, str(x.type)))
+    return pa.schema(sorted_cols)
 
+def __large_to_normal_dtype(dtype: pa.DataType) -> pa.DataType:
+     return DTYPE_MAP.get(dtype, dtype)
+            
 class DeltaJSONEncoder(json.JSONEncoder):
     def default(self, obj: Any) -> Any:
         if isinstance(obj, bytes):
