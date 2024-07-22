@@ -65,8 +65,9 @@ PYARROW_MAJOR_VERSION = int(pa.__version__.split(".", maxsplit=1)[0])
 DEFAULT_DATA_SKIPPING_NUM_INDEX_COLS = 32
 
 DTYPE_MAP = {
-        pa.large_string(): pa.string(),
-    }
+    pa.large_string(): pa.string(),
+}
+
 
 class ArrowStreamExportable(Protocol):
     """Type hint for object exporting Arrow C Stream via Arrow PyCapsule Interface.
@@ -274,11 +275,11 @@ def write_deltalake(
         storage_options.update(storage_options or {})
         table.update_incremental()
 
-    __enforce_append_only(table=table, configuration=configuration, mode=mode)
+    _enforce_append_only(table=table, configuration=configuration, mode=mode)
     if isinstance(partition_by, str):
         partition_by = [partition_by]
 
-    data, schema = __convert_data_and_schema(
+    data, schema = _convert_data_and_schema(
         data=data, schema=schema, large_dtypes=large_dtypes
     )
 
@@ -325,7 +326,7 @@ def write_deltalake(
                 )
             )
 
-            if __sort_arrow_schema(schema) != __sort_arrow_schema(
+            if _sort_arrow_schema(schema) != _sort_arrow_schema(
                 table.schema().to_pyarrow(as_large_types=large_dtypes)
             ) and not (mode == "overwrite" and schema_mode == "overwrite"):
                 raise ValueError(
@@ -360,7 +361,7 @@ def write_deltalake(
                 partition_schema = pa.schema(
                     [
                         pa.field(
-                            name, __large_to_normal_dtype(table_schema.field(name).type)
+                            name, _large_to_normal_dtype(table_schema.field(name).type)
                         )
                         for name in partition_by
                     ]
@@ -592,7 +593,7 @@ def convert_to_deltalake(
     return
 
 
-def __enforce_append_only(
+def _enforce_append_only(
     table: Optional[DeltaTable],
     configuration: Optional[Mapping[str, Optional[str]]],
     mode: str,
@@ -610,7 +611,7 @@ def __enforce_append_only(
         )
 
 
-def __convert_data_and_schema(
+def _convert_data_and_schema(
     data: Union[
         "pd.DataFrame",
         ds.Dataset,
@@ -623,7 +624,6 @@ def __convert_data_and_schema(
     schema: Optional[Union[pa.Schema, DeltaSchema]],
     large_dtypes: bool,
 ) -> tuple[pa.RecordBatchReader, pa.Schema]:
-
     if isinstance(data, RecordBatchReader):
         data = convert_pyarrow_recordbatchreader(data, large_dtypes)
     elif isinstance(data, pa.RecordBatch):
@@ -670,13 +670,16 @@ def __convert_data_and_schema(
 
     return data, schema
 
-def __sort_arrow_schema(schema: pa.schema) -> pa.schema:
+
+def _sort_arrow_schema(schema: pa.schema) -> pa.schema:
     sorted_cols = sorted(iter(schema), key=lambda x: (x.name, str(x.type)))
     return pa.schema(sorted_cols)
 
-def __large_to_normal_dtype(dtype: pa.DataType) -> pa.DataType:
-     return DTYPE_MAP.get(dtype, dtype)
-            
+
+def _large_to_normal_dtype(dtype: pa.DataType) -> pa.DataType:
+    return DTYPE_MAP.get(dtype, dtype)
+
+
 class DeltaJSONEncoder(json.JSONEncoder):
     def default(self, obj: Any) -> Any:
         if isinstance(obj, bytes):
