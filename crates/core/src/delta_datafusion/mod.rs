@@ -2432,6 +2432,34 @@ mod tests {
         assert!(visitor.pruning_predicate.is_none());
     }
 
+    #[tokio::test]
+    async fn test_delta_scan_applies_parquet_options() {
+        let arr: Arc<dyn Array> = Arc::new(arrow::array::StringArray::from(vec!["s"]));
+        let batch = RecordBatch::try_from_iter_with_nullable(vec![("a", arr, false)]).unwrap();
+        let table = crate::DeltaOps::new_in_memory()
+            .write(vec![batch])
+            .with_save_mode(crate::protocol::SaveMode::Append)
+            .await
+            .unwrap();
+
+        let snapshot = table.snapshot().unwrap();
+
+        let mut config = SessionConfig::default();
+        config.options_mut().execution.parquet.pushdown_filters = true;
+        let ctx = SessionContext::new_with_config(config);
+        let state = ctx.state();
+
+        let scan = DeltaScanBuilder::new(snapshot, table.log_store(), &state)
+            .build()
+            .await
+            .unwrap();
+
+        let mut visitor = ParquetOptionsVisitor::default();
+        visit_execution_plan(&scan, &mut visitor).unwrap();
+
+        assert_eq!(ctx.copied_table_options().parquet, visitor.options.unwrap());
+    }
+
     #[derive(Default)]
     struct ParquetPredicateVisitor {
         predicate: Option<Arc<dyn PhysicalExpr>>,
@@ -2445,6 +2473,22 @@ mod tests {
             if let Some(parquet_exec) = plan.as_any().downcast_ref::<ParquetExec>() {
                 self.predicate = parquet_exec.predicate().cloned();
                 self.pruning_predicate = parquet_exec.pruning_predicate().cloned();
+            }
+            Ok(true)
+        }
+    }
+
+    #[derive(Default)]
+    struct ParquetOptionsVisitor {
+        options: Option<TableParquetOptions>,
+    }
+
+    impl ExecutionPlanVisitor for ParquetOptionsVisitor {
+        type Error = DataFusionError;
+
+        fn pre_visit(&mut self, plan: &dyn ExecutionPlan) -> Result<bool, Self::Error> {
+            if let Some(parquet_exec) = plan.as_any().downcast_ref::<ParquetExec>() {
+                self.options = Some(parquet_exec.table_parquet_options().clone())
             }
             Ok(true)
         }
