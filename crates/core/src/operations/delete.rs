@@ -139,7 +139,7 @@ async fn excute_non_empty_expr(
 
     let table_partition_cols = snapshot.metadata().partition_columns.clone();
 
-    let scan = DeltaScanBuilder::new(snapshot, log_store.clone())
+    let scan = DeltaScanBuilder::new(snapshot, log_store.clone(), &state)
         .with_files(rewrite)
         .build()
         .await?;
