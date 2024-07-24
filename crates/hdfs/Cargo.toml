@@ -1,6 +1,6 @@
 [package]
-name = "deltalake-azure"
-version = "0.1.3"
+name = "deltalake-hdfs"
+version = "0.1.0"
 authors.workspace = true
 keywords.workspace = true
 readme.workspace = true
@@ -13,26 +13,17 @@ rust-version.workspace = true
 
 [dependencies]
 deltalake-core = { version = ">=0.17.0, <0.19.0", path = "../core" }
-lazy_static = "1"
+hdfs-native-object-store = "0.11"
 
-# workspace depenndecies
-async-trait = { workspace = true }
-bytes = { workspace = true }
-futures = { workspace = true }
-tracing = { workspace = true }
-object_store = { workspace = true, features = ["azure"]}
-thiserror = { workspace = true }
+# workspace dependecies
+object_store = { workspace = true }
 tokio = { workspace = true }
-regex = { workspace = true }
 url = { workspace = true }
 
 [dev-dependencies]
-chrono = { workspace = true }
 serial_test = "3"
 deltalake-test = { path = "../test" }
-pretty_env_logger = "0.5.0"
-rand = "0.8"
-serde_json = { workspace = true }
+which = "4"
 
 [features]
-integration_test = []
+integration_test = ["hdfs-native-object-store/integration-test"]

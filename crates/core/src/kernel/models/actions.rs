@@ -736,6 +736,10 @@ pub struct CommitInfo {
     /// Additional provenance information for the commit
     #[serde(flatten, default)]
     pub info: HashMap<String, serde_json::Value>,
+
+    /// User defined metadata
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub user_metadata: Option<String>,
 }
 
 /// The domain metadata action contains a configuration (string) for a named metadata domain
