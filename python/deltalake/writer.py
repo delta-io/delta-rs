@@ -623,7 +623,7 @@ def _convert_data_and_schema(
     ],
     schema: Optional[Union[pa.Schema, DeltaSchema]],
     large_dtypes: bool,
-) -> tuple[pa.RecordBatchReader, pa.Schema]:
+) -> Tuple[pa.RecordBatchReader, pa.Schema]:
     if isinstance(data, RecordBatchReader):
         data = convert_pyarrow_recordbatchreader(data, large_dtypes)
     elif isinstance(data, pa.RecordBatch):
