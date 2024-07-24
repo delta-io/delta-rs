@@ -64,6 +64,10 @@ else:
 PYARROW_MAJOR_VERSION = int(pa.__version__.split(".", maxsplit=1)[0])
 DEFAULT_DATA_SKIPPING_NUM_INDEX_COLS = 32
 
+DTYPE_MAP = {
+    pa.large_string(): pa.string(),
+}
+
 
 class ArrowStreamExportable(Protocol):
     """Type hint for object exporting Arrow C Stream via Arrow PyCapsule Interface.
@@ -271,54 +275,13 @@ def write_deltalake(
         storage_options.update(storage_options or {})
         table.update_incremental()
 
-    __enforce_append_only(table=table, configuration=configuration, mode=mode)
+    _enforce_append_only(table=table, configuration=configuration, mode=mode)
     if isinstance(partition_by, str):
         partition_by = [partition_by]
 
-    if isinstance(schema, DeltaSchema):
-        schema = schema.to_pyarrow(as_large_types=large_dtypes)
-
-    if isinstance(data, RecordBatchReader):
-        data = convert_pyarrow_recordbatchreader(data, large_dtypes)
-    elif isinstance(data, pa.RecordBatch):
-        data = convert_pyarrow_recordbatch(data, large_dtypes)
-    elif isinstance(data, pa.Table):
-        data = convert_pyarrow_table(data, large_dtypes)
-    elif isinstance(data, ds.Dataset):
-        data = convert_pyarrow_dataset(data, large_dtypes)
-    elif _has_pandas and isinstance(data, pd.DataFrame):
-        if schema is not None:
-            data = convert_pyarrow_table(
-                pa.Table.from_pandas(data, schema=schema), large_dtypes=large_dtypes
-            )
-        else:
-            data = convert_pyarrow_table(
-                pa.Table.from_pandas(data), large_dtypes=large_dtypes
-            )
-    elif hasattr(data, "__arrow_c_array__"):
-        data = convert_pyarrow_recordbatch(
-            pa.record_batch(data),  # type:ignore[attr-defined]
-            large_dtypes,
-        )
-    elif hasattr(data, "__arrow_c_stream__"):
-        if not hasattr(RecordBatchReader, "from_stream"):
-            raise ValueError(
-                "pyarrow 15 or later required to read stream via pycapsule interface"
-            )
-
-        data = convert_pyarrow_recordbatchreader(
-            RecordBatchReader.from_stream(data), large_dtypes
-        )
-    elif isinstance(data, Iterable):
-        if schema is None:
-            raise ValueError("You must provide schema if data is Iterable")
-    else:
-        raise TypeError(
-            f"{type(data).__name__} is not a valid input. Only PyArrow RecordBatchReader, RecordBatch, Iterable[RecordBatch], Table, Dataset or Pandas DataFrame or objects implementing the Arrow PyCapsule Interface are valid inputs for source."
-        )
-
-    if schema is None:
-        schema = data.schema
+    data, schema = _convert_data_and_schema(
+        data=data, schema=schema, large_dtypes=large_dtypes
+    )
 
     if engine == "rust":
         if table is not None and mode == "ignore":
@@ -356,10 +319,6 @@ def write_deltalake(
             table._table if table is not None else None, configuration
         )
 
-        def sort_arrow_schema(schema: pa.schema) -> pa.schema:
-            sorted_cols = sorted(iter(schema), key=lambda x: (x.name, str(x.type)))
-            return pa.schema(sorted_cols)
-
         if table:  # already exists
             filesystem = pa_fs.PyFileSystem(
                 DeltaStorageHandler.from_table(
@@ -367,7 +326,7 @@ def write_deltalake(
                 )
             )
 
-            if sort_arrow_schema(schema) != sort_arrow_schema(
+            if _sort_arrow_schema(schema) != _sort_arrow_schema(
                 table.schema().to_pyarrow(as_large_types=large_dtypes)
             ) and not (mode == "overwrite" and schema_mode == "overwrite"):
                 raise ValueError(
@@ -395,16 +354,6 @@ def write_deltalake(
                 DeltaStorageHandler(table_uri, options=storage_options)
             )
             current_version = -1
-
-        dtype_map = {
-            pa.large_string(): pa.string(),
-        }
-
-        def _large_to_normal_dtype(dtype: pa.DataType) -> pa.DataType:
-            try:
-                return dtype_map[dtype]
-            except KeyError:
-                return dtype
 
         if partition_by:
             table_schema: pa.Schema = schema
@@ -644,7 +593,7 @@ def convert_to_deltalake(
     return
 
 
-def __enforce_append_only(
+def _enforce_append_only(
     table: Optional[DeltaTable],
     configuration: Optional[Mapping[str, Optional[str]]],
     mode: str,
@@ -660,6 +609,75 @@ def __enforce_append_only(
             "If configuration has delta.appendOnly = 'true', mode must be 'append'."
             f" Mode is currently {mode}"
         )
+
+
+def _convert_data_and_schema(
+    data: Union[
+        "pd.DataFrame",
+        ds.Dataset,
+        pa.Table,
+        pa.RecordBatch,
+        Iterable[pa.RecordBatch],
+        RecordBatchReader,
+        ArrowStreamExportable,
+    ],
+    schema: Optional[Union[pa.Schema, DeltaSchema]],
+    large_dtypes: bool,
+) -> Tuple[pa.RecordBatchReader, pa.Schema]:
+    if isinstance(data, RecordBatchReader):
+        data = convert_pyarrow_recordbatchreader(data, large_dtypes)
+    elif isinstance(data, pa.RecordBatch):
+        data = convert_pyarrow_recordbatch(data, large_dtypes)
+    elif isinstance(data, pa.Table):
+        data = convert_pyarrow_table(data, large_dtypes)
+    elif isinstance(data, ds.Dataset):
+        data = convert_pyarrow_dataset(data, large_dtypes)
+    elif _has_pandas and isinstance(data, pd.DataFrame):
+        if schema is not None:
+            data = convert_pyarrow_table(
+                pa.Table.from_pandas(data, schema=schema), large_dtypes=large_dtypes
+            )
+        else:
+            data = convert_pyarrow_table(
+                pa.Table.from_pandas(data), large_dtypes=large_dtypes
+            )
+    elif hasattr(data, "__arrow_c_array__"):
+        data = convert_pyarrow_recordbatch(
+            pa.record_batch(data),  # type:ignore[attr-defined]
+            large_dtypes,
+        )
+    elif hasattr(data, "__arrow_c_stream__"):
+        if not hasattr(RecordBatchReader, "from_stream"):
+            raise ValueError(
+                "pyarrow 15 or later required to read stream via pycapsule interface"
+            )
+
+        data = convert_pyarrow_recordbatchreader(
+            RecordBatchReader.from_stream(data), large_dtypes
+        )
+    elif isinstance(data, Iterable):
+        if schema is None:
+            raise ValueError("You must provide schema if data is Iterable")
+    else:
+        raise TypeError(
+            f"{type(data).__name__} is not a valid input. Only PyArrow RecordBatchReader, RecordBatch, Iterable[RecordBatch], Table, Dataset or Pandas DataFrame or objects implementing the Arrow PyCapsule Interface are valid inputs for source."
+        )
+
+    if isinstance(schema, DeltaSchema):
+        schema = schema.to_pyarrow(as_large_types=large_dtypes)
+    elif schema is None:
+        schema = data.schema
+
+    return data, schema
+
+
+def _sort_arrow_schema(schema: pa.schema) -> pa.schema:
+    sorted_cols = sorted(iter(schema), key=lambda x: (x.name, str(x.type)))
+    return pa.schema(sorted_cols)
+
+
+def _large_to_normal_dtype(dtype: pa.DataType) -> pa.DataType:
+    return DTYPE_MAP.get(dtype, dtype)
 
 
 class DeltaJSONEncoder(json.JSONEncoder):
