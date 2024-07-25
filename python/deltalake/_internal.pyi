@@ -159,6 +159,7 @@ class RawDeltaTable:
     def check_can_write_timestamp_ntz(self, schema: pyarrow.Schema) -> None: ...
     def load_cdf(
         self,
+        columns: Optional[List[str]] = None,
         starting_version: int = 0,
         ending_version: Optional[int] = None,
         starting_timestamp: Optional[str] = None,
