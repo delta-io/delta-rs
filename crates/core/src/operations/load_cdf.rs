@@ -1,5 +1,9 @@
 //! Module for reading the change datafeed of delta tables
 
+use datafusion_physical_expr::{
+    expressions::{self},
+    PhysicalExpr,
+};
 use std::sync::Arc;
 use std::time::SystemTime;
 
@@ -8,6 +12,7 @@ use chrono::{DateTime, Utc};
 use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::file_format::FileFormat;
 use datafusion::datasource::physical_plan::FileScanConfig;
+use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::union::UnionExec;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::SessionContext;
@@ -29,6 +34,8 @@ pub struct CdfLoadBuilder {
     snapshot: DeltaTableState,
     /// Delta object store for handling data files
     log_store: LogStoreRef,
+    /// Columns to project
+    columns: Option<Vec<String>>,
     /// Version to read from
     starting_version: i64,
     /// Version to stop reading at
@@ -47,6 +54,7 @@ impl CdfLoadBuilder {
         Self {
             snapshot,
             log_store,
+            columns: None,
             starting_version: 0,
             ending_version: None,
             starting_timestamp: None,
@@ -82,6 +90,12 @@ impl CdfLoadBuilder {
     /// Timestamp to start from
     pub fn with_starting_timestamp(mut self, timestamp: DateTime<Utc>) -> Self {
         self.starting_timestamp = Some(timestamp);
+        self
+    }
+
+    /// Columns to select
+    pub fn with_columns(mut self, columns: Vec<String>) -> Self {
+        self.columns = Some(columns);
         self
     }
 
@@ -293,7 +307,24 @@ impl CdfLoadBuilder {
 
         // The output batches are then unioned to create a single output. Coalesce partitions is only here for the time
         // being for development. I plan to parallelize the reads once the base idea is correct.
-        let union_scan: Arc<dyn ExecutionPlan> = Arc::new(UnionExec::new(vec![cdc_scan, add_scan]));
+        let mut union_scan: Arc<dyn ExecutionPlan> =
+            Arc::new(UnionExec::new(vec![cdc_scan, add_scan]));
+
+        if let Some(columns) = &self.columns {
+            let expressions: Vec<(Arc<dyn PhysicalExpr>, String)> = union_scan
+                .schema()
+                .fields()
+                .into_iter()
+                .enumerate()
+                .map(|(idx, field)| -> (Arc<dyn PhysicalExpr>, String) {
+                    let field_name = field.name();
+                    let expr = Arc::new(expressions::Column::new(field_name, idx));
+                    (expr, field_name.to_owned())
+                })
+                .filter(|(_, field_name)| columns.contains(field_name))
+                .collect();
+            union_scan = Arc::new(ProjectionExec::try_new(expressions, union_scan)?);
+        }
         Ok(DeltaCdfScan::new(union_scan))
     }
 }
