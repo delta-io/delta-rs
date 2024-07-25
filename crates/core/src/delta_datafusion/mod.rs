@@ -61,7 +61,7 @@ use datafusion_common::scalar::ScalarValue;
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion, TreeNodeVisitor};
 use datafusion_common::{
     config::ConfigOptions, Column, DFSchema, DataFusionError, Result as DataFusionResult,
-    ToDFSchema,
+    TableReference, ToDFSchema,
 };
 use datafusion_expr::logical_plan::CreateExternalTable;
 use datafusion_expr::utils::conjunction;
@@ -845,6 +845,10 @@ impl DisplayAs for DeltaScan {
 }
 
 impl ExecutionPlan for DeltaScan {
+    fn name(&self) -> &str {
+        Self::static_name()
+    }
+
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -1316,6 +1320,7 @@ impl LogicalExtensionCodec for DeltaLogicalCodec {
     fn try_decode_table_provider(
         &self,
         buf: &[u8],
+        _table_ref: &TableReference,
         _schema: SchemaRef,
         _ctx: &SessionContext,
     ) -> Result<Arc<dyn TableProvider>, DataFusionError> {
@@ -1326,6 +1331,7 @@ impl LogicalExtensionCodec for DeltaLogicalCodec {
 
     fn try_encode_table_provider(
         &self,
+        _table_ref: &TableReference,
         node: Arc<dyn TableProvider>,
         buf: &mut Vec<u8>,
     ) -> Result<(), DataFusionError> {
@@ -1506,7 +1512,7 @@ pub(crate) async fn find_files_scan<'a>(
 
     // Identify which columns we need to project
     let mut used_columns = expression
-        .to_columns()?
+        .column_refs()
         .into_iter()
         .map(|column| logical_schema.index_of(&column.name))
         .collect::<Result<Vec<usize>, ArrowError>>()?;
@@ -1756,9 +1762,8 @@ mod tests {
     use datafusion::assert_batches_sorted_eq;
     use datafusion::datasource::physical_plan::ParquetExec;
     use datafusion::physical_plan::empty::EmptyExec;
-    use datafusion::physical_plan::{visit_execution_plan, ExecutionPlanVisitor};
+    use datafusion::physical_plan::{visit_execution_plan, ExecutionPlanVisitor, PhysicalExpr};
     use datafusion_expr::lit;
-    use datafusion_physical_expr::PhysicalExpr;
     use datafusion_proto::physical_plan::AsExecutionPlan;
     use datafusion_proto::protobuf;
     use object_store::path::Path;

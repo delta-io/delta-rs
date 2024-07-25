@@ -85,6 +85,10 @@ impl DisplayAs for FindFilesExec {
 }
 
 impl ExecutionPlan for FindFilesExec {
+    fn name(&self) -> &str {
+        Self::static_name()
+    }
+
     fn as_any(&self) -> &dyn Any {
         self
     }
