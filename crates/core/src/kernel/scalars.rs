@@ -1,7 +1,5 @@
 //! Auxiliary methods for dealing with kernel scalars
 //!
-use std::cmp::Ordering;
-
 use arrow_array::Array;
 use arrow_schema::TimeUnit;
 use chrono::{DateTime, TimeZone, Utc};
@@ -10,6 +8,8 @@ use delta_kernel::{
     schema::StructField,
 };
 use object_store::path::Path;
+use std::cmp::Ordering;
+use urlencoding::encode;
 
 use crate::NULL_PARTITION_VALUE_DATA_PATH;
 
@@ -76,7 +76,7 @@ impl ScalarExt for Scalar {
         if self.is_null() {
             return NULL_PARTITION_VALUE_DATA_PATH.to_string();
         }
-        Path::from(self.serialize()).to_string()
+        encode(Path::from(self.serialize()).as_ref()).to_string()
     }
 
     /// Create a [`Scalar`] form a row in an arrow array.
