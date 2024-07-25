@@ -412,3 +412,9 @@ def test_read_cdf_non_partitioned():
         datetime(2024, 4, 14, 15, 58, 31, 257000),
         datetime(2024, 4, 14, 15, 58, 32, 495000),
     ]
+
+
+def test_read_cdf_partitioned_projection():
+    dt = DeltaTable("../crates/test/tests/data/cdf-table/")
+    columns = ["id", "_change_type", "_commit_version"]
+    assert columns == dt.load_cdf(0, 3, columns=columns).schema.names
