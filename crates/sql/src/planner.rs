@@ -42,6 +42,7 @@ impl<'a, S: ContextProvider> DeltaSqlToRel<'a, S> {
                     ParserOptions {
                         parse_float_as_decimal: self.options.parse_float_as_decimal,
                         enable_ident_normalization: self.options.enable_ident_normalization,
+                        support_varchar_with_length: false,
                     },
                 );
                 planner.statement_to_plan(s)

@@ -29,6 +29,7 @@ use std::{
 use arrow_schema::DataType;
 use chrono::{DateTime, NaiveDate};
 use datafusion::execution::context::SessionState;
+use datafusion::execution::FunctionRegistry;
 use datafusion_common::Result as DFResult;
 use datafusion_common::{config::ConfigOptions, DFSchema, Result, ScalarValue, TableReference};
 use datafusion_expr::{
@@ -107,8 +108,14 @@ pub(crate) fn parse_predicate_expression(
         })?;
 
     let context_provider = DeltaContextProvider { state: df_state };
-    let sql_to_rel =
+    let mut sql_to_rel =
         SqlToRel::new_with_options(&context_provider, DeltaParserOptions::default().into());
+
+    // NOTE: This can be probably removed with Datafusion 41 once
+    // <https://github.com/apache/datafusion/pull/11485> is released
+    for planner in context_provider.state.expr_planners() {
+        sql_to_rel = sql_to_rel.with_user_defined_planner(planner.clone());
+    }
 
     Ok(sql_to_rel.sql_to_expr(sql, schema, &mut Default::default())?)
 }
