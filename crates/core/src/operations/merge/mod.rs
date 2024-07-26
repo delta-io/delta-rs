@@ -36,6 +36,8 @@ use async_trait::async_trait;
 use datafusion::datasource::provider_as_source;
 use datafusion::error::Result as DataFusionResult;
 use datafusion::execution::context::SessionConfig;
+use datafusion::execution::session_state::SessionStateBuilder;
+use datafusion::functions_aggregate::expr_fn::{max, min};
 use datafusion::logical_expr::build_join_schema;
 use datafusion::physical_plan::metrics::MetricBuilder;
 use datafusion::physical_planner::{ExtensionPlanner, PhysicalPlanner};
@@ -48,7 +50,7 @@ use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{Column, DFSchema, ScalarValue, TableReference};
 use datafusion_expr::expr::Placeholder;
 use datafusion_expr::{
-    col, conditional_expressions::CaseBuilder, lit, max, min, when, Between, Expr, JoinType,
+    col, conditional_expressions::CaseBuilder, lit, when, Between, Expr, JoinType,
 };
 use datafusion_expr::{
     Aggregate, BinaryExpr, Extension, LogicalPlan, LogicalPlanBuilder, Operator,
@@ -679,11 +681,11 @@ struct PredicatePlaceholder {
 /// Takes the predicate provided and does three things:
 ///
 /// 1. for any relations between a source column and a partition target column,
-/// replace source with a placeholder matching the name of the partition
-/// columns
+///    replace source with a placeholder matching the name of the partition
+///    columns
 ///
 /// 2. for any is equal relations between a source column and a non-partition target column,
-/// replace source with is between expression with min(source_column) and max(source_column) placeholders
+///    replace source with is between expression with min(source_column) and max(source_column) placeholders
 ///
 /// 3. for any other relation with a source column, remove them.
 ///
@@ -1004,10 +1006,10 @@ async fn execute(
     source: DataFrame,
     log_store: LogStoreRef,
     snapshot: DeltaTableState,
-    state: SessionState,
+    _state: SessionState,
     writer_properties: Option<WriterProperties>,
     mut commit_properties: CommitProperties,
-    safe_cast: bool,
+    _safe_cast: bool,
     source_alias: Option<String>,
     target_alias: Option<String>,
     match_operations: Vec<MergeOperationConfig>,
@@ -1031,7 +1033,10 @@ async fn execute(
         extension_planner: MergeMetricExtensionPlanner {},
     };
 
-    let state = state.with_query_planner(Arc::new(merge_planner));
+    let state = SessionStateBuilder::new()
+        .with_default_features()
+        .with_query_planner(Arc::new(merge_planner))
+        .build();
 
     // TODO: Given the join predicate, remove any expression that involve the
     // source table and keep expressions that only involve the target table.

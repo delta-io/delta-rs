@@ -248,7 +248,7 @@ pub(crate) fn merge_arrow_field(
             let mut new_field = left.clone();
             match new_field.try_merge(right) {
                 Ok(()) => (),
-                Err(err) => {
+                Err(_err) => {
                     // We cannot keep the table field here, there is some weird behavior where
                     // Decimal(5,1) can be safely casted into Decimal(4,1) with out loss of data
                     // Then our stats parser fails to parse this decimal(1000.1) into Decimal(4,1)

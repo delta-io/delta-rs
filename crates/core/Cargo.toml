@@ -43,7 +43,7 @@ datafusion-proto = { workspace = true, optional = true }
 datafusion-sql = { workspace = true, optional = true }
 datafusion-physical-expr = { workspace = true, optional = true }
 datafusion-functions = { workspace = true, optional = true }
-datafusion-functions-array = { workspace = true, optional = true }
+datafusion-functions-aggregate = { workspace = true, optional = true }
 
 # serde
 serde = { workspace = true, features = ["derive"] }
@@ -129,7 +129,7 @@ datafusion = [
     "datafusion-physical-expr",
     "datafusion-sql",
     "datafusion-functions",
-    "datafusion-functions-array",
+    "datafusion-functions-aggregate",
     "sqlparser",
 ]
 datafusion-ext = ["datafusion"]

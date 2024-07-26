@@ -71,13 +71,3 @@ pub enum Error {
     #[error("Failed to parse value '{0}' as '{1}'")]
     Parse(String, DataType),
 }
-
-#[cfg(feature = "object_store")]
-impl From<object_store::Error> for Error {
-    fn from(value: object_store::Error) -> Self {
-        match value {
-            object_store::Error::NotFound { path, .. } => Self::FileNotFound(path),
-            err => Self::ObjectStore(err),
-        }
-    }
-}

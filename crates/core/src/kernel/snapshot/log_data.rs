@@ -472,18 +472,24 @@ impl<'a> IntoIterator for LogDataHandler<'a> {
 mod datafusion {
     use std::sync::Arc;
 
+    use ::datafusion::functions_aggregate::min_max::{MaxAccumulator, MinAccumulator};
+    use ::datafusion::physical_plan::Accumulator;
     use arrow_arith::aggregate::sum;
     use arrow_array::Int64Array;
     use arrow_schema::DataType as ArrowDataType;
     use datafusion_common::scalar::ScalarValue;
     use datafusion_common::stats::{ColumnStatistics, Precision, Statistics};
-    use datafusion_expr::AggregateFunction;
-    use datafusion_physical_expr::aggregate::AggregateExpr;
-    use datafusion_physical_expr::expressions::{Column, Max, Min};
 
     use super::*;
     use crate::kernel::arrow::extract::{extract_and_cast_opt, extract_column};
 
+    #[derive(Debug, Default, Clone)]
+    enum AccumulatorType {
+        Min,
+        Max,
+        #[default]
+        Unused,
+    }
     // TODO validate this works with "wide and narrow" builds / stats
 
     impl FileStatsAccessor<'_> {
@@ -512,7 +518,7 @@ mod datafusion {
             &self,
             path_step: &str,
             name: &str,
-            fun: &AggregateFunction,
+            fun_type: AccumulatorType,
         ) -> Precision<ScalarValue> {
             let mut path = name.split('.');
             let array = if let Ok(array) = extract_column(self.stats, path_step, &mut path) {
@@ -522,28 +528,24 @@ mod datafusion {
             };
 
             if array.data_type().is_primitive() {
-                let agg: Box<dyn AggregateExpr> = match fun {
-                    AggregateFunction::Min => Box::new(Min::new(
-                        // NOTE: this is just a placeholder, we never evalutae this expression
-                        Arc::new(Column::new(name, 0)),
-                        name,
-                        array.data_type().clone(),
-                    )),
-                    AggregateFunction::Max => Box::new(Max::new(
-                        // NOTE: this is just a placeholder, we never evalutae this expression
-                        Arc::new(Column::new(name, 0)),
-                        name,
-                        array.data_type().clone(),
-                    )),
-                    _ => return Precision::Absent,
+                let accumulator: Option<Box<dyn Accumulator>> = match fun_type {
+                    AccumulatorType::Min => MinAccumulator::try_new(array.data_type())
+                        .map_or(None, |a| Some(Box::new(a))),
+                    AccumulatorType::Max => MaxAccumulator::try_new(array.data_type())
+                        .map_or(None, |a| Some(Box::new(a))),
+                    _ => None,
                 };
-                let mut accum = agg.create_accumulator().ok().unwrap();
-                return accum
-                    .update_batch(&[array.clone()])
-                    .ok()
-                    .and_then(|_| accum.evaluate().ok())
-                    .map(Precision::Exact)
-                    .unwrap_or(Precision::Absent);
+
+                if let Some(mut accumulator) = accumulator {
+                    return accumulator
+                        .update_batch(&[array.clone()])
+                        .ok()
+                        .and_then(|_| accumulator.evaluate().ok())
+                        .map(Precision::Exact)
+                        .unwrap_or(Precision::Absent);
+                }
+
+                return Precision::Absent;
             }
 
             match array.data_type() {
@@ -551,7 +553,11 @@ mod datafusion {
                     return fields
                         .iter()
                         .map(|f| {
-                            self.column_bounds(path_step, &format!("{name}.{}", f.name()), fun)
+                            self.column_bounds(
+                                path_step,
+                                &format!("{name}.{}", f.name()),
+                                fun_type.clone(),
+                            )
                         })
                         .map(|s| match s {
                             Precision::Exact(s) => Some(s),
@@ -590,8 +596,7 @@ mod datafusion {
             let null_count_col = format!("{COL_NULL_COUNT}.{}", name.as_ref());
             let null_count = self.collect_count(&null_count_col);
 
-            let min_value =
-                self.column_bounds(COL_MIN_VALUES, name.as_ref(), &AggregateFunction::Min);
+            let min_value = self.column_bounds(COL_MIN_VALUES, name.as_ref(), AccumulatorType::Min);
             let min_value = match &min_value {
                 Precision::Exact(value) if value.is_null() => Precision::Absent,
                 // TODO this is a hack, we should not be casting here but rather when we read the checkpoint data.
@@ -602,8 +607,7 @@ mod datafusion {
                 _ => min_value,
             };
 
-            let max_value =
-                self.column_bounds(COL_MAX_VALUES, name.as_ref(), &AggregateFunction::Max);
+            let max_value = self.column_bounds(COL_MAX_VALUES, name.as_ref(), AccumulatorType::Max);
             let max_value = match &max_value {
                 Precision::Exact(value) if value.is_null() => Precision::Absent,
                 Precision::Exact(ScalarValue::TimestampNanosecond(a, b)) => Precision::Exact(

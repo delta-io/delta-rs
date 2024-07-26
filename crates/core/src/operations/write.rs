@@ -28,7 +28,7 @@ use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
-use std::{iter, vec};
+use std::vec;
 
 use arrow_array::RecordBatch;
 use arrow_cast::can_cast_types;

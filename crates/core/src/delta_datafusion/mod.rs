@@ -39,12 +39,12 @@ use arrow_cast::display::array_value_to_string;
 use arrow_schema::Field;
 use async_trait::async_trait;
 use chrono::{DateTime, TimeZone, Utc};
+use datafusion::catalog::{Session, TableProviderFactory};
 use datafusion::config::TableParquetOptions;
 use datafusion::datasource::physical_plan::parquet::ParquetExecBuilder;
 use datafusion::datasource::physical_plan::{
     wrap_partition_type_in_dict, wrap_partition_value_in_dict, FileScanConfig,
 };
-use datafusion::datasource::provider::TableProviderFactory;
 use datafusion::datasource::{listing::PartitionedFile, MemTable, TableProvider, TableType};
 use datafusion::execution::context::{SessionConfig, SessionContext, SessionState, TaskContext};
 use datafusion::execution::runtime_env::RuntimeEnv;
@@ -465,12 +465,11 @@ pub struct DeltaScanConfig {
     pub schema: Option<SchemaRef>,
 }
 
-#[derive(Debug)]
 pub(crate) struct DeltaScanBuilder<'a> {
     snapshot: &'a DeltaTableState,
     log_store: LogStoreRef,
     filter: Option<Expr>,
-    state: &'a SessionState,
+    session: &'a dyn Session,
     projection: Option<&'a Vec<usize>>,
     limit: Option<usize>,
     files: Option<&'a [Add]>,
@@ -481,13 +480,13 @@ impl<'a> DeltaScanBuilder<'a> {
     pub fn new(
         snapshot: &'a DeltaTableState,
         log_store: LogStoreRef,
-        state: &'a SessionState,
+        session: &'a dyn Session,
     ) -> Self {
         DeltaScanBuilder {
             snapshot,
             log_store,
             filter: None,
-            state,
+            session,
             projection: None,
             limit: None,
             files: None,
@@ -648,7 +647,7 @@ impl<'a> DeltaScanBuilder<'a> {
             .unwrap_or(Statistics::new_unknown(&schema));
 
         let parquet_options = TableParquetOptions {
-            global: self.state.config().options().execution.parquet.clone(),
+            global: self.session.config().options().execution.parquet.clone(),
             ..Default::default()
         };
 
@@ -717,7 +716,7 @@ impl TableProvider for DeltaTable {
 
     async fn scan(
         &self,
-        session: &SessionState,
+        session: &dyn Session,
         projection: Option<&Vec<usize>>,
         filters: &[Expr],
         limit: Option<usize>,
@@ -806,7 +805,7 @@ impl TableProvider for DeltaTableProvider {
 
     async fn scan(
         &self,
-        session: &SessionState,
+        session: &dyn Session,
         projection: Option<&Vec<usize>>,
         filters: &[Expr],
         limit: Option<usize>,
@@ -1377,7 +1376,7 @@ pub struct DeltaTableFactory {}
 impl TableProviderFactory for DeltaTableFactory {
     async fn create(
         &self,
-        _ctx: &SessionState,
+        _ctx: &dyn Session,
         cmd: &CreateExternalTable,
     ) -> datafusion::error::Result<Arc<dyn TableProvider>> {
         let provider = if cmd.options.is_empty() {
