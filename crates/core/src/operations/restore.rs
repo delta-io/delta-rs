@@ -4,14 +4,14 @@
 //! 1) Read the latest state snapshot of the table.
 //! 2) Read table state for version or datetime to restore
 //! 3) Compute files available in state for restoring (files were removed by some commit)
-//! but missed in the latest. Add these files into commit as AddFile action.
+//!    but missed in the latest. Add these files into commit as AddFile action.
 //! 4) Compute files available in the latest state snapshot (files were added after version to restore)
-//! but missed in the state to restore. Add these files into commit as RemoveFile action.
+//!    but missed in the state to restore. Add these files into commit as RemoveFile action.
 //! 5) If ignore_missing_files option is false (default value) check availability of AddFile
-//! in file system.
+//!    in file system.
 //! 6) Commit Protocol, all RemoveFile and AddFile actions
-//! into delta log using `LogStore::write_commit_entry` (commit will be failed in case of parallel transaction)
-//! TODO: comment is outdated
+//!    into delta log using `LogStore::write_commit_entry` (commit will be failed in case of parallel transaction)
+//!    TODO: comment is outdated
 //! 7) If table was modified in parallel then ignore restore and raise exception.
 //!
 //! # Example

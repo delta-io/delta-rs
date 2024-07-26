@@ -26,6 +26,7 @@ use datafusion::dataframe::DataFrame;
 use datafusion::datasource::provider_as_source;
 use datafusion::error::Result as DataFusionResult;
 use datafusion::execution::context::{SessionContext, SessionState};
+use datafusion::execution::session_state::SessionStateBuilder;
 use datafusion::physical_plan::metrics::MetricBuilder;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_planner::{ExtensionPlanner, PhysicalPlanner};
@@ -185,7 +186,9 @@ async fn excute_non_empty_expr(
         extension_planner: DeleteMetricExtensionPlanner {},
     };
 
-    let state = state.clone().with_query_planner(Arc::new(delete_planner));
+    let state = SessionStateBuilder::new_from_existing(state.clone())
+        .with_query_planner(Arc::new(delete_planner))
+        .build();
 
     let scan_config = DeltaScanConfigBuilder::default()
         .with_file_column(false)

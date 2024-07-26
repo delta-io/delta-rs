@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use dashmap::DashMap;
-use datafusion::catalog::schema::SchemaProvider;
+use datafusion::catalog::SchemaProvider;
 use datafusion::datasource::TableProvider;
 use datafusion_common::DataFusionError;
 use futures::TryStreamExt;
@@ -147,7 +147,8 @@ impl SchemaProvider for ListingSchemaProvider {
 mod tests {
     use super::*;
     use datafusion::assert_batches_sorted_eq;
-    use datafusion::catalog::{CatalogProvider, MemoryCatalogProvider};
+    use datafusion::catalog::CatalogProvider;
+    use datafusion::catalog_common::MemoryCatalogProvider;
     use datafusion::execution::context::SessionContext;
 
     #[test]

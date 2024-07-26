@@ -53,6 +53,7 @@ use datafusion::{
     dataframe::DataFrame,
     datasource::provider_as_source,
     execution::context::SessionState,
+    execution::session_state::SessionStateBuilder,
     physical_plan::{metrics::MetricBuilder, ExecutionPlan},
     physical_planner::{ExtensionPlanner, PhysicalPlanner},
     prelude::SessionContext,
@@ -225,7 +226,7 @@ async fn execute(
     state: SessionState,
     writer_properties: Option<WriterProperties>,
     mut commit_properties: CommitProperties,
-    safe_cast: bool,
+    _safe_cast: bool,
 ) -> DeltaResult<(DeltaTableState, UpdateMetrics)> {
     // Validate the predicate and update expressions.
     //
@@ -241,7 +242,9 @@ async fn execute(
         extension_planner: UpdateMetricExtensionPlanner {},
     };
 
-    let state = state.clone().with_query_planner(Arc::new(update_planner));
+    let state = SessionStateBuilder::new_from_existing(state)
+        .with_query_planner(Arc::new(update_planner))
+        .build();
 
     let exec_start = Instant::now();
     let mut metrics = UpdateMetrics::default();

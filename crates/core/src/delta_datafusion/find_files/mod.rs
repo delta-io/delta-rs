@@ -41,8 +41,10 @@ lazy_static! {
         ONLY_FILES_SCHEMA.clone().to_dfschema_ref().unwrap();
 }
 
+#[derive(Default)]
 struct FindFilesPlannerExtension {}
 
+#[derive(Default)]
 struct FindFilesPlanner {}
 
 #[async_trait]
@@ -188,6 +190,7 @@ async fn scan_table_by_files(
 pub mod tests {
     use std::sync::Arc;
 
+    use datafusion::execution::session_state::SessionStateBuilder;
     use datafusion::prelude::{DataFrame, SessionContext};
     use datafusion_common::{assert_batches_eq, assert_batches_sorted_eq};
     use datafusion_expr::{col, lit, Expr, Extension, LogicalPlan};
@@ -202,9 +205,9 @@ pub mod tests {
         expr: Expr,
     ) -> Result<Vec<arrow_array::RecordBatch>, DeltaTableError> {
         let ctx = SessionContext::new();
-        let state = ctx
-            .state()
-            .with_query_planner(Arc::new(FindFilesPlanner {}));
+        let state = SessionStateBuilder::new_from_existing(ctx.state())
+            .with_query_planner(Arc::new(FindFilesPlanner::default()))
+            .build();
         let find_files_node = LogicalPlan::Extension(Extension {
             node: Arc::new(FindFilesNode::new(
                 "my_cool_plan".into(),

@@ -252,8 +252,8 @@ pub enum TableType {
     StreamingTable,
 }
 
-///
 #[derive(Deserialize)]
+/// Summary of the table
 pub struct TableSummary {
     /// The full name of the table.
     pub full_name: String,

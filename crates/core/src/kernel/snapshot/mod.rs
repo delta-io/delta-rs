@@ -371,7 +371,7 @@ impl Snapshot {
                 .partition_columns
                 .iter()
                 .map(|col| {
-                    schema.field(col).map(|field| field.clone()).ok_or_else(|| {
+                    schema.field(col).cloned().ok_or_else(|| {
                         DeltaTableError::Generic(format!(
                             "Partition column {} not found in schema",
                             col
