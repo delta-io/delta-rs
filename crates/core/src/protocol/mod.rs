@@ -377,6 +377,13 @@ pub enum DeltaOperation {
         name: String,
     },
 
+    /// Represents a Delta `Drop Column` operation.
+    /// Used to drop columns or fields in a struct
+    DropColumn {
+        /// Fields to be dropped from the schema
+        fields: Vec<String>,
+    },
+
     /// Merge data with a source data with the following predicate
     #[serde(rename_all = "camelCase")]
     Merge {
@@ -476,6 +483,7 @@ impl DeltaOperation {
             DeltaOperation::VacuumEnd { .. } => "VACUUM END",
             DeltaOperation::AddConstraint { .. } => "ADD CONSTRAINT",
             DeltaOperation::DropConstraint { .. } => "DROP CONSTRAINT",
+            DeltaOperation::DropColumn { .. } => "DROP COLUMN",
         }
     }
 
@@ -516,6 +524,7 @@ impl DeltaOperation {
             | Self::VacuumStart { .. }
             | Self::VacuumEnd { .. }
             | Self::AddConstraint { .. }
+            | Self::DropColumn { .. }
             | Self::DropConstraint { .. } => false,
             Self::Create { .. }
             | Self::FileSystemCheck {}

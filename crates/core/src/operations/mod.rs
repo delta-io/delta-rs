@@ -18,6 +18,7 @@ use std::collections::HashMap;
 pub mod cast;
 pub mod convert_to_delta;
 pub mod create;
+pub mod drop_column;
 pub mod drop_constraints;
 pub mod filesystem_check;
 pub mod optimize;
@@ -35,6 +36,7 @@ use self::{
 pub use ::datafusion::physical_plan::common::collect as collect_sendable_stream;
 #[cfg(feature = "datafusion")]
 use arrow::record_batch::RecordBatch;
+use drop_column::DropColumnBuilder;
 use optimize::OptimizeBuilder;
 use restore::RestoreBuilder;
 use set_tbl_properties::SetTablePropertiesBuilder;
@@ -222,6 +224,11 @@ impl DeltaOps {
     #[must_use]
     pub fn drop_constraints(self) -> DropConstraintBuilder {
         DropConstraintBuilder::new(self.0.log_store, self.0.state.unwrap())
+    }
+
+    /// Add new columns
+    pub fn drop_columns(self) -> DropColumnBuilder {
+        DropColumnBuilder::new(self.0.log_store, self.0.state.unwrap())
     }
 
     /// Set table properties

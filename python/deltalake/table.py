@@ -1868,6 +1868,38 @@ class TableAlterer:
             post_commithook_properties.__dict__ if post_commithook_properties else None,
         )
 
+    def drop_columns(
+        self,
+        fields: Union[str, List[str]],
+        custom_metadata: Optional[Dict[str, str]] = None,
+        post_commithook_properties: Optional[PostCommitHookProperties] = None,
+    ) -> None:
+        """Drop columns and/or update the fields of a stuct column
+        Args:
+            fields: fields to drop from table schema
+            custom_metadata: custom metadata that will be added to the transaction commit.
+            post_commithook_properties: properties for the post commit hook. If None, default values are used.
+        Example:
+            ```python
+            from deltalake import DeltaTable
+            dt = DeltaTable("test_table")
+            dt.alter.drop_columns(
+                [
+                    "foo",
+                    "bar.baz"
+                ]
+            )
+            ```
+        """
+        if isinstance(fields, str):
+            fields = [fields]
+
+        self.table._table.drop_columns(
+            fields,
+            custom_metadata,
+            post_commithook_properties.__dict__ if post_commithook_properties else None,
+        )
+
     def set_table_properties(
         self,
         properties: Dict[str, str],

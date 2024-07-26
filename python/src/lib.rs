@@ -32,6 +32,7 @@ use deltalake::operations::collect_sendable_stream;
 use deltalake::operations::constraints::ConstraintBuilder;
 use deltalake::operations::convert_to_delta::{ConvertToDeltaBuilder, PartitionStrategy};
 use deltalake::operations::delete::DeleteBuilder;
+use deltalake::operations::drop_column::DropColumnBuilder;
 use deltalake::operations::drop_constraints::DropConstraintBuilder;
 use deltalake::operations::filesystem_check::FileSystemCheckBuilder;
 use deltalake::operations::load_cdf::CdfLoadBuilder;
@@ -621,6 +622,33 @@ impl RawDeltaTable {
                     commit_properties =
                         set_post_commithook_properties(commit_properties, post_commit_hook_props)
                 }
+                cmd = cmd.with_commit_properties(commit_properties);
+            }
+
+            rt().block_on(cmd.into_future()).map_err(PythonError::from)
+        })?;
+        self._table.state = table.state;
+        Ok(())
+    }
+
+    #[pyo3(signature = (fields, custom_metadata=None, post_commithook_properties=None))]
+    pub fn drop_columns(
+        &mut self,
+        py: Python,
+        fields: Vec<String>,
+        custom_metadata: Option<HashMap<String, String>>,
+        post_commithook_properties: Option<HashMap<String, Option<bool>>>,
+    ) -> PyResult<()> {
+        let table = py.allow_threads(|| {
+            let mut cmd = DropColumnBuilder::new(
+                self._table.log_store(),
+                self._table.snapshot().map_err(PythonError::from)?.clone(),
+            );
+            cmd = cmd.with_fields(fields);
+
+            if let Some(commit_properties) =
+                maybe_create_commit_properties(custom_metadata, post_commithook_properties)
+            {
                 cmd = cmd.with_commit_properties(commit_properties);
             }
 
@@ -1428,6 +1456,27 @@ fn convert_partition_filters(
             }
         })
         .collect()
+}
+
+fn maybe_create_commit_properties(
+    custom_metadata: Option<HashMap<String, String>>,
+    post_commithook_properties: Option<HashMap<String, Option<bool>>>,
+) -> Option<CommitProperties> {
+    if custom_metadata.is_none() && post_commithook_properties.is_none() {
+        return None;
+    }
+    let mut commit_properties = CommitProperties::default();
+    if let Some(metadata) = custom_metadata {
+        let json_metadata: Map<String, Value> =
+            metadata.into_iter().map(|(k, v)| (k, v.into())).collect();
+        commit_properties = commit_properties.with_metadata(json_metadata);
+    };
+
+    if let Some(post_commit_hook_props) = post_commithook_properties {
+        commit_properties =
+            set_post_commithook_properties(commit_properties, post_commit_hook_props)
+    }
+    Some(commit_properties)
 }
 
 fn scalar_to_py<'py>(value: &Scalar, py_date: &Bound<'py, PyAny>) -> PyResult<Bound<'py, PyAny>> {

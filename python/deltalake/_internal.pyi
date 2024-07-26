@@ -91,6 +91,12 @@ class RawDeltaTable:
         custom_metadata: Optional[Dict[str, str]],
         post_commithook_properties: Optional[Dict[str, Optional[bool]]],
     ) -> None: ...
+    def drop_columns(
+        self,
+        fields: List[str],
+        custom_metadata: Optional[Dict[str, str]],
+        post_commithook_properties: Optional[Dict[str, Optional[bool]]],
+    ) -> None: ...
     def set_table_properties(
         self,
         properties: Dict[str, str],
