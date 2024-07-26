@@ -380,6 +380,7 @@ impl CdfLoadBuilder {
     }
 }
 
+#[allow(unused)]
 /// Helper function to collect batches associated with reading CDF data
 pub(crate) async fn collect_batches(
     num_partitions: usize,
@@ -408,8 +409,6 @@ pub(crate) mod tests {
     use datafusion_common::assert_batches_sorted_eq;
     use itertools::Itertools;
 
-    use crate::delta_datafusion::cdf::DeltaCdfScan;
-    use crate::operations::collect_sendable_stream;
     use crate::test_utils::TestSchemas;
     use crate::writer::test_utils::TestResult;
     use crate::{DeltaConfigKey, DeltaOps, DeltaTable};

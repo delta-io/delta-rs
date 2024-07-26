@@ -60,6 +60,7 @@ pub mod update;
 pub mod write;
 pub mod writer;
 
+#[allow(unused)]
 /// The [Operation] trait defines common behaviors that all operations builders
 /// should have consistent
 pub(crate) trait Operation<State>: std::future::IntoFuture {}

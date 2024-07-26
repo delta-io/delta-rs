@@ -21,3 +21,5 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 [features]
 default = []
 datafusion = ["deltalake-core/datafusion"]
+hdfs = []
+azure = []

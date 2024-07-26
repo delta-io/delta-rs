@@ -196,18 +196,9 @@ impl PartialStats {
         let null_count = take(&mut self.null_count);
         Stats {
             num_records: self.num_records,
-            min_values: match min_values {
-                Some(minv) => minv,
-                None => HashMap::default(),
-            },
-            max_values: match max_values {
-                Some(maxv) => maxv,
-                None => HashMap::default(),
-            },
-            null_count: match null_count {
-                Some(nc) => nc,
-                None => HashMap::default(),
-            },
+            min_values: min_values.unwrap_or_default(),
+            max_values: max_values.unwrap_or_default(),
+            null_count: null_count.unwrap_or_default(),
         }
     }
 }

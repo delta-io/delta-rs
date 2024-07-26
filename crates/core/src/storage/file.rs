@@ -106,14 +106,14 @@ impl From<LocalFileSystemError> for ObjectStoreError {
 /// Multi-writer support for different platforms:
 ///
 /// * Modern Linux kernels are well supported. However because Linux implementation leverages
-/// `RENAME_NOREPLACE`, older versions of the kernel might not work depending on what filesystem is
-/// being used:
+///   `RENAME_NOREPLACE`, older versions of the kernel might not work depending on what filesystem is
+///   being used:
 ///   *  ext4 requires >= Linux 3.15
 ///   *  btrfs, shmem, and cif requires >= Linux 3.17
 ///   *  xfs requires >= Linux 4.0
 ///   *  ext2, minix, reiserfs, jfs, vfat, and bpf requires >= Linux 4.9
 /// * Darwin is supported but not fully tested.
-/// Patches welcome.
+///   Patches welcome.
 /// * Support for other platforms are not implemented at the moment.
 #[derive(Debug)]
 pub struct FileStorageBackend {
@@ -279,10 +279,7 @@ async fn rename_noreplace(from: &str, to: &str) -> Result<(), LocalFileSystemErr
 }
 
 // Generic implementation (Requires 2 system calls)
-#[cfg(not(any(
-    all(target_os = "linux", target_env = "gnu", glibc_renameat2),
-    target_os = "macos"
-)))]
+#[cfg(not(any(all(target_os = "linux", target_env = "gnu"), target_os = "macos")))]
 mod imp {
     use super::*;
 
@@ -323,10 +320,7 @@ mod imp {
 }
 
 // Optimized implementations (Only 1 system call)
-#[cfg(any(
-    all(target_os = "linux", target_env = "gnu", glibc_renameat2),
-    target_os = "macos"
-))]
+#[cfg(any(all(target_os = "linux", target_env = "gnu"), target_os = "macos"))]
 mod imp {
     use super::*;
     use std::ffi::CString;
