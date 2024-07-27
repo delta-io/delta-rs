@@ -1,10 +1,15 @@
 //! Drop a column from the table
 
+use delta_kernel::schema::DataType;
 use delta_kernel::schema::StructType;
 use futures::future::BoxFuture;
-use itertools::Itertools;
+use std::collections::HashMap;
 
-use super::transaction::{CommitBuilder, CommitProperties, PROTOCOL};
+use itertools::Itertools;
+use sqlparser::dialect::GenericDialect;
+use sqlparser::parser::Parser;
+
+use super::transaction::{CommitBuilder, CommitProperties};
 
 use crate::kernel::StructField;
 use crate::logstore::LogStoreRef;
@@ -18,6 +23,8 @@ pub struct DropColumnBuilder {
     snapshot: DeltaTableState,
     /// Fields to drop from the schema
     fields: Option<Vec<String>>,
+    /// Raise if constraint doesn't exist
+    raise_if_not_exists: bool,
     /// Delta object store for handling data files
     log_store: LogStoreRef,
     /// Additional information to add to the commit
@@ -32,6 +39,7 @@ impl DropColumnBuilder {
         Self {
             snapshot,
             log_store,
+            raise_if_not_exists: true,
             fields: None,
             commit_properties: CommitProperties::default(),
         }
@@ -47,6 +55,12 @@ impl DropColumnBuilder {
         self.commit_properties = commit_properties;
         self
     }
+
+    /// Specify if you want to raise if the specified column does not exist
+    pub fn with_raise_if_not_exists(mut self, raise: bool) -> Self {
+        self.raise_if_not_exists = raise;
+        self
+    }
 }
 
 impl std::future::IntoFuture for DropColumnBuilder {
@@ -58,6 +72,7 @@ impl std::future::IntoFuture for DropColumnBuilder {
         let this = self;
 
         Box::pin(async move {
+            let dialect = GenericDialect {};
             let mut metadata = this.snapshot.metadata().clone();
             let fields = match this.fields {
                 Some(v) => v,
@@ -66,7 +81,47 @@ impl std::future::IntoFuture for DropColumnBuilder {
 
             let table_schema = this.snapshot.schema();
 
-            let new_table_schema = table_schema;
+            let fields_map = fields
+                .iter()
+                .map(|field_name| {
+                    let identifiers = Parser::new(&dialect)
+                        .try_with_sql(field_name.as_str())
+                        .unwrap()
+                        .parse_multipart_identifier()
+                        .unwrap()
+                        .iter()
+                        .map(|v| v.value.to_owned())
+                        .collect_vec();
+                    // Root field, field path
+                    (identifiers[0].clone(), identifiers)
+                })
+                .collect::<HashMap<String, Vec<String>>>();
+            
+            let new_table_schema = StructType::new(
+                table_schema
+                    .fields()
+                    .filter_map(|field| {
+                        if let Some(identifiers) = fields_map.get(field.name()) {
+                            if identifiers.len() == 1 {
+                                None
+                            } else {
+                                drop_nested_fields(field, &identifiers[1..])
+                            }
+                        } else {
+                            Some(field.clone())
+                        }
+                    })
+                    .collect::<Vec<StructField>>(),
+            );
+
+            dbg!(&new_table_schema);
+
+            if new_table_schema.eq(table_schema) && this.raise_if_not_exists {
+                return Err(DeltaTableError::Generic(format!(
+                    "Schema remained unchanges, column with name: {:#?} doesn't exists",
+                    &fields
+                )));
+            }
 
             let operation = DeltaOperation::DropColumn { fields: fields };
 
@@ -84,5 +139,37 @@ impl std::future::IntoFuture for DropColumnBuilder {
                 commit.snapshot(),
             ))
         })
+    }
+}
+
+fn drop_nested_fields(field: &StructField, path: &[String]) -> Option<StructField> {
+    match field.data_type() {
+        DataType::Struct(inner_struct) => {
+            let remaining_fields = inner_struct
+                .fields()
+                .filter_map(|nested_field| {
+                    if nested_field.name() == &path[0] {
+                        if path.len() > 1 {
+                            drop_nested_fields(nested_field, &path[1..])
+                        } else {
+                            None
+                        }
+                    } else {
+                        Some(nested_field.clone())
+                    }
+                })
+                .collect::<Vec<StructField>>();
+
+            if remaining_fields.is_empty() {
+                None
+            } else {
+                Some(StructField::new(
+                    field.name(),
+                    DataType::Struct(Box::new(StructType::new(remaining_fields))),
+                    field.is_nullable(),
+                ))
+            }
+        }
+        _ => Some(field.clone()),
     }
 }
