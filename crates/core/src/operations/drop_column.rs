@@ -145,7 +145,7 @@ impl std::future::IntoFuture for DropColumnBuilder {
                 )));
             }
 
-            let operation = DeltaOperation::DropColumn { fields: fields };
+            let operation = DeltaOperation::DropColumn { fields };
 
             metadata.schema_string = serde_json::to_string(&new_table_schema)?;
 
