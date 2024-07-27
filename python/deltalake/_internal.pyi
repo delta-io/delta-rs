@@ -94,6 +94,7 @@ class RawDeltaTable:
     def drop_columns(
         self,
         fields: List[str],
+        raise_if_not_exists: bool,
         custom_metadata: Optional[Dict[str, str]],
         post_commithook_properties: Optional[Dict[str, Optional[bool]]],
     ) -> None: ...

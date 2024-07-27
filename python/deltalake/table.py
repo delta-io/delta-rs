@@ -1871,6 +1871,7 @@ class TableAlterer:
     def drop_columns(
         self,
         fields: Union[str, List[str]],
+        raise_if_not_exists: bool = True,
         custom_metadata: Optional[Dict[str, str]] = None,
         post_commithook_properties: Optional[PostCommitHookProperties] = None,
     ) -> None:
@@ -1896,6 +1897,7 @@ class TableAlterer:
 
         self.table._table.drop_columns(
             fields,
+            raise_if_not_exists,
             custom_metadata,
             post_commithook_properties.__dict__ if post_commithook_properties else None,
         )

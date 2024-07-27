@@ -80,6 +80,7 @@ impl std::future::IntoFuture for DropColumnBuilder {
             };
 
             let table_schema = this.snapshot.schema();
+            let mut fields_not_found = HashMap::new();
 
             let fields_map = fields
                 .iter()
@@ -96,7 +97,7 @@ impl std::future::IntoFuture for DropColumnBuilder {
                     (identifiers[0].clone(), identifiers)
                 })
                 .collect::<HashMap<String, Vec<String>>>();
-            
+
             let new_table_schema = StructType::new(
                 table_schema
                     .fields()
@@ -105,7 +106,7 @@ impl std::future::IntoFuture for DropColumnBuilder {
                             if identifiers.len() == 1 {
                                 None
                             } else {
-                                drop_nested_fields(field, &identifiers[1..])
+                                drop_nested_fields(field, &identifiers[1..], &mut fields_not_found)
                             }
                         } else {
                             Some(field.clone())
@@ -114,12 +115,15 @@ impl std::future::IntoFuture for DropColumnBuilder {
                     .collect::<Vec<StructField>>(),
             );
 
-            dbg!(&new_table_schema);
+            let not_found: Vec<String> = fields_not_found
+                .iter()
+                .map(|(key, value)| format!("{}.{}", key, value.join(".")))
+                .collect();
 
-            if new_table_schema.eq(table_schema) && this.raise_if_not_exists {
+            if !not_found.is_empty() && this.raise_if_not_exists {
                 return Err(DeltaTableError::Generic(format!(
-                    "Schema remained unchanges, column with name: {:#?} doesn't exists",
-                    &fields
+                    "Column(s) with name: {:#?} doesn't exists",
+                    &not_found
                 )));
             }
 
@@ -142,7 +146,11 @@ impl std::future::IntoFuture for DropColumnBuilder {
     }
 }
 
-fn drop_nested_fields(field: &StructField, path: &[String]) -> Option<StructField> {
+fn drop_nested_fields<'a>(
+    field: &StructField,
+    path: &'a [String],
+    unmatched_paths: &mut HashMap<String, &'a [String]>,
+) -> Option<StructField> {
     match field.data_type() {
         DataType::Struct(inner_struct) => {
             let remaining_fields = inner_struct
@@ -150,7 +158,7 @@ fn drop_nested_fields(field: &StructField, path: &[String]) -> Option<StructFiel
                 .filter_map(|nested_field| {
                     if nested_field.name() == &path[0] {
                         if path.len() > 1 {
-                            drop_nested_fields(nested_field, &path[1..])
+                            drop_nested_fields(nested_field, &path[1..], unmatched_paths)
                         } else {
                             None
                         }
@@ -159,6 +167,18 @@ fn drop_nested_fields(field: &StructField, path: &[String]) -> Option<StructFiel
                     }
                 })
                 .collect::<Vec<StructField>>();
+
+            // If field was the same, we push the missing paths recursively into the hashmap
+            // we also remove the subpaths from the hashmap if we see that it's a subset
+            // (might need to find better way )
+            if remaining_fields.eq(&inner_struct.fields().cloned().collect_vec()) {
+                if let Some(part_path) = unmatched_paths.get(&path[0]) {
+                    if part_path == &&path[1..] {
+                        unmatched_paths.remove(&path[0]);
+                    }
+                }
+                unmatched_paths.insert(field.name().to_owned(), path);
+            };
 
             if remaining_fields.is_empty() {
                 None

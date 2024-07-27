@@ -631,11 +631,12 @@ impl RawDeltaTable {
         Ok(())
     }
 
-    #[pyo3(signature = (fields, custom_metadata=None, post_commithook_properties=None))]
+    #[pyo3(signature = (fields, raise_if_not_exists, custom_metadata=None, post_commithook_properties=None))]
     pub fn drop_columns(
         &mut self,
         py: Python,
         fields: Vec<String>,
+        raise_if_not_exists: bool,
         custom_metadata: Option<HashMap<String, String>>,
         post_commithook_properties: Option<HashMap<String, Option<bool>>>,
     ) -> PyResult<()> {
@@ -644,7 +645,9 @@ impl RawDeltaTable {
                 self._table.log_store(),
                 self._table.snapshot().map_err(PythonError::from)?.clone(),
             );
-            cmd = cmd.with_fields(fields);
+            cmd = cmd
+                .with_fields(fields)
+                .with_raise_if_not_exists(raise_if_not_exists);
 
             if let Some(commit_properties) =
                 maybe_create_commit_properties(custom_metadata, post_commithook_properties)
