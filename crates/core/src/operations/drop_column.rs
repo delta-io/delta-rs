@@ -115,14 +115,32 @@ impl std::future::IntoFuture for DropColumnBuilder {
                     .collect::<Vec<StructField>>(),
             );
 
-            let not_found: Vec<String> = fields_not_found
+            let mut not_found: Vec<String> = fields_not_found
                 .iter()
                 .map(|(key, value)| format!("{}.{}", key, value.join(".")))
                 .collect();
+            
+            // Catch root fields that do not exist
+            not_found.append(
+                &mut fields_map
+                    .values()
+                    .filter_map(|v| {
+                        if v.len() == 1 {
+                            if table_schema.field(&v[0]).is_none() {
+                                Some(v[0].clone())
+                            } else {
+                                None
+                            }
+                        } else {
+                            None
+                        }
+                    })
+                    .collect_vec(),
+            );
 
             if !not_found.is_empty() && this.raise_if_not_exists {
                 return Err(DeltaTableError::Generic(format!(
-                    "Column(s) with name: {:#?} doesn't exists",
+                    "Column(s) with name: {:#?} doesn't exist",
                     &not_found
                 )));
             }
