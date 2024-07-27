@@ -119,7 +119,7 @@ impl std::future::IntoFuture for DropColumnBuilder {
                 .iter()
                 .map(|(key, value)| format!("{}.{}", key, value.join(".")))
                 .collect();
-            
+
             // Catch root fields that do not exist
             not_found.append(
                 &mut fields_map
