@@ -1,3 +1,4 @@
+import json
 import pathlib
 
 import pyarrow as pa
@@ -305,3 +306,207 @@ def test_set_table_properties_enable_dv(tmp_path: pathlib.Path, sample_table: pa
     assert protocol.min_writer_version == 7
     assert protocol.writer_features == ["deletionVectors"]
     assert protocol.reader_features == ["deletionVectors"]
+
+
+data = pa.Table.from_pydict(
+    {
+        "foo": [1],
+        "bar": [{"baz": {"nested": 1, "nested_02": 1}, "foo": 2}],
+        "barz": [{"baz": {"nested": 1}}],
+    }
+)
+
+
+def test_drop_columns_single_col(tmp_path):
+    write_deltalake(tmp_path, data)
+
+    dt = DeltaTable(tmp_path)
+    dt.alter.drop_columns("foo")
+    expected = {
+        "type": "struct",
+        "fields": [
+            {
+                "name": "bar",
+                "type": {
+                    "type": "struct",
+                    "fields": [
+                        {
+                            "name": "baz",
+                            "type": {
+                                "type": "struct",
+                                "fields": [
+                                    {
+                                        "name": "nested",
+                                        "type": "long",
+                                        "nullable": True,
+                                        "metadata": {},
+                                    },
+                                    {
+                                        "name": "nested_02",
+                                        "type": "long",
+                                        "nullable": True,
+                                        "metadata": {},
+                                    },
+                                ],
+                            },
+                            "nullable": True,
+                            "metadata": {},
+                        },
+                        {
+                            "name": "foo",
+                            "type": "long",
+                            "nullable": True,
+                            "metadata": {},
+                        },
+                    ],
+                },
+                "nullable": True,
+                "metadata": {},
+            },
+            {
+                "name": "barz",
+                "type": {
+                    "type": "struct",
+                    "fields": [
+                        {
+                            "name": "baz",
+                            "type": {
+                                "type": "struct",
+                                "fields": [
+                                    {
+                                        "name": "nested",
+                                        "type": "long",
+                                        "nullable": True,
+                                        "metadata": {},
+                                    }
+                                ],
+                            },
+                            "nullable": True,
+                            "metadata": {},
+                        }
+                    ],
+                },
+                "nullable": True,
+                "metadata": {},
+            },
+        ],
+    }
+    assert json.loads(dt.schema().to_json()) == expected
+
+
+def test_drop_columns_multiple_cols(tmp_path):
+    write_deltalake(tmp_path, data)
+
+    dt = DeltaTable(tmp_path)
+    dt.alter.drop_columns(["foo", "bar"])
+    expected = {
+        "type": "struct",
+        "fields": [
+            {
+                "name": "barz",
+                "type": {
+                    "type": "struct",
+                    "fields": [
+                        {
+                            "name": "baz",
+                            "type": {
+                                "type": "struct",
+                                "fields": [
+                                    {
+                                        "name": "nested",
+                                        "type": "long",
+                                        "nullable": True,
+                                        "metadata": {},
+                                    }
+                                ],
+                            },
+                            "nullable": True,
+                            "metadata": {},
+                        }
+                    ],
+                },
+                "nullable": True,
+                "metadata": {},
+            }
+        ],
+    }
+    assert json.loads(dt.schema().to_json()) == expected
+
+
+def test_drop_columns_multiple_cols_nested(tmp_path):
+    write_deltalake(tmp_path, data)
+
+    dt = DeltaTable(tmp_path)
+    dt.alter.drop_columns(["foo", "bar.baz.nested"])
+    expected = {
+        "type": "struct",
+        "fields": [
+            {
+                "name": "bar",
+                "type": {
+                    "type": "struct",
+                    "fields": [
+                        {
+                            "name": "baz",
+                            "type": {
+                                "type": "struct",
+                                "fields": [
+                                    {
+                                        "name": "nested_02",
+                                        "type": "long",
+                                        "nullable": True,
+                                        "metadata": {},
+                                    }
+                                ],
+                            },
+                            "nullable": True,
+                            "metadata": {},
+                        },
+                        {
+                            "name": "foo",
+                            "type": "long",
+                            "nullable": True,
+                            "metadata": {},
+                        },
+                    ],
+                },
+                "nullable": True,
+                "metadata": {},
+            },
+            {
+                "name": "barz",
+                "type": {
+                    "type": "struct",
+                    "fields": [
+                        {
+                            "name": "baz",
+                            "type": {
+                                "type": "struct",
+                                "fields": [
+                                    {
+                                        "name": "nested",
+                                        "type": "long",
+                                        "nullable": True,
+                                        "metadata": {},
+                                    }
+                                ],
+                            },
+                            "nullable": True,
+                            "metadata": {},
+                        }
+                    ],
+                },
+                "nullable": True,
+                "metadata": {},
+            },
+        ],
+    }
+    assert json.loads(dt.schema().to_json()) == expected
+
+
+def test_drop_columns_raise_not_exists(tmp_path):
+    write_deltalake(tmp_path, data)
+
+    dt = DeltaTable(tmp_path)
+    with pytest.raises(DeltaError):
+        dt.alter.drop_columns(["foo", "not_exists"], raise_if_not_exists=True)
