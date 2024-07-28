@@ -2074,6 +2074,6 @@ fn _internal(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<filesystem::DeltaFileSystemHandler>()?;
     m.add_class::<filesystem::ObjectInputFile>()?;
     m.add_class::<filesystem::ObjectOutputStream>()?;
-    m.add_class::<features::PyTableFeatures>()?;
+    m.add_class::<features::TableFeatures>()?;
     Ok(())
 }
