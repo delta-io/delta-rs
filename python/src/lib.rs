@@ -1,4 +1,5 @@
 mod error;
+mod features;
 mod filesystem;
 mod schema;
 mod utils;
@@ -25,9 +26,11 @@ use deltalake::datafusion::physical_plan::ExecutionPlan;
 use deltalake::datafusion::prelude::SessionContext;
 use deltalake::delta_datafusion::DeltaDataChecker;
 use deltalake::errors::DeltaTableError;
+use deltalake::kernel::TableFeatures;
 use deltalake::kernel::{
     scalars::ScalarExt, Action, Add, Invariant, LogicalFile, Remove, StructType,
 };
+use deltalake::operations::add_feature::AddTableFeatureBuilder;
 use deltalake::operations::collect_sendable_stream;
 use deltalake::operations::constraints::ConstraintBuilder;
 use deltalake::operations::convert_to_delta::{ConvertToDeltaBuilder, PartitionStrategy};
@@ -60,6 +63,7 @@ use serde_json::{Map, Value};
 
 use crate::error::DeltaProtocolError;
 use crate::error::PythonError;
+use crate::features::PyTableFeatures;
 use crate::filesystem::FsConfig;
 use crate::schema::schema_to_pyobject;
 use crate::utils::rt;
@@ -551,6 +555,32 @@ impl RawDeltaTable {
         })?;
         self._table.state = table.state;
         Ok(serde_json::to_string(&metrics).unwrap())
+    }
+
+    #[pyo3(signature = (feature, custom_metadata=None, post_commithook_properties=None))]
+    pub fn add_feature(
+        &mut self,
+        py: Python,
+        feature: PyTableFeatures,
+        custom_metadata: Option<HashMap<String, String>>,
+        post_commithook_properties: Option<HashMap<String, Option<bool>>>,
+    ) -> PyResult<()> {
+        let table = py.allow_threads(|| {
+            let mut cmd = AddTableFeatureBuilder::new(
+                self._table.log_store(),
+                self._table.snapshot().map_err(PythonError::from)?.clone(),
+            )
+            .with_feature(Into::<TableFeatures>::into(feature));
+
+            if let Some(commit_properties) =
+                maybe_create_commit_properties(custom_metadata, post_commithook_properties)
+            {
+                cmd = cmd.with_commit_properties(commit_properties);
+            }
+            rt().block_on(cmd.into_future()).map_err(PythonError::from)
+        })?;
+        self._table.state = table.state;
+        Ok(())
     }
 
     #[pyo3(signature = (constraints, custom_metadata=None, post_commithook_properties=None))]
@@ -1430,6 +1460,27 @@ fn convert_partition_filters(
         .collect()
 }
 
+fn maybe_create_commit_properties(
+    custom_metadata: Option<HashMap<String, String>>,
+    post_commithook_properties: Option<HashMap<String, Option<bool>>>,
+) -> Option<CommitProperties> {
+    if custom_metadata.is_none() && post_commithook_properties.is_none() {
+        return None;
+    }
+    let mut commit_properties = CommitProperties::default();
+    if let Some(metadata) = custom_metadata {
+        let json_metadata: Map<String, Value> =
+            metadata.into_iter().map(|(k, v)| (k, v.into())).collect();
+        commit_properties = commit_properties.with_metadata(json_metadata);
+    };
+
+    if let Some(post_commit_hook_props) = post_commithook_properties {
+        commit_properties =
+            set_post_commithook_properties(commit_properties, post_commit_hook_props)
+    }
+    Some(commit_properties)
+}
+
 fn scalar_to_py<'py>(value: &Scalar, py_date: &Bound<'py, PyAny>) -> PyResult<Bound<'py, PyAny>> {
     use Scalar::*;
 
@@ -2021,5 +2072,6 @@ fn _internal(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<filesystem::DeltaFileSystemHandler>()?;
     m.add_class::<filesystem::ObjectInputFile>()?;
     m.add_class::<filesystem::ObjectOutputStream>()?;
+    m.add_class::<features::PyTableFeatures>()?;
     Ok(())
 }

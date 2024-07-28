@@ -15,6 +15,7 @@ use crate::table::builder::DeltaTableBuilder;
 use crate::DeltaTable;
 use std::collections::HashMap;
 
+pub mod add_feature;
 pub mod cast;
 pub mod convert_to_delta;
 pub mod create;
@@ -33,6 +34,7 @@ use self::{
 };
 #[cfg(feature = "datafusion")]
 pub use ::datafusion::physical_plan::common::collect as collect_sendable_stream;
+use add_feature::AddTableFeatureBuilder;
 #[cfg(feature = "datafusion")]
 use arrow::record_batch::RecordBatch;
 use optimize::OptimizeBuilder;
@@ -215,6 +217,12 @@ impl DeltaOps {
     #[must_use]
     pub fn add_constraint(self) -> ConstraintBuilder {
         ConstraintBuilder::new(self.0.log_store, self.0.state.unwrap())
+    }
+
+    /// Enable a table feature for a table
+    #[must_use]
+    pub fn add_feature(self) -> AddTableFeatureBuilder {
+        AddTableFeatureBuilder::new(self.0.log_store, self.0.state.unwrap())
     }
 
     /// Drops constraints from a table
