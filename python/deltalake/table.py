@@ -1805,13 +1805,13 @@ class TableAlterer:
             ```python
             from deltalake import DeltaTable
             dt = DeltaTable("test_table")
-            dt.alter.add_feature(TableFeatures.DeletionVectors)
+            dt.alter.add_feature(TableFeatures.AppendOnly)
             ```
 
-            **Check configuration**
+            **Check protocol**
             ```
-            dt.metadata().configuration
-            {'delta.constraints.value_gt_5': 'value > 5'}
+            dt.protocol()
+            ProtocolVersions(min_reader_version=1, min_writer_version=7, writer_features=['appendOnly'], reader_features=None)
             ```
         """
 
