@@ -26,7 +26,7 @@ use deltalake::datafusion::physical_plan::ExecutionPlan;
 use deltalake::datafusion::prelude::SessionContext;
 use deltalake::delta_datafusion::DeltaDataChecker;
 use deltalake::errors::DeltaTableError;
-use deltalake::kernel::TableFeatures;
+use deltalake::kernel::TableFeatures as KernelTableFeatures;
 use deltalake::kernel::{
     scalars::ScalarExt, Action, Add, Invariant, LogicalFile, Remove, StructType,
 };
@@ -63,7 +63,7 @@ use serde_json::{Map, Value};
 
 use crate::error::DeltaProtocolError;
 use crate::error::PythonError;
-use crate::features::PyTableFeatures;
+use crate::features::TableFeatures;
 use crate::filesystem::FsConfig;
 use crate::schema::schema_to_pyobject;
 use crate::utils::rt;
@@ -557,11 +557,12 @@ impl RawDeltaTable {
         Ok(serde_json::to_string(&metrics).unwrap())
     }
 
-    #[pyo3(signature = (feature, custom_metadata=None, post_commithook_properties=None))]
+    #[pyo3(signature = (feature, allow_protocol_versions_increase, custom_metadata=None, post_commithook_properties=None))]
     pub fn add_feature(
         &mut self,
         py: Python,
-        feature: PyTableFeatures,
+        feature: TableFeatures,
+        allow_protocol_versions_increase: bool,
         custom_metadata: Option<HashMap<String, String>>,
         post_commithook_properties: Option<HashMap<String, Option<bool>>>,
     ) -> PyResult<()> {
@@ -570,7 +571,8 @@ impl RawDeltaTable {
                 self._table.log_store(),
                 self._table.snapshot().map_err(PythonError::from)?.clone(),
             )
-            .with_feature(Into::<TableFeatures>::into(feature));
+            .with_feature(Into::<KernelTableFeatures>::into(feature))
+            .with_allow_protocol_versions_increase(allow_protocol_versions_increase);
 
             if let Some(commit_properties) =
                 maybe_create_commit_properties(custom_metadata, post_commithook_properties)

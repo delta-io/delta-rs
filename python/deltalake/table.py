@@ -40,7 +40,7 @@ if TYPE_CHECKING:
     import os
 
 from deltalake._internal import DeltaDataChecker as _DeltaDataChecker
-from deltalake._internal import RawDeltaTable
+from deltalake._internal import RawDeltaTable, TableFeatures
 from deltalake._internal import create_deltalake as _create_deltalake
 from deltalake._util import encode_partition_value
 from deltalake.data_catalog import DataCatalog
@@ -1784,6 +1784,43 @@ class TableAlterer:
 
     def __init__(self, table: DeltaTable) -> None:
         self.table = table
+
+    def add_feature(
+        self,
+        feature: TableFeatures,
+        allow_protocol_versions_increase: bool = False,
+        custom_metadata: Optional[Dict[str, str]] = None,
+        post_commithook_properties: Optional[PostCommitHookProperties] = None,
+    ) -> None:
+        """
+        Enable a table feature.
+
+        Args:
+            feature: Table Feature e.g. Deletion Vectors, Change Data Feed
+            allow_protocol_versions_increase: Allow the protocol to be implicitily bumped to reader 3 or writer 7
+            custom_metadata: custom metadata that will be added to the transaction commit.
+            post_commithook_properties: properties for the post commit hook. If None, default values are used.
+
+        Example:
+            ```python
+            from deltalake import DeltaTable
+            dt = DeltaTable("test_table")
+            dt.alter.add_feature(TableFeatures.DeletionVectors)
+            ```
+
+            **Check configuration**
+            ```
+            dt.metadata().configuration
+            {'delta.constraints.value_gt_5': 'value > 5'}
+            ```
+        """
+
+        self.table._table.add_feature(
+            feature,
+            allow_protocol_versions_increase,
+            custom_metadata,
+            post_commithook_properties.__dict__ if post_commithook_properties else None,
+        )
 
     def add_constraint(
         self,

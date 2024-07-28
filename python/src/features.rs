@@ -1,10 +1,10 @@
-use deltalake::kernel::TableFeatures;
+use deltalake::kernel::TableFeatures as KernelTableFeatures;
 use pyo3::pyclass;
 
 /// High level table features
 #[pyclass]
 #[derive(Clone)]
-pub enum PyTableFeatures {
+pub enum TableFeatures {
     /// Mapping of one column to another
     ColumnMapping,
     /// Deletion vectors for merge, update, delete
@@ -33,22 +33,24 @@ pub enum PyTableFeatures {
     IcebergCompatV1,
 }
 
-impl From<PyTableFeatures> for TableFeatures {
-    fn from(value: PyTableFeatures) -> Self {
+impl From<TableFeatures> for KernelTableFeatures {
+    fn from(value: TableFeatures) -> Self {
         match value {
-            PyTableFeatures::ColumnMapping => TableFeatures::ColumnMapping,
-            PyTableFeatures::DeletionVectors => TableFeatures::DeletionVectors,
-            PyTableFeatures::TimestampWithoutTimezone => TableFeatures::TimestampWithoutTimezone,
-            PyTableFeatures::V2Checkpoint => TableFeatures::V2Checkpoint,
-            PyTableFeatures::AppendOnly => TableFeatures::AppendOnly,
-            PyTableFeatures::Invariants => TableFeatures::Invariants,
-            PyTableFeatures::CheckConstraints => TableFeatures::CheckConstraints,
-            PyTableFeatures::ChangeDataFeed => TableFeatures::ChangeDataFeed,
-            PyTableFeatures::GeneratedColumns => TableFeatures::GeneratedColumns,
-            PyTableFeatures::IdentityColumns => TableFeatures::IdentityColumns,
-            PyTableFeatures::RowTracking => TableFeatures::RowTracking,
-            PyTableFeatures::DomainMetadata => TableFeatures::DomainMetadata,
-            PyTableFeatures::IcebergCompatV1 => TableFeatures::IcebergCompatV1,
+            TableFeatures::ColumnMapping => KernelTableFeatures::ColumnMapping,
+            TableFeatures::DeletionVectors => KernelTableFeatures::DeletionVectors,
+            TableFeatures::TimestampWithoutTimezone => {
+                KernelTableFeatures::TimestampWithoutTimezone
+            }
+            TableFeatures::V2Checkpoint => KernelTableFeatures::V2Checkpoint,
+            TableFeatures::AppendOnly => KernelTableFeatures::AppendOnly,
+            TableFeatures::Invariants => KernelTableFeatures::Invariants,
+            TableFeatures::CheckConstraints => KernelTableFeatures::CheckConstraints,
+            TableFeatures::ChangeDataFeed => KernelTableFeatures::ChangeDataFeed,
+            TableFeatures::GeneratedColumns => KernelTableFeatures::GeneratedColumns,
+            TableFeatures::IdentityColumns => KernelTableFeatures::IdentityColumns,
+            TableFeatures::RowTracking => KernelTableFeatures::RowTracking,
+            TableFeatures::DomainMetadata => KernelTableFeatures::DomainMetadata,
+            TableFeatures::IcebergCompatV1 => KernelTableFeatures::IcebergCompatV1,
         }
     }
 }

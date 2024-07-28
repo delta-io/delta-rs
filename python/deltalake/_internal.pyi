@@ -1,3 +1,4 @@
+from enum import Enum
 from typing import Any, Dict, List, Literal, Mapping, Optional, Tuple, Union
 
 import pyarrow
@@ -6,6 +7,9 @@ import pyarrow.fs as fs
 from deltalake.writer import AddAction
 
 __version__: str
+
+class TableFeatures(Enum):
+    pass
 
 class RawDeltaTableMetaData:
     id: int
@@ -78,6 +82,13 @@ class RawDeltaTable:
         custom_metadata: Optional[Dict[str, str]],
         post_commithook_properties: Optional[Dict[str, Optional[bool]]],
     ) -> str: ...
+    def add_feature(
+        self,
+        feature: TableFeatures,
+        allow_protocol_versions_increase: bool,
+        custom_metadata: Optional[Dict[str, str]],
+        post_commithook_properties: Optional[Dict[str, Optional[bool]]],
+    ) -> None: ...
     def add_constraints(
         self,
         constraints: Dict[str, str],

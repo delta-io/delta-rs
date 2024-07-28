@@ -1,3 +1,4 @@
+from ._internal import TableFeatures as TableFeatures
 from ._internal import __version__ as __version__
 from ._internal import rust_core_version as rust_core_version
 from .data_catalog import DataCatalog as DataCatalog
