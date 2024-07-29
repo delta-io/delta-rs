@@ -45,7 +45,7 @@ impl DropColumnBuilder {
         }
     }
 
-    /// Specify the fields to be added
+    /// Specify the fields to be removed
     pub fn with_fields(mut self, fields: impl IntoIterator<Item = String> + Clone) -> Self {
         self.fields = Some(fields.into_iter().collect());
         self
