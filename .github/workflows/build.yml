@@ -5,6 +5,7 @@ on:
     branches: [main, "rust-v*"]
   pull_request:
     branches: [main, "rust-v*"]
+  merge_group:
 
 jobs:
   format:
