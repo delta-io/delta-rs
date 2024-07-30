@@ -136,6 +136,26 @@ impl RawDeltaTable {
         })
     }
 
+    #[pyo3(signature = (table_uri, storage_options = None))]
+    #[staticmethod]
+    pub fn is_deltatable(
+        table_uri: &str,
+        storage_options: Option<HashMap<String, String>>,
+    ) -> PyResult<bool> {
+        let mut builder = deltalake::DeltaTableBuilder::from_uri(table_uri);
+        if let Some(storage_options) = storage_options {
+            builder = builder.with_storage_options(storage_options)
+        }
+        let res = rt()
+            .block_on(builder.verify_deltatable_existence())
+            .map_err(PythonError::from);
+        match res {
+            Ok(true) => Ok(true),
+            Ok(false) => Ok(false),
+            Err(err) => Err(err)?,
+        }
+    }
+
     pub fn table_uri(&self) -> PyResult<String> {
         Ok(self._table.table_uri())
     }

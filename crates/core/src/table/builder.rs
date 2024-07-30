@@ -330,6 +330,12 @@ impl DeltaTableBuilder {
         }
         Ok(table)
     }
+
+    /// Check if the [`DeltaTable`] exists
+    pub async fn verify_deltatable_existence(self) -> DeltaResult<bool> {
+        let table = self.build()?;
+        table.log_store.is_delta_table_location().await
+    }
 }
 
 enum UriType {
