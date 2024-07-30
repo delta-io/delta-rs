@@ -83,7 +83,7 @@ use serde_json::Value;
 use std::collections::HashMap;
 
 use self::conflict_checker::{CommitConflictError, TransactionInfo, WinningCommitSummary};
-use crate::checkpoints::create_checkpoint_for;
+use crate::checkpoints::{cleanup_expired_logs_for, create_checkpoint_for};
 use crate::errors::DeltaTableError;
 use crate::kernel::{
     Action, CommitInfo, EagerSnapshot, Metadata, Protocol, ReaderFeatures, Transaction,
@@ -309,6 +309,8 @@ impl CommitData {
 /// Properties for post commit hook.
 pub struct PostCommitHookProperties {
     create_checkpoint: bool,
+    /// Override the EnableExpiredLogCleanUp setting, if None config setting is used
+    cleanup_expired_logs: Option<bool>,
 }
 
 #[derive(Clone, Debug)]
@@ -319,6 +321,7 @@ pub struct CommitProperties {
     pub(crate) app_transaction: Vec<Transaction>,
     max_retries: usize,
     create_checkpoint: bool,
+    cleanup_expired_logs: Option<bool>,
 }
 
 impl Default for CommitProperties {
@@ -328,6 +331,7 @@ impl Default for CommitProperties {
             app_transaction: Vec::new(),
             max_retries: DEFAULT_RETRIES,
             create_checkpoint: true,
+            cleanup_expired_logs: None,
         }
     }
 }
@@ -359,6 +363,12 @@ impl CommitProperties {
         self.app_transaction = txn;
         self
     }
+
+    /// Specify if it should clean up the logs when the logRetentionDuration interval is met
+    pub fn with_cleanup_expired_logs(mut self, cleanup_expired_logs: Option<bool>) -> Self {
+        self.cleanup_expired_logs = cleanup_expired_logs;
+        self
+    }
 }
 
 impl From<CommitProperties> for CommitBuilder {
@@ -368,6 +378,7 @@ impl From<CommitProperties> for CommitBuilder {
             app_metadata: value.app_metadata,
             post_commit_hook: Some(PostCommitHookProperties {
                 create_checkpoint: value.create_checkpoint,
+                cleanup_expired_logs: value.cleanup_expired_logs,
             }),
             app_transaction: value.app_transaction,
             ..Default::default()
@@ -527,6 +538,7 @@ impl<'a> std::future::IntoFuture for PreparedCommit<'a> {
                     version: 0,
                     data: this.data,
                     create_checkpoint: false,
+                    cleanup_expired_logs: None,
                     log_store: this.log_store,
                     table_data: this.table_data,
                 });
@@ -547,6 +559,10 @@ impl<'a> std::future::IntoFuture for PreparedCommit<'a> {
                             create_checkpoint: this
                                 .post_commit
                                 .map(|v| v.create_checkpoint)
+                                .unwrap_or_default(),
+                            cleanup_expired_logs: this
+                                .post_commit
+                                .map(|v| v.cleanup_expired_logs)
                                 .unwrap_or_default(),
                             log_store: this.log_store,
                             table_data: this.table_data,
@@ -603,6 +619,7 @@ pub struct PostCommit<'a> {
     /// The data that was comitted to the log store
     pub data: CommitData,
     create_checkpoint: bool,
+    cleanup_expired_logs: Option<bool>,
     log_store: LogStoreRef,
     table_data: Option<&'a dyn TableReference>,
 }
@@ -627,6 +644,21 @@ impl<'a> PostCommit<'a> {
             if self.create_checkpoint {
                 self.create_checkpoint(&state, &self.log_store, self.version)
                     .await?;
+            }
+            let cleanup_logs = if let Some(cleanup_logs) = self.cleanup_expired_logs {
+                cleanup_logs
+            } else {
+                state.table_config().enable_expired_log_cleanup()
+            };
+
+            if cleanup_logs {
+                cleanup_expired_logs_for(
+                    self.version,
+                    self.log_store.as_ref(),
+                    Utc::now().timestamp_millis()
+                        - state.table_config().log_retention_duration().as_millis() as i64,
+                )
+                .await?;
             }
             Ok(state)
         } else {
