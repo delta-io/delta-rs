@@ -1,6 +1,7 @@
 import os
 from datetime import date, datetime, timezone
 from pathlib import Path
+from random import random
 from threading import Barrier, Thread
 from types import SimpleNamespace
 from typing import Any, List, Tuple
@@ -798,3 +799,28 @@ def test_read_table_last_checkpoint_not_updated():
     dt = DeltaTable("../crates/test/tests/data/table_failed_last_checkpoint_update")
 
     assert dt.version() == 3
+
+
+def test_is_deltatable_valid_path():
+    table_path = "../crates/test/tests/data/simple_table"
+    assert DeltaTable.is_deltatable(table_path)
+
+
+def test_is_deltatable_invalid_path():
+    # Nonce ensures that the table_path always remains an invalid table path.
+    nonce = int(random() * 10000)
+    table_path = "../crates/test/tests/data/simple_table_invalid_%s" % nonce
+    assert not DeltaTable.is_deltatable(table_path)
+
+
+def test_is_deltatable_with_storage_opts():
+    table_path = "../crates/test/tests/data/simple_table"
+    storage_options = {
+        "AWS_ACCESS_KEY_ID": "THE_AWS_ACCESS_KEY_ID",
+        "AWS_SECRET_ACCESS_KEY": "THE_AWS_SECRET_ACCESS_KEY",
+        "AWS_ALLOW_HTTP": "true",
+        "AWS_S3_ALLOW_UNSAFE_RENAME": "true",
+        "AWS_S3_LOCKING_PROVIDER": "dynamodb",
+        "DELTA_DYNAMO_TABLE_NAME": "custom_table_name",
+    }
+    assert DeltaTable.is_deltatable(table_path, storage_options=storage_options)
