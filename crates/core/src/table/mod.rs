@@ -287,6 +287,11 @@ impl DeltaTable {
         self.log_store.object_store()
     }
 
+    /// Check if the [`DeltaTable`] exists
+    pub async fn verify_deltatable_existence(&self) -> DeltaResult<bool> {
+        self.log_store.is_delta_table_location().await
+    }
+
     /// The URI of the underlying data
     pub fn table_uri(&self) -> String {
         self.log_store.root_uri()

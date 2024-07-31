@@ -146,14 +146,14 @@ impl RawDeltaTable {
         if let Some(storage_options) = storage_options {
             builder = builder.with_storage_options(storage_options)
         }
-        let res = rt()
-            .block_on(builder.verify_deltatable_existence())
-            .map_err(PythonError::from);
-        match res {
-            Ok(true) => Ok(true),
-            Ok(false) => Ok(false),
-            Err(err) => Err(err)?,
-        }
+        Ok(rt()
+            .block_on(async {
+                match builder.build() {
+                    Ok(table) => table.verify_deltatable_existence().await,
+                    Err(err) => Err(err),
+                }
+            })
+            .map_err(PythonError::from)?)
     }
 
     pub fn table_uri(&self) -> PyResult<String> {
