@@ -148,9 +148,11 @@ async fn excute_non_empty_expr(
     let input_schema = snapshot.input_schema()?;
     let input_dfschema: DFSchema = input_schema.clone().as_ref().clone().try_into()?;
     let table_partition_cols = snapshot.metadata().partition_columns.clone();
-
     let scan = DeltaScanBuilder::new(snapshot, log_store.clone(), &state)
         .with_files(rewrite)
+        // Use input schema which doesn't wrap partition values, otherwise divide_by_partition_value won't work on UTF8 partitions
+        // Since it can't fetch a scalar from a dictionary type
+        .with_schema(snapshot.input_schema()?)
         .build()
         .await?;
     let scan = Arc::new(scan);
