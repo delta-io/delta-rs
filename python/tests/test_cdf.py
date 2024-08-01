@@ -427,37 +427,49 @@ def test_read_cdf_partitioned_projection():
 
 def test_delete_unpartitioned_cdf(tmp_path, sample_data: pa.Table):
     cdc_path = f"{tmp_path}/_change_data"
-    
-    write_deltalake(tmp_path, sample_data, mode='append', configuration={"delta.enableChangeDataFeed":"true"})
+
+    write_deltalake(
+        tmp_path,
+        sample_data,
+        mode="append",
+        configuration={"delta.enableChangeDataFeed": "true"},
+    )
     dt = DeltaTable(tmp_path)
     dt.delete("int64 > 2")
-    
-    expected_data = sample_data.filter(pc.field('int64')>2).append_column(field_=pa.field("_change_type", pa.string(), nullable=False), column=[["delete"]*2])
+
+    expected_data = sample_data.filter(pc.field("int64") > 2).append_column(
+        field_=pa.field("_change_type", pa.string(), nullable=False),
+        column=[["delete"] * 2],
+    )
     cdc_data = pq.read_table(cdc_path)
-    
+
     assert os.path.exists(cdc_path), "_change_data doesn't exist"
     assert cdc_data == expected_data
-    
+
 
 def test_delete_partitioned_cdf(tmp_path, sample_data: pa.Table):
     cdc_path = f"{tmp_path}/_change_data"
-    
-    write_deltalake(tmp_path, 
-                    sample_data, 
-                    mode='overwrite', 
-                    partition_by=["utf8"],
-                    configuration={"delta.enableChangeDataFeed":"true"})
+
+    write_deltalake(
+        tmp_path,
+        sample_data,
+        mode="overwrite",
+        partition_by=["utf8"],
+        configuration={"delta.enableChangeDataFeed": "true"},
+    )
     dt = DeltaTable(tmp_path)
     dt.delete("int64 > 2")
-    
-    # expected_data = sample_data.filter(pc.field('int64')>2).append_column(field_=pa.field("_change_type", pa.string(), nullable=False), column=[["delete"]*2])
-    # cdc_data = pq.read_table(cdc_path)
-    
-    # assert os.path.exists(cdc_path), "_change_data doesn't exist"
-    # assert len(os.listdir(cdc_path)) == 2
-    # assert cdc_data == expected_data
-    
-    
 
-    
-    
+    expected_data = sample_data.filter(pc.field("int64") > 2).append_column(
+        field_=pa.field("_change_type", pa.string(), nullable=False),
+        column=[["delete"] * 2],
+    )
+    table_schema = dt.schema().to_pyarrow()
+    table_schema = table_schema.insert(
+        len(table_schema), pa.field("_change_type", pa.string(), nullable=False)
+    )
+    cdc_data = pq.read_table(cdc_path, schema=table_schema)
+
+    assert os.path.exists(cdc_path), "_change_data doesn't exist"
+    assert len(os.listdir(cdc_path)) == 2
+    assert cdc_data == expected_data
