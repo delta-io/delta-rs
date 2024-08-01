@@ -238,8 +238,6 @@ async fn excute_non_empty_expr(
                 cdc_scan.clone(),
             )?);
 
-            dbg!(table_partition_cols.clone());
-
             let cdc_actions = write_execution_plan_cdc(
                 Some(snapshot),
                 state.clone(),
