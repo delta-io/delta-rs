@@ -462,6 +462,7 @@ async fn write_execution_plan_with_predicate(
     Ok(actions)
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn write_execution_plan_cdc(
     snapshot: Option<&DeltaTableState>,
     state: SessionState,
