@@ -131,6 +131,7 @@ impl DeleteBuilder {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn excute_non_empty_expr(
     snapshot: &DeltaTableState,
     log_store: LogStoreRef,
@@ -148,7 +149,7 @@ async fn excute_non_empty_expr(
     let input_schema = snapshot.input_schema()?;
     let input_dfschema: DFSchema = input_schema.clone().as_ref().clone().try_into()?;
     let table_partition_cols = snapshot.metadata().partition_columns.clone();
-    let scan = DeltaScanBuilder::new(snapshot, log_store.clone(), &state)
+    let scan = DeltaScanBuilder::new(snapshot, log_store.clone(), state)
         .with_files(rewrite)
         // Use input schema which doesn't wrap partition values, otherwise divide_by_partition_value won't work on UTF8 partitions
         // Since it can't fetch a scalar from a dictionary type
@@ -187,15 +188,7 @@ async fn excute_non_empty_expr(
             writer_stats_config.clone(),
             None,
         )
-        .await?
-        .into_iter()
-        .map(|a| match a {
-            Action::Add(a) => a,
-            _ => panic!("Expected Add action"),
-        })
-        .into_iter()
-        .map(Action::Add)
-        .collect();
+        .await?;
 
         actions.extend(add_actions);
 
@@ -208,56 +201,52 @@ async fn excute_non_empty_expr(
     }
 
     // CDC logic, simply filters data with predicate and adds the _change_type="delete" as literal column
-    match should_write_cdc(&snapshot) {
-        Ok(true) => {
-            // Create CDC scan
-            let cdc_predicate_expr =
-                state.create_physical_expr(expression.clone(), &input_dfschema)?;
-            let cdc_scan: Arc<dyn ExecutionPlan> =
-                Arc::new(FilterExec::try_new(cdc_predicate_expr, scan.clone())?);
+    if let Ok(true) = should_write_cdc(&snapshot) {
+        // Create CDC scan
+        let cdc_predicate_expr = state.create_physical_expr(expression.clone(), &input_dfschema)?;
+        let cdc_scan: Arc<dyn ExecutionPlan> =
+            Arc::new(FilterExec::try_new(cdc_predicate_expr, scan.clone())?);
 
-            // Add literal column "_change_type"
-            let change_type_lit = lit(ScalarValue::Utf8(Some("delete".to_string())));
-            let change_type_expr = state.create_physical_expr(change_type_lit, &input_dfschema)?;
+        // Add literal column "_change_type"
+        let change_type_lit = lit(ScalarValue::Utf8(Some("delete".to_string())));
+        let change_type_expr = state.create_physical_expr(change_type_lit, &input_dfschema)?;
 
-            // Project columns and lit
-            let project_expressions: Vec<(Arc<dyn PhysicalExpr>, String)> = scan
-                .schema()
-                .fields()
-                .into_iter()
-                .enumerate()
-                .map(|(idx, field)| -> (Arc<dyn PhysicalExpr>, String) {
-                    (
-                        Arc::new(expressions::Column::new(field.name(), idx)),
-                        field.name().to_owned(),
-                    )
-                })
-                .chain(iter::once((change_type_expr, "_change_type".to_owned())))
-                .collect();
+        // Project columns and lit
+        let project_expressions: Vec<(Arc<dyn PhysicalExpr>, String)> = scan
+            .schema()
+            .fields()
+            .into_iter()
+            .enumerate()
+            .map(|(idx, field)| -> (Arc<dyn PhysicalExpr>, String) {
+                (
+                    Arc::new(expressions::Column::new(field.name(), idx)),
+                    field.name().to_owned(),
+                )
+            })
+            .chain(iter::once((change_type_expr, "_change_type".to_owned())))
+            .collect();
 
-            let projected_scan: Arc<dyn ExecutionPlan> = Arc::new(ProjectionExec::try_new(
-                project_expressions,
-                cdc_scan.clone(),
-            )?);
+        let projected_scan: Arc<dyn ExecutionPlan> = Arc::new(ProjectionExec::try_new(
+            project_expressions,
+            cdc_scan.clone(),
+        )?);
 
-            let cdc_actions = write_execution_plan_cdc(
-                Some(snapshot),
-                state.clone(),
-                projected_scan.clone(),
-                table_partition_cols.clone(),
-                log_store.object_store(),
-                Some(snapshot.table_config().target_file_size() as usize),
-                None,
-                writer_properties,
-                false,
-                Some(SchemaMode::Overwrite), // If not overwrite, the plan schema is not taken but table schema, however we need the plan schema since it has the _change_type_col
-                writer_stats_config,
-                None,
-            )
-            .await?;
-            actions.extend(cdc_actions)
-        }
-        _ => (),
+        let cdc_actions = write_execution_plan_cdc(
+            Some(snapshot),
+            state.clone(),
+            projected_scan.clone(),
+            table_partition_cols.clone(),
+            log_store.object_store(),
+            Some(snapshot.table_config().target_file_size() as usize),
+            None,
+            writer_properties,
+            false,
+            Some(SchemaMode::Overwrite), // If not overwrite, the plan schema is not taken but table schema, however we need the plan schema since it has the _change_type_col
+            writer_stats_config,
+            None,
+        )
+        .await?;
+        actions.extend(cdc_actions)
     };
     Ok(actions)
 }
