@@ -50,7 +50,7 @@ use crate::delta_datafusion::{
 };
 use crate::errors::DeltaResult;
 use crate::kernel::{Action, Add, Remove};
-use crate::operations::write::write_execution_plan;
+use crate::operations::write::{write_execution_plan, SchemaMode};
 use crate::protocol::DeltaOperation;
 use crate::table::state::DeltaTableState;
 use crate::DeltaTable;
@@ -236,7 +236,7 @@ async fn excute_non_empty_expr(
                 None,
                 writer_properties,
                 false,
-                None,
+                Some(SchemaMode::Overwrite), // If not overwrite, the plan schema is not taken but table schema, however we need the plan schema since it has the _change_type_col
                 writer_stats_config,
                 None,
             )
