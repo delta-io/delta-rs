@@ -395,6 +395,9 @@ impl std::future::IntoFuture for DeleteBuilder {
 
 #[cfg(test)]
 mod tests {
+    use crate::delta_datafusion::cdf::DeltaCdfScan;
+    use crate::kernel::DataType as DeltaDataType;
+    use crate::operations::collect_sendable_stream;
     use crate::operations::DeltaOps;
     use crate::protocol::*;
     use crate::writer::test_utils::datafusion::get_data;
@@ -408,11 +411,15 @@ mod tests {
     use arrow::datatypes::{Field, Schema};
     use arrow::record_batch::RecordBatch;
     use arrow_array::ArrayRef;
+    use arrow_array::StringArray;
     use arrow_array::StructArray;
     use arrow_buffer::NullBuffer;
+    use arrow_schema::DataType;
     use arrow_schema::Fields;
     use datafusion::assert_batches_sorted_eq;
+    use datafusion::physical_plan::ExecutionPlan;
     use datafusion::prelude::*;
+    use delta_kernel::schema::PrimitiveType;
     use serde_json::json;
     use std::sync::Arc;
 
@@ -867,5 +874,175 @@ mod tests {
             )))
             .await;
         assert!(res.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_delete_cdc_enabled() {
+        let table: DeltaTable = DeltaOps::new_in_memory()
+            .create()
+            .with_column(
+                "value",
+                DeltaDataType::Primitive(PrimitiveType::Integer),
+                true,
+                None,
+            )
+            .with_configuration_property(DeltaConfigKey::EnableChangeDataFeed, Some("true"))
+            .await
+            .unwrap();
+        assert_eq!(table.version(), 0);
+
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "value",
+            arrow::datatypes::DataType::Int32,
+            true,
+        )]));
+
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(Int32Array::from(vec![Some(1), Some(2), Some(3)]))],
+        )
+        .unwrap();
+        let table = DeltaOps(table)
+            .write(vec![batch])
+            .await
+            .expect("Failed to write first batch");
+        assert_eq!(table.version(), 1);
+
+        let (table, _metrics) = DeltaOps(table)
+            .delete()
+            .with_predicate(col("value").eq(lit(2)))
+            .await
+            .unwrap();
+        assert_eq!(table.version(), 2);
+
+        let ctx = SessionContext::new();
+        let table = DeltaOps(table)
+            .load_cdf()
+            .with_session_ctx(ctx.clone())
+            .with_starting_version(0)
+            .build()
+            .await
+            .expect("Failed to load CDF");
+
+        let mut batches = collect_batches(
+            table.properties().output_partitioning().partition_count(),
+            table,
+            ctx,
+        )
+        .await
+        .expect("Failed to collect batches");
+
+        // The batches will contain a current _commit_timestamp which shouldn't be check_append_only
+        let _: Vec<_> = batches.iter_mut().map(|b| b.remove_column(3)).collect();
+
+        assert_batches_sorted_eq! {[
+        "+-------+--------------+-----------------+",
+        "| value | _change_type | _commit_version |",
+        "+-------+--------------+-----------------+",
+        "| 1     | insert       | 1               |",
+        "| 2     | delete       | 2               |",
+        "| 2     | insert       | 1               |",
+        "| 3     | insert       | 1               |",
+        "+-------+--------------+-----------------+",
+        ], &batches }
+    }
+
+    #[tokio::test]
+    async fn test_delete_cdc_enabled_partitioned() {
+        let table: DeltaTable = DeltaOps::new_in_memory()
+            .create()
+            .with_column(
+                "year",
+                DeltaDataType::Primitive(PrimitiveType::String),
+                true,
+                None,
+            )
+            .with_column(
+                "value",
+                DeltaDataType::Primitive(PrimitiveType::Integer),
+                true,
+                None,
+            )
+            .with_partition_columns(vec!["year"])
+            .with_configuration_property(DeltaConfigKey::EnableChangeDataFeed, Some("true"))
+            .await
+            .unwrap();
+        assert_eq!(table.version(), 0);
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("year", DataType::Utf8, true),
+            Field::new("value", DataType::Int32, true),
+        ]));
+
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(StringArray::from(vec![
+                    Some("2020"),
+                    Some("2020"),
+                    Some("2024"),
+                ])),
+                Arc::new(Int32Array::from(vec![Some(1), Some(2), Some(3)])),
+            ],
+        )
+        .unwrap();
+
+        let table = DeltaOps(table)
+            .write(vec![batch])
+            .await
+            .expect("Failed to write first batch");
+        assert_eq!(table.version(), 1);
+
+        let (table, _metrics) = DeltaOps(table)
+            .delete()
+            .with_predicate(col("value").eq(lit(2)))
+            .await
+            .unwrap();
+        assert_eq!(table.version(), 2);
+
+        let ctx = SessionContext::new();
+        let table = DeltaOps(table)
+            .load_cdf()
+            .with_session_ctx(ctx.clone())
+            .with_starting_version(0)
+            .build()
+            .await
+            .expect("Failed to load CDF");
+
+        let mut batches = collect_batches(
+            table.properties().output_partitioning().partition_count(),
+            table,
+            ctx,
+        )
+        .await
+        .expect("Failed to collect batches");
+
+        // The batches will contain a current _commit_timestamp which shouldn't be check_append_only
+        let _: Vec<_> = batches.iter_mut().map(|b| b.remove_column(3)).collect();
+
+        assert_batches_sorted_eq! {[
+        "+-------+--------------+-----------------+------+",
+        "| value | _change_type | _commit_version | year |",
+        "+-------+--------------+-----------------+------+",
+        "| 1     | insert       | 1               | 2020 |",
+        "| 2     | delete       | 2               | 2020 |",
+        "| 2     | insert       | 1               | 2020 |",
+        "| 3     | insert       | 1               | 2024 |",
+        "+-------+--------------+-----------------+------+",
+        ], &batches }
+    }
+
+    async fn collect_batches(
+        num_partitions: usize,
+        stream: DeltaCdfScan,
+        ctx: SessionContext,
+    ) -> Result<Vec<RecordBatch>, Box<dyn std::error::Error>> {
+        let mut batches = vec![];
+        for p in 0..num_partitions {
+            let data: Vec<RecordBatch> =
+                collect_sendable_stream(stream.execute(p, ctx.task_ctx())?).await?;
+            batches.extend_from_slice(&data);
+        }
+        Ok(batches)
     }
 }
