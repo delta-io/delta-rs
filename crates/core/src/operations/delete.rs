@@ -139,13 +139,14 @@ async fn excute_non_empty_expr(
     metrics: &mut DeleteMetrics,
     rewrite: &[Add],
     writer_properties: Option<WriterProperties>,
+    partition_scan: bool,
 ) -> DeltaResult<Vec<Action>> {
     // For each identified file perform a parquet scan + filter + limit (1) + count.
     // If returned count is not zero then append the file to be rewritten and removed from the log. Otherwise do nothing to the file.
+    let mut actions: Vec<Action> = Vec::new();
 
     let input_schema = snapshot.input_schema()?;
     let input_dfschema: DFSchema = input_schema.clone().as_ref().clone().try_into()?;
-
     let table_partition_cols = snapshot.metadata().partition_columns.clone();
 
     let scan = DeltaScanBuilder::new(snapshot, log_store.clone(), &state)
@@ -153,13 +154,6 @@ async fn excute_non_empty_expr(
         .build()
         .await?;
     let scan = Arc::new(scan);
-
-    // Apply the negation of the filter and rewrite files
-    let negated_expression = Expr::Not(Box::new(Expr::IsTrue(Box::new(expression.clone()))));
-
-    let predicate_expr = state.create_physical_expr(negated_expression, &input_dfschema)?;
-    let filter: Arc<dyn ExecutionPlan> =
-        Arc::new(FilterExec::try_new(predicate_expr, scan.clone())?);
 
     let writer_stats_config = WriterStatsConfig::new(
         snapshot.table_config().num_indexed_cols(),
@@ -169,29 +163,47 @@ async fn excute_non_empty_expr(
             .map(|v| v.iter().map(|v| v.to_string()).collect::<Vec<String>>()),
     );
 
-    let mut actions: Vec<Action> = write_execution_plan(
-        Some(snapshot),
-        state.clone(),
-        filter.clone(),
-        table_partition_cols.clone(),
-        log_store.object_store(),
-        Some(snapshot.table_config().target_file_size() as usize),
-        None,
-        writer_properties.clone(),
-        false,
-        None,
-        writer_stats_config.clone(),
-        None,
-    )
-    .await?
-    .into_iter()
-    .map(|a| match a {
-        Action::Add(a) => a,
-        _ => panic!("Expected Add action"),
-    })
-    .into_iter()
-    .map(Action::Add)
-    .collect();
+    if !partition_scan {
+        // Apply the negation of the filter and rewrite files
+        let negated_expression = Expr::Not(Box::new(Expr::IsTrue(Box::new(expression.clone()))));
+
+        let predicate_expr = state.create_physical_expr(negated_expression, &input_dfschema)?;
+        let filter: Arc<dyn ExecutionPlan> =
+            Arc::new(FilterExec::try_new(predicate_expr, scan.clone())?);
+
+        let add_actions: Vec<Action> = write_execution_plan(
+            Some(snapshot),
+            state.clone(),
+            filter.clone(),
+            table_partition_cols.clone(),
+            log_store.object_store(),
+            Some(snapshot.table_config().target_file_size() as usize),
+            None,
+            writer_properties.clone(),
+            false,
+            None,
+            writer_stats_config.clone(),
+            None,
+        )
+        .await?
+        .into_iter()
+        .map(|a| match a {
+            Action::Add(a) => a,
+            _ => panic!("Expected Add action"),
+        })
+        .into_iter()
+        .map(Action::Add)
+        .collect();
+
+        actions.extend(add_actions);
+
+        let read_records = scan.parquet_scan.metrics().and_then(|m| m.output_rows());
+        let filter_records = filter.metrics().and_then(|m| m.output_rows());
+        metrics.num_copied_rows = filter_records;
+        metrics.num_deleted_rows = read_records
+            .zip(filter_records)
+            .map(|(read, filter)| read - filter);
+    }
 
     // CDC logic, simply filters data with predicate and adds the _change_type="delete" as literal column
     match should_write_cdc(&snapshot) {
@@ -226,6 +238,8 @@ async fn excute_non_empty_expr(
                 cdc_scan.clone(),
             )?);
 
+            dbg!(table_partition_cols.clone());
+
             let cdc_actions = write_execution_plan_cdc(
                 Some(snapshot),
                 state.clone(),
@@ -245,14 +259,6 @@ async fn excute_non_empty_expr(
         }
         _ => (),
     };
-
-    let read_records = scan.parquet_scan.metrics().and_then(|m| m.output_rows());
-    let filter_records = filter.metrics().and_then(|m| m.output_rows());
-    metrics.num_copied_rows = filter_records;
-    metrics.num_deleted_rows = read_records
-        .zip(filter_records)
-        .map(|(read, filter)| read - filter);
-
     Ok(actions)
 }
 
@@ -273,9 +279,7 @@ async fn execute(
 
     let predicate = predicate.unwrap_or(Expr::Literal(ScalarValue::Boolean(Some(true))));
 
-    let mut actions = if candidates.partition_scan {
-        Vec::new()
-    } else {
+    let mut actions = {
         let write_start = Instant::now();
         let add = excute_non_empty_expr(
             &snapshot,
@@ -285,6 +289,7 @@ async fn execute(
             &mut metrics,
             &candidates.candidates,
             writer_properties,
+            candidates.partition_scan,
         )
         .await?;
         metrics.rewrite_time_ms = Instant::now().duration_since(write_start).as_millis() as u64;
