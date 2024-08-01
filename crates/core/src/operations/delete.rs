@@ -17,34 +17,39 @@
 //!     .await?;
 //! ````
 
-use core::panic;
-use std::sync::Arc;
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
-
-use super::writer::DeltaWriter;
 use crate::logstore::LogStoreRef;
+use core::panic;
 use datafusion::execution::context::{SessionContext, SessionState};
 use datafusion::physical_plan::filter::FilterExec;
+use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::Expr;
 use datafusion_common::scalar::ScalarValue;
 use datafusion_common::DFSchema;
+use datafusion_expr::lit;
+use datafusion_physical_expr::{
+    expressions::{self},
+    PhysicalExpr,
+};
 use futures::future::BoxFuture;
-use object_store::prefix::PrefixStore;
+use std::iter;
+use std::sync::Arc;
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
+
 use parquet::file::properties::WriterProperties;
 use serde::Serialize;
 
 use super::cdc::should_write_cdc;
 use super::datafusion_utils::Expression;
 use super::transaction::{CommitBuilder, CommitProperties, PROTOCOL};
-use super::write::{write_execution_plan_cdc, write_execution_plan_cdf, WriterStatsConfig};
-use super::writer::WriterConfig;
+use super::write::{write_execution_plan_cdc, WriterStatsConfig};
+
 use crate::delta_datafusion::expr::fmt_expr_to_sql;
 use crate::delta_datafusion::{
     find_files, register_store, DataFusionMixins, DeltaScanBuilder, DeltaSessionContext,
 };
 use crate::errors::DeltaResult;
-use crate::kernel::{Action, Add, AddCDCFile, Remove};
+use crate::kernel::{Action, Add, Remove};
 use crate::operations::write::write_execution_plan;
 use crate::protocol::DeltaOperation;
 use crate::table::state::DeltaTableState;
@@ -191,14 +196,40 @@ async fn excute_non_empty_expr(
     // CDC logic, simply filters data with predicate and adds the _change_type="delete" as literal column
     match should_write_cdc(&snapshot) {
         Ok(true) => {
+            // Create CDC scan
             let cdc_predicate_expr =
                 state.create_physical_expr(expression.clone(), &input_dfschema)?;
             let cdc_scan: Arc<dyn ExecutionPlan> =
                 Arc::new(FilterExec::try_new(cdc_predicate_expr, scan.clone())?);
+
+            // Add literal column "_change_type"
+            let change_type_lit = lit(ScalarValue::Utf8(Some("delete".to_string())));
+            let change_type_expr = state.create_physical_expr(change_type_lit, &input_dfschema)?;
+
+            // Project columns and lit
+            let project_expressions: Vec<(Arc<dyn PhysicalExpr>, String)> = scan
+                .schema()
+                .fields()
+                .into_iter()
+                .enumerate()
+                .map(|(idx, field)| -> (Arc<dyn PhysicalExpr>, String) {
+                    (
+                        Arc::new(expressions::Column::new(field.name(), idx)),
+                        field.name().to_owned(),
+                    )
+                })
+                .chain(iter::once((change_type_expr, "_change_type".to_owned())))
+                .collect();
+
+            let projected_scan: Arc<dyn ExecutionPlan> = Arc::new(ProjectionExec::try_new(
+                project_expressions,
+                cdc_scan.clone(),
+            )?);
+
             let cdc_actions = write_execution_plan_cdc(
                 Some(snapshot),
                 state.clone(),
-                cdc_scan.clone(),
+                projected_scan.clone(),
                 table_partition_cols.clone(),
                 log_store.object_store(),
                 Some(snapshot.table_config().target_file_size() as usize),
