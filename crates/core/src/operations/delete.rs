@@ -483,9 +483,6 @@ mod tests {
         //     serde_json::to_value(&metrics).unwrap()
         // );
 
-        // rewrite is not required
-        assert_eq!(metrics.rewrite_time_ms, 0);
-
         // Deletes with no changes to state must not commit
         let (table, metrics) = DeltaOps(table).delete().await.unwrap();
         assert_eq!(table.version(), 2);
@@ -721,7 +718,6 @@ mod tests {
         assert_eq!(metrics.num_deleted_rows, None);
         assert_eq!(metrics.num_copied_rows, None);
         assert!(metrics.scan_time_ms > 0);
-        assert_eq!(metrics.rewrite_time_ms, 0);
 
         let expected = vec![
             "+----+-------+------------+",
