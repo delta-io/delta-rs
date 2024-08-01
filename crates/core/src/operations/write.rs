@@ -476,39 +476,42 @@ pub(crate) async fn write_execution_plan_cdc(
     writer_stats_config: WriterStatsConfig,
     sender: Option<Sender<RecordBatch>>,
 ) -> DeltaResult<Vec<Action>> {
-    let cdc_store = Arc::new(PrefixStore::new(
-        object_store,
-        "_change_data",
-    ));
+    let cdc_store = Arc::new(PrefixStore::new(object_store, "_change_data"));
     Ok(write_execution_plan(
-        snapshot, 
-        state, 
-        plan, 
+        snapshot,
+        state,
+        plan,
         partition_columns,
         cdc_store,
-        target_file_size, 
-        write_batch_size, 
-        writer_properties, 
-        safe_cast, 
-        schema_mode, 
-        writer_stats_config, 
-        sender).await?.into_iter().map(|add| {
-            // Modify add actions into CDC actions
-            match add {
-                Action::Add(add) => { Action::Cdc(AddCDCFile {
-                                        // This is a gnarly hack, but the action needs the nested path, not the
-                                        // path isnide the prefixed store
-                                        path: format!("_change_data/{}", add.path),
-                                        size: add.size,
-                                        partition_values: add.partition_values,
-                                        data_change: false,
-                                        tags: add.tags,
-                                    })},
-                _ => panic!("Expected Add action"),
+        target_file_size,
+        write_batch_size,
+        writer_properties,
+        safe_cast,
+        schema_mode,
+        writer_stats_config,
+        sender,
+    )
+    .await?
+    .into_iter()
+    .map(|add| {
+        // Modify add actions into CDC actions
+        match add {
+            Action::Add(add) => {
+                Action::Cdc(AddCDCFile {
+                    // This is a gnarly hack, but the action needs the nested path, not the
+                    // path isnide the prefixed store
+                    path: format!("_change_data/{}", add.path),
+                    size: add.size,
+                    partition_values: add.partition_values,
+                    data_change: false,
+                    tags: add.tags,
+                })
             }
-        }).collect::<Vec<_>>())
+            _ => panic!("Expected Add action"),
+        }
+    })
+    .collect::<Vec<_>>())
 }
-
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn write_execution_plan(

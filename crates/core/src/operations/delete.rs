@@ -183,7 +183,10 @@ async fn excute_non_empty_expr(
     .map(|a| match a {
         Action::Add(a) => a,
         _ => panic!("Expected Add action"),
-    }).into_iter().map(Action::Add).collect();
+    })
+    .into_iter()
+    .map(Action::Add)
+    .collect();
 
     // CDC logic, simply filters data with predicate and adds the _change_type="delete" as literal column
     match should_write_cdc(&snapshot) {
