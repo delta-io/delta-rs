@@ -21,6 +21,7 @@ use core::panic;
 use std::sync::Arc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
+use super::writer::DeltaWriter;
 use crate::logstore::LogStoreRef;
 use datafusion::execution::context::{SessionContext, SessionState};
 use datafusion::physical_plan::filter::FilterExec;
@@ -29,18 +30,21 @@ use datafusion::prelude::Expr;
 use datafusion_common::scalar::ScalarValue;
 use datafusion_common::DFSchema;
 use futures::future::BoxFuture;
+use object_store::prefix::PrefixStore;
 use parquet::file::properties::WriterProperties;
 use serde::Serialize;
 
+use super::cdc::should_write_cdc;
 use super::datafusion_utils::Expression;
 use super::transaction::{CommitBuilder, CommitProperties, PROTOCOL};
-use super::write::WriterStatsConfig;
+use super::write::{write_execution_plan_cdc, write_execution_plan_cdf, WriterStatsConfig};
+use super::writer::WriterConfig;
 use crate::delta_datafusion::expr::fmt_expr_to_sql;
 use crate::delta_datafusion::{
     find_files, register_store, DataFusionMixins, DeltaScanBuilder, DeltaSessionContext,
 };
 use crate::errors::DeltaResult;
-use crate::kernel::{Action, Add, Remove};
+use crate::kernel::{Action, Add, AddCDCFile, Remove};
 use crate::operations::write::write_execution_plan;
 use crate::protocol::DeltaOperation;
 use crate::table::state::DeltaTableState;
@@ -130,7 +134,7 @@ async fn excute_non_empty_expr(
     metrics: &mut DeleteMetrics,
     rewrite: &[Add],
     writer_properties: Option<WriterProperties>,
-) -> DeltaResult<Vec<Add>> {
+) -> DeltaResult<Vec<Action>> {
     // For each identified file perform a parquet scan + filter + limit (1) + count.
     // If returned count is not zero then append the file to be rewritten and removed from the log. Otherwise do nothing to the file.
 
@@ -160,7 +164,7 @@ async fn excute_non_empty_expr(
             .map(|v| v.iter().map(|v| v.to_string()).collect::<Vec<String>>()),
     );
 
-    let add_actions = write_execution_plan(
+    let mut actions: Vec<Action> = write_execution_plan(
         Some(snapshot),
         state.clone(),
         filter.clone(),
@@ -168,10 +172,10 @@ async fn excute_non_empty_expr(
         log_store.object_store(),
         Some(snapshot.table_config().target_file_size() as usize),
         None,
-        writer_properties,
+        writer_properties.clone(),
         false,
         None,
-        writer_stats_config,
+        writer_stats_config.clone(),
         None,
     )
     .await?
@@ -179,8 +183,34 @@ async fn excute_non_empty_expr(
     .map(|a| match a {
         Action::Add(a) => a,
         _ => panic!("Expected Add action"),
-    })
-    .collect::<Vec<Add>>();
+    }).into_iter().map(Action::Add).collect();
+
+    // CDC logic, simply filters data with predicate and adds the _change_type="delete" as literal column
+    match should_write_cdc(&snapshot) {
+        Ok(true) => {
+            let cdc_predicate_expr =
+                state.create_physical_expr(expression.clone(), &input_dfschema)?;
+            let cdc_scan: Arc<dyn ExecutionPlan> =
+                Arc::new(FilterExec::try_new(cdc_predicate_expr, scan.clone())?);
+            let cdc_actions = write_execution_plan_cdc(
+                Some(snapshot),
+                state.clone(),
+                cdc_scan.clone(),
+                table_partition_cols.clone(),
+                log_store.object_store(),
+                Some(snapshot.table_config().target_file_size() as usize),
+                None,
+                writer_properties,
+                false,
+                None,
+                writer_stats_config,
+                None,
+            )
+            .await?;
+            actions.extend(cdc_actions)
+        }
+        _ => (),
+    };
 
     let read_records = scan.parquet_scan.metrics().and_then(|m| m.output_rows());
     let filter_records = filter.metrics().and_then(|m| m.output_rows());
@@ -189,7 +219,7 @@ async fn excute_non_empty_expr(
         .zip(filter_records)
         .map(|(read, filter)| read - filter);
 
-    Ok(add_actions)
+    Ok(actions)
 }
 
 async fn execute(
@@ -209,7 +239,7 @@ async fn execute(
 
     let predicate = predicate.unwrap_or(Expr::Literal(ScalarValue::Boolean(Some(true))));
 
-    let add = if candidates.partition_scan {
+    let mut actions = if candidates.partition_scan {
         Vec::new()
     } else {
         let write_start = Instant::now();
@@ -233,7 +263,6 @@ async fn execute(
         .unwrap()
         .as_millis() as i64;
 
-    let mut actions: Vec<Action> = add.into_iter().map(Action::Add).collect();
     metrics.num_removed_files = remove.len();
     metrics.num_added_files = actions.len();
 
