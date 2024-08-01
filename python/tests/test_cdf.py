@@ -3,6 +3,7 @@ from datetime import date, datetime
 
 import pyarrow as pa
 import pyarrow.compute as pc
+import pyarrow.dataset as ds
 import pyarrow.parquet as pq
 
 from deltalake import DeltaTable, write_deltalake
@@ -437,9 +438,13 @@ def test_delete_unpartitioned_cdf(tmp_path, sample_data: pa.Table):
     dt = DeltaTable(tmp_path)
     dt.delete("int64 > 2")
 
-    expected_data = sample_data.filter(pc.field("int64") > 2).append_column(
-        field_=pa.field("_change_type", pa.string(), nullable=False),
-        column=[["delete"] * 2],
+    expected_data = (
+        ds.dataset(sample_data)
+        .to_table(filter=(pc.field("int64") > 2))
+        .append_column(
+            field_=pa.field("_change_type", pa.string(), nullable=False),
+            column=[["delete"] * 2],
+        )
     )
     cdc_data = pq.read_table(cdc_path)
 
@@ -460,9 +465,13 @@ def test_delete_partitioned_cdf(tmp_path, sample_data: pa.Table):
     dt = DeltaTable(tmp_path)
     dt.delete("int64 > 2")
 
-    expected_data = sample_data.filter(pc.field("int64") > 2).append_column(
-        field_=pa.field("_change_type", pa.string(), nullable=False),
-        column=[["delete"] * 2],
+    expected_data = (
+        ds.dataset(sample_data)
+        .to_table(filter=(pc.field("int64") > 2))
+        .append_column(
+            field_=pa.field("_change_type", pa.string(), nullable=False),
+            column=[["delete"] * 2],
+        )
     )
     table_schema = dt.schema().to_pyarrow()
     table_schema = table_schema.insert(
