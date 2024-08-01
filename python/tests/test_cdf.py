@@ -1,6 +1,11 @@
+import os
 from datetime import date, datetime
 
-from deltalake import DeltaTable
+import pyarrow as pa
+import pyarrow.compute as pc
+import pyarrow.parquet as pq
+
+from deltalake import DeltaTable, write_deltalake
 
 
 def test_read_cdf_partitioned():
@@ -418,3 +423,41 @@ def test_read_cdf_partitioned_projection():
     dt = DeltaTable("../crates/test/tests/data/cdf-table/")
     columns = ["id", "_change_type", "_commit_version"]
     assert columns == dt.load_cdf(0, 3, columns=columns).schema.names
+
+
+def test_delete_unpartitioned_cdf(tmp_path, sample_data: pa.Table):
+    cdc_path = f"{tmp_path}/_change_data"
+    
+    write_deltalake(tmp_path, sample_data, mode='append', configuration={"delta.enableChangeDataFeed":"true"})
+    dt = DeltaTable(tmp_path)
+    dt.delete("int64 > 2")
+    
+    expected_data = sample_data.filter(pc.field('int64')>2).append_column(field_=pa.field("_change_type", pa.string(), nullable=False), column=[["delete"]*2])
+    cdc_data = pq.read_table(cdc_path)
+    
+    assert os.path.exists(cdc_path), "_change_data doesn't exist"
+    assert cdc_data == expected_data
+    
+
+def test_delete_partitioned_cdf(tmp_path, sample_data: pa.Table):
+    cdc_path = f"{tmp_path}/_change_data"
+    
+    write_deltalake(tmp_path, 
+                    sample_data, 
+                    mode='overwrite', 
+                    partition_by=["utf8"],
+                    configuration={"delta.enableChangeDataFeed":"true"})
+    dt = DeltaTable(tmp_path)
+    dt.delete("int64 > 2")
+    
+    # expected_data = sample_data.filter(pc.field('int64')>2).append_column(field_=pa.field("_change_type", pa.string(), nullable=False), column=[["delete"]*2])
+    # cdc_data = pq.read_table(cdc_path)
+    
+    # assert os.path.exists(cdc_path), "_change_data doesn't exist"
+    # assert len(os.listdir(cdc_path)) == 2
+    # assert cdc_data == expected_data
+    
+    
+
+    
+    
