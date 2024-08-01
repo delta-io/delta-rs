@@ -484,18 +484,16 @@ impl std::future::IntoFuture for UpdateBuilder {
 mod tests {
     use super::*;
 
-    use crate::delta_datafusion::cdf::DeltaCdfScan;
     use crate::kernel::DataType as DeltaDataType;
     use crate::kernel::{Action, PrimitiveType, Protocol, StructField, StructType};
-    use crate::operations::collect_sendable_stream;
+    use crate::operations::load_cdf::*;
     use crate::operations::DeltaOps;
     use crate::writer::test_utils::datafusion::get_data;
     use crate::writer::test_utils::datafusion::write_batch;
     use crate::writer::test_utils::{
         get_arrow_schema, get_delta_schema, get_record_batch, setup_table_with_configuration,
     };
-    use crate::DeltaConfigKey;
-    use crate::DeltaTable;
+    use crate::{DeltaConfigKey, DeltaTable};
     use arrow::array::{Int32Array, StringArray};
     use arrow::datatypes::Schema as ArrowSchema;
     use arrow::datatypes::{Field, Schema};
@@ -1211,19 +1209,5 @@ mod tests {
         "| 3     | insert           | 1               | 2024 |",
         "+-------+------------------+-----------------+------+",
             ], &batches }
-    }
-
-    async fn collect_batches(
-        num_partitions: usize,
-        stream: DeltaCdfScan,
-        ctx: SessionContext,
-    ) -> Result<Vec<RecordBatch>, Box<dyn std::error::Error>> {
-        let mut batches = vec![];
-        for p in 0..num_partitions {
-            let data: Vec<RecordBatch> =
-                collect_sendable_stream(stream.execute(p, ctx.task_ctx())?).await?;
-            batches.extend_from_slice(&data);
-        }
-        Ok(batches)
     }
 }
