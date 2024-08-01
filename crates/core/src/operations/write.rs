@@ -40,6 +40,7 @@ use datafusion_common::DFSchema;
 use datafusion_expr::Expr;
 use futures::future::BoxFuture;
 use futures::StreamExt;
+use object_store::prefix::PrefixStore;
 use parquet::file::properties::WriterProperties;
 use tracing::log::*;
 
@@ -52,7 +53,7 @@ use crate::delta_datafusion::expr::parse_predicate_expression;
 use crate::delta_datafusion::{find_files, register_store, DeltaScanBuilder};
 use crate::delta_datafusion::{DataFusionMixins, DeltaDataChecker};
 use crate::errors::{DeltaResult, DeltaTableError};
-use crate::kernel::{Action, Add, Metadata, PartitionsExt, Remove, StructType};
+use crate::kernel::{Action, Add, AddCDCFile, Metadata, PartitionsExt, Remove, StructType};
 use crate::logstore::LogStoreRef;
 use crate::operations::cast::{cast_record_batch, merge_schema};
 use crate::protocol::{DeltaOperation, SaveMode};
@@ -460,6 +461,54 @@ async fn write_execution_plan_with_predicate(
     // Collect add actions to add to commit
     Ok(actions)
 }
+
+pub(crate) async fn write_execution_plan_cdc(
+    snapshot: Option<&DeltaTableState>,
+    state: SessionState,
+    plan: Arc<dyn ExecutionPlan>,
+    partition_columns: Vec<String>,
+    object_store: ObjectStoreRef,
+    target_file_size: Option<usize>,
+    write_batch_size: Option<usize>,
+    writer_properties: Option<WriterProperties>,
+    safe_cast: bool,
+    schema_mode: Option<SchemaMode>,
+    writer_stats_config: WriterStatsConfig,
+    sender: Option<Sender<RecordBatch>>,
+) -> DeltaResult<Vec<Action>> {
+    let cdc_store = Arc::new(PrefixStore::new(
+        object_store,
+        "_change_data",
+    ));
+    Ok(write_execution_plan(
+        snapshot, 
+        state, 
+        plan, 
+        partition_columns,
+        cdc_store,
+        target_file_size, 
+        write_batch_size, 
+        writer_properties, 
+        safe_cast, 
+        schema_mode, 
+        writer_stats_config, 
+        sender).await?.into_iter().map(|add| {
+            // Modify add actions into CDC actions
+            match add {
+                Action::Add(add) => { Action::Cdc(AddCDCFile {
+                                        // This is a gnarly hack, but the action needs the nested path, not the
+                                        // path isnide the prefixed store
+                                        path: format!("_change_data/{}", add.path),
+                                        size: add.size,
+                                        partition_values: add.partition_values,
+                                        data_change: false,
+                                        tags: add.tags,
+                                    })},
+                _ => panic!("Expected Add action"),
+            }
+        }).collect::<Vec<_>>())
+}
+
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn write_execution_plan(
