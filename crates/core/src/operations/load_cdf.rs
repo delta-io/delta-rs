@@ -7,6 +7,7 @@ use datafusion_physical_expr::{
 use std::sync::Arc;
 use std::time::SystemTime;
 
+use arrow::record_batch::RecordBatch;
 use arrow_schema::{ArrowError, Field};
 use chrono::{DateTime, Utc};
 use datafusion::datasource::file_format::parquet::ParquetFormat;
@@ -329,36 +330,33 @@ impl CdfLoadBuilder {
     }
 }
 
+/// Helper function to collect batches associated with reading CDF data
+pub(crate) async fn collect_batches(
+    num_partitions: usize,
+    stream: DeltaCdfScan,
+    ctx: SessionContext,
+) -> Result<Vec<RecordBatch>, Box<dyn std::error::Error>> {
+    let mut batches = vec![];
+    for p in 0..num_partitions {
+        let data: Vec<RecordBatch> =
+            crate::operations::collect_sendable_stream(stream.execute(p, ctx.task_ctx())?).await?;
+        batches.extend_from_slice(&data);
+    }
+    Ok(batches)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::error::Error;
     use std::str::FromStr;
 
-    use arrow_array::RecordBatch;
     use chrono::NaiveDateTime;
     use datafusion::physical_plan::ExecutionPlan;
     use datafusion::prelude::SessionContext;
     use datafusion_common::assert_batches_sorted_eq;
 
-    use crate::delta_datafusion::cdf::DeltaCdfScan;
-    use crate::operations::collect_sendable_stream;
     use crate::writer::test_utils::TestResult;
     use crate::DeltaOps;
-
-    async fn collect_batches(
-        num_partitions: usize,
-        stream: DeltaCdfScan,
-        ctx: SessionContext,
-    ) -> Result<Vec<RecordBatch>, Box<dyn Error>> {
-        let mut batches = vec![];
-        for p in 0..num_partitions {
-            let data: Vec<RecordBatch> =
-                collect_sendable_stream(stream.execute(p, ctx.task_ctx())?).await?;
-            batches.extend_from_slice(&data);
-        }
-        Ok(batches)
-    }
 
     #[tokio::test]
     async fn test_load_local() -> TestResult {

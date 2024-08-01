@@ -59,6 +59,7 @@ use futures::future::BoxFuture;
 use itertools::Itertools;
 use parquet::file::properties::WriterProperties;
 use serde::Serialize;
+use tracing::log::*;
 
 use self::barrier::{MergeBarrier, MergeBarrierExec};
 
@@ -74,9 +75,10 @@ use crate::delta_datafusion::{
 };
 use crate::kernel::Action;
 use crate::logstore::LogStoreRef;
+use crate::operations::cdc::*;
 use crate::operations::merge::barrier::find_barrier_node;
 use crate::operations::transaction::CommitBuilder;
-use crate::operations::write::{write_execution_plan, WriterStatsConfig};
+use crate::operations::write::{write_execution_plan, write_execution_plan_cdc, WriterStatsConfig};
 use crate::protocol::{DeltaOperation, MergePredicate};
 use crate::table::state::DeltaTableState;
 use crate::{DeltaResult, DeltaTable, DeltaTableError};
@@ -1014,6 +1016,15 @@ async fn execute(
 ) -> DeltaResult<(DeltaTableState, MergeMetrics)> {
     let mut metrics = MergeMetrics::default();
     let exec_start = Instant::now();
+    // Determining whether we should write change data once so that computation of change data can
+    // be disabled in the common case(s)
+    let should_cdc = should_write_cdc(&snapshot)?;
+    // Change data may be collected and then written out at the completion of the merge
+    let mut change_data = vec![];
+
+    if should_cdc {
+        debug!("Executing a merge and I should write CDC!");
+    }
 
     let current_metadata = snapshot.metadata();
     let merge_planner = DeltaPlanner::<MergeMetricExtensionPlanner> {
@@ -1076,6 +1087,7 @@ async fn execute(
     let source_schema = source.schema();
     let target_schema = target.schema();
     let join_schema_df = build_join_schema(source_schema, target_schema, &JoinType::Full)?;
+
     let predicate = match predicate {
         Expression::DataFusion(expr) => expr,
         Expression::String(s) => parse_predicate_expression(&join_schema_df, s, &state)?,
@@ -1119,7 +1131,7 @@ async fn execute(
         None => LogicalPlanBuilder::scan(target_name.clone(), target_provider, None)?.build()?,
     };
 
-    let source = DataFrame::new(state.clone(), source);
+    let source = DataFrame::new(state.clone(), source.clone());
     let source = source.with_column(SOURCE_COLUMN, lit(true))?;
 
     // Not match operations imply a full scan of the target table is required
@@ -1412,7 +1424,7 @@ async fn execute(
 
     let merge_barrier = LogicalPlan::Extension(Extension {
         node: Arc::new(MergeBarrier {
-            input: new_columns,
+            input: new_columns.clone(),
             expr: distrbute_expr,
             file_column,
         }),
@@ -1427,11 +1439,23 @@ async fn execute(
     });
 
     let operation_count = DataFrame::new(state.clone(), operation_count);
+
+    if should_cdc {
+        // Create a dataframe containing the CDC deletes which are present at this point
+        change_data.push(
+            operation_count
+                .clone()
+                .filter(col(DELETE_COLUMN))?
+                .select(write_projection.clone())?
+                .with_column("_change_type", lit("delete"))?,
+        );
+    }
+
     let filtered = operation_count.filter(col(DELETE_COLUMN).is_false())?;
 
-    let project = filtered.select(write_projection)?;
-    let merge_final = &project.into_unoptimized_plan();
+    let project = filtered.clone().select(write_projection)?;
 
+    let merge_final = &project.into_unoptimized_plan();
     let write = state.create_physical_plan(merge_final).await?;
 
     let err = || DeltaTableError::Generic("Unable to locate expected metric node".into());
@@ -1451,7 +1475,7 @@ async fn execute(
     );
 
     let rewrite_start = Instant::now();
-    let add_actions = write_execution_plan(
+    let mut add_actions = write_execution_plan(
         Some(&snapshot),
         state.clone(),
         write,
@@ -1464,6 +1488,25 @@ async fn execute(
         None,
     )
     .await?;
+
+    if should_cdc && !change_data.is_empty() {
+        add_actions.extend(
+            write_execution_plan_cdc(
+                Some(&snapshot),
+                state.clone(),
+                change_data.pop().unwrap().create_physical_plan().await?,
+                table_partition_cols.clone(),
+                log_store.object_store(),
+                Some(snapshot.table_config().target_file_size() as usize),
+                None,
+                writer_properties,
+                safe_cast,
+                writer_stats_config,
+                None,
+            )
+            .await?,
+        );
+    }
 
     metrics.rewrite_time_ms = Instant::now().duration_since(rewrite_start).as_millis() as u64;
 
@@ -1604,6 +1647,7 @@ mod tests {
     use crate::kernel::DataType;
     use crate::kernel::PrimitiveType;
     use crate::kernel::StructField;
+    use crate::operations::load_cdf::collect_batches;
     use crate::operations::merge::generalize_filter;
     use crate::operations::merge::try_construct_early_filter;
     use crate::operations::DeltaOps;
@@ -1620,8 +1664,8 @@ mod tests {
     use arrow_schema::Field;
     use datafusion::assert_batches_sorted_eq;
     use datafusion::datasource::provider_as_source;
-    use datafusion::prelude::DataFrame;
-    use datafusion::prelude::SessionContext;
+    use datafusion::physical_plan::ExecutionPlan;
+    use datafusion::prelude::*;
     use datafusion_common::Column;
     use datafusion_common::ScalarValue;
     use datafusion_common::TableReference;
@@ -3415,5 +3459,219 @@ mod tests {
         ];
         let actual = get_data(&table).await;
         assert_batches_sorted_eq!(&expected, &actual);
+    }
+
+    #[tokio::test]
+    async fn test_merge_cdc_disabled() {
+        let (table, source) = setup().await;
+
+        let (table, metrics) = DeltaOps(table)
+            .merge(source, col("target.id").eq(col("source.id")))
+            .with_source_alias("source")
+            .with_target_alias("target")
+            .when_matched_update(|update| {
+                update
+                    .update("value", col("source.value"))
+                    .update("modified", col("source.modified"))
+            })
+            .unwrap()
+            .when_not_matched_by_source_update(|update| {
+                update
+                    .predicate(col("target.value").eq(lit(1)))
+                    .update("value", col("target.value") + lit(1))
+            })
+            .unwrap()
+            .when_not_matched_insert(|insert| {
+                insert
+                    .set("id", col("source.id"))
+                    .set("value", col("source.value"))
+                    .set("modified", col("source.modified"))
+            })
+            .unwrap()
+            .await
+            .unwrap();
+
+        assert_merge(table.clone(), metrics).await;
+
+        // Just checking that the data wasn't actually written instead!
+        if let Ok(files) = crate::storage::utils::flatten_list_stream(
+            &table.object_store(),
+            Some(&object_store::path::Path::from("_change_data")),
+        )
+        .await
+        {
+            assert_eq!(
+                0,
+                files.len(),
+                "This test should not find any written CDC files! {files:#?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_merge_cdc_enabled_simple() {
+        // Manually creating the desired table with the right minimum CDC features
+        use crate::kernel::Protocol;
+        use crate::operations::merge::Action;
+
+        let _ = pretty_env_logger::try_init();
+        let schema = get_delta_schema();
+
+        let actions = vec![Action::Protocol(Protocol::new(1, 4))];
+        let table: DeltaTable = DeltaOps::new_in_memory()
+            .create()
+            .with_columns(schema.fields().cloned())
+            .with_actions(actions)
+            .with_configuration_property(DeltaConfigKey::EnableChangeDataFeed, Some("true"))
+            .await
+            .unwrap();
+        assert_eq!(table.version(), 0);
+
+        let schema = get_arrow_schema(&None);
+        let table = write_data(table, &schema).await;
+
+        assert_eq!(table.version(), 1);
+        assert_eq!(table.get_files_count(), 1);
+        let source = merge_source(schema);
+
+        let (table, metrics) = DeltaOps(table)
+            .merge(source, col("target.id").eq(col("source.id")))
+            .with_source_alias("source")
+            .with_target_alias("target")
+            .when_matched_update(|update| {
+                update
+                    .update("value", col("source.value"))
+                    .update("modified", col("source.modified"))
+            })
+            .unwrap()
+            .when_not_matched_by_source_update(|update| {
+                update
+                    .predicate(col("target.value").eq(lit(1)))
+                    .update("value", col("target.value") + lit(1))
+            })
+            .unwrap()
+            .when_not_matched_insert(|insert| {
+                insert
+                    .set("id", col("source.id"))
+                    .set("value", col("source.value"))
+                    .set("modified", col("source.modified"))
+            })
+            .unwrap()
+            .await
+            .unwrap();
+
+        assert_merge(table.clone(), metrics).await;
+
+        // Just checking that the data wasn't actually written instead!
+        if let Ok(files) = crate::storage::utils::flatten_list_stream(
+            &table.object_store(),
+            Some(&object_store::path::Path::from("_change_data")),
+        )
+        .await
+        {
+            assert_eq!(
+                1,
+                files.len(),
+                "This test should find written CDC files! {files:#?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_merge_cdc_enabled_delete() {
+        // Manually creating the desired table with the right minimum CDC features
+        use crate::kernel::Protocol;
+        use crate::operations::merge::Action;
+
+        let _ = pretty_env_logger::try_init();
+        let schema = get_delta_schema();
+
+        let actions = vec![Action::Protocol(Protocol::new(1, 4))];
+        let table: DeltaTable = DeltaOps::new_in_memory()
+            .create()
+            .with_columns(schema.fields().cloned())
+            .with_actions(actions)
+            .with_configuration_property(DeltaConfigKey::EnableChangeDataFeed, Some("true"))
+            .await
+            .unwrap();
+        assert_eq!(table.version(), 0);
+
+        let schema = get_arrow_schema(&None);
+        let table = write_data(table, &schema).await;
+
+        assert_eq!(table.version(), 1);
+        assert_eq!(table.get_files_count(), 1);
+        let source = merge_source(schema);
+
+        let (table, _metrics) = DeltaOps(table)
+            .merge(source, col("target.id").eq(col("source.id")))
+            .with_source_alias("source")
+            .with_target_alias("target")
+            .when_not_matched_by_source_delete(|delete| {
+                delete.predicate(col("target.modified").gt(lit("2021-02-01")))
+            })
+            .unwrap()
+            .await
+            .unwrap();
+
+        let expected = vec![
+            "+----+-------+------------+",
+            "| id | value | modified   |",
+            "+----+-------+------------+",
+            "| A  | 1     | 2021-02-01 |",
+            "| B  | 10    | 2021-02-01 |",
+            "| C  | 10    | 2021-02-02 |",
+            "+----+-------+------------+",
+        ];
+        let actual = get_data(&table).await;
+        assert_batches_sorted_eq!(&expected, &actual);
+
+        // Just checking that the data wasn't actually written instead!
+        if let Ok(files) = crate::storage::utils::flatten_list_stream(
+            &table.object_store(),
+            Some(&object_store::path::Path::from("_change_data")),
+        )
+        .await
+        {
+            assert_eq!(
+                1,
+                files.len(),
+                "This test should find written CDC files! {files:#?}"
+            );
+        }
+
+        let ctx = SessionContext::new();
+        let table = DeltaOps(table)
+            .load_cdf()
+            .with_session_ctx(ctx.clone())
+            .with_starting_version(0)
+            .build()
+            .await
+            .expect("Failed to load CDF");
+
+        let mut batches = collect_batches(
+            table.properties().output_partitioning().partition_count(),
+            table,
+            ctx,
+        )
+        .await
+        .expect("Failed to collect batches");
+
+        let _ = arrow::util::pretty::print_batches(&batches);
+
+        // The batches will contain a current _commit_timestamp which shouldn't be check_append_only
+        let _: Vec<_> = batches.iter_mut().map(|b| b.remove_column(5)).collect();
+
+        assert_batches_sorted_eq! {[
+        "+----+-------+------------+--------------+-----------------+",
+        "| id | value | modified   | _change_type | _commit_version |",
+        "+----+-------+------------+--------------+-----------------+",
+        "| D  | 100   | 2021-02-02 | delete       | 2               |",
+        "| A  | 1     | 2021-02-01 | insert       | 1               |",
+        "| B  | 10    | 2021-02-01 | insert       | 1               |",
+        "| C  | 10    | 2021-02-02 | insert       | 1               |",
+        "| D  | 100   | 2021-02-02 | insert       | 1               |",
+        "+----+-------+------------+--------------+-----------------+",
+        ], &batches }
     }
 }

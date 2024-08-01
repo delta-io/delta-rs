@@ -88,10 +88,14 @@ mod tests {
     use crate::operations::DeltaOps;
     use crate::{DeltaConfigKey, DeltaTable};
     use arrow::array::{ArrayRef, Int32Array, StructArray};
+    use arrow::datatypes::{DataType, Field, SchemaRef};
     use arrow_array::RecordBatch;
     use arrow_schema::{DataType, Field, Schema};
     use datafusion::assert_batches_sorted_eq;
     use datafusion::datasource::{MemTable, TableProvider};
+
+    use std::sync::Arc;
+    use tracing::log::*;
 
     /// A simple test which validates primitive writer version 1 tables should
     /// not write Change Data Files
