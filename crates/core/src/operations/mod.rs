@@ -7,6 +7,7 @@
 //! with a [data stream][datafusion::physical_plan::SendableRecordBatchStream],
 //! if the operation returns data as well.
 
+use self::add_column::AddColumnBuilder;
 use self::create::CreateBuilder;
 use self::filesystem_check::FileSystemCheckBuilder;
 use self::vacuum::VacuumBuilder;
@@ -15,6 +16,7 @@ use crate::table::builder::DeltaTableBuilder;
 use crate::DeltaTable;
 use std::collections::HashMap;
 
+pub mod add_column;
 pub mod cast;
 pub mod convert_to_delta;
 pub mod create;
@@ -227,6 +229,11 @@ impl DeltaOps {
     /// Set table properties
     pub fn set_tbl_properties(self) -> SetTablePropertiesBuilder {
         SetTablePropertiesBuilder::new(self.0.log_store, self.0.state.unwrap())
+    }
+
+    /// Add new columns
+    pub fn add_columns(self) -> AddColumnBuilder {
+        AddColumnBuilder::new(self.0.log_store, self.0.state.unwrap())
     }
 }
 

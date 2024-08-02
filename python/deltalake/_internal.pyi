@@ -82,6 +82,12 @@ class RawDeltaTable:
         custom_metadata: Optional[Dict[str, str]],
         post_commithook_properties: Optional[Dict[str, Optional[bool]]],
     ) -> str: ...
+    def add_columns(
+        self,
+        fields: List[Field],
+        custom_metadata: Optional[Dict[str, str]],
+        post_commithook_properties: Optional[Dict[str, Optional[bool]]],
+    ) -> None: ...
     def add_constraints(
         self,
         constraints: Dict[str, str],
