@@ -288,17 +288,20 @@ impl WriteBuilder {
             Some(snapshot) => {
                 PROTOCOL.can_write_to(snapshot)?;
 
-                if let Some(plan) = &self.input {
-                    let schema: StructType = (plan.schema()).try_into()?;
-                    PROTOCOL.check_can_write_timestamp_ntz(snapshot, &schema)?;
+                let schema: StructType = if let Some(plan) = &self.input {
+                    (plan.schema()).try_into()?
                 } else if let Some(batches) = &self.batches {
                     if batches.is_empty() {
                         return Err(WriteError::MissingData.into());
                     }
-                    let schema: StructType = (batches[0].schema()).try_into()?;
+                    (batches[0].schema()).try_into()?
+                } else {
+                    return Err(WriteError::MissingData.into());
+                };
+
+                if self.schema_mode.is_none() {
                     PROTOCOL.check_can_write_timestamp_ntz(snapshot, &schema)?;
                 }
-
                 match self.mode {
                     SaveMode::ErrorIfExists => {
                         Err(WriteError::AlreadyExists(self.log_store.root_uri()).into())
@@ -796,12 +799,38 @@ impl std::future::IntoFuture for WriteBuilder {
             if this.schema_mode == Some(SchemaMode::Merge) && schema_drift {
                 if let Some(snapshot) = &this.snapshot {
                     let schema_struct: StructType = schema.clone().try_into()?;
+                    let current_protocol = snapshot.protocol();
+                    let configuration = snapshot.metadata().configuration.clone();
+                    let maybe_new_protocol = if PROTOCOL
+                        .contains_timestampntz(schema_struct.fields())
+                        && !current_protocol
+                            .reader_features
+                            .clone()
+                            .unwrap_or_default()
+                            .contains(&crate::kernel::ReaderFeatures::TimestampWithoutTimezone)
+                    // We can check only reader features, as reader and writer timestampNtz
+                    // should be always enabled together
+                    {
+                        let new_protocol = current_protocol.clone().enable_timestamp_ntz();
+                        if !(current_protocol.min_reader_version == 3
+                            && current_protocol.min_writer_version == 7)
+                        {
+                            Some(new_protocol.move_table_properties_into_features(&configuration))
+                        } else {
+                            Some(new_protocol)
+                        }
+                    } else {
+                        None
+                    };
                     let schema_action = Action::Metadata(Metadata::try_new(
                         schema_struct,
                         partition_columns.clone(),
-                        snapshot.metadata().configuration.clone(),
+                        configuration,
                     )?);
                     actions.push(schema_action);
+                    if let Some(new_protocol) = maybe_new_protocol {
+                        actions.push(new_protocol.into())
+                    }
                 }
             }
             let state = match this.state {
@@ -868,6 +897,34 @@ impl std::future::IntoFuture for WriteBuilder {
                         .await
                         .or_else(|_| snapshot.arrow_schema())
                         .unwrap_or(schema.clone());
+
+                    let configuration = snapshot.metadata().configuration.clone();
+                    let current_protocol = snapshot.protocol();
+                    let maybe_new_protocol = if PROTOCOL.contains_timestampntz(
+                        TryInto::<StructType>::try_into(schema.clone())?.fields(),
+                    ) && !current_protocol
+                        .reader_features
+                        .clone()
+                        .unwrap_or_default()
+                        .contains(&crate::kernel::ReaderFeatures::TimestampWithoutTimezone)
+                    // We can check only reader features, as reader and writer timestampNtz
+                    // should be always enabled together
+                    {
+                        let new_protocol = current_protocol.clone().enable_timestamp_ntz();
+                        if !(current_protocol.min_reader_version == 3
+                            && current_protocol.min_writer_version == 7)
+                        {
+                            Some(new_protocol.move_table_properties_into_features(&configuration))
+                        } else {
+                            Some(new_protocol)
+                        }
+                    } else {
+                        None
+                    };
+
+                    if let Some(protocol) = maybe_new_protocol {
+                        actions.push(protocol.into())
+                    }
 
                     if schema != table_schema {
                         let mut metadata = snapshot.metadata().clone();

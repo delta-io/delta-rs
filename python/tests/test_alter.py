@@ -1,10 +1,12 @@
 import pathlib
+from typing import List
 
 import pyarrow as pa
 import pytest
 
 from deltalake import DeltaTable, write_deltalake
 from deltalake.exceptions import DeltaError, DeltaProtocolError
+from deltalake.schema import Field, PrimitiveType, StructType
 
 
 def test_add_constraint(tmp_path: pathlib.Path, sample_table: pa.Table):
@@ -305,3 +307,68 @@ def test_set_table_properties_enable_dv(tmp_path: pathlib.Path, sample_table: pa
     assert protocol.min_writer_version == 7
     assert protocol.writer_features == ["deletionVectors"]
     assert protocol.reader_features == ["deletionVectors"]
+
+
+def _sort_fields(fields: List[Field]) -> List[Field]:
+    return list(sorted(iter(fields), key=lambda x: (x.name, str(x.type))))
+
+
+def test_add_column_primitive(existing_table: DeltaTable):
+    current_fields = existing_table.schema().fields
+
+    new_fields_to_add = [
+        Field("foo", PrimitiveType("integer")),
+        Field("bar", PrimitiveType("float")),
+    ]
+
+    existing_table.alter.add_columns(new_fields_to_add)
+    new_fields = existing_table.schema().fields
+
+    assert _sort_fields(new_fields) == _sort_fields(
+        [*current_fields, *new_fields_to_add]
+    )
+
+
+def test_add_field_in_struct_column(existing_table: DeltaTable):
+    current_fields = existing_table.schema().fields
+
+    new_fields_to_add = [
+        Field("struct", StructType([Field("z", PrimitiveType("float"))])),
+    ]
+
+    existing_table.alter.add_columns(new_fields_to_add)
+    new_fields = existing_table.schema().fields
+
+    new_field = Field(
+        "struct",
+        StructType(
+            [
+                Field("x", PrimitiveType("long")),
+                Field("y", PrimitiveType("string")),
+                Field("z", PrimitiveType("float")),
+            ]
+        ),
+    )
+    assert _sort_fields(new_fields) == _sort_fields(
+        [*[field for field in current_fields if field.name != "struct"], new_field]
+    )
+
+
+def test_add_timestamp_ntz_column(tmp_path: pathlib.Path, sample_table: pa.Table):
+    write_deltalake(tmp_path, sample_table, mode="append", engine="rust")
+    dt = DeltaTable(tmp_path)
+    current_fields = dt.schema().fields
+
+    new_fields_to_add = Field("timestamp_ntz_col", PrimitiveType("timestamp_ntz"))
+
+    dt.alter.add_columns(new_fields_to_add)
+    new_fields = dt.schema().fields
+    new_protocol = dt.protocol()
+
+    assert _sort_fields(new_fields) == _sort_fields(
+        [*current_fields, new_fields_to_add]
+    )
+    assert new_protocol.min_reader_version == 3
+    assert new_protocol.min_writer_version == 7
+    assert new_protocol.reader_features == ["timestampNtz"]
+    assert new_protocol.writer_features == ["timestampNtz"]
