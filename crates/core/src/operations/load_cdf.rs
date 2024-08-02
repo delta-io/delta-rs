@@ -230,11 +230,11 @@ impl CdfLoadBuilder {
         );
 
         let partition_values = self.snapshot.metadata().partition_columns.clone();
-        let schema = self.snapshot.arrow_schema()?;
+        let schema = self.snapshot.input_schema()?;
         let schema_fields: Vec<Field> = self
             .snapshot
-            .arrow_schema()?
-            .all_fields()
+            .input_schema()?
+            .flattened_fields()
             .into_iter()
             .filter(|f| !partition_values.contains(f.name()))
             .cloned()
