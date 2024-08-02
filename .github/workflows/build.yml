@@ -126,7 +126,7 @@ jobs:
           echo "$GITHUB_WORKSPACE/hadoop-3.4.0/bin" >> $GITHUB_PATH
 
       - name: Start emulated services
-        run: docker-compose up -d
+        run: docker compose up -d
 
       - name: Run tests with rustls (default)
         run: |
