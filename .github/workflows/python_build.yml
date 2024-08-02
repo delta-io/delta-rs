@@ -78,7 +78,7 @@ jobs:
         uses: ./.github/actions/setup-env
 
       - name: Start emulated services
-        run: docker-compose up -d
+        run: docker compose up -d
 
       - name: Build and install deltalake
         run: |
