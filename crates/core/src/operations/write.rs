@@ -693,7 +693,6 @@ pub(crate) async fn execute_non_empty_expr_cdc(
                 None,
                 writer_properties,
                 false,
-                Some(SchemaMode::Overwrite), // If not overwrite, the plan schema is not taken but table schema, however we need the plan schema since it has the _change_type_col
                 writer_stats_config,
                 None,
             )
