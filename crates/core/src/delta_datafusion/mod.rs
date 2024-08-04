@@ -523,10 +523,10 @@ impl<'a> DeltaScanBuilder<'a> {
             None => DeltaScanConfigBuilder::new().build(self.snapshot)?,
         };
 
-        let schema = match config.schema.clone() {
-            Some(value) => Ok(value),
-            None => self.snapshot.arrow_schema(),
-        }?;
+        let schema = config
+            .schema
+            .clone()
+            .unwrap_or(self.snapshot.arrow_schema()?);
 
         let logical_schema = df_logical_schema(self.snapshot, &config)?;
 
