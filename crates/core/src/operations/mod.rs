@@ -291,6 +291,7 @@ mod datafusion_utils {
     use crate::{delta_datafusion::expr::parse_predicate_expression, DeltaResult};
 
     /// Used to represent user input of either a Datafusion expression or string expression
+    #[derive(Debug)]
     pub enum Expression {
         /// Datafusion Expression
         DataFusion(Expr),

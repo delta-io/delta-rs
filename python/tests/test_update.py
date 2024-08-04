@@ -117,10 +117,8 @@ def test_update_wrong_types_cast(tmp_path: pathlib.Path, sample_table: pa.Table)
     with pytest.raises(Exception) as excinfo:
         dt.update(updates={"deleted": "'hello_world'"})
 
-    assert (
-        str(excinfo.value)
-        == "Generic DeltaTable error: Error during planning: Failed to coerce then ([Utf8]) and else (Some(Boolean)) to common types in CASE WHEN expression"
-    )
+    expected = """Generic DeltaTable error: type_coercion\ncaused by\nError during planning: Failed to coerce then ([Utf8]) and else (Some(Boolean)) to common types in CASE WHEN expression"""
+    assert str(excinfo.value) == expected
 
 
 def test_update_wo_predicate_multiple_updates(
