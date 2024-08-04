@@ -35,15 +35,13 @@ use std::time::Instant;
 use async_trait::async_trait;
 use datafusion::datasource::provider_as_source;
 use datafusion::error::Result as DataFusionResult;
-use datafusion::execution::context::{QueryPlanner, SessionConfig};
+use datafusion::execution::context::SessionConfig;
 use datafusion::logical_expr::build_join_schema;
-use datafusion::physical_planner::{DefaultPhysicalPlanner, ExtensionPlanner, PhysicalPlanner};
+use datafusion::physical_plan::metrics::MetricBuilder;
+use datafusion::physical_planner::{ExtensionPlanner, PhysicalPlanner};
 use datafusion::{
     execution::context::SessionState,
-    physical_plan::{
-        metrics::{MetricBuilder, MetricsSet},
-        ExecutionPlan,
-    },
+    physical_plan::ExecutionPlan,
     prelude::{DataFrame, SessionContext},
 };
 use datafusion_common::tree_node::{Transformed, TreeNode};
@@ -68,7 +66,8 @@ use super::datafusion_utils::{into_expr, maybe_into_expr, Expression};
 use super::transaction::{CommitProperties, PROTOCOL};
 use crate::delta_datafusion::expr::{fmt_expr_to_sql, parse_predicate_expression};
 use crate::delta_datafusion::logical::MetricObserver;
-use crate::delta_datafusion::physical::{find_metric_node, MetricObserverExec};
+use crate::delta_datafusion::physical::{find_metric_node, get_metric, MetricObserverExec};
+use crate::delta_datafusion::planner::DeltaPlanner;
 use crate::delta_datafusion::{
     execute_plan_to_batch, register_store, DeltaColumn, DeltaScanConfigBuilder, DeltaSessionConfig,
     DeltaTableProvider,
@@ -576,7 +575,7 @@ pub struct MergeMetrics {
     /// Time taken to rewrite the matched files
     pub rewrite_time_ms: u64,
 }
-
+#[derive(Clone)]
 struct MergeMetricExtensionPlanner {}
 
 #[async_trait]
@@ -1017,7 +1016,11 @@ async fn execute(
     let exec_start = Instant::now();
 
     let current_metadata = snapshot.metadata();
-    let state = state.with_query_planner(Arc::new(MergePlanner {}));
+    let merge_planner = DeltaPlanner::<MergeMetricExtensionPlanner> {
+        extension_planner: MergeMetricExtensionPlanner {},
+    };
+
+    let state = state.with_query_planner(Arc::new(merge_planner));
 
     // TODO: Given the join predicate, remove any expression that involve the
     // source table and keep expressions that only involve the target table.
@@ -1486,9 +1489,6 @@ async fn execute(
 
     let source_count_metrics = source_count.metrics().unwrap();
     let target_count_metrics = op_count.metrics().unwrap();
-    fn get_metric(metrics: &MetricsSet, name: &str) -> usize {
-        metrics.sum_by_name(name).map(|m| m.as_usize()).unwrap_or(0)
-    }
 
     metrics.num_source_rows = get_metric(&source_count_metrics, SOURCE_COUNT_METRIC);
     metrics.num_target_rows_inserted = get_metric(&target_count_metrics, TARGET_INSERTED_METRIC);
@@ -1553,25 +1553,6 @@ fn remove_table_alias(expr: Expr, table_alias: &str) -> Expr {
     })
     .unwrap()
     .data
-}
-
-// TODO: Abstract MergePlanner into DeltaPlanner to support other delta operations in the future.
-struct MergePlanner {}
-
-#[async_trait]
-impl QueryPlanner for MergePlanner {
-    async fn create_physical_plan(
-        &self,
-        logical_plan: &LogicalPlan,
-        session_state: &SessionState,
-    ) -> DataFusionResult<Arc<dyn ExecutionPlan>> {
-        let planner = Arc::new(Box::new(DefaultPhysicalPlanner::with_extension_planners(
-            vec![Arc::new(MergeMetricExtensionPlanner {})],
-        )));
-        planner
-            .create_physical_plan(logical_plan, session_state)
-            .await
-    }
 }
 
 impl std::future::IntoFuture for MergeBuilder {
