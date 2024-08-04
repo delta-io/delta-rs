@@ -54,7 +54,9 @@ use super::writer::{DeltaWriter, WriterConfig};
 use super::CreateBuilder;
 use crate::delta_datafusion::expr::fmt_expr_to_sql;
 use crate::delta_datafusion::expr::parse_predicate_expression;
-use crate::delta_datafusion::{find_files, register_store, DeltaScanBuilder};
+use crate::delta_datafusion::{
+    find_files, register_store, DeltaScanBuilder, DeltaScanConfigBuilder,
+};
 use crate::delta_datafusion::{DataFusionMixins, DeltaDataChecker};
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::{Action, Add, AddCDCFile, Metadata, PartitionsExt, Remove, StructType};
@@ -573,11 +575,15 @@ async fn execute_non_empty_expr(
     let input_schema = snapshot.input_schema()?;
     let input_dfschema: DFSchema = input_schema.clone().as_ref().clone().try_into()?;
 
+    let scan_config = DeltaScanConfigBuilder::new()
+        .with_schema(snapshot.input_schema()?)
+        .build(snapshot)?;
+
     let scan = DeltaScanBuilder::new(snapshot, log_store.clone(), &state)
         .with_files(rewrite)
         // Use input schema which doesn't wrap partition values, otherwise divide_by_partition_value won't work on UTF8 partitions
         // Since it can't fetch a scalar from a dictionary type
-        .with_schema(snapshot.input_schema()?)
+        .with_scan_config(scan_config)
         .build()
         .await?;
     let scan = Arc::new(scan);
@@ -711,7 +717,7 @@ async fn prepare_predicate_actions(
         find_files(snapshot, log_store.clone(), &state, Some(predicate.clone())).await?;
 
     let mut actions = execute_non_empty_expr(
-        &snapshot,
+        snapshot,
         log_store,
         state,
         partition_columns,
@@ -752,19 +758,24 @@ async fn execute_non_empty_expr_cdc_all_actions(
     writer_stats_config: WriterStatsConfig,
 ) -> DeltaResult<Option<Vec<Action>>> {
     let current_state_add_actions = &snapshot.file_actions()?;
+
+    let scan_config = DeltaScanConfigBuilder::new()
+        .with_schema(snapshot.input_schema()?)
+        .build(snapshot)?;
+
     // Since all files get removed, check to write CDC
     let scan = DeltaScanBuilder::new(snapshot, log_store.clone(), &state)
         .with_files(current_state_add_actions)
         // Use input schema which doesn't wrap partition values, otherwise divide_by_partition_value won't work on UTF8 partitions
         // Since it can't fetch a scalar from a dictionary type
-        .with_schema(snapshot.input_schema()?)
+        .with_scan_config(scan_config)
         .build()
         .await?;
 
     let input_schema = snapshot.input_schema()?;
     let input_dfschema: DFSchema = input_schema.clone().as_ref().clone().try_into()?;
 
-    Ok(execute_non_empty_expr_cdc(
+    execute_non_empty_expr_cdc(
         snapshot,
         log_store,
         state,
@@ -775,7 +786,7 @@ async fn execute_non_empty_expr_cdc_all_actions(
         writer_properties,
         writer_stats_config,
     )
-    .await?)
+    .await
 }
 
 impl std::future::IntoFuture for WriteBuilder {
