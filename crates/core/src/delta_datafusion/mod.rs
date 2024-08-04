@@ -92,6 +92,7 @@ pub mod cdf;
 pub mod expr;
 pub mod logical;
 pub mod physical;
+pub mod planner;
 
 mod find_files;
 mod schema_adapter;
