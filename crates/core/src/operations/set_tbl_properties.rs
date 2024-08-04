@@ -1,18 +1,16 @@
 //! Set table properties on a table
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use futures::future::BoxFuture;
-use maplit::hashset;
 
 use super::transaction::{CommitBuilder, CommitProperties};
-use crate::kernel::{Action, Protocol, ReaderFeatures, WriterFeatures};
+use crate::kernel::Action;
 use crate::logstore::LogStoreRef;
 use crate::protocol::DeltaOperation;
 use crate::table::state::DeltaTableState;
-use crate::DeltaConfigKey;
+use crate::DeltaResult;
 use crate::DeltaTable;
-use crate::{DeltaResult, DeltaTableError};
 
 /// Remove constraints from the table
 pub struct SetTablePropertiesBuilder {
@@ -59,203 +57,6 @@ impl SetTablePropertiesBuilder {
     }
 }
 
-/// Will apply the properties to the protocol by either bumping the version or setting
-/// features
-pub fn apply_properties_to_protocol(
-    current_protocol: &Protocol,
-    new_properties: &HashMap<String, String>,
-    raise_if_not_exists: bool,
-) -> DeltaResult<Protocol> {
-    let mut parsed_properties: HashMap<DeltaConfigKey, String> = HashMap::new();
-
-    for (key, value) in new_properties {
-        if let Ok(parsed_key) = key.parse::<DeltaConfigKey>() {
-            parsed_properties.insert(parsed_key, value.to_string());
-        } else if raise_if_not_exists {
-            return Err(DeltaTableError::Generic(format!(
-                "Error parsing property '{}':'{}'",
-                key, value
-            )));
-        }
-    }
-
-    let mut new_protocol = current_protocol.clone();
-
-    // Check and update delta.minReaderVersion
-    if let Some(min_reader_version) = parsed_properties.get(&DeltaConfigKey::MinReaderVersion) {
-        let new_min_reader_version = min_reader_version.parse::<i32>();
-        match new_min_reader_version {
-            Ok(version) => match version {
-                1..=3 => {
-                    if version > new_protocol.min_reader_version {
-                        new_protocol.min_reader_version = version
-                    }
-                }
-                _ => {
-                    return Err(DeltaTableError::Generic(format!(
-                        "delta.minReaderVersion = '{}' is invalid, valid values are ['1','2','3']",
-                        min_reader_version
-                    )))
-                }
-            },
-            Err(_) => {
-                return Err(DeltaTableError::Generic(format!(
-                    "delta.minReaderVersion = '{}' is invalid, valid values are ['1','2','3']",
-                    min_reader_version
-                )))
-            }
-        }
-    }
-
-    // Check and update delta.minWriterVersion
-    if let Some(min_writer_version) = parsed_properties.get(&DeltaConfigKey::MinWriterVersion) {
-        let new_min_writer_version = min_writer_version.parse::<i32>();
-        match new_min_writer_version {
-            Ok(version) => match version {
-                2..=7 => {
-                    if version > new_protocol.min_writer_version {
-                        new_protocol.min_writer_version = version
-                    }
-                }
-                _ => {
-                    return Err(DeltaTableError::Generic(format!(
-                        "delta.minWriterVersion = '{}' is invalid, valid values are ['2','3','4','5','6','7']",
-                        min_writer_version
-                    )))
-                }
-            },
-            Err(_) => {
-                return Err(DeltaTableError::Generic(format!(
-                    "delta.minWriterVersion = '{}' is invalid, valid values are ['2','3','4','5','6','7']",
-                    min_writer_version
-                )))
-            }
-        }
-    }
-
-    // Check enableChangeDataFeed and bump protocol or add writerFeature if writer versions is >=7
-    if let Some(enable_cdf) = parsed_properties.get(&DeltaConfigKey::EnableChangeDataFeed) {
-        let if_enable_cdf = enable_cdf.to_ascii_lowercase().parse::<bool>();
-        match if_enable_cdf {
-            Ok(true) => {
-                if new_protocol.min_writer_version >= 7 {
-                    match new_protocol.writer_features {
-                        Some(mut features) => {
-                            features.insert(WriterFeatures::ChangeDataFeed);
-                            new_protocol.writer_features = Some(features);
-                        }
-                        None => {
-                            new_protocol.writer_features =
-                                Some(hashset! {WriterFeatures::ChangeDataFeed})
-                        }
-                    }
-                } else if new_protocol.min_writer_version <= 3 {
-                    new_protocol.min_writer_version = 4
-                }
-            }
-            Ok(false) => {}
-            _ => {
-                return Err(DeltaTableError::Generic(format!(
-                    "delta.enableChangeDataFeed = '{}' is invalid, valid values are ['true']",
-                    enable_cdf
-                )))
-            }
-        }
-    }
-
-    if let Some(enable_dv) = parsed_properties.get(&DeltaConfigKey::EnableDeletionVectors) {
-        let if_enable_dv = enable_dv.to_ascii_lowercase().parse::<bool>();
-        match if_enable_dv {
-            Ok(true) => {
-                let writer_features = match new_protocol.writer_features {
-                    Some(mut features) => {
-                        features.insert(WriterFeatures::DeletionVectors);
-                        features
-                    }
-                    None => hashset! {WriterFeatures::DeletionVectors},
-                };
-                let reader_features = match new_protocol.reader_features {
-                    Some(mut features) => {
-                        features.insert(ReaderFeatures::DeletionVectors);
-                        features
-                    }
-                    None => hashset! {ReaderFeatures::DeletionVectors},
-                };
-                new_protocol.min_reader_version = 3;
-                new_protocol.min_writer_version = 7;
-                new_protocol.writer_features = Some(writer_features);
-                new_protocol.reader_features = Some(reader_features);
-            }
-            Ok(false) => {}
-            _ => {
-                return Err(DeltaTableError::Generic(format!(
-                    "delta.enableDeletionVectors = '{}' is invalid, valid values are ['true']",
-                    enable_dv
-                )))
-            }
-        }
-    }
-
-    Ok(new_protocol)
-}
-
-/// Converts existing properties into features if the reader_version is >=3 or writer_version >=3
-/// only converts features that are "true"
-pub fn convert_properties_to_features(
-    mut new_protocol: Protocol,
-    configuration: &HashMap<String, Option<String>>,
-) -> Protocol {
-    if new_protocol.min_writer_version >= 7 {
-        let mut converted_writer_features = configuration
-            .iter()
-            .filter(|(_, value)| {
-                value.as_ref().map_or(false, |v| {
-                    v.to_ascii_lowercase().parse::<bool>().is_ok_and(|v| v)
-                })
-            })
-            .collect::<HashMap<&String, &Option<String>>>()
-            .keys()
-            .map(|key| (*key).clone().into())
-            .filter(|v| !matches!(v, WriterFeatures::Other(_)))
-            .collect::<HashSet<WriterFeatures>>();
-
-        if configuration
-            .keys()
-            .any(|v| v.contains("delta.constraints."))
-        {
-            converted_writer_features.insert(WriterFeatures::CheckConstraints);
-        }
-
-        match new_protocol.writer_features {
-            Some(mut features) => {
-                features.extend(converted_writer_features);
-                new_protocol.writer_features = Some(features);
-            }
-            None => new_protocol.writer_features = Some(converted_writer_features),
-        }
-    }
-    if new_protocol.min_reader_version >= 3 {
-        let converted_reader_features = configuration
-            .iter()
-            .filter(|(_, value)| {
-                value.as_ref().map_or(false, |v| {
-                    v.to_ascii_lowercase().parse::<bool>().is_ok_and(|v| v)
-                })
-            })
-            .map(|(key, _)| (*key).clone().into())
-            .filter(|v| !matches!(v, ReaderFeatures::Other(_)))
-            .collect::<HashSet<ReaderFeatures>>();
-        match new_protocol.reader_features {
-            Some(mut features) => {
-                features.extend(converted_reader_features);
-                new_protocol.reader_features = Some(features);
-            }
-            None => new_protocol.reader_features = Some(converted_reader_features),
-        }
-    }
-    new_protocol
-}
-
 impl std::future::IntoFuture for SetTablePropertiesBuilder {
     type Output = DeltaResult<DeltaTable>;
 
@@ -270,11 +71,9 @@ impl std::future::IntoFuture for SetTablePropertiesBuilder {
             let current_protocol = this.snapshot.protocol();
             let properties = this.properties;
 
-            let new_protocol = apply_properties_to_protocol(
-                current_protocol,
-                &properties,
-                this.raise_if_not_exists,
-            )?;
+            let new_protocol = current_protocol
+                .clone()
+                .apply_properties_to_protocol(&properties, this.raise_if_not_exists)?;
 
             metadata.configuration.extend(
                 properties
@@ -285,7 +84,7 @@ impl std::future::IntoFuture for SetTablePropertiesBuilder {
             );
 
             let final_protocol =
-                convert_properties_to_features(new_protocol, &metadata.configuration);
+                new_protocol.move_table_properties_into_features(&metadata.configuration);
 
             let operation = DeltaOperation::SetTableProperties { properties };
 

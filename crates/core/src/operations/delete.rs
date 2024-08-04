@@ -17,31 +17,40 @@
 //!     .await?;
 //! ````
 
-use core::panic;
-use std::sync::Arc;
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
-
 use crate::logstore::LogStoreRef;
+use core::panic;
 use datafusion::execution::context::{SessionContext, SessionState};
 use datafusion::physical_plan::filter::FilterExec;
+use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::Expr;
 use datafusion_common::scalar::ScalarValue;
 use datafusion_common::DFSchema;
+use datafusion_expr::lit;
+use datafusion_physical_expr::{
+    expressions::{self},
+    PhysicalExpr,
+};
 use futures::future::BoxFuture;
+use std::iter;
+use std::sync::Arc;
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
+
 use parquet::file::properties::WriterProperties;
 use serde::Serialize;
 
+use super::cdc::should_write_cdc;
 use super::datafusion_utils::Expression;
 use super::transaction::{CommitBuilder, CommitProperties, PROTOCOL};
-use super::write::WriterStatsConfig;
+use super::write::{write_execution_plan_cdc, WriterStatsConfig};
+
 use crate::delta_datafusion::expr::fmt_expr_to_sql;
 use crate::delta_datafusion::{
     find_files, register_store, DataFusionMixins, DeltaScanBuilder, DeltaSessionContext,
 };
 use crate::errors::DeltaResult;
 use crate::kernel::{Action, Add, Remove};
-use crate::operations::write::write_execution_plan;
+use crate::operations::write::{write_execution_plan, SchemaMode};
 use crate::protocol::DeltaOperation;
 use crate::table::state::DeltaTableState;
 use crate::DeltaTable;
@@ -122,6 +131,7 @@ impl DeleteBuilder {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn excute_non_empty_expr(
     snapshot: &DeltaTableState,
     log_store: LogStoreRef,
@@ -130,27 +140,23 @@ async fn excute_non_empty_expr(
     metrics: &mut DeleteMetrics,
     rewrite: &[Add],
     writer_properties: Option<WriterProperties>,
-) -> DeltaResult<Vec<Add>> {
+    partition_scan: bool,
+) -> DeltaResult<Vec<Action>> {
     // For each identified file perform a parquet scan + filter + limit (1) + count.
     // If returned count is not zero then append the file to be rewritten and removed from the log. Otherwise do nothing to the file.
+    let mut actions: Vec<Action> = Vec::new();
 
     let input_schema = snapshot.input_schema()?;
     let input_dfschema: DFSchema = input_schema.clone().as_ref().clone().try_into()?;
-
     let table_partition_cols = snapshot.metadata().partition_columns.clone();
-
-    let scan = DeltaScanBuilder::new(snapshot, log_store.clone(), &state)
+    let scan = DeltaScanBuilder::new(snapshot, log_store.clone(), state)
         .with_files(rewrite)
+        // Use input schema which doesn't wrap partition values, otherwise divide_by_partition_value won't work on UTF8 partitions
+        // Since it can't fetch a scalar from a dictionary type
+        .with_schema(snapshot.input_schema()?)
         .build()
         .await?;
     let scan = Arc::new(scan);
-
-    // Apply the negation of the filter and rewrite files
-    let negated_expression = Expr::Not(Box::new(Expr::IsTrue(Box::new(expression.clone()))));
-
-    let predicate_expr = state.create_physical_expr(negated_expression, &input_dfschema)?;
-    let filter: Arc<dyn ExecutionPlan> =
-        Arc::new(FilterExec::try_new(predicate_expr, scan.clone())?);
 
     let writer_stats_config = WriterStatsConfig::new(
         snapshot.table_config().num_indexed_cols(),
@@ -160,36 +166,89 @@ async fn excute_non_empty_expr(
             .map(|v| v.iter().map(|v| v.to_string()).collect::<Vec<String>>()),
     );
 
-    let add_actions = write_execution_plan(
-        Some(snapshot),
-        state.clone(),
-        filter.clone(),
-        table_partition_cols.clone(),
-        log_store.object_store(),
-        Some(snapshot.table_config().target_file_size() as usize),
-        None,
-        writer_properties,
-        false,
-        None,
-        writer_stats_config,
-        None,
-    )
-    .await?
-    .into_iter()
-    .map(|a| match a {
-        Action::Add(a) => a,
-        _ => panic!("Expected Add action"),
-    })
-    .collect::<Vec<Add>>();
+    if !partition_scan {
+        // Apply the negation of the filter and rewrite files
+        let negated_expression = Expr::Not(Box::new(Expr::IsTrue(Box::new(expression.clone()))));
 
-    let read_records = scan.parquet_scan.metrics().and_then(|m| m.output_rows());
-    let filter_records = filter.metrics().and_then(|m| m.output_rows());
-    metrics.num_copied_rows = filter_records;
-    metrics.num_deleted_rows = read_records
-        .zip(filter_records)
-        .map(|(read, filter)| read - filter);
+        let predicate_expr = state.create_physical_expr(negated_expression, &input_dfschema)?;
+        let filter: Arc<dyn ExecutionPlan> =
+            Arc::new(FilterExec::try_new(predicate_expr, scan.clone())?);
 
-    Ok(add_actions)
+        let add_actions: Vec<Action> = write_execution_plan(
+            Some(snapshot),
+            state.clone(),
+            filter.clone(),
+            table_partition_cols.clone(),
+            log_store.object_store(),
+            Some(snapshot.table_config().target_file_size() as usize),
+            None,
+            writer_properties.clone(),
+            false,
+            None,
+            writer_stats_config.clone(),
+            None,
+        )
+        .await?;
+
+        actions.extend(add_actions);
+
+        let read_records = scan.parquet_scan.metrics().and_then(|m| m.output_rows());
+        let filter_records = filter.metrics().and_then(|m| m.output_rows());
+        metrics.num_copied_rows = filter_records;
+        metrics.num_deleted_rows = read_records
+            .zip(filter_records)
+            .map(|(read, filter)| read - filter);
+    }
+
+    // CDC logic, simply filters data with predicate and adds the _change_type="delete" as literal column
+    if let Ok(true) = should_write_cdc(&snapshot) {
+        // Create CDC scan
+        let cdc_predicate_expr = state.create_physical_expr(expression.clone(), &input_dfschema)?;
+        let cdc_scan: Arc<dyn ExecutionPlan> =
+            Arc::new(FilterExec::try_new(cdc_predicate_expr, scan.clone())?);
+
+        // Add literal column "_change_type"
+        let change_type_lit = lit(ScalarValue::Utf8(Some("delete".to_string())));
+        let change_type_expr = state.create_physical_expr(change_type_lit, &input_dfschema)?;
+
+        // Project columns and lit
+        let project_expressions: Vec<(Arc<dyn PhysicalExpr>, String)> = scan
+            .schema()
+            .fields()
+            .into_iter()
+            .enumerate()
+            .map(|(idx, field)| -> (Arc<dyn PhysicalExpr>, String) {
+                (
+                    Arc::new(expressions::Column::new(field.name(), idx)),
+                    field.name().to_owned(),
+                )
+            })
+            .chain(iter::once((change_type_expr, "_change_type".to_owned())))
+            .collect();
+
+        let projected_scan: Arc<dyn ExecutionPlan> = Arc::new(ProjectionExec::try_new(
+            project_expressions,
+            cdc_scan.clone(),
+        )?);
+
+        let cdc_actions = write_execution_plan_cdc(
+            Some(snapshot),
+            state.clone(),
+            projected_scan.clone(),
+            table_partition_cols.clone(),
+            log_store.object_store(),
+            Some(snapshot.table_config().target_file_size() as usize),
+            None,
+            writer_properties,
+            false,
+            Some(SchemaMode::Overwrite), // If not overwrite, the plan schema is not taken but table schema, however we need the plan schema since it has the _change_type_col
+            writer_stats_config,
+            None,
+        )
+        .await?;
+        actions.extend(cdc_actions)
+    };
+    Ok(actions)
 }
 
 async fn execute(
@@ -209,9 +268,7 @@ async fn execute(
 
     let predicate = predicate.unwrap_or(Expr::Literal(ScalarValue::Boolean(Some(true))));
 
-    let add = if candidates.partition_scan {
-        Vec::new()
-    } else {
+    let mut actions = {
         let write_start = Instant::now();
         let add = excute_non_empty_expr(
             &snapshot,
@@ -221,6 +278,7 @@ async fn execute(
             &mut metrics,
             &candidates.candidates,
             writer_properties,
+            candidates.partition_scan,
         )
         .await?;
         metrics.rewrite_time_ms = Instant::now().duration_since(write_start).as_millis() as u64;
@@ -233,7 +291,6 @@ async fn execute(
         .unwrap()
         .as_millis() as i64;
 
-    let mut actions: Vec<Action> = add.into_iter().map(Action::Add).collect();
     metrics.num_removed_files = remove.len();
     metrics.num_added_files = actions.len();
 
@@ -327,6 +384,9 @@ impl std::future::IntoFuture for DeleteBuilder {
 
 #[cfg(test)]
 mod tests {
+    use crate::delta_datafusion::cdf::DeltaCdfScan;
+    use crate::kernel::DataType as DeltaDataType;
+    use crate::operations::collect_sendable_stream;
     use crate::operations::DeltaOps;
     use crate::protocol::*;
     use crate::writer::test_utils::datafusion::get_data;
@@ -340,11 +400,15 @@ mod tests {
     use arrow::datatypes::{Field, Schema};
     use arrow::record_batch::RecordBatch;
     use arrow_array::ArrayRef;
+    use arrow_array::StringArray;
     use arrow_array::StructArray;
     use arrow_buffer::NullBuffer;
+    use arrow_schema::DataType;
     use arrow_schema::Fields;
     use datafusion::assert_batches_sorted_eq;
+    use datafusion::physical_plan::ExecutionPlan;
     use datafusion::prelude::*;
+    use delta_kernel::schema::PrimitiveType;
     use serde_json::json;
     use std::sync::Arc;
 
@@ -418,9 +482,6 @@ mod tests {
         //     extra_info["operationMetrics"],
         //     serde_json::to_value(&metrics).unwrap()
         // );
-
-        // rewrite is not required
-        assert_eq!(metrics.rewrite_time_ms, 0);
 
         // Deletes with no changes to state must not commit
         let (table, metrics) = DeltaOps(table).delete().await.unwrap();
@@ -657,7 +718,6 @@ mod tests {
         assert_eq!(metrics.num_deleted_rows, None);
         assert_eq!(metrics.num_copied_rows, None);
         assert!(metrics.scan_time_ms > 0);
-        assert_eq!(metrics.rewrite_time_ms, 0);
 
         let expected = vec![
             "+----+-------+------------+",
@@ -799,5 +859,175 @@ mod tests {
             )))
             .await;
         assert!(res.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_delete_cdc_enabled() {
+        let table: DeltaTable = DeltaOps::new_in_memory()
+            .create()
+            .with_column(
+                "value",
+                DeltaDataType::Primitive(PrimitiveType::Integer),
+                true,
+                None,
+            )
+            .with_configuration_property(DeltaConfigKey::EnableChangeDataFeed, Some("true"))
+            .await
+            .unwrap();
+        assert_eq!(table.version(), 0);
+
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "value",
+            arrow::datatypes::DataType::Int32,
+            true,
+        )]));
+
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(Int32Array::from(vec![Some(1), Some(2), Some(3)]))],
+        )
+        .unwrap();
+        let table = DeltaOps(table)
+            .write(vec![batch])
+            .await
+            .expect("Failed to write first batch");
+        assert_eq!(table.version(), 1);
+
+        let (table, _metrics) = DeltaOps(table)
+            .delete()
+            .with_predicate(col("value").eq(lit(2)))
+            .await
+            .unwrap();
+        assert_eq!(table.version(), 2);
+
+        let ctx = SessionContext::new();
+        let table = DeltaOps(table)
+            .load_cdf()
+            .with_session_ctx(ctx.clone())
+            .with_starting_version(0)
+            .build()
+            .await
+            .expect("Failed to load CDF");
+
+        let mut batches = collect_batches(
+            table.properties().output_partitioning().partition_count(),
+            table,
+            ctx,
+        )
+        .await
+        .expect("Failed to collect batches");
+
+        // The batches will contain a current _commit_timestamp which shouldn't be check_append_only
+        let _: Vec<_> = batches.iter_mut().map(|b| b.remove_column(3)).collect();
+
+        assert_batches_sorted_eq! {[
+        "+-------+--------------+-----------------+",
+        "| value | _change_type | _commit_version |",
+        "+-------+--------------+-----------------+",
+        "| 1     | insert       | 1               |",
+        "| 2     | delete       | 2               |",
+        "| 2     | insert       | 1               |",
+        "| 3     | insert       | 1               |",
+        "+-------+--------------+-----------------+",
+        ], &batches }
+    }
+
+    #[tokio::test]
+    async fn test_delete_cdc_enabled_partitioned() {
+        let table: DeltaTable = DeltaOps::new_in_memory()
+            .create()
+            .with_column(
+                "year",
+                DeltaDataType::Primitive(PrimitiveType::String),
+                true,
+                None,
+            )
+            .with_column(
+                "value",
+                DeltaDataType::Primitive(PrimitiveType::Integer),
+                true,
+                None,
+            )
+            .with_partition_columns(vec!["year"])
+            .with_configuration_property(DeltaConfigKey::EnableChangeDataFeed, Some("true"))
+            .await
+            .unwrap();
+        assert_eq!(table.version(), 0);
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("year", DataType::Utf8, true),
+            Field::new("value", DataType::Int32, true),
+        ]));
+
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(StringArray::from(vec![
+                    Some("2020"),
+                    Some("2020"),
+                    Some("2024"),
+                ])),
+                Arc::new(Int32Array::from(vec![Some(1), Some(2), Some(3)])),
+            ],
+        )
+        .unwrap();
+
+        let table = DeltaOps(table)
+            .write(vec![batch])
+            .await
+            .expect("Failed to write first batch");
+        assert_eq!(table.version(), 1);
+
+        let (table, _metrics) = DeltaOps(table)
+            .delete()
+            .with_predicate(col("value").eq(lit(2)))
+            .await
+            .unwrap();
+        assert_eq!(table.version(), 2);
+
+        let ctx = SessionContext::new();
+        let table = DeltaOps(table)
+            .load_cdf()
+            .with_session_ctx(ctx.clone())
+            .with_starting_version(0)
+            .build()
+            .await
+            .expect("Failed to load CDF");
+
+        let mut batches = collect_batches(
+            table.properties().output_partitioning().partition_count(),
+            table,
+            ctx,
+        )
+        .await
+        .expect("Failed to collect batches");
+
+        // The batches will contain a current _commit_timestamp which shouldn't be check_append_only
+        let _: Vec<_> = batches.iter_mut().map(|b| b.remove_column(3)).collect();
+
+        assert_batches_sorted_eq! {[
+        "+-------+--------------+-----------------+------+",
+        "| value | _change_type | _commit_version | year |",
+        "+-------+--------------+-----------------+------+",
+        "| 1     | insert       | 1               | 2020 |",
+        "| 2     | delete       | 2               | 2020 |",
+        "| 2     | insert       | 1               | 2020 |",
+        "| 3     | insert       | 1               | 2024 |",
+        "+-------+--------------+-----------------+------+",
+        ], &batches }
+    }
+
+    async fn collect_batches(
+        num_partitions: usize,
+        stream: DeltaCdfScan,
+        ctx: SessionContext,
+    ) -> Result<Vec<RecordBatch>, Box<dyn std::error::Error>> {
+        let mut batches = vec![];
+        for p in 0..num_partitions {
+            let data: Vec<RecordBatch> =
+                collect_sendable_stream(stream.execute(p, ctx.task_ctx())?).await?;
+            batches.extend_from_slice(&data);
+        }
+        Ok(batches)
     }
 }

@@ -40,6 +40,7 @@ use datafusion_common::DFSchema;
 use datafusion_expr::Expr;
 use futures::future::BoxFuture;
 use futures::StreamExt;
+use object_store::prefix::PrefixStore;
 use parquet::file::properties::WriterProperties;
 use tracing::log::*;
 
@@ -52,7 +53,7 @@ use crate::delta_datafusion::expr::parse_predicate_expression;
 use crate::delta_datafusion::{find_files, register_store, DeltaScanBuilder};
 use crate::delta_datafusion::{DataFusionMixins, DeltaDataChecker};
 use crate::errors::{DeltaResult, DeltaTableError};
-use crate::kernel::{Action, Add, Metadata, PartitionsExt, Remove, StructType};
+use crate::kernel::{Action, Add, AddCDCFile, Metadata, PartitionsExt, Remove, StructType};
 use crate::logstore::LogStoreRef;
 use crate::operations::cast::{cast_record_batch, merge_schema};
 use crate::protocol::{DeltaOperation, SaveMode};
@@ -287,17 +288,20 @@ impl WriteBuilder {
             Some(snapshot) => {
                 PROTOCOL.can_write_to(snapshot)?;
 
-                if let Some(plan) = &self.input {
-                    let schema: StructType = (plan.schema()).try_into()?;
-                    PROTOCOL.check_can_write_timestamp_ntz(snapshot, &schema)?;
+                let schema: StructType = if let Some(plan) = &self.input {
+                    (plan.schema()).try_into()?
                 } else if let Some(batches) = &self.batches {
                     if batches.is_empty() {
                         return Err(WriteError::MissingData.into());
                     }
-                    let schema: StructType = (batches[0].schema()).try_into()?;
+                    (batches[0].schema()).try_into()?
+                } else {
+                    return Err(WriteError::MissingData.into());
+                };
+
+                if self.schema_mode.is_none() {
                     PROTOCOL.check_can_write_timestamp_ntz(snapshot, &schema)?;
                 }
-
                 match self.mode {
                     SaveMode::ErrorIfExists => {
                         Err(WriteError::AlreadyExists(self.log_store.root_uri()).into())
@@ -459,6 +463,58 @@ async fn write_execution_plan_with_predicate(
         .collect::<Vec<_>>();
     // Collect add actions to add to commit
     Ok(actions)
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn write_execution_plan_cdc(
+    snapshot: Option<&DeltaTableState>,
+    state: SessionState,
+    plan: Arc<dyn ExecutionPlan>,
+    partition_columns: Vec<String>,
+    object_store: ObjectStoreRef,
+    target_file_size: Option<usize>,
+    write_batch_size: Option<usize>,
+    writer_properties: Option<WriterProperties>,
+    safe_cast: bool,
+    schema_mode: Option<SchemaMode>,
+    writer_stats_config: WriterStatsConfig,
+    sender: Option<Sender<RecordBatch>>,
+) -> DeltaResult<Vec<Action>> {
+    let cdc_store = Arc::new(PrefixStore::new(object_store, "_change_data"));
+    Ok(write_execution_plan(
+        snapshot,
+        state,
+        plan,
+        partition_columns,
+        cdc_store,
+        target_file_size,
+        write_batch_size,
+        writer_properties,
+        safe_cast,
+        schema_mode,
+        writer_stats_config,
+        sender,
+    )
+    .await?
+    .into_iter()
+    .map(|add| {
+        // Modify add actions into CDC actions
+        match add {
+            Action::Add(add) => {
+                Action::Cdc(AddCDCFile {
+                    // This is a gnarly hack, but the action needs the nested path, not the
+                    // path isnide the prefixed store
+                    path: format!("_change_data/{}", add.path),
+                    size: add.size,
+                    partition_values: add.partition_values,
+                    data_change: false,
+                    tags: add.tags,
+                })
+            }
+            _ => panic!("Expected Add action"),
+        }
+    })
+    .collect::<Vec<_>>())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -743,12 +799,38 @@ impl std::future::IntoFuture for WriteBuilder {
             if this.schema_mode == Some(SchemaMode::Merge) && schema_drift {
                 if let Some(snapshot) = &this.snapshot {
                     let schema_struct: StructType = schema.clone().try_into()?;
+                    let current_protocol = snapshot.protocol();
+                    let configuration = snapshot.metadata().configuration.clone();
+                    let maybe_new_protocol = if PROTOCOL
+                        .contains_timestampntz(schema_struct.fields())
+                        && !current_protocol
+                            .reader_features
+                            .clone()
+                            .unwrap_or_default()
+                            .contains(&crate::kernel::ReaderFeatures::TimestampWithoutTimezone)
+                    // We can check only reader features, as reader and writer timestampNtz
+                    // should be always enabled together
+                    {
+                        let new_protocol = current_protocol.clone().enable_timestamp_ntz();
+                        if !(current_protocol.min_reader_version == 3
+                            && current_protocol.min_writer_version == 7)
+                        {
+                            Some(new_protocol.move_table_properties_into_features(&configuration))
+                        } else {
+                            Some(new_protocol)
+                        }
+                    } else {
+                        None
+                    };
                     let schema_action = Action::Metadata(Metadata::try_new(
                         schema_struct,
                         partition_columns.clone(),
-                        snapshot.metadata().configuration.clone(),
+                        configuration,
                     )?);
                     actions.push(schema_action);
+                    if let Some(new_protocol) = maybe_new_protocol {
+                        actions.push(new_protocol.into())
+                    }
                 }
             }
             let state = match this.state {
@@ -815,6 +897,34 @@ impl std::future::IntoFuture for WriteBuilder {
                         .await
                         .or_else(|_| snapshot.arrow_schema())
                         .unwrap_or(schema.clone());
+
+                    let configuration = snapshot.metadata().configuration.clone();
+                    let current_protocol = snapshot.protocol();
+                    let maybe_new_protocol = if PROTOCOL.contains_timestampntz(
+                        TryInto::<StructType>::try_into(schema.clone())?.fields(),
+                    ) && !current_protocol
+                        .reader_features
+                        .clone()
+                        .unwrap_or_default()
+                        .contains(&crate::kernel::ReaderFeatures::TimestampWithoutTimezone)
+                    // We can check only reader features, as reader and writer timestampNtz
+                    // should be always enabled together
+                    {
+                        let new_protocol = current_protocol.clone().enable_timestamp_ntz();
+                        if !(current_protocol.min_reader_version == 3
+                            && current_protocol.min_writer_version == 7)
+                        {
+                            Some(new_protocol.move_table_properties_into_features(&configuration))
+                        } else {
+                            Some(new_protocol)
+                        }
+                    } else {
+                        None
+                    };
+
+                    if let Some(protocol) = maybe_new_protocol {
+                        actions.push(protocol.into())
+                    }
 
                     if schema != table_schema {
                         let mut metadata = snapshot.metadata().clone();

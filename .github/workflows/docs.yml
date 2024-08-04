@@ -1,6 +1,7 @@
 name: Build (and maybe release) the documentation
 
 on:
+  merge_group:
   pull_request:
     paths:
       - python/**

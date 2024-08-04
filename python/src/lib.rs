@@ -14,6 +14,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use arrow::pyarrow::PyArrowType;
 use chrono::{DateTime, Duration, FixedOffset, Utc};
 use delta_kernel::expressions::Scalar;
+use delta_kernel::schema::StructField;
 use deltalake::arrow::compute::concat_batches;
 use deltalake::arrow::ffi_stream::{ArrowArrayStreamReader, FFI_ArrowArrayStream};
 use deltalake::arrow::record_batch::RecordBatchReader;
@@ -30,6 +31,7 @@ use deltalake::kernel::TableFeatures as KernelTableFeatures;
 use deltalake::kernel::{
     scalars::ScalarExt, Action, Add, Invariant, LogicalFile, Remove, StructType,
 };
+use deltalake::operations::add_column::AddColumnBuilder;
 use deltalake::operations::add_feature::AddTableFeatureBuilder;
 use deltalake::operations::collect_sendable_stream;
 use deltalake::operations::constraints::ConstraintBuilder;
@@ -65,7 +67,7 @@ use crate::error::DeltaProtocolError;
 use crate::error::PythonError;
 use crate::features::TableFeatures;
 use crate::filesystem::FsConfig;
-use crate::schema::schema_to_pyobject;
+use crate::schema::{schema_to_pyobject, Field};
 use crate::utils::rt;
 
 #[derive(FromPyObject)]
@@ -138,6 +140,26 @@ impl RawDeltaTable {
                 },
             })
         })
+    }
+
+    #[pyo3(signature = (table_uri, storage_options = None))]
+    #[staticmethod]
+    pub fn is_deltatable(
+        table_uri: &str,
+        storage_options: Option<HashMap<String, String>>,
+    ) -> PyResult<bool> {
+        let mut builder = deltalake::DeltaTableBuilder::from_uri(table_uri);
+        if let Some(storage_options) = storage_options {
+            builder = builder.with_storage_options(storage_options)
+        }
+        Ok(rt()
+            .block_on(async {
+                match builder.build() {
+                    Ok(table) => table.verify_deltatable_existence().await,
+                    Err(err) => Err(err),
+                }
+            })
+            .map_err(PythonError::from)?)
     }
 
     pub fn table_uri(&self) -> PyResult<String> {
@@ -344,20 +366,11 @@ impl RawDeltaTable {
                 cmd = cmd.with_retention_period(Duration::hours(retention_period as i64));
             }
 
-            if custom_metadata.is_some() || post_commithook_properties.is_some() {
-                let mut commit_properties = CommitProperties::default();
-                if let Some(metadata) = custom_metadata {
-                    let json_metadata: Map<String, Value> =
-                        metadata.into_iter().map(|(k, v)| (k, v.into())).collect();
-                    commit_properties = commit_properties.with_metadata(json_metadata);
-                };
-
-                if let Some(post_commit_hook_props) = post_commithook_properties {
-                    commit_properties =
-                        set_post_commithook_properties(commit_properties, post_commit_hook_props)
-                }
+            if let Some(commit_properties) =
+                maybe_create_commit_properties(custom_metadata, post_commithook_properties)
+            {
                 cmd = cmd.with_commit_properties(commit_properties);
-            };
+            }
             rt().block_on(cmd.into_future()).map_err(PythonError::from)
         })?;
         self._table.state = table.state;
@@ -366,6 +379,7 @@ impl RawDeltaTable {
 
     /// Run the UPDATE command on the Delta Table
     #[pyo3(signature = (updates, predicate=None, writer_properties=None, safe_cast = false, custom_metadata = None, post_commithook_properties=None))]
+    #[allow(clippy::too_many_arguments)]
     pub fn update(
         &mut self,
         py: Python,
@@ -397,18 +411,9 @@ impl RawDeltaTable {
                 cmd = cmd.with_predicate(update_predicate);
             }
 
-            if custom_metadata.is_some() || post_commithook_properties.is_some() {
-                let mut commit_properties = CommitProperties::default();
-                if let Some(metadata) = custom_metadata {
-                    let json_metadata: Map<String, Value> =
-                        metadata.into_iter().map(|(k, v)| (k, v.into())).collect();
-                    commit_properties = commit_properties.with_metadata(json_metadata);
-                };
-
-                if let Some(post_commit_hook_props) = post_commithook_properties {
-                    commit_properties =
-                        set_post_commithook_properties(commit_properties, post_commit_hook_props)
-                }
+            if let Some(commit_properties) =
+                maybe_create_commit_properties(custom_metadata, post_commithook_properties)
+            {
                 cmd = cmd.with_commit_properties(commit_properties);
             }
 
@@ -460,18 +465,9 @@ impl RawDeltaTable {
                 );
             }
 
-            if custom_metadata.is_some() || post_commithook_properties.is_some() {
-                let mut commit_properties = CommitProperties::default();
-                if let Some(metadata) = custom_metadata {
-                    let json_metadata: Map<String, Value> =
-                        metadata.into_iter().map(|(k, v)| (k, v.into())).collect();
-                    commit_properties = commit_properties.with_metadata(json_metadata);
-                };
-
-                if let Some(post_commit_hook_props) = post_commithook_properties {
-                    commit_properties =
-                        set_post_commithook_properties(commit_properties, post_commit_hook_props)
-                }
+            if let Some(commit_properties) =
+                maybe_create_commit_properties(custom_metadata, post_commithook_properties)
+            {
                 cmd = cmd.with_commit_properties(commit_properties);
             }
 
@@ -531,18 +527,9 @@ impl RawDeltaTable {
                 );
             }
 
-            if custom_metadata.is_some() || post_commithook_properties.is_some() {
-                let mut commit_properties = CommitProperties::default();
-                if let Some(metadata) = custom_metadata {
-                    let json_metadata: Map<String, Value> =
-                        metadata.into_iter().map(|(k, v)| (k, v.into())).collect();
-                    commit_properties = commit_properties.with_metadata(json_metadata);
-                };
-
-                if let Some(post_commit_hook_props) = post_commithook_properties {
-                    commit_properties =
-                        set_post_commithook_properties(commit_properties, post_commit_hook_props)
-                }
+            if let Some(commit_properties) =
+                maybe_create_commit_properties(custom_metadata, post_commithook_properties)
+            {
                 cmd = cmd.with_commit_properties(commit_properties);
             }
 
@@ -573,12 +560,46 @@ impl RawDeltaTable {
             )
             .with_feature(Into::<KernelTableFeatures>::into(feature))
             .with_allow_protocol_versions_increase(allow_protocol_versions_increase);
+            
+            if let Some(commit_properties) =
+                  maybe_create_commit_properties(custom_metadata, post_commithook_properties)
+              {
+                  cmd = cmd.with_commit_properties(commit_properties);
+              }
+
+            rt().block_on(cmd.into_future()).map_err(PythonError::from)
+        })?;
+        self._table.state = table.state;
+        Ok(())
+  }
+  
+    #[pyo3(signature = (fields, custom_metadata=None, post_commithook_properties=None))]
+    pub fn add_columns(
+        &mut self,
+        py: Python,
+        fields: Vec<Field>,
+        custom_metadata: Option<HashMap<String, String>>,
+        post_commithook_properties: Option<HashMap<String, Option<bool>>>,
+    ) -> PyResult<()> {
+        let table = py.allow_threads(|| {
+            let mut cmd = AddColumnBuilder::new(
+                self._table.log_store(),
+                self._table.snapshot().map_err(PythonError::from)?.clone(),
+            );
+
+            let new_fields = fields
+                .iter()
+                .map(|v| v.inner.clone())
+                .collect::<Vec<StructField>>();
+
+            cmd = cmd.with_fields(new_fields);
 
             if let Some(commit_properties) =
                 maybe_create_commit_properties(custom_metadata, post_commithook_properties)
             {
                 cmd = cmd.with_commit_properties(commit_properties);
             }
+          
             rt().block_on(cmd.into_future()).map_err(PythonError::from)
         })?;
         self._table.state = table.state;
@@ -603,18 +624,9 @@ impl RawDeltaTable {
                 cmd = cmd.with_constraint(col_name.clone(), expression.clone());
             }
 
-            if custom_metadata.is_some() || post_commithook_properties.is_some() {
-                let mut commit_properties = CommitProperties::default();
-                if let Some(metadata) = custom_metadata {
-                    let json_metadata: Map<String, Value> =
-                        metadata.into_iter().map(|(k, v)| (k, v.into())).collect();
-                    commit_properties = commit_properties.with_metadata(json_metadata);
-                };
-
-                if let Some(post_commit_hook_props) = post_commithook_properties {
-                    commit_properties =
-                        set_post_commithook_properties(commit_properties, post_commit_hook_props)
-                }
+            if let Some(commit_properties) =
+                maybe_create_commit_properties(custom_metadata, post_commithook_properties)
+            {
                 cmd = cmd.with_commit_properties(commit_properties);
             }
 
@@ -641,18 +653,9 @@ impl RawDeltaTable {
             .with_constraint(name)
             .with_raise_if_not_exists(raise_if_not_exists);
 
-            if custom_metadata.is_some() || post_commithook_properties.is_some() {
-                let mut commit_properties = CommitProperties::default();
-                if let Some(metadata) = custom_metadata {
-                    let json_metadata: Map<String, Value> =
-                        metadata.into_iter().map(|(k, v)| (k, v.into())).collect();
-                    commit_properties = commit_properties.with_metadata(json_metadata);
-                };
-
-                if let Some(post_commit_hook_props) = post_commithook_properties {
-                    commit_properties =
-                        set_post_commithook_properties(commit_properties, post_commit_hook_props)
-                }
+            if let Some(commit_properties) =
+                maybe_create_commit_properties(custom_metadata, post_commithook_properties)
+            {
                 cmd = cmd.with_commit_properties(commit_properties);
             }
 
@@ -801,18 +804,9 @@ impl RawDeltaTable {
                 );
             }
 
-            if custom_metadata.is_some() || post_commithook_properties.is_some() {
-                let mut commit_properties = CommitProperties::default();
-                if let Some(metadata) = custom_metadata {
-                    let json_metadata: Map<String, Value> =
-                        metadata.into_iter().map(|(k, v)| (k, v.into())).collect();
-                    commit_properties = commit_properties.with_metadata(json_metadata);
-                };
-
-                if let Some(post_commit_hook_props) = post_commithook_properties {
-                    commit_properties =
-                        set_post_commithook_properties(commit_properties, post_commit_hook_props)
-                }
+            if let Some(commit_properties) =
+                maybe_create_commit_properties(custom_metadata, post_commithook_properties)
+            {
                 cmd = cmd.with_commit_properties(commit_properties);
             }
 
@@ -961,12 +955,9 @@ impl RawDeltaTable {
         cmd = cmd.with_ignore_missing_files(ignore_missing_files);
         cmd = cmd.with_protocol_downgrade_allowed(protocol_downgrade_allowed);
 
-        if let Some(metadata) = custom_metadata {
-            let json_metadata: Map<String, Value> =
-                metadata.into_iter().map(|(k, v)| (k, v.into())).collect();
-            cmd = cmd
-                .with_commit_properties(CommitProperties::default().with_metadata(json_metadata));
-        };
+        if let Some(commit_properties) = maybe_create_commit_properties(custom_metadata, None) {
+            cmd = cmd.with_commit_properties(commit_properties);
+        }
 
         let (table, metrics) = rt()
             .block_on(cmd.into_future())
@@ -1296,19 +1287,14 @@ impl RawDeltaTable {
             if let Some(predicate) = predicate {
                 cmd = cmd.with_predicate(predicate);
             }
-
-            if custom_metadata.is_some() || post_commithook_properties.is_some() {
-                let mut commit_properties = CommitProperties::default();
-                if let Some(metadata) = custom_metadata {
-                    let json_metadata: Map<String, Value> =
-                        metadata.into_iter().map(|(k, v)| (k, v.into())).collect();
-                    commit_properties = commit_properties.with_metadata(json_metadata);
-                };
-
-                if let Some(post_commit_hook_props) = post_commithook_properties {
-                    commit_properties =
-                        set_post_commithook_properties(commit_properties, post_commit_hook_props)
-                }
+            if let Some(writer_props) = writer_properties {
+                cmd = cmd.with_writer_properties(
+                    set_writer_properties(writer_props).map_err(PythonError::from)?,
+                );
+            }
+            if let Some(commit_properties) =
+                maybe_create_commit_properties(custom_metadata, post_commithook_properties)
+            {
                 cmd = cmd.with_commit_properties(commit_properties);
             }
 
@@ -1332,14 +1318,7 @@ impl RawDeltaTable {
         .with_properties(properties)
         .with_raise_if_not_exists(raise_if_not_exists);
 
-        if custom_metadata.is_some() {
-            let mut commit_properties = CommitProperties::default();
-            if let Some(metadata) = custom_metadata {
-                let json_metadata: Map<String, Value> =
-                    metadata.into_iter().map(|(k, v)| (k, v.into())).collect();
-                commit_properties = commit_properties.with_metadata(json_metadata);
-            };
-
+        if let Some(commit_properties) = maybe_create_commit_properties(custom_metadata, None) {
             cmd = cmd.with_commit_properties(commit_properties);
         }
 
@@ -1365,18 +1344,9 @@ impl RawDeltaTable {
         )
         .with_dry_run(dry_run);
 
-        if custom_metadata.is_some() || post_commithook_properties.is_some() {
-            let mut commit_properties = CommitProperties::default();
-            if let Some(metadata) = custom_metadata {
-                let json_metadata: Map<String, Value> =
-                    metadata.into_iter().map(|(k, v)| (k, v.into())).collect();
-                commit_properties = commit_properties.with_metadata(json_metadata);
-            };
-
-            if let Some(post_commit_hook_props) = post_commithook_properties {
-                commit_properties =
-                    set_post_commithook_properties(commit_properties, post_commit_hook_props)
-            }
+        if let Some(commit_properties) =
+            maybe_create_commit_properties(custom_metadata, post_commithook_properties)
+        {
             cmd = cmd.with_commit_properties(commit_properties);
         }
 

@@ -613,9 +613,7 @@ mod tests {
     #[tokio::test]
     async fn test_minwriter_v4_with_generated_columns_and_expressions() {
         let checker_5 = ProtocolChecker::new(READER_V2.clone(), WRITER_V4.clone());
-        let actions = vec![Action::Protocol(Protocol::new(2, 4).with_writer_features(
-            vec![crate::kernel::WriterFeatures::GeneratedColumns],
-        ))];
+        let actions = vec![Action::Protocol(Protocol::new(2, 4))];
 
         let table: crate::DeltaTable = crate::DeltaOps::new_in_memory()
             .create()

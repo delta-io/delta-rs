@@ -59,6 +59,33 @@ For AWS Glue catalog, use AWS environment variables to authenticate.
 {'id': [5, 7, 9, 5, 6, 7, 8, 9]}
 ```
 
+## Verify Table Existence
+
+You can check whether or not a Delta table exists at a particular path by using
+the `DeltaTable.is_deltatable()` method.
+
+```python
+from deltalake import DeltaTable
+
+table_path = "<path/to/valid/table>"
+DeltaTable.is_deltatable(table_path)
+# True
+
+invalid_table_path = "<path/to/nonexistent/table>"
+DeltaTable.is_deltatable(invalid_table_path)
+# False
+
+bucket_table_path = "<path/to/valid/table/in/bucket>"
+storage_options = {
+    "AWS_ACCESS_KEY_ID": "THE_AWS_ACCESS_KEY_ID",
+    "AWS_SECRET_ACCESS_KEY": "THE_AWS_SECRET_ACCESS_KEY",
+    ...
+}
+DeltaTable.is_deltatable(bucket_table_path)
+# True
+```
+
+
 ## Custom Storage Backends
 
 While delta always needs its internal storage backend to work and be

@@ -15,9 +15,6 @@ use crate::kernel::{
     Action, DataType, Metadata, Protocol, ReaderFeatures, StructField, StructType, WriterFeatures,
 };
 use crate::logstore::{LogStore, LogStoreRef};
-use crate::operations::set_tbl_properties::{
-    apply_properties_to_protocol, convert_properties_to_features,
-};
 use crate::protocol::{DeltaOperation, SaveMode};
 use crate::table::builder::ensure_table_uri;
 use crate::table::config::DeltaConfigKey;
@@ -298,8 +295,7 @@ impl CreateBuilder {
             })
             .unwrap_or_else(|| current_protocol);
 
-        let protocol = apply_properties_to_protocol(
-            &protocol,
+        let protocol = protocol.apply_properties_to_protocol(
             &configuration
                 .iter()
                 .map(|(k, v)| (k.clone(), v.clone().unwrap()))
@@ -307,7 +303,7 @@ impl CreateBuilder {
             self.raise_if_key_not_exists,
         )?;
 
-        let protocol = convert_properties_to_features(protocol, &configuration);
+        let protocol = protocol.move_table_properties_into_features(&configuration);
 
         let mut metadata = Metadata::try_new(
             StructType::new(self.columns),

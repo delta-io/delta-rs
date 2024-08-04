@@ -404,7 +404,7 @@ impl MapType {
 #[pyclass(module = "deltalake._internal")]
 #[derive(Clone)]
 pub struct Field {
-    inner: StructField,
+    pub inner: StructField,
 }
 
 #[pymethods]

@@ -46,6 +46,7 @@ from deltalake._util import encode_partition_value
 from deltalake.data_catalog import DataCatalog
 from deltalake.exceptions import DeltaProtocolError
 from deltalake.fs import DeltaStorageHandler
+from deltalake.schema import Field as DeltaField
 from deltalake.schema import Schema as DeltaSchema
 
 try:
@@ -358,6 +359,21 @@ class DeltaTable:
         return cls(
             table_uri=table_uri, version=version, log_buffer_size=log_buffer_size
         )
+
+    @staticmethod
+    def is_deltatable(
+        table_uri: str, storage_options: Optional[Dict[str, str]] = None
+    ) -> bool:
+        """
+        Returns True if a Delta Table exists at specified path.
+        Returns False otherwise.
+
+        Args:
+            table_uri: the path of the DeltaTable
+            storage_options: a dictionary of the options to use for the
+                storage backend
+        """
+        return RawDeltaTable.is_deltatable(table_uri, storage_options)
 
     @classmethod
     def create(
@@ -1785,6 +1801,7 @@ class TableAlterer:
     def __init__(self, table: DeltaTable) -> None:
         self.table = table
 
+
     def add_feature(
         self,
         feature: TableFeatures,
@@ -1814,10 +1831,39 @@ class TableAlterer:
             ProtocolVersions(min_reader_version=1, min_writer_version=7, writer_features=['appendOnly'], reader_features=None)
             ```
         """
-
         self.table._table.add_feature(
             feature,
             allow_protocol_versions_increase,
+            custom_metadata,
+            post_commithook_properties.__dict__ if post_commithook_properties else None
+        )
+
+    def add_columns(
+          self,
+          fields: Union[DeltaField, List[DeltaField]],
+          custom_metadata: Optional[Dict[str, str]] = None,
+          post_commithook_properties: Optional[PostCommitHookProperties] = None,
+      ) -> None:
+        """Add new columns and/or update the fields of a stuctcolumn
+
+        Args:
+            fields: fields to merge into schema
+            from deltalake.schema import Field, PrimitiveType, StructType
+            dt = DeltaTable("test_table")
+            new_fields = [
+                Field("baz", StructType([Field("bar", PrimitiveType("integer"))])),
+                Field("bar", PrimitiveType("integer"))
+            ]
+            dt.alter.add_columns(
+                new_fields
+            )
+            ```
+        """
+        if isinstance(fields, DeltaField):
+            fields = [fields]
+
+        self.table._table.add_columns(
+            fields,
             custom_metadata,
             post_commithook_properties.__dict__ if post_commithook_properties else None,
         )
