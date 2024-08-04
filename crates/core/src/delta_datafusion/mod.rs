@@ -344,7 +344,10 @@ pub struct DeltaScanConfigBuilder {
     file_column_name: Option<String>,
     /// Whether to wrap partition values in a dictionary encoding to potentially save space
     wrap_partition_values: Option<bool>,
+    /// Whether to push down filter in end result or just prune the files
     enable_parquet_pushdown: bool,
+    /// Schema to scan table with
+    schema: Option<SchemaRef>,
 }
 
 impl Default for DeltaScanConfigBuilder {
@@ -354,6 +357,7 @@ impl Default for DeltaScanConfigBuilder {
             file_column_name: None,
             wrap_partition_values: None,
             enable_parquet_pushdown: true,
+            schema: None,
         }
     }
 }
@@ -389,6 +393,12 @@ impl DeltaScanConfigBuilder {
     /// When disabled the filter will only be used for pruning files
     pub fn with_parquet_pushdown(mut self, pushdown: bool) -> Self {
         self.enable_parquet_pushdown = pushdown;
+        self
+    }
+
+    /// Use the provided [SchemaRef] for the [DeltaScan]
+    pub fn with_schema(mut self, schema: SchemaRef) -> Self {
+        self.schema = Some(schema);
         self
     }
 
@@ -433,6 +443,7 @@ impl DeltaScanConfigBuilder {
             file_column_name,
             wrap_partition_values: self.wrap_partition_values.unwrap_or(true),
             enable_parquet_pushdown: self.enable_parquet_pushdown,
+            schema: self.schema.clone(),
         })
     }
 }
@@ -446,6 +457,8 @@ pub struct DeltaScanConfig {
     pub wrap_partition_values: bool,
     /// Allow pushdown of the scan filter
     pub enable_parquet_pushdown: bool,
+    /// Schema to read as
+    pub schema: Option<SchemaRef>,
 }
 
 #[derive(Debug)]
@@ -458,7 +471,6 @@ pub(crate) struct DeltaScanBuilder<'a> {
     limit: Option<usize>,
     files: Option<&'a [Add]>,
     config: Option<DeltaScanConfig>,
-    schema: Option<SchemaRef>,
 }
 
 impl<'a> DeltaScanBuilder<'a> {
@@ -476,7 +488,6 @@ impl<'a> DeltaScanBuilder<'a> {
             limit: None,
             files: None,
             config: None,
-            schema: None,
         }
     }
 
@@ -505,22 +516,17 @@ impl<'a> DeltaScanBuilder<'a> {
         self
     }
 
-    /// Use the provided [SchemaRef] for the [DeltaScan]
-    pub fn with_schema(mut self, schema: SchemaRef) -> Self {
-        self.schema = Some(schema);
-        self
-    }
-
     pub async fn build(self) -> DeltaResult<DeltaScan> {
         let config = match self.config {
             Some(config) => config,
             None => DeltaScanConfigBuilder::new().build(self.snapshot)?,
         };
 
-        let schema = match self.schema {
-            Some(schema) => schema,
-            None => self.snapshot.arrow_schema()?,
-        };
+        let schema = config
+            .schema
+            .clone()
+            .unwrap_or(self.snapshot.arrow_schema()?);
+
         let logical_schema = df_logical_schema(self.snapshot, &config)?;
 
         let logical_schema = if let Some(used_columns) = self.projection {
@@ -742,6 +748,7 @@ pub struct DeltaTableProvider {
     log_store: LogStoreRef,
     config: DeltaScanConfig,
     schema: Arc<ArrowSchema>,
+    files: Option<Vec<Add>>,
 }
 
 impl DeltaTableProvider {
@@ -756,7 +763,14 @@ impl DeltaTableProvider {
             snapshot,
             log_store,
             config,
+            files: None,
         })
+    }
+
+    /// Define which files to consider while building a scan, for advanced usecases
+    pub fn with_files(mut self, files: Vec<Add>) -> DeltaTableProvider {
+        self.files = Some(files);
+        self
     }
 }
 
@@ -792,15 +806,16 @@ impl TableProvider for DeltaTableProvider {
         register_store(self.log_store.clone(), session.runtime_env().clone());
         let filter_expr = conjunction(filters.iter().cloned());
 
-        let scan = DeltaScanBuilder::new(&self.snapshot, self.log_store.clone(), session)
+        let mut scan = DeltaScanBuilder::new(&self.snapshot, self.log_store.clone(), session)
             .with_projection(projection)
             .with_limit(limit)
             .with_filter(filter_expr)
-            .with_scan_config(self.config.clone())
-            .build()
-            .await?;
+            .with_scan_config(self.config.clone());
 
-        Ok(Arc::new(scan))
+        if let Some(files) = &self.files {
+            scan = scan.with_files(files);
+        }
+        Ok(Arc::new(scan.build().await?))
     }
 
     fn supports_filters_pushdown(
