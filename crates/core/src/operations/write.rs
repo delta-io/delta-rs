@@ -482,11 +482,14 @@ pub(crate) async fn write_execution_plan_cdc(
     write_batch_size: Option<usize>,
     writer_properties: Option<WriterProperties>,
     safe_cast: bool,
-    schema_mode: Option<SchemaMode>,
     writer_stats_config: WriterStatsConfig,
     sender: Option<Sender<RecordBatch>>,
 ) -> DeltaResult<Vec<Action>> {
     let cdc_store = Arc::new(PrefixStore::new(object_store, "_change_data"));
+
+    // If not overwrite, the plan schema is not taken but table schema,
+    // however we need the plan schema since it has the _change_type_col
+    let schema_mode = Some(SchemaMode::Overwrite);
     Ok(write_execution_plan(
         snapshot,
         state,

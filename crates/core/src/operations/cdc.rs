@@ -5,90 +5,48 @@
 use crate::table::state::DeltaTableState;
 use crate::DeltaResult;
 
-use arrow::array::{Array, StringArray};
-use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
-use arrow::record_batch::RecordBatch;
-use datafusion::error::Result as DataFusionResult;
-use datafusion::physical_plan::{
-    metrics::MetricsSet, DisplayAs, ExecutionPlan, RecordBatchStream, SendableRecordBatchStream,
-};
-use datafusion::prelude::*;
-use futures::{Stream, StreamExt};
-use std::sync::Arc;
-use tokio::sync::mpsc::*;
-use tracing::log::*;
+use arrow::datatypes::{DataType, Field, SchemaRef};
 
-/// Maximum in-memory channel size for the tracker to use
-const MAX_CHANNEL_SIZE: usize = 1024;
+use datafusion::prelude::*;
+use datafusion_common::ScalarValue;
+use std::sync::Arc;
+use tracing::log::*;
 
 /// The CDCTracker is useful for hooking reads/writes in a manner nececessary to create CDC files
 /// associated with commits
 pub(crate) struct CDCTracker {
     schema: SchemaRef,
-    pre_sender: Sender<RecordBatch>,
-    pre_receiver: Receiver<RecordBatch>,
-    post_sender: Sender<RecordBatch>,
-    post_receiver: Receiver<RecordBatch>,
+    pre_dataframe: DataFrame,
+    post_dataframe: DataFrame,
 }
 
 impl CDCTracker {
     ///  construct
-    pub(crate) fn new(schema: SchemaRef) -> Self {
-        let (pre_sender, pre_receiver) = channel(MAX_CHANNEL_SIZE);
-        let (post_sender, post_receiver) = channel(MAX_CHANNEL_SIZE);
+    pub(crate) fn new(
+        schema: SchemaRef,
+        pre_dataframe: DataFrame,
+        post_dataframe: DataFrame,
+    ) -> Self {
         Self {
             schema,
-            pre_sender,
-            pre_receiver,
-            post_sender,
-            post_receiver,
+            pre_dataframe,
+            post_dataframe,
         }
     }
 
-    /// Return an owned [Sender] for the caller to use when sending read but not altered batches
-    pub(crate) fn pre_sender(&self) -> Sender<RecordBatch> {
-        self.pre_sender.clone()
-    }
-
-    /// Return an owned [Sender][ for the caller to use when sending altered batches
-    pub(crate) fn post_sender(&self) -> Sender<RecordBatch> {
-        self.post_sender.clone()
-    }
-
-    pub(crate) async fn collect(mut self) -> DeltaResult<Vec<RecordBatch>> {
-        debug!("Collecting all the batches for diffing");
-        let ctx = SessionContext::new();
-        let mut pre = vec![];
-        let mut post = vec![];
-
-        while !self.pre_receiver.is_empty() {
-            if let Ok(batch) = self.pre_receiver.try_recv() {
-                pre.push(batch);
-            } else {
-                warn!("Error when receiving on the pre-receiver");
-            }
-        }
-
-        while !self.post_receiver.is_empty() {
-            if let Ok(batch) = self.post_receiver.try_recv() {
-                post.push(batch);
-            } else {
-                warn!("Error when receiving on the post-receiver");
-            }
-        }
-
+    pub(crate) fn collect(self) -> DeltaResult<DataFrame> {
         // Collect _all_ the batches for consideration
-        let pre = ctx.read_batches(pre)?;
-        let post = ctx.read_batches(post)?;
+        let pre_df = self.pre_dataframe;
+        let post_df = self.post_dataframe;
 
         // There is certainly a better way to do this other than stupidly cloning data for diffing
         // purposes, but this is the quickest and easiest way to "diff" the two sets of batches
-        let preimage = pre.clone().except(post.clone())?;
-        let postimage = post.except(pre)?;
+        let preimage = pre_df.clone().except(post_df.clone())?;
+        let postimage = post_df.except(pre_df)?;
 
         // Create a new schema which represents the input batch along with the CDC
         // columns
-        let mut fields: Vec<Arc<Field>> = self.schema.fields().to_vec().clone();
+        let fields: Vec<Arc<Field>> = self.schema.fields().to_vec().clone();
 
         let mut has_struct = false;
         for field in fields.iter() {
@@ -107,186 +65,18 @@ impl CDCTracker {
             warn!("The schema contains a Struct or List type, which unfortunately means a change data file cannot be captured in this release of delta-rs: <https://github.com/delta-io/delta-rs/issues/2568>. The write operation will complete properly, but no CDC data will be generated for schema: {fields:?}");
         }
 
-        fields.push(Arc::new(Field::new("_change_type", DataType::Utf8, true)));
-        let schema = Arc::new(Schema::new(fields));
+        let preimage = preimage.with_column(
+            "_change_type",
+            lit(ScalarValue::Utf8(Some("update_preimage".to_string()))),
+        )?;
 
-        let mut batches = vec![];
+        let postimage = postimage.with_column(
+            "_change_type",
+            lit(ScalarValue::Utf8(Some("update_postimage".to_string()))),
+        )?;
 
-        let mut pre_stream = preimage.execute_stream().await?;
-        let mut post_stream = postimage.execute_stream().await?;
-
-        // Fill up on pre image batches
-        while let Some(Ok(batch)) = pre_stream.next().await {
-            let batch = crate::operations::cast::cast_record_batch(
-                &batch,
-                self.schema.clone(),
-                true,
-                false,
-            )?;
-            debug!("prestream: {batch:?}");
-            let new_column = Arc::new(StringArray::from(vec![
-                Some("update_preimage");
-                batch.num_rows()
-            ]));
-            let mut columns: Vec<Arc<dyn Array>> = batch.columns().to_vec();
-            columns.push(new_column);
-
-            let batch = RecordBatch::try_new(schema.clone(), columns)?;
-            batches.push(batch);
-        }
-
-        // Fill up on the post-image batches
-        while let Some(Ok(batch)) = post_stream.next().await {
-            let batch = crate::operations::cast::cast_record_batch(
-                &batch,
-                self.schema.clone(),
-                true,
-                false,
-            )?;
-            debug!("poststream: {batch:?}");
-            let new_column = Arc::new(StringArray::from(vec![
-                Some("update_postimage");
-                batch.num_rows()
-            ]));
-            let mut columns: Vec<Arc<dyn Array>> = batch.columns().to_vec();
-            columns.push(new_column);
-
-            let batch = RecordBatch::try_new(schema.clone(), columns)?;
-            batches.push(batch);
-        }
-
-        debug!("Found {} batches to consider `CDC` data", batches.len());
-
-        // At this point the batches should just contain the changes
-        Ok(batches)
-    }
-}
-
-/// A DataFusion observer to help pick up on pre-image changes
-pub(crate) struct CDCObserver {
-    parent: Arc<dyn ExecutionPlan>,
-    id: String,
-    sender: Sender<RecordBatch>,
-}
-
-impl CDCObserver {
-    pub(crate) fn new(
-        id: String,
-        sender: Sender<RecordBatch>,
-        parent: Arc<dyn ExecutionPlan>,
-    ) -> Self {
-        Self { id, sender, parent }
-    }
-}
-
-impl std::fmt::Debug for CDCObserver {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("CDCObserver").field("id", &self.id).finish()
-    }
-}
-
-impl DisplayAs for CDCObserver {
-    fn fmt_as(
-        &self,
-        _: datafusion::physical_plan::DisplayFormatType,
-        f: &mut std::fmt::Formatter,
-    ) -> std::fmt::Result {
-        write!(f, "CDCObserver id={}", self.id)
-    }
-}
-
-impl ExecutionPlan for CDCObserver {
-    fn name(&self) -> &str {
-        Self::static_name()
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
-    fn schema(&self) -> SchemaRef {
-        self.parent.schema()
-    }
-
-    fn properties(&self) -> &datafusion::physical_plan::PlanProperties {
-        self.parent.properties()
-    }
-
-    fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
-        vec![&self.parent]
-    }
-
-    fn execute(
-        &self,
-        partition: usize,
-        context: Arc<datafusion::execution::context::TaskContext>,
-    ) -> datafusion_common::Result<datafusion::physical_plan::SendableRecordBatchStream> {
-        let res = self.parent.execute(partition, context)?;
-        Ok(Box::pin(CDCObserverStream {
-            schema: self.schema(),
-            input: res,
-            sender: self.sender.clone(),
-        }))
-    }
-
-    fn statistics(&self) -> DataFusionResult<datafusion_common::Statistics> {
-        self.parent.statistics()
-    }
-
-    fn with_new_children(
-        self: Arc<Self>,
-        children: Vec<Arc<dyn ExecutionPlan>>,
-    ) -> datafusion_common::Result<Arc<dyn ExecutionPlan>> {
-        if let Some(parent) = children.first() {
-            Ok(Arc::new(CDCObserver {
-                id: self.id.clone(),
-                sender: self.sender.clone(),
-                parent: parent.clone(),
-            }))
-        } else {
-            Err(datafusion_common::DataFusionError::Internal(
-                "Failed to handle CDCObserver".into(),
-            ))
-        }
-    }
-
-    fn metrics(&self) -> Option<MetricsSet> {
-        self.parent.metrics()
-    }
-}
-
-/// The CDCObserverStream simply acts to help observe the stream of data being
-/// read by DataFusion to capture the pre-image versions of data
-pub(crate) struct CDCObserverStream {
-    schema: SchemaRef,
-    input: SendableRecordBatchStream,
-    sender: Sender<RecordBatch>,
-}
-
-impl Stream for CDCObserverStream {
-    type Item = DataFusionResult<RecordBatch>;
-
-    fn poll_next(
-        mut self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Option<Self::Item>> {
-        self.input.poll_next_unpin(cx).map(|x| match x {
-            Some(Ok(batch)) => {
-                let _ = self.sender.try_send(batch.clone());
-                Some(Ok(batch))
-            }
-            other => other,
-        })
-    }
-
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        self.input.size_hint()
-    }
-}
-
-impl RecordBatchStream for CDCObserverStream {
-    fn schema(&self) -> SchemaRef {
-        self.schema.clone()
+        let final_df = preimage.union(postimage)?;
+        Ok(final_df)
     }
 }
 
@@ -327,7 +117,10 @@ mod tests {
     use crate::operations::DeltaOps;
     use crate::{DeltaConfigKey, DeltaTable};
     use arrow::array::{ArrayRef, Int32Array, StructArray};
+    use arrow_array::RecordBatch;
+    use arrow_schema::Schema;
     use datafusion::assert_batches_sorted_eq;
+    use datafusion::datasource::{MemTable, TableProvider};
 
     /// A simple test which validates primitive writer version 1 tables should
     /// not write Change Data Files
@@ -435,30 +228,37 @@ mod tests {
 
     #[tokio::test]
     async fn test_sanity_check() {
+        let ctx = SessionContext::new();
         let schema = Arc::new(Schema::new(vec![Field::new(
             "value",
             DataType::Int32,
             true,
         )]));
-        let tracker = CDCTracker::new(schema.clone());
 
         let batch = RecordBatch::try_new(
-            Arc::clone(&schema),
+            Arc::clone(&schema.clone()),
             vec![Arc::new(Int32Array::from(vec![Some(1), Some(2), Some(3)]))],
         )
         .unwrap();
+        let table_provider: Arc<dyn TableProvider> =
+            Arc::new(MemTable::try_new(schema.clone(), vec![vec![batch]]).unwrap());
+        let source_df = ctx.read_table(table_provider).unwrap();
+
         let updated_batch = RecordBatch::try_new(
-            Arc::clone(&schema),
+            Arc::clone(&schema.clone()),
             vec![Arc::new(Int32Array::from(vec![Some(1), Some(12), Some(3)]))],
         )
         .unwrap();
+        let table_provider_updated: Arc<dyn TableProvider> =
+            Arc::new(MemTable::try_new(schema.clone(), vec![vec![updated_batch]]).unwrap());
+        let updated_df = ctx.read_table(table_provider_updated).unwrap();
 
-        let _ = tracker.pre_sender().send(batch).await;
-        let _ = tracker.post_sender().send(updated_batch).await;
+        let tracker = CDCTracker::new(schema, source_df, updated_df);
 
-        match tracker.collect().await {
-            Ok(batches) => {
-                let _ = arrow::util::pretty::print_batches(&batches);
+        match tracker.collect() {
+            Ok(df) => {
+                let batches = &df.collect().await.unwrap();
+                let _ = arrow::util::pretty::print_batches(batches);
                 assert_eq!(batches.len(), 2);
                 assert_batches_sorted_eq! {[
                 "+-------+------------------+",
@@ -558,6 +358,7 @@ mod tests {
     #[ignore]
     #[tokio::test]
     async fn test_sanity_check_with_struct() {
+        let ctx = SessionContext::new();
         let nested_schema = Arc::new(Schema::new(vec![
             Field::new("id", DataType::Int32, true),
             Field::new("lat", DataType::Int32, true),
@@ -572,10 +373,8 @@ mod tests {
             ),
         ]));
 
-        let tracker = CDCTracker::new(schema.clone());
-
         let batch = RecordBatch::try_new(
-            Arc::clone(&schema),
+            Arc::clone(&schema.clone()),
             vec![
                 Arc::new(Int32Array::from(vec![Some(1), Some(2), Some(3)])),
                 Arc::new(StructArray::from(vec![
@@ -595,9 +394,12 @@ mod tests {
             ],
         )
         .unwrap();
+        let table_provider: Arc<dyn TableProvider> =
+            Arc::new(MemTable::try_new(schema.clone(), vec![vec![batch]]).unwrap());
+        let source_df = ctx.read_table(table_provider).unwrap();
 
         let updated_batch = RecordBatch::try_new(
-            Arc::clone(&schema),
+            Arc::clone(&schema.clone()),
             vec![
                 Arc::new(Int32Array::from(vec![Some(1), Some(12), Some(3)])),
                 Arc::new(StructArray::from(vec![
@@ -617,22 +419,25 @@ mod tests {
             ],
         )
         .unwrap();
+        let table_provider_updated: Arc<dyn TableProvider> =
+            Arc::new(MemTable::try_new(schema.clone(), vec![vec![updated_batch]]).unwrap());
+        let updated_df = ctx.read_table(table_provider_updated).unwrap();
 
-        let _ = tracker.pre_sender().send(batch).await;
-        let _ = tracker.post_sender().send(updated_batch).await;
+        let tracker = CDCTracker::new(schema, source_df, updated_df);
 
-        match tracker.collect().await {
-            Ok(batches) => {
+        match tracker.collect() {
+            Ok(df) => {
+                let batches = &df.collect().await.unwrap();
                 let _ = arrow::util::pretty::print_batches(&batches);
                 assert_eq!(batches.len(), 2);
                 assert_batches_sorted_eq! {[
-                "+-------+------------------+",
-                "| value | _change_type     |",
-                "+-------+------------------+",
-                "| 2     | update_preimage  |",
-                "| 12    | update_postimage |",
-                "+-------+------------------+",
-                    ], &batches }
+                "+-------+--------------------------+------------------+",
+                "| value | nested                   | _change_type     |",
+                "+-------+--------------------------+------------------+",
+                "| 12    | {id: 2, lat: 2, long: 2} | update_postimage |",
+                "| 2     | {id: 2, lat: 2, long: 2} | update_preimage  |",
+                "+-------+--------------------------+------------------+",
+                ], &batches }
             }
             Err(err) => {
                 println!("err: {err:#?}");
