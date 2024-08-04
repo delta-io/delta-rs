@@ -19,6 +19,8 @@
 
 use crate::logstore::LogStoreRef;
 use core::panic;
+use datafusion::dataframe::DataFrame;
+use datafusion::datasource::provider_as_source;
 use datafusion::execution::context::{SessionContext, SessionState};
 use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::projection::ProjectionExec;
@@ -26,7 +28,7 @@ use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::Expr;
 use datafusion_common::scalar::ScalarValue;
 use datafusion_common::DFSchema;
-use datafusion_expr::lit;
+use datafusion_expr::{lit, LogicalPlanBuilder};
 use datafusion_physical_expr::{
     expressions::{self},
     PhysicalExpr,
@@ -45,7 +47,8 @@ use super::write::{execute_non_empty_expr_cdc, WriterStatsConfig};
 
 use crate::delta_datafusion::expr::fmt_expr_to_sql;
 use crate::delta_datafusion::{
-    find_files, register_store, DataFusionMixins, DeltaScanBuilder, DeltaSessionContext,
+    find_files, register_store, DataFusionMixins, DeltaScanBuilder, DeltaScanConfigBuilder,
+    DeltaSessionContext, DeltaTableProvider,
 };
 use crate::errors::DeltaResult;
 use crate::kernel::{Action, Add, Remove};
@@ -136,26 +139,29 @@ async fn excute_non_empty_expr(
     log_store: LogStoreRef,
     state: &SessionState,
     expression: &Expr,
-    metrics: &mut DeleteMetrics,
     rewrite: &[Add],
+    metrics: &mut DeleteMetrics,
     writer_properties: Option<WriterProperties>,
     partition_scan: bool,
 ) -> DeltaResult<Vec<Action>> {
     // For each identified file perform a parquet scan + filter + limit (1) + count.
     // If returned count is not zero then append the file to be rewritten and removed from the log. Otherwise do nothing to the file.
     let mut actions: Vec<Action> = Vec::new();
-
-    let input_schema = snapshot.input_schema()?;
-    let input_dfschema: DFSchema = input_schema.clone().as_ref().clone().try_into()?;
     let table_partition_cols = snapshot.metadata().partition_columns.clone();
-    let scan = DeltaScanBuilder::new(snapshot, log_store.clone(), state)
-        .with_files(rewrite)
-        // Use input schema which doesn't wrap partition values, otherwise divide_by_partition_value won't work on UTF8 partitions
-        // Since it can't fetch a scalar from a dictionary type
+
+    let scan_config = DeltaScanConfigBuilder::default()
+        .with_file_column(false)
         .with_schema(snapshot.input_schema()?)
-        .build()
-        .await?;
-    let scan = Arc::new(scan);
+        .build(&snapshot)?;
+
+    let target_provider = Arc::new(
+        DeltaTableProvider::try_new(snapshot.clone(), log_store.clone(), scan_config.clone())?
+            .with_files(rewrite.to_vec()),
+    );
+    let target_provider = provider_as_source(target_provider);
+    let plan = LogicalPlanBuilder::scan("target", target_provider.clone(), None)?.build()?;
+
+    let df = DataFrame::new(state.clone(), plan);
 
     let writer_stats_config = WriterStatsConfig::new(
         snapshot.table_config().num_indexed_cols(),
@@ -169,9 +175,11 @@ async fn excute_non_empty_expr(
         // Apply the negation of the filter and rewrite files
         let negated_expression = Expr::Not(Box::new(Expr::IsTrue(Box::new(expression.clone()))));
 
-        let predicate_expr = state.create_physical_expr(negated_expression, &input_dfschema)?;
-        let filter: Arc<dyn ExecutionPlan> =
-            Arc::new(FilterExec::try_new(predicate_expr, scan.clone())?);
+        let filter = df
+            .clone()
+            .filter(negated_expression)?
+            .create_physical_plan()
+            .await?;
 
         let add_actions: Vec<Action> = write_execution_plan(
             Some(snapshot),
@@ -191,7 +199,7 @@ async fn excute_non_empty_expr(
 
         actions.extend(add_actions);
 
-        let read_records = scan.parquet_scan.metrics().and_then(|m| m.output_rows());
+        let read_records = Some(df.clone().count().await?);
         let filter_records = filter.metrics().and_then(|m| m.output_rows());
         metrics.num_copied_rows = filter_records;
         metrics.num_deleted_rows = read_records
@@ -200,19 +208,31 @@ async fn excute_non_empty_expr(
     }
 
     // CDC logic, simply filters data with predicate and adds the _change_type="delete" as literal column
-    if let Some(cdc_actions) = execute_non_empty_expr_cdc(
-        snapshot,
-        log_store,
-        state.clone(),
-        scan,
-        input_dfschema,
-        expression,
-        table_partition_cols,
-        writer_properties,
-        writer_stats_config,
-    )
-    .await?
-    {
+    if let Ok(true) = should_write_cdc(&snapshot) {
+        // Create CDC scan
+        let change_type_lit = lit(ScalarValue::Utf8(Some("delete".to_string())));
+        let cdc_filter = df
+            .filter(expression.clone())?
+            .with_column("_change_type", change_type_lit)?
+            .create_physical_plan()
+            .await?;
+
+        use crate::operations::write::write_execution_plan_cdc;
+        let cdc_actions = write_execution_plan_cdc(
+            Some(snapshot),
+            state.clone(),
+            cdc_filter,
+            table_partition_cols.clone(),
+            log_store.object_store(),
+            Some(snapshot.table_config().target_file_size() as usize),
+            None,
+            writer_properties,
+            false,
+            Some(SchemaMode::Overwrite), // If not overwrite, the plan schema is not taken but table schema, however we need the plan schema since it has the _change_type_col
+            writer_stats_config,
+            None,
+        )
+        .await?;
         actions.extend(cdc_actions)
     }
 
@@ -243,8 +263,8 @@ async fn execute(
             log_store.clone(),
             &state,
             &predicate,
-            &mut metrics,
             &candidates.candidates,
+            &mut metrics,
             writer_properties,
             candidates.partition_scan,
         )
