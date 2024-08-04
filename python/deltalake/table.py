@@ -1801,7 +1801,6 @@ class TableAlterer:
     def __init__(self, table: DeltaTable) -> None:
         self.table = table
 
-
     def add_feature(
         self,
         feature: TableFeatures,
@@ -1835,15 +1834,15 @@ class TableAlterer:
             feature,
             allow_protocol_versions_increase,
             custom_metadata,
-            post_commithook_properties.__dict__ if post_commithook_properties else None
+            post_commithook_properties.__dict__ if post_commithook_properties else None,
         )
 
     def add_columns(
-          self,
-          fields: Union[DeltaField, List[DeltaField]],
-          custom_metadata: Optional[Dict[str, str]] = None,
-          post_commithook_properties: Optional[PostCommitHookProperties] = None,
-      ) -> None:
+        self,
+        fields: Union[DeltaField, List[DeltaField]],
+        custom_metadata: Optional[Dict[str, str]] = None,
+        post_commithook_properties: Optional[PostCommitHookProperties] = None,
+    ) -> None:
         """Add new columns and/or update the fields of a stuctcolumn
 
         Args:

@@ -560,19 +560,19 @@ impl RawDeltaTable {
             )
             .with_feature(Into::<KernelTableFeatures>::into(feature))
             .with_allow_protocol_versions_increase(allow_protocol_versions_increase);
-            
+
             if let Some(commit_properties) =
-                  maybe_create_commit_properties(custom_metadata, post_commithook_properties)
-              {
-                  cmd = cmd.with_commit_properties(commit_properties);
-              }
+                maybe_create_commit_properties(custom_metadata, post_commithook_properties)
+            {
+                cmd = cmd.with_commit_properties(commit_properties);
+            }
 
             rt().block_on(cmd.into_future()).map_err(PythonError::from)
         })?;
         self._table.state = table.state;
         Ok(())
-  }
-  
+    }
+
     #[pyo3(signature = (fields, custom_metadata=None, post_commithook_properties=None))]
     pub fn add_columns(
         &mut self,
@@ -599,7 +599,7 @@ impl RawDeltaTable {
             {
                 cmd = cmd.with_commit_properties(commit_properties);
             }
-          
+
             rt().block_on(cmd.into_future()).map_err(PythonError::from)
         })?;
         self._table.state = table.state;
