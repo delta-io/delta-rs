@@ -1046,15 +1046,11 @@ class DeltaTable:
                 )
 
         if not filesystem:
-            file_sizes = self.get_add_actions().to_pydict()
-            file_sizes = {
-                x: y for x, y in zip(file_sizes["path"], file_sizes["size_bytes"])
-            }
             filesystem = pa_fs.PyFileSystem(
                 DeltaStorageHandler.from_table(
                     self._table,
                     self._storage_options,
-                    file_sizes,
+                    self._table.get_add_file_sizes(),
                 )
             )
         format = ParquetFileFormat(
