@@ -3,7 +3,6 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 from random import random
 from threading import Barrier, Thread
-from types import SimpleNamespace
 from typing import Any, List, Tuple
 from unittest.mock import Mock
 
@@ -169,18 +168,18 @@ def test_read_simple_table_update_incremental():
     assert dt.to_pyarrow_dataset().to_table().to_pydict() == {"id": [5, 7, 9]}
 
 
-def test_read_simple_table_file_sizes_failure():
+def test_read_simple_table_file_sizes_failure(mocker):
     table_path = "../crates/test/tests/data/simple_table"
     dt = DeltaTable(table_path)
     add_actions = dt.get_add_actions().to_pydict()
 
     # set all sizes to -1, the idea is to break the reading, to check
     # that input file sizes are actually used
-    add_actions_modified = {
-        x: [-1 for item in x] if x == "size_bytes" else y
-        for x, y in add_actions.items()
-    }
-    dt.get_add_actions = lambda: SimpleNamespace(to_pydict=lambda: add_actions_modified)  # type:ignore
+    add_actions_modified = {x: -1 for x in add_actions["path"]}
+    mocker.patch(
+        "deltalake._internal.RawDeltaTable.get_add_file_sizes",
+        return_value=add_actions_modified,
+    )
 
     with pytest.raises(OSError, match="Cannot seek past end of file."):
         dt.to_pyarrow_dataset().to_table().to_pydict()

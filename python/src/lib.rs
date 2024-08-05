@@ -24,6 +24,7 @@ use deltalake::datafusion::datasource::memory::MemTable;
 use deltalake::datafusion::datasource::provider::TableProvider;
 use deltalake::datafusion::physical_plan::ExecutionPlan;
 use deltalake::datafusion::prelude::SessionContext;
+use deltalake::delta_datafusion::cdf::FileAction;
 use deltalake::delta_datafusion::DeltaDataChecker;
 use deltalake::errors::DeltaTableError;
 use deltalake::kernel::{
@@ -1236,6 +1237,19 @@ impl RawDeltaTable {
         ))
     }
 
+    pub fn get_add_file_sizes(&self) -> PyResult<HashMap<String, i64>> {
+        let actions = self
+            ._table
+            .snapshot()
+            .map_err(PythonError::from)?
+            .file_actions()
+            .map_err(PythonError::from)?;
+
+        Ok(actions
+            .iter()
+            .map(|action| (action.path(), action.size() as i64))
+            .collect::<HashMap<String, i64>>())
+    }
     /// Run the delete command on the delta table: delete records following a predicate and return the delete metrics.
     #[pyo3(signature = (predicate = None, writer_properties=None, custom_metadata=None, post_commithook_properties=None))]
     pub fn delete(
