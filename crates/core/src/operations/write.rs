@@ -560,7 +560,7 @@ pub(crate) async fn write_execution_plan(
         schema_mode,
         writer_stats_config,
         sender,
-        arrow_type_size
+        arrow_type_size,
     )
     .await
 }

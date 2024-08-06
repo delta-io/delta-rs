@@ -169,7 +169,6 @@ impl UpdateBuilder {
         self.safe_cast = safe_cast;
         self
     }
-
 }
 
 #[allow(clippy::too_many_arguments)]

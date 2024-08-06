@@ -128,7 +128,6 @@ impl DeleteBuilder {
         self.writer_properties = Some(writer_properties);
         self
     }
-
 }
 
 #[allow(clippy::too_many_arguments)]

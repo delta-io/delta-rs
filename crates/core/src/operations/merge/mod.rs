@@ -1022,7 +1022,7 @@ async fn execute(
     match_operations: Vec<MergeOperationConfig>,
     not_match_target_operations: Vec<MergeOperationConfig>,
     not_match_source_operations: Vec<MergeOperationConfig>,
-    arrow_type_size: Option<ArrowTypeSize>
+    arrow_type_size: Option<ArrowTypeSize>,
 ) -> DeltaResult<(DeltaTableState, MergeMetrics)> {
     let mut metrics = MergeMetrics::default();
     let exec_start = Instant::now();
