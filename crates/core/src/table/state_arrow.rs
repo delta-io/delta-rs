@@ -14,7 +14,7 @@ use arrow_array::{
     StringArray, StructArray, TimestampMicrosecondArray, TimestampMillisecondArray,
 };
 use arrow_schema::{DataType, Field, Fields, TimeUnit};
-use delta_kernel::column_mapping::ColumnMappingMode;
+use delta_kernel::features::ColumnMappingMode;
 use itertools::Itertools;
 
 use super::state::DeltaTableState;

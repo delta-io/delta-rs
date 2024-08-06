@@ -38,6 +38,7 @@ use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::{memory::MemoryExec, ExecutionPlan};
 use datafusion_common::DFSchema;
 use datafusion_expr::Expr;
+use delta_kernel::engine::arrow_conversion::ArrowTypeSize;
 use futures::future::BoxFuture;
 use futures::StreamExt;
 use object_store::prefix::PrefixStore;
@@ -153,6 +154,8 @@ pub struct WriteBuilder {
     description: Option<String>,
     /// Configurations of the delta table, only used when table doesn't exist
     configuration: HashMap<String, Option<String>>,
+    /// Arrow type size that should be to read parquet data into
+    arrow_type_size: Option<ArrowTypeSize>,
 }
 
 impl super::Operation<()> for WriteBuilder {}
@@ -178,6 +181,7 @@ impl WriteBuilder {
             name: None,
             description: None,
             configuration: Default::default(),
+            arrow_type_size: None,
         }
     }
 
@@ -283,6 +287,12 @@ impl WriteBuilder {
         self
     }
 
+    /// Arrow type size that should be to read parquet data into
+    pub fn with_arrow_type_size(mut self, size: ArrowTypeSize) -> Self {
+        self.arrow_type_size = Some(size);
+        self
+    }
+
     async fn check_preconditions(&self) -> DeltaResult<Vec<Action>> {
         match &self.snapshot {
             Some(snapshot) => {
@@ -376,12 +386,13 @@ async fn write_execution_plan_with_predicate(
     schema_mode: Option<SchemaMode>,
     writer_stats_config: WriterStatsConfig,
     sender: Option<Sender<RecordBatch>>,
+    arrow_type_size: Option<ArrowTypeSize>,
 ) -> DeltaResult<Vec<Action>> {
     let schema: ArrowSchemaRef = if schema_mode.is_some() {
         plan.schema()
     } else {
         snapshot
-            .and_then(|s| s.input_schema().ok())
+            .and_then(|s| s.input_schema(arrow_type_size).ok())
             .unwrap_or(plan.schema())
     };
     let checker = if let Some(snapshot) = snapshot {
@@ -479,6 +490,7 @@ pub(crate) async fn write_execution_plan_cdc(
     schema_mode: Option<SchemaMode>,
     writer_stats_config: WriterStatsConfig,
     sender: Option<Sender<RecordBatch>>,
+    arrow_type_size: Option<ArrowTypeSize>,
 ) -> DeltaResult<Vec<Action>> {
     let cdc_store = Arc::new(PrefixStore::new(object_store, "_change_data"));
     Ok(write_execution_plan(
@@ -494,6 +506,7 @@ pub(crate) async fn write_execution_plan_cdc(
         schema_mode,
         writer_stats_config,
         sender,
+        arrow_type_size,
     )
     .await?
     .into_iter()
@@ -531,6 +544,7 @@ pub(crate) async fn write_execution_plan(
     schema_mode: Option<SchemaMode>,
     writer_stats_config: WriterStatsConfig,
     sender: Option<Sender<RecordBatch>>,
+    arrow_type_size: Option<ArrowTypeSize>,
 ) -> DeltaResult<Vec<Action>> {
     write_execution_plan_with_predicate(
         None,
@@ -546,6 +560,7 @@ pub(crate) async fn write_execution_plan(
         schema_mode,
         writer_stats_config,
         sender,
+        arrow_type_size
     )
     .await
 }
@@ -564,7 +579,7 @@ async fn execute_non_empty_expr(
     // For each identified file perform a parquet scan + filter + limit (1) + count.
     // If returned count is not zero then append the file to be rewritten and removed from the log. Otherwise do nothing to the file.
 
-    let input_schema = snapshot.input_schema()?;
+    let input_schema = snapshot.input_schema(None)?;
     let input_dfschema: DFSchema = input_schema.clone().as_ref().clone().try_into()?;
 
     let scan = DeltaScanBuilder::new(snapshot, log_store.clone(), &state)
@@ -594,6 +609,7 @@ async fn execute_non_empty_expr(
         false,
         None,
         writer_stats_config,
+        None,
         None,
     )
     .await?;
@@ -713,9 +729,7 @@ impl std::future::IntoFuture for WriteBuilder {
                     let mut new_schema = None;
                     if let Some(snapshot) = &this.snapshot {
                         let table_schema = snapshot
-                            .physical_arrow_schema(this.log_store.object_store().clone())
-                            .await
-                            .or_else(|_| snapshot.arrow_schema())
+                            .input_schema(this.arrow_type_size)
                             .unwrap_or(schema.clone());
 
                         if let Err(schema_err) =
@@ -884,6 +898,7 @@ impl std::future::IntoFuture for WriteBuilder {
                 this.schema_mode,
                 writer_stats_config.clone(),
                 None,
+                this.arrow_type_size,
             )
             .await?;
             actions.extend(add_actions);

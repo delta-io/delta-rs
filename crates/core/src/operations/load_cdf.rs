@@ -4,6 +4,7 @@ use datafusion_physical_expr::{
     expressions::{self},
     PhysicalExpr,
 };
+use delta_kernel::engine::arrow_conversion::ArrowTypeSize;
 use std::sync::Arc;
 use std::time::SystemTime;
 
@@ -46,6 +47,8 @@ pub struct CdfLoadBuilder {
     ending_timestamp: Option<DateTime<Utc>>,
     /// Provided Datafusion context
     ctx: SessionContext,
+    /// Arrow type size that should be to read parquet data into
+    arrow_type_size: Option<ArrowTypeSize>,
 }
 
 impl CdfLoadBuilder {
@@ -60,6 +63,7 @@ impl CdfLoadBuilder {
             starting_timestamp: None,
             ending_timestamp: None,
             ctx: SessionContext::new(),
+            arrow_type_size: None,
         }
     }
 
@@ -96,6 +100,12 @@ impl CdfLoadBuilder {
     /// Columns to select
     pub fn with_columns(mut self, columns: Vec<String>) -> Self {
         self.columns = Some(columns);
+        self
+    }
+
+    /// Arrow type size that should be to read parquet data into
+    pub fn with_arrow_type_size(mut self, size: ArrowTypeSize) -> Self {
+        self.arrow_type_size = Some(size);
         self
     }
 
@@ -230,10 +240,9 @@ impl CdfLoadBuilder {
         );
 
         let partition_values = self.snapshot.metadata().partition_columns.clone();
-        let schema = self.snapshot.input_schema()?;
-        let schema_fields: Vec<Field> = self
-            .snapshot
-            .input_schema()?
+        let schema = self.snapshot.input_schema(self.arrow_type_size)?;
+        let schema_fields: Vec<Field> = schema
+            .clone()
             .flattened_fields()
             .into_iter()
             .filter(|f| !partition_values.contains(f.name()))

@@ -56,6 +56,7 @@ use datafusion_expr::{
     Aggregate, BinaryExpr, Extension, LogicalPlan, LogicalPlanBuilder, Operator,
     UserDefinedLogicalNode, UNNAMED_TABLE,
 };
+use delta_kernel::engine::arrow_conversion::ArrowTypeSize;
 use either::{Left, Right};
 use futures::future::BoxFuture;
 use itertools::Itertools;
@@ -134,6 +135,8 @@ pub struct MergeBuilder {
     /// safe_cast determines how data types that do not match the underlying table are handled
     /// By default an error is returned
     safe_cast: bool,
+    /// Arrow type size that should be to read parquet data into
+    arrow_type_size: Option<ArrowTypeSize>,
 }
 
 impl super::Operation<()> for MergeBuilder {}
@@ -161,6 +164,7 @@ impl MergeBuilder {
             not_match_operations: Vec::new(),
             not_match_source_operations: Vec::new(),
             safe_cast: false,
+            arrow_type_size: None,
         }
     }
 
@@ -378,6 +382,12 @@ impl MergeBuilder {
     /// Test123     ->      null
     pub fn with_safe_cast(mut self, safe_cast: bool) -> Self {
         self.safe_cast = safe_cast;
+        self
+    }
+
+    /// Arrow type size that should be to read parquet data into
+    pub fn with_arrow_type_size(mut self, size: ArrowTypeSize) -> Self {
+        self.arrow_type_size = Some(size);
         self
     }
 }
@@ -1012,6 +1022,7 @@ async fn execute(
     match_operations: Vec<MergeOperationConfig>,
     not_match_target_operations: Vec<MergeOperationConfig>,
     not_match_source_operations: Vec<MergeOperationConfig>,
+    arrow_type_size: Option<ArrowTypeSize>
 ) -> DeltaResult<(DeltaTableState, MergeMetrics)> {
     let mut metrics = MergeMetrics::default();
     let exec_start = Instant::now();
@@ -1460,6 +1471,7 @@ async fn execute(
         None,
         writer_stats_config,
         None,
+        arrow_type_size,
     )
     .await?;
 
@@ -1608,6 +1620,7 @@ impl std::future::IntoFuture for MergeBuilder {
                 this.match_operations,
                 this.not_match_operations,
                 this.not_match_source_operations,
+                this.arrow_type_size,
             )
             .await?;
 

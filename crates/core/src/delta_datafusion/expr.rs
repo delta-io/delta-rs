@@ -634,7 +634,7 @@ mod test {
                         &table
                             .snapshot()
                             .unwrap()
-                            .input_schema()
+                            .input_schema(None)
                             .unwrap()
                             .as_ref()
                             .to_owned()

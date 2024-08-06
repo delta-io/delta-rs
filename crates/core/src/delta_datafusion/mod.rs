@@ -69,6 +69,8 @@ use datafusion_expr::{col, Expr, Extension, LogicalPlan, TableProviderFilterPush
 use datafusion_proto::logical_plan::LogicalExtensionCodec;
 use datafusion_proto::physical_plan::PhysicalExtensionCodec;
 use datafusion_sql::planner::ParserOptions;
+use delta_kernel::engine::arrow_conversion::ArrowTypeSize;
+use delta_kernel::engine::arrow_conversion::TryFromWithSize;
 use either::Either;
 use futures::TryStreamExt;
 use itertools::Itertools;
@@ -125,8 +127,8 @@ pub trait DataFusionMixins {
     /// The physical datafusion schema of a table
     fn arrow_schema(&self) -> DeltaResult<ArrowSchemaRef>;
 
-    /// Get the table schema as an [`ArrowSchemaRef`]
-    fn input_schema(&self) -> DeltaResult<ArrowSchemaRef>;
+    /// Get the table schema as an [`ArrowSchemaRef`], if type_size is none the default is taken
+    fn input_schema(&self, type_size: Option<ArrowTypeSize>) -> DeltaResult<ArrowSchemaRef>;
 
     /// Parse an expression string into a datafusion [`Expr`]
     fn parse_predicate_expression(
@@ -138,11 +140,12 @@ pub trait DataFusionMixins {
 
 impl DataFusionMixins for Snapshot {
     fn arrow_schema(&self) -> DeltaResult<ArrowSchemaRef> {
-        _arrow_schema(self, true)
+        _arrow_schema(self, true, None)
     }
 
-    fn input_schema(&self) -> DeltaResult<ArrowSchemaRef> {
-        _arrow_schema(self, false)
+    /// If type_size is None, the default is taken
+    fn input_schema(&self, type_size: Option<ArrowTypeSize>) -> DeltaResult<ArrowSchemaRef> {
+        _arrow_schema(self, false, type_size)
     }
 
     fn parse_predicate_expression(
@@ -160,8 +163,9 @@ impl DataFusionMixins for EagerSnapshot {
         self.snapshot().arrow_schema()
     }
 
-    fn input_schema(&self) -> DeltaResult<ArrowSchemaRef> {
-        self.snapshot().input_schema()
+    /// If type_size is None, the default is taken
+    fn input_schema(&self, type_size: Option<ArrowTypeSize>) -> DeltaResult<ArrowSchemaRef> {
+        self.snapshot().input_schema(type_size)
     }
 
     fn parse_predicate_expression(
@@ -178,8 +182,9 @@ impl DataFusionMixins for DeltaTableState {
         self.snapshot.arrow_schema()
     }
 
-    fn input_schema(&self) -> DeltaResult<ArrowSchemaRef> {
-        self.snapshot.input_schema()
+    /// If type_size is None, the default is taken
+    fn input_schema(&self, type_size: Option<ArrowTypeSize>) -> DeltaResult<ArrowSchemaRef> {
+        self.snapshot.input_schema(type_size)
     }
 
     fn parse_predicate_expression(
@@ -191,8 +196,13 @@ impl DataFusionMixins for DeltaTableState {
     }
 }
 
-fn _arrow_schema(snapshot: &Snapshot, wrap_partitions: bool) -> DeltaResult<ArrowSchemaRef> {
+fn _arrow_schema(
+    snapshot: &Snapshot,
+    wrap_partitions: bool,
+    arrow_type_size: Option<ArrowTypeSize>,
+) -> DeltaResult<ArrowSchemaRef> {
     let meta = snapshot.metadata();
+    let size = arrow_type_size.unwrap_or_default();
 
     let schema = meta.schema()?;
     let fields = schema
@@ -204,14 +214,16 @@ fn _arrow_schema(snapshot: &Snapshot, wrap_partitions: bool) -> DeltaResult<Arro
             // partitioning columns is not always the same in the json schema and the array
             meta.partition_columns.iter().map(|partition_col| {
                 let f = schema.field(partition_col).unwrap();
-                let field = Field::try_from(f)?;
+                let field = Field::try_from_with_arrow_size(f, size)?;
                 let corrected = if wrap_partitions {
                     match field.data_type() {
                         // Only dictionary-encode types that may be large
                         // // https://github.com/apache/arrow-datafusion/pull/5545
                         DataType::Utf8
                         | DataType::LargeUtf8
+                        | DataType::Utf8View
                         | DataType::Binary
+                        | DataType::BinaryView
                         | DataType::LargeBinary => {
                             wrap_partition_type_in_dict(field.data_type().clone())
                         }
@@ -395,7 +407,7 @@ impl DeltaScanConfigBuilder {
     /// Build a DeltaScanConfig and ensure no column name conflicts occur during downstream processing
     pub fn build(&self, snapshot: &DeltaTableState) -> DeltaResult<DeltaScanConfig> {
         let file_column_name = if self.include_file_column {
-            let input_schema = snapshot.input_schema()?;
+            let input_schema = snapshot.input_schema(None)?;
             let mut column_names: HashSet<&String> = HashSet::new();
             for field in input_schema.fields.iter() {
                 column_names.insert(field.name());

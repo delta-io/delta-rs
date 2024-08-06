@@ -169,6 +169,7 @@ impl UpdateBuilder {
         self.safe_cast = safe_cast;
         self
     }
+
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -231,7 +232,7 @@ async fn execute(
     let predicate = predicate.unwrap_or(Expr::Literal(ScalarValue::Boolean(Some(true))));
 
     // Create a projection for a new column with the predicate evaluated
-    let input_schema = snapshot.input_schema()?;
+    let input_schema = snapshot.input_schema(None)?;
     let tracker = CDCTracker::new(input_schema.clone());
 
     // For each rewrite evaluate the predicate and then modify each expression
@@ -356,6 +357,7 @@ async fn execute(
         None,
         writer_stats_config,
         Some(tracker.post_sender()),
+        None,
     )
     .await?;
 
