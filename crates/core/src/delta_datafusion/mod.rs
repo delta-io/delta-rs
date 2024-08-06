@@ -2238,6 +2238,61 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn delta_scan_supports_pushdown() {
+        let schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("col_1", DataType::Utf8, false),
+            Field::new("col_2", DataType::Utf8, false),
+        ]));
+
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(arrow::array::StringArray::from(vec![
+                    Some("A"),
+                    Some("B"),
+                    Some("C"),
+                ])),
+                Arc::new(arrow::array::StringArray::from(vec![
+                    Some("A2"),
+                    Some("B2"),
+                    Some("C2"),
+                ])),
+            ],
+        )
+        .unwrap();
+
+        let table = crate::DeltaOps::new_in_memory()
+            .write(vec![batch])
+            .with_save_mode(crate::protocol::SaveMode::Append)
+            .await
+            .unwrap();
+
+        let config = DeltaScanConfigBuilder::new()
+            .build(table.snapshot().unwrap())
+            .unwrap();
+        let log = table.log_store();
+
+        let provider =
+            DeltaTableProvider::try_new(table.snapshot().unwrap().clone(), log, config).unwrap();
+
+        let mut cfg = SessionConfig::default();
+        cfg.options_mut().execution.parquet.pushdown_filters = true;
+        let ctx = SessionContext::new_with_config(cfg);
+        ctx.register_table("test", Arc::new(provider)).unwrap();
+
+        let df = ctx.sql("select col_1, col_2 from test WHERE col_1 = 'A'").await.unwrap();
+        let actual = df.collect().await.unwrap();
+        let expected = vec![
+            "+-------+-------+",
+            "| col_1 | col_2 |",
+            "+-------+-------+",
+            "| A     | A2    |",
+            "+-------+-------+",
+        ];
+        assert_batches_sorted_eq!(&expected, &actual);
+    }
+
+    #[tokio::test]
     async fn delta_scan_supports_nested_missing_columns() {
         let column1_schema1: arrow::datatypes::Fields =
             vec![Field::new("col_1a", DataType::Utf8, true)].into();
