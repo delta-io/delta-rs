@@ -2,7 +2,7 @@
 use std::time::Duration;
 use std::{collections::HashMap, str::FromStr};
 
-use delta_kernel::column_mapping::ColumnMappingMode;
+use delta_kernel::features::ColumnMappingMode;
 use lazy_static::lazy_static;
 use serde::{Deserialize, Serialize};
 
