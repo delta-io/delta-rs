@@ -315,7 +315,7 @@ impl Snapshot {
         let stats_fields = if let Some(stats_cols) = self.table_config().stats_columns() {
             stats_cols
                 .iter()
-                .map(|col| match lookup_stats_field(schema, col) {
+                .map(|col| match schema.field(col) {
                     Some(field) => match field.data_type() {
                         DataType::Map(_) | DataType::Array(_) | &DataType::BINARY => {
                             Err(DeltaTableError::Generic(format!(
@@ -355,24 +355,6 @@ impl Snapshot {
                 true,
             ),
         ]))
-    }
-}
-
-fn lookup_stats_field<'a>(schema: &'a StructType, field_name: &str) -> Option<&'a StructField> {
-    if field_name.starts_with('`') && field_name.ends_with('`') {
-        let field_name = &field_name[1..field_name.len() - 1];
-        schema.field(field_name)
-    } else {
-        match field_name.split_once('.') {
-            Some((parent, children)) => {
-                let parent_field = schema.fields.get(parent)?;
-                match parent_field.data_type() {
-                    DataType::Struct(s) => lookup_stats_field(s.as_ref(), children),
-                    _ => None,
-                }
-            }
-            None => schema.field(field_name),
-        }
     }
 }
 
