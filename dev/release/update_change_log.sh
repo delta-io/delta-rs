@@ -16,8 +16,8 @@
 set -e
 
 LANGUAGE="rust"
-SINCE_VERSION=${SINCE_VERSION:-"0.17.1"}
-FUTURE_RELEASE=${FUTURE_RELEASE:-"0.17.3"}
+SINCE_VERSION=${SINCE_VERSION:-"0.18.1"}
+FUTURE_RELEASE=${FUTURE_RELEASE:-"0.18.3"}
 
 # only consider tags of the correct language
 if [ "$LANGUAGE" == "rust" ]; then
