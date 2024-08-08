@@ -1,3 +1,4 @@
+from enum import Enum
 from typing import Any, Dict, List, Literal, Mapping, Optional, Tuple, Union
 
 import pyarrow
@@ -6,6 +7,34 @@ import pyarrow.fs as fs
 from deltalake.writer import AddAction
 
 __version__: str
+
+class TableFeatures(Enum):
+    # Mapping of one column to another
+    ColumnMapping = "ColumnMapping"
+    # Deletion vectors for merge, update, delete
+    DeletionVectors = "DeletionVectors"
+    # timestamps without timezone support
+    TimestampWithoutTimezone = "TimestampWithoutTimezone"
+    # version 2 of checkpointing
+    V2Checkpoint = "V2Checkpoint"
+    # Append Only Tables
+    AppendOnly = "AppendOnly"
+    # Table invariants
+    Invariants = "Invariants"
+    # Check constraints on columns
+    CheckConstraints = "CheckConstraints"
+    # CDF on a table
+    ChangeDataFeed = "ChangeDataFeed"
+    # Columns with generated values
+    GeneratedColumns = "GeneratedColumns"
+    # ID Columns
+    IdentityColumns = "IdentityColumns"
+    # Row tracking on tables
+    RowTracking = "RowTracking"
+    # domain specific metadata
+    DomainMetadata = "DomainMetadata"
+    # Iceberg compatibility support
+    IcebergCompatV1 = "IcebergCompatV1"
 
 class RawDeltaTableMetaData:
     id: int
@@ -83,6 +112,12 @@ class RawDeltaTable:
         custom_metadata: Optional[Dict[str, str]],
         post_commithook_properties: Optional[Dict[str, Optional[bool]]],
     ) -> str: ...
+    def add_feature(
+        self,
+        feature: TableFeatures,
+        allow_protocol_versions_increase: bool,
+        post_commithook_properties: Optional[Dict[str, Optional[bool]]],
+    ) -> None: ...
     def add_columns(
         self,
         fields: List[Field],
