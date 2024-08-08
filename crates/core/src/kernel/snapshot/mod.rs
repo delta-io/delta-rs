@@ -315,7 +315,7 @@ impl Snapshot {
         let stats_fields = if let Some(stats_cols) = self.table_config().stats_columns() {
             stats_cols
                 .iter()
-                .map(|col| match schema.field(col) {
+                .map(|col| match get_stats_field(schema, col) {
                     Some(field) => match field.data_type() {
                         DataType::Map(_) | DataType::Array(_) | &DataType::BINARY => {
                             Err(DeltaTableError::Generic(format!(
@@ -738,6 +738,36 @@ mod datafusion {
     }
 }
 
+/// Checks if provided string is enclosed in char_to_remove and extracts the enclosed string.
+/// If the string is not enclosed, it returns the original string.
+fn extract_enclosed_string(string_to_extract: &str, enclosing_char: char) -> &str {
+    if string_to_extract.len() > 1
+        && string_to_extract.starts_with(enclosing_char)
+        && string_to_extract.ends_with(enclosing_char)
+    {
+        &string_to_extract[1..string_to_extract.len() - 1]
+    } else {
+        string_to_extract
+    }
+}
+
+/// Retrieves a specific field from the schema based on the provided field name.
+/// It handles cases where the field name is nested or enclosed in backticks.
+fn get_stats_field<'a>(schema: &'a StructType, stats_field_name: &str) -> Option<&'a StructField> {
+    match stats_field_name.split_once('.') {
+        Some((parent, children)) => {
+            let parent_field = schema.fields.get(extract_enclosed_string(parent, '`'))?;
+            match parent_field.data_type() {
+                DataType::Struct(inner) => get_stats_field(inner.as_ref(), children),
+                _ => None,
+            }
+        }
+        None => schema
+            .fields
+            .get(extract_enclosed_string(stats_field_name, '`')),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
@@ -955,5 +985,61 @@ mod tests {
             .all(|(_, add)| { new_files.contains(&add.path) }));
 
         Ok(())
+    }
+
+    #[test]
+    fn test_field_with_name() {
+        let schema = StructType::new(vec![
+            StructField::new("a", DataType::STRING, true),
+            StructField::new("b", DataType::INTEGER, true),
+        ]);
+        let field = get_stats_field(&schema, "b").unwrap();
+        assert_eq!(*field, StructField::new("b", DataType::INTEGER, true));
+    }
+
+    #[test]
+    fn test_field_with_name_nested() {
+        let nested = StructType::new(vec![StructField::new(
+            "nested_struct",
+            DataType::BOOLEAN,
+            true,
+        )]);
+        let schema = StructType::new(vec![
+            StructField::new("a", DataType::STRING, true),
+            StructField::new("b", DataType::Struct(Box::new(nested)), true),
+        ]);
+
+        let field = get_stats_field(&schema, "b.nested_struct").unwrap();
+
+        assert_eq!(
+            *field,
+            StructField::new("nested_struct", DataType::BOOLEAN, true)
+        );
+    }
+
+    #[test]
+    fn test_field_with_last_name_nested_backticks() {
+        let nested = StructType::new(vec![StructField::new("pr!me", DataType::BOOLEAN, true)]);
+        let schema = StructType::new(vec![
+            StructField::new("a", DataType::STRING, true),
+            StructField::new("b", DataType::Struct(Box::new(nested)), true),
+        ]);
+
+        let field = get_stats_field(&schema, "b.`pr!me`").unwrap();
+
+        assert_eq!(*field, StructField::new("pr!me", DataType::BOOLEAN, true));
+    }
+
+    #[test]
+    fn test_field_with_name_nested_backticks() {
+        let nested = StructType::new(vec![StructField::new("pr", DataType::BOOLEAN, true)]);
+        let schema = StructType::new(vec![
+            StructField::new("a", DataType::STRING, true),
+            StructField::new("b&b", DataType::Struct(Box::new(nested)), true),
+        ]);
+
+        let field = get_stats_field(&schema, "`b&b`.pr").unwrap();
+
+        assert_eq!(*field, StructField::new("pr", DataType::BOOLEAN, true));
     }
 }
