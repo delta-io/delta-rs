@@ -31,7 +31,7 @@ jobs:
         run: make check-rust
 
   test-minimal:
-    name: Python Build (Python 3.8 PyArrow 8.0.0)
+    name: Python Build (Python 3.8 PyArrow latest)
     runs-on: ubuntu-latest
     env:
       RUSTFLAGS: "-C debuginfo=line-tables-only"
@@ -49,9 +49,7 @@ jobs:
         run: |
           python -m venv venv
           source venv/bin/activate
-          make setup
-          # Install minimum PyArrow version
-          pip install -e .[pandas,devel] pyarrow==8.0.0
+          make develop
         env:
           RUSTFLAGS: "-C debuginfo=line-tables-only"
 
@@ -59,10 +57,6 @@ jobs:
         run: |
           source venv/bin/activate
           make unit-test
-
-    # - name: Run Integration tests
-    #   run: |
-    #     py.test --cov tests -m integration
 
   test:
     name: Python Build (Python 3.10 PyArrow latest)
