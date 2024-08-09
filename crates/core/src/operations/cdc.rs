@@ -5,12 +5,8 @@
 use crate::table::state::DeltaTableState;
 use crate::DeltaResult;
 
-use arrow::datatypes::{DataType, Field, SchemaRef};
-
 use datafusion::prelude::*;
 use datafusion_common::ScalarValue;
-use std::sync::Arc;
-use tracing::log::*;
 
 /// The CDCTracker is useful for hooking reads/writes in a manner nececessary to create CDC files
 /// associated with commits
@@ -84,6 +80,8 @@ pub(crate) fn should_write_cdc(snapshot: &DeltaTableState) -> DeltaResult<bool> 
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use super::*;
     use crate::kernel::DataType as DeltaDataType;
     use crate::kernel::{Action, PrimitiveType, Protocol};
@@ -91,7 +89,7 @@ mod tests {
     use crate::{DeltaConfigKey, DeltaTable};
     use arrow::array::{ArrayRef, Int32Array, StructArray};
     use arrow_array::RecordBatch;
-    use arrow_schema::Schema;
+    use arrow_schema::{DataType, Field, Schema};
     use datafusion::assert_batches_sorted_eq;
     use datafusion::datasource::{MemTable, TableProvider};
 
