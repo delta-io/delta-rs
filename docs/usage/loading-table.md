@@ -143,4 +143,4 @@ version number or datetime string:
 
     Previous table versions may not exist if they have been vacuumed, in
     which case an exception will be thrown. See [Vacuuming
-    tables](#vacuuming-tables) for more information.
+    tables](managing-tables.md#vacuuming-tables) for more information.
