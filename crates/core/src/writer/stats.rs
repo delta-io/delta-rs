@@ -1,8 +1,11 @@
-use std::collections::BTreeMap;
+use std::cmp::min;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use std::{collections::HashMap, ops::AddAssign};
 
+use delta_kernel::expressions::Scalar;
+use indexmap::IndexMap;
+use parquet::file::metadata::ParquetMetaData;
 use parquet::format::FileMetaData;
 use parquet::schema::types::{ColumnDescriptor, SchemaDescriptor};
 use parquet::{basic::LogicalType, errors::ParquetError};
@@ -12,17 +15,24 @@ use parquet::{
 };
 
 use super::*;
-use crate::kernel::{Add, Scalar};
+use crate::kernel::{scalars::ScalarExt, Add};
 use crate::protocol::{ColumnValueStat, Stats};
 
 /// Creates an [`Add`] log action struct.
 pub fn create_add(
-    partition_values: &BTreeMap<String, Scalar>,
+    partition_values: &IndexMap<String, Scalar>,
     path: String,
     size: i64,
     file_metadata: &FileMetaData,
+    num_indexed_cols: i32,
+    stats_columns: &Option<Vec<String>>,
 ) -> Result<Add, DeltaTableError> {
-    let stats = stats_from_file_metadata(partition_values, file_metadata)?;
+    let stats = stats_from_file_metadata(
+        partition_values,
+        file_metadata,
+        num_indexed_cols,
+        stats_columns,
+    )?;
     let stats_string = serde_json::to_string(&stats)?;
 
     // Determine the modification timestamp to include in the add action - milliseconds since epoch
@@ -58,26 +68,94 @@ pub fn create_add(
     })
 }
 
+// As opposed to `stats_from_file_metadata` which operates on `parquet::format::FileMetaData`,
+// this function produces the stats by reading the metadata from already written out files.
+//
+// Note that the file metadata used here is actually `parquet::file::metadata::FileMetaData`
+// which is a thrift decoding of the `parquet::format::FileMetaData` which is typically obtained
+// when flushing the write.
+pub(crate) fn stats_from_parquet_metadata(
+    partition_values: &IndexMap<String, Scalar>,
+    parquet_metadata: &ParquetMetaData,
+    num_indexed_cols: i32,
+    stats_columns: &Option<Vec<String>>,
+) -> Result<Stats, DeltaWriterError> {
+    let num_rows = parquet_metadata.file_metadata().num_rows();
+    let schema_descriptor = parquet_metadata.file_metadata().schema_descr_ptr();
+    let row_group_metadata = parquet_metadata.row_groups().to_vec();
+
+    stats_from_metadata(
+        partition_values,
+        schema_descriptor,
+        row_group_metadata,
+        num_rows,
+        num_indexed_cols,
+        stats_columns,
+    )
+}
+
 fn stats_from_file_metadata(
-    partition_values: &BTreeMap<String, Scalar>,
+    partition_values: &IndexMap<String, Scalar>,
     file_metadata: &FileMetaData,
+    num_indexed_cols: i32,
+    stats_columns: &Option<Vec<String>>,
 ) -> Result<Stats, DeltaWriterError> {
     let type_ptr = parquet::schema::types::from_thrift(file_metadata.schema.as_slice());
     let schema_descriptor = type_ptr.map(|type_| Arc::new(SchemaDescriptor::new(type_)))?;
 
+    let row_group_metadata: Vec<RowGroupMetaData> = file_metadata
+        .row_groups
+        .iter()
+        .map(|rg| RowGroupMetaData::from_thrift(schema_descriptor.clone(), rg.clone()))
+        .collect::<Result<Vec<RowGroupMetaData>, ParquetError>>()?;
+
+    stats_from_metadata(
+        partition_values,
+        schema_descriptor,
+        row_group_metadata,
+        file_metadata.num_rows,
+        num_indexed_cols,
+        stats_columns,
+    )
+}
+
+fn stats_from_metadata(
+    partition_values: &IndexMap<String, Scalar>,
+    schema_descriptor: Arc<SchemaDescriptor>,
+    row_group_metadata: Vec<RowGroupMetaData>,
+    num_rows: i64,
+    num_indexed_cols: i32,
+    stats_columns: &Option<Vec<String>>,
+) -> Result<Stats, DeltaWriterError> {
     let mut min_values: HashMap<String, ColumnValueStat> = HashMap::new();
     let mut max_values: HashMap<String, ColumnValueStat> = HashMap::new();
     let mut null_count: HashMap<String, ColumnCountStat> = HashMap::new();
 
-    let row_group_metadata: Result<Vec<RowGroupMetaData>, ParquetError> = file_metadata
-        .row_groups
-        .iter()
-        .map(|rg| RowGroupMetaData::from_thrift(schema_descriptor.clone(), rg.clone()))
-        .collect();
-    let row_group_metadata = row_group_metadata?;
+    let idx_to_iterate = if let Some(stats_cols) = stats_columns {
+        schema_descriptor
+            .columns()
+            .iter()
+            .enumerate()
+            .filter_map(|(index, col)| {
+                if stats_cols.contains(&col.name().to_string()) {
+                    Some(index)
+                } else {
+                    None
+                }
+            })
+            .collect()
+    } else if num_indexed_cols == -1 {
+        (0..schema_descriptor.num_columns()).collect::<Vec<_>>()
+    } else if num_indexed_cols >= 0 {
+        (0..min(num_indexed_cols as usize, schema_descriptor.num_columns())).collect::<Vec<_>>()
+    } else {
+        return Err(DeltaWriterError::DeltaTable(DeltaTableError::Generic(
+            "delta.dataSkippingNumIndexedCols valid values are >=-1".to_string(),
+        )));
+    };
 
-    for i in 0..schema_descriptor.num_columns() {
-        let column_descr = schema_descriptor.column(i);
+    for idx in idx_to_iterate {
+        let column_descr = schema_descriptor.column(idx);
 
         let column_path = column_descr.path();
         let column_path_parts = column_path.parts();
@@ -90,7 +168,7 @@ fn stats_from_file_metadata(
         let maybe_stats: Option<AggregatedStats> = row_group_metadata
             .iter()
             .map(|g| {
-                g.column(i)
+                g.column(idx)
                     .statistics()
                     .map(|s| AggregatedStats::from((s, &column_descr.logical_type())))
             })
@@ -118,7 +196,7 @@ fn stats_from_file_metadata(
     Ok(Stats {
         min_values,
         max_values,
-        num_records: file_metadata.num_rows,
+        num_records: num_rows,
         null_count,
     })
 }
@@ -180,19 +258,19 @@ impl StatsScalar {
                 // https://github.com/delta-io/delta/blob/master/PROTOCOL.md#timestamp-without-timezone-timestampntz
                 let v = get_stat!(v);
                 let timestamp = match unit {
-                    TimeUnit::MILLIS(_) => chrono::NaiveDateTime::from_timestamp_millis(v),
-                    TimeUnit::MICROS(_) => chrono::NaiveDateTime::from_timestamp_micros(v),
+                    TimeUnit::MILLIS(_) => chrono::DateTime::from_timestamp_millis(v),
+                    TimeUnit::MICROS(_) => chrono::DateTime::from_timestamp_micros(v),
                     TimeUnit::NANOS(_) => {
                         let secs = v / 1_000_000_000;
                         let nanosecs = (v % 1_000_000_000) as u32;
-                        chrono::NaiveDateTime::from_timestamp_opt(secs, nanosecs)
+                        chrono::DateTime::from_timestamp(secs, nanosecs)
                     }
                 };
                 let timestamp = timestamp.ok_or(DeltaWriterError::StatsParsingFailed {
                     debug_value: v.to_string(),
                     logical_type: logical_type.clone(),
                 })?;
-                Ok(Self::Timestamp(timestamp))
+                Ok(Self::Timestamp(timestamp.naive_utc()))
             }
             (Statistics::Int64(v), Some(LogicalType::Decimal { scale, .. })) => {
                 let val = get_stat!(v) as f64 / 10.0_f64.powi(*scale);
@@ -231,18 +309,8 @@ impl StatsScalar {
                     v.max_bytes()
                 };
 
-                let val = if val.len() <= 4 {
-                    let mut bytes = [0; 4];
-                    bytes[..val.len()].copy_from_slice(val);
-                    i32::from_be_bytes(bytes) as f64
-                } else if val.len() <= 8 {
-                    let mut bytes = [0; 8];
-                    bytes[..val.len()].copy_from_slice(val);
-                    i64::from_be_bytes(bytes) as f64
-                } else if val.len() <= 16 {
-                    let mut bytes = [0; 16];
-                    bytes[..val.len()].copy_from_slice(val);
-                    i128::from_be_bytes(bytes) as f64
+                let val = if val.len() <= 16 {
+                    i128::from_be_bytes(sign_extend_be(val)) as f64
                 } else {
                     return Err(DeltaWriterError::StatsParsingFailed {
                         debug_value: format!("{val:?}"),
@@ -282,6 +350,19 @@ impl StatsScalar {
             }),
         }
     }
+}
+
+/// Performs big endian sign extension
+/// Copied from arrow-rs repo/parquet crate:
+/// https://github.com/apache/arrow-rs/blob/b25c441745602c9967b1e3cc4a28bc469cfb1311/parquet/src/arrow/buffer/bit_util.rs#L54
+pub fn sign_extend_be<const N: usize>(b: &[u8]) -> [u8; N] {
+    assert!(b.len() <= N, "Array too large, expected less than {N}");
+    let is_negative = (b[0] & 128u8) == 128u8;
+    let mut result = if is_negative { [255u8; N] } else { [0u8; N] };
+    for (d, s) in result.iter_mut().skip(N - b.len()).zip(b) {
+        *d = *s;
+    }
+    result
 }
 
 impl From<StatsScalar> for serde_json::Value {
@@ -625,6 +706,17 @@ mod tests {
             (
                 simple_parquet_stat!(
                     Statistics::FixedLenByteArray,
+                    FixedLenByteArray::from(vec![0, 39, 16])
+                ),
+                Some(LogicalType::Decimal {
+                    scale: 3,
+                    precision: 5,
+                }),
+                Value::from(10.0),
+            ),
+            (
+                simple_parquet_stat!(
+                    Statistics::FixedLenByteArray,
                     FixedLenByteArray::from(
                         [
                             0xc2, 0xe8, 0xc7, 0xf7, 0xd1, 0xf9, 0x4b, 0x49, 0xa5, 0xd9, 0x4b, 0xfe,
@@ -645,7 +737,6 @@ mod tests {
         }
     }
 
-    #[ignore]
     #[tokio::test]
     async fn test_delta_stats() {
         let temp_dir = tempfile::tempdir().unwrap();

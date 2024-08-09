@@ -1,6 +1,6 @@
 //! The module for delta table state.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use chrono::Utc;
@@ -8,22 +8,21 @@ use futures::TryStreamExt;
 use object_store::{path::Path, ObjectStore};
 use serde::{Deserialize, Serialize};
 
-use super::config::TableConfig;
-use super::{get_partition_col_data_types, DeltaTableConfig};
+use super::{config::TableConfig, get_partition_col_data_types, DeltaTableConfig};
+#[cfg(test)]
+use crate::kernel::Action;
 use crate::kernel::{
-    Action, Add, DataType, EagerSnapshot, LogDataHandler, LogicalFile, Metadata, Protocol, Remove,
-    StructType,
+    ActionType, Add, AddCDCFile, DataType, EagerSnapshot, LogDataHandler, LogicalFile, Metadata,
+    Protocol, Remove, StructType, Transaction,
 };
 use crate::logstore::LogStore;
 use crate::partitions::{DeltaTablePartition, PartitionFilter};
-use crate::protocol::DeltaOperation;
 use crate::{DeltaResult, DeltaTableError};
 
 /// State snapshot currently held by the Delta Table instance.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DeltaTableState {
-    app_transaction_version: HashMap<String, i64>,
     pub(crate) snapshot: EagerSnapshot,
 }
 
@@ -35,11 +34,15 @@ impl DeltaTableState {
         config: DeltaTableConfig,
         version: Option<i64>,
     ) -> DeltaResult<Self> {
-        let snapshot = EagerSnapshot::try_new(table_root, store.clone(), config, version).await?;
-        Ok(Self {
-            snapshot,
-            app_transaction_version: HashMap::new(),
-        })
+        let snapshot = EagerSnapshot::try_new_with_visitor(
+            table_root,
+            store.clone(),
+            config,
+            version,
+            HashSet::from([ActionType::Txn]),
+        )
+        .await?;
+        Ok(Self { snapshot })
     }
 
     /// Return table version
@@ -57,7 +60,9 @@ impl DeltaTableState {
     /// Construct a delta table state object from a list of actions
     #[cfg(test)]
     pub fn from_actions(actions: Vec<Action>) -> DeltaResult<Self> {
-        use crate::protocol::SaveMode;
+        use crate::operations::transaction::CommitData;
+        use crate::protocol::{DeltaOperation, SaveMode};
+
         let metadata = actions
             .iter()
             .find_map(|a| match a {
@@ -73,7 +78,7 @@ impl DeltaTableState {
             })
             .ok_or(DeltaTableError::NotInitialized)?;
 
-        let commit_data = [(
+        let commit_data = [CommitData::new(
             actions,
             DeltaOperation::Create {
                 mode: SaveMode::Append,
@@ -81,13 +86,12 @@ impl DeltaTableState {
                 protocol: protocol.clone(),
                 metadata: metadata.clone(),
             },
-            None,
+            HashMap::new(),
+            Vec::new(),
         )];
+
         let snapshot = EagerSnapshot::new_test(&commit_data).unwrap();
-        Ok(Self {
-            app_transaction_version: Default::default(),
-            snapshot,
-        })
+        Ok(Self { snapshot })
     }
 
     /// Returns a semantic accessor to the currently loaded log data.
@@ -133,9 +137,20 @@ impl DeltaTableState {
         Ok(self.snapshot.file_actions()?.collect())
     }
 
+    /// Full list of add actions representing all parquet files that are part of the current
+    /// delta table state.
+    pub fn file_actions_iter(&self) -> DeltaResult<impl Iterator<Item = Add> + '_> {
+        self.snapshot.file_actions()
+    }
+
     /// Get the number of files in the current table state
     pub fn files_count(&self) -> usize {
         self.snapshot.files_count()
+    }
+
+    /// Full list of all of the CDC files added as part of the changeDataFeed feature
+    pub fn cdc_files(&self) -> DeltaResult<impl Iterator<Item = AddCDCFile> + '_> {
+        self.snapshot.cdc_files()
     }
 
     /// Returns an iterator of file names present in the loaded state
@@ -146,10 +161,9 @@ impl DeltaTableState {
             .map(|add| add.object_store_path())
     }
 
-    /// HashMap containing the last txn version stored for every app id writing txn
-    /// actions.
-    pub fn app_transaction_version(&self) -> &HashMap<String, i64> {
-        &self.app_transaction_version
+    /// HashMap containing the last transaction stored for every application.
+    pub fn app_transaction_version(&self) -> DeltaResult<impl Iterator<Item = Transaction> + '_> {
+        self.snapshot.transactions()
     }
 
     /// The most recent protocol of the table.
@@ -172,26 +186,9 @@ impl DeltaTableState {
         self.snapshot.table_config()
     }
 
-    /// Merges new state information into our state
-    ///
-    /// The DeltaTableState also carries the version information for the given state,
-    /// as there is a one-to-one match between a table state and a version. In merge/update
-    /// scenarios we cannot infer the intended / correct version number. By default this
-    /// function will update the tracked version if the version on `new_state` is larger then the
-    /// currently set version however it is up to the caller to update the `version` field according
-    /// to the version the merged state represents.
-    pub(crate) fn merge(
-        &mut self,
-        actions: Vec<Action>,
-        operation: &DeltaOperation,
-        version: i64,
-    ) -> Result<(), DeltaTableError> {
-        let commit_infos = vec![(actions, operation.clone(), None)];
-        let new_version = self.snapshot.advance(&commit_infos)?;
-        if new_version != version {
-            return Err(DeltaTableError::Generic("Version mismatch".to_string()));
-        }
-        Ok(())
+    /// Obtain the Eager snapshot of the state
+    pub fn snapshot(&self) -> &EagerSnapshot {
+        &self.snapshot
     }
 
     /// Update the state of the table to the given version.

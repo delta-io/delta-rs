@@ -20,29 +20,33 @@
 //! let (table, metrics) = OptimizeBuilder::new(table.object_store(), table.state).await?;
 //! ````
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
+use std::fmt;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use arrow::datatypes::SchemaRef as ArrowSchemaRef;
 use arrow_array::RecordBatch;
+use delta_kernel::expressions::Scalar;
 use futures::future::BoxFuture;
 use futures::stream::BoxStream;
 use futures::{Future, StreamExt, TryStreamExt};
+use indexmap::IndexMap;
 use itertools::Itertools;
 use num_cpus;
 use parquet::arrow::async_reader::{ParquetObjectReader, ParquetRecordBatchStreamBuilder};
 use parquet::basic::{Compression, ZstdLevel};
 use parquet::errors::ParquetError;
 use parquet::file::properties::WriterProperties;
-use serde::{Deserialize, Serialize};
+use serde::{de::Error as DeError, Deserialize, Deserializer, Serialize, Serializer};
 use tracing::debug;
 
-use super::transaction::{commit, PROTOCOL};
+use super::transaction::PROTOCOL;
 use super::writer::{PartitionWriter, PartitionWriterConfig};
 use crate::errors::{DeltaResult, DeltaTableError};
-use crate::kernel::{Action, PartitionsExt, Remove, Scalar};
+use crate::kernel::{scalars::ScalarExt, Action, PartitionsExt, Remove};
 use crate::logstore::LogStoreRef;
+use crate::operations::transaction::{CommitBuilder, CommitProperties, DEFAULT_RETRIES};
 use crate::protocol::DeltaOperation;
 use crate::storage::ObjectStoreRef;
 use crate::table::state::DeltaTableState;
@@ -58,8 +62,16 @@ pub struct Metrics {
     /// Number of unoptimized files removed
     pub num_files_removed: u64,
     /// Detailed metrics for the add operation
+    #[serde(
+        serialize_with = "serialize_metric_details",
+        deserialize_with = "deserialize_metric_details"
+    )]
     pub files_added: MetricDetails,
     /// Detailed metrics for the remove operation
+    #[serde(
+        serialize_with = "serialize_metric_details",
+        deserialize_with = "deserialize_metric_details"
+    )]
     pub files_removed: MetricDetails,
     /// Number of partitions that had at least one file optimized
     pub partitions_optimized: u64,
@@ -73,17 +85,34 @@ pub struct Metrics {
     pub preserve_insertion_order: bool,
 }
 
+// Custom serialization function that serializes metric details as a string
+fn serialize_metric_details<S>(value: &MetricDetails, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    serializer.serialize_str(&value.to_string())
+}
+
+// Custom deserialization that parses a JSON string into MetricDetails
+fn deserialize_metric_details<'de, D>(deserializer: D) -> Result<MetricDetails, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let s: String = Deserialize::deserialize(deserializer)?;
+    serde_json::from_str(&s).map_err(DeError::custom)
+}
+
 /// Statistics on files for a particular operation
 /// Operation can be remove or add
 #[derive(Debug, PartialEq, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MetricDetails {
-    /// Minimum file size of a operation
-    pub min: i64,
-    /// Maximum file size of a operation
-    pub max: i64,
     /// Average file size of a operation
     pub avg: f64,
+    /// Maximum file size of a operation
+    pub max: i64,
+    /// Minimum file size of a operation
+    pub min: i64,
     /// Number of files encountered during operation
     pub total_files: usize,
     /// Sum of file sizes of a operation
@@ -98,6 +127,13 @@ impl MetricDetails {
         self.total_files += partial.total_files;
         self.total_size += partial.total_size;
         self.avg = self.total_size as f64 / self.total_files as f64;
+    }
+}
+
+impl fmt::Display for MetricDetails {
+    /// Display the metric details using serde serialization
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        serde_json::to_string(self).map_err(|_| fmt::Error)?.fmt(f)
     }
 }
 
@@ -163,8 +199,8 @@ pub struct OptimizeBuilder<'a> {
     target_size: Option<i64>,
     /// Properties passed to underlying parquet writer
     writer_properties: Option<WriterProperties>,
-    /// Additional metadata to be added to commit
-    app_metadata: Option<HashMap<String, serde_json::Value>>,
+    /// Commit properties and configuration
+    commit_properties: CommitProperties,
     /// Whether to preserve insertion order within files (default false)
     preserve_insertion_order: bool,
     /// Max number of concurrent tasks (default is number of cpus)
@@ -176,6 +212,8 @@ pub struct OptimizeBuilder<'a> {
     min_commit_interval: Option<Duration>,
 }
 
+impl super::Operation<()> for OptimizeBuilder<'_> {}
+
 impl<'a> OptimizeBuilder<'a> {
     /// Create a new [`OptimizeBuilder`]
     pub fn new(log_store: LogStoreRef, snapshot: DeltaTableState) -> Self {
@@ -185,7 +223,7 @@ impl<'a> OptimizeBuilder<'a> {
             filters: &[],
             target_size: None,
             writer_properties: None,
-            app_metadata: None,
+            commit_properties: CommitProperties::default(),
             preserve_insertion_order: false,
             max_concurrent_tasks: num_cpus::get(),
             max_spill_size: 20 * 1024 * 1024 * 2014, // 20 GB.
@@ -218,12 +256,9 @@ impl<'a> OptimizeBuilder<'a> {
         self
     }
 
-    /// Additional metadata to be added to commit info
-    pub fn with_metadata(
-        mut self,
-        metadata: impl IntoIterator<Item = (String, serde_json::Value)>,
-    ) -> Self {
-        self.app_metadata = Some(HashMap::from_iter(metadata));
+    /// Additonal information to write to the commit
+    pub fn with_commit_properties(mut self, commit_properties: CommitProperties) -> Self {
+        self.commit_properties = commit_properties;
         self
     }
 
@@ -260,7 +295,7 @@ impl<'a> std::future::IntoFuture for OptimizeBuilder<'a> {
         let this = self;
 
         Box::pin(async move {
-            PROTOCOL.can_write_to(&this.snapshot)?;
+            PROTOCOL.can_write_to(&this.snapshot.snapshot)?;
 
             let writer_properties = this.writer_properties.unwrap_or_else(|| {
                 WriterProperties::builder()
@@ -282,7 +317,7 @@ impl<'a> std::future::IntoFuture for OptimizeBuilder<'a> {
                     this.max_concurrent_tasks,
                     this.max_spill_size,
                     this.min_commit_interval,
-                    this.app_metadata,
+                    this.commit_properties,
                 )
                 .await?;
             let mut table = DeltaTable::new_with_state(this.log_store, this.snapshot);
@@ -295,20 +330,21 @@ impl<'a> std::future::IntoFuture for OptimizeBuilder<'a> {
 #[derive(Debug, Clone)]
 struct OptimizeInput {
     target_size: i64,
+    predicate: Option<String>,
 }
 
 impl From<OptimizeInput> for DeltaOperation {
     fn from(opt_input: OptimizeInput) -> Self {
         DeltaOperation::Optimize {
             target_size: opt_input.target_size,
-            predicate: None,
+            predicate: opt_input.predicate,
         }
     }
 }
 
 fn create_remove(
     path: &str,
-    partitions: &BTreeMap<String, Scalar>,
+    partitions: &IndexMap<String, Scalar>,
     size: i64,
 ) -> Result<Action, DeltaTableError> {
     // NOTE unwrap is safe since UNIX_EPOCH will always be earlier then now.
@@ -353,11 +389,11 @@ enum OptimizeOperations {
     ///
     /// Bins are determined by the bin-packing algorithm to reach an optimal size.
     /// Files that are large enough already are skipped. Bins of size 1 are dropped.
-    Compact(HashMap<String, (BTreeMap<String, Scalar>, Vec<MergeBin>)>),
+    Compact(HashMap<String, (IndexMap<String, Scalar>, Vec<MergeBin>)>),
     /// Plan to Z-order each partition
     ZOrder(
         Vec<String>,
-        HashMap<String, (BTreeMap<String, Scalar>, MergeBin)>,
+        HashMap<String, (IndexMap<String, Scalar>, MergeBin)>,
     ),
     // TODO: Sort
 }
@@ -389,6 +425,10 @@ pub struct MergeTaskParameters {
     file_schema: ArrowSchemaRef,
     /// Properties passed to parquet writer
     writer_properties: WriterProperties,
+    /// Num index cols to collect stats for
+    num_indexed_cols: i32,
+    /// Stats columns, specific columns to collect stats from, takes precedence over num_indexed_cols
+    stats_columns: Option<Vec<String>>,
 }
 
 /// A stream of record batches, with a ParquetError on failure.
@@ -401,7 +441,7 @@ impl MergePlan {
     /// collected during the operation.
     async fn rewrite_files<F>(
         task_parameters: Arc<MergeTaskParameters>,
-        partition_values: BTreeMap<String, Scalar>,
+        partition_values: IndexMap<String, Scalar>,
         files: MergeBin,
         object_store: ObjectStoreRef,
         read_stream: F,
@@ -448,15 +488,24 @@ impl MergePlan {
             Some(task_parameters.input_parameters.target_size as usize),
             None,
         )?;
-        let mut writer = PartitionWriter::try_with_config(object_store, writer_config)?;
+        let mut writer = PartitionWriter::try_with_config(
+            object_store,
+            writer_config,
+            task_parameters.num_indexed_cols,
+            task_parameters.stats_columns.clone(),
+        )?;
 
         let mut read_stream = read_stream.await?;
 
         while let Some(maybe_batch) = read_stream.next().await {
             let mut batch = maybe_batch?;
 
-            batch =
-                super::cast::cast_record_batch(&batch, task_parameters.file_schema.clone(), false)?;
+            batch = super::cast::cast_record_batch(
+                &batch,
+                task_parameters.file_schema.clone(),
+                false,
+                true,
+            )?;
             partial_metrics.num_batches += 1;
             writer.write(&batch).await.map_err(DeltaTableError::from)?;
         }
@@ -606,7 +655,7 @@ impl MergePlan {
         #[allow(unused_variables)] // used behind a feature flag
         max_spill_size: usize,
         min_commit_interval: Option<Duration>,
-        app_metadata: Option<HashMap<String, serde_json::Value>>,
+        commit_properties: CommitProperties,
     ) -> Result<Metrics, DeltaTableError> {
         let operations = std::mem::take(&mut self.operations);
 
@@ -698,6 +747,7 @@ impl MergePlan {
         let mut total_metrics = orig_metrics.clone();
 
         let mut last_commit = Instant::now();
+        let mut commits_made = 0;
         loop {
             let next = stream.next().await.transpose()?;
 
@@ -720,31 +770,34 @@ impl MergePlan {
                 last_commit = now;
 
                 buffered_metrics.preserve_insertion_order = true;
-                let mut app_metadata = match app_metadata.clone() {
-                    Some(meta) => meta,
-                    None => HashMap::new(),
-                };
-                app_metadata.insert("readVersion".to_owned(), self.read_table_version.into());
+                let mut properties = CommitProperties::default();
+                properties.app_metadata = commit_properties.app_metadata.clone();
+                properties
+                    .app_metadata
+                    .insert("readVersion".to_owned(), self.read_table_version.into());
                 let maybe_map_metrics = serde_json::to_value(std::mem::replace(
                     &mut buffered_metrics,
                     orig_metrics.clone(),
                 ));
                 if let Ok(map) = maybe_map_metrics {
-                    app_metadata.insert("operationMetrics".to_owned(), map);
+                    properties
+                        .app_metadata
+                        .insert("operationMetrics".to_owned(), map);
                 }
 
-                table.update().await?;
                 debug!("committing {} actions", actions.len());
-                //// TODO: Check for remove actions on optimized partitions. If a
-                //// optimized partition was updated then abort the commit. Requires (#593).
-                commit(
-                    table.log_store.as_ref(),
-                    &actions,
-                    self.task_parameters.input_parameters.clone().into(),
-                    Some(table.snapshot()?),
-                    Some(app_metadata.clone()),
-                )
-                .await?;
+
+                CommitBuilder::from(properties)
+                    .with_actions(actions)
+                    .with_max_retries(DEFAULT_RETRIES + commits_made)
+                    .build(
+                        Some(snapshot),
+                        log_store.clone(),
+                        self.task_parameters.input_parameters.clone().into(),
+                    )
+                    .await?;
+
+                commits_made += 1;
             }
 
             if end {
@@ -759,6 +812,8 @@ impl MergePlan {
         if total_metrics.num_files_removed == 0 {
             total_metrics.files_removed.min = 0;
         }
+
+        table.update().await?;
 
         Ok(total_metrics)
     }
@@ -782,7 +837,10 @@ pub fn create_merge_plan(
         }
     };
 
-    let input_parameters = OptimizeInput { target_size };
+    let input_parameters = OptimizeInput {
+        target_size,
+        predicate: serde_json::to_string(filters).ok(),
+    };
     let file_schema =
         arrow_schema_without_partitions(&Arc::new(snapshot.schema().try_into()?), partitions_keys);
 
@@ -793,6 +851,11 @@ pub fn create_merge_plan(
             input_parameters,
             file_schema,
             writer_properties,
+            num_indexed_cols: snapshot.table_config().num_indexed_cols(),
+            stats_columns: snapshot
+                .table_config()
+                .stats_columns()
+                .map(|v| v.iter().map(|v| v.to_string()).collect::<Vec<String>>()),
         }),
         read_table_version: snapshot.version(),
     })
@@ -849,7 +912,7 @@ fn build_compaction_plan(
 ) -> Result<(OptimizeOperations, Metrics), DeltaTableError> {
     let mut metrics = Metrics::default();
 
-    let mut partition_files: HashMap<String, (BTreeMap<String, Scalar>, Vec<ObjectMeta>)> =
+    let mut partition_files: HashMap<String, (IndexMap<String, Scalar>, Vec<ObjectMeta>)> =
         HashMap::new();
     for add in snapshot.get_active_add_actions_by_partitions(filters)? {
         let add = add?;
@@ -863,7 +926,7 @@ fn build_compaction_plan(
             .partition_values()?
             .into_iter()
             .map(|(k, v)| (k.to_string(), v))
-            .collect::<BTreeMap<_, _>>();
+            .collect::<IndexMap<_, _>>();
 
         partition_files
             .entry(add.partition_values()?.hive_partition_path())
@@ -877,7 +940,7 @@ fn build_compaction_plan(
         file.sort_by(|a, b| b.size.cmp(&a.size));
     }
 
-    let mut operations: HashMap<String, (BTreeMap<String, Scalar>, Vec<MergeBin>)> = HashMap::new();
+    let mut operations: HashMap<String, (IndexMap<String, Scalar>, Vec<MergeBin>)> = HashMap::new();
     for (part, (partition, files)) in partition_files {
         let mut merge_bins = vec![MergeBin::new()];
 
@@ -939,7 +1002,6 @@ fn build_zorder_plan(
     let field_names = snapshot
         .schema()
         .fields()
-        .iter()
         .map(|field| field.name().to_string())
         .collect_vec();
     let unknown_columns = zorder_columns
@@ -955,14 +1017,14 @@ fn build_zorder_plan(
     // For now, just be naive and optimize all files in each selected partition.
     let mut metrics = Metrics::default();
 
-    let mut partition_files: HashMap<String, (BTreeMap<String, Scalar>, MergeBin)> = HashMap::new();
+    let mut partition_files: HashMap<String, (IndexMap<String, Scalar>, MergeBin)> = HashMap::new();
     for add in snapshot.get_active_add_actions_by_partitions(filters)? {
         let add = add?;
         let partition_values = add
             .partition_values()?
             .into_iter()
             .map(|(k, v)| (k.to_string(), v))
-            .collect::<BTreeMap<_, _>>();
+            .collect::<IndexMap<_, _>>();
         metrics.total_considered_files += 1;
         let object_meta = ObjectMeta::try_from(&add)?;
 
@@ -1283,7 +1345,7 @@ pub(super) mod zorder {
                     "+-----+-----+-----------+",
                 ];
 
-                let expected = vec![expected_1, expected_2, expected_3];
+                let expected = [expected_1, expected_2, expected_3];
 
                 let indices = Int32Array::from(shuffled_indices().to_vec());
                 let shuffled_columns = batch

@@ -5,17 +5,18 @@
 use std::collections::HashMap;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use aws_sdk_dynamodb::types::BillingMode;
 use deltalake_aws::logstore::{RepairLogEntryResult, S3DynamoDbLogStore};
-use deltalake_aws::storage::S3StorageOptions;
+use deltalake_aws::storage::{s3_constants, S3StorageOptions};
 use deltalake_aws::{CommitEntry, DynamoDbConfig, DynamoDbLockClient};
 use deltalake_core::kernel::{Action, Add, DataType, PrimitiveType, StructField, StructType};
 use deltalake_core::logstore::LogStore;
-use deltalake_core::operations::transaction::{commit, prepare_commit};
+use deltalake_core::operations::transaction::CommitBuilder;
 use deltalake_core::protocol::{DeltaOperation, SaveMode};
 use deltalake_core::storage::commit_uri_from_version;
 use deltalake_core::storage::StorageOptions;
 use deltalake_core::table::builder::ensure_table_uri;
-use deltalake_core::{DeltaOps, DeltaTable, DeltaTableBuilder};
+use deltalake_core::{DeltaOps, DeltaTable, DeltaTableBuilder, ObjectStoreError};
 use deltalake_test::utils::*;
 use lazy_static::lazy_static;
 use object_store::path::Path;
@@ -31,17 +32,17 @@ lazy_static! {
     static ref OPTIONS: HashMap<String, String> = maplit::hashmap! {
         "allow_http".to_owned() => "true".to_owned(),
     };
-    static ref S3_OPTIONS: S3StorageOptions = S3StorageOptions::from_map(&OPTIONS);
+    static ref S3_OPTIONS: S3StorageOptions = S3StorageOptions::from_map(&OPTIONS).unwrap();
 }
 
 fn make_client() -> TestResult<DynamoDbLockClient> {
-    let options: S3StorageOptions = S3StorageOptions::default();
+    let options: S3StorageOptions = S3StorageOptions::try_default().unwrap();
     Ok(DynamoDbLockClient::try_new(
+        &options.sdk_config,
         None,
         None,
         None,
-        options.region.clone(),
-        false,
+        None,
     )?)
 }
 
@@ -62,13 +63,13 @@ fn client_configs_via_env_variables() -> TestResult<()> {
     );
     let client = make_client()?;
     let config = client.get_dynamodb_config();
+    let options: S3StorageOptions = S3StorageOptions::try_default().unwrap();
     assert_eq!(
         DynamoDbConfig {
-            billing_mode: deltalake_aws::BillingMode::PayPerRequest,
+            billing_mode: BillingMode::PayPerRequest,
             lock_table_name: "some_table".to_owned(),
             max_elapsed_request_time: Duration::from_secs(64),
-            use_web_identity: false,
-            region: config.region.clone(),
+            sdk_config: options.sdk_config,
         },
         *config,
     );
@@ -180,6 +181,80 @@ async fn test_repair_on_load() -> TestResult<()> {
     Ok(())
 }
 
+#[tokio::test]
+#[serial]
+async fn test_abort_commit_entry() -> TestResult<()> {
+    let context = IntegrationContext::new(Box::new(S3Integration::default()))?;
+    let client = make_client()?;
+    let table = prepare_table(&context, "abort_entry").await?;
+    let options: StorageOptions = OPTIONS.clone().into();
+    let log_store: S3DynamoDbLogStore = S3DynamoDbLogStore::try_new(
+        ensure_table_uri(table.table_uri())?,
+        options.clone(),
+        &S3_OPTIONS,
+        std::sync::Arc::new(table.object_store()),
+    )?;
+
+    let entry = create_incomplete_commit_entry(&table, 1, "unfinished_commit").await?;
+
+    log_store
+        .abort_commit_entry(entry.version, &entry.temp_path)
+        .await?;
+
+    // The entry should have been aborted - the latest entry should be one version lower
+    if let Some(new_entry) = client.get_latest_entry(&table.table_uri()).await? {
+        assert_eq!(entry.version - 1, new_entry.version);
+    }
+    // Temp commit file should have been deleted
+    assert!(matches!(
+        log_store.object_store().get(&entry.temp_path).await,
+        Err(ObjectStoreError::NotFound { .. })
+    ));
+
+    // Test abort commit is idempotent - still works if already aborted
+    log_store
+        .abort_commit_entry(entry.version, &entry.temp_path)
+        .await?;
+
+    Ok(())
+}
+
+#[tokio::test]
+#[serial]
+async fn test_abort_commit_entry_fail_to_delete_entry() -> TestResult<()> {
+    // Test abort commit does not delete the temp commit if the DynamoDB entry is not deleted
+    let context = IntegrationContext::new(Box::new(S3Integration::default()))?;
+    let client = make_client()?;
+    let table = prepare_table(&context, "abort_entry_fail").await?;
+    let options: StorageOptions = OPTIONS.clone().into();
+    let log_store: S3DynamoDbLogStore = S3DynamoDbLogStore::try_new(
+        ensure_table_uri(table.table_uri())?,
+        options.clone(),
+        &S3_OPTIONS,
+        std::sync::Arc::new(table.object_store()),
+    )?;
+
+    let entry = create_incomplete_commit_entry(&table, 1, "finished_commit").await?;
+
+    // Mark entry as complete
+    client
+        .update_commit_entry(entry.version, &table.table_uri())
+        .await?;
+
+    // Abort will fail since we marked the entry as complete
+    assert!(matches!(
+        log_store
+            .abort_commit_entry(entry.version, &entry.temp_path)
+            .await,
+        Err(_),
+    ));
+
+    // Check temp commit file still exists
+    assert!(log_store.object_store().get(&entry.temp_path).await.is_ok());
+
+    Ok(())
+}
+
 const WORKERS: i64 = 3;
 const COMMITS: i64 = 15;
 
@@ -208,7 +283,9 @@ async fn test_concurrent_writers() -> TestResult<()> {
     for f in futures {
         map.extend(f.await?);
     }
+
     validate_lock_table_state(&table, WORKERS * COMMITS).await?;
+
     Ok(())
 }
 
@@ -258,18 +335,18 @@ async fn create_incomplete_commit_entry(
     tag: &str,
 ) -> TestResult<CommitEntry> {
     let actions = vec![add_action(tag)];
-    let temp_path = prepare_commit(
-        table.object_store().as_ref(),
-        &DeltaOperation::Write {
-            mode: SaveMode::Append,
-            partition_by: None,
-            predicate: None,
-        },
-        &actions,
-        None,
-    )
-    .await?;
-    let commit_entry = CommitEntry::new(version, temp_path);
+    let operation = DeltaOperation::Write {
+        mode: SaveMode::Append,
+        partition_by: None,
+        predicate: None,
+    };
+    let prepared = CommitBuilder::default()
+        .with_actions(actions)
+        .build(Some(table.snapshot()?), table.log_store(), operation)
+        .into_prepared_commit_future()
+        .await?;
+
+    let commit_entry = CommitEntry::new(version, prepared.path().to_owned());
     make_client()?
         .put_commit_entry(&table.table_uri(), &commit_entry)
         .await?;
@@ -314,7 +391,7 @@ async fn prepare_table(context: &IntegrationContext, table_name: &str) -> TestRe
     // create delta table
     let table = DeltaOps(table)
         .create()
-        .with_columns(schema.fields().clone())
+        .with_columns(schema.fields().cloned())
         .await?;
     println!("table created: {table:?}");
     Ok(table)
@@ -331,15 +408,12 @@ async fn append_to_table(
         predicate: None,
     };
     let actions = vec![add_action(name)];
-    let version = commit(
-        table.log_store().as_ref(),
-        &actions,
-        operation,
-        Some(table.snapshot()?),
-        metadata,
-    )
-    .await
-    .unwrap();
+    let version = CommitBuilder::default()
+        .with_actions(actions)
+        .with_app_metadata(metadata.unwrap_or_default())
+        .build(Some(table.snapshot()?), table.log_store(), operation)
+        .await?
+        .version();
     Ok(version)
 }
 

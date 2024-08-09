@@ -1,10 +1,8 @@
 import json
-import operator
 import warnings
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from enum import Enum
-from functools import reduce
 from pathlib import Path
 from typing import (
     TYPE_CHECKING,
@@ -19,7 +17,6 @@ from typing import (
     Optional,
     Tuple,
     Union,
-    cast,
 )
 
 import pyarrow
@@ -34,6 +31,11 @@ from pyarrow.dataset import (
     ParquetReadOptions,
 )
 
+try:
+    from pyarrow.parquet import filters_to_expression  # pyarrow >= 10.0.0
+except ImportError:
+    from pyarrow.parquet import _filters_to_expression as filters_to_expression
+
 if TYPE_CHECKING:
     import os
 
@@ -44,17 +46,23 @@ from deltalake._util import encode_partition_value
 from deltalake.data_catalog import DataCatalog
 from deltalake.exceptions import DeltaProtocolError
 from deltalake.fs import DeltaStorageHandler
+from deltalake.schema import Field as DeltaField
 from deltalake.schema import Schema as DeltaSchema
 
 try:
-    import pandas as pd  # noqa: F811
+    import pandas as pd
 except ModuleNotFoundError:
     _has_pandas = False
 else:
     _has_pandas = True
 
-MAX_SUPPORTED_READER_VERSION = 1
-MAX_SUPPORTED_WRITER_VERSION = 2
+MAX_SUPPORTED_PYARROW_WRITER_VERSION = 7
+NOT_SUPPORTED_PYARROW_WRITER_VERSIONS = [3, 4, 5, 6]
+SUPPORTED_WRITER_FEATURES = {"appendOnly", "invariants", "timestampNtz"}
+
+MAX_SUPPORTED_READER_VERSION = 3
+NOT_SUPPORTED_READER_VERSION = 2
+SUPPORTED_READER_FEATURES = {"timestampNtz"}
 
 
 class Compression(Enum):
@@ -108,6 +116,28 @@ class Compression(Enum):
             )
         else:
             return True
+
+
+@dataclass(init=True)
+class PostCommitHookProperties:
+    """The post commit hook properties, only required for advanced usecases where you need to control this."""
+
+    def __init__(
+        self,
+        create_checkpoint: bool = True,
+        cleanup_expired_logs: Optional[bool] = None,
+    ):
+        """Checkpoints are by default created based on the delta.checkpointInterval config setting.
+        cleanup_expired_logs can be set to override the delta.enableExpiredLogCleanup, otherwise the
+        config setting will be used to decide whether to clean up logs automatically by taking also
+        the delta.logRetentionDuration into account.
+
+        Args:
+            create_checkpoint (bool, optional): to create checkpoints based on checkpoint interval. Defaults to True.
+            cleanup_expired_logs (Optional[bool], optional): to clean up logs based on interval. Defaults to None.
+        """
+        self.create_checkpoint = create_checkpoint
+        self.cleanup_expired_logs = cleanup_expired_logs
 
 
 @dataclass(init=True)
@@ -242,128 +272,17 @@ class Metadata:
 class ProtocolVersions(NamedTuple):
     min_reader_version: int
     min_writer_version: int
+    writer_features: Optional[List[str]]
+    reader_features: Optional[List[str]]
 
 
 FilterLiteralType = Tuple[str, str, Any]
 
-
 FilterConjunctionType = List[FilterLiteralType]
-
 
 FilterDNFType = List[FilterConjunctionType]
 
-
 FilterType = Union[FilterConjunctionType, FilterDNFType]
-
-
-def _check_contains_null(value: Any) -> bool:
-    """
-    Check if target contains nullish value.
-    """
-    if isinstance(value, bytes):
-        for byte in value:
-            if isinstance(byte, bytes):
-                compare_to = chr(0)
-            else:
-                compare_to = 0
-            if byte == compare_to:
-                return True
-    elif isinstance(value, str):
-        return "\x00" in value
-    return False
-
-
-def _check_dnf(
-    dnf: FilterDNFType,
-    check_null_strings: bool = True,
-) -> FilterDNFType:
-    """
-    Check if DNF are well-formed.
-    """
-    if len(dnf) == 0 or any(len(c) == 0 for c in dnf):
-        raise ValueError("Malformed DNF")
-    if check_null_strings:
-        for conjunction in dnf:
-            for col, op, val in conjunction:
-                if (
-                    isinstance(val, list)
-                    and all(_check_contains_null(v) for v in val)
-                    or _check_contains_null(val)
-                ):
-                    raise NotImplementedError(
-                        "Null-terminated binary strings are not supported "
-                        "as filter values."
-                    )
-    return dnf
-
-
-def _convert_single_predicate(column: str, op: str, value: Any) -> Expression:
-    """
-    Convert given `tuple` to [pyarrow.dataset.Expression].
-    """
-    import pyarrow.dataset as ds
-
-    field = ds.field(column)
-    if op == "=" or op == "==":
-        return field == value
-    elif op == "!=":
-        return field != value
-    elif op == "<":
-        return field < value
-    elif op == ">":
-        return field > value
-    elif op == "<=":
-        return field <= value
-    elif op == ">=":
-        return field >= value
-    elif op == "in":
-        return field.isin(value)
-    elif op == "not in":
-        return ~field.isin(value)
-    else:
-        raise ValueError(
-            f'"{(column, op, value)}" is not a valid operator in predicates.'
-        )
-
-
-def _filters_to_expression(filters: FilterType) -> Expression:
-    """
-    Check if filters are well-formed and convert to an [pyarrow.dataset.Expression].
-    """
-    if isinstance(filters[0][0], str):
-        # We have encountered the situation where we have one nesting level too few:
-        #   We have [(,,), ..] instead of [[(,,), ..]]
-        dnf = cast(FilterDNFType, [filters])
-    else:
-        dnf = cast(FilterDNFType, filters)
-    dnf = _check_dnf(dnf, check_null_strings=False)
-    disjunction_members = []
-    for conjunction in dnf:
-        conjunction_members = [
-            _convert_single_predicate(col, op, val) for col, op, val in conjunction
-        ]
-        disjunction_members.append(reduce(operator.and_, conjunction_members))
-    return reduce(operator.or_, disjunction_members)
-
-
-_DNF_filter_doc = """
-Predicates are expressed in disjunctive normal form (DNF), like [("x", "=", "a"), ...].
-DNF allows arbitrary boolean logical combinations of single partition predicates.
-The innermost tuples each describe a single partition predicate. The list of inner
-predicates is interpreted as a conjunction (AND), forming a more selective and
-multiple partition predicates. Each tuple has format: (key, op, value) and compares
-the key with the value. The supported op are: `=`, `!=`, `in`, and `not in`. If
-the op is in or not in, the value must be a collection such as a list, a set or a tuple.
-The supported type for value is str. Use empty string `''` for Null partition value.
-
-Example:
-    ```
-    ("x", "=", "a")
-    ("x", "!=", "a")
-    ("y", "in", ["a", "b", "c"])
-    ("z", "not in", ["a","b"])
-    ```
-"""
 
 
 @dataclass(init=False)
@@ -441,6 +360,21 @@ class DeltaTable:
             table_uri=table_uri, version=version, log_buffer_size=log_buffer_size
         )
 
+    @staticmethod
+    def is_deltatable(
+        table_uri: str, storage_options: Optional[Dict[str, str]] = None
+    ) -> bool:
+        """
+        Returns True if a Delta Table exists at specified path.
+        Returns False otherwise.
+
+        Args:
+            table_uri: the path of the DeltaTable
+            storage_options: a dictionary of the options to use for the
+                storage backend
+        """
+        return RawDeltaTable.is_deltatable(table_uri, storage_options)
+
     @classmethod
     def create(
         cls,
@@ -453,6 +387,7 @@ class DeltaTable:
         configuration: Optional[Mapping[str, Optional[str]]] = None,
         storage_options: Optional[Dict[str, str]] = None,
         custom_metadata: Optional[Dict[str, str]] = None,
+        raise_if_key_not_exists: bool = True,
     ) -> "DeltaTable":
         """`CREATE` or `CREATE_OR_REPLACE` a delta table given a table_uri.
 
@@ -467,8 +402,9 @@ class DeltaTable:
             name: User-provided identifier for this table.
             description: User-provided description for this table.
             configuration:  A map containing configuration options for the metadata action.
-            storage_options: options passed to the object store crate.
-            custom_metadata: custom metadata that will be added to the transaction commit.
+            storage_options: Options passed to the object store crate.
+            custom_metadata: Custom metadata that will be added to the transaction commit.
+            raise_if_key_not_exists: Whether to raise an error if the configuration uses keys that are not Delta keys
 
         Returns:
             DeltaTable: created delta table
@@ -502,6 +438,7 @@ class DeltaTable:
             schema,
             partition_by or [],
             mode,
+            raise_if_key_not_exists,
             name,
             description,
             configuration,
@@ -600,6 +537,7 @@ class DeltaTable:
         """
         Load/time travel a DeltaTable to a specified version number, or a timestamp version of the table. If a
         string is passed then the argument should be an RFC 3339 and ISO 8601 date and time string format.
+        If a datetime object without a timezone is passed, the UTC timezone will be assumed.
 
         Args:
             version: the identifier of the version of the DeltaTable to load
@@ -613,7 +551,8 @@ class DeltaTable:
 
             **Use a datetime object**
             ```
-            dt.load_as_version(datetime(2023,1,1))
+            dt.load_as_version(datetime(2023, 1, 1))
+            dt.load_as_version(datetime(2023, 1, 1, tzinfo=timezone.utc))
             ```
 
             **Use a datetime in string format**
@@ -626,6 +565,8 @@ class DeltaTable:
         if isinstance(version, int):
             self._table.load_version(version)
         elif isinstance(version, datetime):
+            if version.tzinfo is None:
+                version = version.astimezone(timezone.utc)
             self._table.load_with_datetime(version.isoformat())
         elif isinstance(version, str):
             self._table.load_with_datetime(version)
@@ -676,6 +617,22 @@ class DeltaTable:
         )
         self._table.load_with_datetime(datetime_string)
 
+    def load_cdf(
+        self,
+        starting_version: int = 0,
+        ending_version: Optional[int] = None,
+        starting_timestamp: Optional[str] = None,
+        ending_timestamp: Optional[str] = None,
+        columns: Optional[List[str]] = None,
+    ) -> pyarrow.RecordBatchReader:
+        return self._table.load_cdf(
+            columns=columns,
+            starting_version=starting_version,
+            ending_version=ending_version,
+            starting_timestamp=starting_timestamp,
+            ending_timestamp=ending_timestamp,
+        )
+
     @property
     def table_uri(self) -> str:
         return self._table.table_uri()
@@ -688,6 +645,13 @@ class DeltaTable:
             the current Schema registered in the transaction log
         """
         return self._table.schema
+
+    def files_by_partitions(self, partition_filters: Optional[FilterType]) -> List[str]:
+        """
+        Get the files for each partition
+
+        """
+        return self._table.files_by_partitions(partition_filters)
 
     def metadata(self) -> Metadata:
         """
@@ -743,15 +707,17 @@ class DeltaTable:
         dry_run: bool = True,
         enforce_retention_duration: bool = True,
         custom_metadata: Optional[Dict[str, str]] = None,
+        post_commithook_properties: Optional[PostCommitHookProperties] = None,
     ) -> List[str]:
         """
         Run the Vacuum command on the Delta Table: list and delete files no longer referenced by the Delta table and are older than the retention threshold.
 
         Args:
-            retention_hours: the retention threshold in hours, if none then the value from `configuration.deletedFileRetentionDuration` is used or default of 1 week otherwise.
+            retention_hours: the retention threshold in hours, if none then the value from `delta.deletedFileRetentionDuration` is used or default of 1 week otherwise.
             dry_run: when activated, list only the files, delete otherwise
-            enforce_retention_duration: when disabled, accepts retention hours smaller than the value from `configuration.deletedFileRetentionDuration`.
+            enforce_retention_duration: when disabled, accepts retention hours smaller than the value from `delta.deletedFileRetentionDuration`.
             custom_metadata: custom metadata that will be added to the transaction commit.
+            post_commithook_properties: properties for the post commit hook. If None, default values are used.
         Returns:
             the list of files no longer referenced by the Delta Table and are older than the retention threshold.
         """
@@ -764,6 +730,7 @@ class DeltaTable:
             retention_hours,
             enforce_retention_duration,
             custom_metadata,
+            post_commithook_properties.__dict__ if post_commithook_properties else None,
         )
 
     def update(
@@ -776,6 +743,7 @@ class DeltaTable:
         writer_properties: Optional[WriterProperties] = None,
         error_on_type_mismatch: bool = True,
         custom_metadata: Optional[Dict[str, str]] = None,
+        post_commithook_properties: Optional[PostCommitHookProperties] = None,
     ) -> Dict[str, Any]:
         """`UPDATE` records in the Delta Table that matches an optional predicate. Either updates or new_values needs
         to be passed for it to execute.
@@ -787,6 +755,7 @@ class DeltaTable:
             writer_properties: Pass writer properties to the Rust parquet writer.
             error_on_type_mismatch: specify if update will return error if data types are mismatching :default = True
             custom_metadata: custom metadata that will be added to the transaction commit.
+            post_commithook_properties: properties for the post commit hook. If None, default values are used.
         Returns:
             the metrics from update
 
@@ -865,6 +834,9 @@ class DeltaTable:
             writer_properties._to_dict() if writer_properties else None,
             safe_cast=not error_on_type_mismatch,
             custom_metadata=custom_metadata,
+            post_commithook_properties=post_commithook_properties.__dict__
+            if post_commithook_properties
+            else None,
         )
         return json.loads(metrics)
 
@@ -904,8 +876,9 @@ class DeltaTable:
         target_alias: Optional[str] = None,
         error_on_type_mismatch: bool = True,
         writer_properties: Optional[WriterProperties] = None,
-        large_dtypes: bool = True,
+        large_dtypes: bool = False,
         custom_metadata: Optional[Dict[str, str]] = None,
+        post_commithook_properties: Optional[PostCommitHookProperties] = None,
     ) -> "TableMerger":
         """Pass the source data which you want to merge on the target delta table, providing a
         predicate in SQL query like format. You can also specify on what to do when the underlying data types do not
@@ -920,6 +893,7 @@ class DeltaTable:
             writer_properties: Pass writer properties to the Rust parquet writer
             large_dtypes: If True, the data schema is kept in large_dtypes.
             custom_metadata: custom metadata that will be added to the transaction commit.
+            post_commithook_properties: properties for the post commit hook. If None, default values are used.
 
         Returns:
             TableMerger: TableMerger Object
@@ -968,6 +942,7 @@ class DeltaTable:
             safe_cast=not error_on_type_mismatch,
             writer_properties=writer_properties,
             custom_metadata=custom_metadata,
+            post_commithook_properties=post_commithook_properties,
         )
 
     def restore(
@@ -1011,6 +986,8 @@ class DeltaTable:
         partitions: Optional[List[Tuple[str, str, Any]]] = None,
         filesystem: Optional[Union[str, pa_fs.FileSystem]] = None,
         parquet_read_options: Optional[ParquetReadOptions] = None,
+        schema: Optional[pyarrow.Schema] = None,
+        as_large_types: bool = False,
     ) -> pyarrow.dataset.Dataset:
         """
         Build a PyArrow Dataset using data from the DeltaTable.
@@ -1019,33 +996,69 @@ class DeltaTable:
             partitions: A list of partition filters, see help(DeltaTable.files_by_partitions) for filter syntax
             filesystem: A concrete implementation of the Pyarrow FileSystem or a fsspec-compatible interface. If None, the first file path will be used to determine the right FileSystem
             parquet_read_options: Optional read options for Parquet. Use this to handle INT96 to timestamp conversion for edge cases like 0001-01-01 or 9999-12-31
+            schema: The schema to use for the dataset. If None, the schema of the DeltaTable will be used. This can be used to force reading of Parquet/Arrow datatypes
+                that DeltaLake can't represent in it's schema (e.g. LargeString).
+                If you only need to read the schema with large types (e.g. for compatibility with Polars) you may want to use the `as_large_types` parameter instead.
+            as_large_types: get schema with all variable size types (list, binary, string) as large variants (with int64 indices).
+                This is for compatibility with systems like Polars that only support the large versions of Arrow types.
+                If `schema` is passed it takes precedence over this option.
 
          More info: https://arrow.apache.org/docs/python/generated/pyarrow.dataset.ParquetReadOptions.html
+
+        Example:
+            ``deltalake`` will work with any storage compliant with :class:`pyarrow.fs.FileSystem`, however the root of the filesystem has
+            to be adjusted to point at the root of the Delta table. We can achieve this by wrapping the custom filesystem into
+            a :class:`pyarrow.fs.SubTreeFileSystem`.
+            ```
+            import pyarrow.fs as fs
+            from deltalake import DeltaTable
+
+            table_uri = "s3://<bucket>/<path>"
+            raw_fs, normalized_path = fs.FileSystem.from_uri(table_uri)
+            filesystem = fs.SubTreeFileSystem(normalized_path, raw_fs)
+
+            dt = DeltaTable(table_uri)
+            ds = dt.to_pyarrow_dataset(filesystem=filesystem)
+            ```
 
         Returns:
             the PyArrow dataset in PyArrow
         """
-        if self.protocol().min_reader_version > MAX_SUPPORTED_READER_VERSION:
+        table_protocol = self.protocol()
+        if (
+            table_protocol.min_reader_version > MAX_SUPPORTED_READER_VERSION
+            or table_protocol.min_reader_version == NOT_SUPPORTED_READER_VERSION
+        ):
             raise DeltaProtocolError(
-                f"The table's minimum reader version is {self.protocol().min_reader_version} "
-                f"but deltalake only supports up to version {MAX_SUPPORTED_READER_VERSION}."
+                f"The table's minimum reader version is {table_protocol.min_reader_version} "
+                f"but deltalake only supports version 1 or {MAX_SUPPORTED_READER_VERSION} with these reader features: {SUPPORTED_READER_FEATURES}"
             )
+        if (
+            table_protocol.min_reader_version >= 3
+            and table_protocol.reader_features is not None
+        ):
+            missing_features = {*table_protocol.reader_features}.difference(
+                SUPPORTED_READER_FEATURES
+            )
+            if len(missing_features) > 0:
+                raise DeltaProtocolError(
+                    f"The table has set these reader features: {missing_features} but these are not yet supported by the deltalake reader."
+                )
 
         if not filesystem:
-            file_sizes = self.get_add_actions().to_pydict()
-            file_sizes = {
-                x: y for x, y in zip(file_sizes["path"], file_sizes["size_bytes"])
-            }
             filesystem = pa_fs.PyFileSystem(
-                DeltaStorageHandler(
-                    self._table.table_uri(), self._storage_options, file_sizes
+                DeltaStorageHandler.from_table(
+                    self._table,
+                    self._storage_options,
+                    self._table.get_add_file_sizes(),
                 )
             )
-
         format = ParquetFileFormat(
             read_options=parquet_read_options,
             default_fragment_scan_options=ParquetFragmentScanOptions(pre_buffer=True),
         )
+
+        schema = schema or self.schema().to_pyarrow(as_large_types=as_large_types)
 
         fragments = [
             format.make_fragment(
@@ -1054,11 +1067,9 @@ class DeltaTable:
                 partition_expression=part_expression,
             )
             for file, part_expression in self._table.dataset_partitions(
-                self.schema().to_pyarrow(), partitions
+                schema, partitions
             )
         ]
-
-        schema = self.schema().to_pyarrow()
 
         dictionary_columns = format.read_options.dictionary_columns or set()
         if dictionary_columns:
@@ -1076,7 +1087,7 @@ class DeltaTable:
         partitions: Optional[List[Tuple[str, str, Any]]] = None,
         columns: Optional[List[str]] = None,
         filesystem: Optional[Union[str, pa_fs.FileSystem]] = None,
-        filters: Optional[FilterType] = None,
+        filters: Optional[Union[FilterType, Expression]] = None,
     ) -> pyarrow.Table:
         """
         Build a PyArrow Table using data from the DeltaTable.
@@ -1085,10 +1096,10 @@ class DeltaTable:
             partitions: A list of partition filters, see help(DeltaTable.files_by_partitions) for filter syntax
             columns: The columns to project. This can be a list of column names to include (order and duplicates will be preserved)
             filesystem: A concrete implementation of the Pyarrow FileSystem or a fsspec-compatible interface. If None, the first file path will be used to determine the right FileSystem
-            filters: A disjunctive normal form (DNF) predicate for filtering rows. If you pass a filter you do not need to pass ``partitions``
+            filters: A disjunctive normal form (DNF) predicate for filtering rows, or directly a pyarrow.dataset.Expression. If you pass a filter you do not need to pass ``partitions``
         """
         if filters is not None:
-            filters = _filters_to_expression(filters)
+            filters = filters_to_expression(filters)
         return self.to_pyarrow_dataset(
             partitions=partitions, filesystem=filesystem
         ).to_table(columns=columns, filter=filters)
@@ -1098,7 +1109,7 @@ class DeltaTable:
         partitions: Optional[List[Tuple[str, str, Any]]] = None,
         columns: Optional[List[str]] = None,
         filesystem: Optional[Union[str, pa_fs.FileSystem]] = None,
-        filters: Optional[FilterType] = None,
+        filters: Optional[Union[FilterType, Expression]] = None,
     ) -> "pd.DataFrame":
         """
         Build a pandas dataframe using data from the DeltaTable.
@@ -1107,7 +1118,7 @@ class DeltaTable:
             partitions: A list of partition filters, see help(DeltaTable.files_by_partitions) for filter syntax
             columns: The columns to project. This can be a list of column names to include (order and duplicates will be preserved)
             filesystem: A concrete implementation of the Pyarrow FileSystem or a fsspec-compatible interface. If None, the first file path will be used to determine the right FileSystem
-            filters: A disjunctive normal form (DNF) predicate for filtering rows. If you pass a filter you do not need to pass ``partitions``
+            filters: A disjunctive normal form (DNF) predicate for filtering rows, or directly a pyarrow.dataset.Expression. If you pass a filter you do not need to pass ``partitions``
         """
         return self.to_pyarrow_table(
             partitions=partitions,
@@ -1129,7 +1140,7 @@ class DeltaTable:
     def cleanup_metadata(self) -> None:
         """
         Delete expired log files before current version from table. The table log retention is based on
-        the `configuration.logRetentionDuration` value, 30 days by default.
+        the `delta.logRetentionDuration` value, 30 days by default.
         """
         self._table.cleanup_metadata()
 
@@ -1194,6 +1205,7 @@ class DeltaTable:
         predicate: Optional[str] = None,
         writer_properties: Optional[WriterProperties] = None,
         custom_metadata: Optional[Dict[str, str]] = None,
+        post_commithook_properties: Optional[PostCommitHookProperties] = None,
     ) -> Dict[str, Any]:
         """Delete records from a Delta Table that statisfy a predicate.
 
@@ -1206,6 +1218,7 @@ class DeltaTable:
             predicate: a SQL where clause. If not passed, will delete all rows.
             writer_properties: Pass writer properties to the Rust parquet writer.
             custom_metadata: custom metadata that will be added to the transaction commit.
+            post_commithook_properties: properties for the post commit hook. If None, default values are used.
 
         Returns:
             the metrics from delete.
@@ -1214,11 +1227,15 @@ class DeltaTable:
             predicate,
             writer_properties._to_dict() if writer_properties else None,
             custom_metadata,
+            post_commithook_properties.__dict__ if post_commithook_properties else None,
         )
         return json.loads(metrics)
 
     def repair(
-        self, dry_run: bool = False, custom_metadata: Optional[Dict[str, str]] = None
+        self,
+        dry_run: bool = False,
+        custom_metadata: Optional[Dict[str, str]] = None,
+        post_commithook_properties: Optional[PostCommitHookProperties] = None,
     ) -> Dict[str, Any]:
         """Repair the Delta Table by auditing active files that do not exist in the underlying
         filesystem and removes them. This can be useful when there are accidental deletions or corrupted files.
@@ -1230,6 +1247,8 @@ class DeltaTable:
         Args:
             dry_run: when activated, list only the files, otherwise add remove actions to transaction log. Defaults to False.
             custom_metadata: custom metadata that will be added to the transaction commit.
+            post_commithook_properties: properties for the post commit hook. If None, default values are used.
+
         Returns:
             The metrics from repair (FSCK) action.
 
@@ -1244,7 +1263,11 @@ class DeltaTable:
             {'dry_run': False, 'files_removed': ['6-0d084325-6885-4847-b008-82c1cf30674c-0.parquet', 5-4fba1d3e-3e20-4de1-933d-a8e13ac59f53-0.parquet']}
             ```
         """
-        metrics = self._table.repair(dry_run, custom_metadata)
+        metrics = self._table.repair(
+            dry_run,
+            custom_metadata,
+            post_commithook_properties.__dict__ if post_commithook_properties else None,
+        )
         return json.loads(metrics)
 
 
@@ -1261,6 +1284,7 @@ class TableMerger:
         safe_cast: bool = True,
         writer_properties: Optional[WriterProperties] = None,
         custom_metadata: Optional[Dict[str, str]] = None,
+        post_commithook_properties: Optional[PostCommitHookProperties] = None,
     ):
         self.table = table
         self.source = source
@@ -1270,6 +1294,7 @@ class TableMerger:
         self.safe_cast = safe_cast
         self.writer_properties = writer_properties
         self.custom_metadata = custom_metadata
+        self.post_commithook_properties = post_commithook_properties
         self.matched_update_updates: Optional[List[Dict[str, str]]] = None
         self.matched_update_predicate: Optional[List[Optional[str]]] = None
         self.matched_delete_predicate: Optional[List[str]] = None
@@ -1277,9 +1302,9 @@ class TableMerger:
         self.not_matched_insert_updates: Optional[List[Dict[str, str]]] = None
         self.not_matched_insert_predicate: Optional[List[Optional[str]]] = None
         self.not_matched_by_source_update_updates: Optional[List[Dict[str, str]]] = None
-        self.not_matched_by_source_update_predicate: Optional[
-            List[Optional[str]]
-        ] = None
+        self.not_matched_by_source_update_predicate: Optional[List[Optional[str]]] = (
+            None
+        )
         self.not_matched_by_source_delete_predicate: Optional[List[str]] = None
         self.not_matched_by_source_delete_all: Optional[bool] = None
 
@@ -1328,6 +1353,10 @@ class TableMerger:
         """Update a matched table row based on the rules defined by ``updates``.
         If a ``predicate`` is specified, then it must evaluate to true for the row to be updated.
 
+        Note:
+            Column names with special characters, such as numbers or spaces should be encapsulated
+            in backticks: "target.`123column`" or "target.`my column`"
+
         Args:
             updates: a mapping of column name to update SQL expression.
             predicate:  SQL like predicate on when to update.
@@ -1340,10 +1369,10 @@ class TableMerger:
             from deltalake import DeltaTable, write_deltalake
             import pyarrow as pa
 
-            data = pa.table({"x": [1, 2, 3], "y": [4, 5, 6]})
+            data = pa.table({"x": [1, 2, 3], "1y": [4, 5, 6]})
             write_deltalake("tmp", data)
             dt = DeltaTable("tmp")
-            new_data = pa.table({"x": [1], "y": [7]})
+            new_data = pa.table({"x": [1], "1y": [7]})
 
             (
                  dt.merge(
@@ -1351,7 +1380,7 @@ class TableMerger:
                      predicate="target.x = source.x",
                      source_alias="source",
                      target_alias="target")
-                 .when_matched_update(updates={"x": "source.x", "y": "source.y"})
+                 .when_matched_update(updates={"x": "source.x", "`1y`": "source.`1y`"})
                  .execute()
             )
             {'num_source_rows': 1, 'num_target_rows_inserted': 0, 'num_target_rows_updated': 1, 'num_target_rows_deleted': 0, 'num_target_rows_copied': 2, 'num_output_rows': 3, 'num_target_files_added': 1, 'num_target_files_removed': 1, 'execution_time_ms': ..., 'scan_time_ms': ..., 'rewrite_time_ms': ...}
@@ -1376,6 +1405,10 @@ class TableMerger:
     def when_matched_update_all(self, predicate: Optional[str] = None) -> "TableMerger":
         """Updating all source fields to target fields, source and target are required to have the same field names.
         If a ``predicate`` is specified, then it must evaluate to true for the row to be updated.
+
+        Note:
+            Column names with special characters, such as numbers or spaces should be encapsulated
+            in backticks: "target.`123column`" or "target.`my column`"
 
         Args:
             predicate: SQL like predicate on when to update all columns.
@@ -1416,7 +1449,7 @@ class TableMerger:
         trgt_alias = (self.target_alias + ".") if self.target_alias is not None else ""
 
         updates = {
-            f"{trgt_alias}{col.name}": f"{src_alias}{col.name}"
+            f"{trgt_alias}`{col.name}`": f"{src_alias}`{col.name}`"
             for col in self.source.schema
         }
 
@@ -1434,6 +1467,10 @@ class TableMerger:
     def when_matched_delete(self, predicate: Optional[str] = None) -> "TableMerger":
         """Delete a matched row from the table only if the given ``predicate`` (if specified) is
         true for the matched row. If not specified it deletes all matches.
+
+        Note:
+            Column names with special characters, such as numbers or spaces should be encapsulated
+            in backticks: "target.`123column`" or "target.`my column`"
 
         Args:
            predicate (str | None, Optional):  SQL like predicate on when to delete.
@@ -1511,6 +1548,10 @@ class TableMerger:
         """Insert a new row to the target table based on the rules defined by ``updates``. If a
         ``predicate`` is specified, then it must evaluate to true for the new row to be inserted.
 
+        Note:
+            Column names with special characters, such as numbers or spaces should be encapsulated
+            in backticks: "target.`123column`" or "target.`my column`"
+
         Args:
             updates (dict):  a mapping of column name to insert SQL expression.
             predicate (str | None, Optional): SQL like predicate on when to insert.
@@ -1570,6 +1611,10 @@ class TableMerger:
         required to have the same field names. If a ``predicate`` is specified, then it must evaluate to true for
         the new row to be inserted.
 
+        Note:
+            Column names with special characters, such as numbers or spaces should be encapsulated
+            in backticks: "target.`123column`" or "target.`my column`"
+
         Args:
             predicate: SQL like predicate on when to insert.
 
@@ -1609,7 +1654,7 @@ class TableMerger:
         src_alias = (self.source_alias + ".") if self.source_alias is not None else ""
         trgt_alias = (self.target_alias + ".") if self.target_alias is not None else ""
         updates = {
-            f"{trgt_alias}{col.name}": f"{src_alias}{col.name}"
+            f"{trgt_alias}`{col.name}`": f"{src_alias}`{col.name}`"
             for col in self.source.schema
         }
         if isinstance(self.not_matched_insert_updates, list) and isinstance(
@@ -1628,6 +1673,10 @@ class TableMerger:
     ) -> "TableMerger":
         """Update a target row that has no matches in the source based on the rules defined by ``updates``.
         If a ``predicate`` is specified, then it must evaluate to true for the row to be updated.
+
+        Note:
+            Column names with special characters, such as numbers or spaces should be encapsulated
+            in backticks: "target.`123column`" or "target.`my column`"
 
         Args:
             updates: a mapping of column name to update SQL expression.
@@ -1683,6 +1732,10 @@ class TableMerger:
         """Delete a target row that has no matches in the source from the table only if the given
         ``predicate`` (if specified) is true for the target row.
 
+        Note:
+            Column names with special characters, such as numbers or spaces should be encapsulated
+            in backticks: "target.`123column`" or "target.`my column`"
+
         Args:
             predicate:  SQL like predicate on when to delete when not matched by source.
 
@@ -1720,6 +1773,9 @@ class TableMerger:
             if self.writer_properties
             else None,
             custom_metadata=self.custom_metadata,
+            post_commithook_properties=self.post_commithook_properties.__dict__
+            if self.post_commithook_properties
+            else None,
             matched_update_updates=self.matched_update_updates,
             matched_update_predicate=self.matched_update_predicate,
             matched_delete_predicate=self.matched_delete_predicate,
@@ -1741,10 +1797,47 @@ class TableAlterer:
     def __init__(self, table: DeltaTable) -> None:
         self.table = table
 
+    def add_columns(
+        self,
+        fields: Union[DeltaField, List[DeltaField]],
+        custom_metadata: Optional[Dict[str, str]] = None,
+        post_commithook_properties: Optional[PostCommitHookProperties] = None,
+    ) -> None:
+        """Add new columns and/or update the fields of a stuctcolumn
+
+        Args:
+            fields: fields to merge into schema
+            custom_metadata: custom metadata that will be added to the transaction commit.
+            post_commithook_properties: properties for the post commit hook. If None, default values are used.
+
+        Example:
+            ```python
+            from deltalake import DeltaTable
+            from deltalake.schema import Field, PrimitiveType, StructType
+            dt = DeltaTable("test_table")
+            new_fields = [
+                Field("baz", StructType([Field("bar", PrimitiveType("integer"))])),
+                Field("bar", PrimitiveType("integer"))
+            ]
+            dt.alter.add_columns(
+                new_fields
+            )
+            ```
+        """
+        if isinstance(fields, DeltaField):
+            fields = [fields]
+
+        self.table._table.add_columns(
+            fields,
+            custom_metadata,
+            post_commithook_properties.__dict__ if post_commithook_properties else None,
+        )
+
     def add_constraint(
         self,
         constraints: Dict[str, str],
         custom_metadata: Optional[Dict[str, str]] = None,
+        post_commithook_properties: Optional[PostCommitHookProperties] = None,
     ) -> None:
         """
         Add constraints to the table. Limited to `single constraint` at once.
@@ -1752,6 +1845,8 @@ class TableAlterer:
         Args:
             constraints: mapping of constraint name to SQL-expression to evaluate on write
             custom_metadata: custom metadata that will be added to the transaction commit.
+            post_commithook_properties: properties for the post commit hook. If None, default values are used.
+
         Example:
             ```python
             from deltalake import DeltaTable
@@ -1773,7 +1868,71 @@ class TableAlterer:
                 Please execute add_constraints multiple times with each time a different constraint."""
             )
 
-        self.table._table.add_constraints(constraints, custom_metadata)
+        self.table._table.add_constraints(
+            constraints,
+            custom_metadata,
+            post_commithook_properties.__dict__ if post_commithook_properties else None,
+        )
+
+    def drop_constraint(
+        self,
+        name: str,
+        raise_if_not_exists: bool = True,
+        custom_metadata: Optional[Dict[str, str]] = None,
+        post_commithook_properties: Optional[PostCommitHookProperties] = None,
+    ) -> None:
+        """
+        Drop constraints from a table. Limited to `single constraint` at once.
+
+        Args:
+            name: constraint name which to drop.
+            raise_if_not_exists: set if should raise if not exists.
+            custom_metadata: custom metadata that will be added to the transaction commit.
+            post_commithook_properties: properties for the post commit hook. If None, default values are used.
+
+        Example:
+            ```python
+            from deltalake import DeltaTable
+            dt = DeltaTable("test_table_constraints")
+            dt.metadata().configuration
+            {'delta.constraints.value_gt_5': 'value > 5'}
+            ```
+
+            **Drop the constraint**
+            ```python
+            dt.alter.drop_constraint(name = "value_gt_5")
+            ```
+
+            **Configuration after dropping**
+            ```python
+            dt.metadata().configuration
+            {}
+            ```
+        """
+        self.table._table.drop_constraints(
+            name,
+            raise_if_not_exists,
+            custom_metadata,
+            post_commithook_properties.__dict__ if post_commithook_properties else None,
+        )
+
+    def set_table_properties(
+        self,
+        properties: Dict[str, str],
+        raise_if_not_exists: bool = True,
+        custom_metadata: Optional[Dict[str, str]] = None,
+    ) -> None:
+        """
+        Unset properties from the table.
+        Args:
+            properties: properties which set
+            raise_if_not_exists: set if should raise if not exists.
+            custom_metadata: custom metadata that will be added to the transaction commit.
+        Example:
+        """
+        self.table._table.set_table_properties(
+            properties, raise_if_not_exists, custom_metadata
+        )
 
 
 class TableOptimizer:
@@ -1809,6 +1968,7 @@ class TableOptimizer:
         min_commit_interval: Optional[Union[int, timedelta]] = None,
         writer_properties: Optional[WriterProperties] = None,
         custom_metadata: Optional[Dict[str, str]] = None,
+        post_commithook_properties: Optional[PostCommitHookProperties] = None,
     ) -> Dict[str, Any]:
         """
         Compacts small files to reduce the total number of files in the table.
@@ -1832,6 +1992,7 @@ class TableOptimizer:
                                     want a commit per partition.
             writer_properties: Pass writer properties to the Rust parquet writer.
             custom_metadata: custom metadata that will be added to the transaction commit.
+            post_commithook_properties: properties for the post commit hook. If None, default values are used.
 
         Returns:
             the metrics from optimize
@@ -1862,6 +2023,7 @@ class TableOptimizer:
             min_commit_interval,
             writer_properties._to_dict() if writer_properties else None,
             custom_metadata,
+            post_commithook_properties.__dict__ if post_commithook_properties else None,
         )
         self.table.update_incremental()
         return json.loads(metrics)
@@ -1876,6 +2038,7 @@ class TableOptimizer:
         min_commit_interval: Optional[Union[int, timedelta]] = None,
         writer_properties: Optional[WriterProperties] = None,
         custom_metadata: Optional[Dict[str, str]] = None,
+        post_commithook_properties: Optional[PostCommitHookProperties] = None,
     ) -> Dict[str, Any]:
         """
         Reorders the data using a Z-order curve to improve data skipping.
@@ -1897,6 +2060,7 @@ class TableOptimizer:
                                     want a commit per partition.
             writer_properties: Pass writer properties to the Rust parquet writer.
             custom_metadata: custom metadata that will be added to the transaction commit.
+            post_commithook_properties: properties for the post commit hook. If None, default values are used.
 
         Returns:
             the metrics from optimize
@@ -1929,6 +2093,7 @@ class TableOptimizer:
             min_commit_interval,
             writer_properties._to_dict() if writer_properties else None,
             custom_metadata,
+            post_commithook_properties.__dict__ if post_commithook_properties else None,
         )
         self.table.update_incremental()
         return json.loads(metrics)

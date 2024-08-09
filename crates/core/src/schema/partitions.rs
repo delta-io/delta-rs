@@ -1,11 +1,13 @@
 //! Delta Table partition handling logic.
-//!
+
+use delta_kernel::expressions::Scalar;
+use serde::{Serialize, Serializer};
 use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::convert::TryFrom;
 
 use crate::errors::DeltaTableError;
-use crate::kernel::{DataType, PrimitiveType, Scalar};
+use crate::kernel::{scalars::ScalarExt, DataType, PrimitiveType};
 
 /// A special value used in Hive to represent the null partition in partitioned tables
 pub const NULL_PARTITION_VALUE_DATA_PATH: &str = "__HIVE_DEFAULT_PARTITION__";
@@ -31,6 +33,42 @@ pub enum PartitionValue {
     NotIn(Vec<String>),
 }
 
+#[derive(Clone, Debug, PartialEq)]
+struct ScalarHelper<'a>(&'a Scalar);
+
+impl PartialOrd for ScalarHelper<'_> {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        use Scalar::*;
+        match (self.0, other.0) {
+            (Null(_), Null(_)) => Some(Ordering::Equal),
+            (Integer(a), Integer(b)) => a.partial_cmp(b),
+            (Long(a), Long(b)) => a.partial_cmp(b),
+            (Short(a), Short(b)) => a.partial_cmp(b),
+            (Byte(a), Byte(b)) => a.partial_cmp(b),
+            (Float(a), Float(b)) => a.partial_cmp(b),
+            (Double(a), Double(b)) => a.partial_cmp(b),
+            (String(a), String(b)) => a.partial_cmp(b),
+            (Boolean(a), Boolean(b)) => a.partial_cmp(b),
+            (Timestamp(a), Timestamp(b)) => a.partial_cmp(b),
+            (TimestampNtz(a), TimestampNtz(b)) => a.partial_cmp(b),
+            (Date(a), Date(b)) => a.partial_cmp(b),
+            (Binary(a), Binary(b)) => a.partial_cmp(b),
+            (Decimal(a, p1, s1), Decimal(b, p2, s2)) => {
+                // TODO implement proper decimal comparison
+                if p1 != p2 || s1 != s2 {
+                    return None;
+                };
+                a.partial_cmp(b)
+            }
+            // TODO should we make an assumption about the ordering of nulls?
+            // rigth now this is only used for internal purposes.
+            (Null(_), _) => Some(Ordering::Less),
+            (_, Null(_)) => Some(Ordering::Greater),
+            _ => None,
+        }
+    }
+}
+
 /// A Struct used for filtering a DeltaTable partition by key and value.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PartitionFilter {
@@ -48,7 +86,7 @@ fn compare_typed_value(
     match data_type {
         DataType::Primitive(primitive_type) => {
             let other = primitive_type.parse_scalar(filter_value).ok()?;
-            partition_value.partial_cmp(&other)
+            ScalarHelper(partition_value).partial_cmp(&ScalarHelper(&other))
         }
         // NOTE: complex types are not supported as partition columns
         _ => None,
@@ -121,6 +159,36 @@ impl PartitionFilter {
         partitions
             .iter()
             .any(|partition| self.match_partition(partition, data_type))
+    }
+}
+
+/// Create desired string representation for PartitionFilter.
+/// Used in places like predicate in operationParameters, etc.
+impl Serialize for PartitionFilter {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let s = match &self.value {
+            PartitionValue::Equal(value) => format!("{} = '{}'", self.key, value),
+            PartitionValue::NotEqual(value) => format!("{} != '{}'", self.key, value),
+            PartitionValue::GreaterThan(value) => format!("{} > '{}'", self.key, value),
+            PartitionValue::GreaterThanOrEqual(value) => format!("{} >= '{}'", self.key, value),
+            PartitionValue::LessThan(value) => format!("{} < '{}'", self.key, value),
+            PartitionValue::LessThanOrEqual(value) => format!("{} <= '{}'", self.key, value),
+            // used upper case for IN and NOT similar to SQL
+            PartitionValue::In(values) => {
+                let quoted_values: Vec<String> =
+                    values.iter().map(|v| format!("'{}'", v)).collect();
+                format!("{} IN ({})", self.key, quoted_values.join(", "))
+            }
+            PartitionValue::NotIn(values) => {
+                let quoted_values: Vec<String> =
+                    values.iter().map(|v| format!("'{}'", v)).collect();
+                format!("{} NOT IN ({})", self.key, quoted_values.join(", "))
+            }
+        };
+        serializer.serialize_str(&s)
     }
 }
 
@@ -205,5 +273,57 @@ impl DeltaTablePartition {
             key: k.to_owned(),
             value: v.to_owned(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn check_json_serialize(filter: PartitionFilter, expected_json: &str) {
+        assert_eq!(serde_json::to_value(filter).unwrap(), json!(expected_json))
+    }
+
+    #[test]
+    fn test_serialize_partition_filter() {
+        check_json_serialize(
+            PartitionFilter::try_from(("date", "=", "2022-05-22")).unwrap(),
+            "date = '2022-05-22'",
+        );
+        check_json_serialize(
+            PartitionFilter::try_from(("date", "!=", "2022-05-22")).unwrap(),
+            "date != '2022-05-22'",
+        );
+        check_json_serialize(
+            PartitionFilter::try_from(("date", ">", "2022-05-22")).unwrap(),
+            "date > '2022-05-22'",
+        );
+        check_json_serialize(
+            PartitionFilter::try_from(("date", ">=", "2022-05-22")).unwrap(),
+            "date >= '2022-05-22'",
+        );
+        check_json_serialize(
+            PartitionFilter::try_from(("date", "<", "2022-05-22")).unwrap(),
+            "date < '2022-05-22'",
+        );
+        check_json_serialize(
+            PartitionFilter::try_from(("date", "<=", "2022-05-22")).unwrap(),
+            "date <= '2022-05-22'",
+        );
+        check_json_serialize(
+            PartitionFilter::try_from(("date", "in", vec!["2023-11-04", "2023-06-07"].as_slice()))
+                .unwrap(),
+            "date IN ('2023-11-04', '2023-06-07')",
+        );
+        check_json_serialize(
+            PartitionFilter::try_from((
+                "date",
+                "not in",
+                vec!["2023-11-04", "2023-06-07"].as_slice(),
+            ))
+            .unwrap(),
+            "date NOT IN ('2023-11-04', '2023-06-07')",
+        );
     }
 }

@@ -4,7 +4,7 @@ use std::iter::FromIterator;
 use std::time::Duration;
 
 use deltalake_core::kernel::{Action, Add, DataType, PrimitiveType, StructField, StructType};
-use deltalake_core::operations::transaction::commit;
+use deltalake_core::operations::transaction::CommitBuilder;
 use deltalake_core::operations::DeltaOps;
 use deltalake_core::protocol::{DeltaOperation, SaveMode};
 use deltalake_core::{DeltaTable, DeltaTableBuilder};
@@ -34,7 +34,7 @@ async fn prepare_table(
 
     let table = DeltaOps(table)
         .create()
-        .with_columns(schema.fields().clone())
+        .with_columns(schema.fields().cloned())
         .await?;
 
     assert_eq!(0, table.version());
@@ -137,15 +137,14 @@ impl Worker {
             default_row_commit_version: None,
             clustering_provider: None,
         })];
-        let version = commit(
-            self.table.log_store().as_ref(),
-            &actions,
-            operation,
-            Some(self.table.snapshot().unwrap()),
-            None,
-        )
-        .await
-        .unwrap();
+        let snapshot = self.table.snapshot().unwrap().snapshot();
+
+        let version = CommitBuilder::default()
+            .with_actions(actions)
+            .build(Some(snapshot), self.table.log_store(), operation)
+            .await
+            .unwrap()
+            .version();
         self.table.update().await.unwrap();
         version
     }

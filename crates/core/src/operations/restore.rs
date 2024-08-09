@@ -21,7 +21,7 @@
 //! ````
 
 use std::cmp::max;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::ops::BitXor;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -33,10 +33,11 @@ use serde::Serialize;
 
 use crate::kernel::{Action, Add, Protocol, Remove};
 use crate::logstore::LogStoreRef;
-use crate::operations::transaction::{prepare_commit, TransactionError};
 use crate::protocol::DeltaOperation;
 use crate::table::state::DeltaTableState;
 use crate::{DeltaResult, DeltaTable, DeltaTableConfig, DeltaTableError, ObjectStoreError};
+
+use super::transaction::{CommitBuilder, CommitProperties, TransactionError};
 
 /// Errors that can occur during restore
 #[derive(thiserror::Error, Debug)]
@@ -84,9 +85,11 @@ pub struct RestoreBuilder {
     ignore_missing_files: bool,
     /// Protocol downgrade allowed
     protocol_downgrade_allowed: bool,
-    /// Additional metadata to be added to commit
-    app_metadata: Option<HashMap<String, serde_json::Value>>,
+    /// Additional information to add to the commit
+    commit_properties: CommitProperties,
 }
+
+impl super::Operation<()> for RestoreBuilder {}
 
 impl RestoreBuilder {
     /// Create a new [`RestoreBuilder`]
@@ -98,7 +101,7 @@ impl RestoreBuilder {
             datetime_to_restore: None,
             ignore_missing_files: false,
             protocol_downgrade_allowed: false,
-            app_metadata: None,
+            commit_properties: CommitProperties::default(),
         }
     }
 
@@ -128,11 +131,8 @@ impl RestoreBuilder {
     }
 
     /// Additional metadata to be added to commit info
-    pub fn with_metadata(
-        mut self,
-        metadata: impl IntoIterator<Item = (String, serde_json::Value)>,
-    ) -> Self {
-        self.app_metadata = Some(HashMap::from_iter(metadata));
+    pub fn with_commit_properties(mut self, commit_properties: CommitProperties) -> Self {
+        self.commit_properties = commit_properties;
         self
     }
 }
@@ -144,7 +144,7 @@ async fn execute(
     datetime_to_restore: Option<DateTime<Utc>>,
     ignore_missing_files: bool,
     protocol_downgrade_allowed: bool,
-    app_metadata: Option<HashMap<String, serde_json::Value>>,
+    mut commit_properties: CommitProperties,
 ) -> DeltaResult<RestoreMetrics> {
     if !(version_to_restore
         .is_none()
@@ -248,43 +248,41 @@ async fn execute(
             reader_features: snapshot.protocol().reader_features.clone(),
         }
     };
-    let mut app_metadata = match app_metadata {
-        Some(meta) => meta,
-        None => HashMap::new(),
-    };
-
-    app_metadata.insert("readVersion".to_owned(), snapshot.version().into());
-
-    if let Ok(map) = serde_json::to_value(&metrics) {
-        app_metadata.insert("operationMetrics".to_owned(), map);
-    }
+    commit_properties
+        .app_metadata
+        .insert("readVersion".to_owned(), snapshot.version().into());
+    commit_properties.app_metadata.insert(
+        "operationMetrics".to_owned(),
+        serde_json::to_value(&metrics)?,
+    );
 
     actions.push(Action::Protocol(protocol));
     actions.extend(files_to_add.into_iter().map(Action::Add));
     actions.extend(files_to_remove.into_iter().map(Action::Remove));
 
-    let commit = prepare_commit(
-        log_store.object_store().as_ref(),
-        &DeltaOperation::Restore {
-            version: version_to_restore,
-            datetime: datetime_to_restore.map(|time| -> i64 { time.timestamp_millis() }),
-        },
-        &actions,
-        Some(app_metadata),
-    )
-    .await?;
+    let operation = DeltaOperation::Restore {
+        version: version_to_restore,
+        datetime: datetime_to_restore.map(|time| -> i64 { time.timestamp_millis() }),
+    };
+
+    let prepared_commit = CommitBuilder::from(commit_properties)
+        .with_actions(actions)
+        .build(Some(&snapshot), log_store.clone(), operation)
+        .into_prepared_commit_future()
+        .await?;
+
     let commit_version = snapshot.version() + 1;
-    match log_store.write_commit_entry(commit_version, &commit).await {
+    let commit = prepared_commit.path();
+    match log_store.write_commit_entry(commit_version, commit).await {
         Ok(_) => {}
         Err(err @ TransactionError::VersionAlreadyExists(_)) => {
             return Err(err.into());
         }
         Err(err) => {
-            log_store.object_store().delete(&commit).await?;
+            log_store.abort_commit_entry(commit_version, commit).await?;
             return Err(err.into());
         }
     }
-
     Ok(metrics)
 }
 
@@ -322,7 +320,7 @@ impl std::future::IntoFuture for RestoreBuilder {
                 this.datetime_to_restore,
                 this.ignore_missing_files,
                 this.protocol_downgrade_allowed,
-                this.app_metadata,
+                this.commit_properties,
             )
             .await?;
             let mut table = DeltaTable::new_with_state(this.log_store, this.snapshot);

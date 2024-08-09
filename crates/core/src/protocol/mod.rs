@@ -21,7 +21,7 @@ use std::str::FromStr;
 use tracing::{debug, error};
 
 use crate::errors::{DeltaResult, DeltaTableError};
-use crate::kernel::{Add, CommitInfo, Metadata, Protocol, Remove};
+use crate::kernel::{Add, CommitInfo, Metadata, Protocol, Remove, StructField};
 use crate::logstore::LogStore;
 use crate::table::CheckPoint;
 
@@ -326,6 +326,13 @@ pub struct MergePredicate {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
 pub enum DeltaOperation {
+    /// Represents a Delta `Add Column` operation.
+    /// Used to add new columns or field in a struct
+    AddColumn {
+        /// Fields added to existing schema
+        fields: Vec<StructField>,
+    },
+
     /// Represents a Delta `Create` operation.
     /// Would usually only create the table, if also data is written,
     /// a `Write` operations is more appropriate
@@ -371,11 +378,20 @@ pub enum DeltaOperation {
         expr: String,
     },
 
+    /// Drops constraints from a table
+    DropConstraint {
+        /// Constraints name
+        name: String,
+    },
+
     /// Merge data with a source data with the following predicate
     #[serde(rename_all = "camelCase")]
     Merge {
-        /// The merge predicate
+        /// Cleaned merge predicate for conflict checks
         predicate: Option<String>,
+
+        /// The original merge predicate
+        merge_predicate: Option<String>,
 
         /// Match operations performed
         matched_predicates: Vec<MergePredicate>,
@@ -396,6 +412,13 @@ pub enum DeltaOperation {
         query_id: String,
         /// The epoch id of the written micro-batch.
         epoch_id: i64,
+    },
+
+    /// Set table properties operations
+    #[serde(rename_all = "camelCase")]
+    SetTableProperties {
+        /// Table properties that were added
+        properties: HashMap<String, String>,
     },
 
     #[serde(rename_all = "camelCase")]
@@ -442,6 +465,7 @@ impl DeltaOperation {
     pub fn name(&self) -> &str {
         // operation names taken from https://learn.microsoft.com/en-us/azure/databricks/delta/history#--operation-metrics-keys
         match &self {
+            DeltaOperation::AddColumn { .. } => "ADD COLUMN",
             DeltaOperation::Create {
                 mode: SaveMode::Overwrite,
                 ..
@@ -452,12 +476,14 @@ impl DeltaOperation {
             DeltaOperation::Update { .. } => "UPDATE",
             DeltaOperation::Merge { .. } => "MERGE",
             DeltaOperation::StreamingUpdate { .. } => "STREAMING UPDATE",
+            DeltaOperation::SetTableProperties { .. } => "SET TBLPROPERTIES",
             DeltaOperation::Optimize { .. } => "OPTIMIZE",
             DeltaOperation::FileSystemCheck { .. } => "FSCK",
             DeltaOperation::Restore { .. } => "RESTORE",
             DeltaOperation::VacuumStart { .. } => "VACUUM START",
             DeltaOperation::VacuumEnd { .. } => "VACUUM END",
             DeltaOperation::AddConstraint { .. } => "ADD CONSTRAINT",
+            DeltaOperation::DropConstraint { .. } => "DROP CONSTRAINT",
         }
     }
 
@@ -494,9 +520,12 @@ impl DeltaOperation {
     pub fn changes_data(&self) -> bool {
         match self {
             Self::Optimize { .. }
+            | Self::SetTableProperties { .. }
+            | Self::AddColumn { .. }
             | Self::VacuumStart { .. }
             | Self::VacuumEnd { .. }
-            | Self::AddConstraint { .. } => false,
+            | Self::AddConstraint { .. }
+            | Self::DropConstraint { .. } => false,
             Self::Create { .. }
             | Self::FileSystemCheck {}
             | Self::StreamingUpdate { .. }
@@ -533,16 +562,15 @@ impl DeltaOperation {
     /// Denotes if the operation reads the entire table
     pub fn read_whole_table(&self) -> bool {
         match self {
-            // TODO just adding one operation example, as currently none of the
-            // implemented operations scan the entire table.
-            Self::Write { predicate, .. } if predicate.is_none() => false,
+            // Predicate is none -> Merge operation had to join full source and target
+            Self::Merge { predicate, .. } if predicate.is_none() => true,
             _ => false,
         }
     }
 }
 
 /// The SaveMode used when performing a DeltaOperation
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, Copy, Clone, PartialEq, Eq)]
 pub enum SaveMode {
     /// Files will be appended to the target location.
     Append,
@@ -572,7 +600,7 @@ impl FromStr for SaveMode {
 }
 
 /// The OutputMode used in streaming operations.
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Copy, Clone)]
 pub enum OutputMode {
     /// Only new rows will be written when new data is available.
     Append,
@@ -1181,6 +1209,32 @@ mod tests {
         }
 
         #[tokio::test]
+        async fn test_table_not_always_with_stats() {
+            let path = "../test/tests/data/delta-stats-optional";
+            let mut table = crate::open_table(path).await.unwrap();
+            table.load().await.unwrap();
+            let actions = table.snapshot().unwrap().add_actions_table(true).unwrap();
+            let actions = sort_batch_by(&actions, "path").unwrap();
+            // get column-0 path, and column-4 num_records, and column_5 null_count.integer
+            let expected_path: ArrayRef = Arc::new(array::StringArray::from(vec![
+                "part-00000-28925d3a-bdf2-411e-bca9-b067444cbcb0-c000.snappy.parquet",
+                "part-00000-7a509247-4f58-4453-9202-51d75dee59af-c000.snappy.parquet",
+            ]));
+            let expected_num_records: ArrayRef =
+                Arc::new(array::Int64Array::from(vec![None, Some(1)]));
+            let expected_null_count: ArrayRef =
+                Arc::new(array::Int64Array::from(vec![None, Some(0)]));
+
+            let path_column = actions.column(0);
+            let num_records_column = actions.column(4);
+            let null_count_column = actions.column(5);
+
+            assert_eq!(&expected_path, path_column);
+            assert_eq!(&expected_num_records, num_records_column);
+            assert_eq!(&expected_null_count, null_count_column);
+        }
+
+        #[tokio::test]
         async fn test_only_struct_stats() {
             // test table with no json stats
             let path = "../test/tests/data/delta-1.2.1-only-struct-stats";
@@ -1298,15 +1352,21 @@ mod tests {
                 ),
                 (
                     "min.timestamp",
-                    Arc::new(array::TimestampMicrosecondArray::from(vec![
-                        TimestampMicrosecondType::parse("2022-10-24T22:59:32.846Z"),
-                    ])),
+                    Arc::new(
+                        array::TimestampMicrosecondArray::from(vec![
+                            TimestampMicrosecondType::parse("2022-10-24T22:59:32.846Z"),
+                        ])
+                        .with_timezone("UTC"),
+                    ),
                 ),
                 (
                     "max.timestamp",
-                    Arc::new(array::TimestampMicrosecondArray::from(vec![
-                        TimestampMicrosecondType::parse("2022-10-24T22:59:32.846Z"),
-                    ])),
+                    Arc::new(
+                        array::TimestampMicrosecondArray::from(vec![
+                            TimestampMicrosecondType::parse("2022-10-24T22:59:32.846Z"),
+                        ])
+                        .with_timezone("UTC"),
+                    ),
                 ),
                 (
                     "null_count.struct.struct_element",

@@ -1,9 +1,9 @@
 import os
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from pathlib import Path
+from random import random
 from threading import Barrier, Thread
-from types import SimpleNamespace
-from typing import Any
+from typing import Any, List, Tuple
 from unittest.mock import Mock
 
 from packaging import version
@@ -36,12 +36,20 @@ def test_read_table_with_edge_timestamps():
         parquet_read_options=ParquetReadOptions(coerce_int96_timestamp_unit="ms")
     )
     assert dataset.to_table().to_pydict() == {
-        "BIG_DATE": [datetime(9999, 12, 31, 0, 0, 0), datetime(9999, 12, 30, 0, 0, 0)],
-        "NORMAL_DATE": [datetime(2022, 1, 1, 0, 0, 0), datetime(2022, 2, 1, 0, 0, 0)],
+        "BIG_DATE": [
+            datetime(9999, 12, 31, 0, 0, 0, tzinfo=timezone.utc),
+            datetime(9999, 12, 30, 0, 0, 0, tzinfo=timezone.utc),
+        ],
+        "NORMAL_DATE": [
+            datetime(2022, 1, 1, 0, 0, 0, tzinfo=timezone.utc),
+            datetime(2022, 2, 1, 0, 0, 0, tzinfo=timezone.utc),
+        ],
         "SOME_VALUE": [1, 2],
     }
     # Can push down filters to these timestamps.
-    predicate = ds.field("BIG_DATE") == datetime(9999, 12, 31, 0, 0, 0)
+    predicate = ds.field("BIG_DATE") == datetime(
+        9999, 12, 31, 0, 0, 0, tzinfo=timezone.utc
+    )
     assert len(list(dataset.get_fragments(predicate))) == 1
 
 
@@ -93,6 +101,52 @@ def test_load_as_version_datetime(date_value: str, expected_version):
     assert dt.version() == expected_version
 
 
+@pytest.mark.parametrize(
+    ["date_value", "expected_version", "log_mtime_pairs"],
+    [
+        ("2020-05-01T00:47:31-07:00", 1, [("00000000000000000000.json", 158839841.0)]),
+        (
+            "2020-05-02T22:47:31-07:00",
+            2,
+            [
+                ("00000000000000000000.json", 158839841.0),
+                ("00000000000000000001.json", 1588484851.0),
+            ],
+        ),
+    ],
+)
+def test_load_as_version_datetime_with_logs_removed(
+    tmp_path,
+    sample_table,
+    date_value: str,
+    expected_version,
+    log_mtime_pairs: List[Tuple[str, int]],
+):
+    log_path = tmp_path / "_delta_log"
+    for i in range(6):
+        write_deltalake(tmp_path, data=sample_table, mode="append")
+
+    for file_name, dt_epoch in log_mtime_pairs:
+        file_path = log_path / file_name
+        print(file_path)
+        os.utime(file_path, (dt_epoch, dt_epoch))
+
+    dt = DeltaTable(tmp_path, version=expected_version)
+    dt.create_checkpoint()
+    file = log_path / f"0000000000000000000{expected_version}.checkpoint.parquet"
+    assert file.exists()
+    dt.cleanup_metadata()
+
+    file = log_path / f"0000000000000000000{expected_version-1}.json"
+    assert not file.exists()
+    dt = DeltaTable(tmp_path)
+    dt.load_as_version(date_value)
+    assert dt.version() == expected_version
+    dt = DeltaTable(tmp_path)
+    dt.load_as_version(datetime.fromisoformat(date_value))
+    assert dt.version() == expected_version
+
+
 def test_load_as_version_datetime_bad_format():
     table_path = "../crates/test/tests/data/simple_table"
     dt = DeltaTable(table_path)
@@ -114,18 +168,18 @@ def test_read_simple_table_update_incremental():
     assert dt.to_pyarrow_dataset().to_table().to_pydict() == {"id": [5, 7, 9]}
 
 
-def test_read_simple_table_file_sizes_failure():
+def test_read_simple_table_file_sizes_failure(mocker):
     table_path = "../crates/test/tests/data/simple_table"
     dt = DeltaTable(table_path)
     add_actions = dt.get_add_actions().to_pydict()
 
     # set all sizes to -1, the idea is to break the reading, to check
     # that input file sizes are actually used
-    add_actions_modified = {
-        x: [-1 for item in x] if x == "size_bytes" else y
-        for x, y in add_actions.items()
-    }
-    dt.get_add_actions = lambda: SimpleNamespace(to_pydict=lambda: add_actions_modified)  # type:ignore
+    add_actions_modified = {x: -1 for x in add_actions["path"]}
+    mocker.patch(
+        "deltalake._internal.RawDeltaTable.get_add_file_sizes",
+        return_value=add_actions_modified,
+    )
 
     with pytest.raises(OSError, match="Cannot seek past end of file."):
         dt.to_pyarrow_dataset().to_table().to_pydict()
@@ -453,7 +507,11 @@ def test_delta_table_with_filters():
 
     filter_expr = ds.field("date") > "2021-02-20"
     data = dataset.to_table(filter=filter_expr)
-    assert len(dt.to_pandas(filters=[("date", ">", "2021-02-20")])) == data.num_rows
+    assert (
+        len(dt.to_pandas(filters=[("date", ">", "2021-02-20")]))
+        == len(dt.to_pandas(filters=filter_expr))
+        == data.num_rows
+    )
 
     filter_expr = (ds.field("date") > "2021-02-20") | (
         ds.field("state").isin(["Alabama", "Wyoming"])
@@ -468,6 +526,7 @@ def test_delta_table_with_filters():
                 ]
             )
         )
+        == len(dt.to_pandas(filters=filter_expr))
         == data.num_rows
     )
 
@@ -484,6 +543,7 @@ def test_delta_table_with_filters():
                 ]
             )
         )
+        == len(dt.to_pandas(filters=filter_expr))
         == data.num_rows
     )
 
@@ -491,7 +551,7 @@ def test_delta_table_with_filters():
 def test_writer_fails_on_protocol():
     table_path = "../crates/test/tests/data/simple_table"
     dt = DeltaTable(table_path)
-    dt.protocol = Mock(return_value=ProtocolVersions(2, 1))
+    dt.protocol = Mock(return_value=ProtocolVersions(2, 1, None, None))
     with pytest.raises(DeltaProtocolError):
         dt.to_pyarrow_dataset()
     with pytest.raises(DeltaProtocolError):
@@ -732,3 +792,34 @@ def test_encode_partition_value(input_value: Any, expected: str) -> None:
         assert [encode_partition_value(val) for val in input_value] == expected
     else:
         assert encode_partition_value(input_value) == expected
+
+
+def test_read_table_last_checkpoint_not_updated():
+    dt = DeltaTable("../crates/test/tests/data/table_failed_last_checkpoint_update")
+
+    assert dt.version() == 3
+
+
+def test_is_deltatable_valid_path():
+    table_path = "../crates/test/tests/data/simple_table"
+    assert DeltaTable.is_deltatable(table_path)
+
+
+def test_is_deltatable_invalid_path():
+    # Nonce ensures that the table_path always remains an invalid table path.
+    nonce = int(random() * 10000)
+    table_path = "../crates/test/tests/data/simple_table_invalid_%s" % nonce
+    assert not DeltaTable.is_deltatable(table_path)
+
+
+def test_is_deltatable_with_storage_opts():
+    table_path = "../crates/test/tests/data/simple_table"
+    storage_options = {
+        "AWS_ACCESS_KEY_ID": "THE_AWS_ACCESS_KEY_ID",
+        "AWS_SECRET_ACCESS_KEY": "THE_AWS_SECRET_ACCESS_KEY",
+        "AWS_ALLOW_HTTP": "true",
+        "AWS_S3_ALLOW_UNSAFE_RENAME": "true",
+        "AWS_S3_LOCKING_PROVIDER": "dynamodb",
+        "DELTA_DYNAMO_TABLE_NAME": "custom_table_name",
+    }
+    assert DeltaTable.is_deltatable(table_path, storage_options=storage_options)

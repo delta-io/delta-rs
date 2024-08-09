@@ -1,24 +1,24 @@
 //! Delta Table read and write implementation
 
-use std::cmp::Ordering;
+use std::cmp::{min, Ordering};
 use std::collections::HashMap;
 use std::fmt;
 use std::fmt::Formatter;
 
 use chrono::{DateTime, Utc};
-use futures::TryStreamExt;
+use futures::{StreamExt, TryStreamExt};
 use object_store::{path::Path, ObjectStore};
 use serde::de::{Error, SeqAccess, Visitor};
 use serde::ser::SerializeSeq;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use tracing::debug;
 
 use self::builder::DeltaTableConfig;
 use self::state::DeltaTableState;
 use crate::kernel::{
     Action, CommitInfo, DataCheck, DataType, LogicalFile, Metadata, Protocol, StructType,
+    Transaction,
 };
-use crate::logstore::{self, LogStoreConfig, LogStoreRef};
+use crate::logstore::{self, extract_version_from_filename, LogStoreConfig, LogStoreRef};
 use crate::partitions::PartitionFilter;
 use crate::storage::{commit_uri_from_version, ObjectStoreRef};
 use crate::{DeltaResult, DeltaTableError};
@@ -163,7 +163,6 @@ pub(crate) fn get_partition_col_data_types<'a>(
     // When loading `partitionValues_parsed` we have to convert the stringified partition values back to the correct data type.
     schema
         .fields()
-        .iter()
         .filter_map(|f| {
             if metadata
                 .partition_columns
@@ -190,6 +189,7 @@ pub enum PeekCommit {
 }
 
 /// In memory representation of a Delta Table
+#[derive(Clone)]
 pub struct DeltaTable {
     /// The state of the table as of the most recent loaded Delta log entry.
     pub state: Option<DeltaTableState>,
@@ -287,6 +287,11 @@ impl DeltaTable {
         self.log_store.object_store()
     }
 
+    /// Check if the [`DeltaTable`] exists
+    pub async fn verify_deltatable_existence(&self) -> DeltaResult<bool> {
+        self.log_store.is_delta_table_location().await
+    }
+
     /// The URI of the underlying data
     pub fn table_uri(&self) -> String {
         self.log_store.root_uri()
@@ -340,10 +345,6 @@ impl DeltaTable {
         &mut self,
         max_version: Option<i64>,
     ) -> Result<(), DeltaTableError> {
-        debug!(
-            "incremental update with version({}) and max_version({max_version:?})",
-            self.version(),
-        );
         match self.state.as_mut() {
             Some(state) => state.update(self.log_store.clone(), max_version).await,
             _ => {
@@ -461,7 +462,7 @@ impl DeltaTable {
             .map(|path| self.log_store.to_uri(&path)))
     }
 
-    /// Get the number of files in the table - retrn 0 if no metadata is loaded
+    /// Get the number of files in the table - returns 0 if no metadata is loaded
     pub fn get_files_count(&self) -> usize {
         self.state.as_ref().map(|s| s.files_count()).unwrap_or(0)
     }
@@ -486,10 +487,11 @@ impl DeltaTable {
     }
 
     /// Returns the current version of the DeltaTable based on the loaded metadata.
-    pub fn get_app_transaction_version(&self) -> HashMap<String, i64> {
+    pub fn get_app_transaction_version(&self) -> HashMap<String, Transaction> {
         self.state
             .as_ref()
-            .map(|s| s.app_transaction_version().clone())
+            .and_then(|s| s.app_transaction_version().ok())
+            .map(|it| it.map(|t| (t.app_id.clone(), t)).collect())
             .unwrap_or_default()
     }
 
@@ -513,9 +515,29 @@ impl DeltaTable {
         &mut self,
         datetime: DateTime<Utc>,
     ) -> Result<(), DeltaTableError> {
-        let mut min_version = 0;
+        let mut min_version: i64 = -1;
+        let log_store = self.log_store();
+        let prefix = Some(log_store.log_path());
+        let offset_path = commit_uri_from_version(min_version);
+        let object_store = log_store.object_store();
+        let mut files = object_store.list_with_offset(prefix, &offset_path);
+
+        while let Some(obj_meta) = files.next().await {
+            let obj_meta = obj_meta?;
+            if let Some(log_version) = extract_version_from_filename(obj_meta.location.as_ref()) {
+                if min_version == -1 {
+                    min_version = log_version
+                } else {
+                    min_version = min(min_version, log_version);
+                }
+            }
+            if min_version == 0 {
+                break;
+            }
+        }
         let mut max_version = self.get_latest_version().await?;
         let mut version = min_version;
+        let lowest_table_version = min_version;
         let target_ts = datetime.timestamp_millis();
 
         // binary search
@@ -537,8 +559,8 @@ impl DeltaTable {
             }
         }
 
-        if version < 0 {
-            version = 0;
+        if version < lowest_table_version {
+            version = lowest_table_version;
         }
 
         self.load_version(version).await

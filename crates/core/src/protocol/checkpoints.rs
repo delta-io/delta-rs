@@ -6,12 +6,15 @@ use std::iter::Iterator;
 use arrow_json::ReaderBuilder;
 use arrow_schema::ArrowError;
 
-use chrono::{Datelike, Utc};
+use chrono::{Datelike, NaiveDate, NaiveDateTime, Utc};
 use futures::{StreamExt, TryStreamExt};
+use itertools::Itertools;
 use lazy_static::lazy_static;
 use object_store::{Error, ObjectStore};
 use parquet::arrow::ArrowWriter;
+use parquet::basic::Compression;
 use parquet::errors::ParquetError;
+use parquet::file::properties::WriterProperties;
 use regex::Regex;
 use serde_json::Value;
 use tracing::{debug, error};
@@ -19,13 +22,12 @@ use tracing::{debug, error};
 use super::{time_utils, ProtocolError};
 use crate::kernel::arrow::delta_log_schema_for_table;
 use crate::kernel::{
-    Action, Add as AddAction, DataType, PrimitiveType, Protocol, Remove, StructField, Txn,
+    Action, Add as AddAction, DataType, PrimitiveType, Protocol, Remove, StructField,
 };
 use crate::logstore::LogStore;
 use crate::table::state::DeltaTableState;
 use crate::table::{get_partition_col_data_types, CheckPoint, CheckPointBuilder};
 use crate::{open_table_with_version, DeltaTable};
-
 type SchemaPath = Vec<String>;
 
 /// Error returned when there is an error during creating a checkpoint.
@@ -55,6 +57,9 @@ enum CheckpointError {
         #[from]
         source: ArrowError,
     },
+
+    #[error("missing rewquired action type in snapshot: {0}")]
+    MissingActionType(String),
 }
 
 impl From<CheckpointError> for ProtocolError {
@@ -64,6 +69,7 @@ impl From<CheckpointError> for ProtocolError {
             CheckpointError::Arrow { source } => Self::Arrow { source },
             CheckpointError::StaleTableVersion(..) => Self::Generic(value.to_string()),
             CheckpointError::Parquet { source } => Self::ParquetParseError { source },
+            CheckpointError::MissingActionType(_) => Self::Generic(value.to_string()),
         }
     }
 }
@@ -164,14 +170,16 @@ pub async fn create_checkpoint_for(
 
     let object_store = log_store.object_store();
     debug!("Writing checkpoint to {:?}.", checkpoint_path);
-    object_store.put(&checkpoint_path, parquet_bytes).await?;
+    object_store
+        .put(&checkpoint_path, parquet_bytes.into())
+        .await?;
 
     let last_checkpoint_content: Value = serde_json::to_value(checkpoint)?;
     let last_checkpoint_content = bytes::Bytes::from(serde_json::to_vec(&last_checkpoint_content)?);
 
     debug!("Writing _last_checkpoint to {:?}.", last_checkpoint_path);
     object_store
-        .put(&last_checkpoint_path, last_checkpoint_content)
+        .put(&last_checkpoint_path, last_checkpoint_content.into())
         .await?;
 
     Ok(())
@@ -186,7 +194,7 @@ pub async fn cleanup_expired_logs_for(
 ) -> Result<usize, ProtocolError> {
     lazy_static! {
         static ref DELTA_LOG_REGEX: Regex =
-            Regex::new(r"_delta_log/(\d{20})\.(json|checkpoint).*$").unwrap();
+            Regex::new(r"_delta_log/(\d{20})\.(json|checkpoint|json.tmp).*$").unwrap();
     }
 
     let object_store = log_store.object_store();
@@ -254,7 +262,8 @@ fn parquet_bytes_from_state(
 
     // Collect a map of paths that require special stats conversion.
     let mut stats_conversions: Vec<(SchemaPath, DataType)> = Vec::new();
-    collect_stats_conversions(&mut stats_conversions, schema.fields().as_slice());
+    let fields = schema.fields().collect_vec();
+    collect_stats_conversions(&mut stats_conversions, fields.as_slice());
 
     // if any, tombstones do not include extended file metadata, we must omit the extended metadata fields from the remove schema
     // See https://github.com/delta-io/delta/blob/master/PROTOCOL.md#add-file-and-remove-file
@@ -279,8 +288,16 @@ fn parquet_bytes_from_state(
     let jsons = std::iter::once(Action::Protocol(Protocol {
         min_reader_version: state.protocol().min_reader_version,
         min_writer_version: state.protocol().min_writer_version,
-        writer_features: None,
-        reader_features: None,
+        writer_features: if state.protocol().min_writer_version >= 7 {
+            Some(state.protocol().writer_features.clone().unwrap_or_default())
+        } else {
+            None
+        },
+        reader_features: if state.protocol().min_reader_version >= 3 {
+            Some(state.protocol().reader_features.clone().unwrap_or_default())
+        } else {
+            None
+        },
     }))
     // metaData
     .chain(std::iter::once(Action::Metadata(current_metadata.clone())))
@@ -288,14 +305,8 @@ fn parquet_bytes_from_state(
     .chain(
         state
             .app_transaction_version()
-            .iter()
-            .map(|(app_id, version)| {
-                Action::Txn(Txn {
-                    app_id: app_id.clone(),
-                    version: *version,
-                    last_updated: None,
-                })
-            }),
+            .map_err(|_| CheckpointError::MissingActionType("txn".to_string()))?
+            .map(Action::Txn),
     )
     // removes
     .chain(tombstones.iter().map(|r| {
@@ -325,7 +336,15 @@ fn parquet_bytes_from_state(
     debug!("Writing to checkpoint parquet buffer...");
     // Write the Checkpoint parquet file.
     let mut bytes = vec![];
-    let mut writer = ArrowWriter::try_new(&mut bytes, arrow_schema.clone(), None)?;
+    let mut writer = ArrowWriter::try_new(
+        &mut bytes,
+        arrow_schema.clone(),
+        Some(
+            WriterProperties::builder()
+                .set_compression(Compression::SNAPPY)
+                .build(),
+        ),
+    )?;
     let mut decoder = ReaderBuilder::new(arrow_schema)
         .with_batch_size(CHECKPOINT_RECORD_BATCH_SIZE)
         .build_decoder()?;
@@ -417,20 +436,22 @@ fn typed_partition_value_from_string(
                 .map_err(|_| CheckpointError::PartitionValueNotParseable(string_value.to_owned()))?
                 .into()),
             PrimitiveType::Date => {
-                let d = chrono::naive::NaiveDate::parse_from_str(string_value, "%Y-%m-%d")
-                    .map_err(|_| {
-                        CheckpointError::PartitionValueNotParseable(string_value.to_owned())
-                    })?;
+                let d = NaiveDate::parse_from_str(string_value, "%Y-%m-%d").map_err(|_| {
+                    CheckpointError::PartitionValueNotParseable(string_value.to_owned())
+                })?;
                 // day 0 is 1970-01-01 (719163 days from ce)
                 Ok((d.num_days_from_ce() - 719_163).into())
             }
-            PrimitiveType::Timestamp => {
-                let ts =
-                    chrono::naive::NaiveDateTime::parse_from_str(string_value, "%Y-%m-%d %H:%M:%S")
-                        .map_err(|_| {
-                            CheckpointError::PartitionValueNotParseable(string_value.to_owned())
-                        })?;
-                Ok((ts.timestamp_millis() * 1000).into())
+            PrimitiveType::Timestamp | PrimitiveType::TimestampNtz => {
+                let ts = NaiveDateTime::parse_from_str(string_value, "%Y-%m-%d %H:%M:%S.%6f");
+                let ts: NaiveDateTime = match ts {
+                    Ok(_) => ts,
+                    Err(_) => NaiveDateTime::parse_from_str(string_value, "%Y-%m-%d %H:%M:%S"),
+                }
+                .map_err(|_| {
+                    CheckpointError::PartitionValueNotParseable(string_value.to_owned())
+                })?;
+                Ok((ts.and_utc().timestamp_millis() * 1000).into())
             }
             s => unimplemented!(
                 "Primitive type {} is not supported for partition column values.",
@@ -460,7 +481,7 @@ fn typed_partition_value_from_option_string(
     }
 }
 
-fn collect_stats_conversions(paths: &mut Vec<(SchemaPath, DataType)>, fields: &[StructField]) {
+fn collect_stats_conversions(paths: &mut Vec<(SchemaPath, DataType)>, fields: &[&StructField]) {
     let mut _path = SchemaPath::new();
     fields
         .iter()
@@ -481,9 +502,7 @@ fn collect_field_conversion(
         DataType::Struct(struct_field) => {
             let struct_fields = struct_field.fields();
             current_path.push(field.name().to_owned());
-            struct_fields
-                .iter()
-                .for_each(|f| collect_field_conversion(current_path, all_paths, f));
+            struct_fields.for_each(|f| collect_field_conversion(current_path, all_paths, f));
             current_path.pop();
         }
         _ => { /* noop */ }
@@ -532,7 +551,9 @@ mod tests {
 
     use super::*;
     use crate::kernel::StructType;
+    use crate::operations::transaction::{CommitBuilder, TableReference};
     use crate::operations::DeltaOps;
+    use crate::protocol::Metadata;
     use crate::writer::test_utils::get_delta_schema;
 
     #[tokio::test]
@@ -541,7 +562,7 @@ mod tests {
 
         let table = DeltaOps::new_in_memory()
             .create()
-            .with_columns(table_schema.fields().clone())
+            .with_columns(table_schema.fields().cloned())
             .with_save_mode(crate::protocol::SaveMode::Ignore)
             .await
             .unwrap();
@@ -565,13 +586,91 @@ mod tests {
         assert_eq!(last_checkpoint.version, 0);
     }
 
+    /// This test validates that a checkpoint can be written and re-read with the minimum viable
+    /// Metadata. There was a bug which didn't handle the optionality of createdTime.
+    #[tokio::test]
+    async fn test_create_checkpoint_with_metadata() {
+        let table_schema = get_delta_schema();
+
+        let mut table = DeltaOps::new_in_memory()
+            .create()
+            .with_columns(table_schema.fields().cloned())
+            .with_save_mode(crate::protocol::SaveMode::Ignore)
+            .await
+            .unwrap();
+        assert_eq!(table.version(), 0);
+        assert_eq!(table.get_schema().unwrap(), &table_schema);
+
+        let part_cols: Vec<String> = vec![];
+        let metadata = Metadata::try_new(table_schema, part_cols, HashMap::new()).unwrap();
+        let actions = vec![Action::Metadata(metadata)];
+
+        let epoch_id = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("Time went backwards")
+            .as_millis() as i64;
+
+        let operation = crate::protocol::DeltaOperation::StreamingUpdate {
+            output_mode: crate::protocol::OutputMode::Append,
+            query_id: "test".into(),
+            epoch_id,
+        };
+        let v = CommitBuilder::default()
+            .with_actions(actions)
+            .build(
+                table.state.as_ref().map(|f| f as &dyn TableReference),
+                table.log_store(),
+                operation,
+            )
+            .await
+            .unwrap()
+            .version();
+
+        assert_eq!(1, v, "Expected the commit to create table version 1");
+        table.load().await.expect("Failed to reload table");
+        assert_eq!(
+            table.version(),
+            1,
+            "The loaded version of the table is not up to date"
+        );
+
+        let res = create_checkpoint_for(
+            table.version(),
+            table.state.as_ref().unwrap(),
+            table.log_store.as_ref(),
+        )
+        .await;
+        assert!(res.is_ok());
+
+        // Look at the "files" and verify that the _last_checkpoint has the right version
+        let path = Path::from("_delta_log/_last_checkpoint");
+        let last_checkpoint = table
+            .object_store()
+            .get(&path)
+            .await
+            .expect("Failed to get the _last_checkpoint")
+            .bytes()
+            .await
+            .expect("Failed to get bytes for _last_checkpoint");
+        let last_checkpoint: CheckPoint = serde_json::from_slice(&last_checkpoint).expect("Fail");
+        assert_eq!(last_checkpoint.version, 1);
+
+        // If the regression exists, this will fail
+        table.load().await.expect("Failed to reload the table, this likely means that the optional createdTime was not actually optional");
+        assert_eq!(
+            1,
+            table.version(),
+            "The reloaded table doesn't have the right version"
+        );
+    }
+
     #[tokio::test]
     async fn test_create_checkpoint_for_invalid_version() {
         let table_schema = get_delta_schema();
 
         let table = DeltaOps::new_in_memory()
             .create()
-            .with_columns(table_schema.fields().clone())
+            .with_columns(table_schema.fields().cloned())
             .with_save_mode(crate::protocol::SaveMode::Ignore)
             .await
             .unwrap();
@@ -649,8 +748,11 @@ mod tests {
         }
 
         for (s, v) in [
+            ("2021-08-08 01:00:01.000000", 1628384401000000i64),
             ("2021-08-08 01:00:01", 1628384401000000i64),
+            ("1970-01-02 12:59:59.000000", 133199000000i64),
             ("1970-01-02 12:59:59", 133199000000i64),
+            ("1970-01-01 13:00:01.000000", 46801000000i64),
             ("1970-01-01 13:00:01", 46801000000i64),
             ("1969-12-31 00:00:00", -86400000000i64),
             ("1677-09-21 00:12:44", -9223372036000000i64),
@@ -702,9 +804,8 @@ mod tests {
     #[test]
     fn collect_stats_conversions_test() {
         let delta_schema: StructType = serde_json::from_value(SCHEMA.clone()).unwrap();
-        let fields = delta_schema.fields();
+        let fields = delta_schema.fields().collect_vec();
         let mut paths = Vec::new();
-
         collect_stats_conversions(&mut paths, fields.as_slice());
 
         assert_eq!(2, paths.len());

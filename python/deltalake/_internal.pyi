@@ -1,10 +1,4 @@
-import sys
-from typing import Any, Dict, List, Mapping, Optional, Tuple, Union
-
-if sys.version_info >= (3, 8):
-    from typing import Literal
-else:
-    from typing_extensions import Literal
+from typing import Any, Dict, List, Literal, Mapping, Optional, Tuple, Union
 
 import pyarrow
 import pyarrow.fs as fs
@@ -40,11 +34,18 @@ class RawDeltaTable:
         data_catalog_id: Optional[str] = None,
         catalog_options: Optional[Dict[str, str]] = None,
     ) -> str: ...
+    @staticmethod
+    def is_deltatable(
+        table_uri: str, storage_options: Optional[Dict[str, str]]
+    ) -> bool: ...
     def table_uri(self) -> str: ...
     def version(self) -> int: ...
+    def get_add_file_sizes(self) -> Dict[str, int]: ...
     def get_latest_version(self) -> int: ...
+    def get_num_index_cols(self) -> int: ...
+    def get_stats_columns(self) -> Optional[List[str]]: ...
     def metadata(self) -> RawDeltaTableMetaData: ...
-    def protocol_versions(self) -> List[int]: ...
+    def protocol_versions(self) -> List[Any]: ...
     def load_version(self, version: int) -> None: ...
     def load_with_datetime(self, ds: str) -> None: ...
     def files_by_partitions(
@@ -58,6 +59,7 @@ class RawDeltaTable:
         retention_hours: Optional[int],
         enforce_retention_duration: bool,
         custom_metadata: Optional[Dict[str, str]],
+        post_commithook_properties: Optional[Dict[str, Optional[bool]]],
     ) -> List[str]: ...
     def compact_optimize(
         self,
@@ -67,6 +69,7 @@ class RawDeltaTable:
         min_commit_interval: Optional[int],
         writer_properties: Optional[Dict[str, Optional[str]]],
         custom_metadata: Optional[Dict[str, str]],
+        post_commithook_properties: Optional[Dict[str, Optional[bool]]],
     ) -> str: ...
     def z_order_optimize(
         self,
@@ -78,10 +81,31 @@ class RawDeltaTable:
         min_commit_interval: Optional[int],
         writer_properties: Optional[Dict[str, Optional[str]]],
         custom_metadata: Optional[Dict[str, str]],
+        post_commithook_properties: Optional[Dict[str, Optional[bool]]],
     ) -> str: ...
+    def add_columns(
+        self,
+        fields: List[Field],
+        custom_metadata: Optional[Dict[str, str]],
+        post_commithook_properties: Optional[Dict[str, Optional[bool]]],
+    ) -> None: ...
     def add_constraints(
         self,
         constraints: Dict[str, str],
+        custom_metadata: Optional[Dict[str, str]],
+        post_commithook_properties: Optional[Dict[str, Optional[bool]]],
+    ) -> None: ...
+    def drop_constraints(
+        self,
+        name: str,
+        raise_if_not_exists: bool,
+        custom_metadata: Optional[Dict[str, str]],
+        post_commithook_properties: Optional[Dict[str, Optional[bool]]],
+    ) -> None: ...
+    def set_table_properties(
+        self,
+        properties: Dict[str, str],
+        raise_if_not_exists: bool,
         custom_metadata: Optional[Dict[str, str]],
     ) -> None: ...
     def restore(
@@ -103,9 +127,13 @@ class RawDeltaTable:
         predicate: Optional[str],
         writer_properties: Optional[Dict[str, Optional[str]]],
         custom_metadata: Optional[Dict[str, str]],
+        post_commithook_properties: Optional[Dict[str, Optional[bool]]],
     ) -> str: ...
     def repair(
-        self, dry_run: bool, custom_metadata: Optional[Dict[str, str]]
+        self,
+        dry_run: bool,
+        custom_metadata: Optional[Dict[str, str]],
+        post_commithook_properties: Optional[Dict[str, Optional[bool]]],
     ) -> str: ...
     def update(
         self,
@@ -114,6 +142,7 @@ class RawDeltaTable:
         writer_properties: Optional[Dict[str, Optional[str]]],
         safe_cast: bool,
         custom_metadata: Optional[Dict[str, str]],
+        post_commithook_properties: Optional[Dict[str, Optional[bool]]],
     ) -> str: ...
     def merge_execute(
         self,
@@ -123,6 +152,7 @@ class RawDeltaTable:
         target_alias: Optional[str],
         writer_properties: Optional[Dict[str, Optional[str]]],
         custom_metadata: Optional[Dict[str, str]],
+        post_commithook_properties: Optional[Dict[str, Optional[bool]]],
         safe_cast: bool,
         matched_update_updates: Optional[List[Dict[str, str]]],
         matched_update_predicate: Optional[List[Optional[str]]],
@@ -146,8 +176,18 @@ class RawDeltaTable:
         schema: pyarrow.Schema,
         partitions_filters: Optional[FilterType],
         custom_metadata: Optional[Dict[str, str]],
+        post_commithook_properties: Optional[Dict[str, Optional[bool]]],
     ) -> None: ...
     def cleanup_metadata(self) -> None: ...
+    def check_can_write_timestamp_ntz(self, schema: pyarrow.Schema) -> None: ...
+    def load_cdf(
+        self,
+        columns: Optional[List[str]] = None,
+        starting_version: int = 0,
+        ending_version: Optional[int] = None,
+        starting_timestamp: Optional[str] = None,
+        ending_timestamp: Optional[str] = None,
+    ) -> pyarrow.RecordBatchReader: ...
 
 def rust_core_version() -> str: ...
 def write_new_deltalake(
@@ -167,8 +207,8 @@ def write_to_deltalake(
     data: pyarrow.RecordBatchReader,
     partition_by: Optional[List[str]],
     mode: str,
-    max_rows_per_group: int,
-    overwrite_schema: bool,
+    table: Optional[RawDeltaTable],
+    schema_mode: Optional[str],
     predicate: Optional[str],
     name: Optional[str],
     description: Optional[str],
@@ -176,6 +216,7 @@ def write_to_deltalake(
     storage_options: Optional[Dict[str, str]],
     writer_properties: Optional[Dict[str, Optional[str]]],
     custom_metadata: Optional[Dict[str, str]],
+    post_commithook_properties: Optional[Dict[str, Optional[bool]]],
 ) -> None: ...
 def convert_to_deltalake(
     uri: str,
@@ -192,6 +233,7 @@ def create_deltalake(
     schema: pyarrow.Schema,
     partition_by: List[str],
     mode: str,
+    raise_if_key_not_exists: bool,
     name: Optional[str],
     description: Optional[str],
     configuration: Optional[Mapping[str, Optional[str]]],
@@ -199,6 +241,9 @@ def create_deltalake(
     custom_metadata: Optional[Dict[str, str]],
 ) -> None: ...
 def batch_distinct(batch: pyarrow.RecordBatch) -> pyarrow.RecordBatch: ...
+def get_num_idx_cols_and_stats_columns(
+    table: Optional[RawDeltaTable], configuration: Optional[Mapping[str, Optional[str]]]
+) -> Tuple[int, Optional[List[str]]]: ...
 
 # Can't implement inheritance (see note in src/schema.rs), so this is next
 # best thing.
@@ -226,7 +271,8 @@ class PrimitiveType:
      * "binary",
      * "date",
      * "timestamp",
-     * "decimal(<precision>, <scale>)"
+     * "timestampNtz",
+     * "decimal(<precision>, <scale>)" Max: decimal(38,38)
 
     Args:
         data_type: string representation of the data type
@@ -706,10 +752,17 @@ class DeltaFileSystemHandler:
 
     def __init__(
         self,
-        root: str,
-        options: dict[str, str] | None = None,
-        known_sizes: dict[str, int] | None = None,
+        table_uri: str,
+        options: Dict[str, str] | None = None,
+        known_sizes: Dict[str, int] | None = None,
     ) -> None: ...
+    @classmethod
+    def from_table(
+        cls,
+        table: RawDeltaTable,
+        options: Dict[str, str] | None = None,
+        known_sizes: Dict[str, int] | None = None,
+    ) -> "DeltaFileSystemHandler": ...
     def get_type_name(self) -> str: ...
     def copy_file(self, src: str, dst: str) -> None:
         """Copy a file.
@@ -761,7 +814,7 @@ class DeltaFileSystemHandler:
     def open_input_file(self, path: str) -> ObjectInputFile:
         """Open an input file for random access reading."""
     def open_output_stream(
-        self, path: str, metadata: dict[str, str] | None = None
+        self, path: str, metadata: Dict[str, str] | None = None
     ) -> ObjectOutputStream:
         """Open an output stream for sequential writing."""
 
@@ -786,6 +839,11 @@ class CommitFailedError(DeltaError):
 
 class DeltaProtocolError(DeltaError):
     """Raised when a violation with the Delta protocol specs ocurred."""
+
+    pass
+
+class SchemaMismatchError(DeltaError):
+    """Raised when a schema mismatch is detected."""
 
     pass
 

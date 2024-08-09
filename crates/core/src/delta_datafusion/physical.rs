@@ -74,6 +74,10 @@ impl DisplayAs for MetricObserverExec {
 }
 
 impl ExecutionPlan for MetricObserverExec {
+    fn name(&self) -> &str {
+        Self::static_name()
+    }
+
     fn as_any(&self) -> &dyn std::any::Any {
         self
     }
@@ -82,16 +86,12 @@ impl ExecutionPlan for MetricObserverExec {
         self.parent.schema()
     }
 
-    fn output_partitioning(&self) -> datafusion::physical_plan::Partitioning {
-        self.parent.output_partitioning()
+    fn properties(&self) -> &datafusion::physical_plan::PlanProperties {
+        self.parent.properties()
     }
 
-    fn output_ordering(&self) -> Option<&[datafusion_physical_expr::PhysicalSortExpr]> {
-        self.parent.output_ordering()
-    }
-
-    fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
-        vec![self.parent.clone()]
+    fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
+        vec![&self.parent]
     }
 
     fn execute(
@@ -177,4 +177,8 @@ pub(crate) fn find_metric_node(
     }
 
     None
+}
+
+pub(crate) fn get_metric(metrics: &MetricsSet, name: &str) -> usize {
+    metrics.sum_by_name(name).map(|m| m.as_usize()).unwrap_or(0)
 }

@@ -5,6 +5,7 @@ on:
     branches: [main, "rust-v*"]
   pull_request:
     branches: [main, "rust-v*"]
+  merge_group:
 
 jobs:
   format:
@@ -28,7 +29,6 @@ jobs:
       matrix:
         os:
           - ubuntu-latest
-          - macos-11
           - windows-latest
     runs-on: ${{ matrix.os }}
 
@@ -42,16 +42,14 @@ jobs:
           toolchain: stable
           override: true
 
-      - uses: Swatinem/rust-cache@v2
-
       - name: build and lint with clippy
-        run: cargo clippy --features azure,datafusion,s3,gcs,glue --tests
+        run: cargo clippy --features azure,datafusion,s3,gcs,glue,hdfs --tests
 
       - name: Spot-check build for native-tls features
         run: cargo clippy --no-default-features --features azure,datafusion,s3-native-tls,gcs,glue --tests
 
       - name: Check docs
-        run: cargo doc --features azure,datafusion,s3,gcs,glue
+        run: cargo doc --features azure,datafusion,s3,gcs,glue,hdfs
 
       - name: Check no default features (except rustls)
         run: cargo check --no-default-features --features rustls
@@ -62,7 +60,6 @@ jobs:
       matrix:
         os:
           - ubuntu-latest
-          - macos-11
           - windows-latest
     runs-on: ${{ matrix.os }}
     env:
@@ -81,8 +78,6 @@ jobs:
           profile: default
           toolchain: "stable"
           override: true
-
-      - uses: Swatinem/rust-cache@v2
 
       - name: Run tests
         run: cargo test --verbose --features datafusion,azure
@@ -118,28 +113,24 @@ jobs:
           toolchain: stable
           override: true
 
-      # - uses: actions/setup-java@v3
-      #   with:
-      #     distribution: "zulu"
-      #     java-version: "17"
+      # Install Java and Hadoop for HDFS integration tests
+      - uses: actions/setup-java@v4
+        with:
+          distribution: "temurin"
+          java-version: "17"
 
-      # - uses: beyondstorage/setup-hdfs@master
-      #   with:
-      #     hdfs-version: "3.3.2"
-
-      # - name: Set Hadoop env
-      #   run: |
-      #     echo "CLASSPATH=$CLASSPATH:`hadoop classpath --glob`" >> $GITHUB_ENV
-      #     echo "LD_LIBRARY_PATH=$JAVA_HOME/lib/server" >> $GITHUB_ENV
-
-      - uses: Swatinem/rust-cache@v2
+      - name: Download Hadoop
+        run: |
+          wget -q https://dlcdn.apache.org/hadoop/common/hadoop-3.4.0/hadoop-3.4.0.tar.gz
+          tar -xf hadoop-3.4.0.tar.gz -C $GITHUB_WORKSPACE
+          echo "$GITHUB_WORKSPACE/hadoop-3.4.0/bin" >> $GITHUB_PATH
 
       - name: Start emulated services
-        run: docker-compose up -d
+        run: docker compose up -d
 
       - name: Run tests with rustls (default)
         run: |
-          cargo test --features integration_test,azure,s3,gcs,datafusion
+          cargo test --features integration_test,azure,s3,gcs,datafusion,hdfs
 
       - name: Run tests with native-tls
         run: |

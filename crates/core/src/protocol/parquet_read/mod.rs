@@ -9,7 +9,8 @@ use tracing::{debug, error, warn};
 
 use crate::kernel::models::actions::serde_path::decode_path;
 use crate::kernel::{
-    Action, Add, AddCDCFile, DeletionVectorDescriptor, Metadata, Protocol, Remove, StorageType, Txn,
+    Action, Add, AddCDCFile, DeletionVectorDescriptor, Metadata, Protocol, Remove, StorageType,
+    Transaction,
 };
 use crate::protocol::{ColumnCountStat, ColumnValueStat, ProtocolError, Stats};
 
@@ -433,12 +434,10 @@ impl Metadata {
                         .map_err(|_| gen_action_type_error("metaData", "schemaString", "string"))?
                         .clone();
                 }
-                "createdTime" => {
-                    re.created_time =
-                        Some(record.get_long(i).map_err(|_| {
-                            gen_action_type_error("metaData", "createdTime", "long")
-                        })?);
-                }
+                "createdTime" => match record.get_long(i) {
+                    Ok(s) => re.created_time = Some(s),
+                    _ => re.created_time = None,
+                },
                 "configuration" => {
                     let configuration_map = record
                         .get_map(i)
@@ -586,7 +585,7 @@ impl Remove {
     }
 }
 
-impl Txn {
+impl Transaction {
     fn from_parquet_record(record: &parquet::record::Row) -> Result<Self, ProtocolError> {
         let mut re = Self {
             ..Default::default()
@@ -707,7 +706,7 @@ impl Action {
             "add" => Action::Add(Add::from_parquet_record(col_data)?),
             "metaData" => Action::Metadata(Metadata::from_parquet_record(col_data)?),
             "remove" => Action::Remove(Remove::from_parquet_record(col_data)?),
-            "txn" => Action::Txn(Txn::from_parquet_record(col_data)?),
+            "txn" => Action::Txn(Transaction::from_parquet_record(col_data)?),
             "protocol" => Action::Protocol(Protocol::from_parquet_record(col_data)?),
             "cdc" => Action::Cdc(AddCDCFile::from_parquet_record(col_data)?),
             name => {

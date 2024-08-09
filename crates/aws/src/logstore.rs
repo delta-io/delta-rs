@@ -45,6 +45,7 @@ impl S3DynamoDbLogStore {
         object_store: ObjectStoreRef,
     ) -> DeltaResult<Self> {
         let lock_client = DynamoDbLockClient::try_new(
+            &s3_options.sdk_config,
             s3_options
                 .extra_opts
                 .get(constants::LOCK_TABLE_KEY_NAME)
@@ -57,13 +58,12 @@ impl S3DynamoDbLogStore {
                 .extra_opts
                 .get(constants::MAX_ELAPSED_REQUEST_TIME_KEY_NAME)
                 .cloned(),
-            s3_options.region.clone(),
-            s3_options.use_web_identity,
+            s3_options.dynamodb_endpoint.clone(),
         )
         .map_err(|err| DeltaTableError::ObjectStore {
             source: ObjectStoreError::Generic {
                 store: STORE_NAME,
-                source: err.into(),
+                source: Box::new(err),
             },
         })?;
         let table_path = to_uri(&location, &Path::from(""));
@@ -237,6 +237,36 @@ impl LogStore for S3DynamoDbLogStore {
         // of the commit is just one delta client competing to perform the repair operation, as any
         // other client could see the incomplete commit to immediately trigger a repair.
         self.repair_entry(&entry).await?;
+        Ok(())
+    }
+
+    /// Tries to abort an entry by first deleting the commit log entry, then deleting the temp commit file
+    async fn abort_commit_entry(
+        &self,
+        version: i64,
+        tmp_commit: &Path,
+    ) -> Result<(), TransactionError> {
+        self.lock_client
+            .delete_commit_entry(version, &self.table_path)
+            .await
+            .map_err(|err| match err {
+                LockClientError::ProvisionedThroughputExceeded => todo!(
+                    "deltalake-aws does not yet handle DynamoDB provisioned throughput errors"
+                ),
+                LockClientError::VersionAlreadyCompleted { version, .. } => {
+                    error!("Trying to abort a completed commit");
+                    TransactionError::LogStoreError {
+                        msg: format!("trying to abort a completed log entry: {}", version),
+                        source: Box::new(err),
+                    }
+                }
+                err => TransactionError::LogStoreError {
+                    msg: "dynamodb client failed to delete log entry".to_owned(),
+                    source: Box::new(err),
+                },
+            })?;
+
+        abort_commit_entry(&self.storage, version, tmp_commit).await?;
         Ok(())
     }
 

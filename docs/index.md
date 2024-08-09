@@ -8,7 +8,7 @@ This module provides the capability to read, write, and manage [Delta Lake](http
 
 * "Rust deltalake" refers to the Rust API of delta-rs (no Spark dependency)
 * "Python deltalake" refers to the Python API of delta-rs (no Spark dependency)
-* "Delta Spark" refers to the Scala impementation of the Delta Lake transaction log protocol.  This depends on Spark and Java.
+* "Delta Spark" refers to the Scala implementation of the Delta Lake transaction log protocol.  This depends on Spark and Java.
 
 ## Why implement the Delta Lake transaction log protocol in Rust and Scala?
 

@@ -50,7 +50,7 @@ def test_s3_authenticated_read_write(s3_localstack_creds, monkeypatch):
     # Create unauthenticated handler
     storage_handler = DeltaStorageHandler(
         "s3://deltars/",
-        {
+        options={
             "AWS_ENDPOINT_URL": s3_localstack_creds["AWS_ENDPOINT_URL"],
             # Grants anonymous access. If we don't do this, will timeout trying
             # to reading from EC2 instance provider.
@@ -209,7 +209,6 @@ def test_roundtrip_azure_direct(azurite_creds, sample_data: pa.Table):
 @pytest.mark.timeout(timeout=60, method="thread")
 def test_roundtrip_azure_sas(azurite_sas_creds, sample_data: pa.Table):
     table_path = "az://deltars/roundtrip3"
-
     write_deltalake(table_path, sample_data, storage_options=azurite_sas_creds)
     dt = DeltaTable(table_path, storage_options=azurite_sas_creds)
     table = dt.to_pyarrow_table()
@@ -231,6 +230,20 @@ def test_roundtrip_azure_decoded_sas(azurite_sas_creds, sample_data: pa.Table):
     table = dt.to_pyarrow_table()
     assert table == sample_data
     assert dt.version() == 0
+
+
+@pytest.mark.parametrize("storage_size", [1, 4 * 1024 * 1024, 5 * 1024 * 1024 - 1])
+def test_warning_for_small_max_buffer_size(tmp_path, storage_size):
+    storage_opts = {"max_buffer_size": str(storage_size)}
+    store = DeltaStorageHandler(str(tmp_path.absolute()), options=storage_opts)
+    with pytest.warns(UserWarning) as warnings:
+        store.open_output_stream("test")
+
+    assert len(warnings) == 1
+    assert (
+        f"You specified a `max_buffer_size` of {storage_size} bits less than {5*1024*1024} bits"
+        in str(warnings[0].message)
+    )
 
 
 def test_pickle_roundtrip(tmp_path):

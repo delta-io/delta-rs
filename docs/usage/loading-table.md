@@ -16,7 +16,7 @@ options](https://docs.rs/object_store/latest/object_store/azure/enum.AzureConfig
 [gcs
 options](https://docs.rs/object_store/latest/object_store/gcp/enum.GoogleConfigKey.html#variants).
 
-``` python
+```python
 >>> storage_options = {"AWS_ACCESS_KEY_ID": "THE_AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY":"THE_AWS_SECRET_ACCESS_KEY"}
 >>> dt = DeltaTable("../rust/tests/data/delta-0.2.0", storage_options=storage_options)
 ```
@@ -28,25 +28,27 @@ properties.
 
 **S3**:
 
-> -   s3://\<bucket\>/\<path\>
-> -   s3a://\<bucket\>/\<path\>
+> - s3://\<bucket\>/\<path\>
+> - s3a://\<bucket\>/\<path\>
+
+Note that `delta-rs` does not read credentials from a local `.aws/config` or `.aws/creds` file. Credentials can be accessed from environment variables, ec2 metadata, profiles or web identity. You can also pass credentials to `storage_options` using `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`.
 
 **Azure**:
 
-> -   az://\<container\>/\<path\>
-> -   adl://\<container\>/\<path\>
-> -   abfs://\<container\>/\<path\>
+> - az://\<container\>/\<path\>
+> - adl://\<container\>/\<path\>
+> - abfs://\<container\>/\<path\>
 
 **GCS**:
 
-> -   gs://\<bucket\>/\<path\>
+> - gs://\<bucket\>/\<path\>
 
 Alternatively, if you have a data catalog you can load it by reference
 to a database and table name. Currently only AWS Glue is supported.
 
 For AWS Glue catalog, use AWS environment variables to authenticate.
 
-``` python
+```python
 >>> from deltalake import DeltaTable
 >>> from deltalake import DataCatalog
 >>> database_name = "simple_database"
@@ -57,6 +59,33 @@ For AWS Glue catalog, use AWS environment variables to authenticate.
 {'id': [5, 7, 9, 5, 6, 7, 8, 9]}
 ```
 
+## Verify Table Existence
+
+You can check whether or not a Delta table exists at a particular path by using
+the `DeltaTable.is_deltatable()` method.
+
+```python
+from deltalake import DeltaTable
+
+table_path = "<path/to/valid/table>"
+DeltaTable.is_deltatable(table_path)
+# True
+
+invalid_table_path = "<path/to/nonexistent/table>"
+DeltaTable.is_deltatable(invalid_table_path)
+# False
+
+bucket_table_path = "<path/to/valid/table/in/bucket>"
+storage_options = {
+    "AWS_ACCESS_KEY_ID": "THE_AWS_ACCESS_KEY_ID",
+    "AWS_SECRET_ACCESS_KEY": "THE_AWS_SECRET_ACCESS_KEY",
+    ...
+}
+DeltaTable.is_deltatable(bucket_table_path)
+# True
+```
+
+
 ## Custom Storage Backends
 
 While delta always needs its internal storage backend to work and be
@@ -66,7 +95,7 @@ customize the storage interface used for reading the bulk data.
 
 `deltalake` will work with any storage compliant with `pyarrow.fs.FileSystem`, however the root of the filesystem has to be adjusted to point at the root of the Delta table. We can achieve this by wrapping the custom filesystem into a `pyarrow.fs.SubTreeFileSystem`.
 
-``` python
+```python
 import pyarrow.fs as fs
 from deltalake import DeltaTable
 
@@ -81,7 +110,7 @@ When using the pyarrow factory method for file systems, the normalized
 path is provided on creation. In case of S3 this would look something
 like:
 
-``` python
+```python
 import pyarrow.fs as fs
 from deltalake import DeltaTable
 
@@ -98,14 +127,14 @@ ds = dt.to_pyarrow_dataset(filesystem=filesystem)
 To load previous table states, you can provide the version number you
 wish to load:
 
-``` python
+```python
 >>> dt = DeltaTable("../rust/tests/data/simple_table", version=2)
 ```
 
 Once you\'ve loaded a table, you can also change versions using either a
 version number or datetime string:
 
-``` python
+```python
 >>> dt.load_version(1)
 >>> dt.load_with_datetime("2021-11-04 00:05:23.283+00:00")
 ```

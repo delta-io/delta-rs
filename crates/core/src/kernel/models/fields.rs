@@ -1,8 +1,8 @@
 //! Schema definitions for action types
 
+use delta_kernel::schema::{ArrayType, DataType, MapType, StructField, StructType};
 use lazy_static::lazy_static;
 
-use super::schema::{ArrayType, DataType, MapType, StructField, StructType};
 use super::ActionType;
 
 impl ActionType {

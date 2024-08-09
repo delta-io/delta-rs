@@ -7,6 +7,7 @@ use datafusion::physical_plan::{ExecutionPlan, SendableRecordBatchStream};
 use futures::future::BoxFuture;
 
 use super::transaction::PROTOCOL;
+use crate::delta_datafusion::DataFusionMixins;
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::logstore::LogStoreRef;
 use crate::table::state::DeltaTableState;
@@ -21,6 +22,8 @@ pub struct LoadBuilder {
     /// A sub-selection of columns to be loaded
     columns: Option<Vec<String>>,
 }
+
+impl super::Operation<()> for LoadBuilder {}
 
 impl LoadBuilder {
     /// Create a new [`LoadBuilder`]
@@ -47,7 +50,7 @@ impl std::future::IntoFuture for LoadBuilder {
         let this = self;
 
         Box::pin(async move {
-            PROTOCOL.can_read_from(&this.snapshot)?;
+            PROTOCOL.can_read_from(&this.snapshot.snapshot)?;
 
             let table = DeltaTable::new_with_state(this.log_store, this.snapshot);
             let schema = table.snapshot()?.arrow_schema()?;

@@ -1,19 +1,17 @@
-use std::collections::HashMap;
-use std::sync::Arc;
-
-use deltalake::storage::{DynObjectStore, ListResult, MultipartId, ObjectStoreError, Path};
+use crate::error::PythonError;
+use crate::utils::{delete_dir, rt, walk_tree, warn};
+use crate::RawDeltaTable;
+use deltalake::storage::object_store::{MultipartUpload, PutPayloadMut};
+use deltalake::storage::{DynObjectStore, ListResult, ObjectStoreError, Path};
 use deltalake::DeltaTableBuilder;
 use pyo3::exceptions::{PyIOError, PyNotImplementedError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::{IntoPyDict, PyBytes};
+use pyo3::types::{IntoPyDict, PyBytes, PyType};
 use serde::{Deserialize, Serialize};
-use tokio::io::{AsyncWrite, AsyncWriteExt};
-use tokio::runtime::Runtime;
+use std::collections::HashMap;
+use std::sync::Arc;
 
-use crate::error::PythonError;
-use crate::utils::{delete_dir, rt, walk_tree};
-
-const DEFAULT_MAX_BUFFER_SIZE: i64 = 4 * 1024 * 1024;
+const DEFAULT_MAX_BUFFER_SIZE: usize = 5 * 1024 * 1024;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct FsConfig {
@@ -25,7 +23,6 @@ pub(crate) struct FsConfig {
 #[derive(Debug, Clone)]
 pub struct DeltaFileSystemHandler {
     pub(crate) inner: Arc<DynObjectStore>,
-    pub(crate) rt: Arc<Runtime>,
     pub(crate) config: FsConfig,
     pub(crate) known_sizes: Option<HashMap<String, i64>>,
 }
@@ -46,20 +43,39 @@ impl DeltaFileSystemHandler {
     #[new]
     #[pyo3(signature = (table_uri, options = None, known_sizes = None))]
     fn new(
-        table_uri: &str,
+        table_uri: String,
         options: Option<HashMap<String, String>>,
         known_sizes: Option<HashMap<String, i64>>,
     ) -> PyResult<Self> {
-        let storage = DeltaTableBuilder::from_uri(table_uri)
+        let storage = DeltaTableBuilder::from_uri(&table_uri)
             .with_storage_options(options.clone().unwrap_or_default())
             .build_storage()
             .map_err(PythonError::from)?
             .object_store();
+
         Ok(Self {
             inner: storage,
-            rt: Arc::new(rt()?),
             config: FsConfig {
-                root_url: table_uri.into(),
+                root_url: table_uri,
+                options: options.unwrap_or_default(),
+            },
+            known_sizes,
+        })
+    }
+
+    #[classmethod]
+    #[pyo3(signature = (table, options = None, known_sizes = None))]
+    fn from_table(
+        _cls: &Bound<'_, PyType>,
+        table: &RawDeltaTable,
+        options: Option<HashMap<String, String>>,
+        known_sizes: Option<HashMap<String, i64>>,
+    ) -> PyResult<Self> {
+        let storage = table._table.object_store();
+        Ok(Self {
+            inner: storage,
+            config: FsConfig {
+                root_url: table._table.table_uri(),
                 options: options.unwrap_or_default(),
             },
             known_sizes,
@@ -79,8 +95,7 @@ impl DeltaFileSystemHandler {
     fn copy_file(&self, src: String, dest: String) -> PyResult<()> {
         let from_path = Self::parse_path(&src);
         let to_path = Self::parse_path(&dest);
-        self.rt
-            .block_on(self.inner.copy(&from_path, &to_path))
+        rt().block_on(self.inner.copy(&from_path, &to_path))
             .map_err(PythonError::from)?;
         Ok(())
     }
@@ -92,16 +107,14 @@ impl DeltaFileSystemHandler {
 
     fn delete_dir(&self, path: String) -> PyResult<()> {
         let path = Self::parse_path(&path);
-        self.rt
-            .block_on(delete_dir(self.inner.as_ref(), &path))
+        rt().block_on(delete_dir(self.inner.as_ref(), &path))
             .map_err(PythonError::from)?;
         Ok(())
     }
 
     fn delete_file(&self, path: String) -> PyResult<()> {
         let path = Self::parse_path(&path);
-        self.rt
-            .block_on(self.inner.delete(&path))
+        rt().block_on(self.inner.delete(&path))
             .map_err(PythonError::from)?;
         Ok(())
     }
@@ -110,26 +123,33 @@ impl DeltaFileSystemHandler {
         Ok(format!("{self:?}") == format!("{other:?}"))
     }
 
-    fn get_file_info<'py>(&self, paths: Vec<String>, py: Python<'py>) -> PyResult<Vec<&'py PyAny>> {
-        let fs = PyModule::import(py, "pyarrow.fs")?;
+    fn get_file_info<'py>(
+        &self,
+        paths: Vec<String>,
+        py: Python<'py>,
+    ) -> PyResult<Vec<Bound<'py, PyAny>>> {
+        let fs = PyModule::import_bound(py, "pyarrow.fs")?;
         let file_types = fs.getattr("FileType")?;
 
-        let to_file_info = |loc: &str, type_: &PyAny, kwargs: &HashMap<&str, i64>| {
-            fs.call_method("FileInfo", (loc, type_), Some(kwargs.into_py_dict(py)))
+        let to_file_info = |loc: &str, type_: &Bound<'py, PyAny>, kwargs: &HashMap<&str, i64>| {
+            fs.call_method(
+                "FileInfo",
+                (loc, type_),
+                Some(&kwargs.into_py_dict_bound(py)),
+            )
         };
 
         let mut infos = Vec::new();
         for file_path in paths {
             let path = Self::parse_path(&file_path);
             let listed = py.allow_threads(|| {
-                self.rt
-                    .block_on(self.inner.list_with_delimiter(Some(&path)))
+                rt().block_on(self.inner.list_with_delimiter(Some(&path)))
                     .map_err(PythonError::from)
             })?;
 
             // TODO is there a better way to figure out if we are in a directory?
             if listed.objects.is_empty() && listed.common_prefixes.is_empty() {
-                let maybe_meta = py.allow_threads(|| self.rt.block_on(self.inner.head(&path)));
+                let maybe_meta = py.allow_threads(|| rt().block_on(self.inner.head(&path)));
                 match maybe_meta {
                     Ok(meta) => {
                         let kwargs = HashMap::from([
@@ -143,14 +163,14 @@ impl DeltaFileSystemHandler {
                         ]);
                         infos.push(to_file_info(
                             meta.location.as_ref(),
-                            file_types.getattr("File")?,
+                            &file_types.getattr("File")?,
                             &kwargs,
                         )?);
                     }
                     Err(ObjectStoreError::NotFound { .. }) => {
                         infos.push(to_file_info(
                             path.as_ref(),
-                            file_types.getattr("NotFound")?,
+                            &file_types.getattr("NotFound")?,
                             &HashMap::new(),
                         )?);
                     }
@@ -161,7 +181,7 @@ impl DeltaFileSystemHandler {
             } else {
                 infos.push(to_file_info(
                     path.as_ref(),
-                    file_types.getattr("Directory")?,
+                    &file_types.getattr("Directory")?,
                     &HashMap::new(),
                 )?);
             }
@@ -177,19 +197,20 @@ impl DeltaFileSystemHandler {
         allow_not_found: bool,
         recursive: bool,
         py: Python<'py>,
-    ) -> PyResult<Vec<&'py PyAny>> {
-        let fs = PyModule::import(py, "pyarrow.fs")?;
+    ) -> PyResult<Vec<Bound<'py, PyAny>>> {
+        let fs = PyModule::import_bound(py, "pyarrow.fs")?;
         let file_types = fs.getattr("FileType")?;
 
-        let to_file_info = |loc: String, type_: &PyAny, kwargs: HashMap<&str, i64>| {
-            fs.call_method("FileInfo", (loc, type_), Some(kwargs.into_py_dict(py)))
+        let to_file_info = |loc: String, type_: &Bound<'py, PyAny>, kwargs: HashMap<&str, i64>| {
+            fs.call_method(
+                "FileInfo",
+                (loc, type_),
+                Some(&kwargs.into_py_dict_bound(py)),
+            )
         };
 
         let path = Self::parse_path(&base_dir);
-        let list_result = match self
-            .rt
-            .block_on(walk_tree(self.inner.clone(), &path, recursive))
-        {
+        let list_result = match rt().block_on(walk_tree(self.inner.clone(), &path, recursive)) {
             Ok(res) => Ok(res),
             Err(ObjectStoreError::NotFound { path, source }) => {
                 if allow_not_found {
@@ -213,7 +234,7 @@ impl DeltaFileSystemHandler {
                 .map(|p| {
                     to_file_info(
                         p.to_string(),
-                        file_types.getattr("Directory")?,
+                        &file_types.getattr("Directory")?,
                         HashMap::new(),
                     )
                 })
@@ -235,7 +256,7 @@ impl DeltaFileSystemHandler {
                     ]);
                     to_file_info(
                         meta.location.to_string(),
-                        file_types.getattr("File")?,
+                        &file_types.getattr("File")?,
                         kwargs,
                     )
                 })
@@ -249,8 +270,7 @@ impl DeltaFileSystemHandler {
         let from_path = Self::parse_path(&src);
         let to_path = Self::parse_path(&dest);
         // TODO check the if not exists semantics
-        self.rt
-            .block_on(self.inner.rename(&from_path, &to_path))
+        rt().block_on(self.inner.rename(&from_path, &to_path))
             .map_err(PythonError::from)?;
         Ok(())
     }
@@ -262,10 +282,8 @@ impl DeltaFileSystemHandler {
         };
 
         let path = Self::parse_path(&path);
-        let file = self
-            .rt
+        let file = rt()
             .block_on(ObjectInputFile::try_new(
-                Arc::clone(&self.rt),
                 self.inner.clone(),
                 path,
                 size.copied(),
@@ -279,6 +297,7 @@ impl DeltaFileSystemHandler {
         &self,
         path: String,
         #[allow(unused)] metadata: Option<HashMap<String, String>>,
+        py: Python<'_>,
     ) -> PyResult<ObjectOutputStream> {
         let path = Self::parse_path(&path);
         let max_buffer_size = self
@@ -286,12 +305,23 @@ impl DeltaFileSystemHandler {
             .options
             .get("max_buffer_size")
             .map_or(DEFAULT_MAX_BUFFER_SIZE, |v| {
-                v.parse::<i64>().unwrap_or(DEFAULT_MAX_BUFFER_SIZE)
+                v.parse::<usize>().unwrap_or(DEFAULT_MAX_BUFFER_SIZE)
             });
-        let file = self
-            .rt
+        if max_buffer_size < DEFAULT_MAX_BUFFER_SIZE {
+            warn(
+                py,
+                "UserWarning",
+                format!(
+                    "You specified a `max_buffer_size` of {} bits less than {} bits. Most object 
+                    stores expect greater than that number, you may experience issues",
+                    max_buffer_size, DEFAULT_MAX_BUFFER_SIZE
+                )
+                .as_str(),
+                Some(2),
+            )?;
+        }
+        let file = rt()
             .block_on(ObjectOutputStream::try_new(
-                Arc::clone(&self.rt),
                 self.inner.clone(),
                 path,
                 max_buffer_size,
@@ -314,7 +344,6 @@ impl DeltaFileSystemHandler {
 #[derive(Debug, Clone)]
 pub struct ObjectInputFile {
     store: Arc<DynObjectStore>,
-    rt: Arc<Runtime>,
     path: Path,
     content_length: i64,
     #[pyo3(get)]
@@ -326,7 +355,6 @@ pub struct ObjectInputFile {
 
 impl ObjectInputFile {
     pub async fn try_new(
-        rt: Arc<Runtime>,
         store: Arc<DynObjectStore>,
         path: Path,
         size: Option<i64>,
@@ -345,7 +373,6 @@ impl ObjectInputFile {
         // https://github.com/apache/arrow/blob/f184255cbb9bf911ea2a04910f711e1a924b12b8/cpp/src/arrow/filesystem/s3fs.cc#L1083
         Ok(Self {
             store,
-            rt,
             path,
             content_length,
             closed: false,
@@ -437,7 +464,7 @@ impl ObjectInputFile {
     }
 
     #[pyo3(signature = (nbytes = None))]
-    fn read(&mut self, nbytes: Option<i64>, py: Python<'_>) -> PyResult<Py<PyBytes>> {
+    fn read<'py>(&mut self, nbytes: Option<i64>, py: Python<'py>) -> PyResult<Bound<'py, PyBytes>> {
         self.check_closed()?;
         let range = match nbytes {
             Some(len) => {
@@ -456,8 +483,7 @@ impl ObjectInputFile {
         self.pos += nbytes;
         let data = if nbytes > 0 {
             py.allow_threads(|| {
-                self.rt
-                    .block_on(self.store.get_range(&self.path, range))
+                rt().block_on(self.store.get_range(&self.path, range))
                     .map_err(PythonError::from)
             })?
         } else {
@@ -466,7 +492,7 @@ impl ObjectInputFile {
         // TODO: PyBytes copies the buffer. If we move away from the limited CPython
         // API (the stable C API), we could implement the buffer protocol for
         // bytes::Bytes and return this zero-copy.
-        Ok(PyBytes::new(py, data.as_ref()).into_py(py))
+        Ok(PyBytes::new_bound(py, data.as_ref()))
     }
 
     fn fileno(&self) -> PyResult<()> {
@@ -489,42 +515,32 @@ impl ObjectInputFile {
 }
 
 // TODO the C++ implementation track an internal lock on all random access files, DO we need this here?
-// TODO add buffer to store data ...
 #[pyclass(weakref, module = "deltalake._internal")]
 pub struct ObjectOutputStream {
-    store: Arc<DynObjectStore>,
-    rt: Arc<Runtime>,
-    path: Path,
-    writer: Box<dyn AsyncWrite + Send + Unpin>,
-    multipart_id: MultipartId,
+    upload: Box<dyn MultipartUpload>,
     pos: i64,
     #[pyo3(get)]
     closed: bool,
     #[pyo3(get)]
     mode: String,
-    max_buffer_size: i64,
-    buffer_size: i64,
+    max_buffer_size: usize,
+    buffer: PutPayloadMut,
 }
 
 impl ObjectOutputStream {
     pub async fn try_new(
-        rt: Arc<Runtime>,
         store: Arc<DynObjectStore>,
         path: Path,
-        max_buffer_size: i64,
+        max_buffer_size: usize,
     ) -> Result<Self, ObjectStoreError> {
-        let (multipart_id, writer) = store.put_multipart(&path).await?;
+        let upload = store.put_multipart(&path).await?;
         Ok(Self {
-            store,
-            rt,
-            path,
-            writer,
-            multipart_id,
+            upload,
             pos: 0,
             closed: false,
             mode: "wb".into(),
+            buffer: PutPayloadMut::default(),
             max_buffer_size,
-            buffer_size: 0,
         })
     }
 
@@ -535,19 +551,36 @@ impl ObjectOutputStream {
 
         Ok(())
     }
+
+    fn abort(&mut self) -> PyResult<()> {
+        rt().block_on(self.upload.abort())
+            .map_err(PythonError::from)?;
+        Ok(())
+    }
+
+    fn upload_buffer(&mut self) -> PyResult<()> {
+        let payload = std::mem::take(&mut self.buffer).freeze();
+        match rt().block_on(self.upload.put_part(payload)) {
+            Ok(_) => Ok(()),
+            Err(err) => {
+                self.abort()?;
+                Err(PyIOError::new_err(err.to_string()))
+            }
+        }
+    }
 }
 
 #[pymethods]
 impl ObjectOutputStream {
     fn close(&mut self, py: Python<'_>) -> PyResult<()> {
-        self.closed = true;
-        py.allow_threads(|| match self.rt.block_on(self.writer.shutdown()) {
-            Ok(_) => Ok(()),
-            Err(err) => {
-                self.rt
-                    .block_on(self.store.abort_multipart(&self.path, &self.multipart_id))
-                    .map_err(PythonError::from)?;
-                Err(PyIOError::new_err(err.to_string()))
+        py.allow_threads(|| {
+            self.closed = true;
+            if !self.buffer.is_empty() {
+                self.upload_buffer()?;
+            }
+            match rt().block_on(self.upload.complete()) {
+                Ok(_) => Ok(()),
+                Err(err) => Err(PyIOError::new_err(err.to_string())),
             }
         })
     }
@@ -592,38 +625,37 @@ impl ObjectOutputStream {
         Err(PyNotImplementedError::new_err("'read' not implemented"))
     }
 
-    fn write(&mut self, data: &PyBytes) -> PyResult<i64> {
+    fn write(&mut self, data: &Bound<'_, PyBytes>) -> PyResult<i64> {
         self.check_closed()?;
-        let len = data.as_bytes().len() as i64;
         let py = data.py();
-        let data = data.as_bytes();
-        let res = py.allow_threads(|| match self.rt.block_on(self.writer.write_all(data)) {
-            Ok(_) => Ok(len),
-            Err(err) => {
-                self.rt
-                    .block_on(self.store.abort_multipart(&self.path, &self.multipart_id))
-                    .map_err(PythonError::from)?;
-                Err(PyIOError::new_err(err.to_string()))
+        let bytes = data.as_bytes();
+        py.allow_threads(|| {
+            let len = bytes.len();
+            for chunk in bytes.chunks(self.max_buffer_size) {
+                // this will never overflow
+                let remaining = self.max_buffer_size - self.buffer.content_length();
+                // if we have enough space to store this chunk, just append it
+                if chunk.len() < remaining {
+                    self.buffer.extend_from_slice(chunk);
+                    break;
+                }
+                // if we don't, fill as much as we can, flush the buffer, and then append the rest
+                // this won't panic since we've checked the size of the chunk
+                let (first, second) = chunk.split_at(remaining);
+                self.buffer.extend_from_slice(first);
+                self.upload_buffer()?;
+                // len(second) will always be < max_buffer_size, and we just
+                // emptied the buffer by flushing, so we won't overflow
+                // if len(chunk) just happened to be == remaining,
+                // the second slice is empty. this is a no-op
+                self.buffer.extend_from_slice(second);
             }
-        })?;
-        self.buffer_size += len;
-        if self.buffer_size >= self.max_buffer_size {
-            let _ = self.flush(py);
-            self.buffer_size = 0;
-        }
-        Ok(res)
+            Ok(len as i64)
+        })
     }
 
     fn flush(&mut self, py: Python<'_>) -> PyResult<()> {
-        py.allow_threads(|| match self.rt.block_on(self.writer.flush()) {
-            Ok(_) => Ok(()),
-            Err(err) => {
-                self.rt
-                    .block_on(self.store.abort_multipart(&self.path, &self.multipart_id))
-                    .map_err(PythonError::from)?;
-                Err(PyIOError::new_err(err.to_string()))
-            }
-        })
+        py.allow_threads(|| self.upload_buffer())
     }
 
     fn fileno(&self) -> PyResult<()> {

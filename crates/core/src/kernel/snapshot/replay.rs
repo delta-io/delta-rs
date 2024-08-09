@@ -21,15 +21,19 @@ use tracing::debug;
 
 use crate::kernel::arrow::extract::{self as ex, ProvidesColumnByName};
 use crate::kernel::arrow::json;
+use crate::kernel::StructType;
 use crate::{DeltaResult, DeltaTableConfig, DeltaTableError};
 
+use super::ReplayVisitor;
 use super::Snapshot;
 
 pin_project! {
-    pub struct ReplayStream<S> {
+    pub struct ReplayStream<'a, S> {
         scanner: LogReplayScanner,
 
         mapper: Arc<LogMapper>,
+
+        visitors: &'a mut Vec<Box<dyn ReplayVisitor>>,
 
         #[pin]
         commits: S,
@@ -39,9 +43,14 @@ pin_project! {
     }
 }
 
-impl<S> ReplayStream<S> {
-    pub(super) fn try_new(commits: S, checkpoint: S, snapshot: &Snapshot) -> DeltaResult<Self> {
-        let stats_schema = Arc::new((&snapshot.stats_schema()?).try_into()?);
+impl<'a, S> ReplayStream<'a, S> {
+    pub(super) fn try_new(
+        commits: S,
+        checkpoint: S,
+        snapshot: &Snapshot,
+        visitors: &'a mut Vec<Box<dyn ReplayVisitor>>,
+    ) -> DeltaResult<Self> {
+        let stats_schema = Arc::new((&snapshot.stats_schema(None)?).try_into()?);
         let mapper = Arc::new(LogMapper {
             stats_schema,
             config: snapshot.config.clone(),
@@ -50,6 +59,7 @@ impl<S> ReplayStream<S> {
             commits,
             checkpoint,
             mapper,
+            visitors,
             scanner: LogReplayScanner::new(),
         })
     }
@@ -61,9 +71,12 @@ pub(super) struct LogMapper {
 }
 
 impl LogMapper {
-    pub(super) fn try_new(snapshot: &Snapshot) -> DeltaResult<Self> {
+    pub(super) fn try_new(
+        snapshot: &Snapshot,
+        table_schema: Option<&StructType>,
+    ) -> DeltaResult<Self> {
         Ok(Self {
-            stats_schema: Arc::new((&snapshot.stats_schema()?).try_into()?),
+            stats_schema: Arc::new((&snapshot.stats_schema(table_schema)?).try_into()?),
             config: snapshot.config.clone(),
         })
     }
@@ -79,7 +92,7 @@ fn map_batch(
     config: &DeltaTableConfig,
 ) -> DeltaResult<RecordBatch> {
     let stats_col = ex::extract_and_cast_opt::<StringArray>(&batch, "add.stats");
-    let stats_parsed_col = ex::extract_and_cast_opt::<StringArray>(&batch, "add.stats_parsed");
+    let stats_parsed_col = ex::extract_and_cast_opt::<StructArray>(&batch, "add.stats_parsed");
     if stats_parsed_col.is_some() {
         return Ok(batch);
     }
@@ -127,7 +140,7 @@ fn map_batch(
     Ok(batch)
 }
 
-impl<S> Stream for ReplayStream<S>
+impl<'a, S> Stream for ReplayStream<'a, S>
 where
     S: Stream<Item = DeltaResult<RecordBatch>>,
 {
@@ -136,20 +149,34 @@ where
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let this = self.project();
         let res = this.commits.poll_next(cx).map(|b| match b {
-            Some(Ok(batch)) => match this.scanner.process_files_batch(&batch, true) {
-                Ok(filtered) => Some(this.mapper.map_batch(filtered)),
-                Err(e) => Some(Err(e)),
-            },
-            Some(Err(e)) => Some(Err(e)),
+            Some(Ok(batch)) => {
+                for visitor in this.visitors.iter_mut() {
+                    if let Err(e) = visitor.visit_batch(&batch) {
+                        return Some(Err(e));
+                    }
+                }
+                match this.scanner.process_files_batch(&batch, true) {
+                    Ok(filtered) => Some(this.mapper.map_batch(filtered)),
+                    err => Some(err),
+                }
+            }
+            Some(e) => Some(e),
             None => None,
         });
         if matches!(res, Poll::Ready(None)) {
             this.checkpoint.poll_next(cx).map(|b| match b {
-                Some(Ok(batch)) => match this.scanner.process_files_batch(&batch, false) {
-                    Ok(filtered) => Some(this.mapper.map_batch(filtered)),
-                    Err(e) => Some(Err(e)),
-                },
-                Some(Err(e)) => Some(Err(e)),
+                Some(Ok(batch)) => {
+                    for visitor in this.visitors.iter_mut() {
+                        if let Err(e) = visitor.visit_batch(&batch) {
+                            return Some(Err(e));
+                        }
+                    }
+                    match this.scanner.process_files_batch(&batch, false) {
+                        Ok(filtered) => Some(this.mapper.map_batch(filtered)),
+                        err => Some(err),
+                    }
+                }
+                Some(e) => Some(e),
                 None => None,
             })
         } else {

@@ -1,10 +1,18 @@
 [package]
 name = "deltalake-gcp"
-version = "0.1.0"
-edition = "2021"
+version = "0.2.2"
+authors.workspace = true
+keywords.workspace = true
+readme.workspace = true
+edition.workspace = true
+homepage.workspace = true
+description.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
 
 [dependencies]
-deltalake-core = { version = "0.17.0", path = "../core" }
+deltalake-core = { version = ">=0.17.0, <0.19.0", path = "../core" }
 lazy_static = "1"
 
 # workspace depenndecies
@@ -22,7 +30,7 @@ url = { workspace = true }
 chrono = { workspace = true }
 serial_test = "3"
 deltalake-test = { path = "../test" }
-pretty_env_logger = "*"
+pretty_env_logger = "0.5.0"
 rand = "0.8"
 serde_json = { workspace = true }
 tempfile = "3"

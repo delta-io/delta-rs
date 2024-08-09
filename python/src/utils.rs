@@ -1,15 +1,16 @@
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use deltalake::storage::{ListResult, ObjectStore, ObjectStoreError, ObjectStoreResult, Path};
 use futures::future::{join_all, BoxFuture, FutureExt};
 use futures::StreamExt;
-use pyo3::exceptions::PyRuntimeError;
-use pyo3::prelude::*;
+use pyo3::types::{IntoPyDict, PyAnyMethods, PyModule};
+use pyo3::{Bound, PyAny, PyResult, Python, ToPyObject};
 use tokio::runtime::Runtime;
 
 #[inline]
-pub fn rt() -> PyResult<tokio::runtime::Runtime> {
-    Runtime::new().map_err(|_| PyRuntimeError::new_err("Couldn't start a new tokio runtime."))
+pub fn rt() -> &'static Runtime {
+    static TOKIO_RT: OnceLock<Runtime> = OnceLock::new();
+    TOKIO_RT.get_or_init(|| Runtime::new().expect("Failed to create a tokio runtime."))
 }
 
 /// walk the "directory" tree along common prefixes in object store
@@ -79,5 +80,22 @@ pub async fn delete_dir(storage: &dyn ObjectStore, prefix: &Path) -> ObjectStore
         let meta = maybe_meta?;
         storage.delete(&meta.location).await?;
     }
+    Ok(())
+}
+
+pub fn warn<'py>(
+    py: Python<'py>,
+    warning_type: &str,
+    message: &str,
+    stack_level: Option<u8>,
+) -> PyResult<()> {
+    let warnings_warn = PyModule::import_bound(py, "warnings")?.getattr("warn")?;
+    let warning_type = PyModule::import_bound(py, "builtins")?.getattr(warning_type)?;
+    let stack_level = stack_level.unwrap_or(1);
+    let kwargs: [(&str, Bound<'py, PyAny>); 2] = [
+        ("category", warning_type),
+        ("stacklevel", stack_level.to_object(py).into_bound(py)),
+    ];
+    warnings_warn.call((message,), Some(&kwargs.into_py_dict_bound(py)))?;
     Ok(())
 }

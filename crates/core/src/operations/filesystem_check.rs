@@ -27,10 +27,12 @@ use url::{ParseError, Url};
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::{Action, Add, Remove};
 use crate::logstore::LogStoreRef;
-use crate::operations::transaction::commit;
 use crate::protocol::DeltaOperation;
 use crate::table::state::DeltaTableState;
 use crate::DeltaTable;
+
+use super::transaction::CommitBuilder;
+use super::transaction::CommitProperties;
 
 /// Audit the Delta Table's active files with the underlying file system.
 /// See this module's documentation for more information
@@ -42,8 +44,8 @@ pub struct FileSystemCheckBuilder {
     log_store: LogStoreRef,
     /// Don't remove actions to the table log. Just determine which files can be removed
     dry_run: bool,
-    /// Additional metadata to be added to commit
-    app_metadata: Option<HashMap<String, serde_json::Value>>,
+    /// Commit properties and configuration
+    commit_properties: CommitProperties,
 }
 
 /// Details of the FSCK operation including which files were removed from the log
@@ -73,6 +75,8 @@ fn is_absolute_path(path: &str) -> DeltaResult<bool> {
     }
 }
 
+impl super::Operation<()> for FileSystemCheckBuilder {}
+
 impl FileSystemCheckBuilder {
     /// Create a new [`FileSystemCheckBuilder`]
     pub fn new(log_store: LogStoreRef, state: DeltaTableState) -> Self {
@@ -80,7 +84,7 @@ impl FileSystemCheckBuilder {
             snapshot: state,
             log_store,
             dry_run: false,
-            app_metadata: None,
+            commit_properties: CommitProperties::default(),
         }
     }
 
@@ -90,12 +94,9 @@ impl FileSystemCheckBuilder {
         self
     }
 
-    /// Additional metadata to be added to commit info
-    pub fn with_metadata(
-        mut self,
-        metadata: impl IntoIterator<Item = (String, serde_json::Value)>,
-    ) -> Self {
-        self.app_metadata = Some(HashMap::from_iter(metadata));
+    /// Additonal information to write to the commit
+    pub fn with_commit_properties(mut self, commit_properties: CommitProperties) -> Self {
+        self.commit_properties = commit_properties;
         self
     }
 
@@ -104,7 +105,7 @@ impl FileSystemCheckBuilder {
             HashMap::with_capacity(self.snapshot.file_actions()?.len());
         let log_store = self.log_store.clone();
 
-        for active in self.snapshot.file_actions()? {
+        for active in self.snapshot.file_actions_iter()? {
             if is_absolute_path(&active.path)? {
                 return Err(DeltaTableError::Generic(
                     "Filesystem check does not support absolute paths".to_string(),
@@ -141,7 +142,7 @@ impl FileSystemCheckPlan {
     pub async fn execute(
         self,
         snapshot: &DeltaTableState,
-        app_metadata: Option<HashMap<String, serde_json::Value>>,
+        mut commit_properties: CommitProperties,
     ) -> DeltaResult<FileSystemCheckMetrics> {
         if self.files_to_remove.is_empty() {
             return Ok(FileSystemCheckMetrics {
@@ -175,25 +176,22 @@ impl FileSystemCheckPlan {
             files_removed: removed_file_paths,
         };
 
-        let mut app_metadata = match app_metadata {
-            Some(meta) => meta,
-            None => HashMap::new(),
-        };
+        commit_properties
+            .app_metadata
+            .insert("readVersion".to_owned(), snapshot.version().into());
+        commit_properties.app_metadata.insert(
+            "operationMetrics".to_owned(),
+            serde_json::to_value(&metrics)?,
+        );
 
-        app_metadata.insert("readVersion".to_owned(), snapshot.version().into());
-        if let Ok(map) = serde_json::to_value(&metrics) {
-            app_metadata.insert("operationMetrics".to_owned(), map);
-        }
-
-        commit(
-            self.log_store.as_ref(),
-            &actions,
-            DeltaOperation::FileSystemCheck {},
-            Some(snapshot),
-            // TODO pass through metadata
-            Some(app_metadata),
-        )
-        .await?;
+        CommitBuilder::from(commit_properties)
+            .with_actions(actions)
+            .build(
+                Some(snapshot),
+                self.log_store.clone(),
+                DeltaOperation::FileSystemCheck {},
+            )
+            .await?;
 
         Ok(metrics)
     }
@@ -218,7 +216,7 @@ impl std::future::IntoFuture for FileSystemCheckBuilder {
                 ));
             }
 
-            let metrics = plan.execute(&this.snapshot, this.app_metadata).await?;
+            let metrics = plan.execute(&this.snapshot, this.commit_properties).await?;
             let mut table = DeltaTable::new_with_state(this.log_store, this.snapshot);
             table.update().await?;
             Ok((table, metrics))

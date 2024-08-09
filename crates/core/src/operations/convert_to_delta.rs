@@ -1,33 +1,32 @@
 //! Command for converting a Parquet table to a Delta table in place
 // https://github.com/delta-io/delta/blob/1d5dd774111395b0c4dc1a69c94abc169b1c83b6/spark/src/main/scala/org/apache/spark/sql/delta/commands/ConvertToDeltaCommand.scala
+use std::collections::{HashMap, HashSet};
+use std::num::TryFromIntError;
+use std::str::{FromStr, Utf8Error};
+use std::sync::Arc;
 
+use arrow::{datatypes::Schema as ArrowSchema, error::ArrowError};
+use futures::future::{self, BoxFuture};
+use futures::TryStreamExt;
+use indexmap::IndexMap;
+use itertools::Itertools;
+use parquet::arrow::async_reader::{ParquetObjectReader, ParquetRecordBatchStreamBuilder};
+use parquet::errors::ParquetError;
+use percent_encoding::percent_decode_str;
+use serde_json::{Map, Value};
+use tracing::debug;
+
+use crate::operations::get_num_idx_cols_and_stats_columns;
 use crate::{
-    kernel::{Add, DataType, Schema, StructField},
+    kernel::{scalars::ScalarExt, Add, DataType, Schema, StructField},
     logstore::{LogStore, LogStoreRef},
     operations::create::CreateBuilder,
     protocol::SaveMode,
     table::builder::ensure_table_uri,
     table::config::DeltaConfigKey,
+    writer::stats::stats_from_parquet_metadata,
     DeltaResult, DeltaTable, DeltaTableError, ObjectStoreError, NULL_PARTITION_VALUE_DATA_PATH,
 };
-use arrow::{datatypes::Schema as ArrowSchema, error::ArrowError};
-use futures::{
-    future::{self, BoxFuture},
-    TryStreamExt,
-};
-use parquet::{
-    arrow::async_reader::{ParquetObjectReader, ParquetRecordBatchStreamBuilder},
-    errors::ParquetError,
-};
-use percent_encoding::percent_decode_str;
-use serde_json::{Map, Value};
-use std::{
-    collections::{HashMap, HashSet},
-    num::TryFromIntError,
-    str::{FromStr, Utf8Error},
-    sync::Arc,
-};
-use tracing::debug;
 
 /// Error converting a Parquet table to a Delta table
 #[derive(Debug, thiserror::Error)]
@@ -49,7 +48,7 @@ enum Error {
     #[error("The schema of partition columns must be provided to convert a Parquet table to a Delta table")]
     MissingPartitionSchema,
     #[error("Partition column provided by the user does not exist in the parquet files")]
-    PartitionColumnNotExist(HashSet<StructField>),
+    PartitionColumnNotExist,
     #[error("The given location is already a delta table location")]
     DeltaTableAlready,
     #[error("Location must be provided to convert a Parquet table to a Delta table")]
@@ -101,7 +100,7 @@ pub struct ConvertToDeltaBuilder {
     log_store: Option<LogStoreRef>,
     location: Option<String>,
     storage_options: Option<HashMap<String, String>>,
-    partition_schema: HashSet<StructField>,
+    partition_schema: HashMap<String, StructField>,
     partition_strategy: PartitionStrategy,
     mode: SaveMode,
     name: Option<String>,
@@ -115,6 +114,8 @@ impl Default for ConvertToDeltaBuilder {
         Self::new()
     }
 }
+
+impl super::Operation<()> for ConvertToDeltaBuilder {}
 
 impl ConvertToDeltaBuilder {
     /// Create a new [`ConvertToDeltaBuilder`]
@@ -164,7 +165,10 @@ impl ConvertToDeltaBuilder {
         mut self,
         partition_schema: impl IntoIterator<Item = StructField>,
     ) -> Self {
-        self.partition_schema = HashSet::from_iter(partition_schema);
+        self.partition_schema = partition_schema
+            .into_iter()
+            .map(|f| (f.name.clone(), f))
+            .collect();
         self
     }
 
@@ -226,7 +230,7 @@ impl ConvertToDeltaBuilder {
     }
 
     /// Consume self into CreateBuilder with corresponding add actions, schemas and operation meta
-    async fn into_create_builder(mut self) -> Result<CreateBuilder, Error> {
+    async fn into_create_builder(self) -> Result<CreateBuilder, Error> {
         // Use the specified log store. If a log store is not provided, create a new store from the specified path.
         // Return an error if neither log store nor path is provided
         let log_store = if let Some(log_store) = self.log_store {
@@ -270,10 +274,16 @@ impl ConvertToDeltaBuilder {
         // Iterate over the parquet files. Parse partition columns, generate add actions and collect parquet file schemas
         let mut arrow_schemas = Vec::new();
         let mut actions = Vec::new();
+        // partition columns that were defined by caller and are expected to apply on this table
+        let mut expected_partitions: HashMap<String, StructField> = self.partition_schema.clone();
         // A HashSet of all unique partition columns in a Parquet table
         let mut partition_columns = HashSet::new();
         // A vector of StructField of all unique partition columns in a Parquet table
         let mut partition_schema_fields = HashMap::new();
+
+        // Obtain settings on which columns to skip collecting stats on if any
+        let (num_indexed_cols, stats_columns) =
+            get_num_idx_cols_and_stats_columns(None, self.configuration.clone());
 
         for file in files {
             // A HashMap from partition column to value for this parquet file only
@@ -290,7 +300,7 @@ impl ConvertToDeltaBuilder {
                     .ok_or(Error::MissingPartitionSchema)?;
 
                 if partition_columns.insert(key.to_string()) {
-                    if let Some(schema) = self.partition_schema.take(key) {
+                    if let Some(schema) = expected_partitions.remove(key) {
                         partition_schema_fields.insert(key.to_string(), schema);
                     } else {
                         // Return an error if the schema of a partition column is not provided by user
@@ -301,12 +311,14 @@ impl ConvertToDeltaBuilder {
                 // Safety: we just checked that the key is present in the map
                 let field = partition_schema_fields.get(key).unwrap();
                 let scalar = if value == NULL_PARTITION_VALUE_DATA_PATH {
-                    Ok(crate::kernel::Scalar::Null(field.data_type().clone()))
+                    Ok(delta_kernel::expressions::Scalar::Null(
+                        field.data_type().clone(),
+                    ))
                 } else {
                     let decoded = percent_decode_str(value).decode_utf8()?;
                     match field.data_type() {
                         DataType::Primitive(p) => p.parse_scalar(decoded.as_ref()),
-                        _ => Err(crate::kernel::Error::Generic(format!(
+                        _ => Err(delta_kernel::Error::Generic(format!(
                             "Exprected primitive type, found: {:?}",
                             field.data_type()
                         ))),
@@ -318,6 +330,24 @@ impl ConvertToDeltaBuilder {
 
                 subpath = iter.next();
             }
+
+            let batch_builder = ParquetRecordBatchStreamBuilder::new(ParquetObjectReader::new(
+                object_store.clone(),
+                file.clone(),
+            ))
+            .await?;
+
+            // Fetch the stats
+            let parquet_metadata = batch_builder.metadata();
+            let stats = stats_from_parquet_metadata(
+                &IndexMap::from_iter(partition_values.clone().into_iter()),
+                parquet_metadata.as_ref(),
+                num_indexed_cols,
+                &stats_columns,
+            )
+            .map_err(|e| Error::DeltaTable(e.into()))?;
+            let stats_string =
+                serde_json::to_string(&stats).map_err(|e| Error::DeltaTable(e.into()))?;
 
             actions.push(
                 Add {
@@ -340,19 +370,13 @@ impl ConvertToDeltaBuilder {
                         .collect(),
                     modification_time: file.last_modified.timestamp_millis(),
                     data_change: true,
+                    stats: Some(stats_string),
                     ..Default::default()
                 }
                 .into(),
             );
 
-            let mut arrow_schema = ParquetRecordBatchStreamBuilder::new(ParquetObjectReader::new(
-                object_store.clone(),
-                file,
-            ))
-            .await?
-            .schema()
-            .as_ref()
-            .clone();
+            let mut arrow_schema = batch_builder.schema().as_ref().clone();
 
             // Arrow schema of Parquet files may have conflicting metatdata
             // Since Arrow schema metadata is not used to generate Delta table schema, we set the metadata field to an empty HashMap
@@ -360,27 +384,21 @@ impl ConvertToDeltaBuilder {
             arrow_schemas.push(arrow_schema);
         }
 
-        if !self.partition_schema.is_empty() {
+        if !expected_partitions.is_empty() {
             // Partition column provided by the user does not exist in the parquet files
-            return Err(Error::PartitionColumnNotExist(self.partition_schema));
+            return Err(Error::PartitionColumnNotExist);
         }
 
         // Merge parquet file schemas
         // This step is needed because timestamp will not be preserved when copying files in S3. We can't use the schema of the latest parqeut file as Delta table's schema
-        let mut schema_fields = Schema::try_from(&ArrowSchema::try_merge(arrow_schemas)?)?
-            .fields()
-            .clone();
-        schema_fields.append(
-            &mut partition_schema_fields
-                .values()
-                .cloned()
-                .collect::<Vec<_>>(),
-        );
+        let schema = Schema::try_from(&ArrowSchema::try_merge(arrow_schemas)?)?;
+        let mut schema_fields = schema.fields().collect_vec();
+        schema_fields.append(&mut partition_schema_fields.values().collect::<Vec<_>>());
 
         // Generate CreateBuilder with corresponding add actions, schemas and operation meta
         let mut builder = CreateBuilder::new()
             .with_log_store(log_store)
-            .with_columns(schema_fields)
+            .with_columns(schema_fields.into_iter().cloned())
             .with_partition_columns(partition_columns.into_iter())
             .with_actions(actions)
             .with_save_mode(self.mode)
@@ -419,17 +437,20 @@ impl std::future::IntoFuture for ConvertToDeltaBuilder {
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+
+    use delta_kernel::expressions::Scalar;
+    use itertools::Itertools;
+    use pretty_assertions::assert_eq;
+    use tempfile::tempdir;
+
     use super::*;
     use crate::{
-        kernel::{DataType, PrimitiveType, Scalar},
+        kernel::{DataType, PrimitiveType},
         open_table,
         storage::StorageOptions,
         Path,
     };
-    use itertools::Itertools;
-    use pretty_assertions::assert_eq;
-    use std::fs;
-    use tempfile::tempdir;
 
     fn schema_field(key: &str, primitive: PrimitiveType, nullable: bool) -> StructField {
         StructField::new(key.to_string(), DataType::Primitive(primitive), nullable)
@@ -535,7 +556,8 @@ mod tests {
             .get_schema()
             .expect("Failed to get schema")
             .fields()
-            .clone();
+            .cloned()
+            .collect_vec();
         schema_fields.sort_by(|a, b| a.name().cmp(b.name()));
         assert_eq!(
             schema_fields, expected_schema,
@@ -574,6 +596,16 @@ mod tests {
             action.path(),
             "part-00000-d22c627d-9655-4153-9527-f8995620fa42-c000.snappy.parquet"
         );
+
+        let Some(Scalar::Struct(data)) = action.min_values() else {
+            panic!("Missing min values");
+        };
+        assert_eq!(data.values(), vec![Scalar::Date(18628), Scalar::Integer(1)]);
+
+        let Some(Scalar::Struct(data)) = action.max_values() else {
+            panic!("Missing max values");
+        };
+        assert_eq!(data.values(), vec![Scalar::Date(18632), Scalar::Integer(5)]);
 
         assert_delta_table(
             table,

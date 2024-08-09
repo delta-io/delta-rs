@@ -4,7 +4,7 @@ use bytes::Bytes;
 use deltalake_core::kernel::{Action, Add, Remove, StructType};
 use deltalake_core::logstore::LogStore;
 use deltalake_core::operations::create::CreateBuilder;
-use deltalake_core::operations::transaction::commit;
+use deltalake_core::operations::transaction::CommitBuilder;
 use deltalake_core::protocol::{DeltaOperation, SaveMode};
 use deltalake_core::DeltaTable;
 use deltalake_core::DeltaTableBuilder;
@@ -86,7 +86,7 @@ impl TestContext {
             .with_log_store(log_store)
             .with_table_name("delta-rs_test_table")
             .with_comment("Table created by delta-rs tests")
-            .with_columns(schema.fields().clone())
+            .with_columns(schema.fields().cloned())
             .with_partition_columns(p)
             .await
             .unwrap()
@@ -119,7 +119,7 @@ pub async fn add_file(
     commit_to_log: bool,
 ) {
     let backend = table.object_store();
-    backend.put(path, data.clone()).await.unwrap();
+    backend.put(path, data.clone().into()).await.unwrap();
 
     if commit_to_log {
         let mut part_values = HashMap::new();
@@ -147,15 +147,13 @@ pub async fn add_file(
             predicate: None,
         };
         let actions = vec![Action::Add(add)];
-        commit(
-            table.log_store().as_ref(),
-            &actions,
-            operation,
-            table.state.as_ref(),
-            None,
-        )
-        .await
-        .unwrap();
+        let snapshot = table.snapshot().unwrap().snapshot();
+
+        CommitBuilder::default()
+            .with_actions(actions)
+            .build(Some(snapshot), table.log_store(), operation)
+            .await
+            .unwrap();
         table.update().await.unwrap();
     }
 }
@@ -185,14 +183,12 @@ pub async fn remove_file(
     };
     let operation = DeltaOperation::Delete { predicate: None };
     let actions = vec![Action::Remove(remove)];
-    commit(
-        table.log_store().as_ref(),
-        &actions,
-        operation,
-        table.state.as_ref(),
-        None,
-    )
-    .await
-    .unwrap();
+    let snapshot = table.snapshot().unwrap().snapshot();
+
+    CommitBuilder::default()
+        .with_actions(actions)
+        .build(Some(snapshot), table.log_store(), operation)
+        .await
+        .unwrap();
     table.update().await.unwrap();
 }

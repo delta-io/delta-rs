@@ -36,6 +36,7 @@
     <img alt="#delta-rs in the Delta Lake Slack workspace" src="https://img.shields.io/badge/slack-delta-blue.svg?logo=slack&style=flat-square&color=F75101">
   </a>
 </p>
+Delta Lake is an open-source storage format that runs on top of existing data lakes. Delta Lake is compatible with processing engines like Apache Spark and provides benefits such as ACID transaction guarantees, schema enforcement, and scalable data handling.
 
 The Delta Lake project aims to unlock the power of the Deltalake for as many users and projects as possible
 by providing native low-level APIs aimed at developers and integrators, as well as a high-level operations
@@ -77,7 +78,7 @@ write_deltalake("./data/delta", df)
 dt = DeltaTable("./data/delta")
 df2 = dt.to_pandas()
 
-assert df == df2
+assert df.equals(df2)
 ```
 
 The same table can also be loaded using the core Rust crate:
@@ -91,7 +92,7 @@ async fn main() -> Result<(), DeltaTableError> {
     let table = open_table("./data/delta").await?;
 
     // show all active files in the table
-    let files = table.get_files();
+    let files: Vec<_> = table.get_file_uris()?.collect();
     println!("{:?}", files);
 
     Ok(())
@@ -116,6 +117,7 @@ Libraries and frameworks that interoperate with delta-rs - in alphabetical order
 - [AWS SDK for Pandas](https://github.com/aws/aws-sdk-pandas)
 - [ballista][ballista]
 - [datafusion][datafusion]
+- [Daft](https://www.getdaft.io/)
 - [Dask](https://github.com/dask-contrib/dask-deltatable)
 - [datahub](https://datahubproject.io/)
 - [DuckDB](https://duckdb.org/)
@@ -130,45 +132,46 @@ of features outlined in the Delta [protocol][protocol] is also [tracked](#protoc
 
 ### Cloud Integrations
 
-| Storage              |  Rust   | Python  | Comment                             |
-| -------------------- | :-----: | :-----: | ----------------------------------- |
-| Local                | ![done] | ![done] |                                     |
-| S3 - AWS             | ![done] | ![done] | requires lock for concurrent writes |
-| S3 - MinIO           | ![done] | ![done] | requires lock for concurrent writes |
-| S3 - R2              | ![done] | ![done] | requires lock for concurrent writes |
-| Azure Blob           | ![done] | ![done] |                                     |
-| Azure ADLS Gen2      | ![done] | ![done] |                                     |
-| Microsoft OneLake    | ![done] | ![done] |                                     |
-| Google Cloud Storage | ![done] | ![done] |                                     |
+| Storage              |  Rust   | Python  | Comment                                                          |
+| -------------------- | :-----: | :-----: | ---------------------------------------------------------------- |
+| Local                | ![done] | ![done] |                                                                  |
+| S3 - AWS             | ![done] | ![done] | requires lock for concurrent writes                              |
+| S3 - MinIO           | ![done] | ![done] | requires lock for concurrent writes                              |
+| S3 - R2              | ![done] | ![done] | No lock required when using `AmazonS3ConfigKey::CopyIfNotExists` |
+| Azure Blob           | ![done] | ![done] |                                                                  |
+| Azure ADLS Gen2      | ![done] | ![done] |                                                                  |
+| Microsoft OneLake    | ![done] | ![done] |                                                                  |
+| Google Cloud Storage | ![done] | ![done] |                                                                  |
+| HDFS                 | ![done] | ![done] |                                                                  |
 
 ### Supported Operations
 
-| Operation             |           Rust           |          Python          | Description                                 |
-| --------------------- | :----------------------: | :----------------------: | ------------------------------------------- |
-| Create                |         ![done]          |         ![done]          | Create a new table                          |
-| Read                  |         ![done]          |         ![done]          | Read data from a table                      |
-| Vacuum                |         ![done]          |         ![done]          | Remove unused files and log entries         |
-| Delete - partitions   |                          |         ![done]          | Delete a table partition                    |
-| Delete - predicates   |         ![done]          |         ![done]          | Delete data based on a predicate            |
-| Optimize - compaction |         ![done]          |         ![done]          | Harmonize the size of data file             |
-| Optimize - Z-order    |         ![done]          |         ![done]          | Place similar data into the same file       |
-| Merge                 |         ![done]          |         ![done]          | Merge a target Delta table with source data |
-| FS check              |         ![done]          |         ![done]          | Remove corrupted files from table           |
+| Operation             |  Rust   | Python  | Description                                 |
+| --------------------- | :-----: | :-----: | ------------------------------------------- |
+| Create                | ![done] | ![done] | Create a new table                          |
+| Read                  | ![done] | ![done] | Read data from a table                      |
+| Vacuum                | ![done] | ![done] | Remove unused files and log entries         |
+| Delete - partitions   |         | ![done] | Delete a table partition                    |
+| Delete - predicates   | ![done] | ![done] | Delete data based on a predicate            |
+| Optimize - compaction | ![done] | ![done] | Harmonize the size of data file             |
+| Optimize - Z-order    | ![done] | ![done] | Place similar data into the same file       |
+| Merge                 | ![done] | ![done] | Merge a target Delta table with source data |
+| FS check              | ![done] | ![done] | Remove corrupted files from table           |
 
 ### Protocol Support Level
 
-| Writer Version | Requirement                                   |        Status        |
-| -------------- | --------------------------------------------- | :------------------: |
-| Version 2      | Append Only Tables                            |       ![done]        |
-| Version 2      | Column Invariants                             |       ![done]        |
-| Version 3      | Enforce `delta.checkpoint.writeStatsAsJson`   | [![open]][writer-rs] |
-| Version 3      | Enforce `delta.checkpoint.writeStatsAsStruct` | [![open]][writer-rs] |
+| Writer Version | Requirement                                   |              Status               |
+| -------------- | --------------------------------------------- | :-------------------------------: |
+| Version 2      | Append Only Tables                            |              ![done]              |
+| Version 2      | Column Invariants                             |              ![done]              |
+| Version 3      | Enforce `delta.checkpoint.writeStatsAsJson`   |       [![open]][writer-rs]        |
+| Version 3      | Enforce `delta.checkpoint.writeStatsAsStruct` |       [![open]][writer-rs]        |
 | Version 3      | CHECK constraints                             | [![semi-done]][check-constraints] |
-| Version 4      | Change Data Feed                              |                      |
-| Version 4      | Generated Columns                             |                      |
-| Version 5      | Column Mapping                                |                      |
-| Version 6      | Identity Columns                              |                      |
-| Version 7      | Table Features                                |                      |
+| Version 4      | Change Data Feed                              |                                   |
+| Version 4      | Generated Columns                             |                                   |
+| Version 5      | Column Mapping                                |                                   |
+| Version 6      | Identity Columns                              |                                   |
+| Version 7      | Table Features                                |                                   |
 
 | Reader Version | Requirement                         | Status |
 | -------------- | ----------------------------------- | ------ |

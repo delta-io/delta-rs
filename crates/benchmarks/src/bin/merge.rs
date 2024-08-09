@@ -7,9 +7,10 @@ use arrow::datatypes::Schema as ArrowSchema;
 use arrow_array::{RecordBatch, StringArray, UInt32Array};
 use chrono::Duration;
 use clap::{command, Args, Parser, Subcommand};
+use datafusion::functions::expr_fn::random;
 use datafusion::{datasource::MemTable, prelude::DataFrame};
 use datafusion_common::DataFusionError;
-use datafusion_expr::{cast, col, lit, random};
+use datafusion_expr::{cast, col, lit};
 use deltalake_core::protocol::SaveMode;
 use deltalake_core::{
     arrow::{
@@ -200,6 +201,7 @@ async fn benchmark_merge_tpcds(
         table.log_store(),
         DeltaScanConfig {
             file_column_name: Some("file_path".to_string()),
+            ..Default::default()
         },
     )
     .unwrap();

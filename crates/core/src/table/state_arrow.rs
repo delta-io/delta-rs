@@ -14,9 +14,9 @@ use arrow_array::{
     StringArray, StructArray, TimestampMicrosecondArray, TimestampMillisecondArray,
 };
 use arrow_schema::{DataType, Field, Fields, TimeUnit};
+use delta_kernel::features::ColumnMappingMode;
 use itertools::Itertools;
 
-use super::config::ColumnMappingMode;
 use super::state::DeltaTableState;
 use crate::errors::DeltaTableError;
 use crate::kernel::{Add, DataType as DeltaDataType, StructType};
@@ -91,7 +91,7 @@ impl DeltaTableState {
                     .fields
                     .iter()
                     .map(|field| Cow::Owned(field.name().clone()))
-                    .zip(partition_cols_batch.columns().iter().map(Arc::clone)),
+                    .zip(partition_cols_batch.columns().iter().cloned()),
             )
         }
 
@@ -103,7 +103,7 @@ impl DeltaTableState {
                     .fields
                     .iter()
                     .map(|field| Cow::Owned(field.name().clone()))
-                    .zip(stats.columns().iter().map(Arc::clone)),
+                    .zip(stats.columns().iter().cloned()),
             );
         }
         if files.iter().any(|add| add.deletion_vector.is_some()) {
@@ -114,7 +114,7 @@ impl DeltaTableState {
                     .fields
                     .iter()
                     .map(|field| Cow::Owned(field.name().clone()))
-                    .zip(delvs.columns().iter().map(Arc::clone)),
+                    .zip(delvs.columns().iter().cloned()),
             );
         }
         if files.iter().any(|add| {
@@ -129,7 +129,7 @@ impl DeltaTableState {
                     .fields
                     .iter()
                     .map(|field| Cow::Owned(field.name().clone()))
-                    .zip(tags.columns().iter().map(Arc::clone)),
+                    .zip(tags.columns().iter().cloned()),
             );
         }
 
@@ -149,7 +149,13 @@ impl DeltaTableState {
             .map(
                 |name| -> Result<arrow::datatypes::DataType, DeltaTableError> {
                     let schema = metadata.schema()?;
-                    let field = schema.field_with_name(name)?;
+                    let field =
+                        schema
+                            .field(name)
+                            .ok_or(DeltaTableError::MetadataError(format!(
+                                "Invalid partition column {0}",
+                                name
+                            )))?;
                     Ok(field.data_type().try_into()?)
                 },
             )
@@ -173,12 +179,12 @@ impl DeltaTableState {
                 .map(|name| -> Result<_, DeltaTableError> {
                     let physical_name = self
                         .schema()
-                        .field_with_name(name)
-                        .or(Err(DeltaTableError::MetadataError(format!(
+                        .field(name)
+                        .ok_or(DeltaTableError::MetadataError(format!(
                             "Invalid partition column {0}",
                             name
-                        ))))?
-                        .physical_name()?
+                        )))?
+                        .physical_name(column_mapping_mode)?
                         .to_string();
                     Ok((physical_name, name.as_str()))
                 })
@@ -328,7 +334,7 @@ impl DeltaTableState {
 
         for add in files {
             if let Some(value) = &add.deletion_vector {
-                storage_type.append_value(&value.storage_type);
+                storage_type.append_value(value.storage_type);
                 path_or_inline_div.append_value(value.path_or_inline_dv.clone());
                 if let Some(ofs) = value.offset {
                     offset.append_value(ofs);
@@ -397,8 +403,7 @@ impl DeltaTableState {
         flatten: bool,
     ) -> Result<arrow::record_batch::RecordBatch, DeltaTableError> {
         let stats: Vec<Option<Stats>> = self
-            .file_actions()?
-            .iter()
+            .file_actions_iter()?
             .map(|f| {
                 f.get_stats()
                     .map_err(|err| DeltaTableError::InvalidStatsJson { json_err: err })
@@ -447,11 +452,12 @@ impl DeltaTableState {
             .map(|(path, datatype)| -> Result<ColStats, DeltaTableError> {
                 let null_count = stats
                     .iter()
-                    .flat_map(|maybe_stat| {
+                    .map(|maybe_stat| {
                         maybe_stat
                             .as_ref()
                             .map(|stat| resolve_column_count_stat(&stat.null_count, &path))
                     })
+                    .map(|null_count| null_count.flatten())
                     .collect::<Vec<Option<i64>>>();
                 let null_count = Some(value_vec_to_array(null_count, |values| {
                     Ok(Arc::new(arrow::array::Int64Array::from(values)))
@@ -463,11 +469,12 @@ impl DeltaTableState {
                 let min_values = if matches!(datatype, DeltaDataType::Primitive(_)) {
                     let min_values = stats
                         .iter()
-                        .flat_map(|maybe_stat| {
+                        .map(|maybe_stat| {
                             maybe_stat
                                 .as_ref()
                                 .map(|stat| resolve_column_value_stat(&stat.min_values, &path))
                         })
+                        .map(|min_value| min_value.flatten())
                         .collect::<Vec<Option<&serde_json::Value>>>();
 
                     Some(value_vec_to_array(min_values, |values| {
@@ -480,11 +487,12 @@ impl DeltaTableState {
                 let max_values = if matches!(datatype, DeltaDataType::Primitive(_)) {
                     let max_values = stats
                         .iter()
-                        .flat_map(|maybe_stat| {
+                        .map(|maybe_stat| {
                             maybe_stat
                                 .as_ref()
                                 .map(|stat| resolve_column_value_stat(&stat.max_values, &path))
                         })
+                        .map(|max_value| max_value.flatten())
                         .collect::<Vec<Option<&serde_json::Value>>>();
                     Some(value_vec_to_array(max_values, |values| {
                         json_value_to_array_general(&arrow_type, values.into_iter())
@@ -570,7 +578,7 @@ impl DeltaTableState {
                 // into StructArrays, until it is consolidated into a single array.
                 columnar_stats = columnar_stats
                     .into_iter()
-                    .group_by(|col_stat| {
+                    .chunk_by(|col_stat| {
                         if col_stat.path.len() < level {
                             col_stat.path.clone()
                         } else {
@@ -672,7 +680,6 @@ impl<'a> SchemaLeafIterator<'a> {
         SchemaLeafIterator {
             fields_remaining: schema
                 .fields()
-                .iter()
                 .map(|field| (vec![field.name().as_ref()], field.data_type()))
                 .collect(),
         }
@@ -737,8 +744,8 @@ fn json_value_to_array_general<'a>(
                 .map(|value| value.and_then(|value| value.as_str().map(|value| value.as_bytes())))
                 .collect_vec(),
         ))),
-        DataType::Timestamp(TimeUnit::Microsecond, None) => {
-            Ok(Arc::new(TimestampMicrosecondArray::from(
+        DataType::Timestamp(TimeUnit::Microsecond, tz) => match tz {
+            None => Ok(Arc::new(TimestampMicrosecondArray::from(
                 values
                     .map(|value| {
                         value.and_then(|value| {
@@ -746,13 +753,32 @@ fn json_value_to_array_general<'a>(
                         })
                     })
                     .collect_vec(),
-            )))
-        }
+            ))),
+            Some(tz_str) if tz_str.as_ref() == "UTC" => Ok(Arc::new(
+                TimestampMicrosecondArray::from(
+                    values
+                        .map(|value| {
+                            value.and_then(|value| {
+                                value.as_str().and_then(TimestampMicrosecondType::parse)
+                            })
+                        })
+                        .collect_vec(),
+                )
+                .with_timezone("UTC"),
+            )),
+            _ => Err(DeltaTableError::Generic(format!(
+                "Invalid datatype {}",
+                datatype
+            ))),
+        },
         DataType::Date32 => Ok(Arc::new(Date32Array::from(
             values
                 .map(|value| value.and_then(|value| value.as_str().and_then(Date32Type::parse)))
                 .collect_vec(),
         ))),
-        _ => Err(DeltaTableError::Generic("Invalid datatype".to_string())),
+        _ => Err(DeltaTableError::Generic(format!(
+            "Invalid datatype {}",
+            datatype
+        ))),
     }
 }

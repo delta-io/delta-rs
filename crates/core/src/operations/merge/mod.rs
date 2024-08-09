@@ -35,38 +35,39 @@ use std::time::Instant;
 use async_trait::async_trait;
 use datafusion::datasource::provider_as_source;
 use datafusion::error::Result as DataFusionResult;
-use datafusion::execution::context::{QueryPlanner, SessionConfig};
+use datafusion::execution::context::SessionConfig;
 use datafusion::logical_expr::build_join_schema;
-use datafusion::physical_planner::{DefaultPhysicalPlanner, ExtensionPlanner, PhysicalPlanner};
+use datafusion::physical_plan::metrics::MetricBuilder;
+use datafusion::physical_planner::{ExtensionPlanner, PhysicalPlanner};
 use datafusion::{
     execution::context::SessionState,
-    physical_plan::{
-        metrics::{MetricBuilder, MetricsSet},
-        ExecutionPlan,
-    },
+    physical_plan::ExecutionPlan,
     prelude::{DataFrame, SessionContext},
 };
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{Column, DFSchema, ScalarValue, TableReference};
 use datafusion_expr::expr::Placeholder;
-use datafusion_expr::{col, conditional_expressions::CaseBuilder, lit, when, Expr, JoinType};
 use datafusion_expr::{
-    BinaryExpr, Distinct, Extension, Filter, LogicalPlan, LogicalPlanBuilder, Operator, Projection,
+    col, conditional_expressions::CaseBuilder, lit, max, min, when, Between, Expr, JoinType,
+};
+use datafusion_expr::{
+    Aggregate, BinaryExpr, Extension, LogicalPlan, LogicalPlanBuilder, Operator,
     UserDefinedLogicalNode, UNNAMED_TABLE,
 };
+use either::{Left, Right};
 use futures::future::BoxFuture;
 use itertools::Itertools;
 use parquet::file::properties::WriterProperties;
 use serde::Serialize;
-use serde_json::Value;
 
 use self::barrier::{MergeBarrier, MergeBarrierExec};
 
 use super::datafusion_utils::{into_expr, maybe_into_expr, Expression};
-use super::transaction::{commit, PROTOCOL};
+use super::transaction::{CommitProperties, PROTOCOL};
 use crate::delta_datafusion::expr::{fmt_expr_to_sql, parse_predicate_expression};
 use crate::delta_datafusion::logical::MetricObserver;
-use crate::delta_datafusion::physical::{find_metric_node, MetricObserverExec};
+use crate::delta_datafusion::physical::{find_metric_node, get_metric, MetricObserverExec};
+use crate::delta_datafusion::planner::DeltaPlanner;
 use crate::delta_datafusion::{
     execute_plan_to_batch, register_store, DeltaColumn, DeltaScanConfigBuilder, DeltaSessionConfig,
     DeltaTableProvider,
@@ -74,7 +75,8 @@ use crate::delta_datafusion::{
 use crate::kernel::Action;
 use crate::logstore::LogStoreRef;
 use crate::operations::merge::barrier::find_barrier_node;
-use crate::operations::write::write_execution_plan;
+use crate::operations::transaction::CommitBuilder;
+use crate::operations::write::{write_execution_plan, WriterStatsConfig};
 use crate::protocol::{DeltaOperation, MergePredicate};
 use crate::table::state::DeltaTableState;
 use crate::{DeltaResult, DeltaTable, DeltaTableError};
@@ -126,12 +128,14 @@ pub struct MergeBuilder {
     state: Option<SessionState>,
     /// Properties passed to underlying parquet writer for when files are rewritten
     writer_properties: Option<WriterProperties>,
-    /// Additional metadata to be added to commit
-    app_metadata: Option<HashMap<String, serde_json::Value>>,
+    /// Additional information to add to the commit
+    commit_properties: CommitProperties,
     /// safe_cast determines how data types that do not match the underlying table are handled
     /// By default an error is returned
     safe_cast: bool,
 }
+
+impl super::Operation<()> for MergeBuilder {}
 
 impl MergeBuilder {
     /// Create a new [`MergeBuilder`]
@@ -150,7 +154,7 @@ impl MergeBuilder {
             source_alias: None,
             target_alias: None,
             state: None,
-            app_metadata: None,
+            commit_properties: CommitProperties::default(),
             writer_properties: None,
             match_operations: Vec::new(),
             not_match_operations: Vec::new(),
@@ -163,10 +167,10 @@ impl MergeBuilder {
     ///
     /// The update expressions can specify both source and target columns.
     ///
-    /// Multiple match clasues can be specified and their predicates are
+    /// Multiple match clauses can be specified and their predicates are
     /// evaluated to determine if the corresponding operation are performed.
-    /// Only the first clause that results in an satisfy predicate is executed.
-    /// Ther order of match clauses matter.
+    /// Only the first clause that results in a satisfy predicate is executed.
+    /// The order of match clauses matter.
     ///
     /// #Example
     /// ```rust ignore
@@ -201,10 +205,10 @@ impl MergeBuilder {
 
     /// Delete a target record when it matches with a source record
     ///
-    /// Multiple match clasues can be specified and their predicates are
+    /// Multiple match clauses can be specified and their predicates are
     /// evaluated to determine if the corresponding operation are performed.
-    /// Only the first clause that results in an satisfy predicate is executed.
-    /// Ther order of match clauses matter.
+    /// Only the first clause that results in a satisfy predicate is executed.
+    /// The order of match clauses matter.
     ///
     /// #Example
     /// ```rust ignore
@@ -234,10 +238,10 @@ impl MergeBuilder {
 
     /// Insert a source record when it does not match with a target record
     ///
-    /// Multiple not match clasues can be specified and their predicates are
+    /// Multiple not match clauses can be specified and their predicates are
     /// evaluated to determine if the corresponding operation are performed.
-    /// Only the first clause that results in an satisfy predicate is executed.
-    /// Ther order of not match clauses matter.
+    /// Only the first clause that results in a satisfy predicate is executed.
+    /// The order of not match clauses matter.
     ///
     /// #Example
     /// ```rust ignore
@@ -269,10 +273,10 @@ impl MergeBuilder {
     ///
     /// The update expressions can specify only target columns.
     ///
-    /// Multiple source not match clasues can be specified and their predicates
+    /// Multiple source not match clauses can be specified and their predicates
     /// are evaluated to determine if the corresponding operation are performed.
-    /// Only the first clause that results in an satisfy predicate is executed.
-    /// Ther order of source not match clauses matter.
+    /// Only the first clause that results in a satisfy predicate is executed.
+    /// The order of source not match clauses matter.
     ///
     /// #Example
     /// ```rust ignore
@@ -301,10 +305,10 @@ impl MergeBuilder {
 
     /// Delete a target record when it does not match with a source record
     ///
-    /// Multiple source not match clasues can be specified and their predicates
-    /// are evaluated to determine if the corresponding operation are performed.
-    /// Only the first clause that results in an satisfy predicate is executed.
-    /// Ther order of source not match clauses matter.
+    /// Multiple source "not match" clauses can be specified and their predicates
+    /// are evaluated to determine if the corresponding operations are performed.
+    /// Only the first clause that results in a satisfy predicate is executed.
+    /// The order of source "not match" clauses matter.
     ///
     /// #Example
     /// ```rust ignore
@@ -351,11 +355,8 @@ impl MergeBuilder {
     }
 
     /// Additional metadata to be added to commit info
-    pub fn with_metadata(
-        mut self,
-        metadata: impl IntoIterator<Item = (String, serde_json::Value)>,
-    ) -> Self {
-        self.app_metadata = Some(HashMap::from_iter(metadata));
+    pub fn with_commit_properties(mut self, commit_properties: CommitProperties) -> Self {
+        self.commit_properties = commit_properties;
         self
     }
 
@@ -503,7 +504,7 @@ impl MergeOperation {
                             relation: Some(TableReference::Bare { table }),
                             name,
                         } => {
-                            if table.eq(alias) {
+                            if table.as_ref() == alias {
                                 Column {
                                     relation: Some(r),
                                     name,
@@ -574,7 +575,7 @@ pub struct MergeMetrics {
     /// Time taken to rewrite the matched files
     pub rewrite_time_ms: u64,
 }
-
+#[derive(Clone)]
 struct MergeMetricExtensionPlanner {}
 
 #[async_trait]
@@ -667,13 +668,22 @@ impl ExtensionPlanner for MergeMetricExtensionPlanner {
     }
 }
 
-/// Takes the predicate provided and does two things:
+struct PredicatePlaceholder {
+    expr: Expr,
+    alias: String,
+    is_aggregate: bool,
+}
+
+/// Takes the predicate provided and does three things:
 ///
-/// 1. for any relations between a source column and a target column, if the target column is a
-/// partition column, then replace source with a placeholder matching the name of the partition
+/// 1. for any relations between a source column and a partition target column,
+/// replace source with a placeholder matching the name of the partition
 /// columns
 ///
-/// 2. for any other relation with a source column, remove them.
+/// 2. for any is equal relations between a source column and a non-partition target column,
+/// replace source with is between expression with min(source_column) and max(source_column) placeholders
+///
+/// 3. for any other relation with a source column, remove them.
 ///
 /// For example, for the predicate:
 ///
@@ -681,21 +691,17 @@ impl ExtensionPlanner for MergeMetricExtensionPlanner {
 ///
 /// where `date` is a partition column, would result in the expr:
 ///
-/// `$date = target.date and frob > 42`
+/// `$date_0 = target.date and target.id between $id_1_min and $id_1_max and frob > 42`
 ///
 /// This leaves us with a predicate that we can push into delta scan after expanding it out to
-/// a conjunction between the disinct partitions in the source input.
+/// a conjunction between the distinct partitions in the source input.
 ///
-/// TODO: A futher improvement here might be for non-partition columns to be replaced with min/max
-/// checks, so the above example could become:
-///
-/// `$date = target.date and target.id between 12345 and 99999 and frob > 42`
 fn generalize_filter(
     predicate: Expr,
     partition_columns: &Vec<String>,
     source_name: &TableReference,
     target_name: &TableReference,
-    placeholders: &mut HashMap<String, Expr>,
+    placeholders: &mut Vec<PredicatePlaceholder>,
 ) -> Option<Expr> {
     #[derive(Debug)]
     enum ReferenceTableCheck {
@@ -705,10 +711,7 @@ fn generalize_filter(
     }
     impl ReferenceTableCheck {
         fn has_reference(&self) -> bool {
-            match self {
-                ReferenceTableCheck::HasReference(_) => true,
-                _ => false,
-            }
+            matches!(self, ReferenceTableCheck::HasReference(_))
         }
     }
     fn references_table(expr: &Expr, table: &TableReference) -> ReferenceTableCheck {
@@ -735,11 +738,86 @@ fn generalize_filter(
                     ReferenceTableCheck::Unknown
                 }
             }
-            Expr::IsNull(inner) => references_table(&inner, table),
+            Expr::IsNull(inner) => references_table(inner, table),
             Expr::Literal(_) => ReferenceTableCheck::NoReference,
             _ => ReferenceTableCheck::Unknown,
         };
         res
+    }
+
+    fn construct_placeholder(
+        binary: BinaryExpr,
+        source_left: bool,
+        is_partition_column: bool,
+        column_name: String,
+        placeholders: &mut Vec<PredicatePlaceholder>,
+    ) -> Option<Expr> {
+        if is_partition_column {
+            let placeholder_name = format!("{column_name}_{}", placeholders.len());
+            let placeholder = Expr::Placeholder(Placeholder {
+                id: placeholder_name.clone(),
+                data_type: None,
+            });
+
+            let (left, right, source_expr): (Box<Expr>, Box<Expr>, Expr) = if source_left {
+                (placeholder.into(), binary.clone().right, *binary.left)
+            } else {
+                (binary.clone().left, placeholder.into(), *binary.right)
+            };
+
+            let replaced = Expr::BinaryExpr(BinaryExpr {
+                left,
+                op: binary.op,
+                right,
+            });
+
+            placeholders.push(PredicatePlaceholder {
+                expr: source_expr,
+                alias: placeholder_name,
+                is_aggregate: false,
+            });
+
+            Some(replaced)
+        } else {
+            match binary.op {
+                Operator::Eq => {
+                    let name_min = format!("{column_name}_{}_min", placeholders.len());
+                    let placeholder_min = Expr::Placeholder(Placeholder {
+                        id: name_min.clone(),
+                        data_type: None,
+                    });
+                    let name_max = format!("{column_name}_{}_max", placeholders.len());
+                    let placeholder_max = Expr::Placeholder(Placeholder {
+                        id: name_max.clone(),
+                        data_type: None,
+                    });
+                    let (source_expr, target_expr) = if source_left {
+                        (*binary.left, *binary.right)
+                    } else {
+                        (*binary.right, *binary.left)
+                    };
+                    let replaced = Expr::Between(Between {
+                        expr: target_expr.into(),
+                        negated: false,
+                        low: placeholder_min.into(),
+                        high: placeholder_max.into(),
+                    });
+
+                    placeholders.push(PredicatePlaceholder {
+                        expr: min(source_expr.clone()),
+                        alias: name_min,
+                        is_aggregate: true,
+                    });
+                    placeholders.push(PredicatePlaceholder {
+                        expr: max(source_expr),
+                        alias: name_max,
+                        is_aggregate: true,
+                    });
+                    Some(replaced)
+                }
+                _ => None,
+            }
+        }
     }
 
     match predicate {
@@ -748,23 +826,13 @@ fn generalize_filter(
                 if let ReferenceTableCheck::HasReference(left_target) =
                     references_table(&binary.left, target_name)
                 {
-                    if partition_columns.contains(&left_target) {
-                        let placeholder_name = format!("{left_target}_{}", placeholders.len());
-
-                        let placeholder = Expr::Placeholder(datafusion_expr::expr::Placeholder {
-                            id: placeholder_name.clone(),
-                            data_type: None,
-                        });
-                        let replaced = Expr::BinaryExpr(BinaryExpr {
-                            left: binary.left,
-                            op: binary.op,
-                            right: placeholder.into(),
-                        });
-
-                        placeholders.insert(placeholder_name, *binary.right);
-
-                        return Some(replaced);
-                    }
+                    return construct_placeholder(
+                        binary,
+                        false,
+                        partition_columns.contains(&left_target),
+                        left_target,
+                        placeholders,
+                    );
                 }
                 return None;
             }
@@ -772,23 +840,13 @@ fn generalize_filter(
                 if let ReferenceTableCheck::HasReference(right_target) =
                     references_table(&binary.right, target_name)
                 {
-                    if partition_columns.contains(&right_target) {
-                        let placeholder_name = format!("{right_target}_{}", placeholders.len());
-
-                        let placeholder = Expr::Placeholder(datafusion_expr::expr::Placeholder {
-                            id: placeholder_name.clone(),
-                            data_type: None,
-                        });
-                        let replaced = Expr::BinaryExpr(BinaryExpr {
-                            right: binary.right,
-                            op: binary.op,
-                            left: placeholder.into(),
-                        });
-
-                        placeholders.insert(placeholder_name, *binary.left);
-
-                        return Some(replaced);
-                    }
+                    return construct_placeholder(
+                        binary,
+                        true,
+                        partition_columns.contains(&right_target),
+                        right_target,
+                        placeholders,
+                    );
                 }
                 return None;
             }
@@ -808,7 +866,7 @@ fn generalize_filter(
                 placeholders,
             );
 
-            let res = match (left, right) {
+            match (left, right) {
                 (None, None) => None,
                 (None, Some(one_side)) | (Some(one_side), None) => {
                     // in the case of an AND clause, it's safe to generalize the filter down to just one side of the AND.
@@ -828,19 +886,22 @@ fn generalize_filter(
                     right: r.into(),
                 })
                 .into(),
-            };
-            res
+            }
         }
         other => match references_table(&other, source_name) {
             ReferenceTableCheck::HasReference(col) => {
                 let placeholder_name = format!("{col}_{}", placeholders.len());
 
-                let placeholder = Expr::Placeholder(datafusion_expr::expr::Placeholder {
+                let placeholder = Expr::Placeholder(Placeholder {
                     id: placeholder_name.clone(),
                     data_type: None,
                 });
 
-                placeholders.insert(placeholder_name, other);
+                placeholders.push(PredicatePlaceholder {
+                    expr: other,
+                    alias: placeholder_name,
+                    is_aggregate: true,
+                });
 
                 Some(placeholder)
             }
@@ -855,11 +916,12 @@ fn replace_placeholders(expr: Expr, placeholders: &HashMap<String, ScalarValue>)
         Expr::Placeholder(Placeholder { id, .. }) => {
             let value = placeholders[&id].clone();
             // Replace the placeholder with the value
-            Ok(Transformed::Yes(Expr::Literal(value)))
+            Ok(Transformed::yes(Expr::Literal(value)))
         }
-        _ => Ok(Transformed::No(expr)),
+        _ => Ok(Transformed::no(expr)),
     })
     .unwrap()
+    .data
 }
 
 async fn try_construct_early_filter(
@@ -867,17 +929,13 @@ async fn try_construct_early_filter(
     table_snapshot: &DeltaTableState,
     session_state: &SessionState,
     source: &LogicalPlan,
-    source_name: &TableReference<'_>,
-    target_name: &TableReference<'_>,
+    source_name: &TableReference,
+    target_name: &TableReference,
 ) -> DeltaResult<Option<Expr>> {
     let table_metadata = table_snapshot.metadata();
     let partition_columns = &table_metadata.partition_columns;
 
-    if partition_columns.is_empty() {
-        return Ok(None);
-    }
-
-    let mut placeholders = HashMap::default();
+    let mut placeholders = Vec::default();
 
     match generalize_filter(
         join_predicate,
@@ -889,35 +947,34 @@ async fn try_construct_early_filter(
         None => Ok(None),
         Some(filter) => {
             if placeholders.is_empty() {
-                // if we haven't recognised any partition-based predicates in the join predicate, return our reduced filter
+                // if we haven't recognised any source predicates in the join predicate, return our filter with static only predicates
                 Ok(Some(filter))
             } else {
-                // if we have some recognised partitions, then discover the distinct set of partitions in the source data and
-                // make a new filter, which expands out the placeholders for each distinct partition (and then OR these together)
-                let distinct_partitions = LogicalPlan::Distinct(Distinct::All(
-                    LogicalPlan::Projection(Projection::try_new(
-                        placeholders
-                            .into_iter()
-                            .map(|(alias, expr)| expr.alias(alias))
-                            .collect_vec(),
-                        source.clone().into(),
-                    )?)
-                    .into(),
-                ));
-
+                // if we have some filters, which depend on the source df, then collect the placeholders values from the source data
+                // We aggregate the distinct values for partitions with the group_columns and stats(min, max) for dynamic filter as agg_columns
+                // Can be translated into `SELECT partition1 as part1_0, min(id) as id_1_min, max(id) as id_1_max FROM source GROUP BY partition1`
+                let (agg_columns, group_columns) = placeholders.into_iter().partition_map(|p| {
+                    if p.is_aggregate {
+                        Left(p.expr.alias(p.alias))
+                    } else {
+                        Right(p.expr.alias(p.alias))
+                    }
+                });
+                let distinct_partitions = LogicalPlan::Aggregate(Aggregate::try_new(
+                    source.clone().into(),
+                    group_columns,
+                    agg_columns,
+                )?);
                 let execution_plan = session_state
                     .create_physical_plan(&distinct_partitions)
                     .await?;
-
                 let items = execute_plan_to_batch(session_state, execution_plan).await?;
-
                 let placeholder_names = items
                     .schema()
                     .fields()
                     .iter()
                     .map(|f| f.name().to_owned())
                     .collect_vec();
-
                 let expr = (0..items.num_rows())
                     .map(|i| {
                         let replacements = placeholder_names
@@ -933,7 +990,6 @@ async fn try_construct_early_filter(
                     .collect::<DeltaResult<Vec<_>>>()?
                     .into_iter()
                     .reduce(Expr::or);
-
                 Ok(expr)
             }
         }
@@ -945,21 +1001,26 @@ async fn execute(
     predicate: Expression,
     source: DataFrame,
     log_store: LogStoreRef,
-    snapshot: &DeltaTableState,
+    snapshot: DeltaTableState,
     state: SessionState,
     writer_properties: Option<WriterProperties>,
-    app_metadata: Option<HashMap<String, Value>>,
+    mut commit_properties: CommitProperties,
     safe_cast: bool,
     source_alias: Option<String>,
     target_alias: Option<String>,
     match_operations: Vec<MergeOperationConfig>,
     not_match_target_operations: Vec<MergeOperationConfig>,
     not_match_source_operations: Vec<MergeOperationConfig>,
-) -> DeltaResult<((Vec<Action>, i64, Option<DeltaOperation>), MergeMetrics)> {
+) -> DeltaResult<(DeltaTableState, MergeMetrics)> {
     let mut metrics = MergeMetrics::default();
     let exec_start = Instant::now();
 
     let current_metadata = snapshot.metadata();
+    let merge_planner = DeltaPlanner::<MergeMetricExtensionPlanner> {
+        extension_planner: MergeMetricExtensionPlanner {},
+    };
+
+    let state = state.with_query_planner(Arc::new(merge_planner));
 
     // TODO: Given the join predicate, remove any expression that involve the
     // source table and keep expressions that only involve the target table.
@@ -998,19 +1059,18 @@ async fn execute(
 
     let scan_config = DeltaScanConfigBuilder::default()
         .with_file_column(true)
-        .build(snapshot)?;
-
-    let file_column = Arc::new(scan_config.file_column_name.clone().unwrap());
+        .with_parquet_pushdown(false)
+        .build(&snapshot)?;
 
     let target_provider = Arc::new(DeltaTableProvider::try_new(
         snapshot.clone(),
         log_store.clone(),
-        scan_config,
+        scan_config.clone(),
     )?);
 
     let target_provider = provider_as_source(target_provider);
-
-    let target = LogicalPlanBuilder::scan(target_name.clone(), target_provider, None)?.build()?;
+    let target =
+        LogicalPlanBuilder::scan(target_name.clone(), target_provider.clone(), None)?.build()?;
 
     let source_schema = source.schema();
     let target_schema = target.schema();
@@ -1020,31 +1080,42 @@ async fn execute(
         Expression::String(s) => parse_predicate_expression(&join_schema_df, s, &state)?,
     };
 
-    let state = state.with_query_planner(Arc::new(MergePlanner {}));
-
-    let target = {
-        // Attempt to construct an early filter that we can apply to the Add action list and the delta scan.
-        // In the case where there are partition columns in the join predicate, we can scan the source table
-        // to get the distinct list of partitions affected and constrain the search to those.
-
-        if !not_match_source_operations.is_empty() {
-            // It's only worth trying to create an early filter where there are no `when_not_matched_source` operators, since
-            // that implies a full scan
-            target
-        } else if let Some(filter) = try_construct_early_filter(
+    // Attempt to construct an early filter that we can apply to the Add action list and the delta scan.
+    // In the case where there are partition columns in the join predicate, we can scan the source table
+    // to get the distinct list of partitions affected and constrain the search to those.
+    let target_subset_filter = if !not_match_source_operations.is_empty() {
+        // It's only worth trying to create an early filter where there are no `when_not_matched_source` operators, since
+        // that implies a full scan
+        None
+    } else {
+        try_construct_early_filter(
             predicate.clone(),
-            snapshot,
+            &snapshot,
             &state,
             &source,
             &source_name,
             &target_name,
         )
         .await?
-        {
-            LogicalPlan::Filter(Filter::try_new(filter, target.into())?)
-        } else {
-            target
+    };
+
+    let file_column = Arc::new(scan_config.file_column_name.clone().unwrap());
+    // Need to manually push this filter into the scan... We want to PRUNE files not FILTER RECORDS
+    let target = match target_subset_filter.clone() {
+        Some(filter) => {
+            let filter = match &target_alias {
+                Some(alias) => remove_table_alias(filter, alias),
+                None => filter,
+            };
+            LogicalPlanBuilder::scan_with_filters(
+                target_name.clone(),
+                target_provider,
+                None,
+                vec![filter],
+            )?
+            .build()?
         }
+        None => LogicalPlanBuilder::scan(target_name.clone(), target_provider, None)?.build()?,
     };
 
     let source = DataFrame::new(state.clone(), source);
@@ -1188,7 +1259,7 @@ async fn execute(
 
     let projection = join.with_column(OPERATION_COLUMN, case)?;
 
-    let mut new_columns = projection;
+    let mut new_columns = vec![];
     let mut write_projection = Vec::new();
 
     for delta_field in snapshot.schema().fields() {
@@ -1223,11 +1294,9 @@ async fn execute(
         .end()?;
 
         let name = "__delta_rs_c_".to_owned() + delta_field.name();
-        write_projection.push(
-            Expr::Column(Column::from_qualified_name_ignore_case(name.clone()))
-                .alias(delta_field.name()),
-        );
-        new_columns = new_columns.with_column(&name, case)?;
+        write_projection
+            .push(Expr::Column(Column::from_name(name.clone())).alias(delta_field.name()));
+        new_columns.push((name, case));
     }
 
     let mut insert_when = Vec::with_capacity(ops.len());
@@ -1303,18 +1372,40 @@ async fn execute(
         .end()
     }
 
-    new_columns = new_columns.with_column(DELETE_COLUMN, build_case(delete_when, delete_then)?)?;
-    new_columns =
-        new_columns.with_column(TARGET_INSERT_COLUMN, build_case(insert_when, insert_then)?)?;
-    new_columns =
-        new_columns.with_column(TARGET_UPDATE_COLUMN, build_case(update_when, update_then)?)?;
-    new_columns = new_columns.with_column(
-        TARGET_DELETE_COLUMN,
+    new_columns.push((
+        DELETE_COLUMN.to_owned(),
+        build_case(delete_when, delete_then)?,
+    ));
+    new_columns.push((
+        TARGET_INSERT_COLUMN.to_owned(),
+        build_case(insert_when, insert_then)?,
+    ));
+    new_columns.push((
+        TARGET_UPDATE_COLUMN.to_owned(),
+        build_case(update_when, update_then)?,
+    ));
+    new_columns.push((
+        TARGET_DELETE_COLUMN.to_owned(),
         build_case(target_delete_when, target_delete_then)?,
-    )?;
-    new_columns = new_columns.with_column(TARGET_COPY_COLUMN, build_case(copy_when, copy_then)?)?;
+    ));
+    new_columns.push((
+        TARGET_COPY_COLUMN.to_owned(),
+        build_case(copy_when, copy_then)?,
+    ));
 
-    let new_columns = new_columns.into_unoptimized_plan();
+    let new_columns = {
+        let plan = projection.into_unoptimized_plan();
+        let mut fields: Vec<Expr> = plan
+            .schema()
+            .columns()
+            .iter()
+            .map(|f| col(f.clone()))
+            .collect();
+
+        fields.extend(new_columns.into_iter().map(|(name, ex)| ex.alias(name)));
+
+        LogicalPlanBuilder::from(plan).project(fields)?.build()?
+    };
 
     let distrbute_expr = col(file_column.as_str());
 
@@ -1350,9 +1441,17 @@ async fn execute(
     // write projected records
     let table_partition_cols = current_metadata.partition_columns.clone();
 
+    let writer_stats_config = WriterStatsConfig::new(
+        snapshot.table_config().num_indexed_cols(),
+        snapshot
+            .table_config()
+            .stats_columns()
+            .map(|v| v.iter().map(|v| v.to_string()).collect::<Vec<String>>()),
+    );
+
     let rewrite_start = Instant::now();
     let add_actions = write_execution_plan(
-        Some(snapshot),
+        Some(&snapshot),
         state.clone(),
         write,
         table_partition_cols.clone(),
@@ -1361,13 +1460,15 @@ async fn execute(
         None,
         writer_properties,
         safe_cast,
-        false,
+        None,
+        writer_stats_config,
+        None,
     )
     .await?;
 
     metrics.rewrite_time_ms = Instant::now().duration_since(rewrite_start).as_millis() as u64;
 
-    let mut actions: Vec<Action> = add_actions.into_iter().map(Action::Add).collect();
+    let mut actions: Vec<Action> = add_actions.clone();
     metrics.num_target_files_added = actions.len();
 
     let survivors = barrier
@@ -1386,13 +1487,8 @@ async fn execute(
         }
     }
 
-    let mut version = snapshot.version();
-
     let source_count_metrics = source_count.metrics().unwrap();
     let target_count_metrics = op_count.metrics().unwrap();
-    fn get_metric(metrics: &MetricsSet, name: &str) -> usize {
-        metrics.sum_by_name(name).map(|m| m.as_usize()).unwrap_or(0)
-    }
 
     metrics.num_source_rows = get_metric(&source_count_metrics, SOURCE_COUNT_METRIC);
     metrics.num_target_rows_inserted = get_metric(&target_count_metrics, TARGET_INSERTED_METRIC);
@@ -1405,55 +1501,58 @@ async fn execute(
 
     metrics.execution_time_ms = Instant::now().duration_since(exec_start).as_millis() as u64;
 
-    let mut app_metadata = match app_metadata {
-        Some(meta) => meta,
-        None => HashMap::new(),
-    };
-
+    let app_metadata = &mut commit_properties.app_metadata;
     app_metadata.insert("readVersion".to_owned(), snapshot.version().into());
-
     if let Ok(map) = serde_json::to_value(&metrics) {
         app_metadata.insert("operationMetrics".to_owned(), map);
     }
 
+    // Predicate will be used for conflict detection
+    let commit_predicate = match target_subset_filter {
+        None => None, // No predicate means it's a full table merge
+        Some(some_filter) => {
+            let predict_expr = match &target_alias {
+                None => some_filter,
+                Some(alias) => remove_table_alias(some_filter, alias),
+            };
+            Some(fmt_expr_to_sql(&predict_expr)?)
+        }
+    };
+
     // Do not make a commit when there are zero updates to the state
     let operation = DeltaOperation::Merge {
-        predicate: Some(fmt_expr_to_sql(&predicate)?),
+        predicate: commit_predicate,
+        merge_predicate: Some(fmt_expr_to_sql(&predicate)?),
         matched_predicates: match_operations,
         not_matched_predicates: not_match_target_operations,
         not_matched_by_source_predicates: not_match_source_operations,
     };
-    if !actions.is_empty() {
-        version = commit(
-            log_store.as_ref(),
-            &actions,
-            operation.clone(),
-            Some(snapshot),
-            Some(app_metadata),
-        )
-        .await?;
+
+    if actions.is_empty() {
+        return Ok((snapshot, metrics));
     }
-    let op = (!actions.is_empty()).then_some(operation);
-    Ok(((actions, version, op), metrics))
+
+    let commit = CommitBuilder::from(commit_properties)
+        .with_actions(actions)
+        .build(Some(&snapshot), log_store.clone(), operation)
+        .await?;
+    Ok((commit.snapshot(), metrics))
 }
 
-// TODO: Abstract MergePlanner into DeltaPlanner to support other delta operations in the future.
-struct MergePlanner {}
-
-#[async_trait]
-impl QueryPlanner for MergePlanner {
-    async fn create_physical_plan(
-        &self,
-        logical_plan: &LogicalPlan,
-        session_state: &SessionState,
-    ) -> DataFusionResult<Arc<dyn ExecutionPlan>> {
-        let planner = Arc::new(Box::new(DefaultPhysicalPlanner::with_extension_planners(
-            vec![Arc::new(MergeMetricExtensionPlanner {})],
-        )));
-        planner
-            .create_physical_plan(logical_plan, session_state)
-            .await
-    }
+fn remove_table_alias(expr: Expr, table_alias: &str) -> Expr {
+    expr.transform(&|expr| match expr {
+        Expr::Column(c) => match c.relation {
+            Some(rel) if rel.table() == table_alias => Ok(Transformed::yes(Expr::Column(
+                Column::new_unqualified(c.name),
+            ))),
+            _ => Ok(Transformed::no(Expr::Column(Column::new(
+                c.relation, c.name,
+            )))),
+        },
+        _ => Ok(Transformed::no(expr)),
+    })
+    .unwrap()
+    .data
 }
 
 impl std::future::IntoFuture for MergeBuilder {
@@ -1461,10 +1560,10 @@ impl std::future::IntoFuture for MergeBuilder {
     type IntoFuture = BoxFuture<'static, Self::Output>;
 
     fn into_future(self) -> Self::IntoFuture {
-        let mut this = self;
+        let this = self;
 
         Box::pin(async move {
-            PROTOCOL.can_write_to(&this.snapshot)?;
+            PROTOCOL.can_write_to(&this.snapshot.snapshot)?;
 
             let state = this.state.unwrap_or_else(|| {
                 let config: SessionConfig = DeltaSessionConfig::default().into();
@@ -1476,14 +1575,14 @@ impl std::future::IntoFuture for MergeBuilder {
                 session.state()
             });
 
-            let ((actions, version, operation), metrics) = execute(
+            let (snapshot, metrics) = execute(
                 this.predicate,
                 this.source,
                 this.log_store.clone(),
-                &this.snapshot,
+                this.snapshot,
                 state,
                 this.writer_properties,
-                this.app_metadata,
+                this.commit_properties,
                 this.safe_cast,
                 this.source_alias,
                 this.target_alias,
@@ -1493,12 +1592,10 @@ impl std::future::IntoFuture for MergeBuilder {
             )
             .await?;
 
-            if let Some(op) = &operation {
-                this.snapshot.merge(actions, op, version)?;
-            }
-            let table = DeltaTable::new_with_state(this.log_store, this.snapshot);
-
-            Ok((table, metrics))
+            Ok((
+                DeltaTable::new_with_state(this.log_store, snapshot),
+                metrics,
+            ))
         })
     }
 }
@@ -1536,8 +1633,8 @@ mod tests {
     use datafusion_expr::LogicalPlanBuilder;
     use datafusion_expr::Operator;
     use itertools::Itertools;
+    use regex::Regex;
     use serde_json::json;
-    use std::collections::HashMap;
     use std::ops::Neg;
     use std::sync::Arc;
 
@@ -1548,7 +1645,7 @@ mod tests {
 
         let table = DeltaOps::new_in_memory()
             .create()
-            .with_columns(table_schema.fields().clone())
+            .with_columns(table_schema.fields().cloned())
             .with_partition_columns(partitions.unwrap_or_default())
             .await
             .unwrap();
@@ -1556,6 +1653,7 @@ mod tests {
         table
     }
 
+    // TODO(ion): property keys are not passed through or translated as table features.. fix this as well
     #[tokio::test]
     async fn test_merge_when_delta_table_is_append_only() {
         let schema = get_arrow_schema(&None);
@@ -1685,7 +1783,8 @@ mod tests {
         let commit_info = table.history(None).await.unwrap();
         let last_commit = &commit_info[0];
         let parameters = last_commit.operation_parameters.clone().unwrap();
-        assert_eq!(parameters["predicate"], json!("target.id = source.id"));
+        assert!(!parameters.contains_key("predicate"));
+        assert_eq!(parameters["mergePredicate"], json!("target.id = source.id"));
         assert_eq!(
             parameters["matchedPredicates"],
             json!(r#"[{"actionType":"update"}]"#)
@@ -1737,7 +1836,8 @@ mod tests {
         let commit_info = table.history(None).await.unwrap();
         let last_commit = &commit_info[0];
         let parameters = last_commit.operation_parameters.clone().unwrap();
-        assert_eq!(parameters["predicate"], json!("target.id = source.id"));
+        assert!(!parameters.contains_key("predicate"));
+        assert_eq!(parameters["mergePredicate"], json!("target.id = source.id"));
         assert_eq!(
             parameters["matchedPredicates"],
             json!(r#"[{"actionType":"update"}]"#)
@@ -1941,6 +2041,15 @@ mod tests {
         assert_eq!(metrics.num_output_rows, 6);
         assert_eq!(metrics.num_source_rows, 3);
 
+        let commit_info = table.history(None).await.unwrap();
+        let last_commit = &commit_info[0];
+        let parameters = last_commit.operation_parameters.clone().unwrap();
+        assert!(!parameters.contains_key("predicate"));
+        assert_eq!(
+            parameters["mergePredicate"],
+            "target.id = source.id AND target.modified = '2021-02-02'"
+        );
+
         let expected = vec![
             "+----+-------+------------+",
             "| id | value | modified   |",
@@ -1955,6 +2064,64 @@ mod tests {
         ];
         let actual = get_data(&table).await;
         assert_batches_sorted_eq!(&expected, &actual);
+    }
+
+    #[tokio::test]
+    async fn test_merge_partition_filtered() {
+        let schema = get_arrow_schema(&None);
+        let table = setup_table(Some(vec!["modified"])).await;
+        let table = write_data(table, &schema).await;
+        assert_eq!(table.version(), 1);
+        let ctx = SessionContext::new();
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(arrow::array::StringArray::from(vec!["B", "C"])),
+                Arc::new(arrow::array::Int32Array::from(vec![10, 20])),
+                Arc::new(arrow::array::StringArray::from(vec![
+                    "2021-02-02",
+                    "2021-02-02",
+                ])),
+            ],
+        )
+        .unwrap();
+        let source = ctx.read_batch(batch).unwrap();
+        let (table, _metrics) = DeltaOps(table)
+            .merge(
+                source,
+                col("target.id")
+                    .eq(col("source.id"))
+                    .and(col("target.modified").eq(lit("2021-02-02"))),
+            )
+            .with_source_alias("source")
+            .with_target_alias("target")
+            .when_matched_update(|update| {
+                update
+                    .update("value", col("source.value"))
+                    .update("modified", col("source.modified"))
+            })
+            .unwrap()
+            .when_not_matched_insert(|insert| {
+                insert
+                    .set("id", col("source.id"))
+                    .set("value", col("source.value"))
+                    .set("modified", col("source.modified"))
+            })
+            .unwrap()
+            .await
+            .unwrap();
+        assert_eq!(table.version(), 2);
+        let commit_info = table.history(None).await.unwrap();
+        let last_commit = &commit_info[0];
+        let parameters = last_commit.operation_parameters.clone().unwrap();
+        assert_eq!(
+            parameters["predicate"],
+            "id BETWEEN 'B' AND 'C' AND modified = '2021-02-02'"
+        );
+        assert_eq!(
+            parameters["mergePredicate"],
+            "target.id = source.id AND target.modified = '2021-02-02'"
+        );
     }
 
     #[tokio::test]
@@ -2013,6 +2180,13 @@ mod tests {
         assert_eq!(metrics.num_target_rows_deleted, 0);
         assert_eq!(metrics.num_output_rows, 3);
         assert_eq!(metrics.num_source_rows, 3);
+
+        let commit_info = table.history(None).await.unwrap();
+        let last_commit = &commit_info[0];
+        let parameters = last_commit.operation_parameters.clone().unwrap();
+        let predicate = parameters["predicate"].as_str().unwrap();
+        let re = Regex::new(r"^id = '(C|X|B)' OR id = '(C|X|B)' OR id = '(C|X|B)'$").unwrap();
+        assert!(re.is_match(predicate));
 
         let expected = vec![
             "+-------+------------+----+",
@@ -2084,7 +2258,8 @@ mod tests {
             extra_info["operationMetrics"],
             serde_json::to_value(&metrics).unwrap()
         );
-        assert_eq!(parameters["predicate"], json!("target.id = source.id"));
+        assert_eq!(parameters["predicate"], "id BETWEEN 'B' AND 'X'");
+        assert_eq!(parameters["mergePredicate"], json!("target.id = source.id"));
         assert_eq!(
             parameters["matchedPredicates"],
             json!(r#"[{"actionType":"delete"}]"#)
@@ -2148,7 +2323,7 @@ mod tests {
         let commit_info = table.history(None).await.unwrap();
         let last_commit = &commit_info[0];
         let parameters = last_commit.operation_parameters.clone().unwrap();
-        assert_eq!(parameters["predicate"], json!("target.id = source.id"));
+        assert_eq!(parameters["mergePredicate"], json!("target.id = source.id"));
         assert_eq!(
             parameters["matchedPredicates"],
             json!(r#"[{"actionType":"delete","predicate":"source.value <= 10"}]"#)
@@ -2217,7 +2392,8 @@ mod tests {
         let commit_info = table.history(None).await.unwrap();
         let last_commit = &commit_info[0];
         let parameters = last_commit.operation_parameters.clone().unwrap();
-        assert_eq!(parameters["predicate"], json!("target.id = source.id"));
+        assert!(!parameters.contains_key("predicate"));
+        assert_eq!(parameters["mergePredicate"], json!("target.id = source.id"));
         assert_eq!(
             parameters["notMatchedBySourcePredicates"],
             json!(r#"[{"actionType":"delete"}]"#)
@@ -2281,7 +2457,7 @@ mod tests {
         let commit_info = table.history(None).await.unwrap();
         let last_commit = &commit_info[0];
         let parameters = last_commit.operation_parameters.clone().unwrap();
-        assert_eq!(parameters["predicate"], json!("target.id = source.id"));
+        assert_eq!(parameters["mergePredicate"], json!("target.id = source.id"));
         assert_eq!(
             parameters["notMatchedBySourcePredicates"],
             json!(r#"[{"actionType":"delete","predicate":"target.modified > '2021-02-01'"}]"#)
@@ -2359,6 +2535,15 @@ mod tests {
         assert_eq!(metrics.num_target_rows_deleted, 0);
         assert_eq!(metrics.num_output_rows, 3);
         assert_eq!(metrics.num_source_rows, 3);
+
+        let commit_info = table.history(None).await.unwrap();
+        let last_commit = &commit_info[0];
+        let parameters = last_commit.operation_parameters.clone().unwrap();
+
+        assert_eq!(
+            parameters["predicate"],
+            json!("id BETWEEN 'B' AND 'X' AND modified = '2021-02-02'")
+        );
 
         let expected = vec![
             "+----+-------+------------+",
@@ -2462,7 +2647,7 @@ mod tests {
         let parsed_filter = col(Column::new(source.clone().into(), "id"))
             .eq(col(Column::new(target.clone().into(), "id")));
 
-        let mut placeholders = HashMap::default();
+        let mut placeholders = Vec::default();
 
         let generalized = generalize_filter(
             parsed_filter,
@@ -2494,7 +2679,7 @@ mod tests {
         let parsed_filter = (source_id.clone().eq(target_id.clone()))
             .or(source_id.clone().is_null().and(target_id.clone().is_null()));
 
-        let mut placeholders = HashMap::default();
+        let mut placeholders = Vec::default();
 
         let generalized = generalize_filter(
             parsed_filter,
@@ -2517,9 +2702,9 @@ mod tests {
         })
         .and(target_id.clone().is_null()));
 
-        assert!(placeholders.len() == 2);
+        assert_eq!(placeholders.len(), 2);
 
-        let captured_expressions = placeholders.values().collect_vec();
+        let captured_expressions = placeholders.into_iter().map(|p| p.expr).collect_vec();
 
         assert!(captured_expressions.contains(&&source_id));
         assert!(captured_expressions.contains(&&source_id.is_null()));
@@ -2538,7 +2723,7 @@ mod tests {
             .neg()
             .eq(col(Column::new(target.clone().into(), "id")));
 
-        let mut placeholders = HashMap::default();
+        let mut placeholders = Vec::default();
 
         let generalized = generalize_filter(
             parsed_filter,
@@ -2558,12 +2743,13 @@ mod tests {
         assert_eq!(generalized, expected_filter);
 
         assert_eq!(placeholders.len(), 1);
-
-        let placeholder_expr = &placeholders["id_0"];
+        let placeholder_expr = placeholders.get(0).unwrap();
 
         let expected_placeholder = col(Column::new(source.clone().into(), "id")).neg();
 
-        assert_eq!(placeholder_expr, &expected_placeholder);
+        assert_eq!(placeholder_expr.expr, expected_placeholder);
+        assert_eq!(placeholder_expr.alias, "id_0");
+        assert_eq!(placeholder_expr.is_aggregate, false);
     }
 
     #[tokio::test]
@@ -2576,7 +2762,7 @@ mod tests {
             .eq(col(Column::new(target.clone().into(), "id")))
             .and(col(Column::new(target.clone().into(), "id")).eq(lit("C")));
 
-        let mut placeholders = HashMap::default();
+        let mut placeholders = Vec::default();
 
         let generalized = generalize_filter(
             parsed_filter,
@@ -2599,6 +2785,38 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_generalize_filter_with_dynamic_target_range_references() {
+        let source = TableReference::parse_str("source");
+        let target = TableReference::parse_str("target");
+
+        let parsed_filter = col(Column::new(source.clone().into(), "id"))
+            .eq(col(Column::new(target.clone().into(), "id")));
+
+        let mut placeholders = Vec::default();
+
+        let generalized = generalize_filter(
+            parsed_filter,
+            &vec!["other".to_owned()],
+            &source,
+            &target,
+            &mut placeholders,
+        )
+        .unwrap();
+        let expected_filter_l = Expr::Placeholder(Placeholder {
+            id: "id_0_min".to_owned(),
+            data_type: None,
+        });
+        let expected_filter_h = Expr::Placeholder(Placeholder {
+            id: "id_0_max".to_owned(),
+            data_type: None,
+        });
+        let expected_filter = col(Column::new(target.clone().into(), "id"))
+            .between(expected_filter_l, expected_filter_h);
+
+        assert_eq!(generalized, expected_filter);
+    }
+
+    #[tokio::test]
     async fn test_generalize_filter_removes_source_references() {
         let source = TableReference::parse_str("source");
         let target = TableReference::parse_str("target");
@@ -2607,7 +2825,7 @@ mod tests {
             .eq(col(Column::new(target.clone().into(), "id")))
             .and(col(Column::new(source.clone().into(), "id")).eq(lit("C")));
 
-        let mut placeholders = HashMap::default();
+        let mut placeholders = Vec::default();
 
         let generalized = generalize_filter(
             parsed_filter,
@@ -2723,5 +2941,480 @@ mod tests {
         ];
 
         assert_eq!(split_pred, expected_pred_parts);
+    }
+
+    #[tokio::test]
+    async fn test_try_construct_early_filter_with_range() {
+        let schema = get_arrow_schema(&None);
+        let table = setup_table(Some(vec!["modified"])).await;
+
+        assert_eq!(table.version(), 0);
+        assert_eq!(table.get_files_count(), 0);
+
+        let ctx = SessionContext::new();
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(arrow::array::StringArray::from(vec!["B", "C"])),
+                Arc::new(arrow::array::Int32Array::from(vec![10, 20])),
+                Arc::new(arrow::array::StringArray::from(vec![
+                    "2023-07-04",
+                    "2023-07-04",
+                ])),
+            ],
+        )
+        .unwrap();
+        let source = ctx.read_batch(batch).unwrap();
+
+        let source_name = TableReference::parse_str("source");
+        let target_name = TableReference::parse_str("target");
+
+        let source = LogicalPlanBuilder::scan(
+            source_name.clone(),
+            provider_as_source(source.into_view()),
+            None,
+        )
+        .unwrap()
+        .build()
+        .unwrap();
+
+        let join_predicate = col(Column {
+            relation: Some(source_name.clone()),
+            name: "id".to_owned(),
+        })
+        .eq(col(Column {
+            relation: Some(target_name.clone()),
+            name: "id".to_owned(),
+        }));
+
+        let pred = try_construct_early_filter(
+            join_predicate,
+            table.snapshot().unwrap(),
+            &ctx.state(),
+            &source,
+            &source_name,
+            &target_name,
+        )
+        .await
+        .unwrap();
+
+        assert!(pred.is_some());
+
+        let filter = col(Column {
+            relation: Some(target_name.clone()),
+            name: "id".to_owned(),
+        })
+        .between(
+            Expr::Literal(ScalarValue::Utf8(Some("B".to_string()))),
+            Expr::Literal(ScalarValue::Utf8(Some("C".to_string()))),
+        );
+        assert_eq!(pred.unwrap(), filter);
+    }
+
+    #[tokio::test]
+    async fn test_try_construct_early_filter_with_partition_and_range() {
+        let schema = get_arrow_schema(&None);
+        let table = setup_table(Some(vec!["modified"])).await;
+
+        assert_eq!(table.version(), 0);
+        assert_eq!(table.get_files_count(), 0);
+
+        let ctx = SessionContext::new();
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(arrow::array::StringArray::from(vec!["B", "C"])),
+                Arc::new(arrow::array::Int32Array::from(vec![10, 20])),
+                Arc::new(arrow::array::StringArray::from(vec![
+                    "2023-07-04",
+                    "2023-07-04",
+                ])),
+            ],
+        )
+        .unwrap();
+        let source = ctx.read_batch(batch).unwrap();
+
+        let source_name = TableReference::parse_str("source");
+        let target_name = TableReference::parse_str("target");
+
+        let source = LogicalPlanBuilder::scan(
+            source_name.clone(),
+            provider_as_source(source.into_view()),
+            None,
+        )
+        .unwrap()
+        .build()
+        .unwrap();
+
+        let join_predicate = col(Column {
+            relation: Some(source_name.clone()),
+            name: "id".to_owned(),
+        })
+        .eq(col(Column {
+            relation: Some(target_name.clone()),
+            name: "id".to_owned(),
+        }))
+        .and(
+            col(Column {
+                relation: Some(source_name.clone()),
+                name: "modified".to_owned(),
+            })
+            .eq(col(Column {
+                relation: Some(target_name.clone()),
+                name: "modified".to_owned(),
+            })),
+        );
+
+        let pred = try_construct_early_filter(
+            join_predicate,
+            table.snapshot().unwrap(),
+            &ctx.state(),
+            &source,
+            &source_name,
+            &target_name,
+        )
+        .await
+        .unwrap();
+
+        assert!(pred.is_some());
+
+        let filter = col(Column {
+            relation: Some(target_name.clone()),
+            name: "id".to_owned(),
+        })
+        .between(
+            Expr::Literal(ScalarValue::Utf8(Some("B".to_string()))),
+            Expr::Literal(ScalarValue::Utf8(Some("C".to_string()))),
+        )
+        .and(
+            Expr::Literal(ScalarValue::Utf8(Some("2023-07-04".to_string()))).eq(col(Column {
+                relation: Some(target_name.clone()),
+                name: "modified".to_owned(),
+            })),
+        );
+        assert_eq!(pred.unwrap(), filter);
+    }
+
+    #[tokio::test]
+    async fn test_merge_pushdowns() {
+        //See https://github.com/delta-io/delta-rs/issues/2158
+        let schema = vec![
+            StructField::new(
+                "id".to_string(),
+                DataType::Primitive(PrimitiveType::String),
+                true,
+            ),
+            StructField::new(
+                "cost".to_string(),
+                DataType::Primitive(PrimitiveType::Float),
+                true,
+            ),
+            StructField::new(
+                "month".to_string(),
+                DataType::Primitive(PrimitiveType::String),
+                true,
+            ),
+        ];
+
+        let arrow_schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("id", ArrowDataType::Utf8, true),
+            Field::new("cost", ArrowDataType::Float32, true),
+            Field::new("month", ArrowDataType::Utf8, true),
+        ]));
+
+        let table = DeltaOps::new_in_memory()
+            .create()
+            .with_columns(schema)
+            .await
+            .unwrap();
+
+        let ctx = SessionContext::new();
+        let batch = RecordBatch::try_new(
+            Arc::clone(&arrow_schema.clone()),
+            vec![
+                Arc::new(arrow::array::StringArray::from(vec!["A", "B"])),
+                Arc::new(arrow::array::Float32Array::from(vec![Some(10.15), None])),
+                Arc::new(arrow::array::StringArray::from(vec![
+                    "2023-07-04",
+                    "2023-07-04",
+                ])),
+            ],
+        )
+        .unwrap();
+
+        let table = DeltaOps(table)
+            .write(vec![batch.clone()])
+            .with_save_mode(SaveMode::Append)
+            .await
+            .unwrap();
+        assert_eq!(table.version(), 1);
+        assert_eq!(table.get_files_count(), 1);
+
+        let batch = RecordBatch::try_new(
+            Arc::clone(&arrow_schema.clone()),
+            vec![
+                Arc::new(arrow::array::StringArray::from(vec!["A", "B"])),
+                Arc::new(arrow::array::Float32Array::from(vec![
+                    Some(12.15),
+                    Some(11.15),
+                ])),
+                Arc::new(arrow::array::StringArray::from(vec![
+                    "2023-07-04",
+                    "2023-07-04",
+                ])),
+            ],
+        )
+        .unwrap();
+        let source = ctx.read_batch(batch).unwrap();
+
+        let (table, _metrics) = DeltaOps(table)
+            .merge(source, "target.id = source.id and target.cost is null")
+            .with_source_alias("source")
+            .with_target_alias("target")
+            .when_matched_update(|insert| {
+                insert
+                    .update("id", "target.id")
+                    .update("cost", "source.cost")
+                    .update("month", "target.month")
+            })
+            .unwrap()
+            .await
+            .unwrap();
+
+        let expected = vec![
+            "+----+-------+------------+",
+            "| id | cost  | month      |",
+            "+----+-------+------------+",
+            "| A  | 10.15 | 2023-07-04 |",
+            "| B  | 11.15 | 2023-07-04 |",
+            "+----+-------+------------+",
+        ];
+        let actual = get_data(&table).await;
+        assert_batches_sorted_eq!(&expected, &actual);
+    }
+
+    #[tokio::test]
+    async fn test_merge_row_groups_parquet_pushdown() {
+        //See https://github.com/delta-io/delta-rs/issues/2362
+        let schema = vec![
+            StructField::new(
+                "id".to_string(),
+                DataType::Primitive(PrimitiveType::String),
+                true,
+            ),
+            StructField::new(
+                "cost".to_string(),
+                DataType::Primitive(PrimitiveType::Float),
+                true,
+            ),
+            StructField::new(
+                "month".to_string(),
+                DataType::Primitive(PrimitiveType::String),
+                true,
+            ),
+        ];
+
+        let arrow_schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("id", ArrowDataType::Utf8, true),
+            Field::new("cost", ArrowDataType::Float32, true),
+            Field::new("month", ArrowDataType::Utf8, true),
+        ]));
+
+        let table = DeltaOps::new_in_memory()
+            .create()
+            .with_columns(schema)
+            .await
+            .unwrap();
+
+        let ctx = SessionContext::new();
+        let batch1 = RecordBatch::try_new(
+            Arc::clone(&arrow_schema.clone()),
+            vec![
+                Arc::new(arrow::array::StringArray::from(vec!["A", "B"])),
+                Arc::new(arrow::array::Float32Array::from(vec![Some(10.15), None])),
+                Arc::new(arrow::array::StringArray::from(vec![
+                    "2023-07-04",
+                    "2023-07-04",
+                ])),
+            ],
+        )
+        .unwrap();
+
+        let batch2 = RecordBatch::try_new(
+            Arc::clone(&arrow_schema.clone()),
+            vec![
+                Arc::new(arrow::array::StringArray::from(vec!["C", "D"])),
+                Arc::new(arrow::array::Float32Array::from(vec![
+                    Some(11.0),
+                    Some(12.0),
+                ])),
+                Arc::new(arrow::array::StringArray::from(vec![
+                    "2023-07-04",
+                    "2023-07-04",
+                ])),
+            ],
+        )
+        .unwrap();
+
+        let table = DeltaOps(table)
+            .write(vec![batch1, batch2])
+            .with_write_batch_size(2)
+            .with_save_mode(SaveMode::Append)
+            .await
+            .unwrap();
+        assert_eq!(table.version(), 1);
+        assert_eq!(table.get_files_count(), 1);
+
+        let batch = RecordBatch::try_new(
+            Arc::clone(&arrow_schema.clone()),
+            vec![
+                Arc::new(arrow::array::StringArray::from(vec!["C", "E"])),
+                Arc::new(arrow::array::Float32Array::from(vec![
+                    Some(12.15),
+                    Some(11.15),
+                ])),
+                Arc::new(arrow::array::StringArray::from(vec![
+                    "2023-07-04",
+                    "2023-07-04",
+                ])),
+            ],
+        )
+        .unwrap();
+        let source = ctx.read_batch(batch).unwrap();
+
+        let (table, _metrics) = DeltaOps(table)
+            .merge(source, "target.id = source.id and target.id >= 'C'")
+            .with_source_alias("source")
+            .with_target_alias("target")
+            .when_matched_update(|insert| {
+                insert
+                    .update("id", "target.id")
+                    .update("cost", "source.cost")
+                    .update("month", "target.month")
+            })
+            .unwrap()
+            .when_not_matched_insert(|insert| {
+                insert
+                    .set("id", "source.id")
+                    .set("cost", "source.cost")
+                    .set("month", "source.month")
+            })
+            .unwrap()
+            .await
+            .unwrap();
+
+        let expected = vec![
+            "+----+-------+------------+",
+            "| id | cost  | month      |",
+            "+----+-------+------------+",
+            "| A  | 10.15 | 2023-07-04 |",
+            "| B  |       | 2023-07-04 |",
+            "| C  | 12.15 | 2023-07-04 |",
+            "| D  | 12.0  | 2023-07-04 |",
+            "| E  | 11.15 | 2023-07-04 |",
+            "+----+-------+------------+",
+        ];
+        let actual = get_data(&table).await;
+        assert_batches_sorted_eq!(&expected, &actual);
+    }
+
+    #[tokio::test]
+    async fn test_merge_pushdowns_partitioned() {
+        //See #2158
+        let schema = vec![
+            StructField::new(
+                "id".to_string(),
+                DataType::Primitive(PrimitiveType::String),
+                true,
+            ),
+            StructField::new(
+                "cost".to_string(),
+                DataType::Primitive(PrimitiveType::Float),
+                true,
+            ),
+            StructField::new(
+                "month".to_string(),
+                DataType::Primitive(PrimitiveType::String),
+                true,
+            ),
+        ];
+
+        let arrow_schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("id", ArrowDataType::Utf8, true),
+            Field::new("cost", ArrowDataType::Float32, true),
+            Field::new("month", ArrowDataType::Utf8, true),
+        ]));
+
+        let part_cols = vec!["month"];
+        let table = DeltaOps::new_in_memory()
+            .create()
+            .with_columns(schema)
+            .with_partition_columns(part_cols)
+            .await
+            .unwrap();
+
+        let ctx = SessionContext::new();
+        let batch = RecordBatch::try_new(
+            Arc::clone(&arrow_schema.clone()),
+            vec![
+                Arc::new(arrow::array::StringArray::from(vec!["A", "B"])),
+                Arc::new(arrow::array::Float32Array::from(vec![Some(10.15), None])),
+                Arc::new(arrow::array::StringArray::from(vec![
+                    "2023-07-04",
+                    "2023-07-04",
+                ])),
+            ],
+        )
+        .unwrap();
+
+        let table = DeltaOps(table)
+            .write(vec![batch.clone()])
+            .with_save_mode(SaveMode::Append)
+            .await
+            .unwrap();
+        assert_eq!(table.version(), 1);
+        assert_eq!(table.get_files_count(), 1);
+
+        let batch = RecordBatch::try_new(
+            Arc::clone(&arrow_schema.clone()),
+            vec![
+                Arc::new(arrow::array::StringArray::from(vec!["A", "B"])),
+                Arc::new(arrow::array::Float32Array::from(vec![
+                    Some(12.15),
+                    Some(11.15),
+                ])),
+                Arc::new(arrow::array::StringArray::from(vec![
+                    "2023-07-04",
+                    "2023-07-04",
+                ])),
+            ],
+        )
+        .unwrap();
+        let source = ctx.read_batch(batch).unwrap();
+
+        let (table, _metrics) = DeltaOps(table)
+            .merge(source, "target.id = source.id and target.cost is null")
+            .with_source_alias("source")
+            .with_target_alias("target")
+            .when_matched_update(|insert| {
+                insert
+                    .update("id", "target.id")
+                    .update("cost", "source.cost")
+                    .update("month", "target.month")
+            })
+            .unwrap()
+            .await
+            .unwrap();
+
+        let expected = vec![
+            "+----+-------+------------+",
+            "| id | cost  | month      |",
+            "+----+-------+------------+",
+            "| A  | 10.15 | 2023-07-04 |",
+            "| B  | 11.15 | 2023-07-04 |",
+            "+----+-------+------------+",
+        ];
+        let actual = get_data(&table).await;
+        assert_batches_sorted_eq!(&expected, &actual);
     }
 }

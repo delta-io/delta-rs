@@ -1,4 +1,5 @@
 """Test that pyspark can read tables written by deltalake(delta-rs)."""
+
 import pathlib
 
 import pyarrow as pa
@@ -95,3 +96,37 @@ def test_issue_1591_roundtrip_special_characters(tmp_path: pathlib.Path):
 
     loaded = DeltaTable(spark_path).to_pandas()
     assert loaded.shape == data.shape
+
+
+@pytest.mark.pyspark
+@pytest.mark.integration
+def test_read_checkpointed_table(tmp_path: pathlib.Path):
+    data = pa.table(
+        {
+            "int": pa.array([1]),
+        }
+    )
+    write_deltalake(tmp_path, data)
+
+    dt = DeltaTable(tmp_path)
+    dt.create_checkpoint()
+
+    assert_spark_read_equal(data, str(tmp_path), ["int"])
+
+
+@pytest.mark.pyspark
+@pytest.mark.integration
+def test_read_checkpointed_features_table(tmp_path: pathlib.Path):
+    from datetime import datetime
+
+    data = pa.table(
+        {
+            "timestamp": pa.array([datetime(2010, 1, 1)]),
+        }
+    )
+    write_deltalake(tmp_path, data)
+
+    dt = DeltaTable(tmp_path)
+    dt.create_checkpoint()
+
+    assert_spark_read_equal(data, str(tmp_path), ["timestamp"])

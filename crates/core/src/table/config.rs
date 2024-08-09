@@ -2,12 +2,12 @@
 use std::time::Duration;
 use std::{collections::HashMap, str::FromStr};
 
+use delta_kernel::features::ColumnMappingMode;
 use lazy_static::lazy_static;
 use serde::{Deserialize, Serialize};
 
-use crate::errors::DeltaTableError;
-
 use super::Constraint;
+use crate::errors::DeltaTableError;
 
 /// Typed property keys that can be defined on a delta table
 /// <https://docs.delta.io/latest/table-properties.html#delta-table-properties-reference>
@@ -208,6 +208,9 @@ macro_rules! table_config {
 /// Well known delta table configuration
 pub struct TableConfig<'a>(pub(crate) &'a HashMap<String, Option<String>>);
 
+/// Default num index cols
+pub const DEFAULT_NUM_INDEX_COLS: i32 = 32;
+
 impl<'a> TableConfig<'a> {
     table_config!(
         (
@@ -249,7 +252,7 @@ impl<'a> TableConfig<'a> {
         (
             "true to enable deletion vectors and predictive I/O for updates.",
             DeltaConfigKey::EnableDeletionVectors,
-            enable_deletio0n_vectors,
+            enable_deletion_vectors,
             bool,
             // in databricks the default is dependent on the workspace settings and runtime version
             // https://learn.microsoft.com/en-us/azure/databricks/administration-guide/workspace-settings/deletion-vectors
@@ -274,7 +277,7 @@ impl<'a> TableConfig<'a> {
             DeltaConfigKey::CheckpointInterval,
             checkpoint_interval,
             i32,
-            10
+            100
         ),
     );
 
@@ -289,7 +292,7 @@ impl<'a> TableConfig<'a> {
     ///   than this value. Otherwise, the query may not be able to restart, as it must still read old files.
     pub fn deleted_file_retention_duration(&self) -> Duration {
         lazy_static! {
-            static ref DEFAULT_DURATION: Duration = parse_interval("interval 1 week").unwrap();
+            static ref DEFAULT_DURATION: Duration = parse_interval("interval 1 weeks").unwrap();
         }
         self.0
             .get(DeltaConfigKey::DeletedFileRetentionDuration.as_ref())
@@ -305,7 +308,7 @@ impl<'a> TableConfig<'a> {
     /// constant time. Operations on history are parallel but will become more expensive as the log size increases.
     pub fn log_retention_duration(&self) -> Duration {
         lazy_static! {
-            static ref DEFAULT_DURATION: Duration = parse_interval("interval 30 day").unwrap();
+            static ref DEFAULT_DURATION: Duration = parse_interval("interval 30 days").unwrap();
         }
         self.0
             .get(DeltaConfigKey::LogRetentionDuration.as_ref())
@@ -362,7 +365,7 @@ impl<'a> TableConfig<'a> {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Copy, Clone, PartialEq)]
 /// The isolation level applied during transaction
 pub enum IsolationLevel {
     /// The strongest isolation level. It ensures that committed write operations
@@ -460,49 +463,6 @@ impl FromStr for CheckpointPolicy {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
-/// The Column Mapping modes used for reading and writing data
-#[serde(rename_all = "camelCase")]
-pub enum ColumnMappingMode {
-    /// No column mapping is applied
-    None,
-    /// Columns are mapped by their field_id in parquet
-    Id,
-    /// Columns are mapped to a physical name
-    Name,
-}
-
-impl Default for ColumnMappingMode {
-    fn default() -> Self {
-        Self::None
-    }
-}
-
-impl AsRef<str> for ColumnMappingMode {
-    fn as_ref(&self) -> &str {
-        match self {
-            Self::None => "none",
-            Self::Id => "id",
-            Self::Name => "name",
-        }
-    }
-}
-
-impl FromStr for ColumnMappingMode {
-    type Err = DeltaTableError;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.to_ascii_lowercase().as_str() {
-            "none" => Ok(Self::None),
-            "id" => Ok(Self::Id),
-            "name" => Ok(Self::Name),
-            _ => Err(DeltaTableError::Generic(
-                "Invalid string for ColumnMappingMode".into(),
-            )),
-        }
-    }
-}
-
 const SECONDS_PER_MINUTE: u64 = 60;
 const SECONDS_PER_HOUR: u64 = 60 * SECONDS_PER_MINUTE;
 const SECONDS_PER_DAY: u64 = 24 * SECONDS_PER_HOUR;
@@ -525,14 +485,14 @@ fn parse_interval(value: &str) -> Result<Duration, DeltaConfigError> {
     let number = number as u64;
 
     let duration = match it.next().ok_or_else(not_an_interval)? {
-        "nanosecond" => Duration::from_nanos(number),
-        "microsecond" => Duration::from_micros(number),
-        "millisecond" => Duration::from_millis(number),
-        "second" => Duration::from_secs(number),
-        "minute" => Duration::from_secs(number * SECONDS_PER_MINUTE),
-        "hour" => Duration::from_secs(number * SECONDS_PER_HOUR),
-        "day" => Duration::from_secs(number * SECONDS_PER_DAY),
-        "week" => Duration::from_secs(number * SECONDS_PER_WEEK),
+        "nanosecond" | "nanoseconds" => Duration::from_nanos(number),
+        "microsecond" | "microseconds" => Duration::from_micros(number),
+        "millisecond" | "milliseconds" => Duration::from_millis(number),
+        "second" | "seconds" => Duration::from_secs(number),
+        "minute" | "minutes" => Duration::from_secs(number * SECONDS_PER_MINUTE),
+        "hour" | "hours" => Duration::from_secs(number * SECONDS_PER_HOUR),
+        "day" | "days" => Duration::from_secs(number * SECONDS_PER_DAY),
+        "week" | "weeks" => Duration::from_secs(number * SECONDS_PER_WEEK),
         unit => {
             return Err(DeltaConfigError::Validation(format!(
                 "Unknown unit '{unit}'"
@@ -591,7 +551,7 @@ mod tests {
     fn get_long_from_metadata_test() {
         let md = dummy_metadata();
         let config = TableConfig(&md.configuration);
-        assert_eq!(config.checkpoint_interval(), 10,)
+        assert_eq!(config.checkpoint_interval(), 100,)
     }
 
     #[test]
@@ -621,7 +581,17 @@ mod tests {
         );
 
         assert_eq!(
+            parse_interval("interval 123 nanoseconds").unwrap(),
+            Duration::from_nanos(123)
+        );
+
+        assert_eq!(
             parse_interval("interval 123 microsecond").unwrap(),
+            Duration::from_micros(123)
+        );
+
+        assert_eq!(
+            parse_interval("interval 123 microseconds").unwrap(),
             Duration::from_micros(123)
         );
 
@@ -631,7 +601,17 @@ mod tests {
         );
 
         assert_eq!(
+            parse_interval("interval 123 milliseconds").unwrap(),
+            Duration::from_millis(123)
+        );
+
+        assert_eq!(
             parse_interval("interval 123 second").unwrap(),
+            Duration::from_secs(123)
+        );
+
+        assert_eq!(
+            parse_interval("interval 123 seconds").unwrap(),
             Duration::from_secs(123)
         );
 
@@ -641,13 +621,33 @@ mod tests {
         );
 
         assert_eq!(
+            parse_interval("interval 123 minutes").unwrap(),
+            Duration::from_secs(123 * 60)
+        );
+
+        assert_eq!(
             parse_interval("interval 123 hour").unwrap(),
+            Duration::from_secs(123 * 3600)
+        );
+
+        assert_eq!(
+            parse_interval("interval 123 hours").unwrap(),
             Duration::from_secs(123 * 3600)
         );
 
         assert_eq!(
             parse_interval("interval 123 day").unwrap(),
             Duration::from_secs(123 * 86400)
+        );
+
+        assert_eq!(
+            parse_interval("interval 123 days").unwrap(),
+            Duration::from_secs(123 * 86400)
+        );
+
+        assert_eq!(
+            parse_interval("interval 123 week").unwrap(),
+            Duration::from_secs(123 * 604800)
         );
 
         assert_eq!(

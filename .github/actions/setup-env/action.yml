@@ -1,0 +1,34 @@
+name: "Setup Python and Rust Environment"
+description: "Set up Python, virtual environment, and Rust toolchain"
+
+inputs:
+
+  python-version:
+    description: "The Python version to set up"
+    required: true
+    default: "3.10"
+
+  rust-toolchain:
+    description: "The Rust toolchain to set up"
+    required: true
+    default: "stable"
+
+runs:
+  using: "composite"
+
+  steps:
+  
+    - name: Set up Python ${{ inputs.python-version }}
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ inputs.python-version }}
+
+    - name: Install Rust toolchain
+      uses: actions-rs/toolchain@v1
+      with:
+        profile: default
+        toolchain: ${{ inputs.rust-toolchain }}
+        override: true
+        components: rustfmt, clippy
+
+    - uses: Swatinem/rust-cache@v2

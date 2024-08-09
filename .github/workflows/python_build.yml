@@ -1,6 +1,7 @@
 name: python_build
 
 on:
+  merge_group:
   push:
     branches: [main]
   pull_request:
@@ -15,22 +16,16 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
-      - name: Setup Python
-        uses: actions/setup-python@v2
-        with:
-          python-version: 3.8
+
+      - name: Setup Environment
+        uses: ./.github/actions/setup-env
 
       - name: Check Python
         run: |
-          pip install ruff black mypy types-dataclasses typing-extensions
+          python -m venv venv
+          source venv/bin/activate
+          pip install ruff==0.5.2 mypy==1.10.1 types-dataclasses typing-extensions
           make check-python
-
-      - name: Install minimal stable with clippy and rustfmt
-        uses: actions-rs/toolchain@v1
-        with:
-          profile: default
-          toolchain: stable
-          override: true
 
       - name: Check Rust
         run: make check-rust
@@ -45,24 +40,14 @@ jobs:
     steps:
       - uses: actions/checkout@v3
 
-      - name: Setup Python
-        uses: actions/setup-python@v2
+      - name: Setup Environment
+        uses: ./.github/actions/setup-env
         with:
           python-version: 3.8
 
-      - name: Install latest nightly
-        uses: actions-rs/toolchain@v1
-        with:
-          toolchain: stable
-          override: true
-          components: rustfmt, clippy
-
-      - uses: Swatinem/rust-cache@v2
-
       - name: Build and install deltalake
         run: |
-          pip install virtualenv
-          virtualenv venv
+          python -m venv venv
           source venv/bin/activate
           make setup
           # Install minimum PyArrow version
@@ -89,26 +74,15 @@ jobs:
     steps:
       - uses: actions/checkout@v3
 
-      - name: Install latest nightly
-        uses: actions-rs/toolchain@v1
-        with:
-          toolchain: stable
-          override: true
-          components: rustfmt, clippy
-
-      - uses: Swatinem/rust-cache@v2
-
-      - uses: actions/setup-python@v3
-        with:
-          python-version: "3.10"
+      - name: Setup Environment
+        uses: ./.github/actions/setup-env
 
       - name: Start emulated services
-        run: docker-compose up -d
+        run: docker compose up -d
 
       - name: Build and install deltalake
         run: |
-          pip install virtualenv
-          virtualenv venv
+          python -m venv venv
           source venv/bin/activate
           make develop
 
@@ -137,23 +111,12 @@ jobs:
     steps:
       - uses: actions/checkout@v2
 
-      - name: Install latest nightly
-        uses: actions-rs/toolchain@v1
-        with:
-          toolchain: stable
-          override: true
-          components: rustfmt, clippy
-
-      - uses: Swatinem/rust-cache@v2
-
-      - uses: actions/setup-python@v4
-        with:
-          python-version: "3.10"
+      - name: Setup Environment
+        uses: ./.github/actions/setup-env
 
       - name: Build deltalake in release mode
         run: |
-          pip install virtualenv
-          virtualenv venv
+          python -m venv venv
           source venv/bin/activate
           MATURIN_EXTRA_ARGS=--release make develop
 
@@ -187,18 +150,8 @@ jobs:
     steps:
       - uses: actions/checkout@v3
 
-      - name: Install latest nightly
-        uses: actions-rs/toolchain@v1
-        with:
-          toolchain: stable
-          override: true
-          components: rustfmt, clippy
-
-      - uses: Swatinem/rust-cache@v2
-
-      - uses: actions/setup-python@v3
-        with:
-          python-version: "3.10"
+      - name: Setup Environment
+        uses: ./.github/actions/setup-env
 
       - uses: actions/setup-java@v2
         with:
@@ -207,8 +160,7 @@ jobs:
 
       - name: Build and install deltalake
         run: |
-          pip install virtualenv
-          virtualenv venv
+          python -m venv venv
           source venv/bin/activate
           make develop-pyspark
 
@@ -231,15 +183,14 @@ jobs:
     steps:
       - uses: actions/checkout@v3
 
-      - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v4
+      - name: Setup Environment
+        uses: ./.github/actions/setup-env
         with:
           python-version: ${{ matrix.python-version }}
 
       - name: Build and install deltalake
         run: |
-          pip install virtualenv
-          virtualenv venv
+          python -m venv venv
           source venv/bin/activate
           make setup
           maturin develop

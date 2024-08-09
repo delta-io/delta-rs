@@ -1,7 +1,7 @@
 //! Exceptions for the deltalake crate
 use object_store::Error as ObjectStoreError;
 
-use crate::operations::transaction::TransactionError;
+use crate::operations::transaction::{CommitBuilderError, TransactionError};
 use crate::protocol::ProtocolError;
 
 /// A result returned by delta-rs
@@ -11,6 +11,9 @@ pub type DeltaResult<T> = Result<T, DeltaTableError>;
 #[allow(missing_docs)]
 #[derive(thiserror::Error, Debug)]
 pub enum DeltaTableError {
+    #[error("Kernel error: {0}")]
+    KernelError(#[from] delta_kernel::error::Error),
+
     #[error("Delta protocol violation: {source}")]
     Protocol { source: ProtocolError },
 
@@ -146,6 +149,13 @@ pub enum DeltaTableError {
         source: std::io::Error,
     },
 
+    /// Error raised while preparing a commit
+    #[error("Commit actions are unsound: {source}")]
+    CommitValidation {
+        /// The source error
+        source: CommitBuilderError,
+    },
+
     /// Error raised while commititng transaction
     #[error("Transaction failed: {source}")]
     Transaction {
@@ -210,6 +220,15 @@ pub enum DeltaTableError {
 
     #[error("Table has not yet been initialized")]
     NotInitialized,
+
+    #[error("Change Data not enabled for version: {version}, Start: {start}, End: {end}")]
+    ChangeDataNotRecorded { version: i64, start: i64, end: i64 },
+
+    #[error("Reading a table version: {version} that does not have change data enabled")]
+    ChangeDataNotEnabled { version: i64 },
+
+    #[error("Invalid version start version {start} is greater than version {end}")]
+    ChangeDataInvalidVersionRange { start: i64, end: i64 },
 }
 
 impl From<object_store::path::Error> for DeltaTableError {

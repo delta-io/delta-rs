@@ -1,7 +1,7 @@
 #![allow(unused)]
 use std::collections::HashMap;
 
-use super::prepare_commit;
+use super::CommitBuilder;
 use crate::kernel::{
     Action, Add, CommitInfo, DataType, Metadata, PrimitiveType, Protocol, Remove, StructField,
     StructType,
@@ -162,17 +162,9 @@ pub async fn create_initialized_table(
         },
     };
     let actions = init_table_actions(None);
-    let prepared_commit = prepare_commit(
-        log_store.object_store().as_ref(),
-        &operation,
-        &actions,
-        None,
-    )
-    .await
-    .unwrap();
-
-    log_store
-        .write_commit_entry(0, &prepared_commit)
+    CommitBuilder::default()
+        .with_actions(actions)
+        .build(None, log_store.clone(), operation)
         .await
         .unwrap();
     DeltaTable::new_with_state(log_store, state)
