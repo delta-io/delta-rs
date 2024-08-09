@@ -4,11 +4,10 @@ use delta_kernel::schema::StructType;
 use futures::future::BoxFuture;
 use itertools::Itertools;
 
-use super::cast::merge_struct;
 use super::transaction::{CommitBuilder, CommitProperties, PROTOCOL};
-
 use crate::kernel::StructField;
 use crate::logstore::LogStoreRef;
+use crate::operations::cast::merge_schema::merge_delta_struct;
 use crate::protocol::DeltaOperation;
 use crate::table::state::DeltaTableState;
 use crate::{DeltaResult, DeltaTable, DeltaTableError};
@@ -67,7 +66,7 @@ impl std::future::IntoFuture for AddColumnBuilder {
 
             let fields_right = &StructType::new(fields.clone());
             let table_schema = this.snapshot.schema();
-            let new_table_schema = merge_struct(table_schema, fields_right)?;
+            let new_table_schema = merge_delta_struct(table_schema, fields_right)?;
 
             // TODO(ion): Think of a way how we can simply this checking through the API or centralize some checks.
             let contains_timestampntz = PROTOCOL.contains_timestampntz(fields.iter());

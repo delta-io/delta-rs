@@ -112,7 +112,7 @@ def test_checks_min_writer_version(tmp_path: pathlib.Path):
         DeltaProtocolError, match="This table's min_writer_version is 3, but"
     ):
         valid_data = pa.table({"c1": pa.array([5, 6])})
-        write_deltalake(str(tmp_path), valid_data, mode="append")
+        write_deltalake(str(tmp_path), valid_data, mode="append", engine="pyarrow")
 
 
 @pytest.mark.pyspark

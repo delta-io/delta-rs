@@ -11,6 +11,8 @@ ListType: Any
 StructType: Any
 MapType: Any
 FixedSizeListType: Any
+LargeListViewType: Any
+ListViewType: Any
 FixedSizeBinaryType: Any
 schema: Any
 map_: Any
@@ -36,7 +38,11 @@ large_string: Any
 string: Any
 large_binary: Any
 binary: Any
+binary_view: Any
+string_view: Any
+list_view: Any
 large_list: Any
+large_list_view: Any
 LargeListType: Any
 dictionary: Any
 timestamp: Any

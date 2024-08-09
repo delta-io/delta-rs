@@ -283,6 +283,7 @@ async fn execute(
 
     let scan_config = DeltaScanConfigBuilder::default()
         .with_file_column(false)
+        .with_schema(snapshot.input_schema()?)
         .build(&snapshot)?;
 
     // For each rewrite evaluate the predicate and then modify each expression
@@ -345,10 +346,7 @@ async fn execute(
             .map(|v| v.iter().map(|v| v.to_string()).collect::<Vec<String>>()),
     );
 
-    let tracker = CDCTracker::new(
-        df,
-        updated_df.drop_columns(&vec![UPDATE_PREDICATE_COLNAME])?,
-    );
+    let tracker = CDCTracker::new(df, updated_df.drop_columns(&[UPDATE_PREDICATE_COLNAME])?);
 
     let add_actions = write_execution_plan(
         Some(&snapshot),
@@ -359,8 +357,6 @@ async fn execute(
         Some(snapshot.table_config().target_file_size() as usize),
         None,
         writer_properties.clone(),
-        safe_cast,
-        None,
         writer_stats_config.clone(),
         None,
     )
@@ -424,7 +420,6 @@ async fn execute(
                     Some(snapshot.table_config().target_file_size() as usize),
                     None,
                     writer_properties,
-                    safe_cast,
                     writer_stats_config,
                     None,
                 )

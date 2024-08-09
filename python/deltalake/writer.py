@@ -1,5 +1,6 @@
 import json
 import uuid
+import warnings
 from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal
@@ -41,6 +42,7 @@ from ._internal import write_to_deltalake as write_deltalake_rust
 from ._util import encode_partition_value
 from .exceptions import DeltaProtocolError, TableNotFoundError
 from .schema import (
+    ArrowSchemaConversionMode,
     convert_pyarrow_dataset,
     convert_pyarrow_recordbatch,
     convert_pyarrow_recordbatchreader,
@@ -62,7 +64,6 @@ except ModuleNotFoundError:
 else:
     _has_pandas = True
 
-PYARROW_MAJOR_VERSION = int(pa.__version__.split(".", maxsplit=1)[0])
 DEFAULT_DATA_SKIPPING_NUM_INDEX_COLS = 32
 
 DTYPE_MAP = {
@@ -148,7 +149,7 @@ def write_deltalake(
     schema_mode: Optional[Literal["merge", "overwrite"]] = ...,
     storage_options: Optional[Dict[str, str]] = ...,
     large_dtypes: bool = ...,
-    engine: Literal["rust"],
+    engine: Literal["rust"] = ...,
     writer_properties: WriterProperties = ...,
     custom_metadata: Optional[Dict[str, str]] = ...,
     post_commithook_properties: Optional[PostCommitHookProperties] = ...,
@@ -178,7 +179,7 @@ def write_deltalake(
     storage_options: Optional[Dict[str, str]] = ...,
     predicate: Optional[str] = ...,
     large_dtypes: bool = ...,
-    engine: Literal["rust"],
+    engine: Literal["rust"] = ...,
     writer_properties: WriterProperties = ...,
     custom_metadata: Optional[Dict[str, str]] = ...,
     post_commithook_properties: Optional[PostCommitHookProperties] = ...,
@@ -214,7 +215,7 @@ def write_deltalake(
     partition_filters: Optional[List[Tuple[str, str, Any]]] = None,
     predicate: Optional[str] = None,
     large_dtypes: bool = False,
-    engine: Literal["pyarrow", "rust"] = "pyarrow",
+    engine: Literal["pyarrow", "rust"] = "rust",
     writer_properties: Optional[WriterProperties] = None,
     custom_metadata: Optional[Dict[str, str]] = None,
     post_commithook_properties: Optional[PostCommitHookProperties] = None,
@@ -268,9 +269,8 @@ def write_deltalake(
         storage_options: options passed to the native delta filesystem.
         predicate: When using `Overwrite` mode, replace data that matches a predicate. Only used in rust engine.
         partition_filters: the partition filters that will be used for partition overwrite. Only used in pyarrow engine.
-        large_dtypes: If True, the data schema is kept in large_dtypes, has no effect on pandas dataframe input.
-        engine: writer engine to write the delta table. `Rust` engine is still experimental but you may
-            see up to 4x performance improvements over pyarrow.
+        large_dtypes: Only used for pyarrow engine
+        engine: writer engine to write the delta table. PyArrow engine is deprecated, and will be removed in v1.0.
         writer_properties: Pass writer properties to the Rust parquet writer.
         custom_metadata: Custom metadata to add to the commitInfo.
         post_commithook_properties: properties for the post commit hook. If None, default values are used.
@@ -285,14 +285,20 @@ def write_deltalake(
     if isinstance(partition_by, str):
         partition_by = [partition_by]
 
-    data, schema = _convert_data_and_schema(
-        data=data, schema=schema, large_dtypes=large_dtypes
-    )
-
     if engine == "rust":
+        if partition_filters is not None:
+            raise ValueError(
+                "Partition filters can only be used with PyArrow engine, use predicate instead. PyArrow engine will be deprecated in 1.0"
+            )
+
         if table is not None and mode == "ignore":
             return
 
+        data, schema = _convert_data_and_schema(
+            data=data,
+            schema=schema,
+            conversion_mode=ArrowSchemaConversionMode.PASSTHROUGH,
+        )
         data = RecordBatchReader.from_batches(schema, (batch for batch in data))
         write_deltalake_rust(
             table_uri=table_uri,
@@ -316,13 +322,34 @@ def write_deltalake(
         )
         if table:
             table.update_incremental()
-
     elif engine == "pyarrow":
+        warnings.warn(
+            "pyarrow engine is deprecated and will be removed in v1.0",
+            category=DeprecationWarning,
+            stacklevel=2,
+        )
+
+        if predicate is not None:
+            raise ValueError(
+                "Predicate can only be used with Rust engine, use partition_filters instead. PyArrow engine will be removed in 1.0"
+            )
+
+        if large_dtypes:
+            arrow_schema_conversion_mode = "large"
+        else:
+            arrow_schema_conversion_mode = "normal"
+
+        conversion_mode = ArrowSchemaConversionMode.from_str(
+            arrow_schema_conversion_mode
+        )
+        data, schema = _convert_data_and_schema(
+            data=data, schema=schema, conversion_mode=conversion_mode
+        )
+
         if schema_mode == "merge":
             raise ValueError(
                 "schema_mode 'merge' is not supported in pyarrow engine. Use engine=rust"
             )
-        # We need to write against the latest table version
 
         num_indexed_cols, stats_cols = get_num_idx_cols_and_stats_columns(
             table._table if table is not None else None, configuration
@@ -366,19 +393,9 @@ def write_deltalake(
 
         if partition_by:
             table_schema: pa.Schema = schema
-            if PYARROW_MAJOR_VERSION < 12:
-                partition_schema = pa.schema(
-                    [
-                        pa.field(
-                            name, _large_to_normal_dtype(table_schema.field(name).type)
-                        )
-                        for name in partition_by
-                    ]
-                )
-            else:
-                partition_schema = pa.schema(
-                    [table_schema.field(name) for name in partition_by]
-                )
+            partition_schema = pa.schema(
+                [table_schema.field(name) for name in partition_by]
+            )
             partitioning = ds.partitioning(partition_schema, flavor="hive")
         else:
             partitioning = None
@@ -393,18 +410,10 @@ def write_deltalake(
                 columns_to_collect_stats=stats_cols,
             )
 
-            # PyArrow added support for written_file.size in 9.0.0
-            if PYARROW_MAJOR_VERSION >= 9:
-                size = written_file.size
-            elif filesystem is not None:
-                size = filesystem.get_file_info([path])[0].size
-            else:
-                size = 0
-
             add_actions.append(
                 AddAction(
                     path,
-                    size,
+                    written_file.size,
                     partition_values,
                     int(datetime.now().timestamp() * 1000),
                     True,
@@ -634,29 +643,27 @@ def _convert_data_and_schema(
         ArrowStreamExportable,
     ],
     schema: Optional[Union[pa.Schema, DeltaSchema]],
-    large_dtypes: bool,
+    conversion_mode: ArrowSchemaConversionMode,
 ) -> Tuple[pa.RecordBatchReader, pa.Schema]:
     if isinstance(data, RecordBatchReader):
-        data = convert_pyarrow_recordbatchreader(data, large_dtypes)
+        data = convert_pyarrow_recordbatchreader(data, conversion_mode)
     elif isinstance(data, pa.RecordBatch):
-        data = convert_pyarrow_recordbatch(data, large_dtypes)
+        data = convert_pyarrow_recordbatch(data, conversion_mode)
     elif isinstance(data, pa.Table):
-        data = convert_pyarrow_table(data, large_dtypes)
+        data = convert_pyarrow_table(data, conversion_mode)
     elif isinstance(data, ds.Dataset):
-        data = convert_pyarrow_dataset(data, large_dtypes)
+        data = convert_pyarrow_dataset(data, conversion_mode)
     elif _has_pandas and isinstance(data, pd.DataFrame):
         if schema is not None:
             data = convert_pyarrow_table(
-                pa.Table.from_pandas(data, schema=schema), large_dtypes=large_dtypes
+                pa.Table.from_pandas(data, schema=schema), conversion_mode
             )
         else:
-            data = convert_pyarrow_table(
-                pa.Table.from_pandas(data), large_dtypes=large_dtypes
-            )
+            data = convert_pyarrow_table(pa.Table.from_pandas(data), conversion_mode)
     elif hasattr(data, "__arrow_c_array__"):
         data = convert_pyarrow_recordbatch(
             pa.record_batch(data),  # type:ignore[attr-defined]
-            large_dtypes,
+            conversion_mode,
         )
     elif hasattr(data, "__arrow_c_stream__"):
         if not hasattr(RecordBatchReader, "from_stream"):
@@ -665,7 +672,7 @@ def _convert_data_and_schema(
             )
 
         data = convert_pyarrow_recordbatchreader(
-            RecordBatchReader.from_stream(data), large_dtypes
+            RecordBatchReader.from_stream(data), conversion_mode
         )
     elif isinstance(data, Iterable):
         if schema is None:
@@ -675,8 +682,18 @@ def _convert_data_and_schema(
             f"{type(data).__name__} is not a valid input. Only PyArrow RecordBatchReader, RecordBatch, Iterable[RecordBatch], Table, Dataset or Pandas DataFrame or objects implementing the Arrow PyCapsule Interface are valid inputs for source."
         )
 
-    if isinstance(schema, DeltaSchema):
-        schema = schema.to_pyarrow(as_large_types=large_dtypes)
+    if (
+        isinstance(schema, DeltaSchema)
+        and conversion_mode == ArrowSchemaConversionMode.PASSTHROUGH
+    ):
+        raise NotImplementedError(
+            "ArrowSchemaConversionMode.passthrough is not implemented to work with DeltaSchema, skip passing a schema or pass an arrow schema."
+        )
+    elif isinstance(schema, DeltaSchema):
+        if conversion_mode == ArrowSchemaConversionMode.LARGE:
+            schema = schema.to_pyarrow(as_large_types=True)
+        else:
+            schema = schema.to_pyarrow(as_large_types=False)
     elif schema is None:
         schema = data.schema
 
@@ -811,19 +828,6 @@ def get_file_stats_from_metadata(
                 # Min and Max are recorded in physical type, not logical type
                 # https://stackoverflow.com/questions/66753485/decoding-parquet-min-max-statistics-for-decimal-type
                 # TODO: Add logic to decode physical type for DATE, DECIMAL
-                logical_type = (
-                    metadata.row_group(0)
-                    .column(column_idx)
-                    .statistics.logical_type.type
-                )
-
-                if PYARROW_MAJOR_VERSION < 8 and logical_type not in [
-                    "STRING",
-                    "INT",
-                    "TIMESTAMP",
-                    "NONE",
-                ]:
-                    continue
 
                 minimums = (
                     group.column(column_idx).statistics.min

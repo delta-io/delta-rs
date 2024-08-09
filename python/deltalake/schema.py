@@ -1,3 +1,4 @@
+from enum import Enum
 from typing import Generator, Union
 
 import pyarrow as pa
@@ -15,9 +16,25 @@ from ._internal import StructType as StructType
 DataType = Union["PrimitiveType", "MapType", "StructType", "ArrayType"]
 
 
+class ArrowSchemaConversionMode(Enum):
+    NORMAL = "NORMAL"
+    LARGE = "LARGE"
+    PASSTHROUGH = "PASSTHROUGH"
+
+    @classmethod
+    def from_str(cls, value: str) -> "ArrowSchemaConversionMode":
+        try:
+            return cls(value.upper())
+        except ValueError:
+            raise ValueError(
+                f"{value} is not a valid ArrowSchemaConversionMode. Valid values are: {[item.value for item in ArrowSchemaConversionMode]}"
+            )
+
+
 ### Inspired from Pola-rs repo - licensed with MIT License, see license in python/licenses/polars_license.txt.###
 def _convert_pa_schema_to_delta(
-    schema: pa.schema, large_dtypes: bool = False
+    schema: pa.schema,
+    schema_conversion_mode: ArrowSchemaConversionMode = ArrowSchemaConversionMode.NORMAL,
 ) -> pa.schema:
     """Convert a PyArrow schema to a schema compatible with Delta Lake. Converts unsigned to signed equivalent, and
     converts all timestamps to `us` timestamps. With the boolean flag large_dtypes you can control if the schema
@@ -26,6 +43,7 @@ def _convert_pa_schema_to_delta(
     Args
         schema: Source schema
         large_dtypes: If True, the pyarrow schema is casted to large_dtypes
+        large_view_passthrough: If True, String/Binary/Lists are passed through as is
     """
     dtype_map = {
         pa.uint8(): pa.int8(),
@@ -33,20 +51,39 @@ def _convert_pa_schema_to_delta(
         pa.uint32(): pa.int32(),
         pa.uint64(): pa.int64(),
     }
-    if large_dtypes:
+    if schema_conversion_mode == ArrowSchemaConversionMode.LARGE:
         dtype_map = {
             **dtype_map,
-            **{pa.string(): pa.large_string(), pa.binary(): pa.large_binary()},
+            **{
+                pa.string(): pa.large_string(),
+                pa.string_view(): pa.large_string(),
+                pa.binary(): pa.large_binary(),
+                pa.binary_view(): pa.large_binary(),
+            },
         }
-    else:
+    elif schema_conversion_mode == ArrowSchemaConversionMode.NORMAL:
         dtype_map = {
             **dtype_map,
-            **{pa.large_string(): pa.string(), pa.large_binary(): pa.binary()},
+            **{
+                pa.large_string(): pa.string(),
+                pa.string_view(): pa.string(),
+                pa.large_binary(): pa.binary(),
+                pa.binary_view(): pa.binary(),
+            },
         }
 
     def dtype_to_delta_dtype(dtype: pa.DataType) -> pa.DataType:
         # Handle nested types
-        if isinstance(dtype, (pa.LargeListType, pa.ListType, pa.FixedSizeListType)):
+        if isinstance(
+            dtype,
+            (
+                pa.LargeListType,
+                pa.ListType,
+                pa.FixedSizeListType,
+                pa.ListViewType,
+                pa.LargeListViewType,
+            ),
+        ):
             return list_to_delta_dtype(dtype)
         elif isinstance(dtype, pa.StructType):
             return struct_to_delta_dtype(dtype)
@@ -63,14 +100,35 @@ def _convert_pa_schema_to_delta(
             return dtype
 
     def list_to_delta_dtype(
-        dtype: Union[pa.LargeListType, pa.ListType],
+        dtype: Union[
+            pa.LargeListType,
+            pa.ListType,
+            pa.ListViewType,
+            pa.LargeListViewType,
+            pa.FixedSizeListType,
+        ],
     ) -> Union[pa.LargeListType, pa.ListType]:
         nested_dtype = dtype.value_type
         nested_dtype_cast = dtype_to_delta_dtype(nested_dtype)
-        if large_dtypes:
+        if schema_conversion_mode == ArrowSchemaConversionMode.LARGE:
             return pa.large_list(nested_dtype_cast)
-        else:
+        elif schema_conversion_mode == ArrowSchemaConversionMode.NORMAL:
             return pa.list_(nested_dtype_cast)
+        elif schema_conversion_mode == ArrowSchemaConversionMode.PASSTHROUGH:
+            if isinstance(dtype, pa.LargeListType):
+                return pa.large_list(nested_dtype_cast)
+            elif isinstance(dtype, pa.ListType):
+                return pa.list_(nested_dtype_cast)
+            elif isinstance(dtype, pa.FixedSizeListType):
+                return pa.list_(nested_dtype_cast)
+            elif isinstance(dtype, pa.LargeListViewType):
+                return pa.large_list_view(nested_dtype_cast)
+            elif isinstance(dtype, pa.ListViewType):
+                return pa.list_view(nested_dtype_cast)
+            else:
+                raise NotImplementedError
+        else:
+            raise NotImplementedError
 
     def struct_to_delta_dtype(dtype: pa.StructType) -> pa.StructType:
         fields = [dtype[i] for i in range(dtype.num_fields)]
@@ -91,10 +149,12 @@ def _cast_schema_to_recordbatchreader(
 
 
 def convert_pyarrow_recordbatchreader(
-    data: pa.RecordBatchReader, large_dtypes: bool
+    data: pa.RecordBatchReader, schema_conversion_mode: ArrowSchemaConversionMode
 ) -> pa.RecordBatchReader:
     """Converts a PyArrow RecordBatchReader to a PyArrow RecordBatchReader with a compatible delta schema"""
-    schema = _convert_pa_schema_to_delta(data.schema, large_dtypes=large_dtypes)
+    schema = _convert_pa_schema_to_delta(
+        data.schema, schema_conversion_mode=schema_conversion_mode
+    )
 
     data = pa.RecordBatchReader.from_batches(
         schema,
@@ -104,25 +164,33 @@ def convert_pyarrow_recordbatchreader(
 
 
 def convert_pyarrow_recordbatch(
-    data: pa.RecordBatch, large_dtypes: bool
+    data: pa.RecordBatch, schema_conversion_mode: ArrowSchemaConversionMode
 ) -> pa.RecordBatchReader:
     """Converts a PyArrow RecordBatch to a PyArrow RecordBatchReader with a compatible delta schema"""
-    schema = _convert_pa_schema_to_delta(data.schema, large_dtypes=large_dtypes)
+    schema = _convert_pa_schema_to_delta(
+        data.schema, schema_conversion_mode=schema_conversion_mode
+    )
     data = pa.Table.from_batches([data]).cast(schema).to_reader()
     return data
 
 
-def convert_pyarrow_table(data: pa.Table, large_dtypes: bool) -> pa.RecordBatchReader:
+def convert_pyarrow_table(
+    data: pa.Table, schema_conversion_mode: ArrowSchemaConversionMode
+) -> pa.RecordBatchReader:
     """Converts a PyArrow table to a PyArrow RecordBatchReader with a compatible delta schema"""
-    schema = _convert_pa_schema_to_delta(data.schema, large_dtypes=large_dtypes)
+    schema = _convert_pa_schema_to_delta(
+        data.schema, schema_conversion_mode=schema_conversion_mode
+    )
     data = data.cast(schema).to_reader()
     return data
 
 
 def convert_pyarrow_dataset(
-    data: ds.Dataset, large_dtypes: bool
+    data: ds.Dataset, schema_conversion_mode: ArrowSchemaConversionMode
 ) -> pa.RecordBatchReader:
     """Converts a PyArrow dataset to a PyArrow RecordBatchReader with a compatible delta schema"""
     data = data.scanner().to_reader()
-    data = convert_pyarrow_recordbatchreader(data, large_dtypes)
+    data = convert_pyarrow_recordbatchreader(
+        data, schema_conversion_mode=schema_conversion_mode
+    )
     return data

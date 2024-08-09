@@ -305,9 +305,13 @@ pub(crate) fn register_store(store: LogStoreRef, env: Arc<RuntimeEnv>) {
 /// at the physical level
 pub(crate) fn df_logical_schema(
     snapshot: &DeltaTableState,
-    scan_config: &DeltaScanConfig,
+    file_column_name: &Option<String>,
+    schema: Option<ArrowSchemaRef>,
 ) -> DeltaResult<SchemaRef> {
-    let input_schema = snapshot.arrow_schema()?;
+    let input_schema = match schema {
+        Some(schema) => schema,
+        None => snapshot.input_schema()?,
+    };
     let table_partition_cols = &snapshot.metadata().partition_columns;
 
     let mut fields: Vec<Arc<Field>> = input_schema
@@ -326,7 +330,7 @@ pub(crate) fn df_logical_schema(
         ));
     }
 
-    if let Some(file_column_name) = &scan_config.file_column_name {
+    if let Some(file_column_name) = file_column_name {
         fields.push(Arc::new(Field::new(file_column_name, DataType::Utf8, true)));
     }
 
@@ -528,7 +532,11 @@ impl<'a> DeltaScanBuilder<'a> {
             None => self.snapshot.arrow_schema(),
         }?;
 
-        let logical_schema = df_logical_schema(self.snapshot, &config)?;
+        let logical_schema = df_logical_schema(
+            self.snapshot,
+            &config.file_column_name,
+            Some(schema.clone()),
+        )?;
 
         let logical_schema = if let Some(used_columns) = self.projection {
             let mut fields = vec![];
@@ -733,7 +741,7 @@ impl TableProvider for DeltaTable {
         filter: &[&Expr],
     ) -> DataFusionResult<Vec<TableProviderFilterPushDown>> {
         Ok(filter
-            .into_iter()
+            .iter()
             .map(|_| TableProviderFilterPushDown::Inexact)
             .collect())
     }
@@ -760,7 +768,7 @@ impl DeltaTableProvider {
         config: DeltaScanConfig,
     ) -> DeltaResult<Self> {
         Ok(DeltaTableProvider {
-            schema: df_logical_schema(&snapshot, &config)?,
+            schema: df_logical_schema(&snapshot, &config.file_column_name, config.schema.clone())?,
             snapshot,
             log_store,
             config,
@@ -1524,7 +1532,7 @@ pub(crate) async fn find_files_scan<'a>(
     }
     .build(snapshot)?;
 
-    let logical_schema = df_logical_schema(snapshot, &scan_config)?;
+    let logical_schema = df_logical_schema(snapshot, &scan_config.file_column_name, None)?;
 
     // Identify which columns we need to project
     let mut used_columns = expression

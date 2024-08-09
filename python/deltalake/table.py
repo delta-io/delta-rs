@@ -22,7 +22,6 @@ from typing import (
 import pyarrow
 import pyarrow.dataset as ds
 import pyarrow.fs as pa_fs
-import pyarrow_hotfix  # noqa: F401; addresses CVE-2023-47248; # type: ignore
 from pyarrow.dataset import (
     Expression,
     FileSystemDataset,
@@ -39,13 +38,13 @@ except ImportError:
 if TYPE_CHECKING:
     import os
 
-from deltalake._internal import DeltaDataChecker as _DeltaDataChecker
 from deltalake._internal import RawDeltaTable
 from deltalake._internal import create_deltalake as _create_deltalake
 from deltalake._util import encode_partition_value
 from deltalake.data_catalog import DataCatalog
 from deltalake.exceptions import DeltaProtocolError
 from deltalake.fs import DeltaStorageHandler
+from deltalake.schema import ArrowSchemaConversionMode
 from deltalake.schema import Field as DeltaField
 from deltalake.schema import Schema as DeltaSchema
 
@@ -891,15 +890,21 @@ class DeltaTable:
             target_alias: Alias for the target table
             error_on_type_mismatch: specify if merge will return error if data types are mismatching :default = True
             writer_properties: Pass writer properties to the Rust parquet writer
-            large_dtypes: If True, the data schema is kept in large_dtypes.
+            large_dtypes: Deprecated, will be removed in 1.0
+            arrow_schema_conversion_mode: Large converts all types of data schema into Large Arrow types, passthrough keeps string/binary/list types untouched
             custom_metadata: custom metadata that will be added to the transaction commit.
             post_commithook_properties: properties for the post commit hook. If None, default values are used.
 
         Returns:
             TableMerger: TableMerger Object
         """
-        invariants = self.schema().invariants
-        checker = _DeltaDataChecker(invariants)
+        if large_dtypes:
+            warnings.warn(
+                "large_dtypes is deprecated",
+                category=DeprecationWarning,
+                stacklevel=2,
+            )
+        conversion_mode = ArrowSchemaConversionMode.PASSTHROUGH
 
         from .schema import (
             convert_pyarrow_dataset,
@@ -909,28 +914,24 @@ class DeltaTable:
         )
 
         if isinstance(source, pyarrow.RecordBatchReader):
-            source = convert_pyarrow_recordbatchreader(source, large_dtypes)
+            source = convert_pyarrow_recordbatchreader(source, conversion_mode)
         elif isinstance(source, pyarrow.RecordBatch):
-            source = convert_pyarrow_recordbatch(source, large_dtypes)
+            source = convert_pyarrow_recordbatch(source, conversion_mode)
         elif isinstance(source, pyarrow.Table):
-            source = convert_pyarrow_table(source, large_dtypes)
+            source = convert_pyarrow_table(source, conversion_mode)
         elif isinstance(source, ds.Dataset):
-            source = convert_pyarrow_dataset(source, large_dtypes)
+            source = convert_pyarrow_dataset(source, conversion_mode)
         elif _has_pandas and isinstance(source, pd.DataFrame):
             source = convert_pyarrow_table(
-                pyarrow.Table.from_pandas(source), large_dtypes
+                pyarrow.Table.from_pandas(source), conversion_mode
             )
         else:
             raise TypeError(
                 f"{type(source).__name__} is not a valid input. Only PyArrow RecordBatchReader, RecordBatch, Table or Pandas DataFrame are valid inputs for source."
             )
 
-        def validate_batch(batch: pyarrow.RecordBatch) -> pyarrow.RecordBatch:
-            checker.check_batch(batch)
-            return batch
-
         source = pyarrow.RecordBatchReader.from_batches(
-            source.schema, (validate_batch(batch) for batch in source)
+            source.schema, (batch for batch in source)
         )
 
         return TableMerger(

@@ -69,8 +69,8 @@ use crate::delta_datafusion::logical::MetricObserver;
 use crate::delta_datafusion::physical::{find_metric_node, get_metric, MetricObserverExec};
 use crate::delta_datafusion::planner::DeltaPlanner;
 use crate::delta_datafusion::{
-    execute_plan_to_batch, register_store, DeltaColumn, DeltaScanConfigBuilder, DeltaSessionConfig,
-    DeltaTableProvider,
+    execute_plan_to_batch, register_store, DataFusionMixins, DeltaColumn, DeltaScanConfigBuilder,
+    DeltaSessionConfig, DeltaTableProvider,
 };
 use crate::kernel::Action;
 use crate::logstore::LogStoreRef;
@@ -1060,6 +1060,7 @@ async fn execute(
     let scan_config = DeltaScanConfigBuilder::default()
         .with_file_column(true)
         .with_parquet_pushdown(false)
+        .with_schema(snapshot.input_schema()?)
         .build(&snapshot)?;
 
     let target_provider = Arc::new(DeltaTableProvider::try_new(
@@ -1459,8 +1460,6 @@ async fn execute(
         Some(snapshot.table_config().target_file_size() as usize),
         None,
         writer_properties,
-        safe_cast,
-        None,
         writer_stats_config,
         None,
     )

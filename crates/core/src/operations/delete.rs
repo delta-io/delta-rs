@@ -43,6 +43,7 @@ use serde::Serialize;
 use super::cdc::should_write_cdc;
 use super::datafusion_utils::Expression;
 use super::transaction::{CommitBuilder, CommitProperties, PROTOCOL};
+use super::write::WriterStatsConfig;
 
 use crate::delta_datafusion::expr::fmt_expr_to_sql;
 use crate::delta_datafusion::{
@@ -51,7 +52,7 @@ use crate::delta_datafusion::{
 };
 use crate::errors::DeltaResult;
 use crate::kernel::{Action, Add, Remove};
-use crate::operations::write::{write_execution_plan, write_execution_plan_cdc, WriterStatsConfig};
+use crate::operations::write::{write_execution_plan, write_execution_plan_cdc};
 use crate::protocol::DeltaOperation;
 use crate::table::state::DeltaTableState;
 use crate::{DeltaTable, DeltaTableError};
@@ -236,8 +237,6 @@ async fn excute_non_empty_expr(
             Some(snapshot.table_config().target_file_size() as usize),
             None,
             writer_properties.clone(),
-            false,
-            None,
             writer_stats_config.clone(),
             None,
         )
@@ -266,7 +265,6 @@ async fn excute_non_empty_expr(
             .create_physical_plan()
             .await?;
 
-        use crate::operations::write::write_execution_plan_cdc;
         let cdc_actions = write_execution_plan_cdc(
             Some(snapshot),
             state.clone(),
@@ -276,7 +274,6 @@ async fn excute_non_empty_expr(
             Some(snapshot.table_config().target_file_size() as usize),
             None,
             writer_properties,
-            false,
             writer_stats_config,
             None,
         )

@@ -137,7 +137,7 @@ async fn scan_table_by_files(
         .with_file_column(true)
         .build(&snapshot)?;
 
-    let logical_schema = df_logical_schema(&snapshot, &scan_config)?;
+    let logical_schema = df_logical_schema(&snapshot, &scan_config.file_column_name, None)?;
 
     // Identify which columns we need to project
     let mut used_columns = expression
