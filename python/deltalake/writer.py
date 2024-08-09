@@ -41,6 +41,7 @@ from ._internal import write_to_deltalake as write_deltalake_rust
 from ._util import encode_partition_value
 from .exceptions import DeltaProtocolError, TableNotFoundError
 from .schema import (
+    ArrowSchemaConversionMode,
     convert_pyarrow_dataset,
     convert_pyarrow_recordbatch,
     convert_pyarrow_recordbatchreader,
@@ -293,6 +294,11 @@ def write_deltalake(
         if table is not None and mode == "ignore":
             return
 
+        data, schema = _convert_data_and_schema(
+            data=data,
+            schema=schema,
+            conversion_mode=ArrowSchemaConversionMode.PASSTHROUGH,
+        )
         data = RecordBatchReader.from_batches(schema, (batch for batch in data))
         write_deltalake_rust(
             table_uri=table_uri,
@@ -318,6 +324,19 @@ def write_deltalake(
             table.update_incremental()
 
     elif engine == "pyarrow":
+
+        if large_dtypes:
+            arrow_schema_conversion_mode = "large"
+        else:
+            arrow_schema_conversion_mode = "normal"
+
+        conversion_mode = ArrowSchemaConversionMode.from_str(
+            arrow_schema_conversion_mode
+        )
+        data, schema = _convert_data_and_schema(
+            data=data, schema=schema, conversion_mode=conversion_mode
+        )
+
         if schema_mode == "merge":
             raise ValueError(
                 "schema_mode 'merge' is not supported in pyarrow engine. Use engine=rust"
@@ -634,29 +653,27 @@ def _convert_data_and_schema(
         ArrowStreamExportable,
     ],
     schema: Optional[Union[pa.Schema, DeltaSchema]],
-    large_dtypes: bool,
+    conversion_mode: ArrowSchemaConversionMode,
 ) -> Tuple[pa.RecordBatchReader, pa.Schema]:
     if isinstance(data, RecordBatchReader):
-        data = convert_pyarrow_recordbatchreader(data, large_dtypes)
+        data = convert_pyarrow_recordbatchreader(data, conversion_mode)
     elif isinstance(data, pa.RecordBatch):
-        data = convert_pyarrow_recordbatch(data, large_dtypes)
+        data = convert_pyarrow_recordbatch(data, conversion_mode)
     elif isinstance(data, pa.Table):
-        data = convert_pyarrow_table(data, large_dtypes)
+        data = convert_pyarrow_table(data, conversion_mode)
     elif isinstance(data, ds.Dataset):
-        data = convert_pyarrow_dataset(data, large_dtypes)
+        data = convert_pyarrow_dataset(data, conversion_mode)
     elif _has_pandas and isinstance(data, pd.DataFrame):
         if schema is not None:
             data = convert_pyarrow_table(
-                pa.Table.from_pandas(data, schema=schema), large_dtypes=large_dtypes
+                pa.Table.from_pandas(data, schema=schema), conversion_mode
             )
         else:
-            data = convert_pyarrow_table(
-                pa.Table.from_pandas(data), large_dtypes=large_dtypes
-            )
+            data = convert_pyarrow_table(pa.Table.from_pandas(data), conversion_mode)
     elif hasattr(data, "__arrow_c_array__"):
         data = convert_pyarrow_recordbatch(
             pa.record_batch(data),  # type:ignore[attr-defined]
-            large_dtypes,
+            conversion_mode,
         )
     elif hasattr(data, "__arrow_c_stream__"):
         if not hasattr(RecordBatchReader, "from_stream"):
@@ -665,7 +682,7 @@ def _convert_data_and_schema(
             )
 
         data = convert_pyarrow_recordbatchreader(
-            RecordBatchReader.from_stream(data), large_dtypes
+            RecordBatchReader.from_stream(data), conversion_mode
         )
     elif isinstance(data, Iterable):
         if schema is None:
@@ -675,8 +692,18 @@ def _convert_data_and_schema(
             f"{type(data).__name__} is not a valid input. Only PyArrow RecordBatchReader, RecordBatch, Iterable[RecordBatch], Table, Dataset or Pandas DataFrame or objects implementing the Arrow PyCapsule Interface are valid inputs for source."
         )
 
-    if isinstance(schema, DeltaSchema):
-        schema = schema.to_pyarrow(as_large_types=large_dtypes)
+    if (
+        isinstance(schema, DeltaSchema)
+        and conversion_mode == ArrowSchemaConversionMode.PASSTHROUGH
+    ):
+        raise NotImplementedError(
+            "ArrowSchemaConversionMode.passthrough is not implemented to work with DeltaSchema, skip passing a schema or pass an arrow schema."
+        )
+    elif isinstance(schema, DeltaSchema):
+        if conversion_mode == ArrowSchemaConversionMode.LARGE:
+            schema = schema.to_pyarrow(as_large_types=True)
+        else:
+            schema = schema.to_pyarrow(as_large_types=False)
     elif schema is None:
         schema = data.schema
 
