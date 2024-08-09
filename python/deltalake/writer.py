@@ -1,5 +1,6 @@
 import json
 import uuid
+import warnings
 from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal
@@ -63,7 +64,6 @@ except ModuleNotFoundError:
 else:
     _has_pandas = True
 
-PYARROW_MAJOR_VERSION = int(pa.__version__.split(".", maxsplit=1)[0])
 DEFAULT_DATA_SKIPPING_NUM_INDEX_COLS = 32
 
 DTYPE_MAP = {
@@ -149,7 +149,7 @@ def write_deltalake(
     schema_mode: Optional[Literal["merge", "overwrite"]] = ...,
     storage_options: Optional[Dict[str, str]] = ...,
     large_dtypes: bool = ...,
-    engine: Literal["rust"],
+    engine: Literal["rust"] = ...,
     writer_properties: WriterProperties = ...,
     custom_metadata: Optional[Dict[str, str]] = ...,
     post_commithook_properties: Optional[PostCommitHookProperties] = ...,
@@ -179,7 +179,7 @@ def write_deltalake(
     storage_options: Optional[Dict[str, str]] = ...,
     predicate: Optional[str] = ...,
     large_dtypes: bool = ...,
-    engine: Literal["rust"],
+    engine: Literal["rust"] = ...,
     writer_properties: WriterProperties = ...,
     custom_metadata: Optional[Dict[str, str]] = ...,
     post_commithook_properties: Optional[PostCommitHookProperties] = ...,
@@ -215,7 +215,7 @@ def write_deltalake(
     partition_filters: Optional[List[Tuple[str, str, Any]]] = None,
     predicate: Optional[str] = None,
     large_dtypes: bool = False,
-    engine: Literal["pyarrow", "rust"] = "pyarrow",
+    engine: Literal["pyarrow", "rust"] = "rust",
     writer_properties: Optional[WriterProperties] = None,
     custom_metadata: Optional[Dict[str, str]] = None,
     post_commithook_properties: Optional[PostCommitHookProperties] = None,
@@ -269,9 +269,8 @@ def write_deltalake(
         storage_options: options passed to the native delta filesystem.
         predicate: When using `Overwrite` mode, replace data that matches a predicate. Only used in rust engine.
         partition_filters: the partition filters that will be used for partition overwrite. Only used in pyarrow engine.
-        large_dtypes: If True, the data schema is kept in large_dtypes, has no effect on pandas dataframe input.
-        engine: writer engine to write the delta table. `Rust` engine is still experimental but you may
-            see up to 4x performance improvements over pyarrow.
+        large_dtypes: Only used for pyarrow engine
+        engine: writer engine to write the delta table. PyArrow engine is deprecated, and will be removed in v1.0.
         writer_properties: Pass writer properties to the Rust parquet writer.
         custom_metadata: Custom metadata to add to the commitInfo.
         post_commithook_properties: properties for the post commit hook. If None, default values are used.
@@ -286,11 +285,12 @@ def write_deltalake(
     if isinstance(partition_by, str):
         partition_by = [partition_by]
 
-    data, schema = _convert_data_and_schema(
-        data=data, schema=schema, large_dtypes=large_dtypes
-    )
-
     if engine == "rust":
+        if partition_filters is not None:
+            raise ValueError(
+                "Partition filters can only be used with PyArrow engine, use predicate instead. PyArrow engine will be deprecated in 1.0"
+            )
+
         if table is not None and mode == "ignore":
             return
 
@@ -322,8 +322,17 @@ def write_deltalake(
         )
         if table:
             table.update_incremental()
-
     elif engine == "pyarrow":
+        warnings.warn(
+            "pyarrow engine is deprecated and will be removed in v1.0",
+            category=DeprecationWarning,
+            stacklevel=2,
+        )
+
+        if predicate is not None:
+            raise ValueError(
+                "Predicate can only be used with Rust engine, use partition_filters instead. PyArrow engine will be removed in 1.0"
+            )
 
         if large_dtypes:
             arrow_schema_conversion_mode = "large"
@@ -341,7 +350,6 @@ def write_deltalake(
             raise ValueError(
                 "schema_mode 'merge' is not supported in pyarrow engine. Use engine=rust"
             )
-        # We need to write against the latest table version
 
         num_indexed_cols, stats_cols = get_num_idx_cols_and_stats_columns(
             table._table if table is not None else None, configuration
@@ -385,19 +393,9 @@ def write_deltalake(
 
         if partition_by:
             table_schema: pa.Schema = schema
-            if PYARROW_MAJOR_VERSION < 12:
-                partition_schema = pa.schema(
-                    [
-                        pa.field(
-                            name, _large_to_normal_dtype(table_schema.field(name).type)
-                        )
-                        for name in partition_by
-                    ]
-                )
-            else:
-                partition_schema = pa.schema(
-                    [table_schema.field(name) for name in partition_by]
-                )
+            partition_schema = pa.schema(
+                [table_schema.field(name) for name in partition_by]
+            )
             partitioning = ds.partitioning(partition_schema, flavor="hive")
         else:
             partitioning = None
@@ -412,18 +410,10 @@ def write_deltalake(
                 columns_to_collect_stats=stats_cols,
             )
 
-            # PyArrow added support for written_file.size in 9.0.0
-            if PYARROW_MAJOR_VERSION >= 9:
-                size = written_file.size
-            elif filesystem is not None:
-                size = filesystem.get_file_info([path])[0].size
-            else:
-                size = 0
-
             add_actions.append(
                 AddAction(
                     path,
-                    size,
+                    written_file.size,
                     partition_values,
                     int(datetime.now().timestamp() * 1000),
                     True,
@@ -838,19 +828,6 @@ def get_file_stats_from_metadata(
                 # Min and Max are recorded in physical type, not logical type
                 # https://stackoverflow.com/questions/66753485/decoding-parquet-min-max-statistics-for-decimal-type
                 # TODO: Add logic to decode physical type for DATE, DECIMAL
-                logical_type = (
-                    metadata.row_group(0)
-                    .column(column_idx)
-                    .statistics.logical_type.type
-                )
-
-                if PYARROW_MAJOR_VERSION < 8 and logical_type not in [
-                    "STRING",
-                    "INT",
-                    "TIMESTAMP",
-                    "NONE",
-                ]:
-                    continue
 
                 minimums = (
                     group.column(column_idx).statistics.min

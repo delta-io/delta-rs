@@ -6,8 +6,6 @@ from threading import Barrier, Thread
 from typing import Any, List, Tuple
 from unittest.mock import Mock
 
-from packaging import version
-
 from deltalake._util import encode_partition_value
 from deltalake.exceptions import DeltaProtocolError
 from deltalake.table import ProtocolVersions
@@ -280,13 +278,11 @@ def test_read_table_with_stats():
     data = dataset.to_table(filter=filter_expr)
     assert data.num_rows == 0
 
-    # PyArrow added support for is_null and is_valid simplification in 8.0.0
-    if version.parse(pa.__version__).major >= 8:
-        filter_expr = ds.field("cases").is_null()
-        assert len(list(dataset.get_fragments(filter=filter_expr))) == 0
+    filter_expr = ds.field("cases").is_null()
+    assert len(list(dataset.get_fragments(filter=filter_expr))) == 0
 
-        data = dataset.to_table(filter=filter_expr)
-        assert data.num_rows == 0
+    data = dataset.to_table(filter=filter_expr)
+    assert data.num_rows == 0
 
 
 def test_read_special_partition():
