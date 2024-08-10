@@ -86,7 +86,7 @@ use crate::table::state::DeltaTableState;
 use crate::table::Constraint;
 use crate::{open_table, open_table_with_storage_options, DeltaTable};
 
-const PATH_COLUMN: &str = "__delta_rs_path";
+pub(crate) const PATH_COLUMN: &str = "__delta_rs_path";
 
 pub mod cdf;
 pub mod expr;
