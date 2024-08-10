@@ -266,4 +266,9 @@ impl DeltaTableError {
         );
         Self::NotATable(msg)
     }
+
+    /// Create a [Generic](DeltaTableError::Generic) error with the given message.
+    pub fn generic(msg: impl ToString) -> Self {
+        Self::Generic(msg.to_string())
+    }
 }
