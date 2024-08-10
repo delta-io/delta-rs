@@ -247,7 +247,6 @@ pub(crate) fn files_matching_predicate<'a>(
     if let Some(Some(predicate)) =
         (!filters.is_empty()).then_some(conjunction(filters.iter().cloned()))
     {
-        //let expr = logical_expr_to_physical_expr(predicate, snapshot.arrow_schema()?.as_ref());
         let expr = SessionContext::new()
             .create_physical_expr(predicate, &snapshot.arrow_schema()?.to_dfschema()?)?;
         let pruning_predicate = PruningPredicate::try_new(expr, snapshot.arrow_schema()?)?;

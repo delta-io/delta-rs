@@ -356,6 +356,31 @@ impl Snapshot {
             ),
         ]))
     }
+
+    /// Get the partition values schema of the snapshot
+    pub fn partitions_schema(
+        &self,
+        table_schema: Option<&StructType>,
+    ) -> DeltaResult<Option<StructType>> {
+        if self.metadata().partition_columns.is_empty() {
+            return Ok(None);
+        }
+        let schema = table_schema.unwrap_or_else(|| self.schema());
+        Ok(Some(StructType::new(
+            self.metadata
+                .partition_columns
+                .iter()
+                .map(|col| {
+                    schema.field(col).map(|field| field.clone()).ok_or_else(|| {
+                        DeltaTableError::Generic(format!(
+                            "Partition column {} not found in schema",
+                            col
+                        ))
+                    })
+                })
+                .collect::<Result<Vec<_>, _>>()?,
+        )))
+    }
 }
 
 /// A snapshot of a Delta table that has been eagerly loaded into memory.
@@ -369,7 +394,7 @@ pub struct EagerSnapshot {
 
     // NOTE: this is a Vec of RecordBatch instead of a single RecordBatch because
     //       we do not yet enforce a consistent schema across all batches we read from the log.
-    files: Vec<RecordBatch>,
+    pub(crate) files: Vec<RecordBatch>,
 }
 
 impl EagerSnapshot {
@@ -955,5 +980,96 @@ mod tests {
             .all(|(_, add)| { new_files.contains(&add.path) }));
 
         Ok(())
+    }
+
+    #[test]
+    fn test_partition_schema() {
+        let schema = StructType::new(vec![
+            StructField::new("id", DataType::LONG, true),
+            StructField::new("name", DataType::STRING, true),
+            StructField::new("date", DataType::DATE, true),
+        ]);
+
+        let partition_columns = vec!["date".to_string()];
+        let metadata = Metadata {
+            id: "id".to_string(),
+            name: None,
+            description: None,
+            format: Default::default(),
+            schema_string: serde_json::to_string(&schema).unwrap(),
+            partition_columns,
+            configuration: Default::default(),
+            created_time: None,
+        };
+
+        let protocol = Protocol {
+            min_reader_version: 1,
+            min_writer_version: 2,
+            reader_features: Default::default(),
+            writer_features: Default::default(),
+        };
+        let commit_data = CommitData::new(
+            vec![
+                Action::Protocol(protocol.clone()),
+                Action::Metadata(metadata.clone()),
+            ],
+            DeltaOperation::Write {
+                mode: SaveMode::Append,
+                partition_by: None,
+                predicate: None,
+            },
+            HashMap::new(),
+            vec![],
+        );
+        let (log_segment, _) = LogSegment::new_test(vec![&commit_data]).unwrap();
+
+        let snapshot = Snapshot {
+            log_segment: log_segment.clone(),
+            config: Default::default(),
+            protocol: Default::default(),
+            metadata,
+            schema: schema.clone(),
+            table_url: "table".to_string(),
+        };
+
+        let expected = StructType::new(vec![StructField::new("date", DataType::DATE, true)]);
+        assert_eq!(snapshot.partitions_schema(None).unwrap(), Some(expected));
+
+        let metadata = Metadata {
+            id: "id".to_string(),
+            name: None,
+            description: None,
+            format: Default::default(),
+            schema_string: serde_json::to_string(&schema).unwrap(),
+            partition_columns: vec![],
+            configuration: Default::default(),
+            created_time: None,
+        };
+
+        let commit_data = CommitData::new(
+            vec![
+                Action::Protocol(protocol.clone()),
+                Action::Metadata(metadata.clone()),
+            ],
+            DeltaOperation::Write {
+                mode: SaveMode::Append,
+                partition_by: None,
+                predicate: None,
+            },
+            HashMap::new(),
+            vec![],
+        );
+        let (log_segment, _) = LogSegment::new_test(vec![&commit_data]).unwrap();
+
+        let snapshot = Snapshot {
+            log_segment,
+            config: Default::default(),
+            protocol: protocol.clone(),
+            metadata,
+            schema: schema.clone(),
+            table_url: "table".to_string(),
+        };
+
+        assert_eq!(snapshot.partitions_schema(None).unwrap(), None);
     }
 }
