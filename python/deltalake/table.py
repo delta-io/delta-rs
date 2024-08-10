@@ -875,7 +875,7 @@ class DeltaTable:
         target_alias: Optional[str] = None,
         error_on_type_mismatch: bool = True,
         writer_properties: Optional[WriterProperties] = None,
-        large_dtypes: bool = False,
+        large_dtypes: Optional[bool] = None,
         custom_metadata: Optional[Dict[str, str]] = None,
         post_commithook_properties: Optional[PostCommitHookProperties] = None,
     ) -> "TableMerger":

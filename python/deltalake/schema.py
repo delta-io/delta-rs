@@ -42,8 +42,9 @@ def _convert_pa_schema_to_delta(
 
     Args
         schema: Source schema
-        large_dtypes: If True, the pyarrow schema is casted to large_dtypes
-        large_view_passthrough: If True, String/Binary/Lists are passed through as is
+        schema_conversion_mode: large mode will cast all string/binary/list to the large version arrow types, normal mode
+            keeps the normal version of the types. Passthrough mode keeps string/binary/list flavored types in their original
+            version, whether that is view/large/normal.
     """
     dtype_map = {
         pa.uint8(): pa.int8(),
