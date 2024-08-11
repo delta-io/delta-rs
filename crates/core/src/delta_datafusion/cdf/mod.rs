@@ -7,7 +7,10 @@ use std::collections::HashMap;
 pub(crate) use scan::*;
 pub(crate) use scan_utils::*;
 
-use crate::kernel::{Add, AddCDCFile};
+use crate::{
+    kernel::{Add, AddCDCFile, Remove},
+    DeltaResult,
+};
 
 mod scan;
 mod scan_utils;
@@ -59,37 +62,73 @@ impl<F: FileAction> CdcDataSpec<F> {
 /// This trait defines a generic set of operations used by CDF Reader
 pub trait FileAction {
     /// Adds partition values
-    fn partition_values(&self) -> &HashMap<String, Option<String>>;
+    fn partition_values(&self) -> DeltaResult<&HashMap<String, Option<String>>>;
     /// Physical Path to the data
     fn path(&self) -> String;
     /// Byte size of the physical file
-    fn size(&self) -> usize;
+    fn size(&self) -> DeltaResult<usize>;
 }
 
 impl FileAction for Add {
-    fn partition_values(&self) -> &HashMap<String, Option<String>> {
-        &self.partition_values
+    fn partition_values(&self) -> DeltaResult<&HashMap<String, Option<String>>> {
+        Ok(&self.partition_values)
     }
 
     fn path(&self) -> String {
         self.path.clone()
     }
 
-    fn size(&self) -> usize {
-        self.size as usize
+    fn size(&self) -> DeltaResult<usize> {
+        Ok(self.size as usize)
     }
 }
 
 impl FileAction for AddCDCFile {
-    fn partition_values(&self) -> &HashMap<String, Option<String>> {
-        &self.partition_values
+    fn partition_values(&self) -> DeltaResult<&HashMap<String, Option<String>>> {
+        Ok(&self.partition_values)
     }
 
     fn path(&self) -> String {
         self.path.clone()
     }
 
-    fn size(&self) -> usize {
-        self.size as usize
+    fn size(&self) -> DeltaResult<usize> {
+        Ok(self.size as usize)
+    }
+}
+
+impl FileAction for Remove {
+    fn partition_values(&self) -> DeltaResult<&HashMap<String, Option<String>>> {
+        // If extended_file_metadata is true, it should be required to have this filled in
+        if self.extended_file_metadata.unwrap_or_default() {
+            Ok(self.partition_values.as_ref().unwrap())
+        } else {
+            match self.partition_values {
+                Some(ref part_map) => Ok(part_map),
+                _ => Err(crate::DeltaTableError::Protocol {
+                    source: crate::protocol::ProtocolError::InvalidField(
+                        "partition_values".to_string(),
+                    ),
+                }),
+            }
+        }
+    }
+
+    fn path(&self) -> String {
+        self.path.clone()
+    }
+
+    fn size(&self) -> DeltaResult<usize> {
+        // If extended_file_metadata is true, it should be required to have this filled in
+        if self.extended_file_metadata.unwrap_or_default() {
+            Ok(self.size.unwrap() as usize)
+        } else {
+            match self.size {
+                Some(size) => Ok(size as usize),
+                _ => Err(crate::DeltaTableError::Protocol {
+                    source: crate::protocol::ProtocolError::InvalidField("size".to_string()),
+                }),
+            }
+        }
     }
 }
