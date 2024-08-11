@@ -777,6 +777,7 @@ mod tests {
     use super::*;
     use crate::kernel::Remove;
     use crate::protocol::{DeltaOperation, SaveMode};
+    use crate::test_utils::ActionFactory;
 
     #[tokio::test]
     async fn test_snapshots() -> TestResult {
@@ -991,23 +992,9 @@ mod tests {
         ]);
 
         let partition_columns = vec!["date".to_string()];
-        let metadata = Metadata {
-            id: "id".to_string(),
-            name: None,
-            description: None,
-            format: Default::default(),
-            schema_string: serde_json::to_string(&schema).unwrap(),
-            partition_columns,
-            configuration: Default::default(),
-            created_time: None,
-        };
+        let metadata = ActionFactory::metadata(&schema, Some(&partition_columns), None);
+        let protocol = ActionFactory::protocol(None, None, None::<Vec<_>>, None::<Vec<_>>);
 
-        let protocol = Protocol {
-            min_reader_version: 1,
-            min_writer_version: 2,
-            reader_features: Default::default(),
-            writer_features: Default::default(),
-        };
         let commit_data = CommitData::new(
             vec![
                 Action::Protocol(protocol.clone()),
@@ -1015,7 +1002,7 @@ mod tests {
             ],
             DeltaOperation::Write {
                 mode: SaveMode::Append,
-                partition_by: None,
+                partition_by: Some(partition_columns),
                 predicate: None,
             },
             HashMap::new(),
@@ -1025,27 +1012,17 @@ mod tests {
 
         let snapshot = Snapshot {
             log_segment: log_segment.clone(),
-            config: Default::default(),
-            protocol: Default::default(),
+            protocol: protocol.clone(),
             metadata,
             schema: schema.clone(),
             table_url: "table".to_string(),
+            config: Default::default(),
         };
 
         let expected = StructType::new(vec![StructField::new("date", DataType::DATE, true)]);
         assert_eq!(snapshot.partitions_schema(None).unwrap(), Some(expected));
 
-        let metadata = Metadata {
-            id: "id".to_string(),
-            name: None,
-            description: None,
-            format: Default::default(),
-            schema_string: serde_json::to_string(&schema).unwrap(),
-            partition_columns: vec![],
-            configuration: Default::default(),
-            created_time: None,
-        };
-
+        let metadata = ActionFactory::metadata(&schema, None::<Vec<&str>>, None);
         let commit_data = CommitData::new(
             vec![
                 Action::Protocol(protocol.clone()),
