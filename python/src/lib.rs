@@ -1247,7 +1247,7 @@ impl RawDeltaTable {
 
         Ok(actions
             .iter()
-            .map(|action| (action.path(), action.size() as i64))
+            .map(|action| (action.path(), action.size))
             .collect::<HashMap<String, i64>>())
     }
     /// Run the delete command on the delta table: delete records following a predicate and return the delete metrics.
