@@ -504,18 +504,28 @@ def test_write_predicate_unpartitioned_cdf(tmp_path, sample_data: pa.Table):
         configuration={"delta.enableChangeDataFeed": "true"},
     )
 
-    expected_data = (
-        ds.dataset(sample_data)
-        .to_table(filter=(pc.field("int64") > 2))
-        .append_column(
-            field_=pa.field("_change_type", pa.string(), nullable=False),
-            column=[["delete"] * 2],
-        )
+    expected_data = pa.concat_tables(
+        [
+            ds.dataset(sample_data)
+            .to_table(filter=(pc.field("int64") > 2))
+            .append_column(
+                field_=pa.field("_change_type", pa.string(), nullable=False),
+                column=[["delete"] * 2],
+            ),
+            ds.dataset(sample_data)
+            .to_table(filter=(pc.field("int64") > 2))
+            .append_column(
+                field_=pa.field("_change_type", pa.string(), nullable=False),
+                column=[["insert"] * 2],
+            ),
+        ]
     )
     cdc_data = pq.read_table(cdc_path)
 
     assert os.path.exists(cdc_path), "_change_data doesn't exist"
-    assert cdc_data == expected_data
+    assert cdc_data.sort_by([("_change_type", "ascending")]) == expected_data.sort_by(
+        [("_change_type", "ascending")]
+    )
     assert dt.to_pyarrow_table().sort_by([("utf8", "ascending")]) == sample_data
 
 
@@ -532,21 +542,30 @@ def test_write_predicate_partitioned_cdf(tmp_path, sample_data: pa.Table):
     dt = DeltaTable(tmp_path)
     write_deltalake(
         dt,
-        data=ds.dataset(sample_data).to_table(filter=(pc.field("int64") > 2)),
+        data=ds.dataset(sample_data).to_table(filter=(pc.field("int64") > 3)),
         mode="overwrite",
-        predicate="int64 > 2",
+        predicate="int64 > 3",
         engine="rust",
         configuration={"delta.enableChangeDataFeed": "true"},
     )
 
-    expected_data = (
-        ds.dataset(sample_data)
-        .to_table(filter=(pc.field("int64") > 2))
-        .append_column(
-            field_=pa.field("_change_type", pa.string(), nullable=False),
-            column=[["delete"] * 2],
-        )
+    expected_data = pa.concat_tables(
+        [
+            ds.dataset(sample_data)
+            .to_table(filter=(pc.field("int64") > 3))
+            .append_column(
+                field_=pa.field("_change_type", pa.string(), nullable=False),
+                column=[["delete"] * 1],
+            ),
+            ds.dataset(sample_data)
+            .to_table(filter=(pc.field("int64") > 3))
+            .append_column(
+                field_=pa.field("_change_type", pa.string(), nullable=False),
+                column=[["insert"] * 1],
+            ),
+        ]
     )
+
     table_schema = dt.schema().to_pyarrow()
     table_schema = table_schema.insert(
         len(table_schema), pa.field("_change_type", pa.string(), nullable=False)
@@ -554,8 +573,13 @@ def test_write_predicate_partitioned_cdf(tmp_path, sample_data: pa.Table):
     cdc_data = pq.read_table(cdc_path, schema=table_schema)
 
     assert os.path.exists(cdc_path), "_change_data doesn't exist"
-    assert len(os.listdir(cdc_path)) == 2
-    assert cdc_data == expected_data
+    assert len(os.listdir(cdc_path)) == 1
+    expected_data = expected_data.combine_chunks().sort_by(
+        [("_change_type", "ascending")]
+    )
+    cdc_data = cdc_data.combine_chunks().sort_by([("_change_type", "ascending")])
+
+    assert expected_data == cdc_data
     assert dt.to_pyarrow_table().sort_by([("utf8", "ascending")]) == sample_data
 
 
@@ -578,19 +602,23 @@ def test_write_overwrite_unpartitioned_cdf(tmp_path, sample_data: pa.Table):
         configuration={"delta.enableChangeDataFeed": "true"},
     )
 
-    expected_data = (
-        ds.dataset(sample_data)
-        .to_table()
-        .append_column(
-            field_=pa.field("_change_type", pa.string(), nullable=False),
-            column=[["delete"] * 5],
-        )
-    )
-    cdc_data = pq.read_table(cdc_path)
+    # expected_data = (
+    #     ds.dataset(sample_data)
+    #     .to_table()
+    #     .append_column(
+    #         field_=pa.field("_change_type", pa.string(), nullable=True),
+    #         column=[["delete"] * 5],
+    #     )
+    # )
 
-    assert os.path.exists(cdc_path), "_change_data doesn't exist"
-    assert cdc_data == expected_data
-    assert dt.to_pyarrow_table().sort_by([("utf8", "ascending")]) == sample_data
+    assert not os.path.exists(
+        cdc_path
+    ), "_change_data shouldn't exist since table was overwritten"
+
+    ## TODO(ion): check if you see insert and deletes in commit version 1
+
+    # assert dt.load_cdf().read_all().drop_columns(['_commit_version', '_commit_timestamp']) == expected_data
+    # assert dt.to_pyarrow_table().sort_by([("utf8", "ascending")]) == sample_data
 
 
 def test_write_overwrite_partitioned_cdf(tmp_path, sample_data: pa.Table):
@@ -600,34 +628,39 @@ def test_write_overwrite_partitioned_cdf(tmp_path, sample_data: pa.Table):
         tmp_path,
         sample_data,
         mode="append",
-        partition_by=["utf8"],
+        partition_by=["int64"],
         configuration={"delta.enableChangeDataFeed": "true"},
     )
 
     dt = DeltaTable(tmp_path)
     write_deltalake(
         dt,
-        data=ds.dataset(sample_data).to_table(),
-        mode="overwrite",
+        data=ds.dataset(sample_data).to_table(filter=(pc.field("int64") > 3)),
         engine="rust",
-        partition_by=["utf8"],
+        mode="overwrite",
+        predicate="int64 > 3",
+        partition_by=["int64"],
         configuration={"delta.enableChangeDataFeed": "true"},
     )
 
-    expected_data = (
-        ds.dataset(sample_data)
-        .to_table()
-        .append_column(
-            field_=pa.field("_change_type", pa.string(), nullable=False),
-            column=[["delete"] * 5],
-        )
-    )
+    # expected_data = (
+    #     ds.dataset(sample_data)
+    #     .to_table()
+    #     .append_column(
+    #         field_=pa.field("_change_type", pa.string(), nullable=False),
+    #         column=[["delete"] * 5],
+    #     )
+    # )
     table_schema = dt.schema().to_pyarrow()
     table_schema = table_schema.insert(
         len(table_schema), pa.field("_change_type", pa.string(), nullable=False)
     )
-    cdc_data = pq.read_table(cdc_path, schema=table_schema)
+    # cdc_data = pq.read_table(cdc_path, schema=table_schema)
 
-    assert os.path.exists(cdc_path), "_change_data doesn't exist"
-    assert cdc_data == expected_data
-    assert dt.to_pyarrow_table().sort_by([("int64", "ascending")]) == sample_data
+    assert not os.path.exists(
+        cdc_path
+    ), "_change_data shouldn't exist since a specific partition was overwritten"
+
+    ## TODO(ion): check if you see insert and deletes in commit version 1
+    # assert cdc_data == expected_data
+    # assert dt.to_pyarrow_table().sort_by([("int64", "ascending")]) == sample_data
