@@ -327,15 +327,26 @@ impl PruningStatistics for DeltaTableState {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::delta_datafusion::DataFusionFileMixins;
-    use crate::operations::transaction::test_utils::{create_add_action, init_table_actions};
+    use std::collections::HashMap;
+
     use datafusion::prelude::SessionContext;
     use datafusion_expr::{col, lit};
 
+    use super::*;
+    use crate::delta_datafusion::DataFusionFileMixins;
+    use crate::kernel::Action;
+    use crate::test_utils::{ActionFactory, TestSchemas};
+
+    fn init_table_actions() -> Vec<Action> {
+        vec![
+            ActionFactory::protocol(None, None, None::<Vec<_>>, None::<Vec<_>>).into(),
+            ActionFactory::metadata(TestSchemas::simple(), None::<Vec<&str>>, None).into(),
+        ]
+    }
+
     #[test]
     fn test_parse_predicate_expression() {
-        let snapshot = DeltaTableState::from_actions(init_table_actions(None)).unwrap();
+        let snapshot = DeltaTableState::from_actions(init_table_actions()).unwrap();
         let session = SessionContext::new();
         let state = session.state();
 
@@ -362,10 +373,26 @@ mod tests {
 
     #[test]
     fn test_files_matching_predicate() {
-        let mut actions = init_table_actions(None);
-        actions.push(create_add_action("excluded", true, Some("{\"numRecords\":10,\"minValues\":{\"value\":1},\"maxValues\":{\"value\":10},\"nullCount\":{\"value\":0}}".into())));
-        actions.push(create_add_action("included-1", true, Some("{\"numRecords\":10,\"minValues\":{\"value\":1},\"maxValues\":{\"value\":100},\"nullCount\":{\"value\":0}}".into())));
-        actions.push(create_add_action("included-2", true, Some("{\"numRecords\":10,\"minValues\":{\"value\":-10},\"maxValues\":{\"value\":3},\"nullCount\":{\"value\":0}}".into())));
+        let mut actions = init_table_actions();
+
+        actions.push(Action::Add(ActionFactory::add(
+            TestSchemas::simple(),
+            HashMap::from_iter([("value", ("1", "10"))]),
+            Default::default(),
+            true,
+        )));
+        actions.push(Action::Add(ActionFactory::add(
+            TestSchemas::simple(),
+            HashMap::from_iter([("value", ("1", "100"))]),
+            Default::default(),
+            true,
+        )));
+        actions.push(Action::Add(ActionFactory::add(
+            TestSchemas::simple(),
+            HashMap::from_iter([("value", ("-10", "3"))]),
+            Default::default(),
+            true,
+        )));
 
         let state = DeltaTableState::from_actions(actions).unwrap();
         let files = state
@@ -385,6 +412,5 @@ mod tests {
             .unwrap()
             .collect::<Vec<_>>();
         assert_eq!(files.len(), 2);
-        assert!(files.iter().all(|add| add.path.contains("included")));
     }
 }

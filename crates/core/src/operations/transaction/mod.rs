@@ -103,8 +103,6 @@ mod conflict_checker;
 mod protocol;
 #[cfg(feature = "datafusion")]
 mod state;
-#[cfg(test)]
-pub(crate) mod test_utils;
 
 const DELTA_LOG_FOLDER: &str = "_delta_log";
 pub(crate) const DEFAULT_RETRIES: usize = 15;

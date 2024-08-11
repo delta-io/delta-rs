@@ -1,4 +1,7 @@
 #![allow(dead_code, unused_variables)]
+use std::any::Any;
+use std::collections::HashMap;
+use std::sync::Arc;
 
 use bytes::Bytes;
 use deltalake_core::kernel::{Action, Add, Remove, StructType};
@@ -9,9 +12,6 @@ use deltalake_core::protocol::{DeltaOperation, SaveMode};
 use deltalake_core::DeltaTable;
 use deltalake_core::DeltaTableBuilder;
 use deltalake_core::{ObjectStore, Path};
-use std::any::Any;
-use std::collections::HashMap;
-use std::sync::Arc;
 use tempfile::TempDir;
 
 pub mod clock;
