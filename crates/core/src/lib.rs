@@ -79,6 +79,9 @@ pub mod schema;
 pub mod storage;
 pub mod table;
 
+#[cfg(test)]
+pub mod test_utils;
+
 #[cfg(feature = "datafusion")]
 pub mod delta_datafusion;
 pub mod writer;

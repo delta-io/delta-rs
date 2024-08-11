@@ -1,11 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::str::FromStr;
-// use std::io::{Cursor, Read};
-// use std::sync::Arc;
 
-// use roaring::RoaringTreemap;
-use crate::DeltaConfigKey;
 use maplit::hashset;
 use serde::{Deserialize, Serialize};
 use tracing::warn;
@@ -13,9 +9,10 @@ use url::Url;
 
 use super::schema::StructType;
 use crate::kernel::{error::Error, DeltaResult};
+use crate::DeltaConfigKey;
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 /// Defines a file format used in table
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct Format {
     /// Name of the encoding for files in this table
     pub provider: String,
@@ -1126,15 +1123,9 @@ pub(crate) mod serde_path {
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
-    // use std::sync::Arc;
-
-    // use object_store::local::LocalFileSystem;
-
-    use crate::kernel::PrimitiveType;
 
     use super::*;
-    // use crate::client::filesystem::ObjectStoreFileSystemClient;
-    // use crate::executor::tokio::TokioBackgroundExecutor;
+    use crate::kernel::PrimitiveType;
 
     fn dv_relateive() -> DeletionVectorDescriptor {
         DeletionVectorDescriptor {

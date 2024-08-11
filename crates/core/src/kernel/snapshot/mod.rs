@@ -356,6 +356,31 @@ impl Snapshot {
             ),
         ]))
     }
+
+    /// Get the partition values schema of the snapshot
+    pub fn partitions_schema(
+        &self,
+        table_schema: Option<&StructType>,
+    ) -> DeltaResult<Option<StructType>> {
+        if self.metadata().partition_columns.is_empty() {
+            return Ok(None);
+        }
+        let schema = table_schema.unwrap_or_else(|| self.schema());
+        Ok(Some(StructType::new(
+            self.metadata
+                .partition_columns
+                .iter()
+                .map(|col| {
+                    schema.field(col).map(|field| field.clone()).ok_or_else(|| {
+                        DeltaTableError::Generic(format!(
+                            "Partition column {} not found in schema",
+                            col
+                        ))
+                    })
+                })
+                .collect::<Result<Vec<_>, _>>()?,
+        )))
+    }
 }
 
 /// A snapshot of a Delta table that has been eagerly loaded into memory.
@@ -369,7 +394,7 @@ pub struct EagerSnapshot {
 
     // NOTE: this is a Vec of RecordBatch instead of a single RecordBatch because
     //       we do not yet enforce a consistent schema across all batches we read from the log.
-    files: Vec<RecordBatch>,
+    pub(crate) files: Vec<RecordBatch>,
 }
 
 impl EagerSnapshot {
@@ -752,6 +777,7 @@ mod tests {
     use super::*;
     use crate::kernel::Remove;
     use crate::protocol::{DeltaOperation, SaveMode};
+    use crate::test_utils::ActionFactory;
 
     #[tokio::test]
     async fn test_snapshots() -> TestResult {
@@ -955,5 +981,72 @@ mod tests {
             .all(|(_, add)| { new_files.contains(&add.path) }));
 
         Ok(())
+    }
+
+    #[test]
+    fn test_partition_schema() {
+        let schema = StructType::new(vec![
+            StructField::new("id", DataType::LONG, true),
+            StructField::new("name", DataType::STRING, true),
+            StructField::new("date", DataType::DATE, true),
+        ]);
+
+        let partition_columns = vec!["date".to_string()];
+        let metadata = ActionFactory::metadata(&schema, Some(&partition_columns), None);
+        let protocol = ActionFactory::protocol(None, None, None::<Vec<_>>, None::<Vec<_>>);
+
+        let commit_data = CommitData::new(
+            vec![
+                Action::Protocol(protocol.clone()),
+                Action::Metadata(metadata.clone()),
+            ],
+            DeltaOperation::Write {
+                mode: SaveMode::Append,
+                partition_by: Some(partition_columns),
+                predicate: None,
+            },
+            HashMap::new(),
+            vec![],
+        );
+        let (log_segment, _) = LogSegment::new_test(vec![&commit_data]).unwrap();
+
+        let snapshot = Snapshot {
+            log_segment: log_segment.clone(),
+            protocol: protocol.clone(),
+            metadata,
+            schema: schema.clone(),
+            table_url: "table".to_string(),
+            config: Default::default(),
+        };
+
+        let expected = StructType::new(vec![StructField::new("date", DataType::DATE, true)]);
+        assert_eq!(snapshot.partitions_schema(None).unwrap(), Some(expected));
+
+        let metadata = ActionFactory::metadata(&schema, None::<Vec<&str>>, None);
+        let commit_data = CommitData::new(
+            vec![
+                Action::Protocol(protocol.clone()),
+                Action::Metadata(metadata.clone()),
+            ],
+            DeltaOperation::Write {
+                mode: SaveMode::Append,
+                partition_by: None,
+                predicate: None,
+            },
+            HashMap::new(),
+            vec![],
+        );
+        let (log_segment, _) = LogSegment::new_test(vec![&commit_data]).unwrap();
+
+        let snapshot = Snapshot {
+            log_segment,
+            config: Default::default(),
+            protocol: protocol.clone(),
+            metadata,
+            schema: schema.clone(),
+            table_url: "table".to_string(),
+        };
+
+        assert_eq!(snapshot.partitions_schema(None).unwrap(), None);
     }
 }
