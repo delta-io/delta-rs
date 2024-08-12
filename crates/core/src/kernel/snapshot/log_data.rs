@@ -198,12 +198,16 @@ impl LogicalFile<'_> {
             .column(0)
             .as_any()
             .downcast_ref::<StringArray>()
-            .ok_or(DeltaTableError::Generic("()".into()))?;
+            .ok_or(DeltaTableError::generic(
+                "expected partition values key field to be of type string",
+            ))?;
         let values = map_value
             .column(1)
             .as_any()
             .downcast_ref::<StringArray>()
-            .ok_or(DeltaTableError::Generic("()".into()))?;
+            .ok_or(DeltaTableError::generic(
+                "expected partition values value field to be of type string",
+            ))?;
 
         let values = keys
             .iter()
@@ -212,8 +216,8 @@ impl LogicalFile<'_> {
                 let (key, field) = self.partition_fields.get_key_value(k.unwrap()).unwrap();
                 let field_type = match field.data_type() {
                     DataType::Primitive(p) => Ok(p),
-                    _ => Err(DeltaTableError::Generic(
-                        "nested partitioning values are not supported".to_string(),
+                    _ => Err(DeltaTableError::generic(
+                        "nested partitioning values are not supported",
                     )),
                 }?;
                 Ok((

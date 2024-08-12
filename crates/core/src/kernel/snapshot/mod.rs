@@ -311,50 +311,7 @@ impl Snapshot {
     /// Get the statistics schema of the snapshot
     pub fn stats_schema(&self, table_schema: Option<&StructType>) -> DeltaResult<StructType> {
         let schema = table_schema.unwrap_or_else(|| self.schema());
-
-        let stats_fields = if let Some(stats_cols) = self.table_config().stats_columns() {
-            stats_cols
-                .iter()
-                .map(|col| match get_stats_field(schema, col) {
-                    Some(field) => match field.data_type() {
-                        DataType::Map(_) | DataType::Array(_) | &DataType::BINARY => {
-                            Err(DeltaTableError::Generic(format!(
-                                "Stats column {} has unsupported type {}",
-                                col,
-                                field.data_type()
-                            )))
-                        }
-                        _ => Ok(StructField::new(
-                            field.name(),
-                            field.data_type().clone(),
-                            true,
-                        )),
-                    },
-                    _ => Err(DeltaTableError::Generic(format!(
-                        "Stats column {} not found in schema",
-                        col
-                    ))),
-                })
-                .collect::<Result<Vec<_>, _>>()?
-        } else {
-            let num_indexed_cols = self.table_config().num_indexed_cols();
-            schema
-                .fields
-                .values()
-                .enumerate()
-                .filter_map(|(idx, f)| stats_field(idx, num_indexed_cols, f))
-                .collect()
-        };
-        Ok(StructType::new(vec![
-            StructField::new("numRecords", DataType::LONG, true),
-            StructField::new("minValues", StructType::new(stats_fields.clone()), true),
-            StructField::new("maxValues", StructType::new(stats_fields.clone()), true),
-            StructField::new(
-                "nullCount",
-                StructType::new(stats_fields.iter().filter_map(to_count_field).collect()),
-                true,
-            ),
-        ]))
+        stats_schema(schema, self.table_config())
     }
 
     /// Get the partition values schema of the snapshot
@@ -711,6 +668,52 @@ impl EagerSnapshot {
 
         Ok(self.snapshot.version())
     }
+}
+
+fn stats_schema<'a>(schema: &StructType, config: TableConfig<'a>) -> DeltaResult<StructType> {
+    let stats_fields = if let Some(stats_cols) = config.stats_columns() {
+        stats_cols
+            .iter()
+            .map(|col| match get_stats_field(schema, col) {
+                Some(field) => match field.data_type() {
+                    DataType::Map(_) | DataType::Array(_) | &DataType::BINARY => {
+                        Err(DeltaTableError::Generic(format!(
+                            "Stats column {} has unsupported type {}",
+                            col,
+                            field.data_type()
+                        )))
+                    }
+                    _ => Ok(StructField::new(
+                        field.name(),
+                        field.data_type().clone(),
+                        true,
+                    )),
+                },
+                _ => Err(DeltaTableError::Generic(format!(
+                    "Stats column {} not found in schema",
+                    col
+                ))),
+            })
+            .collect::<Result<Vec<_>, _>>()?
+    } else {
+        let num_indexed_cols = config.num_indexed_cols();
+        schema
+            .fields
+            .values()
+            .enumerate()
+            .filter_map(|(idx, f)| stats_field(idx, num_indexed_cols, f))
+            .collect()
+    };
+    Ok(StructType::new(vec![
+        StructField::new("numRecords", DataType::LONG, true),
+        StructField::new("minValues", StructType::new(stats_fields.clone()), true),
+        StructField::new("maxValues", StructType::new(stats_fields.clone()), true),
+        StructField::new(
+            "nullCount",
+            StructType::new(stats_fields.iter().filter_map(to_count_field).collect()),
+            true,
+        ),
+    ]))
 }
 
 fn stats_field(idx: usize, num_indexed_cols: i32, field: &StructField) -> Option<StructField> {

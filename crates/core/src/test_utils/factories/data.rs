@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use arrow_arith::aggregate::{max as arrow_max, min as arrow_min};
+use arrow_arith::aggregate::{max as arrow_max, max_string, min as arrow_min, min_string};
 use arrow_array::*;
 use arrow_schema::DataType as ArrowDataType;
 use bytes::Bytes;
@@ -153,7 +153,7 @@ pub fn generate_random_array(
         Primitive(String) => {
             let arr = StringArray::from(
                 (0..length)
-                    .map(|_| Alphanumeric.sample_string(&mut rng, 16))
+                    .map(|_| Alphanumeric.sample_string(&mut rng, 3))
                     .collect::<Vec<_>>(),
             );
             Ok(Arc::new(arr))
@@ -211,7 +211,13 @@ fn get_stats(batch: &RecordBatch) -> TestResult<FileStats> {
                 let null_count = Scalar::Long(array.null_count() as i64);
                 Some((null_count, min, max))
             }
-            Utf8 => None,
+            Utf8 => {
+                let array = array.as_any().downcast_ref::<StringArray>().unwrap();
+                let min = Scalar::String(min_string(array).unwrap().into());
+                let max = Scalar::String(max_string(array).unwrap().into());
+                let null_count = Scalar::Long(array.null_count() as i64);
+                Some((null_count, min, max))
+            }
             Struct(_) => None,
             _ => todo!(),
         };
