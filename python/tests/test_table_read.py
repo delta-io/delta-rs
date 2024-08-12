@@ -1,3 +1,4 @@
+from itertools import product
 import os
 from datetime import date, datetime, timezone
 from pathlib import Path
@@ -24,6 +25,8 @@ import pytest
 from pyarrow.dataset import ParquetReadOptions
 from pyarrow.fs import LocalFileSystem, SubTreeFileSystem
 
+import multiprocessing
+import threading
 from deltalake import DeltaTable
 
 
@@ -55,6 +58,23 @@ def test_read_simple_table_to_dict():
     table_path = "../crates/test/tests/data/simple_table"
     dt = DeltaTable(table_path)
     assert dt.to_pyarrow_dataset().to_table().to_pydict() == {"id": [5, 7, 9]}
+
+def recursively_read_simple_table(thread_or_process_class, depth):
+    print(thread_or_process_class, depth)
+    test_read_simple_table_to_dict()
+    if depth == 0:
+        return
+    
+    process_or_thread = thread_or_process_class(target=recursively_read_simple_table, args=(thread_or_process_class, depth - 1))
+    process_or_thread.start()
+    process_or_thread.join()
+
+
+@pytest.mark.parametrize("thread_or_process_class, multiprocessing_start_method", [(threading.Thread, None), (multiprocessing.Process, "forkserver"), (multiprocessing.Process, "spawn"), (multiprocessing.Process, "fork")])
+def test_read_simple_in_threads_and_processes(thread_or_process_class, multiprocessing_start_method):
+    if multiprocessing_start_method is not None:
+        multiprocessing.set_start_method(multiprocessing_start_method, force=True)
+    recursively_read_simple_table(thread_or_process_class=thread_or_process_class, depth=10)
 
 
 def test_read_simple_table_by_version_to_dict():
