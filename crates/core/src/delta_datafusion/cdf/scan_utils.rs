@@ -92,9 +92,9 @@ pub fn create_partition_values<F: FileAction>(
     Ok(file_groups)
 }
 
-pub fn create_cdc_schema(mut schema_fields: Vec<Field>, include_type: bool) -> SchemaRef {
+pub fn create_cdc_schema(mut schema_fields: Vec<Arc<Field>>, include_type: bool) -> SchemaRef {
     if include_type {
-        schema_fields.push(Field::new(CHANGE_TYPE_COL, DataType::Utf8, true));
+        schema_fields.push(Field::new(CHANGE_TYPE_COL, DataType::Utf8, true).into());
     }
     Arc::new(Schema::new(schema_fields))
 }
