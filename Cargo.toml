@@ -46,7 +46,7 @@ parquet = { version = "52" }
 
 # datafusion
 datafusion = { version = "40" }
-datafusion-expr = { version = "40" }
+datafusion-expr = { version = "41" }
 datafusion-common = { version = "40" }
 datafusion-proto = { version = "40" }
 datafusion-sql = { version = "40" }
