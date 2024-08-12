@@ -4,6 +4,7 @@ use std::task::Context;
 use std::task::Poll;
 
 use arrow_arith::boolean::{is_not_null, or};
+use arrow_array::MapArray;
 use arrow_array::{
     Array, ArrayRef, BooleanArray, Int32Array, RecordBatch, StringArray, StructArray,
 };
@@ -19,13 +20,12 @@ use percent_encoding::percent_decode_str;
 use pin_project_lite::pin_project;
 use tracing::debug;
 
+use super::ReplayVisitor;
+use super::Snapshot;
 use crate::kernel::arrow::extract::{self as ex, ProvidesColumnByName};
 use crate::kernel::arrow::json;
 use crate::kernel::StructType;
 use crate::{DeltaResult, DeltaTableConfig, DeltaTableError};
-
-use super::ReplayVisitor;
-use super::Snapshot;
 
 pin_project! {
     pub struct ReplayStream<'a, S> {
@@ -51,8 +51,15 @@ impl<'a, S> ReplayStream<'a, S> {
         visitors: &'a mut Vec<Box<dyn ReplayVisitor>>,
     ) -> DeltaResult<Self> {
         let stats_schema = Arc::new((&snapshot.stats_schema(None)?).try_into()?);
+        let partitions_schema = snapshot
+            .partitions_schema(None)?
+            .as_ref()
+            .map(|s| s.try_into())
+            .transpose()?
+            .map(|s| Arc::new(s));
         let mapper = Arc::new(LogMapper {
             stats_schema,
+            partitions_schema,
             config: snapshot.config.clone(),
         });
         Ok(Self {
@@ -67,6 +74,7 @@ impl<'a, S> ReplayStream<'a, S> {
 
 pub(super) struct LogMapper {
     stats_schema: ArrowSchemaRef,
+    partitions_schema: Option<ArrowSchemaRef>,
     config: DeltaTableConfig,
 }
 
@@ -77,66 +85,114 @@ impl LogMapper {
     ) -> DeltaResult<Self> {
         Ok(Self {
             stats_schema: Arc::new((&snapshot.stats_schema(table_schema)?).try_into()?),
+            partitions_schema: snapshot
+                .partitions_schema(None)?
+                .as_ref()
+                .map(|s| s.try_into())
+                .transpose()?
+                .map(|s| Arc::new(s)),
             config: snapshot.config.clone(),
         })
     }
 
     pub fn map_batch(&self, batch: RecordBatch) -> DeltaResult<RecordBatch> {
-        map_batch(batch, self.stats_schema.clone(), &self.config)
+        map_batch(
+            batch,
+            self.stats_schema.clone(),
+            self.partitions_schema.clone(),
+            &self.config,
+        )
     }
 }
 
 fn map_batch(
     batch: RecordBatch,
     stats_schema: ArrowSchemaRef,
+    partition_schema: Option<ArrowSchemaRef>,
     config: &DeltaTableConfig,
 ) -> DeltaResult<RecordBatch> {
-    let stats_col = ex::extract_and_cast_opt::<StringArray>(&batch, "add.stats");
+    let mut new_batch = batch.clone();
+
     let stats_parsed_col = ex::extract_and_cast_opt::<StructArray>(&batch, "add.stats_parsed");
-    if stats_parsed_col.is_some() {
-        return Ok(batch);
-    }
-    if let Some(stats) = stats_col {
-        let stats: Arc<StructArray> =
-            Arc::new(json::parse_json(stats, stats_schema.clone(), config)?.into());
-        let schema = batch.schema();
-        let add_col = ex::extract_and_cast::<StructArray>(&batch, "add")?;
-        let (add_idx, _) = schema.column_with_name("add").unwrap();
-        let add_type = add_col
-            .fields()
-            .iter()
-            .cloned()
-            .chain(std::iter::once(Arc::new(ArrowField::new(
-                "stats_parsed",
-                ArrowDataType::Struct(stats_schema.fields().clone()),
-                true,
-            ))))
-            .collect_vec();
-        let new_add = Arc::new(StructArray::try_new(
-            add_type.clone().into(),
-            add_col
-                .columns()
-                .iter()
-                .cloned()
-                .chain(std::iter::once(stats as ArrayRef))
-                .collect(),
-            add_col.nulls().cloned(),
-        )?);
-        let new_add_field = Arc::new(ArrowField::new(
-            "add",
-            ArrowDataType::Struct(add_type.into()),
-            true,
-        ));
-        let mut fields = schema.fields().to_vec();
-        let _ = std::mem::replace(&mut fields[add_idx], new_add_field);
-        let mut columns = batch.columns().to_vec();
-        let _ = std::mem::replace(&mut columns[add_idx], new_add);
-        return Ok(RecordBatch::try_new(
-            Arc::new(ArrowSchema::new(fields)),
-            columns,
-        )?);
+    if stats_parsed_col.is_none() {
+        new_batch = parse_stats(new_batch, stats_schema, config)?;
     }
 
+    if let Some(partitions_schema) = partition_schema {
+        let partitions_parsed_col =
+            ex::extract_and_cast_opt::<StructArray>(&batch, "add.partitionValues_parsed");
+        if partitions_parsed_col.is_none() {
+            new_batch = parse_partitions(new_batch, partitions_schema, config)?;
+        }
+    }
+
+    Ok(new_batch)
+}
+
+/// parse the serialized stats in the  `add.stats` column in the files batch
+/// and add a new column `stats_parsed` containing the the parsed stats.
+fn parse_stats(
+    batch: RecordBatch,
+    stats_schema: ArrowSchemaRef,
+    config: &DeltaTableConfig,
+) -> DeltaResult<RecordBatch> {
+    let stats = ex::extract_and_cast_opt::<StringArray>(&batch, "add.stats").ok_or(
+        DeltaTableError::generic("No stats column found in files batch. This is unexpected."),
+    )?;
+
+    let stats: Arc<StructArray> =
+        Arc::new(json::parse_json(stats, stats_schema.clone(), config)?.into());
+    let schema = batch.schema();
+    let add_col = ex::extract_and_cast::<StructArray>(&batch, "add")?;
+    let (add_idx, _) = schema.column_with_name("add").unwrap();
+
+    let add_type = add_col
+        .fields()
+        .iter()
+        .cloned()
+        .chain(std::iter::once(Arc::new(ArrowField::new(
+            "stats_parsed",
+            ArrowDataType::Struct(stats_schema.fields().clone()),
+            true,
+        ))))
+        .collect_vec();
+    let new_add = Arc::new(StructArray::try_new(
+        add_type.clone().into(),
+        add_col
+            .columns()
+            .iter()
+            .cloned()
+            .chain(std::iter::once(stats as ArrayRef))
+            .collect(),
+        add_col.nulls().cloned(),
+    )?);
+    let new_add_field = Arc::new(ArrowField::new(
+        "add",
+        ArrowDataType::Struct(add_type.into()),
+        true,
+    ));
+
+    let mut fields = schema.fields().to_vec();
+    let _ = std::mem::replace(&mut fields[add_idx], new_add_field);
+    let mut columns = batch.columns().to_vec();
+    let _ = std::mem::replace(&mut columns[add_idx], new_add);
+
+    Ok(RecordBatch::try_new(
+        Arc::new(ArrowSchema::new(fields)),
+        columns,
+    )?)
+}
+
+fn parse_partitions(
+    batch: RecordBatch,
+    partition_schema: ArrowSchemaRef,
+    config: &DeltaTableConfig,
+) -> DeltaResult<RecordBatch> {
+    let partitions = ex::extract_and_cast_opt::<MapArray>(&batch, "add.partitionValues").ok_or(
+        DeltaTableError::generic(
+            "No partitionValues column found in files batch. This is unexpected.",
+        ),
+    )?;
     Ok(batch)
 }
 
@@ -356,16 +412,31 @@ fn read_file_info<'a>(arr: &'a dyn ProvidesColumnByName) -> DeltaResult<Vec<Opti
 
 #[cfg(test)]
 pub(super) mod tests {
+    use std::collections::HashMap;
     use std::sync::Arc;
 
+    use arrow::util::pretty::{print_batches, print_columns};
     use arrow_select::concat::concat_batches;
+    use datafusion_expr::expr;
+    use delta_kernel::engine::arrow_data::ArrowEngineData;
+    use delta_kernel::engine::arrow_expression::ArrowExpressionHandler;
+    use delta_kernel::schema::{DataType, PrimitiveType};
+    use delta_kernel::{Expression, ExpressionEvaluator, ExpressionHandler};
     use deltalake_test::utils::*;
     use futures::TryStreamExt;
     use object_store::path::Path;
 
-    use super::super::log_segment::LogSegment;
+    use super::super::{log_segment::LogSegment, stats_schema};
     use super::*;
     use crate::kernel::{models::ActionType, StructType};
+    use crate::operations::transaction::CommitData;
+    use crate::protocol::DeltaOperation;
+    use crate::table::config::TableConfig;
+    use crate::test_utils::{ActionFactory, TestResult, TestSchemas};
+
+    lazy_static::lazy_static! {
+        static ref ARROW_HANDLER: ArrowExpressionHandler = ArrowExpressionHandler {};
+    }
 
     pub(crate) async fn test_log_replay(context: &IntegrationContext) -> TestResult {
         let log_schema = Arc::new(StructType::new(vec![
@@ -417,6 +488,90 @@ pub(super) mod tests {
         assert_eq!(arr_add.null_count(), 0);
         assert!(add_count_after < add_count);
         assert_eq!(add_count_after, add_count - rm_count);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_parse_stats() -> TestResult {
+        let schema = TestSchemas::simple();
+        let config_map = HashMap::new();
+        let table_config = TableConfig(&config_map);
+        let config = DeltaTableConfig::default();
+
+        let commit_data = CommitData {
+            actions: vec![ActionFactory::add(schema, HashMap::new(), HashMap::new(), true).into()],
+            operation: DeltaOperation::Write {
+                mode: crate::protocol::SaveMode::Append,
+                partition_by: None,
+                predicate: None,
+            },
+            app_metadata: Default::default(),
+            app_transactions: Default::default(),
+        };
+        let (_, maybe_batches) = LogSegment::new_test(&[commit_data])?;
+
+        let batches = maybe_batches.into_iter().collect::<Result<Vec<_>, _>>()?;
+        let batch = concat_batches(&batches[0].schema(), &batches)?;
+
+        assert!(ex::extract_and_cast_opt::<StringArray>(&batch, "add.stats").is_some());
+        assert!(ex::extract_and_cast_opt::<StructArray>(&batch, "add.stats_parsed").is_none());
+
+        let stats_schema = stats_schema(&schema, table_config)?;
+        let new_batch = parse_stats(batch, Arc::new((&stats_schema).try_into()?), &config)?;
+
+        assert!(ex::extract_and_cast_opt::<StructArray>(&new_batch, "add.stats_parsed").is_some());
+        let parsed_col = ex::extract_and_cast::<StructArray>(&new_batch, "add.stats_parsed")?;
+        let delta_type: DataType = parsed_col.data_type().try_into()?;
+
+        match delta_type {
+            DataType::Struct(fields) => {
+                assert_eq!(fields.as_ref(), &stats_schema);
+            }
+            _ => panic!("unexpected data type"),
+        }
+
+        // let expression = Expression::column("add.stats");
+        // let evaluator = ARROW_HANDLER.get_evaluator(
+        //     Arc::new(batch.schema_ref().as_ref().try_into()?),
+        //     expression,
+        //     DataType::Primitive(PrimitiveType::String),
+        // );
+        // let engine_data = ArrowEngineData::new(batch);
+        // let result = evaluator
+        //     .evaluate(&engine_data)?
+        //     .as_any()
+        //     .downcast_ref::<ArrowEngineData>()
+        //     .ok_or(DeltaTableError::generic(
+        //         "failed to downcast evaluator result to ArrowEngineData.",
+        //     ))?
+        //     .record_batch()
+        //     .clone();
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_parse_partition_values() -> TestResult {
+        let schema = TestSchemas::simple();
+        let config_map = HashMap::new();
+        let table_config = TableConfig(&config_map);
+        let config = DeltaTableConfig::default();
+
+        let commit_data = CommitData {
+            actions: vec![ActionFactory::add(schema, HashMap::new(), HashMap::new(), true).into()],
+            operation: DeltaOperation::Write {
+                mode: crate::protocol::SaveMode::Append,
+                partition_by: None,
+                predicate: None,
+            },
+            app_metadata: Default::default(),
+            app_transactions: Default::default(),
+        };
+        let (_, maybe_batches) = LogSegment::new_test(&[commit_data])?;
+
+        let batches = maybe_batches.into_iter().collect::<Result<Vec<_>, _>>()?;
+        let batch = concat_batches(&batches[0].schema(), &batches)?;
 
         Ok(())
     }
