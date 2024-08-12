@@ -51,7 +51,7 @@ datafusion-common = { version = "40" }
 datafusion-proto = { version = "40" }
 datafusion-sql = { version = "40" }
 datafusion-physical-expr = { version = "40" }
-datafusion-functions = { version = "40" }
+datafusion-functions = { version = "41" }
 datafusion-functions-array = { version = "40" }
 
 # serde
