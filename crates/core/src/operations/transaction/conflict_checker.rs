@@ -679,7 +679,7 @@ mod tests {
             target_size: 0,
         };
         let add =
-            ActionFactory::add(TestSchemas::simple(), HashMap::new(), HashMap::new(), true).into();
+            ActionFactory::add(TestSchemas::simple(), HashMap::new(), Vec::new(), true).into();
         let res = can_downgrade_to_snapshot_isolation(&[add], &operation, &isolation);
         assert!(!res)
     }

@@ -1,10 +1,14 @@
 use std::collections::HashMap;
 
+use arrow_array::*;
 use chrono::Utc;
+use delta_kernel::schema::{DataType, PrimitiveType};
 use object_store::path::Path;
 use object_store::ObjectMeta;
 
 use super::{get_parquet_bytes, DataFactory, FileStats};
+use crate::kernel::arrow::extract::{self as ex};
+use crate::kernel::partitions_schema;
 use crate::kernel::{Add, Metadata, Protocol, ReaderFeatures, Remove, StructType, WriterFeatures};
 use crate::operations::transaction::PROTOCOL;
 
@@ -36,10 +40,47 @@ impl ActionFactory {
     pub fn add(
         schema: &StructType,
         bounds: HashMap<&str, (&str, &str)>,
-        partition_values: HashMap<String, Option<String>>,
+        partition_columns: Vec<String>,
         data_change: bool,
     ) -> Add {
-        let batch = DataFactory::record_batch(schema, 10, bounds).unwrap();
+        let partitions_schema = partitions_schema(&schema, &partition_columns).unwrap();
+        let partition_values = if let Some(p_schema) = partitions_schema {
+            let batch = DataFactory::record_batch(&p_schema, 1, &bounds).unwrap();
+            p_schema
+                .fields()
+                .map(|f| {
+                    let value = match f.data_type() {
+                        DataType::Primitive(PrimitiveType::String) => {
+                            let arr =
+                                ex::extract_and_cast::<StringArray>(&batch, f.name()).unwrap();
+                            Some(arr.value(0).to_string())
+                        }
+                        DataType::Primitive(PrimitiveType::Integer) => {
+                            let arr = ex::extract_and_cast::<Int32Array>(&batch, f.name()).unwrap();
+                            Some(arr.value(0).to_string())
+                        }
+                        DataType::Primitive(PrimitiveType::Long) => {
+                            let arr = ex::extract_and_cast::<Int64Array>(&batch, f.name()).unwrap();
+                            Some(arr.value(0).to_string())
+                        }
+                        _ => unimplemented!(),
+                    };
+                    (f.name().to_owned(), value)
+                })
+                .collect()
+        } else {
+            HashMap::new()
+        };
+
+        let data_schema = StructType::new(
+            schema
+                .fields()
+                .filter(|f| !partition_columns.contains(f.name()))
+                .cloned()
+                .collect(),
+        );
+
+        let batch = DataFactory::record_batch(&data_schema, 10, &bounds).unwrap();
         let stats = DataFactory::file_stats(&batch).unwrap();
         let path = Path::from(generate_file_name());
         let data = get_parquet_bytes(&batch).unwrap();
