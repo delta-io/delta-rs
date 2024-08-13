@@ -276,6 +276,37 @@ impl DeltaTablePartition {
     }
 }
 
+///
+/// A HivePartition string is represented by a "key=value" format.
+///
+/// ```rust
+/// # use delta_kernel::expressions::Scalar;
+/// use deltalake_core::DeltaTablePartition;
+///
+/// let hive_part = "ds=2023-01-01";
+/// let partition = DeltaTablePartition::try_from(hive_part).unwrap();
+/// assert_eq!("ds", partition.key);
+/// assert_eq!(Scalar::String("2023-01-01".into()), partition.value);
+/// ```
+impl TryFrom<&str> for DeltaTablePartition {
+    type Error = DeltaTableError;
+
+    /// Try to create a DeltaTable partition from a HivePartition string.
+    /// Returns a DeltaTableError if the string is not in the form of a HivePartition.
+    fn try_from(partition: &str) -> Result<Self, DeltaTableError> {
+        let partition_splitted: Vec<&str> = partition.split('=').collect();
+        match partition_splitted {
+            partition_splitted if partition_splitted.len() == 2 => Ok(DeltaTablePartition {
+                key: partition_splitted[0].to_owned(),
+                value: Scalar::String(partition_splitted[1].to_owned()),
+            }),
+            _ => Err(DeltaTableError::PartitionError {
+                partition: partition.to_string(),
+            }),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -325,5 +356,22 @@ mod tests {
             .unwrap(),
             "date NOT IN ('2023-11-04', '2023-06-07')",
         );
+    }
+
+    #[test]
+    fn tryfrom_invalid() {
+        let buf = "this-is-not-a-partition";
+        let partition = DeltaTablePartition::try_from(buf);
+        assert!(partition.is_err());
+    }
+
+    #[test]
+    fn tryfrom_valid() {
+        let buf = "ds=2024-04-01";
+        let partition = DeltaTablePartition::try_from(buf);
+        assert!(partition.is_ok());
+        let partition = partition.unwrap();
+        assert_eq!(partition.key, "ds");
+        assert_eq!(partition.value, Scalar::String("2024-04-01".into()));
     }
 }
