@@ -21,7 +21,7 @@ impl DataFactory {
     pub fn record_batch(
         schema: &StructType,
         length: usize,
-        bounds: HashMap<&str, (&str, &str)>,
+        bounds: &HashMap<&str, (&str, &str)>,
     ) -> TestResult<RecordBatch> {
         generate_random_batch(schema, length, bounds)
     }
@@ -43,7 +43,7 @@ impl DataFactory {
 fn generate_random_batch(
     schema: &StructType,
     length: usize,
-    bounds: HashMap<&str, (&str, &str)>,
+    bounds: &HashMap<&str, (&str, &str)>,
 ) -> TestResult<RecordBatch> {
     schema
         .fields()

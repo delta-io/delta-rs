@@ -323,20 +323,7 @@ impl Snapshot {
             return Ok(None);
         }
         let schema = table_schema.unwrap_or_else(|| self.schema());
-        Ok(Some(StructType::new(
-            self.metadata
-                .partition_columns
-                .iter()
-                .map(|col| {
-                    schema.field(col).cloned().ok_or_else(|| {
-                        DeltaTableError::Generic(format!(
-                            "Partition column {} not found in schema",
-                            col
-                        ))
-                    })
-                })
-                .collect::<Result<Vec<_>, _>>()?,
-        )))
+        partitions_schema(schema, &self.metadata().partition_columns)
     }
 }
 
@@ -714,6 +701,28 @@ fn stats_schema<'a>(schema: &StructType, config: TableConfig<'a>) -> DeltaResult
             true,
         ),
     ]))
+}
+
+pub(crate) fn partitions_schema(
+    schema: &StructType,
+    partition_columns: &Vec<String>,
+) -> DeltaResult<Option<StructType>> {
+    if partition_columns.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(StructType::new(
+        partition_columns
+            .iter()
+            .map(|col| {
+                schema.field(col).map(|field| field.clone()).ok_or_else(|| {
+                    DeltaTableError::Generic(format!(
+                        "Partition column {} not found in schema",
+                        col
+                    ))
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()?,
+    )))
 }
 
 fn stats_field(idx: usize, num_indexed_cols: i32, field: &StructField) -> Option<StructField> {
