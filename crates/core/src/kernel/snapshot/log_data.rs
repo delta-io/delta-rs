@@ -229,7 +229,7 @@ impl LogicalFile<'_> {
             })
             .collect::<DeltaResult<HashMap<_, _>>>()?;
 
-        // NOTE: we recreate the map as a BTreeMap to ensure the order of the keys is consistently
+        // NOTE: we recreate the map as a IndexMap to ensure the order of the keys is consistently
         // the same as the order of partition fields.
         self.partition_fields
             .iter()
