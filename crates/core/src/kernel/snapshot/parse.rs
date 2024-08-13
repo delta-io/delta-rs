@@ -257,7 +257,9 @@ pub(super) fn read_removes(array: &dyn ProvidesColumnByName) -> DeltaResult<Vec<
     Ok(result)
 }
 
-fn collect_map(val: &StructArray) -> Option<impl Iterator<Item = (String, Option<String>)> + '_> {
+pub(super) fn collect_map(
+    val: &StructArray,
+) -> Option<impl Iterator<Item = (String, Option<String>)> + '_> {
     let keys = val
         .column(0)
         .as_ref()

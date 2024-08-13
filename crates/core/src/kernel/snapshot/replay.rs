@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::Context;
@@ -5,14 +6,15 @@ use std::task::Poll;
 
 use arrow_arith::boolean::{is_not_null, or};
 use arrow_array::MapArray;
-use arrow_array::{
-    Array, ArrayRef, BooleanArray, Int32Array, RecordBatch, StringArray, StructArray,
-};
+use arrow_array::*;
 use arrow_schema::{
-    DataType as ArrowDataType, Field as ArrowField, Schema as ArrowSchema,
+    DataType as ArrowDataType, Field as ArrowField, Fields, Schema as ArrowSchema,
     SchemaRef as ArrowSchemaRef,
 };
 use arrow_select::filter::filter_record_batch;
+use delta_kernel::expressions::Scalar;
+use delta_kernel::schema::DataType;
+use delta_kernel::schema::PrimitiveType;
 use futures::Stream;
 use hashbrown::HashSet;
 use itertools::Itertools;
@@ -20,6 +22,7 @@ use percent_encoding::percent_decode_str;
 use pin_project_lite::pin_project;
 use tracing::debug;
 
+use super::parse::collect_map;
 use super::ReplayVisitor;
 use super::Snapshot;
 use crate::kernel::arrow::extract::{self as ex, ProvidesColumnByName};
@@ -51,12 +54,7 @@ impl<'a, S> ReplayStream<'a, S> {
         visitors: &'a mut Vec<Box<dyn ReplayVisitor>>,
     ) -> DeltaResult<Self> {
         let stats_schema = Arc::new((&snapshot.stats_schema(None)?).try_into()?);
-        let partitions_schema = snapshot
-            .partitions_schema(None)?
-            .as_ref()
-            .map(|s| s.try_into())
-            .transpose()?
-            .map(|s| Arc::new(s));
+        let partitions_schema = snapshot.partitions_schema(None)?.map(|s| Arc::new(s));
         let mapper = Arc::new(LogMapper {
             stats_schema,
             partitions_schema,
@@ -74,7 +72,7 @@ impl<'a, S> ReplayStream<'a, S> {
 
 pub(super) struct LogMapper {
     stats_schema: ArrowSchemaRef,
-    partitions_schema: Option<ArrowSchemaRef>,
+    partitions_schema: Option<Arc<StructType>>,
     config: DeltaTableConfig,
 }
 
@@ -86,10 +84,7 @@ impl LogMapper {
         Ok(Self {
             stats_schema: Arc::new((&snapshot.stats_schema(table_schema)?).try_into()?),
             partitions_schema: snapshot
-                .partitions_schema(None)?
-                .as_ref()
-                .map(|s| s.try_into())
-                .transpose()?
+                .partitions_schema(table_schema)?
                 .map(|s| Arc::new(s)),
             config: snapshot.config.clone(),
         })
@@ -108,7 +103,7 @@ impl LogMapper {
 fn map_batch(
     batch: RecordBatch,
     stats_schema: ArrowSchemaRef,
-    partition_schema: Option<ArrowSchemaRef>,
+    partition_schema: Option<Arc<StructType>>,
     config: &DeltaTableConfig,
 ) -> DeltaResult<RecordBatch> {
     let mut new_batch = batch.clone();
@@ -122,7 +117,7 @@ fn map_batch(
         let partitions_parsed_col =
             ex::extract_and_cast_opt::<StructArray>(&batch, "add.partitionValues_parsed");
         if partitions_parsed_col.is_none() {
-            new_batch = parse_partitions(new_batch, partitions_schema, config)?;
+            new_batch = parse_partitions(new_batch, partitions_schema.as_ref())?;
         }
     }
 
@@ -139,9 +134,198 @@ fn parse_stats(
     let stats = ex::extract_and_cast_opt::<StringArray>(&batch, "add.stats").ok_or(
         DeltaTableError::generic("No stats column found in files batch. This is unexpected."),
     )?;
+    let stats: StructArray = json::parse_json(stats, stats_schema.clone(), config)?.into();
+    insert_field(batch, stats, "stats_parsed")
+}
 
-    let stats: Arc<StructArray> =
-        Arc::new(json::parse_json(stats, stats_schema.clone(), config)?.into());
+fn parse_partitions(batch: RecordBatch, partition_schema: &StructType) -> DeltaResult<RecordBatch> {
+    let partitions = ex::extract_and_cast_opt::<MapArray>(&batch, "add.partitionValues").ok_or(
+        DeltaTableError::generic(
+            "No partitionValues column found in files batch. This is unexpected.",
+        ),
+    )?;
+
+    let mut values = partition_schema
+        .fields()
+        .map(|f| {
+            (
+                f.name().to_string(),
+                Vec::<Scalar>::with_capacity(partitions.len()),
+            )
+        })
+        .collect::<HashMap<_, _>>();
+
+    for i in 0..partitions.len() {
+        if partitions.is_null(i) {
+            return Err(DeltaTableError::generic(
+                "Expected potentially empty partition values map, but found a null value.",
+            ));
+        }
+        let data: HashMap<_, _> = collect_map(&partitions.value(i))
+            .ok_or(DeltaTableError::generic(
+                "Failed to collect partition values from map array.",
+            ))?
+            .map(|(k, v)| {
+                let field = partition_schema
+                    .field(k.as_str())
+                    .ok_or(DeltaTableError::generic(format!(
+                        "Partition column {} not found in schema.",
+                        k
+                    )))?;
+                let field_type = match field.data_type() {
+                    DataType::Primitive(p) => Ok(p),
+                    _ => Err(DeltaTableError::generic(
+                        "nested partitioning values are not supported",
+                    )),
+                }?;
+                Ok::<_, DeltaTableError>((
+                    k,
+                    v.map(|vv| field_type.parse_scalar(vv.as_str()))
+                        .transpose()?
+                        .unwrap_or(Scalar::Null(field.data_type().clone())),
+                ))
+            })
+            .collect::<Result<_, _>>()?;
+
+        partition_schema.fields().for_each(|f| {
+            let value = data
+                .get(f.name())
+                .cloned()
+                .unwrap_or(Scalar::Null(f.data_type().clone()));
+            values.get_mut(f.name()).unwrap().push(value);
+        });
+    }
+
+    let columns = partition_schema
+        .fields()
+        .map(|f| {
+            let values = values.get(f.name()).unwrap();
+            match f.data_type() {
+                DataType::Primitive(p) => {
+                    // Safety: we created the Scalars above using the parsing function of the same PrimitiveType
+                    // should this fail, it's a bug in our code, and we should panic
+                    let arr = match p {
+                        PrimitiveType::String => {
+                            Arc::new(StringArray::from_iter(values.iter().map(|v| match v {
+                                Scalar::String(s) => Some(s.clone()),
+                                Scalar::Null(_) => None,
+                                _ => panic!("unexpected scalar type"),
+                            }))) as ArrayRef
+                        }
+                        PrimitiveType::Long => {
+                            Arc::new(Int64Array::from_iter(values.iter().map(|v| match v {
+                                Scalar::Long(i) => Some(*i),
+                                Scalar::Null(_) => None,
+                                _ => panic!("unexpected scalar type"),
+                            }))) as ArrayRef
+                        }
+                        PrimitiveType::Integer => {
+                            Arc::new(Int32Array::from_iter(values.iter().map(|v| match v {
+                                Scalar::Integer(i) => Some(*i),
+                                Scalar::Null(_) => None,
+                                _ => panic!("unexpected scalar type"),
+                            }))) as ArrayRef
+                        }
+                        PrimitiveType::Short => {
+                            Arc::new(Int16Array::from_iter(values.iter().map(|v| match v {
+                                Scalar::Short(i) => Some(*i),
+                                Scalar::Null(_) => None,
+                                _ => panic!("unexpected scalar type"),
+                            }))) as ArrayRef
+                        }
+                        PrimitiveType::Byte => {
+                            Arc::new(Int8Array::from_iter(values.iter().map(|v| match v {
+                                Scalar::Byte(i) => Some(*i),
+                                Scalar::Null(_) => None,
+                                _ => panic!("unexpected scalar type"),
+                            }))) as ArrayRef
+                        }
+                        PrimitiveType::Float => {
+                            Arc::new(Float32Array::from_iter(values.iter().map(|v| match v {
+                                Scalar::Float(f) => Some(*f),
+                                Scalar::Null(_) => None,
+                                _ => panic!("unexpected scalar type"),
+                            }))) as ArrayRef
+                        }
+                        PrimitiveType::Double => {
+                            Arc::new(Float64Array::from_iter(values.iter().map(|v| match v {
+                                Scalar::Double(f) => Some(*f),
+                                Scalar::Null(_) => None,
+                                _ => panic!("unexpected scalar type"),
+                            }))) as ArrayRef
+                        }
+                        PrimitiveType::Boolean => {
+                            Arc::new(BooleanArray::from_iter(values.iter().map(|v| match v {
+                                Scalar::Boolean(b) => Some(*b),
+                                Scalar::Null(_) => None,
+                                _ => panic!("unexpected scalar type"),
+                            }))) as ArrayRef
+                        }
+                        PrimitiveType::Binary => {
+                            Arc::new(BinaryArray::from_iter(values.iter().map(|v| match v {
+                                Scalar::Binary(b) => Some(b.clone()),
+                                Scalar::Null(_) => None,
+                                _ => panic!("unexpected scalar type"),
+                            }))) as ArrayRef
+                        }
+                        PrimitiveType::Date => {
+                            Arc::new(Date32Array::from_iter(values.iter().map(|v| match v {
+                                Scalar::Date(d) => Some(*d),
+                                Scalar::Null(_) => None,
+                                _ => panic!("unexpected scalar type"),
+                            }))) as ArrayRef
+                        }
+
+                        PrimitiveType::Timestamp => Arc::new(
+                            TimestampMicrosecondArray::from_iter(values.iter().map(|v| match v {
+                                Scalar::Timestamp(t) => Some(*t),
+                                Scalar::Null(_) => None,
+                                _ => panic!("unexpected scalar type"),
+                            }))
+                            .with_timezone("UTC"),
+                        ) as ArrayRef,
+                        PrimitiveType::TimestampNtz => Arc::new(
+                            TimestampMicrosecondArray::from_iter(values.iter().map(|v| match v {
+                                Scalar::TimestampNtz(t) => Some(*t),
+                                Scalar::Null(_) => None,
+                                _ => panic!("unexpected scalar type"),
+                            })),
+                        ) as ArrayRef,
+                        PrimitiveType::Decimal(p, s) => Arc::new(
+                            Decimal128Array::from_iter(values.iter().map(|v| match v {
+                                Scalar::Decimal(d, _, _) => Some(*d),
+                                Scalar::Null(_) => None,
+                                _ => panic!("unexpected scalar type"),
+                            }))
+                            .with_precision_and_scale(*p, *s as i8)?,
+                        ) as ArrayRef,
+                    };
+                    Ok(arr)
+                }
+                _ => Err(DeltaTableError::generic(
+                    "complex partitioning values are not supported",
+                )),
+            }
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+
+    insert_field(
+        batch,
+        StructArray::try_new(
+            Fields::from(
+                partition_schema
+                    .fields()
+                    .map(|f| f.try_into())
+                    .collect::<Result<Vec<ArrowField>, _>>()?,
+            ),
+            columns,
+            None,
+        )?,
+        "partitionValues_parsed",
+    )
+}
+
+fn insert_field(batch: RecordBatch, array: StructArray, name: &str) -> DeltaResult<RecordBatch> {
     let schema = batch.schema();
     let add_col = ex::extract_and_cast::<StructArray>(&batch, "add")?;
     let (add_idx, _) = schema.column_with_name("add").unwrap();
@@ -151,8 +335,8 @@ fn parse_stats(
         .iter()
         .cloned()
         .chain(std::iter::once(Arc::new(ArrowField::new(
-            "stats_parsed",
-            ArrowDataType::Struct(stats_schema.fields().clone()),
+            name,
+            array.data_type().clone(),
             true,
         ))))
         .collect_vec();
@@ -162,7 +346,7 @@ fn parse_stats(
             .columns()
             .iter()
             .cloned()
-            .chain(std::iter::once(stats as ArrayRef))
+            .chain(std::iter::once(Arc::new(array) as ArrayRef))
             .collect(),
         add_col.nulls().cloned(),
     )?);
@@ -181,19 +365,6 @@ fn parse_stats(
         Arc::new(ArrowSchema::new(fields)),
         columns,
     )?)
-}
-
-fn parse_partitions(
-    batch: RecordBatch,
-    partition_schema: ArrowSchemaRef,
-    config: &DeltaTableConfig,
-) -> DeltaResult<RecordBatch> {
-    let partitions = ex::extract_and_cast_opt::<MapArray>(&batch, "add.partitionValues").ok_or(
-        DeltaTableError::generic(
-            "No partitionValues column found in files batch. This is unexpected.",
-        ),
-    )?;
-    Ok(batch)
 }
 
 impl<'a, S> Stream for ReplayStream<'a, S>
@@ -415,18 +586,14 @@ pub(super) mod tests {
     use std::collections::HashMap;
     use std::sync::Arc;
 
-    use arrow::util::pretty::{print_batches, print_columns};
     use arrow_select::concat::concat_batches;
-    use datafusion_expr::expr;
-    use delta_kernel::engine::arrow_data::ArrowEngineData;
     use delta_kernel::engine::arrow_expression::ArrowExpressionHandler;
-    use delta_kernel::schema::{DataType, PrimitiveType};
-    use delta_kernel::{Expression, ExpressionEvaluator, ExpressionHandler};
+    use delta_kernel::schema::DataType;
     use deltalake_test::utils::*;
     use futures::TryStreamExt;
     use object_store::path::Path;
 
-    use super::super::{log_segment::LogSegment, stats_schema};
+    use super::super::{log_segment::LogSegment, partitions_schema, stats_schema};
     use super::*;
     use crate::kernel::{models::ActionType, StructType};
     use crate::operations::transaction::CommitData;
@@ -500,7 +667,7 @@ pub(super) mod tests {
         let config = DeltaTableConfig::default();
 
         let commit_data = CommitData {
-            actions: vec![ActionFactory::add(schema, HashMap::new(), HashMap::new(), true).into()],
+            actions: vec![ActionFactory::add(schema, HashMap::new(), Vec::new(), true).into()],
             operation: DeltaOperation::Write {
                 mode: crate::protocol::SaveMode::Append,
                 partition_by: None,
@@ -554,15 +721,19 @@ pub(super) mod tests {
     #[test]
     fn test_parse_partition_values() -> TestResult {
         let schema = TestSchemas::simple();
-        let config_map = HashMap::new();
-        let table_config = TableConfig(&config_map);
-        let config = DeltaTableConfig::default();
+        let partition_columns = vec![schema.field("modified").unwrap().name().to_string()];
 
         let commit_data = CommitData {
-            actions: vec![ActionFactory::add(schema, HashMap::new(), HashMap::new(), true).into()],
+            actions: vec![ActionFactory::add(
+                schema,
+                HashMap::new(),
+                partition_columns.clone(),
+                true,
+            )
+            .into()],
             operation: DeltaOperation::Write {
                 mode: crate::protocol::SaveMode::Append,
-                partition_by: None,
+                partition_by: Some(partition_columns.clone()),
                 predicate: None,
             },
             app_metadata: Default::default(),
@@ -572,6 +743,29 @@ pub(super) mod tests {
 
         let batches = maybe_batches.into_iter().collect::<Result<Vec<_>, _>>()?;
         let batch = concat_batches(&batches[0].schema(), &batches)?;
+
+        assert!(ex::extract_and_cast_opt::<MapArray>(&batch, "add.partitionValues").is_some());
+        assert!(
+            ex::extract_and_cast_opt::<StructArray>(&batch, "add.partitionValues_parsed").is_none()
+        );
+
+        let partitions_schema = partitions_schema(&schema, &partition_columns)?.unwrap();
+        let new_batch = parse_partitions(batch, &partitions_schema)?;
+
+        assert!(
+            ex::extract_and_cast_opt::<StructArray>(&new_batch, "add.partitionValues_parsed")
+                .is_some()
+        );
+        let parsed_col =
+            ex::extract_and_cast::<StructArray>(&new_batch, "add.partitionValues_parsed")?;
+        let delta_type: DataType = parsed_col.data_type().try_into()?;
+
+        match delta_type {
+            DataType::Struct(fields) => {
+                assert_eq!(fields.as_ref(), &partitions_schema);
+            }
+            _ => panic!("unexpected data type"),
+        }
 
         Ok(())
     }
