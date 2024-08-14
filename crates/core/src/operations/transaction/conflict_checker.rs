@@ -700,7 +700,7 @@ mod tests {
     ) -> Result<(), CommitConflictError> {
         use crate::table::state::DeltaTableState;
 
-        let setup_actions = setup.unwrap_or_else(|| init_table_actions());
+        let setup_actions = setup.unwrap_or_else(init_table_actions);
         let state = DeltaTableState::from_actions(setup_actions).unwrap();
         let snapshot = state.snapshot();
         let transaction_info = TransactionInfo::new(snapshot, reads, &actions, read_whole_table);

@@ -374,4 +374,116 @@ mod tests {
         assert_eq!(partition.key, "ds");
         assert_eq!(partition.value, Scalar::String("2024-04-01".into()));
     }
+
+    #[test]
+    fn test_create_delta_table_partition() {
+        let year = "2021".to_string();
+        let path = format!("year={year}");
+        assert_eq!(
+            DeltaTablePartition::try_from(path.as_ref()).unwrap(),
+            DeltaTablePartition {
+                key: "year".into(),
+                value: Scalar::String(year.into()),
+            }
+        );
+
+        let _wrong_path = "year=2021/month=";
+        assert!(matches!(
+            DeltaTablePartition::try_from(_wrong_path).unwrap_err(),
+            DeltaTableError::PartitionError {
+                partition: _wrong_path
+            },
+        ))
+    }
+
+    #[test]
+    fn test_match_partition() {
+        let partition_2021 = DeltaTablePartition {
+            key: "year".into(),
+            value: Scalar::String("2021".into()),
+        };
+        let partition_2020 = DeltaTablePartition {
+            key: "year".into(),
+            value: Scalar::String("2020".into()),
+        };
+        let partition_2019 = DeltaTablePartition {
+            key: "year".into(),
+            value: Scalar::String("2019".into()),
+        };
+
+        let partition_year_2020_filter = PartitionFilter {
+            key: "year".to_string(),
+            value: PartitionValue::Equal("2020".to_string()),
+        };
+        let partition_month_12_filter = PartitionFilter {
+            key: "month".to_string(),
+            value: PartitionValue::Equal("12".to_string()),
+        };
+        let string_type = DataType::Primitive(PrimitiveType::String);
+
+        assert!(!partition_year_2020_filter.match_partition(&partition_2021, &string_type));
+        assert!(partition_year_2020_filter.match_partition(&partition_2020, &string_type));
+        assert!(!partition_year_2020_filter.match_partition(&partition_2019, &string_type));
+        assert!(!partition_month_12_filter.match_partition(&partition_2019, &string_type));
+
+        /* TODO: To be re-enabled at a future date, needs some type futzing
+        let partition_2020_12_31_23_59_59 = DeltaTablePartition {
+            key: "time".into(),
+            value: PrimitiveType::TimestampNtz.parse_scalar("2020-12-31 23:59:59").expect("Failed to parse timestamp"),
+        };
+
+        let partition_time_2020_12_31_23_59_59_filter = PartitionFilter {
+            key: "time".to_string(),
+            value: PartitionValue::Equal("2020-12-31 23:59:59.000000".into()),
+        };
+
+        assert!(partition_time_2020_12_31_23_59_59_filter.match_partition(
+            &partition_2020_12_31_23_59_59,
+            &DataType::Primitive(PrimitiveType::TimestampNtz)
+        ));
+        assert!(!partition_time_2020_12_31_23_59_59_filter
+            .match_partition(&partition_2020_12_31_23_59_59, &string_type));
+        */
+    }
+
+    #[test]
+    fn test_match_filters() {
+        let partitions = vec![
+            DeltaTablePartition {
+                key: "year".into(),
+                value: Scalar::String("2021".into()),
+            },
+            DeltaTablePartition {
+                key: "month".into(),
+                value: Scalar::String("12".into()),
+            },
+        ];
+
+        let string_type = DataType::Primitive(PrimitiveType::String);
+        let partition_data_types: HashMap<&String, &DataType> = vec![
+            (&partitions[0].key, &string_type),
+            (&partitions[1].key, &string_type),
+        ]
+        .into_iter()
+        .collect();
+
+        let valid_filters = PartitionFilter {
+            key: "year".to_string(),
+            value: PartitionValue::Equal("2021".to_string()),
+        };
+
+        let valid_filter_month = PartitionFilter {
+            key: "month".to_string(),
+            value: PartitionValue::Equal("12".to_string()),
+        };
+
+        let invalid_filter = PartitionFilter {
+            key: "year".to_string(),
+            value: PartitionValue::Equal("2020".to_string()),
+        };
+
+        assert!(valid_filters.match_partitions(&partitions, &partition_data_types),);
+        assert!(valid_filter_month.match_partitions(&partitions, &partition_data_types),);
+        assert!(!invalid_filter.match_partitions(&partitions, &partition_data_types),);
+    }
 }

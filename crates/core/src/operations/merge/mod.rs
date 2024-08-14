@@ -2800,8 +2800,8 @@ mod tests {
 
         let captured_expressions = placeholders.into_iter().map(|p| p.expr).collect_vec();
 
-        assert!(captured_expressions.contains(&&source_id));
-        assert!(captured_expressions.contains(&&source_id.is_null()));
+        assert!(captured_expressions.contains(&source_id));
+        assert!(captured_expressions.contains(&source_id.is_null()));
 
         assert_eq!(generalized, expected_filter);
     }
@@ -2837,13 +2837,13 @@ mod tests {
         assert_eq!(generalized, expected_filter);
 
         assert_eq!(placeholders.len(), 1);
-        let placeholder_expr = placeholders.get(0).unwrap();
+        let placeholder_expr = placeholders.first().unwrap();
 
         let expected_placeholder = col(Column::new(source.clone().into(), "id")).neg();
 
         assert_eq!(placeholder_expr.expr, expected_placeholder);
         assert_eq!(placeholder_expr.alias, "id_0");
-        assert_eq!(placeholder_expr.is_aggregate, false);
+        assert!(!placeholder_expr.is_aggregate);
     }
 
     #[tokio::test]

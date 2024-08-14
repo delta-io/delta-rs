@@ -112,10 +112,7 @@ mod tests {
             .expect("Failed to make a table");
         table.load().await.expect("Failed to reload table");
         let result = should_write_cdc(table.snapshot().unwrap()).expect("Failed to use table");
-        assert!(
-            result == false,
-            "A default table should not create CDC files"
-        );
+        assert!(!result, "A default table should not create CDC files");
     }
 
     ///
@@ -140,7 +137,7 @@ mod tests {
 
         let result = should_write_cdc(table.snapshot().unwrap()).expect("Failed to use table");
         assert!(
-            result == true,
+            result,
             "A table with the EnableChangeDataFeed should create CDC files"
         );
     }
@@ -166,7 +163,7 @@ mod tests {
 
         let result = should_write_cdc(table.snapshot().unwrap()).expect("Failed to use table");
         assert!(
-            result == false,
+            !result,
             "A v7 table must not write CDC files unless the writer feature is set"
         );
     }
@@ -308,8 +305,8 @@ mod tests {
             ],
         )
         .unwrap();
-        let _ = arrow::util::pretty::print_batches(&vec![batch.clone()]);
-        let _ = arrow::util::pretty::print_batches(&vec![updated_batch.clone()]);
+        let _ = arrow::util::pretty::print_batches(&[batch.clone()]);
+        let _ = arrow::util::pretty::print_batches(&[updated_batch.clone()]);
 
         let ctx = SessionContext::new();
         let before = ctx.read_batch(batch).expect("Failed to make DataFrame");
@@ -398,7 +395,7 @@ mod tests {
         match tracker.collect() {
             Ok(df) => {
                 let batches = &df.collect().await.unwrap();
-                let _ = arrow::util::pretty::print_batches(&batches);
+                let _ = arrow::util::pretty::print_batches(batches);
                 assert_eq!(batches.len(), 2);
                 assert_batches_sorted_eq! {[
                 "+-------+--------------------------+------------------+",

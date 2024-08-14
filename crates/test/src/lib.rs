@@ -46,10 +46,6 @@ impl TestContext {
         let backend_ref = backend.as_ref().map(|s| s.as_str());
         match backend_ref {
             Ok("LOCALFS") | Err(std::env::VarError::NotPresent) => setup_local_context().await,
-            #[cfg(feature = "azure")]
-            Ok("AZURE_GEN2") => adls::setup_azure_gen2_context().await,
-            #[cfg(feature = "hdfs")]
-            Ok("HDFS") => hdfs::setup_hdfs_context(),
             _ => panic!("Invalid backend for delta-rs tests"),
         }
     }

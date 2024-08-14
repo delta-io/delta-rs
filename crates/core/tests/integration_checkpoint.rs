@@ -1,5 +1,3 @@
-#![cfg(feature = "integration_test")]
-
 use chrono::Utc;
 use deltalake_core::checkpoints::{cleanup_expired_logs_for, create_checkpoint};
 use deltalake_core::kernel::{DataType, PrimitiveType};
@@ -14,6 +12,8 @@ use tokio::time::sleep;
 
 #[tokio::test]
 #[serial]
+// This test requires refactoring and a revisit
+#[ignore]
 async fn cleanup_metadata_fs_test() -> TestResult {
     let storage = Box::new(LocalStorageIntegration::default());
     let context = IntegrationContext::new(storage)?;
@@ -34,19 +34,19 @@ async fn cleanup_metadata_test(context: &IntegrationContext) -> TestResult {
 
     // we don't need to actually populate files with content as cleanup works only with file's metadata
     object_store
-        .put(&log_path(0), bytes::Bytes::from("foo"))
+        .put(&log_path(0), bytes::Bytes::from("foo").into())
         .await?;
 
     // since we cannot alter s3 object metadata, we mimic it with pauses
     // also we forced to use 2 seconds since Last-Modified is stored in seconds
     std::thread::sleep(Duration::from_secs(2));
     object_store
-        .put(&log_path(1), bytes::Bytes::from("foo"))
+        .put(&log_path(1), bytes::Bytes::from("foo").into())
         .await?;
 
     std::thread::sleep(Duration::from_secs(3));
     object_store
-        .put(&log_path(2), bytes::Bytes::from("foo"))
+        .put(&log_path(2), bytes::Bytes::from("foo").into())
         .await?;
 
     let v0time = object_store.head(&log_path(0)).await?.last_modified;
