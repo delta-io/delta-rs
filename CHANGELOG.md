@@ -1,5 +1,49 @@
 # Changelog
 
+## [rust-v0.19.0](https://github.com/delta-io/delta-rs/tree/rust-v0.19.0) (2024-08-14)
+
+[Full Changelog](https://github.com/delta-io/delta-rs/compare/rust-v0.18.2...rust-v0.19.0)
+
+**Implemented enhancements:**
+
+- Only allow squash merge [\#2542](https://github.com/delta-io/delta-rs/issues/2542)
+
+**Fixed bugs:**
+
+- Write also insert change types in writer CDC [\#2750](https://github.com/delta-io/delta-rs/issues/2750)
+- Regression in Python multiprocessing support [\#2744](https://github.com/delta-io/delta-rs/issues/2744)
+- SchemaError occurs during table optimisation after upgrade to v0.18.1 [\#2731](https://github.com/delta-io/delta-rs/issues/2731)
+- AWS WebIdentityToken exposure in log files [\#2719](https://github.com/delta-io/delta-rs/issues/2719)
+- Write performance degrades with multiple writers [\#2683](https://github.com/delta-io/delta-rs/issues/2683)
+- Write monotonic sequence, but read is non monotonic [\#2659](https://github.com/delta-io/delta-rs/issues/2659)
+- Python `write_deltalake` with `schema_mode="merge"` casts types [\#2642](https://github.com/delta-io/delta-rs/issues/2642)
+- Newest docs \(potentially\) not released [\#2587](https://github.com/delta-io/delta-rs/issues/2587)
+- CDC is not generated for Structs and Lists [\#2568](https://github.com/delta-io/delta-rs/issues/2568)
+
+**Closed issues:**
+
+- delete\_dir bug [\#2713](https://github.com/delta-io/delta-rs/issues/2713)
+
+**Merged pull requests:**
+
+- chore: fix a bunch of clippy lints and re-enable tests [\#2773](https://github.com/delta-io/delta-rs/pull/2773) ([rtyler](https://github.com/rtyler))
+- feat: more economic data skipping with datafusion [\#2772](https://github.com/delta-io/delta-rs/pull/2772) ([roeap](https://github.com/roeap))
+- chore: prepare the next notable release of 0.19.0 [\#2768](https://github.com/delta-io/delta-rs/pull/2768) ([rtyler](https://github.com/rtyler))
+- feat: restore the TryFrom for DeltaTablePartition [\#2767](https://github.com/delta-io/delta-rs/pull/2767) ([rtyler](https://github.com/rtyler))
+- feat: fail fast on forked process [\#2765](https://github.com/delta-io/delta-rs/pull/2765) ([Tom-Newton](https://github.com/Tom-Newton))
+- perf: early stop if all values in arr are null [\#2764](https://github.com/delta-io/delta-rs/pull/2764) ([ion-elgreco](https://github.com/ion-elgreco))
+- fix\(python, rust\): don't flatten fields during cdf read [\#2763](https://github.com/delta-io/delta-rs/pull/2763) ([ion-elgreco](https://github.com/ion-elgreco))
+- chore: upgrade to datafusion 41 [\#2761](https://github.com/delta-io/delta-rs/pull/2761) ([rtyler](https://github.com/rtyler))
+- fix\(python, rust\): cdc in writer not creating inserts [\#2751](https://github.com/delta-io/delta-rs/pull/2751) ([ion-elgreco](https://github.com/ion-elgreco))
+- feat: improved test fixtures [\#2749](https://github.com/delta-io/delta-rs/pull/2749) ([roeap](https://github.com/roeap))
+- feat: introduce CDC generation for merge operations [\#2747](https://github.com/delta-io/delta-rs/pull/2747) ([rtyler](https://github.com/rtyler))
+- docs: fix broken link in docs [\#2746](https://github.com/delta-io/delta-rs/pull/2746) ([astrojuanlu](https://github.com/astrojuanlu))
+- chore: update delta\_kernel to 0.3.0 [\#2742](https://github.com/delta-io/delta-rs/pull/2742) ([alexwilcoxson-rel](https://github.com/alexwilcoxson-rel))
+- chore: add to code\_owner crates [\#2741](https://github.com/delta-io/delta-rs/pull/2741) ([ion-elgreco](https://github.com/ion-elgreco))
+- chore: update changelog and versions for next release [\#2740](https://github.com/delta-io/delta-rs/pull/2740) ([rtyler](https://github.com/rtyler))
+- feat\(python, rust\): arrow large/view types passthrough, rust default engine [\#2738](https://github.com/delta-io/delta-rs/pull/2738) ([ion-elgreco](https://github.com/ion-elgreco))
+- fix: column parsing to include nested columns and enclosing char [\#2737](https://github.com/delta-io/delta-rs/pull/2737) ([gtrawinski](https://github.com/gtrawinski))
+
 ## [rust-v0.18.2](https://github.com/delta-io/delta-rs/tree/rust-v0.18.2) (2024-08-07)
 
 [Full Changelog](https://github.com/delta-io/delta-rs/compare/rust-v0.18.1...rust-v0.18.2)
