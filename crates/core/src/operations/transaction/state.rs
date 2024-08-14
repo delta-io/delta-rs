@@ -3,14 +3,14 @@ use std::sync::Arc;
 
 use arrow::array::{ArrayRef, BooleanArray};
 use arrow::datatypes::{
-    DataType, Field as ArrowField, Schema as ArrowSchema, SchemaRef as ArrowSchemaRef,
+    DataType as ArrowDataType, Field as ArrowField, Schema as ArrowSchema,
+    SchemaRef as ArrowSchemaRef,
 };
 use datafusion::execution::context::SessionContext;
 use datafusion::physical_optimizer::pruning::{PruningPredicate, PruningStatistics};
 use datafusion_common::scalar::ScalarValue;
 use datafusion_common::{Column, ToDFSchema};
 use datafusion_expr::Expr;
-use itertools::Itertools;
 use object_store::ObjectStore;
 use parquet::arrow::arrow_reader::ArrowReaderOptions;
 use parquet::arrow::async_reader::{ParquetObjectReader, ParquetRecordBatchStreamBuilder};
@@ -102,7 +102,7 @@ impl<'a> AddContainer<'a> {
         let (_, field) = self.schema.column_with_name(&column.name)?;
 
         // See issue 1214. Binary type does not support natural order which is required for Datafusion to prune
-        if field.data_type() == &DataType::Binary {
+        if field.data_type() == &ArrowDataType::Binary {
             return None;
         }
 
@@ -249,25 +249,19 @@ impl PruningStatistics for EagerSnapshot {
     /// return the minimum values for the named column, if known.
     /// Note: the returned array must contain `num_containers()` rows
     fn min_values(&self, column: &Column) -> Option<ArrayRef> {
-        let files = self.file_actions().ok()?.collect_vec();
-        let partition_columns = &self.metadata().partition_columns;
-        let container = AddContainer::new(&files, partition_columns, self.arrow_schema().ok()?);
-        container.min_values(column)
+        self.log_data().min_values(column)
     }
 
     /// return the maximum values for the named column, if known.
     /// Note: the returned array must contain `num_containers()` rows.
     fn max_values(&self, column: &Column) -> Option<ArrayRef> {
-        let files = self.file_actions().ok()?.collect_vec();
-        let partition_columns = &self.metadata().partition_columns;
-        let container = AddContainer::new(&files, partition_columns, self.arrow_schema().ok()?);
-        container.max_values(column)
+        self.log_data().max_values(column)
     }
 
     /// return the number of containers (e.g. row groups) being
     /// pruned with these statistics
     fn num_containers(&self) -> usize {
-        self.files_count()
+        self.log_data().num_containers()
     }
 
     /// return the number of null values for the named column as an
@@ -275,10 +269,7 @@ impl PruningStatistics for EagerSnapshot {
     ///
     /// Note: the returned array must contain `num_containers()` rows.
     fn null_counts(&self, column: &Column) -> Option<ArrayRef> {
-        let files = self.file_actions().ok()?.collect_vec();
-        let partition_columns = &self.metadata().partition_columns;
-        let container = AddContainer::new(&files, partition_columns, self.arrow_schema().ok()?);
-        container.null_counts(column)
+        self.log_data().null_counts(column)
     }
 
     /// return the number of rows for the named column in each container
@@ -286,42 +277,39 @@ impl PruningStatistics for EagerSnapshot {
     ///
     /// Note: the returned array must contain `num_containers()` rows
     fn row_counts(&self, column: &Column) -> Option<ArrayRef> {
-        let files = self.file_actions().ok()?.collect_vec();
-        let partition_columns = &self.metadata().partition_columns;
-        let container = AddContainer::new(&files, partition_columns, self.arrow_schema().ok()?);
-        container.row_counts(column)
+        self.log_data().row_counts(column)
     }
 
     // This function is required since DataFusion 35.0, but is implemented as a no-op
     // https://github.com/apache/arrow-datafusion/blob/ec6abece2dcfa68007b87c69eefa6b0d7333f628/datafusion/core/src/datasource/physical_plan/parquet/page_filter.rs#L550
-    fn contained(&self, _column: &Column, _value: &HashSet<ScalarValue>) -> Option<BooleanArray> {
-        None
+    fn contained(&self, column: &Column, value: &HashSet<ScalarValue>) -> Option<BooleanArray> {
+        self.log_data().contained(column, value)
     }
 }
 
 impl PruningStatistics for DeltaTableState {
     fn min_values(&self, column: &Column) -> Option<ArrayRef> {
-        self.snapshot.min_values(column)
+        self.snapshot.log_data().min_values(column)
     }
 
     fn max_values(&self, column: &Column) -> Option<ArrayRef> {
-        self.snapshot.max_values(column)
+        self.snapshot.log_data().max_values(column)
     }
 
     fn num_containers(&self) -> usize {
-        self.snapshot.num_containers()
+        self.snapshot.log_data().num_containers()
     }
 
     fn null_counts(&self, column: &Column) -> Option<ArrayRef> {
-        self.snapshot.null_counts(column)
+        self.snapshot.log_data().null_counts(column)
     }
 
     fn row_counts(&self, column: &Column) -> Option<ArrayRef> {
-        self.snapshot.row_counts(column)
+        self.snapshot.log_data().row_counts(column)
     }
 
     fn contained(&self, column: &Column, values: &HashSet<ScalarValue>) -> Option<BooleanArray> {
-        self.snapshot.contained(column, values)
+        self.snapshot.log_data().contained(column, values)
     }
 }
 
