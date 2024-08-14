@@ -2,7 +2,9 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use arrow_array::{Array, Int32Array, Int64Array, MapArray, RecordBatch, StringArray, StructArray};
+use arrow_array::{
+    Array, Int32Array, Int64Array, MapArray, RecordBatch, StringArray, StructArray, UInt64Array,
+};
 use chrono::{DateTime, Utc};
 use delta_kernel::expressions::Scalar;
 use indexmap::IndexMap;
@@ -474,15 +476,25 @@ impl<'a> IntoIterator for LogDataHandler<'a> {
 
 #[cfg(feature = "datafusion")]
 mod datafusion {
+    use std::collections::HashSet;
     use std::sync::Arc;
 
     use ::datafusion::functions_aggregate::min_max::{MaxAccumulator, MinAccumulator};
+    use ::datafusion::physical_optimizer::pruning::PruningStatistics;
     use ::datafusion::physical_plan::Accumulator;
     use arrow_arith::aggregate::sum;
-    use arrow_array::Int64Array;
+    use arrow_array::{ArrayRef, BooleanArray, Int64Array};
     use arrow_schema::DataType as ArrowDataType;
+    use arrow_select::concat::concat;
     use datafusion_common::scalar::ScalarValue;
     use datafusion_common::stats::{ColumnStatistics, Precision, Statistics};
+    use datafusion_common::Column;
+    use delta_kernel::engine::arrow_expression::{
+        evaluate_expression, ArrowExpressionHandler, DefaultExpressionEvaluator,
+    };
+    use delta_kernel::expressions::Expression;
+    use delta_kernel::schema::{DataType, PrimitiveType};
+    use itertools::Itertools;
 
     use super::*;
     use crate::kernel::arrow::extract::{extract_and_cast_opt, extract_column};
@@ -696,6 +708,98 @@ mod datafusion {
                 total_byte_size,
                 column_statistics,
             })
+        }
+
+        fn pick_stats(&self, column: &Column, stats_field: &'static str) -> Option<ArrayRef> {
+            let field = self.schema.field(&column.name)?;
+            // See issue #1214. Binary type does not support natural order which is required for Datafusion to prune
+            if field.data_type() == &DataType::Primitive(PrimitiveType::Binary) {
+                return None;
+            }
+            let expression = if self.metadata.partition_columns.contains(&column.name) {
+                Expression::Column(format!("add.partitionValues_parsed.{}", column.name))
+            } else {
+                Expression::Column(format!("add.stats_parsed.{}.{}", stats_field, column.name))
+            };
+            let results: Vec<_> = self
+                .data
+                .iter()
+                .map(|batch| evaluate_expression(&expression, batch, None))
+                .try_collect()
+                .ok()?;
+            let borrowed = results.iter().map(|a| a.as_ref()).collect::<Vec<_>>();
+            concat(borrowed.as_slice()).ok()
+        }
+    }
+
+    impl<'a> PruningStatistics for LogDataHandler<'a> {
+        /// return the minimum values for the named column, if known.
+        /// Note: the returned array must contain `num_containers()` rows
+        fn min_values(&self, column: &Column) -> Option<ArrayRef> {
+            self.pick_stats(column, "minValues")
+        }
+
+        /// return the maximum values for the named column, if known.
+        /// Note: the returned array must contain `num_containers()` rows.
+        fn max_values(&self, column: &Column) -> Option<ArrayRef> {
+            self.pick_stats(column, "maxValues")
+        }
+
+        /// return the number of containers (e.g. row groups) being
+        /// pruned with these statistics
+        fn num_containers(&self) -> usize {
+            self.data.iter().map(|f| f.num_rows()).sum()
+        }
+
+        /// return the number of null values for the named column as an
+        /// `Option<UInt64Array>`.
+        ///
+        /// Note: the returned array must contain `num_containers()` rows.
+        fn null_counts(&self, column: &Column) -> Option<ArrayRef> {
+            if !self.metadata.partition_columns.contains(&column.name) {
+                let counts = self.pick_stats(column, "nullCount")?;
+                return arrow_cast::cast(counts.as_ref(), &ArrowDataType::UInt64).ok();
+            }
+            let partition_values = self.pick_stats(column, "__dummy__")?;
+            let row_counts = self.row_counts(column)?;
+            let row_counts = row_counts.as_any().downcast_ref::<UInt64Array>()?;
+            let mut null_counts = Vec::with_capacity(partition_values.len());
+            for i in 0..partition_values.len() {
+                let null_count = if partition_values.is_null(i) {
+                    row_counts.value(i)
+                } else {
+                    0
+                };
+                null_counts.push(null_count);
+            }
+            Some(Arc::new(UInt64Array::from(null_counts)))
+        }
+
+        /// return the number of rows for the named column in each container
+        /// as an `Option<UInt64Array>`.
+        ///
+        /// Note: the returned array must contain `num_containers()` rows
+        fn row_counts(&self, _column: &Column) -> Option<ArrayRef> {
+            let expression = Expression::Column("add.stats_parsed.numRecords".to_string());
+            let results: Vec<_> = self
+                .data
+                .iter()
+                .map(|batch| evaluate_expression(&expression, batch, None))
+                .try_collect()
+                .ok()?;
+            let borrowed = results.iter().map(|a| a.as_ref()).collect::<Vec<_>>();
+            let array = concat(borrowed.as_slice()).ok()?;
+            arrow_cast::cast(array.as_ref(), &ArrowDataType::UInt64).ok()
+        }
+
+        // This function is required since DataFusion 35.0, but is implemented as a no-op
+        // https://github.com/apache/arrow-datafusion/blob/ec6abece2dcfa68007b87c69eefa6b0d7333f628/datafusion/core/src/datasource/physical_plan/parquet/page_filter.rs#L550
+        fn contained(
+            &self,
+            _column: &Column,
+            _value: &HashSet<ScalarValue>,
+        ) -> Option<BooleanArray> {
+            None
         }
     }
 }
