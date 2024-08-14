@@ -1,82 +1,17 @@
 use std::collections::HashSet;
-use std::sync::Arc;
 
 use arrow::array::{ArrayRef, BooleanArray};
-use arrow::datatypes::{
-    DataType as ArrowDataType, Field as ArrowField, Schema as ArrowSchema,
-    SchemaRef as ArrowSchemaRef,
-};
+use arrow::datatypes::{DataType as ArrowDataType, SchemaRef as ArrowSchemaRef};
 use datafusion::execution::context::SessionContext;
 use datafusion::physical_optimizer::pruning::{PruningPredicate, PruningStatistics};
 use datafusion_common::scalar::ScalarValue;
 use datafusion_common::{Column, ToDFSchema};
 use datafusion_expr::Expr;
-use object_store::ObjectStore;
-use parquet::arrow::arrow_reader::ArrowReaderOptions;
-use parquet::arrow::async_reader::{ParquetObjectReader, ParquetRecordBatchStreamBuilder};
 
-use crate::delta_datafusion::{get_null_of_arrow_type, to_correct_scalar_value, DataFusionMixins};
+use crate::delta_datafusion::{get_null_of_arrow_type, to_correct_scalar_value};
 use crate::errors::DeltaResult;
 use crate::kernel::{Add, EagerSnapshot};
 use crate::table::state::DeltaTableState;
-
-impl DeltaTableState {
-    /// Get the physical table schema.
-    ///
-    /// This will construct a schema derived from the parquet schema of the latest data file,
-    /// and fields for partition columns from the schema defined in table meta data.
-    pub async fn physical_arrow_schema(
-        &self,
-        object_store: Arc<dyn ObjectStore>,
-    ) -> DeltaResult<ArrowSchemaRef> {
-        self.snapshot.physical_arrow_schema(object_store).await
-    }
-}
-
-impl EagerSnapshot {
-    /// Get the physical table schema.
-    ///
-    /// This will construct a schema derived from the parquet schema of the latest data file,
-    /// and fields for partition columns from the schema defined in table meta data.
-    pub async fn physical_arrow_schema(
-        &self,
-        object_store: Arc<dyn ObjectStore>,
-    ) -> DeltaResult<ArrowSchemaRef> {
-        if let Some(add) = self.file_actions()?.max_by_key(|obj| obj.modification_time) {
-            let file_meta = add.try_into()?;
-            let file_reader = ParquetObjectReader::new(object_store, file_meta);
-            let file_schema = ParquetRecordBatchStreamBuilder::new_with_options(
-                file_reader,
-                ArrowReaderOptions::new().with_skip_arrow_metadata(true),
-            )
-            .await?
-            .build()?
-            .schema()
-            .clone();
-
-            let table_schema = Arc::new(ArrowSchema::new(
-                self.arrow_schema()?
-                    .fields
-                    .clone()
-                    .into_iter()
-                    .map(|field| {
-                        // field is an &Arc<Field>
-                        let owned_field: ArrowField = field.as_ref().clone();
-                        file_schema
-                            .field_with_name(field.name())
-                            // yielded with &Field
-                            .cloned()
-                            .unwrap_or(owned_field)
-                    })
-                    .collect::<Vec<ArrowField>>(),
-            ));
-
-            Ok(table_schema)
-        } else {
-            self.arrow_schema()
-        }
-    }
-}
 
 pub struct AddContainer<'a> {
     inner: &'a Vec<Add>,
@@ -321,7 +256,7 @@ mod tests {
     use datafusion_expr::{col, lit};
 
     use super::*;
-    use crate::delta_datafusion::DataFusionFileMixins;
+    use crate::delta_datafusion::{DataFusionFileMixins, DataFusionMixins};
     use crate::kernel::Action;
     use crate::test_utils::{ActionFactory, TestSchemas};
 

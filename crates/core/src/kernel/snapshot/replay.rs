@@ -601,10 +601,6 @@ pub(super) mod tests {
     use crate::table::config::TableConfig;
     use crate::test_utils::{ActionFactory, TestResult, TestSchemas};
 
-    lazy_static::lazy_static! {
-        static ref ARROW_HANDLER: ArrowExpressionHandler = ArrowExpressionHandler {};
-    }
-
     pub(crate) async fn test_log_replay(context: &IntegrationContext) -> TestResult {
         let log_schema = Arc::new(StructType::new(vec![
             ActionType::Add.schema_field().clone(),
