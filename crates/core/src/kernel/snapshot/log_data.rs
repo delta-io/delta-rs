@@ -482,22 +482,21 @@ mod datafusion {
     use ::datafusion::functions_aggregate::min_max::{MaxAccumulator, MinAccumulator};
     use ::datafusion::physical_optimizer::pruning::PruningStatistics;
     use ::datafusion::physical_plan::Accumulator;
+    use arrow::compute::concat_batches;
     use arrow_arith::aggregate::sum;
     use arrow_array::{ArrayRef, BooleanArray, Int64Array};
     use arrow_schema::DataType as ArrowDataType;
-    use arrow_select::concat::concat;
     use datafusion_common::scalar::ScalarValue;
     use datafusion_common::stats::{ColumnStatistics, Precision, Statistics};
     use datafusion_common::Column;
-    use delta_kernel::engine::arrow_expression::{
-        evaluate_expression, ArrowExpressionHandler, DefaultExpressionEvaluator,
-    };
+    use delta_kernel::engine::arrow_data::ArrowEngineData;
     use delta_kernel::expressions::Expression;
     use delta_kernel::schema::{DataType, PrimitiveType};
-    use itertools::Itertools;
+    use delta_kernel::{ExpressionEvaluator, ExpressionHandler};
 
     use super::*;
     use crate::kernel::arrow::extract::{extract_and_cast_opt, extract_column};
+    use crate::kernel::ARROW_HANDLER;
 
     #[derive(Debug, Default, Clone)]
     enum AccumulatorType {
@@ -721,14 +720,26 @@ mod datafusion {
             } else {
                 Expression::Column(format!("add.stats_parsed.{}.{}", stats_field, column.name))
             };
-            let results: Vec<_> = self
-                .data
-                .iter()
-                .map(|batch| evaluate_expression(&expression, batch, None))
-                .try_collect()
-                .ok()?;
-            let borrowed = results.iter().map(|a| a.as_ref()).collect::<Vec<_>>();
-            concat(borrowed.as_slice()).ok()
+            let evaluator = ARROW_HANDLER.get_evaluator(
+                crate::kernel::models::fields::log_schema_ref().clone(),
+                expression,
+                field.data_type().clone(),
+            );
+            let mut results = Vec::with_capacity(self.data.len());
+            for batch in self.data.iter() {
+                let engine = ArrowEngineData::new(batch.clone());
+                let result = evaluator.evaluate(&engine).ok()?;
+                let result = result
+                    .as_any()
+                    .downcast_ref::<ArrowEngineData>()
+                    .ok_or(DeltaTableError::generic(
+                        "failed to downcast evaluator result to ArrowEngineData.",
+                    ))
+                    .ok()?;
+                results.push(result.record_batch().clone());
+            }
+            let batch = concat_batches(results[0].schema_ref(), &results).ok()?;
+            batch.column_by_name("output").map(|c| c.clone())
         }
     }
 
@@ -780,16 +791,28 @@ mod datafusion {
         ///
         /// Note: the returned array must contain `num_containers()` rows
         fn row_counts(&self, _column: &Column) -> Option<ArrayRef> {
-            let expression = Expression::Column("add.stats_parsed.numRecords".to_string());
-            let results: Vec<_> = self
-                .data
-                .iter()
-                .map(|batch| evaluate_expression(&expression, batch, None))
-                .try_collect()
-                .ok()?;
-            let borrowed = results.iter().map(|a| a.as_ref()).collect::<Vec<_>>();
-            let array = concat(borrowed.as_slice()).ok()?;
-            arrow_cast::cast(array.as_ref(), &ArrowDataType::UInt64).ok()
+            lazy_static::lazy_static! {
+                static ref ROW_COUNTS_EVAL: Arc<dyn ExpressionEvaluator> =  ARROW_HANDLER.get_evaluator(
+                    crate::kernel::models::fields::log_schema_ref().clone(),
+                    Expression::column("add.stats_parsed.numRecords"),
+                    DataType::Primitive(PrimitiveType::Long),
+                );
+            }
+            let mut results = Vec::with_capacity(self.data.len());
+            for batch in self.data.iter() {
+                let engine = ArrowEngineData::new(batch.clone());
+                let result = ROW_COUNTS_EVAL.evaluate(&engine).ok()?;
+                let result = result
+                    .as_any()
+                    .downcast_ref::<ArrowEngineData>()
+                    .ok_or(DeltaTableError::generic(
+                        "failed to downcast evaluator result to ArrowEngineData.",
+                    ))
+                    .ok()?;
+                results.push(result.record_batch().clone());
+            }
+            let batch = concat_batches(results[0].schema_ref(), &results).ok()?;
+            arrow_cast::cast(batch.column_by_name("output")?, &ArrowDataType::UInt64).ok()
         }
 
         // This function is required since DataFusion 35.0, but is implemented as a no-op
