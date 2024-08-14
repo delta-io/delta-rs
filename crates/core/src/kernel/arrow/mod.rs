@@ -14,7 +14,6 @@ pub(crate) mod json;
 const MAP_ROOT_DEFAULT: &str = "key_value";
 const MAP_KEY_DEFAULT: &str = "key";
 const MAP_VALUE_DEFAULT: &str = "value";
-const LIST_ROOT_DEFAULT: &str = "item";
 
 macro_rules! arrow_map {
     ($fieldname: ident, null) => {

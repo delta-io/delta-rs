@@ -785,12 +785,12 @@ pub(super) mod tests {
         for i in 0..10 {
             actions.push(Action::Add(Add {
                 path: format!("part-{}.parquet", i),
-                modification_time: chrono::Utc::now().timestamp_millis() as i64,
+                modification_time: chrono::Utc::now().timestamp_millis(),
                 ..Default::default()
             }));
         }
 
-        let log_store = DeltaTableBuilder::from_uri("memory:///".to_string())
+        let log_store = DeltaTableBuilder::from_uri("memory:///")
             .build_storage()
             .unwrap();
         let op = DeltaOperation::Write {
@@ -809,7 +809,7 @@ pub(super) mod tests {
         for i in 0..9 {
             actions.push(Action::Remove(Remove {
                 path: format!("part-{}.parquet", i),
-                deletion_timestamp: Some(chrono::Utc::now().timestamp_millis() as i64),
+                deletion_timestamp: Some(chrono::Utc::now().timestamp_millis()),
                 ..Default::default()
             }))
         }
