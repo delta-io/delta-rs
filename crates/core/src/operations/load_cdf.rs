@@ -695,10 +695,7 @@ pub(crate) mod tests {
 
         let cdc_actions = version_actions
             .iter()
-            .filter(|action| match action {
-                &&Action::Cdc(_) => true,
-                _ => false,
-            })
+            .filter(|action| matches!(action, &&Action::Cdc(_)))
             .collect_vec();
         assert!(cdc_actions.is_empty());
         Ok(())

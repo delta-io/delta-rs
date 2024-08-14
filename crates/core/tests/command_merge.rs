@@ -142,7 +142,7 @@ async fn test_merge_concurrent_conflict() {
     let tmp_dir = tempfile::tempdir().unwrap();
     let table_uri = tmp_dir.path().to_str().to_owned().unwrap();
 
-    let table_ref1 = create_table(&table_uri.to_string(), Some(vec!["event_date"])).await;
+    let table_ref1 = create_table(table_uri, Some(vec!["event_date"])).await;
     let table_ref2 = open_table(table_uri).await.unwrap();
     let (df1, _df2) = create_test_data();
 
