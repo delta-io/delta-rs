@@ -74,20 +74,22 @@
 //!       └───────────────────────────────┘           
 //!</pre>
 
+use async_trait::async_trait;
 use chrono::Utc;
 use conflict_checker::ConflictChecker;
 use futures::future::BoxFuture;
 use object_store::path::Path;
 use object_store::{Error as ObjectStoreError, ObjectStore};
 use serde_json::Value;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 use self::conflict_checker::{CommitConflictError, TransactionInfo, WinningCommitSummary};
 use crate::checkpoints::{cleanup_expired_logs_for, create_checkpoint_for};
 use crate::errors::DeltaTableError;
 use crate::kernel::{
-    Action, CommitInfo, EagerSnapshot, Metadata, Protocol, ReaderFeatures, Transaction,
-    WriterFeatures,
+    Action, ActionType, CommitInfo, EagerSnapshot, Metadata, Protocol, ReaderFeatures, Snapshot,
+    Transaction, WriterFeatures,
 };
 use crate::logstore::LogStoreRef;
 use crate::protocol::DeltaOperation;
@@ -196,6 +198,7 @@ impl From<CommitBuilderError> for DeltaTableError {
 }
 
 /// Reference to some structure that contains mandatory attributes for performing a commit.
+#[async_trait]
 pub trait TableReference: Send + Sync {
     /// Well known table configuration
     fn config(&self) -> TableConfig;
@@ -207,9 +210,70 @@ pub trait TableReference: Send + Sync {
     fn metadata(&self) -> &Metadata;
 
     /// Try to cast this table reference to a `EagerSnapshot`
-    fn eager_snapshot(&self) -> &EagerSnapshot;
+    async fn eager_snapshot(&self) -> DeltaResult<&EagerSnapshot>;
+
+    /// TODO
+    fn version(&self) -> i64;
 }
 
+/// TODO
+pub struct LazySnapshot {
+    inner: Snapshot,
+    store: Arc<dyn ObjectStore>,
+    tracked_actions: HashSet<ActionType>,
+    eager: tokio::sync::OnceCell<EagerSnapshot>,
+}
+
+impl LazySnapshot {
+    /// TODO
+    pub fn new(
+        inner: Snapshot,
+        store: Arc<dyn ObjectStore>,
+        tracked_actions: HashSet<ActionType>,
+    ) -> Self {
+        Self {
+            inner,
+            store,
+            tracked_actions,
+            eager: tokio::sync::OnceCell::new(),
+        }
+    }
+}
+
+#[async_trait]
+impl TableReference for LazySnapshot {
+    fn protocol(&self) -> &Protocol {
+        self.inner.protocol()
+    }
+
+    fn metadata(&self) -> &Metadata {
+        self.inner.metadata()
+    }
+
+    fn config(&self) -> TableConfig {
+        self.inner.table_config()
+    }
+
+    async fn eager_snapshot(&self) -> DeltaResult<&EagerSnapshot> {
+        self.eager
+            .get_or_try_init(|| async {
+                let eager = EagerSnapshot::try_from_snapshot(
+                    &self.inner,
+                    self.store.clone(),
+                    self.tracked_actions.clone(),
+                )
+                .await?;
+                Ok::<_, DeltaTableError>(eager)
+            })
+            .await
+    }
+
+    fn version(&self) -> i64 {
+        self.inner.version()
+    }
+}
+
+#[async_trait]
 impl TableReference for EagerSnapshot {
     fn protocol(&self) -> &Protocol {
         EagerSnapshot::protocol(self)
@@ -223,11 +287,16 @@ impl TableReference for EagerSnapshot {
         self.table_config()
     }
 
-    fn eager_snapshot(&self) -> &EagerSnapshot {
-        self
+    async fn eager_snapshot(&self) -> DeltaResult<&EagerSnapshot> {
+        Ok(self)
+    }
+
+    fn version(&self) -> i64 {
+        EagerSnapshot::version(self)
     }
 }
 
+#[async_trait]
 impl TableReference for DeltaTableState {
     fn config(&self) -> TableConfig {
         self.snapshot.config()
@@ -241,8 +310,12 @@ impl TableReference for DeltaTableState {
         self.snapshot.metadata()
     }
 
-    fn eager_snapshot(&self) -> &EagerSnapshot {
-        &self.snapshot
+    async fn eager_snapshot<'a>(&'a self) -> DeltaResult<&'a EagerSnapshot> {
+        Ok(&self.snapshot)
+    }
+
+    fn version(&self) -> i64 {
+        self.snapshot.version()
     }
 }
 
@@ -544,11 +617,11 @@ impl<'a> std::future::IntoFuture for PreparedCommit<'a> {
 
             // unwrap() is safe here due to the above check
             // TODO: refactor to only depend on TableReference Trait
-            let read_snapshot = this.table_data.unwrap().eager_snapshot();
+            let table_data = this.table_data.unwrap();
 
             let mut attempt_number = 1;
             while attempt_number <= this.max_retries {
-                let version = read_snapshot.version() + attempt_number as i64;
+                let version = table_data.version() + attempt_number as i64;
                 match this.log_store.write_commit_entry(version, tmp_commit).await {
                     Ok(()) => {
                         return Ok(PostCommit {
@@ -574,7 +647,7 @@ impl<'a> std::future::IntoFuture for PreparedCommit<'a> {
                         )
                         .await?;
                         let transaction_info = TransactionInfo::try_new(
-                            read_snapshot,
+                            table_data.eager_snapshot().await?,
                             this.data.operation.read_predicate(),
                             &this.data.actions,
                             this.data.operation.read_whole_table(),
@@ -626,7 +699,7 @@ impl<'a> PostCommit<'a> {
     /// Runs the post commit activities
     async fn run_post_commit_hook(&self) -> DeltaResult<DeltaTableState> {
         if let Some(table) = self.table_data {
-            let mut snapshot = table.eager_snapshot().clone();
+            let mut snapshot = table.eager_snapshot().await?.clone();
             if self.version - snapshot.version() > 1 {
                 // This may only occur during concurrent write actions. We need to update the state first to - 1
                 // then we can advance.
