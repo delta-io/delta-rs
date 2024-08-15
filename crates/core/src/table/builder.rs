@@ -261,7 +261,22 @@ impl DeltaTableBuilder {
     /// - [S3 options](https://docs.rs/object_store/latest/object_store/aws/enum.AmazonS3ConfigKey.html#variants)
     /// - [Google options](https://docs.rs/object_store/latest/object_store/gcp/enum.GoogleConfigKey.html#variants)
     pub fn with_storage_options(mut self, storage_options: HashMap<String, String>) -> Self {
-        self.storage_options = Some(storage_options);
+        self.storage_options = Some(
+            storage_options
+                .clone()
+                .into_iter()
+                .map(|(k, v)| {
+                    let needs_trim = v.starts_with("http://")
+                        || v.starts_with("https://")
+                        || k.to_lowercase().ends_with("_url");
+                    if needs_trim {
+                        (k.to_owned(), v.trim_end_matches('/').to_owned())
+                    } else {
+                        (k, v)
+                    }
+                })
+                .collect(),
+        );
         self
     }
 
@@ -560,5 +575,50 @@ mod tests {
         // Urls should round trips as-is
         DeltaTableBuilder::from_valid_uri("this://is.nonsense")
             .expect_err("this should be an error");
+    }
+
+    #[test]
+    fn test_writer_storage_opts_url_trim() {
+        let cases = [
+            // Trim Case 1 - Key indicating a url
+            ("SOMETHING_URL", "something://else/", "something://else"),
+            // Trim Case 2 - Value https url ending with slash
+            (
+                "SOMETHING",
+                "http://something:port/",
+                "http://something:port",
+            ),
+            // Trim Case 3 - Value https url ending with slash
+            (
+                "SOMETHING",
+                "https://something:port/",
+                "https://something:port",
+            ),
+            // No Trim Case 4 - JDBC MySQL url with slash
+            (
+                "SOME_JDBC_PREFIX",
+                "jdbc:mysql://mysql.db.server:3306/",
+                "jdbc:mysql://mysql.db.server:3306/",
+            ),
+            // No Trim Case 5 - S3A file system link
+            ("SOME_S3_LINK", "s3a://bucket-name/", "s3a://bucket-name/"),
+            // No Trim Case 6 - Not a url but ending with slash
+            ("SOME_RANDOM_STRING", "a1b2c3d4e5f#/", "a1b2c3d4e5f#/"),
+            // No Trim Case 7 - Some value not a url
+            (
+                "SOME_VALUE",
+                "/ This is some value 123 /",
+                "/ This is some value 123 /",
+            ),
+        ];
+        for (key, val, expected) in cases {
+            let table_uri = Url::parse("memory:///test/tests/data/delta-0.8.0").unwrap();
+            let mut storage_opts = HashMap::<String, String>::new();
+            storage_opts.insert(key.to_owned(), val.to_owned());
+
+            let table = DeltaTableBuilder::from_uri(table_uri).with_storage_options(storage_opts);
+            let found_opts = table.storage_options();
+            assert_eq!(expected, found_opts.0.get(key).unwrap());
+        }
     }
 }
