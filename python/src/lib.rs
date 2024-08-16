@@ -1362,6 +1362,7 @@ fn set_writer_properties(
     let write_batch_size = writer_properties.get("write_batch_size");
     let max_row_group_size = writer_properties.get("max_row_group_size");
     let compression = writer_properties.get("compression");
+    let statistics_truncate_length = writer_properties.get("statistics_truncate_length");
 
     if let Some(Some(data_page_size)) = data_page_size_limit {
         properties = properties.set_data_page_size_limit(data_page_size.parse::<usize>().unwrap());
@@ -1379,6 +1380,9 @@ fn set_writer_properties(
     }
     if let Some(Some(row_group_size)) = max_row_group_size {
         properties = properties.set_max_row_group_size(row_group_size.parse::<usize>().unwrap());
+    }
+    if let Some(Some(statistics_truncate_length)) = statistics_truncate_length {
+        properties = properties.set_statistics_truncate_length(statistics_truncate_length.parse::<usize>().ok());
     }
 
     if let Some(Some(compression)) = compression {
