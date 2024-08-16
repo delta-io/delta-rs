@@ -1382,7 +1382,8 @@ fn set_writer_properties(
         properties = properties.set_max_row_group_size(row_group_size.parse::<usize>().unwrap());
     }
     if let Some(Some(statistics_truncate_length)) = statistics_truncate_length {
-        properties = properties.set_statistics_truncate_length(statistics_truncate_length.parse::<usize>().ok());
+        properties = properties
+            .set_statistics_truncate_length(statistics_truncate_length.parse::<usize>().ok());
     }
 
     if let Some(Some(compression)) = compression {
