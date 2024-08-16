@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 
-use arrow::array::{ArrayRef, BooleanArray};
-use arrow::datatypes::{DataType as ArrowDataType, SchemaRef as ArrowSchemaRef};
+use arrow_array::{ArrayRef, BooleanArray};
+use arrow_schema::{DataType as ArrowDataType, SchemaRef as ArrowSchemaRef};
 use datafusion::execution::context::SessionContext;
 use datafusion::physical_optimizer::pruning::{PruningPredicate, PruningStatistics};
 use datafusion_common::scalar::ScalarValue;

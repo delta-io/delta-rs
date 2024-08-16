@@ -1,31 +1,30 @@
 //! Object storage backend abstraction layer for Delta Table transaction logs and data
-
-use dashmap::DashMap;
-use object_store::limit::LimitStore;
 use std::collections::HashMap;
 use std::sync::{Arc, OnceLock};
 
+use dashmap::DashMap;
 use lazy_static::lazy_static;
+use object_store::limit::LimitStore;
+use object_store::local::LocalFileSystem;
+use object_store::memory::InMemory;
+use object_store::prefix::PrefixStore;
 use serde::{Deserialize, Serialize};
 use url::Url;
-
-pub mod file;
-pub mod retry_ext;
-pub mod utils;
 
 use crate::{DeltaResult, DeltaTableError};
 
 pub use object_store;
-use object_store::local::LocalFileSystem;
-use object_store::memory::InMemory;
 pub use object_store::path::{Path, DELIMITER};
-use object_store::prefix::PrefixStore;
 pub use object_store::{
     DynObjectStore, Error as ObjectStoreError, GetResult, ListResult, MultipartId, ObjectMeta,
     ObjectStore, Result as ObjectStoreResult,
 };
 pub use retry_ext::ObjectStoreRetryExt;
 pub use utils::*;
+
+pub mod file;
+pub mod retry_ext;
+pub mod utils;
 
 lazy_static! {
     static ref DELTA_LOG_PATH: Path = Path::from("_delta_log");

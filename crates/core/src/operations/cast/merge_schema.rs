@@ -1,12 +1,14 @@
 //! Provide schema merging for delta schemas
 //!
-use crate::kernel::{ArrayType, DataType as DeltaDataType, MapType, StructField, StructType};
+use std::collections::HashMap;
+
 use arrow::datatypes::DataType::Dictionary;
 use arrow_schema::{
     ArrowError, DataType, Field as ArrowField, Fields, Schema as ArrowSchema,
     SchemaRef as ArrowSchemaRef,
 };
-use std::collections::HashMap;
+
+use crate::kernel::{ArrayType, DataType as DeltaDataType, MapType, StructField, StructType};
 
 fn try_merge_metadata<T: std::cmp::PartialEq + Clone>(
     left: &mut HashMap<String, T>,

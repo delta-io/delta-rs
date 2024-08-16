@@ -25,8 +25,8 @@ use std::fmt;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use arrow::datatypes::SchemaRef as ArrowSchemaRef;
 use arrow_array::RecordBatch;
+use arrow_schema::SchemaRef as ArrowSchemaRef;
 use delta_kernel::expressions::Scalar;
 use futures::future::BoxFuture;
 use futures::stream::BoxStream;

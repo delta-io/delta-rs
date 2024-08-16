@@ -1,6 +1,8 @@
 //! Local file storage backend. This backend read and write objects from local filesystem.
 //!
 //! The local file storage backend is multi-writer safe.
+use std::ops::Range;
+use std::sync::Arc;
 
 use bytes::Bytes;
 use futures::stream::BoxStream;
@@ -10,8 +12,6 @@ use object_store::{
     Result as ObjectStoreResult,
 };
 use object_store::{MultipartUpload, PutMultipartOpts, PutPayload};
-use std::ops::Range;
-use std::sync::Arc;
 use url::Url;
 
 const STORE_NAME: &str = "DeltaLocalObjectStore";

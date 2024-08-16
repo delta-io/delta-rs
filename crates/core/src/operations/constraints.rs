@@ -4,9 +4,9 @@ use std::sync::Arc;
 
 use datafusion::execution::context::SessionState;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
-use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::SessionContext;
 use datafusion_common::ToDFSchema;
+use datafusion_physical_plan::ExecutionPlan;
 use futures::future::BoxFuture;
 use futures::StreamExt;
 

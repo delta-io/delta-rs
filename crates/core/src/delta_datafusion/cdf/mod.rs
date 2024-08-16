@@ -1,16 +1,13 @@
 //! Logical operators and physical executions for CDF
+use std::collections::HashMap;
 
 use arrow_schema::{DataType, Field, TimeUnit};
 use lazy_static::lazy_static;
-use std::collections::HashMap;
 
-pub(crate) use scan::*;
-pub(crate) use scan_utils::*;
-
-use crate::{
-    kernel::{Add, AddCDCFile, Remove},
-    DeltaResult,
-};
+pub(crate) use self::scan::*;
+pub(crate) use self::scan_utils::*;
+use crate::kernel::{Add, AddCDCFile, Remove};
+use crate::DeltaResult;
 
 mod scan;
 mod scan_utils;

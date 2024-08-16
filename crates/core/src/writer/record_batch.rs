@@ -7,12 +7,11 @@
 
 use std::{collections::HashMap, sync::Arc};
 
-use arrow::array::{new_null_array, Array, UInt32Array};
-use arrow::compute::{partition, take};
-use arrow::record_batch::RecordBatch;
-use arrow_array::ArrayRef;
+use arrow_array::{new_null_array, Array, ArrayRef, RecordBatch, UInt32Array};
+use arrow_ord::partition::partition;
 use arrow_row::{RowConverter, SortField};
 use arrow_schema::{ArrowError, Schema as ArrowSchema, SchemaRef as ArrowSchemaRef};
+use arrow_select::take::take;
 use bytes::Bytes;
 use delta_kernel::expressions::Scalar;
 use indexmap::IndexMap;

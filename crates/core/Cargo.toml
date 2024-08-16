@@ -42,6 +42,7 @@ datafusion-common = { workspace = true, optional = true }
 datafusion-proto = { workspace = true, optional = true }
 datafusion-sql = { workspace = true, optional = true }
 datafusion-physical-expr = { workspace = true, optional = true }
+datafusion-physical-plan = { workspace = true, optional = true }
 datafusion-functions = { workspace = true, optional = true }
 datafusion-functions-aggregate = { workspace = true, optional = true }
 
@@ -127,6 +128,7 @@ datafusion = [
     "datafusion-common",
     "datafusion-proto",
     "datafusion-physical-expr",
+    "datafusion-physical-plan",
     "datafusion-sql",
     "datafusion-functions",
     "datafusion-functions-aggregate",
