@@ -15,6 +15,7 @@ def test_writer_properties_all_filled():
         write_batch_size=400,
         max_row_group_size=500,
         compression="SNAPPY",
+        statistics_truncate_length=600,
     )
 
     expected = {
@@ -24,6 +25,7 @@ def test_writer_properties_all_filled():
         "write_batch_size": "400",
         "max_row_group_size": "500",
         "compression": "SNAPPY",
+        "statistics_truncate_length": "600",
     }
 
     assert wp._to_dict() == expected
@@ -39,6 +41,7 @@ def test_writer_properties_lower_case_compression():
         "write_batch_size": None,
         "max_row_group_size": None,
         "compression": "SNAPPY",
+        "statistics_truncate_length": None,
     }
 
     assert wp._to_dict() == expected
