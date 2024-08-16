@@ -1,5 +1,6 @@
 //! Auxiliary methods for dealing with kernel scalars
-//!
+use std::cmp::Ordering;
+
 use arrow_array::Array;
 use arrow_schema::TimeUnit;
 use chrono::{DateTime, TimeZone, Utc};
@@ -10,7 +11,6 @@ use delta_kernel::{
 use object_store::path::Path;
 #[cfg(test)]
 use serde_json::Value;
-use std::cmp::Ordering;
 use urlencoding::encode;
 
 use crate::NULL_PARTITION_VALUE_DATA_PATH;

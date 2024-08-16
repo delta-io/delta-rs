@@ -8,14 +8,14 @@ use arrow_array::RecordBatch;
 use arrow_schema::SchemaRef;
 use datafusion::error::Result;
 use datafusion::execution::{RecordBatchStream, SendableRecordBatchStream, TaskContext};
-use datafusion::physical_plan::memory::MemoryStream;
-use datafusion::physical_plan::{
-    DisplayAs, DisplayFormatType, ExecutionMode, ExecutionPlan, PlanProperties,
-};
 use datafusion::prelude::SessionContext;
 use datafusion_common::tree_node::TreeNode;
 use datafusion_expr::Expr;
 use datafusion_physical_expr::{EquivalenceProperties, Partitioning};
+use datafusion_physical_plan::memory::MemoryStream;
+use datafusion_physical_plan::{
+    DisplayAs, DisplayFormatType, ExecutionMode, ExecutionPlan, PlanProperties,
+};
 use futures::stream::BoxStream;
 use futures::{FutureExt, Stream, StreamExt, TryStreamExt};
 

@@ -1,10 +1,10 @@
 //! Delta Table partition handling logic.
-
-use delta_kernel::expressions::Scalar;
-use serde::{Serialize, Serializer};
 use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::convert::TryFrom;
+
+use delta_kernel::expressions::Scalar;
+use serde::{Serialize, Serializer};
 
 use crate::errors::DeltaTableError;
 use crate::kernel::{scalars::ScalarExt, DataType, PrimitiveType};

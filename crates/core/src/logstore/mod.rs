@@ -1,31 +1,27 @@
 //! Delta log store.
-use dashmap::DashMap;
-use futures::StreamExt;
-use lazy_static::lazy_static;
-use regex::Regex;
-use serde::{
-    de::{Error, SeqAccess, Visitor},
-    ser::SerializeSeq,
-    Deserialize, Serialize,
-};
 use std::io::{BufRead, BufReader, Cursor};
 use std::sync::OnceLock;
 use std::{cmp::max, collections::HashMap, sync::Arc};
+
+use bytes::Bytes;
+use dashmap::DashMap;
+use futures::StreamExt;
+use lazy_static::lazy_static;
+use object_store::{path::Path, Error as ObjectStoreError, ObjectStore};
+use regex::Regex;
+use serde::de::{Error, SeqAccess, Visitor};
+use serde::ser::SerializeSeq;
+use serde::{Deserialize, Serialize};
+use tracing::{debug, warn};
 use url::Url;
 
-use crate::{
-    errors::DeltaResult,
-    kernel::Action,
-    operations::transaction::TransactionError,
-    protocol::{get_last_checkpoint, ProtocolError},
-    storage::{
-        commit_uri_from_version, retry_ext::ObjectStoreRetryExt, ObjectStoreRef, StorageOptions,
-    },
-    DeltaTableError,
+use crate::kernel::Action;
+use crate::operations::transaction::TransactionError;
+use crate::protocol::{get_last_checkpoint, ProtocolError};
+use crate::storage::{
+    commit_uri_from_version, retry_ext::ObjectStoreRetryExt, ObjectStoreRef, StorageOptions,
 };
-use bytes::Bytes;
-use object_store::{path::Path, Error as ObjectStoreError, ObjectStore};
-use tracing::{debug, warn};
+use crate::{DeltaResult, DeltaTableError};
 
 #[cfg(feature = "datafusion")]
 use datafusion::datasource::object_store::ObjectStoreUrl;

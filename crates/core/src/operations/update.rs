@@ -24,6 +24,26 @@ use std::{
     time::{Instant, SystemTime, UNIX_EPOCH},
 };
 
+use async_trait::async_trait;
+use datafusion::error::Result as DataFusionResult;
+use datafusion::{
+    dataframe::DataFrame,
+    datasource::provider_as_source,
+    execution::context::SessionState,
+    execution::session_state::SessionStateBuilder,
+    physical_plan::{metrics::MetricBuilder, ExecutionPlan},
+    physical_planner::{ExtensionPlanner, PhysicalPlanner},
+    prelude::SessionContext,
+};
+use datafusion_common::{Column, ScalarValue};
+use datafusion_expr::{
+    case, col, lit, when, Expr, Extension, LogicalPlan, LogicalPlanBuilder, UserDefinedLogicalNode,
+};
+use futures::future::BoxFuture;
+use parquet::file::properties::WriterProperties;
+use serde::Serialize;
+use tracing::log::*;
+
 use super::write::{write_execution_plan, write_execution_plan_cdc};
 use super::{
     datafusion_utils::Expression,
@@ -47,25 +67,6 @@ use crate::{
     DeltaTableError,
 };
 use crate::{DeltaResult, DeltaTable};
-use async_trait::async_trait;
-use datafusion::error::Result as DataFusionResult;
-use datafusion::{
-    dataframe::DataFrame,
-    datasource::provider_as_source,
-    execution::context::SessionState,
-    execution::session_state::SessionStateBuilder,
-    physical_plan::{metrics::MetricBuilder, ExecutionPlan},
-    physical_planner::{ExtensionPlanner, PhysicalPlanner},
-    prelude::SessionContext,
-};
-use datafusion_common::{Column, ScalarValue};
-use datafusion_expr::{
-    case, col, lit, when, Expr, Extension, LogicalPlan, LogicalPlanBuilder, UserDefinedLogicalNode,
-};
-use futures::future::BoxFuture;
-use parquet::file::properties::WriterProperties;
-use serde::Serialize;
-use tracing::log::*;
 
 /// Custom column name used for marking internal [RecordBatch] rows as updated
 pub(crate) const UPDATE_PREDICATE_COLNAME: &str = "__delta_rs_update_predicate";

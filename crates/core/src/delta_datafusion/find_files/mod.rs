@@ -1,6 +1,6 @@
-use arrow_array::cast::AsArray;
 use std::sync::Arc;
 
+use arrow_array::cast::AsArray;
 use arrow_array::types::UInt16Type;
 use arrow_array::RecordBatch;
 use arrow_schema::SchemaBuilder;
@@ -10,13 +10,13 @@ use async_trait::async_trait;
 use datafusion::datasource::MemTable;
 use datafusion::execution::context::{QueryPlanner, SessionState};
 use datafusion::execution::TaskContext;
-use datafusion::physical_plan::filter::FilterExec;
-use datafusion::physical_plan::limit::LocalLimitExec;
-use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_planner::{DefaultPhysicalPlanner, ExtensionPlanner, PhysicalPlanner};
 use datafusion::prelude::SessionContext;
 use datafusion_common::{DFSchemaRef, Result, ToDFSchema};
 use datafusion_expr::{col, Expr, LogicalPlan, UserDefinedLogicalNode};
+use datafusion_physical_plan::filter::FilterExec;
+use datafusion_physical_plan::limit::LocalLimitExec;
+use datafusion_physical_plan::ExecutionPlan;
 use lazy_static::lazy_static;
 
 use crate::delta_datafusion::find_files::logical::FindFilesNode;

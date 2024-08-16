@@ -17,22 +17,18 @@
 //!     .await?;
 //! ````
 
-use crate::delta_datafusion::logical::MetricObserver;
-use crate::delta_datafusion::physical::{find_metric_node, get_metric, MetricObserverExec};
-use crate::delta_datafusion::planner::DeltaPlanner;
-use crate::logstore::LogStoreRef;
 use async_trait::async_trait;
 use datafusion::dataframe::DataFrame;
 use datafusion::datasource::provider_as_source;
 use datafusion::error::Result as DataFusionResult;
 use datafusion::execution::context::{SessionContext, SessionState};
 use datafusion::execution::session_state::SessionStateBuilder;
-use datafusion::physical_plan::metrics::MetricBuilder;
-use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_planner::{ExtensionPlanner, PhysicalPlanner};
 use datafusion::prelude::Expr;
 use datafusion_common::ScalarValue;
 use datafusion_expr::{lit, Extension, LogicalPlan, LogicalPlanBuilder, UserDefinedLogicalNode};
+use datafusion_physical_plan::metrics::MetricBuilder;
+use datafusion_physical_plan::ExecutionPlan;
 
 use futures::future::BoxFuture;
 use std::sync::Arc;
@@ -44,14 +40,17 @@ use serde::Serialize;
 use super::cdc::should_write_cdc;
 use super::datafusion_utils::Expression;
 use super::transaction::{CommitBuilder, CommitProperties, PROTOCOL};
-
 use crate::delta_datafusion::expr::fmt_expr_to_sql;
+use crate::delta_datafusion::logical::MetricObserver;
+use crate::delta_datafusion::physical::{find_metric_node, get_metric, MetricObserverExec};
+use crate::delta_datafusion::planner::DeltaPlanner;
 use crate::delta_datafusion::{
     find_files, register_store, DataFusionMixins, DeltaScanConfigBuilder, DeltaSessionContext,
     DeltaTableProvider,
 };
 use crate::errors::DeltaResult;
 use crate::kernel::{Action, Add, Remove};
+use crate::logstore::LogStoreRef;
 use crate::operations::write::{write_execution_plan, write_execution_plan_cdc, WriterStatsConfig};
 use crate::protocol::DeltaOperation;
 use crate::table::state::DeltaTableState;

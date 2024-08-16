@@ -2,9 +2,11 @@
 
 #![allow(non_camel_case_types)]
 
-pub mod checkpoints;
-mod parquet_read;
-mod time_utils;
+use std::borrow::Borrow;
+use std::collections::HashMap;
+use std::hash::{Hash, Hasher};
+use std::mem::take;
+use std::str::FromStr;
 
 use arrow_schema::ArrowError;
 use futures::StreamExt;
@@ -13,17 +15,16 @@ use object_store::{path::Path, Error as ObjectStoreError, ObjectStore};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::borrow::Borrow;
-use std::collections::HashMap;
-use std::hash::{Hash, Hasher};
-use std::mem::take;
-use std::str::FromStr;
 use tracing::{debug, error};
 
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::{Add, CommitInfo, Metadata, Protocol, Remove, StructField};
 use crate::logstore::LogStore;
 use crate::table::CheckPoint;
+
+pub mod checkpoints;
+mod parquet_read;
+mod time_utils;
 
 /// Error returned when an invalid Delta log action is encountered.
 #[allow(missing_docs)]

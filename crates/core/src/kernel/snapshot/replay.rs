@@ -588,7 +588,6 @@ pub(super) mod tests {
     use std::sync::Arc;
 
     use arrow_select::concat::concat_batches;
-    use delta_kernel::engine::arrow_expression::ArrowExpressionHandler;
     use delta_kernel::schema::DataType;
     use deltalake_test::utils::*;
     use futures::TryStreamExt;

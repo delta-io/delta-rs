@@ -20,11 +20,8 @@
 // Display functions and required macros were pulled from https://github.com/apache/arrow-datafusion/blob/ddb95497e2792015d5a5998eec79aac8d37df1eb/datafusion/expr/src/expr.rs
 
 //! Utility functions for Datafusion's Expressions
-
-use std::{
-    fmt::{self, Display, Error, Formatter, Write},
-    sync::Arc,
-};
+use std::fmt::{self, Display, Error, Formatter, Write};
+use std::sync::Arc;
 
 use arrow_schema::DataType;
 use chrono::{DateTime, NaiveDate};
@@ -33,19 +30,17 @@ use datafusion::execution::session_state::SessionStateBuilder;
 use datafusion::execution::FunctionRegistry;
 use datafusion_common::Result as DFResult;
 use datafusion_common::{config::ConfigOptions, DFSchema, Result, ScalarValue, TableReference};
-use datafusion_expr::{
-    expr::InList, planner::ExprPlanner, AggregateUDF, Between, BinaryExpr, Cast, Expr, Like,
-    TableSource,
-};
+use datafusion_expr::expr::InList;
+use datafusion_expr::planner::ExprPlanner;
+use datafusion_expr::{AggregateUDF, Between, BinaryExpr, Cast, Expr, Like, TableSource};
 use datafusion_sql::planner::{ContextProvider, SqlToRel};
 use datafusion_sql::sqlparser::ast::escape_quoted_string;
 use datafusion_sql::sqlparser::dialect::GenericDialect;
 use datafusion_sql::sqlparser::parser::Parser;
 use datafusion_sql::sqlparser::tokenizer::Tokenizer;
 
-use crate::{DeltaResult, DeltaTableError};
-
 use super::DeltaParserOptions;
+use crate::{DeltaResult, DeltaTableError};
 
 pub(crate) struct DeltaContextProvider<'a> {
     state: SessionState,
