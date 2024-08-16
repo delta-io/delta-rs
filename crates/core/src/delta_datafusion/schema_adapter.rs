@@ -1,9 +1,11 @@
-use crate::operations::cast::cast_record_batch;
+use std::fmt::Debug;
+use std::sync::Arc;
+
 use arrow_array::RecordBatch;
 use arrow_schema::{Schema, SchemaRef};
 use datafusion::datasource::schema_adapter::{SchemaAdapter, SchemaAdapterFactory, SchemaMapper};
-use std::fmt::Debug;
-use std::sync::Arc;
+
+use crate::operations::cast::cast_record_batch;
 
 /// A Schema Adapter Factory which provides casting record batches from parquet to meet
 /// delta lake conventions.

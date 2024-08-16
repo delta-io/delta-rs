@@ -1,13 +1,12 @@
 //! Physical Operations for DataFusion
 use std::sync::Arc;
 
+use arrow_array::RecordBatch;
 use arrow_schema::SchemaRef;
-use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::error::Result as DataFusionResult;
-use datafusion::physical_plan::DisplayAs;
-use datafusion::physical_plan::{
-    metrics::{ExecutionPlanMetricsSet, MetricsSet},
-    ExecutionPlan, RecordBatchStream, SendableRecordBatchStream,
+use datafusion_physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
+use datafusion_physical_plan::{
+    DisplayAs, ExecutionPlan, RecordBatchStream, SendableRecordBatchStream,
 };
 use futures::{Stream, StreamExt};
 

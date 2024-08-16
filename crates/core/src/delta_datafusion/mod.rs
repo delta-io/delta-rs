@@ -25,18 +25,15 @@ use std::collections::{HashMap, HashSet};
 use std::fmt::{self, Debug};
 use std::sync::Arc;
 
-use arrow::compute::{cast_with_options, CastOptions};
-use arrow::datatypes::DataType;
-use arrow::datatypes::{
-    DataType as ArrowDataType, Schema as ArrowSchema, SchemaRef, SchemaRef as ArrowSchemaRef,
-    TimeUnit,
-};
-use arrow::error::ArrowError;
-use arrow::record_batch::RecordBatch;
 use arrow_array::types::UInt16Type;
-use arrow_array::{Array, DictionaryArray, StringArray, TypedDictionaryArray};
+use arrow_array::{Array, DictionaryArray, RecordBatch, StringArray, TypedDictionaryArray};
 use arrow_cast::display::array_value_to_string;
-use arrow_schema::Field;
+use arrow_cast::{cast_with_options, CastOptions};
+use arrow_schema::{
+    ArrowError, DataType as ArrowDataType, Field, Schema as ArrowSchema, SchemaRef,
+    SchemaRef as ArrowSchemaRef, TimeUnit,
+};
+use arrow_select::concat::concat_batches;
 use async_trait::async_trait;
 use chrono::{DateTime, TimeZone, Utc};
 use datafusion::catalog::{Session, TableProviderFactory};
@@ -50,13 +47,6 @@ use datafusion::execution::context::{SessionConfig, SessionContext, SessionState
 use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::execution::FunctionRegistry;
 use datafusion::physical_optimizer::pruning::PruningPredicate;
-use datafusion::physical_plan::filter::FilterExec;
-use datafusion::physical_plan::limit::LocalLimitExec;
-use datafusion::physical_plan::metrics::{ExecutionPlanMetricsSet, MetricBuilder, MetricsSet};
-use datafusion::physical_plan::{
-    DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties, SendableRecordBatchStream,
-    Statistics,
-};
 use datafusion_common::scalar::ScalarValue;
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion, TreeNodeVisitor};
 use datafusion_common::{
@@ -66,6 +56,13 @@ use datafusion_common::{
 use datafusion_expr::logical_plan::CreateExternalTable;
 use datafusion_expr::utils::conjunction;
 use datafusion_expr::{col, Expr, Extension, LogicalPlan, TableProviderFilterPushDown, Volatility};
+use datafusion_physical_plan::filter::FilterExec;
+use datafusion_physical_plan::limit::LocalLimitExec;
+use datafusion_physical_plan::metrics::{ExecutionPlanMetricsSet, MetricBuilder, MetricsSet};
+use datafusion_physical_plan::{
+    DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties, SendableRecordBatchStream,
+    Statistics,
+};
 use datafusion_proto::logical_plan::LogicalExtensionCodec;
 use datafusion_proto::physical_plan::PhysicalExtensionCodec;
 use datafusion_sql::planner::ParserOptions;
@@ -210,10 +207,10 @@ fn _arrow_schema(snapshot: &Snapshot, wrap_partitions: bool) -> DeltaResult<Arro
                     match field.data_type() {
                         // Only dictionary-encode types that may be large
                         // // https://github.com/apache/arrow-datafusion/pull/5545
-                        DataType::Utf8
-                        | DataType::LargeUtf8
-                        | DataType::Binary
-                        | DataType::LargeBinary => {
+                        ArrowDataType::Utf8
+                        | ArrowDataType::LargeUtf8
+                        | ArrowDataType::Binary
+                        | ArrowDataType::LargeBinary => {
                             wrap_partition_type_in_dict(field.data_type().clone())
                         }
                         _ => field.data_type().clone(),
@@ -330,7 +327,11 @@ pub(crate) fn df_logical_schema(
     }
 
     if let Some(file_column_name) = file_column_name {
-        fields.push(Arc::new(Field::new(file_column_name, DataType::Utf8, true)));
+        fields.push(Arc::new(Field::new(
+            file_column_name,
+            ArrowDataType::Utf8,
+            true,
+        )));
     }
 
     Ok(Arc::new(ArrowSchema::new(fields)))
@@ -630,9 +631,9 @@ impl<'a> DeltaScanBuilder<'a> {
 
         if let Some(file_column_name) = &config.file_column_name {
             let field_name_datatype = if config.wrap_partition_values {
-                wrap_partition_type_in_dict(DataType::Utf8)
+                wrap_partition_type_in_dict(ArrowDataType::Utf8)
             } else {
-                DataType::Utf8
+                ArrowDataType::Utf8
             };
             table_partition_cols.push(Field::new(
                 file_column_name.clone(),
@@ -1142,13 +1143,13 @@ pub(crate) async fn execute_plan_to_batch(
 
                 let batches = batch_stream.try_collect::<Vec<_>>().await?;
 
-                DataFusionResult::<_>::Ok(arrow::compute::concat_batches(&schema, batches.iter())?)
+                DataFusionResult::<_>::Ok(concat_batches(&schema, batches.iter())?)
             }
         }),
     )
     .await?;
 
-    let batch = arrow::compute::concat_batches(&plan.schema(), data.iter())?;
+    let batch = concat_batches(&plan.schema(), data.iter())?;
 
     Ok(batch)
 }
@@ -1591,7 +1592,7 @@ pub(crate) async fn scan_memory_table(
             ))?
             .to_owned(),
     );
-    fields.push(Field::new(PATH_COLUMN, DataType::Utf8, false));
+    fields.push(Field::new(PATH_COLUMN, ArrowDataType::Utf8, false));
 
     for field in schema.fields() {
         if field.name().starts_with("partition.") {
@@ -1776,10 +1777,8 @@ impl From<Column> for DeltaColumn {
 
 #[cfg(test)]
 mod tests {
-    use crate::operations::write::SchemaMode;
-    use crate::writer::test_utils::get_delta_schema;
-    use arrow::array::StructArray;
-    use arrow::datatypes::{DataType, Field, Schema};
+    use arrow_array::StructArray;
+    use arrow_schema::Schema;
     use chrono::{TimeZone, Utc};
     use datafusion::assert_batches_sorted_eq;
     use datafusion::datasource::physical_plan::ParquetExec;
@@ -1793,6 +1792,8 @@ mod tests {
     use std::ops::Deref;
 
     use super::*;
+    use crate::operations::write::SchemaMode;
+    use crate::writer::test_utils::get_delta_schema;
 
     // test deserialization of serialized partition values.
     // https://github.com/delta-io/delta/blob/master/PROTOCOL.md#partition-value-serialization
@@ -1913,8 +1914,8 @@ mod tests {
     #[tokio::test]
     async fn test_enforce_invariants() {
         let schema = Arc::new(Schema::new(vec![
-            Field::new("a", DataType::Utf8, false),
-            Field::new("b", DataType::Int32, false),
+            Field::new("a", ArrowDataType::Utf8, false),
+            Field::new("b", ArrowDataType::Int32, false),
         ]));
         let batch = RecordBatch::try_new(
             Arc::clone(&schema),
@@ -1966,7 +1967,7 @@ mod tests {
         let struct_fields = schema.fields().clone();
         let schema = Arc::new(Schema::new(vec![Field::new(
             "x",
-            DataType::Struct(struct_fields),
+            ArrowDataType::Struct(struct_fields),
             false,
         )]));
         let inner = Arc::new(StructArray::from(batch));
@@ -1986,8 +1987,8 @@ mod tests {
         let codec = DeltaPhysicalCodec {};
 
         let schema = Arc::new(Schema::new(vec![
-            Field::new("a", DataType::Utf8, false),
-            Field::new("b", DataType::Int32, false),
+            Field::new("a", ArrowDataType::Utf8, false),
+            Field::new("b", ArrowDataType::Int32, false),
         ]));
         let exec_plan = Arc::from(DeltaScan {
             table_uri: "s3://my_bucket/this/is/some/path".to_string(),
@@ -2043,9 +2044,9 @@ mod tests {
         // Tests issue (1787) where partition columns were incorrect when they
         // have a different order in the metadata and table schema
         let schema = Arc::new(ArrowSchema::new(vec![
-            Field::new("modified", DataType::Utf8, true),
-            Field::new("id", DataType::Utf8, true),
-            Field::new("value", DataType::Int32, true),
+            Field::new("modified", ArrowDataType::Utf8, true),
+            Field::new("id", ArrowDataType::Utf8, true),
+            Field::new("value", ArrowDataType::Int32, true),
         ]));
 
         let table = crate::DeltaOps::new_in_memory()
@@ -2115,9 +2116,9 @@ mod tests {
     #[tokio::test]
     async fn delta_scan_case_sensitive() {
         let schema = Arc::new(ArrowSchema::new(vec![
-            Field::new("moDified", DataType::Utf8, true),
-            Field::new("ID", DataType::Utf8, true),
-            Field::new("vaLue", DataType::Int32, true),
+            Field::new("moDified", ArrowDataType::Utf8, true),
+            Field::new("ID", ArrowDataType::Utf8, true),
+            Field::new("vaLue", ArrowDataType::Int32, true),
         ]));
 
         let batch = RecordBatch::try_new(
@@ -2185,7 +2186,7 @@ mod tests {
     async fn delta_scan_supports_missing_columns() {
         let schema1 = Arc::new(ArrowSchema::new(vec![Field::new(
             "col_1",
-            DataType::Utf8,
+            ArrowDataType::Utf8,
             true,
         )]));
 
@@ -2199,8 +2200,8 @@ mod tests {
         .unwrap();
 
         let schema2 = Arc::new(ArrowSchema::new(vec![
-            Field::new("col_1", DataType::Utf8, true),
-            Field::new("col_2", DataType::Utf8, true),
+            Field::new("col_1", ArrowDataType::Utf8, true),
+            Field::new("col_2", ArrowDataType::Utf8, true),
         ]));
 
         let batch2 = RecordBatch::try_new(
@@ -2262,8 +2263,8 @@ mod tests {
     #[tokio::test]
     async fn delta_scan_supports_pushdown() {
         let schema = Arc::new(ArrowSchema::new(vec![
-            Field::new("col_1", DataType::Utf8, false),
-            Field::new("col_2", DataType::Utf8, false),
+            Field::new("col_1", ArrowDataType::Utf8, false),
+            Field::new("col_2", ArrowDataType::Utf8, false),
         ]));
 
         let batch = RecordBatch::try_new(
@@ -2320,10 +2321,10 @@ mod tests {
     #[tokio::test]
     async fn delta_scan_supports_nested_missing_columns() {
         let column1_schema1: arrow::datatypes::Fields =
-            vec![Field::new("col_1a", DataType::Utf8, true)].into();
+            vec![Field::new("col_1a", ArrowDataType::Utf8, true)].into();
         let schema1 = Arc::new(ArrowSchema::new(vec![Field::new(
             "col_1",
-            DataType::Struct(column1_schema1.clone()),
+            ArrowDataType::Struct(column1_schema1.clone()),
             true,
         )]));
 
@@ -2340,14 +2341,14 @@ mod tests {
         )
         .unwrap();
 
-        let column1_schema2: arrow::datatypes::Fields = vec![
-            Field::new("col_1a", DataType::Utf8, true),
-            Field::new("col_1b", DataType::Utf8, true),
+        let column1_schema2: arrow_schema::Fields = vec![
+            Field::new("col_1a", ArrowDataType::Utf8, true),
+            Field::new("col_1b", ArrowDataType::Utf8, true),
         ]
         .into();
         let schema2 = Arc::new(ArrowSchema::new(vec![Field::new(
             "col_1",
-            DataType::Struct(column1_schema2.clone()),
+            ArrowDataType::Struct(column1_schema2.clone()),
             true,
         )]));
 
@@ -2418,9 +2419,9 @@ mod tests {
     async fn test_multiple_predicate_pushdown() {
         use crate::datafusion::prelude::SessionContext;
         let schema = Arc::new(ArrowSchema::new(vec![
-            Field::new("moDified", DataType::Utf8, true),
-            Field::new("id", DataType::Utf8, true),
-            Field::new("vaLue", DataType::Int32, true),
+            Field::new("moDified", ArrowDataType::Utf8, true),
+            Field::new("id", ArrowDataType::Utf8, true),
+            Field::new("vaLue", ArrowDataType::Int32, true),
         ]));
 
         let batch = RecordBatch::try_new(

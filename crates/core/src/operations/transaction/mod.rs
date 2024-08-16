@@ -73,6 +73,7 @@
 //!       │                               │                   
 //!       └───────────────────────────────┘           
 //!</pre>
+use std::collections::HashMap;
 
 use chrono::Utc;
 use conflict_checker::ConflictChecker;
@@ -80,7 +81,6 @@ use futures::future::BoxFuture;
 use object_store::path::Path;
 use object_store::{Error as ObjectStoreError, ObjectStore};
 use serde_json::Value;
-use std::collections::HashMap;
 
 use self::conflict_checker::{CommitConflictError, TransactionInfo, WinningCommitSummary};
 use crate::checkpoints::{cleanup_expired_logs_for, create_checkpoint_for};

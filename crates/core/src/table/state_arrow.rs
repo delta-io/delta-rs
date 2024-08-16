@@ -6,13 +6,13 @@ use std::borrow::Cow;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 
-use arrow::compute::cast;
-use arrow::compute::kernels::cast_utils::Parser;
 use arrow_array::types::{Date32Type, TimestampMicrosecondType};
 use arrow_array::{
     Array, ArrayRef, BinaryArray, BooleanArray, Date32Array, Float64Array, Int64Array, NullArray,
     StringArray, StructArray, TimestampMicrosecondArray, TimestampMillisecondArray,
 };
+use arrow_cast::cast;
+use arrow_cast::parse::Parser;
 use arrow_schema::{DataType, Field, Fields, TimeUnit};
 use delta_kernel::features::ColumnMappingMode;
 use itertools::Itertools;

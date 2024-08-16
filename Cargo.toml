@@ -51,6 +51,7 @@ datafusion-common = { version = "41" }
 datafusion-proto = { version = "41" }
 datafusion-sql = { version = "41" }
 datafusion-physical-expr = { version = "41" }
+datafusion-physical-plan = { version = "41" }
 datafusion-functions = { version = "41" }
 datafusion-functions-aggregate = { version = "41" }
 

@@ -5,7 +5,7 @@ use std::num::TryFromIntError;
 use std::str::{FromStr, Utf8Error};
 use std::sync::Arc;
 
-use arrow::{datatypes::Schema as ArrowSchema, error::ArrowError};
+use arrow_schema::{ArrowError, Schema as ArrowSchema};
 use futures::future::{self, BoxFuture};
 use futures::TryStreamExt;
 use indexmap::IndexMap;

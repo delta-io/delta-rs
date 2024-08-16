@@ -1,23 +1,21 @@
 //! Module for reading the change datafeed of delta tables
 
-use datafusion_physical_expr::{
-    expressions::{self},
-    PhysicalExpr,
-};
 use std::sync::Arc;
 use std::time::SystemTime;
 
-use arrow::record_batch::RecordBatch;
+use arrow_array::RecordBatch;
 use arrow_schema::{ArrowError, Field};
 use chrono::{DateTime, Utc};
 use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::file_format::FileFormat;
 use datafusion::datasource::physical_plan::FileScanConfig;
-use datafusion::physical_plan::projection::ProjectionExec;
-use datafusion::physical_plan::union::UnionExec;
-use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::SessionContext;
 use datafusion_common::{ScalarValue, Statistics};
+use datafusion_physical_expr::expressions;
+use datafusion_physical_expr::PhysicalExpr;
+use datafusion_physical_plan::projection::ProjectionExec;
+use datafusion_physical_plan::union::UnionExec;
+use datafusion_physical_plan::ExecutionPlan;
 use tracing::log;
 
 use crate::delta_datafusion::{register_store, DataFusionMixins};

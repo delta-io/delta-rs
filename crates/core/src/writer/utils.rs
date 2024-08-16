@@ -4,9 +4,9 @@
 use std::io::Write;
 use std::sync::Arc;
 
-use arrow::datatypes::{Schema as ArrowSchema, SchemaRef as ArrowSchemaRef};
-use arrow::json::ReaderBuilder;
-use arrow::record_batch::*;
+use arrow_array::RecordBatch;
+use arrow_json::ReaderBuilder;
+use arrow_schema::{Schema as ArrowSchema, SchemaRef as ArrowSchemaRef};
 use object_store::path::Path;
 use parking_lot::RwLock;
 use parquet::basic::Compression;
