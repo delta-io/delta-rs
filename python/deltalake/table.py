@@ -162,6 +162,7 @@ class WriterProperties:
             ]
         ] = None,
         compression_level: Optional[int] = None,
+        statistics_truncate_length: Optional[int] = None,
     ):
         """Create a Writer Properties instance for the Rust parquet writer:
 
@@ -176,6 +177,7 @@ class WriterProperties:
                 GZIP: levels (1-9),
                 BROTLI: levels (1-11),
                 ZSTD: levels (1-22),
+            statistics_truncate_length: maximum length of truncated min/max values in statistics.
         """
         self.data_page_size_limit = data_page_size_limit
         self.dictionary_page_size_limit = dictionary_page_size_limit
@@ -183,6 +185,7 @@ class WriterProperties:
         self.write_batch_size = write_batch_size
         self.max_row_group_size = max_row_group_size
         self.compression = None
+        self.statistics_truncate_length = statistics_truncate_length
 
         if compression_level is not None and compression is None:
             raise ValueError(
@@ -211,7 +214,7 @@ class WriterProperties:
         return (
             f"WriterProperties(data_page_size_limit: {self.data_page_size_limit}, dictionary_page_size_limit: {self.dictionary_page_size_limit}, "
             f"data_page_row_count_limit: {self.data_page_row_count_limit}, write_batch_size: {self.write_batch_size}, "
-            f"max_row_group_size: {self.max_row_group_size}, compression: {self.compression})"
+            f"max_row_group_size: {self.max_row_group_size}, compression: {self.compression}, statistics_truncate_length: {self.statistics_truncate_length})"
         )
 
     def _to_dict(self) -> Dict[str, Optional[str]]:
