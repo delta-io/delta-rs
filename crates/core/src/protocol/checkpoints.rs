@@ -59,7 +59,7 @@ enum CheckpointError {
         source: ArrowError,
     },
 
-    #[error("missing rewquired action type in snapshot: {0}")]
+    #[error("missing required action type in snapshot: {0}")]
     MissingActionType(String),
 }
 
