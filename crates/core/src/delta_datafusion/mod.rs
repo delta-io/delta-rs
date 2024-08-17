@@ -76,7 +76,9 @@ use url::Url;
 use crate::delta_datafusion::expr::parse_predicate_expression;
 use crate::delta_datafusion::schema_adapter::DeltaSchemaAdapterFactory;
 use crate::errors::{DeltaResult, DeltaTableError};
-use crate::kernel::{Add, DataCheck, EagerSnapshot, Invariant, Snapshot, StructTypeExt};
+use crate::kernel::{
+    Add, DataCheck, EagerSnapshot, Invariant, LogicalFile, Snapshot, StructTypeExt,
+};
 use crate::logstore::LogStoreRef;
 use crate::table::builder::ensure_table_uri;
 use crate::table::state::DeltaTableState;
@@ -224,17 +226,6 @@ fn _arrow_schema(snapshot: &Snapshot, wrap_partitions: bool) -> DeltaResult<Arro
         .collect::<Result<Vec<Field>, _>>()?;
 
     Ok(Arc::new(ArrowSchema::new(fields)))
-}
-
-pub(crate) trait DataFusionFileMixins {
-    /// Iterate over all files in the log matching a predicate
-    fn files_matching_predicate(&self, filters: &[Expr]) -> DeltaResult<impl Iterator<Item = Add>>;
-}
-
-impl DataFusionFileMixins for EagerSnapshot {
-    fn files_matching_predicate(&self, filters: &[Expr]) -> DeltaResult<impl Iterator<Item = Add>> {
-        files_matching_predicate(self, filters)
-    }
 }
 
 pub(crate) fn files_matching_predicate<'a>(
@@ -1007,7 +998,7 @@ pub(crate) fn get_null_of_arrow_type(t: &ArrowDataType) -> DeltaResult<ScalarVal
     }
 }
 
-pub(crate) fn partitioned_file_from_action(
+fn partitioned_file_from_action(
     action: &Add,
     partition_columns: &[String],
     schema: &ArrowSchema,
@@ -1149,9 +1140,7 @@ pub(crate) async fn execute_plan_to_batch(
     )
     .await?;
 
-    let batch = concat_batches(&plan.schema(), data.iter())?;
-
-    Ok(batch)
+    Ok(concat_batches(&plan.schema(), data.iter())?)
 }
 
 /// Responsible for checking batches of data conform to table's invariants.
@@ -1897,7 +1886,7 @@ mod tests {
         let file = partitioned_file_from_action(&action, &part_columns, &schema);
         let ref_file = PartitionedFile {
             object_meta: object_store::ObjectMeta {
-                location: Path::from("year=2015/month=1/part-00000-4dcb50d3-d017-450c-9df7-a7257dbd3c5d-c000.snappy.parquet".to_string()), 
+                location: Path::from("year=2015/month=1/part-00000-4dcb50d3-d017-450c-9df7-a7257dbd3c5d-c000.snappy.parquet".to_string()),
                 last_modified: Utc.timestamp_millis_opt(1660497727833).unwrap(),
                 size: 10644,
                 e_tag: None,

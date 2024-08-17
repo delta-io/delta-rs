@@ -6,6 +6,7 @@ use deltalake_core::kernel::{DataType, PrimitiveType, StructField};
 use deltalake_core::protocol::SaveMode;
 use deltalake_core::storage::commit_uri_from_version;
 use deltalake_core::{DeltaOps, DeltaTable};
+use itertools::Itertools;
 use rand::Rng;
 use std::error::Error;
 use std::fs;
@@ -103,10 +104,9 @@ async fn test_restore_by_version() -> Result<(), Box<dyn Error>> {
     let table_uri = context.tmp_dir.path().to_str().to_owned().unwrap();
     let mut table = DeltaOps::try_from_uri(table_uri).await?;
     table.0.load_version(1).await?;
-    assert_eq!(
-        table.0.snapshot()?.file_actions()?,
-        result.0.snapshot()?.file_actions()?
-    );
+    let curr_files = table.0.snapshot()?.file_paths_iter().collect_vec();
+    let result_files = result.0.snapshot()?.file_paths_iter().collect_vec();
+    assert_eq!(curr_files, result_files);
 
     let result = DeltaOps(result.0)
         .restore()

@@ -256,7 +256,7 @@ mod tests {
     use datafusion_expr::{col, lit};
 
     use super::*;
-    use crate::delta_datafusion::{DataFusionFileMixins, DataFusionMixins};
+    use crate::delta_datafusion::{files_matching_predicate, DataFusionMixins};
     use crate::kernel::Action;
     use crate::test_utils::{ActionFactory, TestSchemas};
 
@@ -318,9 +318,7 @@ mod tests {
         )));
 
         let state = DeltaTableState::from_actions(actions).unwrap();
-        let files = state
-            .snapshot
-            .files_matching_predicate(&[])
+        let files = files_matching_predicate(&state.snapshot, &[])
             .unwrap()
             .collect::<Vec<_>>();
         assert_eq!(files.len(), 3);
@@ -329,9 +327,7 @@ mod tests {
             .gt(lit::<i32>(10))
             .or(col("value").lt_eq(lit::<i32>(0)));
 
-        let files = state
-            .snapshot
-            .files_matching_predicate(&[predictate])
+        let files = files_matching_predicate(&state.snapshot, &[predictate])
             .unwrap()
             .collect::<Vec<_>>();
         assert_eq!(files.len(), 2);
