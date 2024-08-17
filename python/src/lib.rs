@@ -1238,16 +1238,13 @@ impl RawDeltaTable {
     }
 
     pub fn get_add_file_sizes(&self) -> PyResult<HashMap<String, i64>> {
-        let actions = self
+        Ok(self
             ._table
             .snapshot()
             .map_err(PythonError::from)?
-            .file_actions()
-            .map_err(PythonError::from)?;
-
-        Ok(actions
-            .iter()
-            .map(|action| (action.path(), action.size))
+            .eager_snapshot()
+            .files()
+            .map(|f| (f.path().to_string(), f.size()))
             .collect::<HashMap<String, i64>>())
     }
     /// Run the delete command on the delta table: delete records following a predicate and return the delete metrics.
