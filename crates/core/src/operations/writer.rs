@@ -1,16 +1,20 @@
 //! Abstractions and implementations for writing data to delta tables
 
 use std::collections::HashMap;
+use std::sync::{Arc, OnceLock};
 
 use arrow_array::RecordBatch;
 use arrow_schema::{ArrowError, SchemaRef as ArrowSchemaRef};
 use bytes::Bytes;
 use delta_kernel::expressions::Scalar;
+use futures::future::BoxFuture;
+use futures::{FutureExt, TryFutureExt};
 use indexmap::IndexMap;
 use object_store::{path::Path, ObjectStore};
 use parquet::arrow::ArrowWriter;
 use parquet::basic::Compression;
 use parquet::file::properties::WriterProperties;
+use tokio::runtime::Runtime;
 use tracing::debug;
 
 use crate::crate_version;
@@ -119,6 +123,12 @@ impl WriterConfig {
     pub fn file_schema(&self) -> ArrowSchemaRef {
         arrow_schema_without_partitions(&self.table_schema, &self.partition_columns)
     }
+}
+
+/// static write runtime
+fn write_rt() -> &'static Runtime {
+    static WRITE_RT: OnceLock<Runtime> = OnceLock::new();
+    WRITE_RT.get_or_init(|| Runtime::new().expect("Failed to create a tokio runtime for writing."))
 }
 
 #[derive(Debug)]
@@ -332,6 +342,24 @@ impl PartitionWriter {
         )
     }
 
+    fn spawn<F, O>(&self, f: F, path: Path) -> BoxFuture<'_, DeltaResult<O>>
+    where
+        F: for<'a> FnOnce(&'a Arc<dyn ObjectStore>, &'a Path) -> BoxFuture<'a, DeltaResult<O>>
+            + Send
+            + 'static,
+        O: Send + 'static,
+    {
+        let store = Arc::clone(&self.object_store);
+        let fut = write_rt().spawn(async move { f(&store, &path).await });
+        fut.unwrap_or_else(|e| match e.try_into_panic() {
+            Ok(p) => std::panic::resume_unwind(p),
+            Err(e) => Err(DeltaTableError::GenericError {
+                source: Box::new(e),
+            }),
+        })
+        .boxed()
+    }
+
     fn reset_writer(&mut self) -> DeltaResult<(ArrowWriter<ShareableBuffer>, ShareableBuffer)> {
         let new_buffer = ShareableBuffer::default();
         let arrow_writer = ArrowWriter::try_new(
@@ -368,7 +396,12 @@ impl PartitionWriter {
         let file_size = buffer.len() as i64;
 
         // write file to object store
-        self.object_store.put(&path, buffer.into()).await?;
+        self.spawn(
+            |store, path| store.put(path, buffer.into()).map_err(|e| e.into()).boxed(),
+            path.clone(),
+        )
+        .await?;
+
         self.files_written.push(
             create_add(
                 &self.config.partition_values,
