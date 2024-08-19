@@ -1,6 +1,6 @@
 [package]
 name = "deltalake-catalog-glue"
-version = "0.4.0"
+version = "0.5.0"
 authors.workspace = true
 keywords.workspace = true
 readme.workspace = true
@@ -15,7 +15,7 @@ rust-version.workspace = true
 async-trait = { workspace = true }
 aws-config = "1"
 aws-sdk-glue = "1"
-deltalake-core = { version = "0.20.0", path = "../core" }
+deltalake-core = { version = "0.21.0", path = "../core" }
 thiserror = { workspace = true }
 
 [dev-dependencies]

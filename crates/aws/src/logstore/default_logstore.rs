@@ -3,11 +3,8 @@
 use std::sync::Arc;
 
 use bytes::Bytes;
+use deltalake_core::logstore::*;
 use deltalake_core::{
-    logstore::{
-        abort_commit_entry, get_latest_version, read_commit_entry, write_commit_entry,
-        CommitOrBytes, LogStore, LogStoreConfig,
-    },
     operations::transaction::TransactionError,
     storage::{ObjectStoreRef, StorageOptions},
     DeltaResult,
@@ -101,6 +98,10 @@ impl LogStore for S3LogStore {
 
     async fn get_latest_version(&self, current_version: i64) -> DeltaResult<i64> {
         get_latest_version(self, current_version).await
+    }
+
+    async fn get_earliest_version(&self, current_version: i64) -> DeltaResult<i64> {
+        get_earliest_version(self, current_version).await
     }
 
     fn object_store(&self) -> Arc<dyn ObjectStore> {

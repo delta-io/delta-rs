@@ -1,6 +1,6 @@
 [package]
 name = "deltalake-aws"
-version = "0.3.0"
+version = "0.4.0"
 authors.workspace = true
 keywords.workspace = true
 readme.workspace = true
@@ -12,7 +12,7 @@ repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-deltalake-core = { version = "0.20.0", path = "../core" }
+deltalake-core = { version = "0.21.0", path = "../core" }
 aws-smithy-runtime-api = { version="1.7" }
 aws-smithy-runtime = { version="1.7", optional = true}
 aws-credential-types = { version="1.2", features = ["hardcoded-credentials"]}
