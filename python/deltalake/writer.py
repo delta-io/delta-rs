@@ -312,9 +312,7 @@ def write_deltalake(
             description=description,
             configuration=configuration,
             storage_options=storage_options,
-            writer_properties=(
-                writer_properties._to_dict() if writer_properties else None
-            ),
+            writer_properties=writer_properties,
             custom_metadata=custom_metadata,
             post_commithook_properties=post_commithook_properties.__dict__
             if post_commithook_properties

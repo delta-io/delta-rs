@@ -3,7 +3,7 @@ from typing import Any, Dict, List, Literal, Mapping, Optional, Tuple, Union
 import pyarrow
 import pyarrow.fs as fs
 
-from deltalake.writer import AddAction
+from deltalake.writer import AddAction, WriterProperties
 
 __version__: str
 
@@ -67,7 +67,7 @@ class RawDeltaTable:
         target_size: Optional[int],
         max_concurrent_tasks: Optional[int],
         min_commit_interval: Optional[int],
-        writer_properties: Optional[Dict[str, Optional[str]]],
+        writer_properties: Optional[WriterProperties],
         custom_metadata: Optional[Dict[str, str]],
         post_commithook_properties: Optional[Dict[str, Optional[bool]]],
     ) -> str: ...
@@ -79,7 +79,7 @@ class RawDeltaTable:
         max_concurrent_tasks: Optional[int],
         max_spill_size: Optional[int],
         min_commit_interval: Optional[int],
-        writer_properties: Optional[Dict[str, Optional[str]]],
+        writer_properties: Optional[WriterProperties],
         custom_metadata: Optional[Dict[str, str]],
         post_commithook_properties: Optional[Dict[str, Optional[bool]]],
     ) -> str: ...
@@ -125,7 +125,7 @@ class RawDeltaTable:
     def delete(
         self,
         predicate: Optional[str],
-        writer_properties: Optional[Dict[str, Optional[str]]],
+        writer_properties: Optional[WriterProperties],
         custom_metadata: Optional[Dict[str, str]],
         post_commithook_properties: Optional[Dict[str, Optional[bool]]],
     ) -> str: ...
@@ -139,7 +139,7 @@ class RawDeltaTable:
         self,
         updates: Dict[str, str],
         predicate: Optional[str],
-        writer_properties: Optional[Dict[str, Optional[str]]],
+        writer_properties: Optional[WriterProperties],
         safe_cast: bool,
         custom_metadata: Optional[Dict[str, str]],
         post_commithook_properties: Optional[Dict[str, Optional[bool]]],
@@ -150,7 +150,7 @@ class RawDeltaTable:
         predicate: str,
         source_alias: Optional[str],
         target_alias: Optional[str],
-        writer_properties: Optional[Dict[str, Optional[str]]],
+        writer_properties: Optional[WriterProperties],
         custom_metadata: Optional[Dict[str, str]],
         post_commithook_properties: Optional[Dict[str, Optional[bool]]],
         safe_cast: bool,
@@ -214,7 +214,7 @@ def write_to_deltalake(
     description: Optional[str],
     configuration: Optional[Mapping[str, Optional[str]]],
     storage_options: Optional[Dict[str, str]],
-    writer_properties: Optional[Dict[str, Optional[str]]],
+    writer_properties: Optional[WriterProperties],
     custom_metadata: Optional[Dict[str, str]],
     post_commithook_properties: Optional[Dict[str, Optional[bool]]],
 ) -> None: ...
