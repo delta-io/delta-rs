@@ -657,7 +657,7 @@ impl EagerSnapshot {
     }
 }
 
-fn stats_schema<'a>(schema: &StructType, config: TableConfig<'a>) -> DeltaResult<StructType> {
+fn stats_schema(schema: &StructType, config: TableConfig<'_>) -> DeltaResult<StructType> {
     let stats_fields = if let Some(stats_cols) = config.stats_columns() {
         stats_cols
             .iter()

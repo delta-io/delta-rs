@@ -239,6 +239,7 @@ impl ConvertToDeltaBuilder {
             crate::logstore::logstore_for(
                 ensure_table_uri(location)?,
                 self.storage_options.unwrap_or_default(),
+                None, // TODO: allow runtime to be passed into builder
             )?
         } else {
             return Err(Error::MissingLocation);
@@ -477,7 +478,7 @@ mod tests {
     fn log_store(path: impl Into<String>) -> LogStoreRef {
         let path: String = path.into();
         let location = ensure_table_uri(path).expect("Failed to get the URI from the path");
-        crate::logstore::logstore_for(location, StorageOptions::default())
+        crate::logstore::logstore_for(location, StorageOptions::default(), None)
             .expect("Failed to create an object store")
     }
 
