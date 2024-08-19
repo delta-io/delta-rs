@@ -8,28 +8,28 @@
       
       
       
-        <link rel="canonical" href="https://github.com/delta-io/delta-rs/usage/deleting-rows-from-delta-lake-table/">
+        <link rel="canonical" href="https://github.com/delta-io/delta-rs/integrations/object-storage/s3/">
       
       
-        <link rel="prev" href="../writing/writing-to-s3-with-locking-provider/">
+        <link rel="prev" href="../hdfs/">
       
       
-        <link rel="next" href="../optimize/small-file-compaction-with-optimize/">
+        <link rel="next" href="../../delta-lake-arrow/">
       
       
-      <link rel="icon" href="../../delta-rust-no-whitespace.svg">
+      <link rel="icon" href="../../../delta-rust-no-whitespace.svg">
       <meta name="generator" content="mkdocs-1.5.3, mkdocs-material-9.4.5">
     
     
       
-        <title>Deleting rows from a table - Delta Lake Documentation</title>
+        <title>AWS S3 Storage Backend - Delta Lake Documentation</title>
       
     
     
-      <link rel="stylesheet" href="../../assets/stylesheets/main.6a10b989.min.css">
+      <link rel="stylesheet" href="../../../assets/stylesheets/main.6a10b989.min.css">
       
         
-        <link rel="stylesheet" href="../../assets/stylesheets/palette.356b1318.min.css">
+        <link rel="stylesheet" href="../../../assets/stylesheets/palette.356b1318.min.css">
       
       
 
@@ -48,11 +48,11 @@
       
     
     
-      <link rel="stylesheet" href="../../assets/_markdown_exec_ansi.css">
+      <link rel="stylesheet" href="../../../assets/_markdown_exec_ansi.css">
     
-      <link rel="stylesheet" href="../../assets/_mkdocstrings.css">
+      <link rel="stylesheet" href="../../../assets/_mkdocstrings.css">
     
-    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce((e,_)=>(e<<5)-e+_.charCodeAt(0),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    <script>__md_scope=new URL("../../..",location),__md_hash=e=>[...e].reduce((e,_)=>(e<<5)-e+_.charCodeAt(0),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
     
       
 
@@ -81,7 +81,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#deleting-rows-from-a-delta-lake-table" class="md-skip">
+        <a href="#aws-s3-storage-backend" class="md-skip">
           Skip to content
         </a>
       
@@ -97,9 +97,9 @@
 
 <header class="md-header md-header--shadow md-header--lifted" data-md-component="header">
   <nav class="md-header__inner md-grid" aria-label="Header">
-    <a href="../.." title="Delta Lake Documentation" class="md-header__button md-logo" aria-label="Delta Lake Documentation" data-md-component="logo">
+    <a href="../../.." title="Delta Lake Documentation" class="md-header__button md-logo" aria-label="Delta Lake Documentation" data-md-component="logo">
       
-  <img src="../../delta-rust-no-whitespace.svg" alt="logo">
+  <img src="../../../delta-rust-no-whitespace.svg" alt="logo">
 
     </a>
     <label class="md-header__button md-icon" for="__drawer">
@@ -116,7 +116,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              Deleting rows from a table
+              AWS S3 Storage Backend
             
           </span>
         </div>
@@ -226,7 +226,7 @@
     
     
       <li class="md-tabs__item">
-        <a href="../.." class="md-tabs__link">
+        <a href="../../.." class="md-tabs__link">
           
   
     
@@ -242,13 +242,11 @@
         
   
   
-    
-  
   
     
     
-      <li class="md-tabs__item md-tabs__item--active">
-        <a href="../installation/" class="md-tabs__link">
+      <li class="md-tabs__item">
+        <a href="../../../usage/installation/" class="md-tabs__link">
           
   
     
@@ -268,7 +266,7 @@
     
     
       <li class="md-tabs__item">
-        <a href="../../api/delta_writer/" class="md-tabs__link">
+        <a href="../../../api/delta_writer/" class="md-tabs__link">
           
   
     
@@ -284,17 +282,21 @@
         
   
   
+    
+  
   
     
     
       
   
   
+    
+  
   
     
     
-      <li class="md-tabs__item">
-        <a href="../../integrations/object-storage/hdfs/" class="md-tabs__link">
+      <li class="md-tabs__item md-tabs__item--active">
+        <a href="../hdfs/" class="md-tabs__link">
           
   
     
@@ -317,7 +319,7 @@
     
     
       <li class="md-tabs__item">
-        <a href="../../how-delta-lake-works/architecture-of-delta-table/" class="md-tabs__link">
+        <a href="../../../how-delta-lake-works/architecture-of-delta-table/" class="md-tabs__link">
           
   
     
@@ -358,9 +360,9 @@
 
 <nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
   <label class="md-nav__title" for="__drawer">
-    <a href="../.." title="Delta Lake Documentation" class="md-nav__button md-logo" aria-label="Delta Lake Documentation" data-md-component="logo">
+    <a href="../../.." title="Delta Lake Documentation" class="md-nav__button md-logo" aria-label="Delta Lake Documentation" data-md-component="logo">
       
-  <img src="../../delta-rust-no-whitespace.svg" alt="logo">
+  <img src="../../../delta-rust-no-whitespace.svg" alt="logo">
 
     </a>
     Delta Lake Documentation
@@ -417,7 +419,7 @@
           
           
           <div class="md-nav__link md-nav__container">
-            <a href="../.." class="md-nav__link ">
+            <a href="../../.." class="md-nav__link ">
               
   
   <span class="md-ellipsis">
@@ -449,7 +451,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../why-use-delta-lake/" class="md-nav__link">
+      <a href="../../../why-use-delta-lake/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -469,7 +471,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../delta-lake-big-data-small-data/" class="md-nav__link">
+      <a href="../../../delta-lake-big-data-small-data/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -489,7 +491,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../delta-lake-best-practices/" class="md-nav__link">
+      <a href="../../../delta-lake-best-practices/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -514,8 +516,6 @@
       
   
   
-    
-  
   
     
     
@@ -553,12 +553,14 @@
       
       
     
-    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
       
         
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" checked>
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_2" >
         
           
           <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="">
@@ -572,7 +574,7 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="true">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
           <label class="md-nav__title" for="__nav_2">
             <span class="md-nav__icon md-icon"></span>
             Usage
@@ -585,7 +587,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../installation/" class="md-nav__link">
+      <a href="../../../usage/installation/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -605,7 +607,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../overview/" class="md-nav__link">
+      <a href="../../../usage/overview/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -625,7 +627,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../create-delta-lake-table/" class="md-nav__link">
+      <a href="../../../usage/create-delta-lake-table/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -645,7 +647,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../loading-table/" class="md-nav__link">
+      <a href="../../../usage/loading-table/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -665,7 +667,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../appending-overwriting-delta-lake-table/" class="md-nav__link">
+      <a href="../../../usage/appending-overwriting-delta-lake-table/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -685,7 +687,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../constraints/" class="md-nav__link">
+      <a href="../../../usage/constraints/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -705,7 +707,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../read-cdf/" class="md-nav__link">
+      <a href="../../../usage/read-cdf/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -725,7 +727,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../examining-table/" class="md-nav__link">
+      <a href="../../../usage/examining-table/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -745,7 +747,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../querying-delta-tables/" class="md-nav__link">
+      <a href="../../../usage/querying-delta-tables/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -765,7 +767,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../managing-tables/" class="md-nav__link">
+      <a href="../../../usage/managing-tables/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -809,7 +811,7 @@
           
           
           <div class="md-nav__link md-nav__container">
-            <a href="../writing/" class="md-nav__link ">
+            <a href="../../../usage/writing/" class="md-nav__link ">
               
   
   <span class="md-ellipsis">
@@ -841,7 +843,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../writing/writing-to-s3-with-locking-provider/" class="md-nav__link">
+      <a href="../../../usage/writing/writing-to-s3-with-locking-provider/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -867,18 +869,9 @@
                 
   
   
-    
   
-  
-    <li class="md-nav__item md-nav__item--active">
-      
-      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
-      
-      
-        
-      
-      
-      <a href="./" class="md-nav__link md-nav__link--active">
+    <li class="md-nav__item">
+      <a href="../../../usage/deleting-rows-from-delta-lake-table/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -887,7 +880,6 @@
   
 
       </a>
-      
     </li>
   
 
@@ -943,7 +935,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../optimize/small-file-compaction-with-optimize/" class="md-nav__link">
+      <a href="../../../usage/optimize/small-file-compaction-with-optimize/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -963,7 +955,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../optimize/delta-lake-z-order/" class="md-nav__link">
+      <a href="../../../usage/optimize/delta-lake-z-order/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1053,7 +1045,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../api/delta_writer/" class="md-nav__link">
+      <a href="../../../api/delta_writer/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1103,7 +1095,7 @@
           
           
           <div class="md-nav__link md-nav__container">
-            <a href="../../api/delta_table/" class="md-nav__link ">
+            <a href="../../../api/delta_table/" class="md-nav__link ">
               
   
   <span class="md-ellipsis">
@@ -1135,7 +1127,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../api/delta_table/metadata/" class="md-nav__link">
+      <a href="../../../api/delta_table/metadata/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1155,7 +1147,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../api/delta_table/delta_table_merger/" class="md-nav__link">
+      <a href="../../../api/delta_table/delta_table_merger/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1175,7 +1167,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../api/delta_table/delta_table_optimizer/" class="md-nav__link">
+      <a href="../../../api/delta_table/delta_table_optimizer/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1195,7 +1187,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../api/delta_table/delta_table_alterer/" class="md-nav__link">
+      <a href="../../../api/delta_table/delta_table_alterer/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1223,7 +1215,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../api/schema/" class="md-nav__link">
+      <a href="../../../api/schema/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1243,7 +1235,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../api/storage/" class="md-nav__link">
+      <a href="../../../api/storage/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1263,7 +1255,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../api/catalog/" class="md-nav__link">
+      <a href="../../../api/catalog/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1283,7 +1275,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../api/exceptions/" class="md-nav__link">
+      <a href="../../../api/exceptions/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1308,6 +1300,8 @@
       
   
   
+    
+  
   
     
     
@@ -1335,14 +1329,12 @@
       
       
     
-    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
       
         
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" checked>
         
           
           <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="">
@@ -1356,7 +1348,7 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="true">
           <label class="md-nav__title" for="__nav_4">
             <span class="md-nav__icon md-icon"></span>
             Integrations
@@ -1367,6 +1359,8 @@
                 
   
   
+    
+  
   
     
     
@@ -1379,14 +1373,12 @@
     
     
     
-    <li class="md-nav__item md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--active md-nav__item--nested">
       
         
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4_1" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_1" checked>
         
           
           <label class="md-nav__link" for="__nav_4_1" id="__nav_4_1_label" tabindex="0">
@@ -1400,7 +1392,7 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_4_1_label" aria-expanded="false">
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_4_1_label" aria-expanded="true">
           <label class="md-nav__title" for="__nav_4_1">
             <span class="md-nav__icon md-icon"></span>
             Object Storage
@@ -1413,7 +1405,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../integrations/object-storage/hdfs/" class="md-nav__link">
+      <a href="../hdfs/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1431,9 +1423,29 @@
                 
   
   
+    
   
-    <li class="md-nav__item">
-      <a href="../../integrations/object-storage/s3/" class="md-nav__link">
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  <span class="md-ellipsis">
+    AWS S3 Storage Backend
+  </span>
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
         
   
   <span class="md-ellipsis">
@@ -1442,6 +1454,61 @@
   
 
       </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#note-for-boto3-users" class="md-nav__link">
+    Note for boto3 users
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#passing-aws-credentials" class="md-nav__link">
+    Passing AWS Credentials
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#example" class="md-nav__link">
+    Example
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#delta-lake-on-s3-safe-concurrent-writes" class="md-nav__link">
+    Delta Lake on S3: Safe Concurrent Writes
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#delta-lake-on-s3-required-permissions" class="md-nav__link">
+    Delta Lake on S3: Required permissions
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
     </li>
   
 
@@ -1461,7 +1528,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../integrations/delta-lake-arrow/" class="md-nav__link">
+      <a href="../../delta-lake-arrow/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1481,7 +1548,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../integrations/delta-lake-daft/" class="md-nav__link">
+      <a href="../../delta-lake-daft/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1501,7 +1568,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../integrations/delta-lake-dagster/" class="md-nav__link">
+      <a href="../../delta-lake-dagster/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1521,7 +1588,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../integrations/delta-lake-dask/" class="md-nav__link">
+      <a href="../../delta-lake-dask/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1541,7 +1608,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../integrations/delta-lake-datafusion/" class="md-nav__link">
+      <a href="../../delta-lake-datafusion/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1561,7 +1628,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../integrations/delta-lake-pandas/" class="md-nav__link">
+      <a href="../../delta-lake-pandas/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1581,7 +1648,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../integrations/delta-lake-polars/" class="md-nav__link">
+      <a href="../../delta-lake-polars/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1657,7 +1724,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../how-delta-lake-works/architecture-of-delta-table/" class="md-nav__link">
+      <a href="../../../how-delta-lake-works/architecture-of-delta-table/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1677,7 +1744,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../how-delta-lake-works/delta-lake-acid-transactions/" class="md-nav__link">
+      <a href="../../../how-delta-lake-works/delta-lake-acid-transactions/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1697,7 +1764,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../how-delta-lake-works/delta-lake-file-skipping/" class="md-nav__link">
+      <a href="../../../how-delta-lake-works/delta-lake-file-skipping/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1738,6 +1805,49 @@
     
   
   
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#note-for-boto3-users" class="md-nav__link">
+    Note for boto3 users
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#passing-aws-credentials" class="md-nav__link">
+    Passing AWS Credentials
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#example" class="md-nav__link">
+    Example
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#delta-lake-on-s3-safe-concurrent-writes" class="md-nav__link">
+    Delta Lake on S3: Safe Concurrent Writes
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#delta-lake-on-s3-required-permissions" class="md-nav__link">
+    Delta Lake on S3: Required permissions
+  </a>
+  
+</li>
+      
+    </ul>
+  
 </nav>
                   </div>
                 </div>
@@ -1754,32 +1864,83 @@
   
 
 
-<h1 id="deleting-rows-from-a-delta-lake-table">Deleting rows from a Delta Lake table</h1>
-<p>This section explains how to delete rows from a Delta Lake table.</p>
-<p>Suppose you have the following Delta table with four rows:</p>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>+-------+----------+
-</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>|   num | letter   |
-</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>|-------+----------|
-</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>|     1 | a        |
-</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>|     2 | b        |
-</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>|     3 | c        |
-</span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>|     4 | d        |
-</span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a>+-------+----------+
+<h1 id="aws-s3-storage-backend">AWS S3 Storage Backend</h1>
+<p><code>delta-rs</code> offers native support for using AWS S3 as an objet storage backend.</p>
+<p>You don’t need to install any extra dependencies to red/write Delta tables to S3 with engines that use <code>delta-rs</code>. You do need to configure your AWS access credentials correctly.</p>
+<h2 id="note-for-boto3-users">Note for boto3 users</h2>
+<p>Many Python engines use <a href="https://boto3.amazonaws.com/v1/documentation/api/latest/index.html">boto3</a> to connect to AWS. This library supports reading credentials automatically from your local <code>.aws/config</code> or <code>.aws/creds</code> file.</p>
+<p>For example, if you’re running locally with the proper credentials in your local <code>.aws/config</code> or <code>.aws/creds</code> file then you can write a Parquet file to S3 like this with pandas:</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>    <span class="kn">import</span> <span class="nn">pandas</span> <span class="k">as</span> <span class="nn">pd</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>    <span class="n">df</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">({</span><span class="s1">&#39;x&#39;</span><span class="p">:</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">]})</span>
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>    <span class="n">df</span><span class="o">.</span><span class="n">to_parquet</span><span class="p">(</span><span class="s2">&quot;s3://avriiil/parquet-test-pandas&quot;</span><span class="p">)</span>
 </span></code></pre></div>
-<p>Here's how to delete all the rows where the <code>num</code> is greater than 2:</p>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="n">dt</span> <span class="o">=</span> <span class="n">DeltaTable</span><span class="p">(</span><span class="s2">&quot;tmp/my-table&quot;</span><span class="p">)</span>
-</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="n">dt</span><span class="o">.</span><span class="n">delete</span><span class="p">(</span><span class="s2">&quot;num &gt; 2&quot;</span><span class="p">)</span>
+<p>The <code>delta-rs</code> writer does not use <code>boto3</code> and therefore does not support taking credentials from your <code>.aws/config</code> or <code>.aws/creds</code> file. If you’re used to working with writers from Python engines like Polars, pandas or Dask, this may mean a small change to your workflow.</p>
+<h2 id="passing-aws-credentials">Passing AWS Credentials</h2>
+<p>You can pass your AWS credentials explicitly by using:</p>
+<ul>
+<li>the <code>storage_options</code>kwarg</li>
+<li>Environment variables</li>
+<li>EC2 metadata if using EC2 instances</li>
+<li>AWS Profiles</li>
+</ul>
+<h2 id="example">Example</h2>
+<p>Let's work through an example with Polars. The same logic applies to other Python engines like Pandas, Daft, Dask, etc.</p>
+<p>Follow the steps below to use Delta Lake on S3 with Polars:</p>
+<ol>
+<li>Install Polars and deltalake. For example, using:</li>
+</ol>
+<p><code>pip install polars deltalake</code></p>
+<ol>
+<li>Create a dataframe with some toy data.</li>
+</ol>
+<p><code>df = pl.DataFrame({'x': [1, 2, 3]})</code></p>
+<ol>
+<li>Set your <code>storage_options</code> correctly.</li>
+</ol>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="n">storage_options</span> <span class="o">=</span> <span class="p">{</span>
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>    <span class="s2">&quot;AWS_REGION&quot;</span><span class="p">:</span><span class="o">&lt;</span><span class="n">region_name</span><span class="o">&gt;</span><span class="p">,</span>
+</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>    <span class="s1">&#39;AWS_ACCESS_KEY_ID&#39;</span><span class="p">:</span> <span class="o">&lt;</span><span class="n">key_id</span><span class="o">&gt;</span><span class="p">,</span>
+</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a>    <span class="s1">&#39;AWS_SECRET_ACCESS_KEY&#39;</span><span class="p">:</span> <span class="o">&lt;</span><span class="n">access_key</span><span class="o">&gt;</span><span class="p">,</span>
+</span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a>    <span class="s1">&#39;AWS_S3_LOCKING_PROVIDER&#39;</span><span class="p">:</span> <span class="s1">&#39;dynamodb&#39;</span><span class="p">,</span>
+</span><span id="__span-1-6"><a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a>    <span class="s1">&#39;DELTA_DYNAMO_TABLE_NAME&#39;</span><span class="p">:</span> <span class="s1">&#39;delta_log&#39;</span><span class="p">,</span>
+</span><span id="__span-1-7"><a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a><span class="p">}</span>
 </span></code></pre></div>
-<p>Here are the contents of the Delta table after the delete operation has been performed:</p>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>+-------+----------+
-</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>|   num | letter   |
-</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>|-------+----------|
-</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a>|     1 | a        |
-</span><span id="__span-2-5"><a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a>|     2 | b        |
-</span><span id="__span-2-6"><a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a>+-------+----------+
+<ol>
+<li>Write data to Delta table using the <code>storage_options</code> kwarg.</li>
+</ol>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="n">df</span><span class="o">.</span><span class="n">write_delta</span><span class="p">(</span>
+</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>    <span class="s2">&quot;s3://bucket/delta_table&quot;</span><span class="p">,</span>
+</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>    <span class="n">storage_options</span><span class="o">=</span><span class="n">storage_options</span><span class="p">,</span>
+</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="p">)</span>
 </span></code></pre></div>
-<p><code>dt.delete()</code> accepts any <code>SQL where</code> clause. If no predicate is provided, all rows will be deleted.</p>
-<p>Read more in the <a href="https://delta-io.github.io/delta-rs/api/delta_table/#deltalake.DeltaTable.delete">API docs</a></p>
+<h2 id="delta-lake-on-s3-safe-concurrent-writes">Delta Lake on S3: Safe Concurrent Writes</h2>
+<p>You need a locking provider to ensure safe concurrent writes when writing Delta tables to S3. This is because S3 does not guarantee mutual exclusion.</p>
+<p>A locking provider guarantees that only one writer is able to create the same file. This prevents corrupted or conflicting data.</p>
+<p><code>delta-rs</code> uses DynamoDB to guarantee safe concurrent writes.</p>
+<p>Run the code below in your terminal to create a DynamoDB table that will act as your locking provider.</p>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>    aws dynamodb create-table \
+</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>    --table-name delta_log \
+</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>    --attribute-definitions AttributeName=tablePath,AttributeType=S AttributeName=fileName,AttributeType=S \
+</span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a>    --key-schema AttributeName=tablePath,KeyType=HASH AttributeName=fileName,KeyType=RANGE \
+</span><span id="__span-3-5"><a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a>    --provisioned-throughput ReadCapacityUnits=5,WriteCapacityUnits=5
+</span></code></pre></div>
+<p>If for some reason you don't want to use DynamoDB as your locking mechanism you can choose to set the <code>AWS_S3_ALLOW_UNSAFE_RENAME</code> variable to <code>true</code> in order to enable S3 unsafe writes.</p>
+<p>Read more in the <a href="../../../usage/writing/writing-to-s3-with-locking-provider/">Usage</a> section.</p>
+<h2 id="delta-lake-on-s3-required-permissions">Delta Lake on S3: Required permissions</h2>
+<p>You need to have permissions to get, put and delete objects in the S3 bucket you're storing your data in. Please note that you must be allowed to delete objects even if you're just appending to the Delta Lake, because there are temporary files into the log folder that are deleted after usage.</p>
+<p>In AWS S3, you will need the following permissions:</p>
+<ul>
+<li>s3:GetObject</li>
+<li>s3:PutObject</li>
+<li>s3:DeleteObject</li>
+</ul>
+<p>In DynamoDB, you will need the following permissions:</p>
+<ul>
+<li>dynamodb:GetItem</li>
+<li>dynamodb:Query</li>
+<li>dynamodb:PutItem</li>
+<li>dynamodb:UpdateItem</li>
+</ul>
 
 
 
@@ -1803,7 +1964,7 @@
       <nav class="md-footer__inner md-grid" aria-label="Footer" >
         
           
-          <a href="../writing/writing-to-s3-with-locking-provider/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Writing to S3 with a locking provider">
+          <a href="../hdfs/" class="md-footer__link md-footer__link--prev" aria-label="Previous: HDFS Storage Backend">
             <div class="md-footer__button md-icon">
               
               <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11h12Z"/></svg>
@@ -1813,20 +1974,20 @@
                 Previous
               </span>
               <div class="md-ellipsis">
-                Writing to S3 with a locking provider
+                HDFS Storage Backend
               </div>
             </div>
           </a>
         
         
           
-          <a href="../optimize/small-file-compaction-with-optimize/" class="md-footer__link md-footer__link--next" aria-label="Next: Small file compaction">
+          <a href="../../delta-lake-arrow/" class="md-footer__link md-footer__link--next" aria-label="Next: Arrow">
             <div class="md-footer__title">
               <span class="md-footer__direction">
                 Next
               </span>
               <div class="md-ellipsis">
-                Small file compaction
+                Arrow
               </div>
             </div>
             <div class="md-footer__button md-icon">
@@ -1867,10 +2028,10 @@
     </div>
     
     
-    <script id="__config" type="application/json">{"base": "../..", "features": ["navigation.tracking", "navigation.instant", "navigation.expand", "navigation.tabs", "navigation.indexes", "navigation.tabs.sticky", "navigation.footer", "content.tabs.link", "content.code.annotation", "content.code.copy"], "search": "../../assets/javascripts/workers/search.f886a092.min.js", "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}}</script>
+    <script id="__config" type="application/json">{"base": "../../..", "features": ["navigation.tracking", "navigation.instant", "navigation.expand", "navigation.tabs", "navigation.indexes", "navigation.tabs.sticky", "navigation.footer", "content.tabs.link", "content.code.annotation", "content.code.copy"], "search": "../../../assets/javascripts/workers/search.f886a092.min.js", "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}}</script>
     
     
-      <script src="../../assets/javascripts/bundle.aecac24b.min.js"></script>
+      <script src="../../../assets/javascripts/bundle.aecac24b.min.js"></script>
       
     
   </body>

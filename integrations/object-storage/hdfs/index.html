@@ -14,7 +14,7 @@
         <link rel="prev" href="../../../api/exceptions/">
       
       
-        <link rel="next" href="../../delta-lake-arrow/">
+        <link rel="next" href="../s3/">
       
       
       <link rel="icon" href="../../../delta-rust-no-whitespace.svg">
@@ -1367,6 +1367,8 @@
       
         
       
+        
+      
     
     
     
@@ -1493,6 +1495,26 @@
   
 </nav>
       
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../s3/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    AWS S3 Storage Backend
+  </span>
+  
+
+      </a>
     </li>
   
 
@@ -1857,15 +1879,19 @@
 <h1 id="hdfs-storage-backend">HDFS Storage Backend</h1>
 <p>HDFS support is provided via the <a href="https://github.com/datafusion-contrib/hdfs-native-object-store">hdfs-native-object-store</a> package, which sits on top of <a href="https://github.com/Kimahriman/hdfs-native">hdfs-native</a>. This is an HDFS client written from scratch in Rust, with no bindings to libhdfs or any use of Java. While it supports most common cluster configurations, it does not support every possible client configuration that could exist.</p>
 <h2 id="supported-configurations">Supported Configurations</h2>
-<p>By default, the client looks for existing Hadoop configs in following manner:
-- If the <code>HADOOP_CONF_DIR</code> environment variable is defined, load configs from <code>$HADOOP_CONF_DIR/core-site.xml</code> and <code>$HADOOP_CONF_DIR/hdfs-site.xml</code>
-- Otherwise, if the <code>HADOOP_HOME</code> environment variable is set, load configs from <code>$HADOOP_HOME/etc/hadoop/core-site.xml</code> and <code>$HADOOP_HOME/etc/hadoop/hdfs-site.xml</code></p>
+<p>By default, the client looks for existing Hadoop configs in following manner:</p>
+<ul>
+<li>If the <code>HADOOP_CONF_DIR</code> environment variable is defined, load configs from <code>$HADOOP_CONF_DIR/core-site.xml</code> and <code>$HADOOP_CONF_DIR/hdfs-site.xml</code></li>
+<li>Otherwise, if the <code>HADOOP_HOME</code> environment variable is set, load configs from <code>$HADOOP_HOME/etc/hadoop/core-site.xml</code> and <code>$HADOOP_HOME/etc/hadoop/hdfs-site.xml</code></li>
+</ul>
 <p>Additionally, you can pass Hadoop configs as <code>storage_options</code> and these will take precedence over the above configs.</p>
-<p>Currently the supported client configuration parameters are:
-- <code>dfs.ha.namenodes.*</code> - name service support
-- <code>dfs.namenode.rpc-address.*</code> - name service support
-- <code>fs.viewfs.mounttable.*.link.*</code> - ViewFS links
-- <code>fs.viewfs.mounttable.*.linkFallback</code> - ViewFS link fallback</p>
+<p>Currently the supported client configuration parameters are:</p>
+<ul>
+<li><code>dfs.ha.namenodes.*</code> - name service support</li>
+<li><code>dfs.namenode.rpc-address.*</code> - name service support</li>
+<li><code>fs.viewfs.mounttable.*.link.*</code> - ViewFS links</li>
+<li><code>fs.viewfs.mounttable.*.linkFallback</code> - ViewFS link fallback</li>
+</ul>
 <p>If you find your setup is not supported, please file an issue in the <a href="https://github.com/Kimahriman/hdfs-native">hdfs-native</a> repository.</p>
 <h2 id="secure-clusters">Secure Clusters</h2>
 <p>The client supports connecting to secure clusters through both Kerberos authentication as well as token authentication, and all SASL protection types are supported. The highest supported protection mechanism advertised by the server will be used.</p>
@@ -1925,13 +1951,13 @@
         
         
           
-          <a href="../../delta-lake-arrow/" class="md-footer__link md-footer__link--next" aria-label="Next: Arrow">
+          <a href="../s3/" class="md-footer__link md-footer__link--next" aria-label="Next: AWS S3 Storage Backend">
             <div class="md-footer__title">
               <span class="md-footer__direction">
                 Next
               </span>
               <div class="md-ellipsis">
-                Arrow
+                AWS S3 Storage Backend
               </div>
             </div>
             <div class="md-footer__button md-icon">

@@ -1239,6 +1239,13 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
+  <a href="#deltalake.table.TableAlterer.add_columns" class="md-nav__link">
+    add_columns
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#deltalake.table.TableAlterer.add_constraint" class="md-nav__link">
     add_constraint
   </a>
@@ -1437,6 +1444,8 @@
       
         
       
+        
+      
     
     
     
@@ -1480,6 +1489,26 @@
   
   <span class="md-ellipsis">
     HDFS Storage Backend
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../integrations/object-storage/s3/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    AWS S3 Storage Backend
   </span>
   
 
@@ -1795,6 +1824,13 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
+  <a href="#deltalake.table.TableAlterer.add_columns" class="md-nav__link">
+    add_columns
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#deltalake.table.TableAlterer.add_constraint" class="md-nav__link">
     add_constraint
   </a>
@@ -1876,12 +1912,105 @@
 
 
 
+<h4 id="deltalake.table.TableAlterer.add_columns" class="doc doc-heading">
+          <span class="doc doc-object-name doc-function-name">add_columns</span>
+
+
+</h4>
+<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">add_columns</span><span class="p">(</span><span class="n">fields</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="n">DeltaField</span><span class="p">,</span> <span class="n">List</span><span class="p">[</span><span class="n">DeltaField</span><span class="p">]],</span> <span class="n">custom_metadata</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">post_commithook_properties</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">PostCommitHookProperties</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span>
+</span></code></pre></div>
+
+  <div class="doc doc-contents ">
+  
+      <p>Add new columns and/or update the fields of a stuctcolumn</p>
+
+
+
+  <p><strong>Parameters:</strong></p>
+  <table>
+    <thead>
+      <tr>
+        <th>Name</th>
+        <th>Type</th>
+        <th>Description</th>
+        <th>Default</th>
+      </tr>
+    </thead>
+    <tbody>
+        <tr>
+          <td><code>fields</code></td>
+          <td>
+                <code><span title="typing.Union">Union</span>[<a class="autorefs autorefs-internal" title="deltalake.schema.Field" href="../../schema/#deltalake.Field">Field</a>, <span title="typing.List">List</span>[<a class="autorefs autorefs-internal" title="deltalake.schema.Field" href="../../schema/#deltalake.Field">Field</a>]]</code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>fields to merge into schema</p>
+            </div>
+          </td>
+          <td>
+              <em>required</em>
+          </td>
+        </tr>
+        <tr>
+          <td><code>custom_metadata</code></td>
+          <td>
+                <code><span title="typing.Optional">Optional</span>[<span title="typing.Dict">Dict</span>[str, str]]</code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>custom metadata that will be added to the transaction commit.</p>
+            </div>
+          </td>
+          <td>
+                <code>None</code>
+          </td>
+        </tr>
+        <tr>
+          <td><code>post_commithook_properties</code></td>
+          <td>
+                <code><span title="typing.Optional">Optional</span>[<span title="deltalake.table.PostCommitHookProperties">PostCommitHookProperties</span>]</code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>properties for the post commit hook. If None, default values are used.</p>
+            </div>
+          </td>
+          <td>
+                <code>None</code>
+          </td>
+        </tr>
+    </tbody>
+  </table>
+
+<details class="example" open>
+  <summary>Example</summary>
+  <div class="language-python highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="kn">from</span> <span class="nn">deltalake</span> <span class="kn">import</span> <span class="n">DeltaTable</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="kn">from</span> <span class="nn">deltalake.schema</span> <span class="kn">import</span> <span class="n">Field</span><span class="p">,</span> <span class="n">PrimitiveType</span><span class="p">,</span> <span class="n">StructType</span>
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="n">dt</span> <span class="o">=</span> <span class="n">DeltaTable</span><span class="p">(</span><span class="s2">&quot;test_table&quot;</span><span class="p">)</span>
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="n">new_fields</span> <span class="o">=</span> <span class="p">[</span>
+</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>    <span class="n">Field</span><span class="p">(</span><span class="s2">&quot;baz&quot;</span><span class="p">,</span> <span class="n">StructType</span><span class="p">([</span><span class="n">Field</span><span class="p">(</span><span class="s2">&quot;bar&quot;</span><span class="p">,</span> <span class="n">PrimitiveType</span><span class="p">(</span><span class="s2">&quot;integer&quot;</span><span class="p">))])),</span>
+</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>    <span class="n">Field</span><span class="p">(</span><span class="s2">&quot;bar&quot;</span><span class="p">,</span> <span class="n">PrimitiveType</span><span class="p">(</span><span class="s2">&quot;integer&quot;</span><span class="p">))</span>
+</span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="p">]</span>
+</span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a><span class="n">dt</span><span class="o">.</span><span class="n">alter</span><span class="o">.</span><span class="n">add_columns</span><span class="p">(</span>
+</span><span id="__span-0-9"><a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a>    <span class="n">new_fields</span>
+</span><span id="__span-0-10"><a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a><span class="p">)</span>
+</span></code></pre></div>
+</details>
+  </div>
+
+</div>
+
+
+<div class="doc doc-object doc-function">
+
+
+
 <h4 id="deltalake.table.TableAlterer.add_constraint" class="doc doc-heading">
           <span class="doc doc-object-name doc-function-name">add_constraint</span>
 
 
 </h4>
-<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">add_constraint</span><span class="p">(</span><span class="n">constraints</span><span class="p">:</span> <span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">],</span> <span class="n">custom_metadata</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span>
+<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">add_constraint</span><span class="p">(</span><span class="n">constraints</span><span class="p">:</span> <span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">],</span> <span class="n">custom_metadata</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">post_commithook_properties</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">PostCommitHookProperties</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span>
 </span></code></pre></div>
 
   <div class="doc doc-contents ">
@@ -1929,22 +2058,36 @@
                 <code>None</code>
           </td>
         </tr>
+        <tr>
+          <td><code>post_commithook_properties</code></td>
+          <td>
+                <code><span title="typing.Optional">Optional</span>[<span title="deltalake.table.PostCommitHookProperties">PostCommitHookProperties</span>]</code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>properties for the post commit hook. If None, default values are used.</p>
+            </div>
+          </td>
+          <td>
+                <code>None</code>
+          </td>
+        </tr>
     </tbody>
   </table>
-      <p>Example:
-    <div class="language-python highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="kn">from</span> <span class="nn">deltalake</span> <span class="kn">import</span> <span class="n">DeltaTable</span>
+
+<details class="example" open>
+  <summary>Example</summary>
+  <div class="language-python highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="kn">from</span> <span class="nn">deltalake</span> <span class="kn">import</span> <span class="n">DeltaTable</span>
 </span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="n">dt</span> <span class="o">=</span> <span class="n">DeltaTable</span><span class="p">(</span><span class="s2">&quot;test_table_constraints&quot;</span><span class="p">)</span>
 </span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="n">dt</span><span class="o">.</span><span class="n">alter</span><span class="o">.</span><span class="n">add_constraint</span><span class="p">({</span>
 </span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>    <span class="s2">&quot;value_gt_5&quot;</span><span class="p">:</span> <span class="s2">&quot;value &gt; 5&quot;</span><span class="p">,</span>
 </span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="p">})</span>
+</span></code></pre></div>
+<p><strong>Check configuration</strong>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>dt.metadata().configuration
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>{&#39;delta.constraints.value_gt_5&#39;: &#39;value &gt; 5&#39;}
 </span></code></pre></div></p>
-<div class="language-text highlight"><pre><span></span><code>**Check configuration**
-```
-dt.metadata().configuration
-{&#39;delta.constraints.value_gt_5&#39;: &#39;value &gt; 5&#39;}
-```
-</code></pre></div>
-
+</details>
   </div>
 
 </div>
@@ -1959,7 +2102,7 @@ dt.metadata().configuration
 
 
 </h4>
-<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">drop_constraint</span><span class="p">(</span><span class="n">name</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">raise_if_not_exists</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span> <span class="n">custom_metadata</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span>
+<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">drop_constraint</span><span class="p">(</span><span class="n">name</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">raise_if_not_exists</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span> <span class="n">custom_metadata</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">post_commithook_properties</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">PostCommitHookProperties</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span>
 </span></code></pre></div>
 
   <div class="doc doc-contents ">
@@ -2021,26 +2164,38 @@ dt.metadata().configuration
                 <code>None</code>
           </td>
         </tr>
+        <tr>
+          <td><code>post_commithook_properties</code></td>
+          <td>
+                <code><span title="typing.Optional">Optional</span>[<span title="deltalake.table.PostCommitHookProperties">PostCommitHookProperties</span>]</code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>properties for the post commit hook. If None, default values are used.</p>
+            </div>
+          </td>
+          <td>
+                <code>None</code>
+          </td>
+        </tr>
     </tbody>
   </table>
-      <p>Example:
-    <div class="language-python highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="kn">from</span> <span class="nn">deltalake</span> <span class="kn">import</span> <span class="n">DeltaTable</span>
+
+<details class="example" open>
+  <summary>Example</summary>
+  <div class="language-python highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="kn">from</span> <span class="nn">deltalake</span> <span class="kn">import</span> <span class="n">DeltaTable</span>
 </span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="n">dt</span> <span class="o">=</span> <span class="n">DeltaTable</span><span class="p">(</span><span class="s2">&quot;test_table_constraints&quot;</span><span class="p">)</span>
 </span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="n">dt</span><span class="o">.</span><span class="n">metadata</span><span class="p">()</span><span class="o">.</span><span class="n">configuration</span>
 </span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="p">{</span><span class="s1">&#39;delta.constraints.value_gt_5&#39;</span><span class="p">:</span> <span class="s1">&#39;value &gt; 5&#39;</span><span class="p">}</span>
+</span></code></pre></div>
+<p><strong>Drop the constraint</strong>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="n">dt</span><span class="o">.</span><span class="n">alter</span><span class="o">.</span><span class="n">drop_constraint</span><span class="p">(</span><span class="n">name</span> <span class="o">=</span> <span class="s2">&quot;value_gt_5&quot;</span><span class="p">)</span>
 </span></code></pre></div></p>
-<div class="language-text highlight"><pre><span></span><code>**Drop the constraint**
-```python
-dt.alter.drop_constraint(name = &quot;value_gt_5&quot;)
-```
-
-**Configuration after dropping**
-```python
-dt.metadata().configuration
-{}
-```
-</code></pre></div>
-
+<p><strong>Configuration after dropping</strong>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="n">dt</span><span class="o">.</span><span class="n">metadata</span><span class="p">()</span><span class="o">.</span><span class="n">configuration</span>
+</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="p">{}</span>
+</span></code></pre></div></p>
+</details>
   </div>
 
 </div>

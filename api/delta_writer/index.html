@@ -1450,6 +1450,8 @@
       
         
       
+        
+      
     
     
     
@@ -1493,6 +1495,26 @@
   
   <span class="md-ellipsis">
     HDFS Storage Backend
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../integrations/object-storage/s3/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    AWS S3 Storage Backend
   </span>
   
 
@@ -1878,7 +1900,7 @@
 
 
 </h3>
-<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">write_deltalake</span><span class="p">(</span><span class="n">table_or_uri</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Path</span><span class="p">,</span> <span class="n">DeltaTable</span><span class="p">],</span> <span class="n">data</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">,</span> <span class="n">ds</span><span class="o">.</span><span class="n">Dataset</span><span class="p">,</span> <span class="n">pa</span><span class="o">.</span><span class="n">Table</span><span class="p">,</span> <span class="n">pa</span><span class="o">.</span><span class="n">RecordBatch</span><span class="p">,</span> <span class="n">Iterable</span><span class="p">[</span><span class="n">pa</span><span class="o">.</span><span class="n">RecordBatch</span><span class="p">],</span> <span class="n">RecordBatchReader</span><span class="p">],</span> <span class="o">*</span><span class="p">,</span> <span class="n">schema</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Union</span><span class="p">[</span><span class="n">pa</span><span class="o">.</span><span class="n">Schema</span><span class="p">,</span> <span class="n">DeltaSchema</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">partition_by</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Union</span><span class="p">[</span><span class="n">List</span><span class="p">[</span><span class="nb">str</span><span class="p">],</span> <span class="nb">str</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">mode</span><span class="p">:</span> <span class="n">Literal</span><span class="p">[</span><span class="s1">&#39;error&#39;</span><span class="p">,</span> <span class="s1">&#39;append&#39;</span><span class="p">,</span> <span class="s1">&#39;overwrite&#39;</span><span class="p">,</span> <span class="s1">&#39;ignore&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="s1">&#39;error&#39;</span><span class="p">,</span> <span class="n">file_options</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">ds</span><span class="o">.</span><span class="n">ParquetFileWriteOptions</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">max_partitions</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">max_open_files</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">1024</span><span class="p">,</span> <span class="n">max_rows_per_file</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">10</span> <span class="o">*</span> <span class="mi">1024</span> <span class="o">*</span> <span class="mi">1024</span><span class="p">,</span> <span class="n">min_rows_per_group</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">64</span> <span class="o">*</span> <span class="mi">1024</span><span class="p">,</span> <span class="n">max_rows_per_group</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">128</span> <span class="o">*</span> <span class="mi">1024</span><span class="p">,</span> <span class="n">name</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">description</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">configuration</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Mapping</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">str</span><span class="p">]]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">schema_mode</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Literal</span><span class="p">[</span><span class="s1">&#39;merge&#39;</span><span class="p">,</span> <span class="s1">&#39;overwrite&#39;</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">storage_options</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">partition_filters</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">List</span><span class="p">[</span><span class="n">Tuple</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">predicate</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">large_dtypes</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span> <span class="n">engine</span><span class="p">:</span> <span class="n">Literal</span><span class="p">[</span><span class="s1">&#39;pyarrow&#39;</span><span class="p">,</span> <span class="s1">&#39;rust&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="s1">&#39;pyarrow&#39;</span><span class="p">,</span> <span class="n">writer_properties</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">WriterProperties</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">custom_metadata</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span>
+<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">write_deltalake</span><span class="p">(</span><span class="n">table_or_uri</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Path</span><span class="p">,</span> <span class="n">DeltaTable</span><span class="p">],</span> <span class="n">data</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">,</span> <span class="n">ds</span><span class="o">.</span><span class="n">Dataset</span><span class="p">,</span> <span class="n">pa</span><span class="o">.</span><span class="n">Table</span><span class="p">,</span> <span class="n">pa</span><span class="o">.</span><span class="n">RecordBatch</span><span class="p">,</span> <span class="n">Iterable</span><span class="p">[</span><span class="n">pa</span><span class="o">.</span><span class="n">RecordBatch</span><span class="p">],</span> <span class="n">RecordBatchReader</span><span class="p">,</span> <span class="n">ArrowStreamExportable</span><span class="p">],</span> <span class="o">*</span><span class="p">,</span> <span class="n">schema</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Union</span><span class="p">[</span><span class="n">pa</span><span class="o">.</span><span class="n">Schema</span><span class="p">,</span> <span class="n">DeltaSchema</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">partition_by</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Union</span><span class="p">[</span><span class="n">List</span><span class="p">[</span><span class="nb">str</span><span class="p">],</span> <span class="nb">str</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">mode</span><span class="p">:</span> <span class="n">Literal</span><span class="p">[</span><span class="s1">&#39;error&#39;</span><span class="p">,</span> <span class="s1">&#39;append&#39;</span><span class="p">,</span> <span class="s1">&#39;overwrite&#39;</span><span class="p">,</span> <span class="s1">&#39;ignore&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="s1">&#39;error&#39;</span><span class="p">,</span> <span class="n">file_options</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">ds</span><span class="o">.</span><span class="n">ParquetFileWriteOptions</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">max_partitions</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">max_open_files</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">1024</span><span class="p">,</span> <span class="n">max_rows_per_file</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">10</span> <span class="o">*</span> <span class="mi">1024</span> <span class="o">*</span> <span class="mi">1024</span><span class="p">,</span> <span class="n">min_rows_per_group</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">64</span> <span class="o">*</span> <span class="mi">1024</span><span class="p">,</span> <span class="n">max_rows_per_group</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">128</span> <span class="o">*</span> <span class="mi">1024</span><span class="p">,</span> <span class="n">name</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">description</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">configuration</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Mapping</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">str</span><span class="p">]]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">schema_mode</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Literal</span><span class="p">[</span><span class="s1">&#39;merge&#39;</span><span class="p">,</span> <span class="s1">&#39;overwrite&#39;</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">storage_options</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">partition_filters</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">List</span><span class="p">[</span><span class="n">Tuple</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">predicate</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">large_dtypes</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span> <span class="n">engine</span><span class="p">:</span> <span class="n">Literal</span><span class="p">[</span><span class="s1">&#39;pyarrow&#39;</span><span class="p">,</span> <span class="s1">&#39;rust&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="s1">&#39;rust&#39;</span><span class="p">,</span> <span class="n">writer_properties</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">WriterProperties</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">custom_metadata</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">post_commithook_properties</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">PostCommitHookProperties</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span>
 </span></code></pre></div>
 
   <div class="doc doc-contents first">
@@ -1922,7 +1944,7 @@ mechanism must be supplied. For more information on enabling concurrent writing 
         <tr>
           <td><code>data</code></td>
           <td>
-                <code><span title="typing.Union">Union</span>[<a class="autorefs autorefs-external" title="pandas.DataFrame" href="https://pandas.pydata.org/docs/reference/api/pandas.DataFrame.html#pandas.DataFrame">DataFrame</a>, <a class="autorefs autorefs-external" title="pyarrow.dataset.Dataset" href="https://arrow.apache.org/docs/python/generated/pyarrow.dataset.Dataset.html#pyarrow.dataset.Dataset">Dataset</a>, <a class="autorefs autorefs-external" title="pyarrow.Table" href="https://arrow.apache.org/docs/python/generated/pyarrow.Table.html#pyarrow.Table">Table</a>, <a class="autorefs autorefs-external" title="pyarrow.RecordBatch" href="https://arrow.apache.org/docs/python/generated/pyarrow.RecordBatch.html#pyarrow.RecordBatch">RecordBatch</a>, <span title="typing.Iterable">Iterable</span>[<a class="autorefs autorefs-external" title="pyarrow.RecordBatch" href="https://arrow.apache.org/docs/python/generated/pyarrow.RecordBatch.html#pyarrow.RecordBatch">RecordBatch</a>], <a class="autorefs autorefs-external" title="pyarrow.lib.RecordBatchReader" href="https://arrow.apache.org/docs/python/generated/pyarrow.RecordBatchReader.html#pyarrow.RecordBatchReader">RecordBatchReader</a>]</code>
+                <code><span title="typing.Union">Union</span>[<a class="autorefs autorefs-external" title="pandas.DataFrame" href="https://pandas.pydata.org/docs/reference/api/pandas.DataFrame.html#pandas.DataFrame">DataFrame</a>, <a class="autorefs autorefs-external" title="pyarrow.dataset.Dataset" href="https://arrow.apache.org/docs/python/generated/pyarrow.dataset.Dataset.html#pyarrow.dataset.Dataset">Dataset</a>, <a class="autorefs autorefs-external" title="pyarrow.Table" href="https://arrow.apache.org/docs/python/generated/pyarrow.Table.html#pyarrow.Table">Table</a>, <a class="autorefs autorefs-external" title="pyarrow.RecordBatch" href="https://arrow.apache.org/docs/python/generated/pyarrow.RecordBatch.html#pyarrow.RecordBatch">RecordBatch</a>, <span title="typing.Iterable">Iterable</span>[<a class="autorefs autorefs-external" title="pyarrow.RecordBatch" href="https://arrow.apache.org/docs/python/generated/pyarrow.RecordBatch.html#pyarrow.RecordBatch">RecordBatch</a>], <a class="autorefs autorefs-external" title="pyarrow.RecordBatchReader" href="https://arrow.apache.org/docs/python/generated/pyarrow.RecordBatchReader.html#pyarrow.RecordBatchReader">RecordBatchReader</a>, <span title="deltalake.writer.ArrowStreamExportable">ArrowStreamExportable</span>]</code>
           </td>
           <td>
             <div class="doc-md-description">
@@ -1965,7 +1987,7 @@ when creating a new table.</p>
         <tr>
           <td><code>mode</code></td>
           <td>
-                <code><span title="typing_extensions.Literal">Literal</span>[&#39;error&#39;, &#39;append&#39;, &#39;overwrite&#39;, &#39;ignore&#39;]</code>
+                <code><span title="typing.Literal">Literal</span>[&#39;error&#39;, &#39;append&#39;, &#39;overwrite&#39;, &#39;ignore&#39;]</code>
           </td>
           <td>
             <div class="doc-md-description">
@@ -2109,7 +2131,7 @@ If this value is set, then min_rows_per_group should also be set.</p>
         <tr>
           <td><code>schema_mode</code></td>
           <td>
-                <code><span title="typing.Optional">Optional</span>[<span title="typing_extensions.Literal">Literal</span>[&#39;merge&#39;, &#39;overwrite&#39;]]</code>
+                <code><span title="typing.Optional">Optional</span>[<span title="typing.Literal">Literal</span>[&#39;merge&#39;, &#39;overwrite&#39;]]</code>
           </td>
           <td>
             <div class="doc-md-description">
@@ -2169,7 +2191,7 @@ If this value is set, then min_rows_per_group should also be set.</p>
           </td>
           <td>
             <div class="doc-md-description">
-              <p>If True, the data schema is kept in large_dtypes, has no effect on pandas dataframe input.</p>
+              <p>Only used for pyarrow engine</p>
             </div>
           </td>
           <td>
@@ -2179,16 +2201,15 @@ If this value is set, then min_rows_per_group should also be set.</p>
         <tr>
           <td><code>engine</code></td>
           <td>
-                <code><span title="typing_extensions.Literal">Literal</span>[&#39;pyarrow&#39;, &#39;rust&#39;]</code>
+                <code><span title="typing.Literal">Literal</span>[&#39;pyarrow&#39;, &#39;rust&#39;]</code>
           </td>
           <td>
             <div class="doc-md-description">
-              <p>writer engine to write the delta table. <code>Rust</code> engine is still experimental but you may
-see up to 4x performance improvements over pyarrow.</p>
+              <p>writer engine to write the delta table. PyArrow engine is deprecated, and will be removed in v1.0.</p>
             </div>
           </td>
           <td>
-                <code>&#39;pyarrow&#39;</code>
+                <code>&#39;rust&#39;</code>
           </td>
         </tr>
         <tr>
@@ -2219,6 +2240,20 @@ see up to 4x performance improvements over pyarrow.</p>
                 <code>None</code>
           </td>
         </tr>
+        <tr>
+          <td><code>post_commithook_properties</code></td>
+          <td>
+                <code><span title="typing.Optional">Optional</span>[<span title="deltalake.table.PostCommitHookProperties">PostCommitHookProperties</span>]</code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>properties for the post commit hook. If None, default values are used.</p>
+            </div>
+          </td>
+          <td>
+                <code>None</code>
+          </td>
+        </tr>
     </tbody>
   </table>
 
@@ -2239,7 +2274,7 @@ see up to 4x performance improvements over pyarrow.</p>
   </span>
 
 </h3>
-<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">WriterProperties</span><span class="p">(</span><span class="n">data_page_size_limit</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">dictionary_page_size_limit</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">data_page_row_count_limit</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">write_batch_size</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">max_row_group_size</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">compression</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Literal</span><span class="p">[</span><span class="s1">&#39;UNCOMPRESSED&#39;</span><span class="p">,</span> <span class="s1">&#39;SNAPPY&#39;</span><span class="p">,</span> <span class="s1">&#39;GZIP&#39;</span><span class="p">,</span> <span class="s1">&#39;BROTLI&#39;</span><span class="p">,</span> <span class="s1">&#39;LZ4&#39;</span><span class="p">,</span> <span class="s1">&#39;ZSTD&#39;</span><span class="p">,</span> <span class="s1">&#39;LZ4_RAW&#39;</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">compression_level</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span>
+<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">WriterProperties</span><span class="p">(</span><span class="n">data_page_size_limit</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">dictionary_page_size_limit</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">data_page_row_count_limit</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">write_batch_size</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">max_row_group_size</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">compression</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Literal</span><span class="p">[</span><span class="s1">&#39;UNCOMPRESSED&#39;</span><span class="p">,</span> <span class="s1">&#39;SNAPPY&#39;</span><span class="p">,</span> <span class="s1">&#39;GZIP&#39;</span><span class="p">,</span> <span class="s1">&#39;BROTLI&#39;</span><span class="p">,</span> <span class="s1">&#39;LZ4&#39;</span><span class="p">,</span> <span class="s1">&#39;ZSTD&#39;</span><span class="p">,</span> <span class="s1">&#39;LZ4_RAW&#39;</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">compression_level</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">statistics_truncate_length</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">default_column_properties</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">ColumnProperties</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">column_properties</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">ColumnProperties</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span>
 </span></code></pre></div>
 
   <div class="doc doc-contents first">
@@ -2363,6 +2398,48 @@ ZSTD: levels (1-22),</p>
                 <code>None</code>
           </td>
         </tr>
+        <tr>
+          <td><code>statistics_truncate_length</code></td>
+          <td>
+                <code><span title="typing.Optional">Optional</span>[int]</code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>maximum length of truncated min/max values in statistics.</p>
+            </div>
+          </td>
+          <td>
+                <code>None</code>
+          </td>
+        </tr>
+        <tr>
+          <td><code>default_column_properties</code></td>
+          <td>
+                <code><span title="typing.Optional">Optional</span>[<span title="deltalake.table.ColumnProperties">ColumnProperties</span>]</code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>Default Column Properties for the Rust parquet writer.</p>
+            </div>
+          </td>
+          <td>
+                <code>None</code>
+          </td>
+        </tr>
+        <tr>
+          <td><code>column_properties</code></td>
+          <td>
+                <code><span title="typing.Optional">Optional</span>[<span title="typing.Dict">Dict</span>[str, <span title="deltalake.table.ColumnProperties">ColumnProperties</span>]]</code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>Column Properties for the Rust parquet writer.</p>
+            </div>
+          </td>
+          <td>
+                <code>None</code>
+          </td>
+        </tr>
     </tbody>
   </table>
 
@@ -2453,7 +2530,7 @@ as configuration, name, and description.</p>
         <tr>
           <td><code>partition_strategy</code></td>
           <td>
-                <code><span title="typing.Optional">Optional</span>[<span title="typing_extensions.Literal">Literal</span>[&#39;hive&#39;]]</code>
+                <code><span title="typing.Optional">Optional</span>[<span title="typing.Literal">Literal</span>[&#39;hive&#39;]]</code>
           </td>
           <td>
             <div class="doc-md-description">
@@ -2467,7 +2544,7 @@ as configuration, name, and description.</p>
         <tr>
           <td><code>mode</code></td>
           <td>
-                <code><span title="typing_extensions.Literal">Literal</span>[&#39;error&#39;, &#39;ignore&#39;]</code>
+                <code><span title="typing.Literal">Literal</span>[&#39;error&#39;, &#39;ignore&#39;]</code>
           </td>
           <td>
             <div class="doc-md-description">
