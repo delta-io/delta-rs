@@ -410,14 +410,8 @@ class DeltaTable:
                                 but will also increase memory usage. Possible rate limits of the storage backend should
                                 also be considered for optimal performance. Defaults to 4 * number of cpus.
         """
-        table_uri = RawDeltaTable.get_table_uri_from_data_catalog(
-            data_catalog=data_catalog.value,
-            data_catalog_id=data_catalog_id,
-            database_name=database_name,
-            table_name=table_name,
-        )
-        return cls(
-            table_uri=table_uri, version=version, log_buffer_size=log_buffer_size
+        raise NotImplementedError(
+            "Reading from data catalog is not supported at this point in time."
         )
 
     @staticmethod
