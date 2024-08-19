@@ -24,7 +24,6 @@ use deltalake::datafusion::catalog::TableProvider;
 use deltalake::datafusion::datasource::memory::MemTable;
 use deltalake::datafusion::physical_plan::ExecutionPlan;
 use deltalake::datafusion::prelude::SessionContext;
-use deltalake::delta_datafusion::cdf::FileAction;
 use deltalake::delta_datafusion::DeltaDataChecker;
 use deltalake::errors::DeltaTableError;
 use deltalake::kernel::{
@@ -52,6 +51,7 @@ use deltalake::parquet::errors::ParquetError;
 use deltalake::parquet::file::properties::WriterProperties;
 use deltalake::partitions::PartitionFilter;
 use deltalake::protocol::{DeltaOperation, SaveMode};
+use deltalake::storage::IORuntime;
 use deltalake::DeltaTableBuilder;
 use deltalake::{DeltaOps, DeltaResult};
 use futures::future::join_all;
@@ -111,7 +111,8 @@ impl RawDeltaTable {
         log_buffer_size: Option<usize>,
     ) -> PyResult<Self> {
         py.allow_threads(|| {
-            let mut builder = deltalake::DeltaTableBuilder::from_uri(table_uri);
+            let mut builder = deltalake::DeltaTableBuilder::from_uri(table_uri)
+                .with_io_runtime(IORuntime::default());
             let options = storage_options.clone().unwrap_or_default();
             if let Some(storage_options) = storage_options {
                 builder = builder.with_storage_options(storage_options)

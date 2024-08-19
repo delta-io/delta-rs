@@ -369,6 +369,7 @@ impl PartitionWriter {
 
         // write file to object store
         self.object_store.put(&path, buffer.into()).await?;
+
         self.files_written.push(
             create_add(
                 &self.config.partition_values,

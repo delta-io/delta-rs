@@ -18,9 +18,12 @@ use url::Url;
 use crate::kernel::Action;
 use crate::operations::transaction::TransactionError;
 use crate::protocol::{get_last_checkpoint, ProtocolError};
+use crate::storage::DeltaIOStorageBackend;
 use crate::storage::{
-    commit_uri_from_version, retry_ext::ObjectStoreRetryExt, ObjectStoreRef, StorageOptions,
+    commit_uri_from_version, retry_ext::ObjectStoreRetryExt, IORuntime, ObjectStoreRef,
+    StorageOptions,
 };
+
 use crate::{DeltaResult, DeltaTableError};
 
 #[cfg(feature = "datafusion")]
@@ -98,11 +101,12 @@ lazy_static! {
 /// # use std::collections::HashMap;
 /// # use url::Url;
 /// let location = Url::parse("memory:///").expect("Failed to make location");
-/// let logstore = logstore_for(location, HashMap::new()).expect("Failed to get a logstore");
+/// let logstore = logstore_for(location, HashMap::new(), None).expect("Failed to get a logstore");
 /// ```
 pub fn logstore_for(
     location: Url,
     options: impl Into<StorageOptions> + Clone,
+    io_runtime: Option<IORuntime>,
 ) -> DeltaResult<LogStoreRef> {
     // turn location into scheme
     let scheme = Url::parse(&format!("{}://", location.scheme()))
@@ -110,10 +114,11 @@ pub fn logstore_for(
 
     if let Some(entry) = crate::storage::factories().get(&scheme) {
         debug!("Found a storage provider for {scheme} ({location})");
+
         let (store, _prefix) = entry
             .value()
             .parse_url_opts(&location, &options.clone().into())?;
-        return logstore_with(store, location, options);
+        return logstore_with(store, location, options, io_runtime);
     }
     Err(DeltaTableError::InvalidTableLocation(location.into()))
 }
@@ -123,9 +128,16 @@ pub fn logstore_with(
     store: ObjectStoreRef,
     location: Url,
     options: impl Into<StorageOptions> + Clone,
+    io_runtime: Option<IORuntime>,
 ) -> DeltaResult<LogStoreRef> {
     let scheme = Url::parse(&format!("{}://", location.scheme()))
         .map_err(|_| DeltaTableError::InvalidTableLocation(location.clone().into()))?;
+
+    let store = if let Some(io_runtime) = io_runtime {
+        Arc::new(DeltaIOStorageBackend::new(store, io_runtime.get_rt())) as ObjectStoreRef
+    } else {
+        store
+    };
 
     if let Some(factory) = logstores().get(&scheme) {
         debug!("Found a logstore provider for {scheme}");
@@ -471,14 +483,21 @@ mod tests {
     #[test]
     fn logstore_with_invalid_url() {
         let location = Url::parse("nonexistent://table").unwrap();
-        let store = logstore_for(location, HashMap::default());
+        let store = logstore_for(location, HashMap::default(), None);
         assert!(store.is_err());
     }
 
     #[test]
     fn logstore_with_memory() {
         let location = Url::parse("memory://table").unwrap();
-        let store = logstore_for(location, HashMap::default());
+        let store = logstore_for(location, HashMap::default(), None);
+        assert!(store.is_ok());
+    }
+
+    #[test]
+    fn logstore_with_memory_and_rt() {
+        let location = Url::parse("memory://table").unwrap();
+        let store = logstore_for(location, HashMap::default(), Some(IORuntime::default()));
         assert!(store.is_ok());
     }
 }
