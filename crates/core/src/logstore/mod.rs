@@ -134,7 +134,7 @@ pub fn logstore_with(
         .map_err(|_| DeltaTableError::InvalidTableLocation(location.clone().into()))?;
 
     let store = if let Some(io_runtime) = io_runtime {
-        Arc::new(DeltaIOStorageBackend::new(store, io_runtime.get_rt())) as ObjectStoreRef
+        Arc::new(DeltaIOStorageBackend::new(store, io_runtime.get_handle())) as ObjectStoreRef
     } else {
         store
     };
