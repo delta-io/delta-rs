@@ -255,7 +255,11 @@ impl DeltaTableBuilder {
     /// Set options used to initialize storage backend
     ///
     /// Options may be passed in the HashMap or set as environment variables. See documentation of
-    /// underlying object store implementation for details.
+    /// underlying object store implementation for details. Trailing slash will be trimmed in
+    /// the option's value to avoid failures. Trimming will only be done if one or more of below
+    /// conditions are met:
+    /// - key ends with `_URL` (e.g., `ENDPOINT_URL`, `S3_URL`, `JDBC_URL`, etc.)
+    /// - value starts with `http://`` or `https://` (e.g., `http://localhost:8000/`)
     ///
     /// - [Azure options](https://docs.rs/object_store/latest/object_store/azure/enum.AzureConfigKey.html#variants)
     /// - [S3 options](https://docs.rs/object_store/latest/object_store/aws/enum.AmazonS3ConfigKey.html#variants)
