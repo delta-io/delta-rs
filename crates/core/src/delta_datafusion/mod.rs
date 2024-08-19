@@ -1777,7 +1777,7 @@ mod tests {
     use crate::operations::write::SchemaMode;
     use crate::writer::test_utils::get_delta_schema;
     use arrow::array::StructArray;
-    use arrow::datatypes::{Field, Schema};
+    use arrow::datatypes::{DataType, Field, Schema};
     use chrono::{TimeZone, Utc};
     use datafusion::assert_batches_sorted_eq;
     use datafusion::datasource::physical_plan::ParquetExec;
