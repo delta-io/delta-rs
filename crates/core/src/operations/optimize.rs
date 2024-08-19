@@ -226,7 +226,7 @@ impl<'a> OptimizeBuilder<'a> {
             commit_properties: CommitProperties::default(),
             preserve_insertion_order: false,
             max_concurrent_tasks: num_cpus::get(),
-            max_spill_size: 20 * 1024 * 1024 * 2014, // 20 GB.
+            max_spill_size: 20 * 1024 * 1024 * 1024, // 20 GB.
             optimize_type: OptimizeType::Compact,
             min_commit_interval: None,
         }
