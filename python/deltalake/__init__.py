@@ -4,9 +4,17 @@ from .data_catalog import DataCatalog as DataCatalog
 from .schema import DataType as DataType
 from .schema import Field as Field
 from .schema import Schema as Schema
+from .table import (
+    BloomFilterProperties as BloomFilterProperties,
+)
+from .table import (
+    ColumnProperties as ColumnProperties,
+)
 from .table import DeltaTable as DeltaTable
 from .table import Metadata as Metadata
 from .table import PostCommitHookProperties as PostCommitHookProperties
-from .table import WriterProperties as WriterProperties
+from .table import (
+    WriterProperties as WriterProperties,
+)
 from .writer import convert_to_deltalake as convert_to_deltalake
 from .writer import write_deltalake as write_deltalake
