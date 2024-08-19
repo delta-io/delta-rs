@@ -296,6 +296,10 @@ impl LogStore for S3DynamoDbLogStore {
         }
     }
 
+    async fn get_earliest_version(&self, current_version: i64) -> DeltaResult<i64> {
+        get_earliest_version(self, current_version).await
+    }
+
     fn object_store(&self) -> ObjectStoreRef {
         self.storage.clone()
     }

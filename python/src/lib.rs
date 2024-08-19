@@ -245,6 +245,14 @@ impl RawDeltaTable {
         })
     }
 
+    pub fn get_earliest_version(&mut self, py: Python) -> PyResult<i64> {
+        py.allow_threads(|| {
+            Ok(rt()
+                .block_on(self._table.get_earliest_version())
+                .map_err(PythonError::from)?)
+        })
+    }
+
     pub fn get_num_index_cols(&mut self) -> PyResult<i32> {
         Ok(self
             ._table
