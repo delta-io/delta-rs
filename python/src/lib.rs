@@ -382,7 +382,7 @@ impl RawDeltaTable {
         py: Python,
         updates: HashMap<String, String>,
         predicate: Option<String>,
-        writer_properties: Option<HashMap<String, Option<String>>>,
+        writer_properties: Option<PyWriterProperties>,
         safe_cast: bool,
         custom_metadata: Option<HashMap<String, String>>,
         post_commithook_properties: Option<HashMap<String, Option<bool>>>,
@@ -439,7 +439,7 @@ impl RawDeltaTable {
         target_size: Option<i64>,
         max_concurrent_tasks: Option<usize>,
         min_commit_interval: Option<u64>,
-        writer_properties: Option<HashMap<String, Option<String>>>,
+        writer_properties: Option<PyWriterProperties>,
         custom_metadata: Option<HashMap<String, String>>,
         post_commithook_properties: Option<HashMap<String, Option<bool>>>,
     ) -> PyResult<String> {
@@ -499,7 +499,7 @@ impl RawDeltaTable {
         max_concurrent_tasks: Option<usize>,
         max_spill_size: usize,
         min_commit_interval: Option<u64>,
-        writer_properties: Option<HashMap<String, Option<String>>>,
+        writer_properties: Option<PyWriterProperties>,
         custom_metadata: Option<HashMap<String, String>>,
         post_commithook_properties: Option<HashMap<String, Option<bool>>>,
     ) -> PyResult<String> {
@@ -728,7 +728,7 @@ impl RawDeltaTable {
         source_alias: Option<String>,
         target_alias: Option<String>,
         safe_cast: bool,
-        writer_properties: Option<HashMap<String, Option<String>>>,
+        writer_properties: Option<PyWriterProperties>,
         post_commithook_properties: Option<HashMap<String, Option<bool>>>,
         custom_metadata: Option<HashMap<String, String>>,
         matched_update_updates: Option<Vec<HashMap<String, String>>>,
@@ -1253,7 +1253,7 @@ impl RawDeltaTable {
         &mut self,
         py: Python,
         predicate: Option<String>,
-        writer_properties: Option<HashMap<String, Option<String>>>,
+        writer_properties: Option<PyWriterProperties>,
         custom_metadata: Option<HashMap<String, String>>,
         post_commithook_properties: Option<HashMap<String, Option<bool>>>,
     ) -> PyResult<String> {
@@ -1349,46 +1349,94 @@ fn set_post_commithook_properties(
     commit_properties
 }
 
-fn set_writer_properties(
-    writer_properties: HashMap<String, Option<String>>,
-) -> DeltaResult<WriterProperties> {
+fn set_writer_properties(writer_properties: PyWriterProperties) -> DeltaResult<WriterProperties> {
     let mut properties = WriterProperties::builder();
-    let data_page_size_limit = writer_properties.get("data_page_size_limit");
-    let dictionary_page_size_limit = writer_properties.get("dictionary_page_size_limit");
-    let data_page_row_count_limit = writer_properties.get("data_page_row_count_limit");
-    let write_batch_size = writer_properties.get("write_batch_size");
-    let max_row_group_size = writer_properties.get("max_row_group_size");
-    let compression = writer_properties.get("compression");
-    let statistics_truncate_length = writer_properties.get("statistics_truncate_length");
+    let data_page_size_limit = writer_properties.data_page_size_limit;
+    let dictionary_page_size_limit = writer_properties.dictionary_page_size_limit;
+    let data_page_row_count_limit = writer_properties.data_page_row_count_limit;
+    let write_batch_size = writer_properties.write_batch_size;
+    let max_row_group_size = writer_properties.max_row_group_size;
+    let compression = writer_properties.compression;
+    let statistics_truncate_length = writer_properties.statistics_truncate_length;
+    let default_column_properties = writer_properties.default_column_properties;
+    let column_properties = writer_properties.column_properties;
 
-    if let Some(Some(data_page_size)) = data_page_size_limit {
-        properties = properties.set_data_page_size_limit(data_page_size.parse::<usize>().unwrap());
+    if let Some(data_page_size) = data_page_size_limit {
+        properties = properties.set_data_page_size_limit(data_page_size);
     }
-    if let Some(Some(dictionary_page_size)) = dictionary_page_size_limit {
-        properties = properties
-            .set_dictionary_page_size_limit(dictionary_page_size.parse::<usize>().unwrap());
+    if let Some(dictionary_page_size) = dictionary_page_size_limit {
+        properties = properties.set_dictionary_page_size_limit(dictionary_page_size);
     }
-    if let Some(Some(data_page_row_count)) = data_page_row_count_limit {
-        properties =
-            properties.set_data_page_row_count_limit(data_page_row_count.parse::<usize>().unwrap());
+    if let Some(data_page_row_count) = data_page_row_count_limit {
+        properties = properties.set_data_page_row_count_limit(data_page_row_count);
     }
-    if let Some(Some(batch_size)) = write_batch_size {
-        properties = properties.set_write_batch_size(batch_size.parse::<usize>().unwrap());
+    if let Some(batch_size) = write_batch_size {
+        properties = properties.set_write_batch_size(batch_size);
     }
-    if let Some(Some(row_group_size)) = max_row_group_size {
-        properties = properties.set_max_row_group_size(row_group_size.parse::<usize>().unwrap());
+    if let Some(row_group_size) = max_row_group_size {
+        properties = properties.set_max_row_group_size(row_group_size);
     }
-    if let Some(Some(statistics_truncate_length)) = statistics_truncate_length {
-        properties = properties
-            .set_statistics_truncate_length(statistics_truncate_length.parse::<usize>().ok());
-    }
+    properties = properties.set_statistics_truncate_length(statistics_truncate_length);
 
-    if let Some(Some(compression)) = compression {
+    if let Some(compression) = compression {
         let compress: Compression = compression
             .parse()
             .map_err(|err: ParquetError| DeltaTableError::Generic(err.to_string()))?;
 
         properties = properties.set_compression(compress);
+    }
+
+    if let Some(default_column_properties) = default_column_properties {
+        if let Some(dictionary_enabled) = default_column_properties.dictionary_enabled {
+            properties = properties.set_dictionary_enabled(dictionary_enabled);
+        }
+        if let Some(max_statistics_size) = default_column_properties.max_statistics_size {
+            properties = properties.set_max_statistics_size(max_statistics_size);
+        }
+        if let Some(bloom_filter_properties) = default_column_properties.bloom_filter_properties {
+            if let Some(set_bloom_filter_enabled) = bloom_filter_properties.set_bloom_filter_enabled
+            {
+                properties = properties.set_bloom_filter_enabled(set_bloom_filter_enabled);
+            }
+            if let Some(bloom_filter_fpp) = bloom_filter_properties.fpp {
+                properties = properties.set_bloom_filter_fpp(bloom_filter_fpp);
+            }
+            if let Some(bloom_filter_ndv) = bloom_filter_properties.ndv {
+                properties = properties.set_bloom_filter_ndv(bloom_filter_ndv);
+            }
+        }
+    }
+    if let Some(column_properties) = column_properties {
+        for (column_name, column_prop) in column_properties {
+            if let Some(column_prop) = column_prop {
+                if let Some(dictionary_enabled) = column_prop.dictionary_enabled {
+                    properties = properties.set_column_dictionary_enabled(
+                        column_name.clone().into(),
+                        dictionary_enabled,
+                    );
+                }
+                if let Some(bloom_filter_properties) = column_prop.bloom_filter_properties {
+                    if let Some(set_bloom_filter_enabled) =
+                        bloom_filter_properties.set_bloom_filter_enabled
+                    {
+                        properties = properties.set_column_bloom_filter_enabled(
+                            column_name.clone().into(),
+                            set_bloom_filter_enabled,
+                        );
+                    }
+                    if let Some(bloom_filter_fpp) = bloom_filter_properties.fpp {
+                        properties = properties.set_column_bloom_filter_fpp(
+                            column_name.clone().into(),
+                            bloom_filter_fpp,
+                        );
+                    }
+                    if let Some(bloom_filter_ndv) = bloom_filter_properties.ndv {
+                        properties = properties
+                            .set_column_bloom_filter_ndv(column_name.into(), bloom_filter_ndv);
+                    }
+                }
+            }
+        }
     }
     Ok(properties.build())
 }
@@ -1672,6 +1720,33 @@ impl From<&PyAddAction> for Add {
     }
 }
 
+#[derive(FromPyObject)]
+pub struct BloomFilterProperties {
+    pub set_bloom_filter_enabled: Option<bool>,
+    pub fpp: Option<f64>,
+    pub ndv: Option<u64>,
+}
+
+#[derive(FromPyObject)]
+pub struct ColumnProperties {
+    pub dictionary_enabled: Option<bool>,
+    pub max_statistics_size: Option<usize>,
+    pub bloom_filter_properties: Option<BloomFilterProperties>,
+}
+
+#[derive(FromPyObject)]
+pub struct PyWriterProperties {
+    data_page_size_limit: Option<usize>,
+    dictionary_page_size_limit: Option<usize>,
+    data_page_row_count_limit: Option<usize>,
+    write_batch_size: Option<usize>,
+    max_row_group_size: Option<usize>,
+    statistics_truncate_length: Option<usize>,
+    compression: Option<String>,
+    default_column_properties: Option<ColumnProperties>,
+    column_properties: Option<HashMap<String, Option<ColumnProperties>>>,
+}
+
 #[pyfunction]
 #[allow(clippy::too_many_arguments)]
 fn write_to_deltalake(
@@ -1687,7 +1762,7 @@ fn write_to_deltalake(
     description: Option<String>,
     configuration: Option<HashMap<String, Option<String>>>,
     storage_options: Option<HashMap<String, String>>,
-    writer_properties: Option<HashMap<String, Option<String>>>,
+    writer_properties: Option<PyWriterProperties>,
     custom_metadata: Option<HashMap<String, String>>,
     post_commithook_properties: Option<HashMap<String, Option<bool>>>,
 ) -> PyResult<()> {

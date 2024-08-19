@@ -140,6 +140,58 @@ class PostCommitHookProperties:
 
 
 @dataclass(init=True)
+class BloomFilterProperties:
+    """The Bloom Filter Properties instance for the Rust parquet writer."""
+
+    def __init__(
+        self,
+        set_bloom_filter_enabled: Optional[bool],
+        fpp: Optional[float] = None,
+        ndv: Optional[int] = None,
+    ):
+        """Create a Bloom Filter Properties instance for the Rust parquet writer:
+
+        Args:
+            set_bloom_filter_enabled: If True and no fpp or ndv are provided, the default values will be used.
+            fpp: The false positive probability for the bloom filter. Must be between 0 and 1 exclusive.
+            ndv: The number of distinct values for the bloom filter.
+        """
+        if fpp is not None and (fpp <= 0 or fpp >= 1):
+            raise ValueError("fpp must be between 0 and 1 exclusive")
+        self.set_bloom_filter_enabled = set_bloom_filter_enabled
+        self.fpp = fpp
+        self.ndv = ndv
+
+    def __str__(self) -> str:
+        return f"set_bloom_filter_enabled: {self.set_bloom_filter_enabled}, fpp: {self.fpp}, ndv: {self.ndv}"
+
+
+@dataclass(init=True)
+class ColumnProperties:
+    """The Column Properties instance for the Rust parquet writer."""
+
+    def __init__(
+        self,
+        dictionary_enabled: Optional[bool] = None,
+        max_statistics_size: Optional[int] = None,
+        bloom_filter_properties: Optional[BloomFilterProperties] = None,
+    ):
+        """Create a Column Properties instance for the Rust parquet writer:
+
+        Args:
+            dictionary_enabled: Enable dictionary encoding for the column.
+            max_statistics_size: Maximum size of statistics for the column.
+            bloom_filter_properties: Bloom Filter Properties for the column.
+        """
+        self.dictionary_enabled = dictionary_enabled
+        self.max_statistics_size = max_statistics_size
+        self.bloom_filter_properties = bloom_filter_properties
+
+    def __str__(self) -> str:
+        return f"dictionary_enabled: {self.dictionary_enabled}, max_statistics_size: {self.max_statistics_size}, bloom_filter_properties: {self.bloom_filter_properties}"
+
+
+@dataclass(init=True)
 class WriterProperties:
     """A Writer Properties instance for the Rust parquet writer."""
 
@@ -163,6 +215,8 @@ class WriterProperties:
         ] = None,
         compression_level: Optional[int] = None,
         statistics_truncate_length: Optional[int] = None,
+        default_column_properties: Optional[ColumnProperties] = None,
+        column_properties: Optional[Dict[str, ColumnProperties]] = None,
     ):
         """Create a Writer Properties instance for the Rust parquet writer:
 
@@ -178,6 +232,8 @@ class WriterProperties:
                 BROTLI: levels (1-11),
                 ZSTD: levels (1-22),
             statistics_truncate_length: maximum length of truncated min/max values in statistics.
+            default_column_properties: Default Column Properties for the Rust parquet writer.
+            column_properties: Column Properties for the Rust parquet writer.
         """
         self.data_page_size_limit = data_page_size_limit
         self.dictionary_page_size_limit = dictionary_page_size_limit
@@ -186,6 +242,8 @@ class WriterProperties:
         self.max_row_group_size = max_row_group_size
         self.compression = None
         self.statistics_truncate_length = statistics_truncate_length
+        self.default_column_properties = default_column_properties
+        self.column_properties = column_properties
 
         if compression_level is not None and compression is None:
             raise ValueError(
@@ -211,17 +269,17 @@ class WriterProperties:
             self.compression = parquet_compression
 
     def __str__(self) -> str:
+        column_properties_str = (
+            ", ".join([f"column '{k}': {v}" for k, v in self.column_properties.items()])
+            if self.column_properties
+            else None
+        )
         return (
             f"WriterProperties(data_page_size_limit: {self.data_page_size_limit}, dictionary_page_size_limit: {self.dictionary_page_size_limit}, "
             f"data_page_row_count_limit: {self.data_page_row_count_limit}, write_batch_size: {self.write_batch_size}, "
-            f"max_row_group_size: {self.max_row_group_size}, compression: {self.compression}, statistics_truncate_length: {self.statistics_truncate_length})"
+            f"max_row_group_size: {self.max_row_group_size}, compression: {self.compression}, statistics_truncate_length: {self.statistics_truncate_length},"
+            f"default_column_properties: {self.default_column_properties}, column_properties: {column_properties_str})"
         )
-
-    def _to_dict(self) -> Dict[str, Optional[str]]:
-        values = {}
-        for key, value in self.__dict__.items():
-            values[key] = str(value) if isinstance(value, int) else value
-        return values
 
 
 @dataclass(init=False)
@@ -833,7 +891,7 @@ class DeltaTable:
         metrics = self._table.update(
             updates,
             predicate,
-            writer_properties._to_dict() if writer_properties else None,
+            writer_properties,
             safe_cast=not error_on_type_mismatch,
             custom_metadata=custom_metadata,
             post_commithook_properties=post_commithook_properties.__dict__
@@ -1229,7 +1287,7 @@ class DeltaTable:
         """
         metrics = self._table.delete(
             predicate,
-            writer_properties._to_dict() if writer_properties else None,
+            writer_properties,
             custom_metadata,
             post_commithook_properties.__dict__ if post_commithook_properties else None,
         )
@@ -1773,7 +1831,7 @@ class TableMerger:
             source_alias=self.source_alias,
             target_alias=self.target_alias,
             safe_cast=self.safe_cast,
-            writer_properties=self.writer_properties._to_dict()
+            writer_properties=self.writer_properties
             if self.writer_properties
             else None,
             custom_metadata=self.custom_metadata,
@@ -2025,7 +2083,7 @@ class TableOptimizer:
             target_size,
             max_concurrent_tasks,
             min_commit_interval,
-            writer_properties._to_dict() if writer_properties else None,
+            writer_properties,
             custom_metadata,
             post_commithook_properties.__dict__ if post_commithook_properties else None,
         )
@@ -2095,7 +2153,7 @@ class TableOptimizer:
             max_concurrent_tasks,
             max_spill_size,
             min_commit_interval,
-            writer_properties._to_dict() if writer_properties else None,
+            writer_properties,
             custom_metadata,
             post_commithook_properties.__dict__ if post_commithook_properties else None,
         )
