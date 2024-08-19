@@ -238,7 +238,7 @@ mod local {
                 .clone(),
         )
         .unwrap();
-        let source_store = logstore_for(source_uri, HashMap::new()).unwrap();
+        let source_store = logstore_for(source_uri, HashMap::new(), None).unwrap();
         let object_store_url = source_store.object_store_url();
         let source_store_url: &Url = object_store_url.as_ref();
         state

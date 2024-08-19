@@ -78,26 +78,31 @@ impl ObjectStoreFactory for S3ObjectStoreFactory {
                 Some((s3_key, value.clone()))
             }),
         )?;
+        let store = aws_storage_handler(limit_store_handler(inner, &options), &options)?;
 
-        let store = limit_store_handler(inner, &options);
+        Ok((store, prefix))
+    }
+}
 
-        // If the copy-if-not-exists env var is set, we don't need to instantiate a locking client or check for allow-unsafe-rename.
-        if options
-            .0
-            .contains_key(AmazonS3ConfigKey::CopyIfNotExists.as_ref())
-        {
-            Ok((store, prefix))
-        } else {
-            let s3_options = S3StorageOptions::from_map(&storage_options.0)?;
+fn aws_storage_handler(
+    store: ObjectStoreRef,
+    options: &StorageOptions,
+) -> DeltaResult<ObjectStoreRef> {
+    // If the copy-if-not-exists env var is set, we don't need to instantiate a locking client or check for allow-unsafe-rename.
+    if options
+        .0
+        .contains_key(AmazonS3ConfigKey::CopyIfNotExists.as_ref())
+    {
+        Ok(store)
+    } else {
+        let s3_options = S3StorageOptions::from_map(&options.0)?;
 
-            let store = S3StorageBackend::try_new(
-                store,
-                Some("dynamodb") == s3_options.locking_provider.as_deref()
-                    || s3_options.allow_unsafe_rename,
-            )?;
-
-            Ok((Arc::new(store), prefix))
-        }
+        let store = S3StorageBackend::try_new(
+            store,
+            Some("dynamodb") == s3_options.locking_provider.as_deref()
+                || s3_options.allow_unsafe_rename,
+        )?;
+        Ok(Arc::new(store))
     }
 }
 
