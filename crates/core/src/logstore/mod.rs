@@ -1,11 +1,12 @@
 //! Delta log store.
+use std::cmp::min;
 use std::io::{BufRead, BufReader, Cursor};
 use std::sync::OnceLock;
 use std::{cmp::max, collections::HashMap, sync::Arc};
 
 use bytes::Bytes;
 use dashmap::DashMap;
-use futures::StreamExt;
+use futures::{StreamExt, TryStreamExt};
 use lazy_static::lazy_static;
 use object_store::{path::Path, Error as ObjectStoreError, ObjectStore};
 use regex::Regex;
@@ -212,6 +213,9 @@ pub trait LogStore: Sync + Send {
 
     /// Find latest version currently stored in the delta log.
     async fn get_latest_version(&self, start_version: i64) -> DeltaResult<i64>;
+
+    /// Find earliest version currently stored in the delta log.
+    async fn get_earliest_version(&self, start_version: i64) -> DeltaResult<i64>;
 
     /// Get underlying object store.
     fn object_store(&self) -> Arc<dyn ObjectStore>;
@@ -436,6 +440,52 @@ pub async fn get_latest_version(
         }
 
         Ok::<i64, DeltaTableError>(max_version)
+    }
+    .await?;
+    Ok(version)
+}
+
+/// Default implementation for retrieving the earliest version
+pub async fn get_earliest_version(
+    log_store: &dyn LogStore,
+    current_version: i64,
+) -> DeltaResult<i64> {
+    let version_start = match get_last_checkpoint(log_store).await {
+        Ok(last_check_point) => last_check_point.version,
+        Err(ProtocolError::CheckpointNotFound) => {
+            // no checkpoint so start from current_version
+            current_version
+        }
+        Err(e) => {
+            return Err(DeltaTableError::from(e));
+        }
+    };
+
+    // list files to find min version
+    let version = async {
+        let mut min_version: i64 = version_start;
+        let prefix = Some(log_store.log_path());
+        let offset_path = commit_uri_from_version(version_start);
+        let object_store = log_store.object_store();
+
+        // Manually filter until we can provide direction in https://github.com/apache/arrow-rs/issues/6274
+        let mut files = object_store
+            .list(prefix)
+            .try_filter(move |f| futures::future::ready(f.location < offset_path))
+            .boxed();
+
+        while let Some(obj_meta) = files.next().await {
+            let obj_meta = obj_meta?;
+            if let Some(log_version) = extract_version_from_filename(obj_meta.location.as_ref()) {
+                min_version = min(min_version, log_version);
+            }
+        }
+
+        if min_version < 0 {
+            return Err(DeltaTableError::not_a_table(log_store.root_uri()));
+        }
+
+        Ok::<i64, DeltaTableError>(min_version)
     }
     .await?;
     Ok(version)
