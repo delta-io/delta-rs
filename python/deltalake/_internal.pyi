@@ -48,8 +48,10 @@ class RawDeltaTable:
     def protocol_versions(self) -> List[Any]: ...
     def load_version(self, version: int) -> None: ...
     def load_with_datetime(self, ds: str) -> None: ...
-    def files(self, partition_filters: Optional[FilterType]) -> List[str]: ...
-    def file_uris(self, partition_filters: Optional[FilterType]) -> List[str]: ...
+    def files(self, partition_filters: Optional[PartitionFilterType]) -> List[str]: ...
+    def file_uris(
+        self, partition_filters: Optional[PartitionFilterType]
+    ) -> List[str]: ...
     def vacuum(
         self,
         dry_run: bool,
@@ -60,7 +62,7 @@ class RawDeltaTable:
     ) -> List[str]: ...
     def compact_optimize(
         self,
-        partition_filters: Optional[FilterType],
+        partition_filters: Optional[PartitionFilterType],
         target_size: Optional[int],
         max_concurrent_tasks: Optional[int],
         min_commit_interval: Optional[int],
@@ -71,7 +73,7 @@ class RawDeltaTable:
     def z_order_optimize(
         self,
         z_order_columns: List[str],
-        partition_filters: Optional[FilterType],
+        partition_filters: Optional[PartitionFilterType],
         target_size: Optional[int],
         max_concurrent_tasks: Optional[int],
         max_spill_size: Optional[int],
@@ -115,7 +117,7 @@ class RawDeltaTable:
     def history(self, limit: Optional[int]) -> List[str]: ...
     def update_incremental(self) -> None: ...
     def dataset_partitions(
-        self, schema: pyarrow.Schema, partition_filters: Optional[FilterType]
+        self, schema: pyarrow.Schema, partition_filters: Optional[FilterConjunctionType]
     ) -> List[Any]: ...
     def create_checkpoint(self) -> None: ...
     def get_add_actions(self, flatten: bool) -> pyarrow.RecordBatch: ...
@@ -848,3 +850,4 @@ FilterLiteralType = Tuple[str, str, Any]
 FilterConjunctionType = List[FilterLiteralType]
 FilterDNFType = List[FilterConjunctionType]
 FilterType = Union[FilterConjunctionType, FilterDNFType]
+PartitionFilterType = List[Tuple[str, str, Union[str, List[str]]]]
