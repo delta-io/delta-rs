@@ -270,26 +270,6 @@ impl RawDeltaTable {
         })
     }
 
-    pub fn files_by_partitions(
-        &self,
-        py: Python,
-        partitions_filters: Vec<(PyBackedStr, PyBackedStr, PartitionFilterValue)>,
-    ) -> PyResult<Vec<String>> {
-        py.allow_threads(|| {
-            let partition_filters = convert_partition_filters(partitions_filters);
-            match partition_filters {
-                Ok(filters) => Ok(self
-                    ._table
-                    .get_files_by_partitions(&filters)
-                    .map_err(PythonError::from)?
-                    .into_iter()
-                    .map(|p| p.to_string())
-                    .collect()),
-                Err(err) => Err(PythonError::from(err).into()),
-            }
-        })
-    }
-
     pub fn files(
         &self,
         py: Python,
@@ -961,7 +941,7 @@ impl RawDeltaTable {
     ) -> PyResult<Vec<(String, Option<Bound<'py, PyAny>>)>> {
         let path_set = match partition_filters {
             Some(filters) => Some(HashSet::<_>::from_iter(
-                self.files_by_partitions(py, filters)?.iter().cloned(),
+                self.files(py, Some(filters))?.iter().cloned(),
             )),
             None => None,
         };
