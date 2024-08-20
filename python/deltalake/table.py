@@ -706,12 +706,18 @@ class DeltaTable:
         """
         return self._table.schema
 
-    def files_by_partitions(self, partition_filters: Optional[FilterType]) -> List[str]:
+    def files_by_partitions(self, partition_filters: FilterType) -> List[str]:
         """
         Get the files for each partition
 
         """
-        return self._table.files_by_partitions(partition_filters)
+        warnings.warn(
+            "files_by_partitions is deprecated, please use DeltaTable.files() instead.",
+            category=DeprecationWarning,
+            stacklevel=2,
+        )
+
+        return self.files(partition_filters)  # type: ignore
 
     def metadata(self) -> Metadata:
         """
