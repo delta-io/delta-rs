@@ -8,6 +8,10 @@ search:
 
 ::: deltalake.write_deltalake
 
+::: deltalake.BloomFilterProperties
+
+::: deltalake.ColumnProperties
+
 ::: deltalake.WriterProperties
 
 ## Convert to Delta Tables

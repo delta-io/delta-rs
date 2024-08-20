@@ -70,3 +70,36 @@ In this case, you can use a `predicate` to overwrite only the relevant records o
     otherwise the operation will fail 
 
 {{ code_example('operations', 'replace_where', ['replaceWhere'])}}
+
+## Using Writer Properites
+
+You can customize the Rust Parquet writer by using the [WriterProperties](../../api/delta_writer.md#deltalake.WriterProperties). Additionally, you can apply extra configurations through the [BloomFilterProperties](../../api/delta_writer.md#deltalake.BloomFilterProperties) and [ColumnProperties](../../api/delta_writer.md#deltalake.ColumnProperties) data classes.
+
+
+Here's how you can do it:
+``` python
+from deltalake import BloomFilterProperties, ColumnProperties, WriterProperties, write_deltalake
+import pyarrow as pa
+
+wp = WriterProperties(
+        statistics_truncate_length=200,
+        default_column_properties=ColumnProperties(
+            bloom_filter_properties=BloomFilterProperties(True, 0.2, 30)
+        ),
+        column_properties={
+            "value_non_bloom": ColumnProperties(bloom_filter_properties=None),
+        },
+    )
+
+table_path = "/tmp/my_table"
+
+data = pa.table(
+        {
+            "id": pa.array(["1", "1"], pa.string()),
+            "value": pa.array([11, 12], pa.int64()),
+            "value_non_bloom": pa.array([11, 12], pa.int64()),
+        }
+    )
+
+write_deltalake(table_path, data, writer_properties=wp)
+```
