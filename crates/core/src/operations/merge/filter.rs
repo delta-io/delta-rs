@@ -252,13 +252,17 @@ pub(crate) fn generalize_filter(
             }
         }
         Expr::InList(in_list) => {
-            let compare_expr = generalize_filter(
+            let compare_expr = match generalize_filter(
                 *in_list.expr,
                 partition_columns,
                 source_name,
                 target_name,
                 placeholders,
-            );
+            ) {
+                Some(expr) => expr,
+                None => return None, // Return early
+            };
+
             let mut list_expr = Vec::new();
             for item in in_list.list.into_iter() {
                 match item {
@@ -277,14 +281,15 @@ pub(crate) fn generalize_filter(
                     }
                 }
             }
-            match (compare_expr, list_expr) {
-                (Some(compare), list) if !list.is_empty() => Expr::InList(InList {
-                    expr: compare.into(),
-                    list: list,
+            if !list_expr.is_empty() {
+                Expr::InList(InList {
+                    expr: compare_expr.into(),
+                    list: list_expr,
                     negated: in_list.negated,
                 })
-                .into(),
-                (_, _) => None,
+                .into()
+            } else {
+                None
             }
         }
         other => match references_table(&other, source_name) {
