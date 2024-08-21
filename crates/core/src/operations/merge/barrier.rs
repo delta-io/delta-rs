@@ -443,14 +443,16 @@ impl UserDefinedLogicalNodeCore for MergeBarrier {
     }
 }
 
-pub(crate) fn find_barrier_node(parent: &Arc<dyn ExecutionPlan>) -> Option<Arc<dyn ExecutionPlan>> {
-    //! Used to locate the physical Barrier Node after the planner converts the logical node
-    if parent.as_any().downcast_ref::<MergeBarrierExec>().is_some() {
+pub(crate) fn find_node<T: 'static>(
+    parent: &Arc<dyn ExecutionPlan>,
+) -> Option<Arc<dyn ExecutionPlan>> {
+    //! Used to locate a Node::<T> after the planner converts the logical node
+    if parent.as_any().downcast_ref::<T>().is_some() {
         return Some(parent.to_owned());
     }
 
     for child in &parent.children() {
-        let res = find_barrier_node(child);
+        let res = find_node::<T>(child);
         if res.is_some() {
             return res;
         }
