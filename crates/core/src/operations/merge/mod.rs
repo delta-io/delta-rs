@@ -68,13 +68,13 @@ use crate::delta_datafusion::logical::MetricObserver;
 use crate::delta_datafusion::physical::{find_metric_node, get_metric, MetricObserverExec};
 use crate::delta_datafusion::planner::DeltaPlanner;
 use crate::delta_datafusion::{
-    register_store, DataFusionMixins, DeltaColumn, DeltaScanConfigBuilder, DeltaSessionConfig,
-    DeltaTableProvider,
+    register_store, DataFusionMixins, DeltaColumn, DeltaScan, DeltaScanConfigBuilder,
+    DeltaSessionConfig, DeltaTableProvider,
 };
 use crate::kernel::Action;
 use crate::logstore::LogStoreRef;
 use crate::operations::cdc::*;
-use crate::operations::merge::barrier::find_barrier_node;
+use crate::operations::merge::barrier::find_node;
 use crate::operations::transaction::CommitBuilder;
 use crate::operations::write::{write_execution_plan, write_execution_plan_cdc, WriterStatsConfig};
 use crate::protocol::{DeltaOperation, MergePredicate};
@@ -565,6 +565,10 @@ pub struct MergeMetrics {
     pub num_target_rows_copied: usize,
     /// Total number of rows written out
     pub num_output_rows: usize,
+    /// Amount of files considered during table scan
+    pub num_target_files_scanned: usize,
+    /// Amount of files not considered (pruned) during table scan
+    pub num_target_files_skipped_during_scan: usize,
     /// Number of files added to the sink(target)
     pub num_target_files_added: usize,
     /// Number of files removed from the sink(target)
@@ -1174,9 +1178,9 @@ async fn execute(
     let err = || DeltaTableError::Generic("Unable to locate expected metric node".into());
     let source_count = find_metric_node(SOURCE_COUNT_ID, &write).ok_or_else(err)?;
     let op_count = find_metric_node(OUTPUT_COUNT_ID, &write).ok_or_else(err)?;
-    let barrier = find_barrier_node(&write).ok_or_else(err)?;
+    let barrier = find_node::<MergeBarrierExec>(&write).ok_or_else(err)?;
+    let scan_count = find_node::<DeltaScan>(&write).ok_or_else(err)?;
 
-    // write projected records
     let table_partition_cols = current_metadata.partition_columns.clone();
 
     let writer_stats_config = WriterStatsConfig::new(
@@ -1251,6 +1255,7 @@ async fn execute(
 
     let source_count_metrics = source_count.metrics().unwrap();
     let target_count_metrics = op_count.metrics().unwrap();
+    let scan_count_metrics = scan_count.metrics().unwrap();
 
     metrics.num_source_rows = get_metric(&source_count_metrics, SOURCE_COUNT_METRIC);
     metrics.num_target_rows_inserted = get_metric(&target_count_metrics, TARGET_INSERTED_METRIC);
@@ -1260,7 +1265,8 @@ async fn execute(
     metrics.num_output_rows = metrics.num_target_rows_inserted
         + metrics.num_target_rows_updated
         + metrics.num_target_rows_copied;
-
+    metrics.num_target_files_scanned = get_metric(&scan_count_metrics, "files_scanned");
+    metrics.num_target_files_skipped_during_scan = get_metric(&scan_count_metrics, "files_pruned");
     metrics.execution_time_ms = Instant::now().duration_since(exec_start).as_millis() as u64;
 
     let app_metadata = &mut commit_properties.app_metadata;
