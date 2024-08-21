@@ -380,3 +380,276 @@ pub(crate) async fn try_construct_early_filter(
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::operations::merge::tests::setup_table;
+    use crate::operations::merge::try_construct_early_filter;
+    use crate::writer::test_utils::get_arrow_schema;
+
+    use arrow::record_batch::RecordBatch;
+
+    use datafusion::datasource::provider_as_source;
+
+    use datafusion::prelude::*;
+    use datafusion_common::Column;
+    use datafusion_common::ScalarValue;
+    use datafusion_common::TableReference;
+    use datafusion_expr::col;
+
+    use datafusion_expr::Expr;
+    use datafusion_expr::LogicalPlanBuilder;
+    use datafusion_expr::Operator;
+
+    use std::sync::Arc;
+
+    #[tokio::test]
+    async fn test_try_construct_early_filter_with_partitions_expands() {
+        let schema = get_arrow_schema(&None);
+        let table = setup_table(Some(vec!["id"])).await;
+
+        assert_eq!(table.version(), 0);
+        assert_eq!(table.get_files_count(), 0);
+
+        let ctx = SessionContext::new();
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(arrow::array::StringArray::from(vec!["B", "C", "X"])),
+                Arc::new(arrow::array::Int32Array::from(vec![10, 20, 30])),
+                Arc::new(arrow::array::StringArray::from(vec![
+                    "2021-02-02",
+                    "2023-07-04",
+                    "2023-07-04",
+                ])),
+            ],
+        )
+        .unwrap();
+        let source = ctx.read_batch(batch).unwrap();
+
+        let source_name = TableReference::parse_str("source");
+        let target_name = TableReference::parse_str("target");
+
+        let source = LogicalPlanBuilder::scan(
+            source_name.clone(),
+            provider_as_source(source.into_view()),
+            None,
+        )
+        .unwrap()
+        .build()
+        .unwrap();
+
+        let join_predicate = col(Column {
+            relation: Some(source_name.clone()),
+            name: "id".to_owned(),
+        })
+        .eq(col(Column {
+            relation: Some(target_name.clone()),
+            name: "id".to_owned(),
+        }));
+
+        let pred = try_construct_early_filter(
+            join_predicate,
+            table.snapshot().unwrap(),
+            &ctx.state(),
+            &source,
+            &source_name,
+            &target_name,
+        )
+        .await
+        .unwrap();
+
+        assert!(pred.is_some());
+
+        let split_pred = {
+            fn split(expr: Expr, parts: &mut Vec<(String, String)>) {
+                match expr {
+                    Expr::BinaryExpr(ex) if ex.op == Operator::Or => {
+                        split(*ex.left, parts);
+                        split(*ex.right, parts);
+                    }
+                    Expr::BinaryExpr(ex) if ex.op == Operator::Eq => {
+                        let col = match *ex.right {
+                            Expr::Column(col) => col.name,
+                            ex => panic!("expected column in pred, got {ex}!"),
+                        };
+
+                        let value = match *ex.left {
+                            Expr::Literal(ScalarValue::Utf8(Some(value))) => value,
+                            ex => panic!("expected value in predicate, got {ex}!"),
+                        };
+
+                        parts.push((col, value))
+                    }
+
+                    expr => panic!("expected either = or OR, got {expr}"),
+                }
+            }
+
+            let mut parts = vec![];
+            split(pred.unwrap(), &mut parts);
+            parts.sort();
+            parts
+        };
+
+        let expected_pred_parts = [
+            ("id".to_owned(), "B".to_owned()),
+            ("id".to_owned(), "C".to_owned()),
+            ("id".to_owned(), "X".to_owned()),
+        ];
+
+        assert_eq!(split_pred, expected_pred_parts);
+    }
+
+    #[tokio::test]
+    async fn test_try_construct_early_filter_with_range() {
+        let schema = get_arrow_schema(&None);
+        let table = setup_table(Some(vec!["modified"])).await;
+
+        assert_eq!(table.version(), 0);
+        assert_eq!(table.get_files_count(), 0);
+
+        let ctx = SessionContext::new();
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(arrow::array::StringArray::from(vec!["B", "C"])),
+                Arc::new(arrow::array::Int32Array::from(vec![10, 20])),
+                Arc::new(arrow::array::StringArray::from(vec![
+                    "2023-07-04",
+                    "2023-07-04",
+                ])),
+            ],
+        )
+        .unwrap();
+        let source = ctx.read_batch(batch).unwrap();
+
+        let source_name = TableReference::parse_str("source");
+        let target_name = TableReference::parse_str("target");
+
+        let source = LogicalPlanBuilder::scan(
+            source_name.clone(),
+            provider_as_source(source.into_view()),
+            None,
+        )
+        .unwrap()
+        .build()
+        .unwrap();
+
+        let join_predicate = col(Column {
+            relation: Some(source_name.clone()),
+            name: "id".to_owned(),
+        })
+        .eq(col(Column {
+            relation: Some(target_name.clone()),
+            name: "id".to_owned(),
+        }));
+
+        let pred = try_construct_early_filter(
+            join_predicate,
+            table.snapshot().unwrap(),
+            &ctx.state(),
+            &source,
+            &source_name,
+            &target_name,
+        )
+        .await
+        .unwrap();
+
+        assert!(pred.is_some());
+
+        let filter = col(Column {
+            relation: Some(target_name.clone()),
+            name: "id".to_owned(),
+        })
+        .between(
+            Expr::Literal(ScalarValue::Utf8(Some("B".to_string()))),
+            Expr::Literal(ScalarValue::Utf8(Some("C".to_string()))),
+        );
+        assert_eq!(pred.unwrap(), filter);
+    }
+
+    #[tokio::test]
+    async fn test_try_construct_early_filter_with_partition_and_range() {
+        let schema = get_arrow_schema(&None);
+        let table = setup_table(Some(vec!["modified"])).await;
+
+        assert_eq!(table.version(), 0);
+        assert_eq!(table.get_files_count(), 0);
+
+        let ctx = SessionContext::new();
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(arrow::array::StringArray::from(vec!["B", "C"])),
+                Arc::new(arrow::array::Int32Array::from(vec![10, 20])),
+                Arc::new(arrow::array::StringArray::from(vec![
+                    "2023-07-04",
+                    "2023-07-04",
+                ])),
+            ],
+        )
+        .unwrap();
+        let source = ctx.read_batch(batch).unwrap();
+
+        let source_name = TableReference::parse_str("source");
+        let target_name = TableReference::parse_str("target");
+
+        let source = LogicalPlanBuilder::scan(
+            source_name.clone(),
+            provider_as_source(source.into_view()),
+            None,
+        )
+        .unwrap()
+        .build()
+        .unwrap();
+
+        let join_predicate = col(Column {
+            relation: Some(source_name.clone()),
+            name: "id".to_owned(),
+        })
+        .eq(col(Column {
+            relation: Some(target_name.clone()),
+            name: "id".to_owned(),
+        }))
+        .and(
+            col(Column {
+                relation: Some(source_name.clone()),
+                name: "modified".to_owned(),
+            })
+            .eq(col(Column {
+                relation: Some(target_name.clone()),
+                name: "modified".to_owned(),
+            })),
+        );
+
+        let pred = try_construct_early_filter(
+            join_predicate,
+            table.snapshot().unwrap(),
+            &ctx.state(),
+            &source,
+            &source_name,
+            &target_name,
+        )
+        .await
+        .unwrap();
+
+        assert!(pred.is_some());
+
+        let filter = col(Column {
+            relation: Some(target_name.clone()),
+            name: "id".to_owned(),
+        })
+        .between(
+            Expr::Literal(ScalarValue::Utf8(Some("B".to_string()))),
+            Expr::Literal(ScalarValue::Utf8(Some("C".to_string()))),
+        )
+        .and(
+            Expr::Literal(ScalarValue::Utf8(Some("2023-07-04".to_string()))).eq(col(Column {
+                relation: Some(target_name.clone()),
+                name: "modified".to_owned(),
+            })),
+        );
+        assert_eq!(pred.unwrap(), filter);
+    }
+}
