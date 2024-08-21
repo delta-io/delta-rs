@@ -210,6 +210,8 @@ pub struct TableConfig<'a>(pub(crate) &'a HashMap<String, Option<String>>);
 
 /// Default num index cols
 pub const DEFAULT_NUM_INDEX_COLS: i32 = 32;
+/// Default target file size
+pub const DEFAULT_TARGET_FILE_SIZE: i64 = 104857600;
 
 impl<'a> TableConfig<'a> {
     table_config!(
