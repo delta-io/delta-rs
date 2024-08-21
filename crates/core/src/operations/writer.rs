@@ -168,18 +168,18 @@ impl DeltaWriter {
                 let partition_cols = self.config.partition_columns.clone();
                 handle
                     .spawn_blocking(move || {
-                        divide_by_partition_values(
-                            schema,
-                            partition_cols,
-                            &values,
-                        )
+                        divide_by_partition_values(schema, partition_cols, &values)
                     })
                     .await
                     .map_err(|e| WriteError::Partitioning(e.to_string()))?
-            },
-            None => divide_by_partition_values(self.config.file_schema(), self.config.partition_columns.clone(), values),
-        }.map_err(|e| WriteError::Partitioning(e.to_string()))?)
-
+            }
+            None => divide_by_partition_values(
+                self.config.file_schema(),
+                self.config.partition_columns.clone(),
+                values,
+            ),
+        }
+        .map_err(|e| WriteError::Partitioning(e.to_string()))?)
     }
 
     /// Write a batch to the partition induced by the partition_values. The record batch is expected
