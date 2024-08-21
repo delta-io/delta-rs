@@ -398,7 +398,6 @@ async fn write_execution_plan_with_predicate(
         }
         _ => checker,
     };
-
     // Write data to disk
     let mut tasks = vec![];
     for i in 0..plan.properties().output_partitioning().partition_count() {
@@ -977,6 +976,9 @@ impl std::future::IntoFuture for WriteBuilder {
                 .as_ref()
                 .map(|snapshot| snapshot.table_config());
 
+            let target_file_size = this.target_file_size.or_else(|| {
+                Some(super::get_target_file_size(&config, &this.configuration) as usize)
+            });
             let (num_indexed_cols, stats_columns) =
                 super::get_num_idx_cols_and_stats_columns(config, this.configuration);
 
@@ -984,6 +986,7 @@ impl std::future::IntoFuture for WriteBuilder {
                 num_indexed_cols,
                 stats_columns,
             };
+
             // Here we need to validate if the new data conforms to a predicate if one is provided
             let add_actions = write_execution_plan_with_predicate(
                 predicate.clone(),
@@ -992,7 +995,7 @@ impl std::future::IntoFuture for WriteBuilder {
                 plan.clone(),
                 partition_columns.clone(),
                 this.log_store.object_store().clone(),
-                this.target_file_size,
+                target_file_size,
                 this.write_batch_size,
                 this.writer_properties.clone(),
                 writer_stats_config.clone(),
