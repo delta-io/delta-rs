@@ -193,6 +193,11 @@ impl Snapshot {
         &self.protocol
     }
 
+    /// Get the table config which is loaded with of the snapshot
+    pub fn load_config(&self) -> &DeltaTableConfig {
+        &self.config
+    }
+
     /// Get the table root of the snapshot
     pub fn table_root(&self) -> Path {
         Path::from(self.table_url.clone())
@@ -533,6 +538,11 @@ impl EagerSnapshot {
     /// Get the table root of the snapshot
     pub fn table_root(&self) -> Path {
         self.snapshot.table_root()
+    }
+
+    /// Get the table config which is loaded with of the snapshot
+    pub fn load_config(&self) -> &DeltaTableConfig {
+        &self.snapshot.load_config()
     }
 
     /// Well known table configuration

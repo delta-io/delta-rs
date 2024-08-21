@@ -789,6 +789,9 @@ impl std::future::IntoFuture for WriteBuilder {
             if this.mode == SaveMode::Overwrite {
                 if let Some(snapshot) = &this.snapshot {
                     PROTOCOL.check_append_only(&snapshot.snapshot)?;
+                    if !snapshot.load_config().require_files {
+                        return Err(DeltaTableError::NotInitializedWithFiles("WRITE".into()));
+                    }
                 }
             }
             if this.schema_mode == Some(SchemaMode::Overwrite) && this.mode != SaveMode::Overwrite {

@@ -296,6 +296,9 @@ impl<'a> std::future::IntoFuture for OptimizeBuilder<'a> {
 
         Box::pin(async move {
             PROTOCOL.can_write_to(&this.snapshot.snapshot)?;
+            if !&this.snapshot.load_config().require_files {
+                return Err(DeltaTableError::NotInitializedWithFiles("OPTIMIZE".into()));
+            }
 
             let writer_properties = this.writer_properties.unwrap_or_else(|| {
                 WriterProperties::builder()
