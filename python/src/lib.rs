@@ -50,6 +50,7 @@ use deltalake::protocol::{DeltaOperation, SaveMode};
 use deltalake::storage::IORuntime;
 use deltalake::DeltaTableBuilder;
 use deltalake::{DeltaOps, DeltaResult};
+use error::DeltaError;
 use futures::future::join_all;
 
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
@@ -166,6 +167,10 @@ impl RawDeltaTable {
         Ok(self._table.version())
     }
 
+    pub fn has_files(&self) -> PyResult<bool> {
+        Ok(self._table.config.require_files)
+    }
+
     pub fn metadata(&self) -> PyResult<RawDeltaTableMetaData> {
         let metadata = self._table.metadata().map_err(PythonError::from)?;
         Ok(RawDeltaTableMetaData {
@@ -273,6 +278,9 @@ impl RawDeltaTable {
         py: Python,
         partition_filters: Option<Vec<(PyBackedStr, PyBackedStr, PartitionFilterValue)>>,
     ) -> PyResult<Vec<String>> {
+        if !self.has_files()? {
+            return Err(DeltaError::new_err("Table is instantiated without files."));
+        }
         py.allow_threads(|| {
             if let Some(filters) = partition_filters {
                 let filters = convert_partition_filters(filters).map_err(PythonError::from)?;
@@ -298,6 +306,10 @@ impl RawDeltaTable {
         &self,
         partition_filters: Option<Vec<(PyBackedStr, PyBackedStr, PartitionFilterValue)>>,
     ) -> PyResult<Vec<String>> {
+        if !self._table.config.require_files {
+            return Err(DeltaError::new_err("Table is initiated without files."));
+        }
+
         if let Some(filters) = partition_filters {
             let filters = convert_partition_filters(filters).map_err(PythonError::from)?;
             Ok(self
@@ -1073,6 +1085,9 @@ impl RawDeltaTable {
     }
 
     pub fn get_add_actions(&self, flatten: bool) -> PyResult<PyArrowType<RecordBatch>> {
+        if !self.has_files()? {
+            return Err(DeltaError::new_err("Table is instantiated without files."));
+        }
         Ok(PyArrowType(
             self._table
                 .snapshot()

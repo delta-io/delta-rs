@@ -293,6 +293,10 @@ async fn execute(
     writer_properties: Option<WriterProperties>,
     mut commit_properties: CommitProperties,
 ) -> DeltaResult<(DeltaTableState, DeleteMetrics)> {
+    if !&snapshot.load_config().require_files {
+        return Err(DeltaTableError::NotInitializedWithFiles("DELETE".into()));
+    }
+
     let exec_start = Instant::now();
     let mut metrics = DeleteMetrics::default();
 
