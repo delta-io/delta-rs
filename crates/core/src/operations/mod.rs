@@ -283,6 +283,22 @@ pub fn get_num_idx_cols_and_stats_columns(
     )
 }
 
+/// Get the target_file_size from the table configuration in the sates
+/// If table_config does not exist (only can occur in the first write action) it takes
+/// the configuration that was passed to the writerBuilder.
+pub fn get_target_file_size(
+    config: &Option<crate::table::config::TableConfig<'_>>,
+    configuration: &HashMap<String, Option<String>>,
+) -> i64 {
+    match &config {
+        Some(conf) => conf.target_file_size(),
+        _ => configuration
+            .get("delta.targetFileSize")
+            .and_then(|v| v.clone().map(|v| v.parse::<i64>().unwrap()))
+            .unwrap_or(crate::table::config::DEFAULT_TARGET_FILE_SIZE),
+    }
+}
+
 #[cfg(feature = "datafusion")]
 mod datafusion_utils {
     use datafusion::execution::context::SessionState;
