@@ -690,6 +690,10 @@ async fn execute(
     not_match_target_operations: Vec<MergeOperationConfig>,
     not_match_source_operations: Vec<MergeOperationConfig>,
 ) -> DeltaResult<(DeltaTableState, MergeMetrics)> {
+    if !snapshot.load_config().require_files {
+        return Err(DeltaTableError::NotInitializedWithFiles("MERGE".into()));
+    }
+
     let mut metrics = MergeMetrics::default();
     let exec_start = Instant::now();
     // Determining whether we should write change data once so that computation of change data can

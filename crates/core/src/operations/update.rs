@@ -238,6 +238,9 @@ async fn execute(
     // For files that were identified, scan for records that match the predicate,
     // perform update operations, and then commit add and remove actions to
     // the log.
+    if !&snapshot.load_config().require_files {
+        return Err(DeltaTableError::NotInitializedWithFiles("UPDATE".into()));
+    }
 
     let update_planner = DeltaPlanner::<UpdateMetricExtensionPlanner> {
         extension_planner: UpdateMetricExtensionPlanner {},

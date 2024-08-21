@@ -39,6 +39,7 @@ if TYPE_CHECKING:
     import os
 
 from deltalake._internal import (
+    DeltaError,
     PyMergeBuilder,
     RawDeltaTable,
 )
@@ -1138,6 +1139,9 @@ class DeltaTable:
         Returns:
             the PyArrow dataset in PyArrow
         """
+        if not self._table.has_files():
+            raise DeltaError("Table is instantiated without files.")
+
         table_protocol = self.protocol()
         if (
             table_protocol.min_reader_version > MAX_SUPPORTED_READER_VERSION
@@ -1158,7 +1162,6 @@ class DeltaTable:
                 raise DeltaProtocolError(
                     f"The table has set these reader features: {missing_features} but these are not yet supported by the deltalake reader."
                 )
-
         if not filesystem:
             filesystem = pa_fs.PyFileSystem(
                 DeltaStorageHandler.from_table(
