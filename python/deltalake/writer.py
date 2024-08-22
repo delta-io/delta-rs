@@ -178,6 +178,7 @@ def write_deltalake(
     schema_mode: Optional[Literal["merge", "overwrite"]] = ...,
     storage_options: Optional[Dict[str, str]] = ...,
     predicate: Optional[str] = ...,
+    target_file_size: Optional[int] = ...,
     large_dtypes: bool = ...,
     engine: Literal["rust"] = ...,
     writer_properties: WriterProperties = ...,
@@ -214,6 +215,7 @@ def write_deltalake(
     storage_options: Optional[Dict[str, str]] = None,
     partition_filters: Optional[List[Tuple[str, str, Any]]] = None,
     predicate: Optional[str] = None,
+    target_file_size: Optional[int] = None,
     large_dtypes: bool = False,
     engine: Literal["pyarrow", "rust"] = "rust",
     writer_properties: Optional[WriterProperties] = None,
@@ -267,7 +269,8 @@ def write_deltalake(
         configuration: A map containing configuration options for the metadata action.
         schema_mode: If set to "overwrite", allows replacing the schema of the table. Set to "merge" to merge with existing schema.
         storage_options: options passed to the native delta filesystem.
-        predicate: When using `Overwrite` mode, replace data that matches a predicate. Only used in rust engine.
+        predicate: When using `Overwrite` mode, replace data that matches a predicate. Only used in rust engine.'
+        target_file_size: Override for target file size for data files written to the delta table. If not passed, it's taken from `delta.targetFileSize`.
         partition_filters: the partition filters that will be used for partition overwrite. Only used in pyarrow engine.
         large_dtypes: Only used for pyarrow engine
         engine: writer engine to write the delta table. PyArrow engine is deprecated, and will be removed in v1.0.
@@ -308,6 +311,7 @@ def write_deltalake(
             table=table._table if table is not None else None,
             schema_mode=schema_mode,
             predicate=predicate,
+            target_file_size=target_file_size,
             name=name,
             description=description,
             configuration=configuration,

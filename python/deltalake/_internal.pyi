@@ -200,6 +200,7 @@ def write_to_deltalake(
     table: Optional[RawDeltaTable],
     schema_mode: Optional[str],
     predicate: Optional[str],
+    target_file_size: Optional[int],
     name: Optional[str],
     description: Optional[str],
     configuration: Optional[Mapping[str, Optional[str]]],

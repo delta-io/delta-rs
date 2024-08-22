@@ -1602,6 +1602,7 @@ fn write_to_deltalake(
     schema_mode: Option<String>,
     partition_by: Option<Vec<String>>,
     predicate: Option<String>,
+    target_file_size: Option<usize>,
     name: Option<String>,
     description: Option<String>,
     configuration: Option<HashMap<String, Option<String>>>,
@@ -1648,6 +1649,10 @@ fn write_to_deltalake(
 
         if let Some(predicate) = predicate {
             builder = builder.with_replace_where(predicate);
+        };
+
+        if let Some(target_file_size) = target_file_size {
+            builder = builder.with_target_file_size(target_file_size)
         };
 
         if let Some(config) = configuration {
