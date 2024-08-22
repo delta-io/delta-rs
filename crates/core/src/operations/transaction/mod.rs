@@ -75,11 +75,12 @@
 //!</pre>
 use std::collections::HashMap;
 
+use bytes::Bytes;
 use chrono::Utc;
 use conflict_checker::ConflictChecker;
 use futures::future::BoxFuture;
 use object_store::path::Path;
-use object_store::{Error as ObjectStoreError, ObjectStore};
+use object_store::Error as ObjectStoreError;
 use serde_json::Value;
 
 use self::conflict_checker::{CommitConflictError, TransactionInfo, WinningCommitSummary};
@@ -89,8 +90,10 @@ use crate::kernel::{
     Action, CommitInfo, EagerSnapshot, Metadata, Protocol, ReaderFeatures, Transaction,
     WriterFeatures,
 };
-use crate::logstore::LogStoreRef;
+use crate::logstore::{CommitOrBytes, LogStoreRef};
 use crate::protocol::DeltaOperation;
+use crate::storage::str_is_truthy;
+use crate::storage::ObjectStoreRef;
 use crate::table::config::TableConfig;
 use crate::table::state::DeltaTableState;
 use crate::{crate_version, DeltaResult};
@@ -476,23 +479,42 @@ impl<'a> PreCommit<'a> {
     pub fn into_prepared_commit_future(self) -> BoxFuture<'a, DeltaResult<PreparedCommit<'a>>> {
         let this = self;
 
+        // Write delta log entry as temporary file to storage. For the actual commit,
+        // the temporary file is moved (atomic rename) to the delta log folder within `commit` function.
+        async fn write_tmp_commit(
+            log_entry: Bytes,
+            store: ObjectStoreRef,
+        ) -> DeltaResult<CommitOrBytes> {
+            let token = uuid::Uuid::new_v4().to_string();
+            let path = Path::from_iter([DELTA_LOG_FOLDER, &format!("_commit_{token}.json.tmp")]);
+            store.put(&path, log_entry.into()).await?;
+            Ok(CommitOrBytes::TmpCommit(path))
+        }
+
         Box::pin(async move {
             if let Some(table_reference) = this.table_data {
                 PROTOCOL.can_commit(table_reference, &this.data.actions, &this.data.operation)?;
             }
 
-            // Write delta log entry as temporary file to storage. For the actual commit,
-            // the temporary file is moved (atomic rename) to the delta log folder within `commit` function.
             let log_entry = this.data.get_bytes()?;
-            let token = uuid::Uuid::new_v4().to_string();
-            let path = Path::from_iter([DELTA_LOG_FOLDER, &format!("_commit_{token}.json.tmp")]);
-            this.log_store
-                .object_store()
-                .put(&path, log_entry.into())
-                .await?;
+
+            // With the DefaultLogStore, we just pass the bytes around, since we use conditionalPuts
+            // ObjectStores that have copy_if_not_exists or are S3 with unsafe_rename
+            let commit_or_bytes = if this.log_store.name() == "DefaultLogStore" {
+                let config_opts = &this.log_store.config().options.0;
+                if str_option(config_opts, "AWS_S3_ALLOW_UNSAFE_RENAME").is_some()
+                    || str_option(config_opts, "aws_copy_if_not_exists").is_some()
+                {
+                    write_tmp_commit(log_entry, this.log_store.object_store()).await?
+                } else {
+                    CommitOrBytes::LogBytes(log_entry)
+                }
+            } else {
+                write_tmp_commit(log_entry, this.log_store.object_store()).await?
+            };
 
             Ok(PreparedCommit {
-                path,
+                commit_or_bytes,
                 log_store: this.log_store,
                 table_data: this.table_data,
                 max_retries: this.max_retries,
@@ -503,9 +525,9 @@ impl<'a> PreCommit<'a> {
     }
 }
 
-/// Represents a inflight commit with a temporary commit marker on the log store
+/// Represents a inflight commit
 pub struct PreparedCommit<'a> {
-    path: Path,
+    commit_or_bytes: CommitOrBytes,
     log_store: LogStoreRef,
     data: CommitData,
     table_data: Option<&'a dyn TableReference>,
@@ -515,8 +537,8 @@ pub struct PreparedCommit<'a> {
 
 impl<'a> PreparedCommit<'a> {
     /// The temporary commit file created
-    pub fn path(&self) -> &Path {
-        &self.path
+    pub fn commit_or_bytes(&self) -> &CommitOrBytes {
+        &self.commit_or_bytes
     }
 }
 
@@ -528,10 +550,12 @@ impl<'a> std::future::IntoFuture for PreparedCommit<'a> {
         let this = self;
 
         Box::pin(async move {
-            let tmp_commit = &this.path;
+            let commit_or_bytes = this.commit_or_bytes;
 
             if this.table_data.is_none() {
-                this.log_store.write_commit_entry(0, tmp_commit).await?;
+                this.log_store
+                    .write_commit_entry(0, commit_or_bytes.clone())
+                    .await?;
                 return Ok(PostCommit {
                     version: 0,
                     data: this.data,
@@ -549,7 +573,11 @@ impl<'a> std::future::IntoFuture for PreparedCommit<'a> {
             let mut attempt_number = 1;
             while attempt_number <= this.max_retries {
                 let version = read_snapshot.version() + attempt_number as i64;
-                match this.log_store.write_commit_entry(version, tmp_commit).await {
+                match this
+                    .log_store
+                    .write_commit_entry(version, commit_or_bytes.clone())
+                    .await
+                {
                     Ok(()) => {
                         return Ok(PostCommit {
                             version,
@@ -590,7 +618,7 @@ impl<'a> std::future::IntoFuture for PreparedCommit<'a> {
                             }
                             Err(err) => {
                                 this.log_store
-                                    .abort_commit_entry(version, tmp_commit)
+                                    .abort_commit_entry(version, commit_or_bytes)
                                     .await?;
                                 return Err(TransactionError::CommitConflict(err).into());
                             }
@@ -598,7 +626,7 @@ impl<'a> std::future::IntoFuture for PreparedCommit<'a> {
                     }
                     Err(err) => {
                         this.log_store
-                            .abort_commit_entry(version, tmp_commit)
+                            .abort_commit_entry(version, commit_or_bytes)
                             .await?;
                         return Err(err.into());
                     }
@@ -723,6 +751,18 @@ impl<'a> std::future::IntoFuture for PostCommit<'a> {
     }
 }
 
+fn str_option(map: &HashMap<String, String>, key: &str) -> Option<String> {
+    if let Some(s) = map.get(key) {
+        return Some(s.to_owned());
+    }
+
+    if let Some(s) = map.get(&key.to_ascii_lowercase()) {
+        return Some(s.to_owned());
+    }
+
+    std::env::var(key).ok()
+}
+
 #[cfg(test)]
 mod tests {
     use std::{collections::HashMap, sync::Arc};
@@ -732,7 +772,7 @@ mod tests {
         logstore::{default_logstore::DefaultLogStore, LogStore},
         storage::commit_uri_from_version,
     };
-    use object_store::{memory::InMemory, PutPayload};
+    use object_store::{memory::InMemory, ObjectStore, PutPayload};
     use url::Url;
 
     #[test]
@@ -754,16 +794,19 @@ mod tests {
                 options: HashMap::new().into(),
             },
         );
-        let tmp_path = Path::from("_delta_log/tmp");
         let version_path = Path::from("_delta_log/00000000000000000000.json");
-        store.put(&tmp_path, PutPayload::new()).await.unwrap();
         store.put(&version_path, PutPayload::new()).await.unwrap();
 
-        let res = log_store.write_commit_entry(0, &tmp_path).await;
+        let res = log_store
+            .write_commit_entry(0, CommitOrBytes::LogBytes(PutPayload::new().into()))
+            .await;
         // fails if file version already exists
         assert!(res.is_err());
 
         // succeeds for next version
-        log_store.write_commit_entry(1, &tmp_path).await.unwrap();
+        log_store
+            .write_commit_entry(1, CommitOrBytes::LogBytes(PutPayload::new().into()))
+            .await
+            .unwrap();
     }
 }

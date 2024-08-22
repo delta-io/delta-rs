@@ -151,6 +151,15 @@ pub fn logstore_with(
     ))
 }
 
+/// Holder whether it's tmp_commit path or commit bytes
+#[derive(Clone)]
+pub enum CommitOrBytes {
+    /// Path of the tmp commit, to be used by logstores which use CopyIfNotExists
+    TmpCommit(Path),
+    /// Bytes of the log, to be used by logstoers which use Conditional Put
+    LogBytes(Bytes),
+}
+
 /// Configuration parameters for a log store
 #[derive(Debug, Clone)]
 pub struct LogStoreConfig {
@@ -190,14 +199,14 @@ pub trait LogStore: Sync + Send {
     async fn write_commit_entry(
         &self,
         version: i64,
-        tmp_commit: &Path,
+        commit_or_bytes: CommitOrBytes,
     ) -> Result<(), TransactionError>;
 
     /// Abort the commit entry for the given version.
     async fn abort_commit_entry(
         &self,
         version: i64,
-        tmp_commit: &Path,
+        commit_or_bytes: CommitOrBytes,
     ) -> Result<(), TransactionError>;
 
     /// Find latest version currently stored in the delta log.
