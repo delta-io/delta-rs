@@ -29,7 +29,7 @@ use std::{
 };
 use tracing::debug;
 
-use deltalake_core::logstore::{logstores, LogStore, LogStoreFactory};
+use deltalake_core::logstore::{default_logstore, logstores, LogStore, LogStoreFactory};
 use deltalake_core::storage::{factories, url_prefix_handler, ObjectStoreRef, StorageOptions};
 use deltalake_core::{DeltaResult, Path};
 use url::Url;
@@ -48,6 +48,15 @@ impl LogStoreFactory for S3LogStoreFactory {
         options: &StorageOptions,
     ) -> DeltaResult<Arc<dyn LogStore>> {
         let store = url_prefix_handler(store, Path::parse(location.path())?);
+
+        // With conditional put in S3-like API we can use the deltalake default logstore which use PutIfAbsent
+        if options
+            .0
+            .contains_key(AmazonS3ConfigKey::ConditionalPut.as_ref())
+        {
+            debug!("S3LogStoreFactory has been asked to create a default LogStore where the underlying store has Conditonal Put enabled - no locking provider required");
+            return Ok(default_logstore(store, location, options));
+        }
 
         if options
             .0

@@ -89,10 +89,13 @@ fn aws_storage_handler(
     store: ObjectStoreRef,
     options: &StorageOptions,
 ) -> DeltaResult<ObjectStoreRef> {
-    // If the copy-if-not-exists env var is set, we don't need to instantiate a locking client or check for allow-unsafe-rename.
+    // If the copy-if-not-exists env var is set or ConditionalPut is set, we don't need to instantiate a locking client or check for allow-unsafe-rename.
     if options
         .0
         .contains_key(AmazonS3ConfigKey::CopyIfNotExists.as_ref())
+        || options
+            .0
+            .contains_key(AmazonS3ConfigKey::ConditionalPut.as_ref())
     {
         Ok(store)
     } else {
