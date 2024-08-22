@@ -92,7 +92,6 @@ use crate::kernel::{
 };
 use crate::logstore::{CommitOrBytes, LogStoreRef};
 use crate::protocol::DeltaOperation;
-use crate::storage::str_is_truthy;
 use crate::storage::ObjectStoreRef;
 use crate::table::config::TableConfig;
 use crate::table::state::DeltaTableState;
@@ -495,20 +494,12 @@ impl<'a> PreCommit<'a> {
             if let Some(table_reference) = this.table_data {
                 PROTOCOL.can_commit(table_reference, &this.data.actions, &this.data.operation)?;
             }
-
             let log_entry = this.data.get_bytes()?;
 
             // With the DefaultLogStore, we just pass the bytes around, since we use conditionalPuts
-            // ObjectStores that have copy_if_not_exists or are S3 with unsafe_rename
+            // Other stores will use tmp_commits
             let commit_or_bytes = if this.log_store.name() == "DefaultLogStore" {
-                let config_opts = &this.log_store.config().options.0;
-                if str_option(config_opts, "AWS_S3_ALLOW_UNSAFE_RENAME").is_some()
-                    || str_option(config_opts, "aws_copy_if_not_exists").is_some()
-                {
-                    write_tmp_commit(log_entry, this.log_store.object_store()).await?
-                } else {
-                    CommitOrBytes::LogBytes(log_entry)
-                }
+                CommitOrBytes::LogBytes(log_entry)
             } else {
                 write_tmp_commit(log_entry, this.log_store.object_store()).await?
             };
@@ -749,18 +740,6 @@ impl<'a> std::future::IntoFuture for PostCommit<'a> {
             }
         })
     }
-}
-
-fn str_option(map: &HashMap<String, String>, key: &str) -> Option<String> {
-    if let Some(s) = map.get(key) {
-        return Some(s.to_owned());
-    }
-
-    if let Some(s) = map.get(&key.to_ascii_lowercase()) {
-        return Some(s.to_owned());
-    }
-
-    std::env::var(key).ok()
 }
 
 #[cfg(test)]
