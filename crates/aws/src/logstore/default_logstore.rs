@@ -1,34 +1,43 @@
-//! Default implementation of [`LogStore`] for storage backends with atomic put-if-absent operation
+//! Default implementation of [`LogStore`] for S3 storage backends
 
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 use bytes::Bytes;
-use object_store::{Attributes, Error as ObjectStoreError, ObjectStore, PutOptions, TagSet};
-
-use super::{CommitOrBytes, LogStore, LogStoreConfig};
-use crate::{
+use deltalake_core::{
+    logstore::{
+        abort_commit_entry, get_latest_version, read_commit_entry, write_commit_entry,
+        CommitOrBytes, LogStore, LogStoreConfig,
+    },
     operations::transaction::TransactionError,
-    storage::{commit_uri_from_version, ObjectStoreRef},
+    storage::{ObjectStoreRef, StorageOptions},
     DeltaResult,
 };
+use object_store::{Error as ObjectStoreError, ObjectStore};
+use url::Url;
 
-fn put_options() -> &'static PutOptions {
-    static PUT_OPTS: OnceLock<PutOptions> = OnceLock::new();
-    PUT_OPTS.get_or_init(|| PutOptions {
-        mode: object_store::PutMode::Create, // Creates if file doesn't exists yet
-        tags: TagSet::default(),
-        attributes: Attributes::default(),
-    })
+/// Return the [DefaultLogStore] implementation with the provided configuration options
+pub fn default_s3_logstore(
+    store: ObjectStoreRef,
+    location: &Url,
+    options: &StorageOptions,
+) -> Arc<dyn LogStore> {
+    Arc::new(DefaultS3LogStore::new(
+        store,
+        LogStoreConfig {
+            location: location.clone(),
+            options: options.clone(),
+        },
+    ))
 }
 
 /// Default [`LogStore`] implementation
 #[derive(Debug, Clone)]
-pub struct DefaultLogStore {
+pub struct DefaultS3LogStore {
     pub(crate) storage: Arc<dyn ObjectStore>,
     config: LogStoreConfig,
 }
 
-impl DefaultLogStore {
+impl DefaultS3LogStore {
     /// Create a new instance of [`DefaultLogStore`]
     ///
     /// # Arguments
@@ -41,13 +50,13 @@ impl DefaultLogStore {
 }
 
 #[async_trait::async_trait]
-impl LogStore for DefaultLogStore {
+impl LogStore for DefaultS3LogStore {
     fn name(&self) -> String {
-        "DefaultLogStore".into()
+        "DefaultS3LogStore".into()
     }
 
     async fn read_commit_entry(&self, version: i64) -> DeltaResult<Option<Bytes>> {
-        super::read_commit_entry(self.storage.as_ref(), version).await
+        read_commit_entry(self.storage.as_ref(), version).await
     }
 
     /// Tries to commit a prepared commit file. Returns [`TransactionError`]
@@ -61,21 +70,10 @@ impl LogStore for DefaultLogStore {
         commit_or_bytes: CommitOrBytes,
     ) -> Result<(), TransactionError> {
         match commit_or_bytes {
-            CommitOrBytes::LogBytes(log_bytes) => {
-                match self
-                    .object_store()
-                    .put_opts(
-                        &commit_uri_from_version(version),
-                        log_bytes.into(),
-                        put_options().clone(),
-                    )
-                    .await
-                {
-                    Ok(_) => Ok(()),
-                    Err(e) => Err(e),
-                }
+            CommitOrBytes::TmpCommit(tmp_commit) => {
+                Ok(write_commit_entry(&self.object_store(), version, &tmp_commit).await?)
             }
-            _ => unreachable!(), // Default log store should never get a tmp_commit, since this is for conditional put stores
+            _ => unreachable!(), // S3 Log Store should never receive bytes
         }
         .map_err(|err| -> TransactionError {
             match err {
@@ -90,17 +88,19 @@ impl LogStore for DefaultLogStore {
 
     async fn abort_commit_entry(
         &self,
-        _version: i64,
+        version: i64,
         commit_or_bytes: CommitOrBytes,
     ) -> Result<(), TransactionError> {
         match &commit_or_bytes {
-            CommitOrBytes::LogBytes(_) => Ok(()),
-            _ => unreachable!(), // Default log store should never get a tmp_commit, since this is for conditional put stores
+            CommitOrBytes::TmpCommit(tmp_commit) => {
+                abort_commit_entry(self.storage.as_ref(), version, tmp_commit).await
+            }
+            _ => unreachable!(), // S3 Log Store should never receive bytes
         }
     }
 
     async fn get_latest_version(&self, current_version: i64) -> DeltaResult<i64> {
-        super::get_latest_version(self, current_version).await
+        get_latest_version(self, current_version).await
     }
 
     fn object_store(&self) -> Arc<dyn ObjectStore> {
