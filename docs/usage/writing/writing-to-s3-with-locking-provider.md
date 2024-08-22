@@ -101,13 +101,10 @@ In DynamoDB, you need those permissions:
 Unlike AWS S3, some S3 clients support atomic renames by passing some headers
 in requests.
 
-For CloudFlare R2 passing this in the storage_options will enable concurrent writes:
+For CloudFlare R2 or Minio passing this in the storage_options will enable concurrent writes:
 
 ```python
 storage_options = {
-    "copy_if_not_exists": "header: cf-copy-destination-if-none-match: *",
+    "conditional_put": "etag",
 }
 ```
-
-Something similar can be done with MinIO but the header to pass should be verified
-in the MinIO documentation.

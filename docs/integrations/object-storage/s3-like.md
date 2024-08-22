@@ -1,37 +1,21 @@
-# AWS S3 Storage Backend
+# CloudFlare R2 & Minio
 
-`delta-rs` offers native support for using AWS S3 as an objet storage backend.
+`delta-rs` offers native support for using Cloudflare R2 and Minio's as storage backend. R2 and Minio support conditional puts, however we have to pass this flag into the storage options. See the example blow
 
 You don’t need to install any extra dependencies to red/write Delta tables to S3 with engines that use `delta-rs`. You do need to configure your AWS access credentials correctly.
 
-## Note for boto3 users
-
-Many Python engines use [boto3](https://boto3.amazonaws.com/v1/documentation/api/latest/index.html) to connect to AWS. This library supports reading credentials automatically from your local `.aws/config` or `.aws/creds` file.
-
-For example, if you’re running locally with the proper credentials in your local `.aws/config` or `.aws/creds` file then you can write a Parquet file to S3 like this with pandas:
-
-```python
-    import pandas as pd
-    df = pd.DataFrame({'x': [1, 2, 3]})
-    df.to_parquet("s3://avriiil/parquet-test-pandas")
-```
-
-The `delta-rs` writer does not use `boto3` and therefore does not support taking credentials from your `.aws/config` or `.aws/creds` file. If you’re used to working with writers from Python engines like Polars, pandas or Dask, this may mean a small change to your workflow.
-
-## Passing AWS Credentials
+## Passing S3 Credentials
 
 You can pass your AWS credentials explicitly by using:
 
 - the `storage_options `kwarg
 - Environment variables
-- EC2 metadata if using EC2 instances
-- AWS Profiles
 
 ## Example
 
 Let's work through an example with Polars. The same logic applies to other Python engines like Pandas, Daft, Dask, etc.
 
-Follow the steps below to use Delta Lake on S3 with Polars:
+Follow the steps below to use Delta Lake on S3 (R2/Minio) with Polars:
 
 1. Install Polars and deltalake. For example, using:
 
@@ -45,11 +29,8 @@ Follow the steps below to use Delta Lake on S3 with Polars:
 
 ```python
 storage_options = {
-    "AWS_REGION":<region_name>,
-    'AWS_ACCESS_KEY_ID': <key_id>,
     'AWS_SECRET_ACCESS_KEY': <access_key>,
-    'AWS_S3_LOCKING_PROVIDER': 'dynamodb',
-    'DELTA_DYNAMO_TABLE_NAME': 'delta_log',
+    'conditional_put': 'etag', # Here we say to use conditional put, this provides safe concurrency.
 }
 ```
 
@@ -62,9 +43,9 @@ storage_options = {
    )
    ```
 
-## Delta Lake on AWS S3: Safe Concurrent Writes
+## Delta Lake on S3: Safe Concurrent Writes
 
-You need a locking provider to ensure safe concurrent writes when writing Delta tables to AWS S3. This is because AWS S3 does not guarantee mutual exclusion.
+You need a locking provider to ensure safe concurrent writes when writing Delta tables to S3. This is because S3 does not guarantee mutual exclusion.
 
 A locking provider guarantees that only one writer is able to create the same file. This prevents corrupted or conflicting data.
 
@@ -84,7 +65,7 @@ If for some reason you don't want to use DynamoDB as your locking mechanism you 
 
 Read more in the [Usage](../../usage/writing/writing-to-s3-with-locking-provider.md) section.
 
-## Delta Lake on AWS S3: Required permissions
+## Delta Lake on S3: Required permissions
 
 You need to have permissions to get, put and delete objects in the S3 bucket you're storing your data in. Please note that you must be allowed to delete objects even if you're just appending to the Delta Lake, because there are temporary files into the log folder that are deleted after usage.
 
