@@ -839,6 +839,78 @@ def test_encode_partition_value(input_value: Any, expected: str) -> None:
         assert encode_partition_value(input_value) == expected
 
 
+def test_partitions_partitioned_table():
+    table_path = "../crates/test/tests/data/delta-0.8.0-partitioned"
+    dt = DeltaTable(table_path)
+    expected = [
+        {"year": "2020", "month": "2", "day": "5"},
+        {"year": "2021", "month": "12", "day": "4"},
+        {"year": "2020", "month": "2", "day": "3"},
+        {"year": "2021", "month": "4", "day": "5"},
+        {"year": "2020", "month": "1", "day": "1"},
+        {"year": "2021", "month": "12", "day": "20"},
+    ]
+    actual = dt.partitions()
+    for partition in expected:
+        assert partition in actual
+
+
+def test_partitions_tuples_partitioned_table():
+    table_path = "../crates/test/tests/data/delta-0.8.0-partitioned"
+    dt = DeltaTable(table_path)
+    expected = [
+        (("day", "5"), ("month", "2"), ("year", "2020")),
+        (("day", "1"), ("month", "1"), ("year", "2020")),
+        (("day", "5"), ("month", "4"), ("year", "2021")),
+        (("day", "3"), ("month", "2"), ("year", "2020")),
+        (("day", "20"), ("month", "12"), ("year", "2021")),
+        (("day", "4"), ("month", "12"), ("year", "2021")),
+    ]
+    actual = dt.partitions(as_tuple_list=True)
+    assert len(expected) == len(actual)
+    for partition in expected:
+        partition in actual
+
+
+def test_partitions_filtering_partitioned_table():
+    table_path = "../crates/test/tests/data/delta-0.8.0-partitioned"
+    dt = DeltaTable(table_path)
+    expected = [
+        (("day", "5"), ("month", "4"), ("year", "2021")),
+        (("day", "20"), ("month", "12"), ("year", "2021")),
+        (("day", "4"), ("month", "12"), ("year", "2021")),
+    ]
+    partition_filters = [("year", ">=", "2021")]
+    actual = dt.partitions(partition_filters=partition_filters, as_tuple_list=True)
+    assert len(expected) == len(actual)
+    for partition in expected:
+        partition in actual
+
+
+def test_partitions_special_partitioned_table():
+    table_path = "../crates/test/tests/data/delta-0.8.0-special-partition"
+    dt = DeltaTable(table_path)
+
+    # Partitions as list of dicts (default).
+    expected_dict = [{"x": "A/A"}, {"x": "B B"}]
+    actual_dict = dt.partitions()
+    for partition in expected_dict:
+        partition in actual_dict
+
+    # Partitions as list of tuples.
+    expected_tuple = [[("x", "B B")], [("x", "A/A")]]
+    actual_tuple = dt.partitions(as_tuple_list=True)
+    assert len(expected_tuple) == len(actual_tuple)
+    for partition in expected_tuple:
+        partition in actual_tuple
+
+
+def test_partitions_unpartitioned_table():
+    table_path = "../crates/test/tests/data/simple_table"
+    dt = DeltaTable(table_path)
+    assert len(dt.partitions()) == 0
+
+
 def test_read_table_last_checkpoint_not_updated():
     dt = DeltaTable("../crates/test/tests/data/table_failed_last_checkpoint_update")
 
