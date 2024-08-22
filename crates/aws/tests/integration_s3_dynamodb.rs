@@ -7,10 +7,10 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use aws_sdk_dynamodb::types::BillingMode;
 use deltalake_aws::logstore::{RepairLogEntryResult, S3DynamoDbLogStore};
-use deltalake_aws::storage::{s3_constants, S3StorageOptions};
+use deltalake_aws::storage::S3StorageOptions;
 use deltalake_aws::{CommitEntry, DynamoDbConfig, DynamoDbLockClient};
 use deltalake_core::kernel::{Action, Add, DataType, PrimitiveType, StructField, StructType};
-use deltalake_core::logstore::LogStore;
+use deltalake_core::logstore::{CommitOrBytes, LogStore};
 use deltalake_core::operations::transaction::CommitBuilder;
 use deltalake_core::protocol::{DeltaOperation, SaveMode};
 use deltalake_core::storage::commit_uri_from_version;
@@ -198,7 +198,10 @@ async fn test_abort_commit_entry() -> TestResult<()> {
     let entry = create_incomplete_commit_entry(&table, 1, "unfinished_commit").await?;
 
     log_store
-        .abort_commit_entry(entry.version, &entry.temp_path)
+        .abort_commit_entry(
+            entry.version,
+            CommitOrBytes::TmpCommit(entry.temp_path.clone()),
+        )
         .await?;
 
     // The entry should have been aborted - the latest entry should be one version lower
@@ -213,7 +216,7 @@ async fn test_abort_commit_entry() -> TestResult<()> {
 
     // Test abort commit is idempotent - still works if already aborted
     log_store
-        .abort_commit_entry(entry.version, &entry.temp_path)
+        .abort_commit_entry(entry.version, CommitOrBytes::TmpCommit(entry.temp_path))
         .await?;
 
     Ok(())
@@ -244,7 +247,10 @@ async fn test_abort_commit_entry_fail_to_delete_entry() -> TestResult<()> {
     // Abort will fail since we marked the entry as complete
     assert!(matches!(
         log_store
-            .abort_commit_entry(entry.version, &entry.temp_path)
+            .abort_commit_entry(
+                entry.version,
+                CommitOrBytes::TmpCommit(entry.temp_path.clone())
+            )
             .await,
         Err(_),
     ));
@@ -346,7 +352,12 @@ async fn create_incomplete_commit_entry(
         .into_prepared_commit_future()
         .await?;
 
-    let commit_entry = CommitEntry::new(version, prepared.path().to_owned());
+    let tmp_commit = match prepared.commit_or_bytes() {
+        CommitOrBytes::TmpCommit(tmp_commit) => tmp_commit,
+        _ => unreachable!(),
+    };
+
+    let commit_entry = CommitEntry::new(version, tmp_commit.to_owned());
     make_client()?
         .put_commit_entry(&table.table_uri(), &commit_entry)
         .await?;
