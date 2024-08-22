@@ -317,13 +317,3 @@ pub enum RepairLogEntryResult {
     /// Both parts of the repair process where already carried.
     AlreadyCompleted,
 }
-
-/// Represents the possible, positive outcomes of calling `DynamoDbClient::try_create_lock_table()`
-#[derive(Debug, PartialEq)]
-pub enum CreateLockTableResult {
-    /// Table created successfully.
-    TableCreated,
-    /// Table was not created because it already exists.
-    /// Does not imply that the table has the correct schema.
-    TableAlreadyExists,
-}
