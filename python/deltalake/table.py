@@ -529,7 +529,7 @@ class DeltaTable:
             if not partition:
                 continue
             if as_tuple_list:
-                sorted_partition = sorted(tuple(partition), key=lambda x: x[0])
+                sorted_partition = sorted(partition, key=lambda x: x[0])
                 partitions.append(tuple(sorted_partition))
             else:
                 partitions.append({k: v for (k, v) in partition})
