@@ -54,28 +54,22 @@ impl LogStoreFactory for S3LogStoreFactory {
             .contains_key(AmazonS3ConfigKey::CopyIfNotExists.as_ref())
         {
             debug!("S3LogStoreFactory has been asked to create a LogStore where the underlying store has copy-if-not-exists enabled - no locking provider required");
-            return Ok(logstore::default_logstore::default_s3_logstore(
-                store, location, options,
-            ));
+            return Ok(logstore::default_s3_logstore(store, location, options));
         }
 
         let s3_options = S3StorageOptions::from_map(&options.0)?;
 
         if s3_options.locking_provider.as_deref() != Some("dynamodb") {
             debug!("S3LogStoreFactory has been asked to create a LogStore without the dynamodb locking provider");
-            return Ok(logstore::default_logstore::default_s3_logstore(
-                store, location, options,
-            ));
+            return Ok(logstore::default_s3_logstore(store, location, options));
         }
 
-        Ok(Arc::new(
-            logstore::dynamodb_logstore::S3DynamoDbLogStore::try_new(
-                location.clone(),
-                options.clone(),
-                &s3_options,
-                store,
-            )?,
-        ))
+        Ok(Arc::new(logstore::S3DynamoDbLogStore::try_new(
+            location.clone(),
+            options.clone(),
+            &s3_options,
+            store,
+        )?))
     }
 }
 
@@ -734,7 +728,7 @@ mod tests {
         let logstore = factory
             .with_options(Arc::new(store), &url, &StorageOptions::from(HashMap::new()))
             .unwrap();
-        assert_eq!(logstore.name(), "DefaultLogStore");
+        assert_eq!(logstore.name(), "S3LogStore");
     }
 
     #[test]

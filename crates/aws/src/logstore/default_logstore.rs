@@ -15,13 +15,13 @@ use deltalake_core::{
 use object_store::{Error as ObjectStoreError, ObjectStore};
 use url::Url;
 
-/// Return the [DefaultLogStore] implementation with the provided configuration options
+/// Return the [S3LogStore] implementation with the provided configuration options
 pub fn default_s3_logstore(
     store: ObjectStoreRef,
     location: &Url,
     options: &StorageOptions,
 ) -> Arc<dyn LogStore> {
-    Arc::new(DefaultS3LogStore::new(
+    Arc::new(S3LogStore::new(
         store,
         LogStoreConfig {
             location: location.clone(),
@@ -32,13 +32,13 @@ pub fn default_s3_logstore(
 
 /// Default [`LogStore`] implementation
 #[derive(Debug, Clone)]
-pub struct DefaultS3LogStore {
+pub struct S3LogStore {
     pub(crate) storage: Arc<dyn ObjectStore>,
     config: LogStoreConfig,
 }
 
-impl DefaultS3LogStore {
-    /// Create a new instance of [`DefaultLogStore`]
+impl S3LogStore {
+    /// Create a new instance of [`S3LogStore`]
     ///
     /// # Arguments
     ///
@@ -50,9 +50,9 @@ impl DefaultS3LogStore {
 }
 
 #[async_trait::async_trait]
-impl LogStore for DefaultS3LogStore {
+impl LogStore for S3LogStore {
     fn name(&self) -> String {
-        "DefaultS3LogStore".into()
+        "S3LogStore".into()
     }
 
     async fn read_commit_entry(&self, version: i64) -> DeltaResult<Option<Bytes>> {
