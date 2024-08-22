@@ -61,30 +61,24 @@ impl LogStore for DefaultLogStore {
         commit_or_bytes: CommitOrBytes,
     ) -> Result<(), TransactionError> {
         match commit_or_bytes {
-            CommitOrBytes::LogBytes(log_bytes) => {
-                match self
-                    .object_store()
-                    .put_opts(
-                        &commit_uri_from_version(version),
-                        log_bytes.into(),
-                        put_options().clone(),
-                    )
-                    .await
-                {
-                    Ok(_) => Ok(()),
-                    Err(e) => Err(e),
-                }
-            }
+            CommitOrBytes::LogBytes(log_bytes) => self
+                .object_store()
+                .put_opts(
+                    &commit_uri_from_version(version),
+                    log_bytes.into(),
+                    put_options().clone(),
+                )
+                .await
+                .map_err(|err| -> TransactionError {
+                    match err {
+                        ObjectStoreError::AlreadyExists { .. } => {
+                            TransactionError::VersionAlreadyExists(version)
+                        }
+                        _ => TransactionError::from(err),
+                    }
+                })?,
             _ => unreachable!(), // Default log store should never get a tmp_commit, since this is for conditional put stores
-        }
-        .map_err(|err| -> TransactionError {
-            match err {
-                ObjectStoreError::AlreadyExists { .. } => {
-                    TransactionError::VersionAlreadyExists(version)
-                }
-                _ => TransactionError::from(err),
-            }
-        })?;
+        };
         Ok(())
     }
 
