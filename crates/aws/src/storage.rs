@@ -1,5 +1,6 @@
 //! AWS S3 storage backend.
 
+use aws_config::default_provider::token::DefaultTokenChain;
 use aws_config::meta::region::ProvideRegion;
 use aws_config::provider_config::ProviderConfig;
 use aws_config::{Region, SdkConfig};
@@ -208,6 +209,16 @@ impl S3StorageOptions {
             imds_timeout,
             &provider_config,
         );
+
+        let token_provider: DefaultTokenChain = execute_sdk_future(
+            DefaultTokenChain::builder()
+                .region(crate::credentials::new_region_provider(
+                    disable_imds,
+                    imds_timeout,
+                ))
+                .build(),
+        )?;
+
         #[cfg(feature = "native-tls")]
         let sdk_config = execute_sdk_future(
             loader
@@ -217,11 +228,16 @@ impl S3StorageOptions {
                         .unwrap_or(false),
                 ))
                 .credentials_provider(credentials_provider)
+                .token_provider(token_provider)
                 .load(),
         )?;
         #[cfg(feature = "rustls")]
-        let sdk_config =
-            execute_sdk_future(loader.credentials_provider(credentials_provider).load())?;
+        let sdk_config = execute_sdk_future(
+            loader
+                .credentials_provider(credentials_provider)
+                .token_provider(token_provider)
+                .load(),
+        )?;
 
         Ok(Self {
             virtual_hosted_style_request,
