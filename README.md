@@ -136,8 +136,8 @@ of features outlined in the Delta [protocol][protocol] is also [tracked](#protoc
 | -------------------- | :-----: | :-----: | ---------------------------------------------------------------- |
 | Local                | ![done] | ![done] |                                                                  |
 | S3 - AWS             | ![done] | ![done] | requires lock for concurrent writes                              |
-| S3 - MinIO           | ![done] | ![done] | requires lock for concurrent writes                              |
-| S3 - R2              | ![done] | ![done] | No lock required when using `AmazonS3ConfigKey::CopyIfNotExists` |
+| S3 - MinIO           | ![done] | ![done] | No lock required when using `AmazonS3ConfigKey::ConditionalPut` with `storage_options = {"conditional_put":"etag"}` |
+| S3 - R2              | ![done] | ![done] | No lock required when using `AmazonS3ConfigKey::ConditionalPut` with `storage_options = {"conditional_put":"etag"}` |
 | Azure Blob           | ![done] | ![done] |                                                                  |
 | Azure ADLS Gen2      | ![done] | ![done] |                                                                  |
 | Microsoft OneLake    | ![done] | ![done] |                                                                  |
