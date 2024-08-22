@@ -199,8 +199,12 @@ impl LogStore for S3DynamoDbLogStore {
     async fn write_commit_entry(
         &self,
         version: i64,
-        tmp_commit: &Path,
+        commit_or_bytes: CommitOrBytes,
     ) -> Result<(), TransactionError> {
+        let tmp_commit = match commit_or_bytes {
+            CommitOrBytes::TmpCommit(tmp_commit) => tmp_commit,
+            _ => unreachable!(), // S3DynamoDBLogstore should never get Bytes
+        };
         let entry = CommitEntry::new(version, tmp_commit.clone());
         debug!("Writing commit entry for {self:?}: {entry:?}");
         // create log entry in dynamo db: complete = false, no expireTime
@@ -244,8 +248,12 @@ impl LogStore for S3DynamoDbLogStore {
     async fn abort_commit_entry(
         &self,
         version: i64,
-        tmp_commit: &Path,
+        commit_or_bytes: CommitOrBytes,
     ) -> Result<(), TransactionError> {
+        let tmp_commit = match commit_or_bytes {
+            CommitOrBytes::TmpCommit(tmp_commit) => tmp_commit,
+            _ => unreachable!(), // S3DynamoDBLogstore should never get Bytes
+        };
         self.lock_client
             .delete_commit_entry(version, &self.table_path)
             .await
@@ -266,7 +274,7 @@ impl LogStore for S3DynamoDbLogStore {
                 },
             })?;
 
-        abort_commit_entry(&self.storage, version, tmp_commit).await?;
+        abort_commit_entry(&self.storage, version, &tmp_commit).await?;
         Ok(())
     }
 

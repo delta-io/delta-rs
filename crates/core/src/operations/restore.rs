@@ -272,14 +272,19 @@ async fn execute(
         .await?;
 
     let commit_version = snapshot.version() + 1;
-    let commit = prepared_commit.path();
-    match log_store.write_commit_entry(commit_version, commit).await {
+    let commit_bytes = prepared_commit.commit_or_bytes();
+    match log_store
+        .write_commit_entry(commit_version, commit_bytes.clone())
+        .await
+    {
         Ok(_) => {}
         Err(err @ TransactionError::VersionAlreadyExists(_)) => {
             return Err(err.into());
         }
         Err(err) => {
-            log_store.abort_commit_entry(commit_version, commit).await?;
+            log_store
+                .abort_commit_entry(commit_version, commit_bytes.clone())
+                .await?;
             return Err(err.into());
         }
     }
