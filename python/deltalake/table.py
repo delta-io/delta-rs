@@ -514,25 +514,19 @@ class DeltaTable:
     def partitions(
         self,
         partition_filters: Optional[List[Tuple[str, str, Any]]] = None,
-        as_tuple_list: bool = False,
-    ) -> List[Dict[str, str]] | List[Tuple[str]]:
+    ) -> List[Dict[str, str]]:
         """
         Returns the partitions as a list of dicts. Example: `[{'month': '1', 'year': '2020', 'day': '1'}, ...]`
 
         Args:
             partition_filters: The partition filters that will be used for getting the matched partitions, defaults to `None` (no filtering).
-            as_tuple_list: If `True`, returns the partitions as a list of tuples. Example: `[(("day", "5"), ("month", "4"), ("year", "2021")), ...]`
         """
 
-        partitions: List[Any] = []
+        partitions: List[Dict[str, str]] = []
         for partition in self._table.get_active_partitions(partition_filters):
             if not partition:
                 continue
-            if as_tuple_list:
-                sorted_partition = sorted(partition, key=lambda x: x[0])
-                partitions.append(tuple(sorted_partition))
-            else:
-                partitions.append({k: v for (k, v) in partition})
+            partitions.append({k: v for (k, v) in partition})
         return partitions
 
     def files(
