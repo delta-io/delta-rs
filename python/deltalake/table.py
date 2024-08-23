@@ -1904,11 +1904,26 @@ class TableAlterer:
     ) -> None:
         """
         Unset properties from the table.
+
         Args:
             properties: properties which set
             raise_if_not_exists: set if should raise if not exists.
             custom_metadata: custom metadata that will be added to the transaction commit.
+
         Example:
+            ```python
+            from deltalake import write_deltalake, DeltaTable
+            import pandas as pd
+            df = pd.DataFrame(
+                {"id": ["1", "2", "3"],
+                "deleted": [False, False, False],
+                "price": [10., 15., 20.]
+                })
+            write_deltalake("tmp", df)
+
+            dt = DeltaTable("tmp")
+            dt.alter.set_table_properties({"delta.enableChangeDataFeed": "true"})
+            ```
         """
         self.table._table.set_table_properties(
             properties, raise_if_not_exists, custom_metadata
