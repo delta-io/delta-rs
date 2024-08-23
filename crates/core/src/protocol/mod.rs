@@ -259,17 +259,11 @@ impl Add {
 
     /// Returns the serde_json representation of stats contained in the action if present.
     /// Since stats are defined as optional in the protocol, this may be None.
-    fn get_json_stats(&self) -> Result<Option<Stats>, serde_json::error::Error> {
-        let ps: Result<Option<PartialStats>, serde_json::error::Error> = self
-            .stats
+    pub fn get_json_stats(&self) -> Result<Option<Stats>, serde_json::error::Error> {
+        self.stats
             .as_ref()
-            .map_or(Ok(None), |s| serde_json::from_str(s));
-
-        match ps {
-            Ok(Some(mut partial)) => Ok(Some(partial.as_stats())),
-            Ok(None) => Ok(None),
-            Err(e) => Err(e),
-        }
+            .map(|stats| serde_json::from_str(stats).map(|mut ps: PartialStats| ps.as_stats()))
+            .transpose()
     }
 }
 
