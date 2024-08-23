@@ -1903,7 +1903,7 @@ class TableAlterer:
         custom_metadata: Optional[Dict[str, str]] = None,
     ) -> None:
         """
-        Unset properties from the table.
+        Set properties from the table.
 
         Args:
             properties: properties which set
