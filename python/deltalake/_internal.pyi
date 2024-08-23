@@ -143,7 +143,7 @@ class RawDeltaTable:
         custom_metadata: Optional[Dict[str, str]],
         post_commithook_properties: Optional[Dict[str, Optional[bool]]],
     ) -> str: ...
-    def merge_execute(
+    def create_merge_builder(
         self,
         source: pyarrow.RecordBatchReader,
         predicate: str,
@@ -153,17 +153,8 @@ class RawDeltaTable:
         custom_metadata: Optional[Dict[str, str]],
         post_commithook_properties: Optional[Dict[str, Optional[bool]]],
         safe_cast: bool,
-        matched_update_updates: Optional[List[Dict[str, str]]],
-        matched_update_predicate: Optional[List[Optional[str]]],
-        matched_delete_predicate: Optional[List[str]],
-        matched_delete_all: Optional[bool],
-        not_matched_insert_updates: Optional[List[Dict[str, str]]],
-        not_matched_insert_predicate: Optional[List[Optional[str]]],
-        not_matched_by_source_update_updates: Optional[List[Dict[str, str]]],
-        not_matched_by_source_update_predicate: Optional[List[Optional[str]]],
-        not_matched_by_source_delete_predicate: Optional[List[str]],
-        not_matched_by_source_delete_all: Optional[bool],
-    ) -> str: ...
+    ) -> PyMergeBuilder: ...
+    def merge_execute(self, merge_builder: PyMergeBuilder) -> str: ...
     def get_active_partitions(
         self, partitions_filters: Optional[FilterType] = None
     ) -> Any: ...
@@ -243,6 +234,26 @@ def batch_distinct(batch: pyarrow.RecordBatch) -> pyarrow.RecordBatch: ...
 def get_num_idx_cols_and_stats_columns(
     table: Optional[RawDeltaTable], configuration: Optional[Mapping[str, Optional[str]]]
 ) -> Tuple[int, Optional[List[str]]]: ...
+
+class PyMergeBuilder:
+    source_alias: str
+    target_alias: str
+    arrow_schema: pyarrow.Schema
+
+    def when_matched_update(
+        self, updates: Dict[str, str], predicate: Optional[str]
+    ) -> None: ...
+    def when_matched_delete(self, predicate: Optional[str]) -> None: ...
+    def when_not_matched_insert(
+        self, updates: Dict[str, str], predicate: Optional[str]
+    ) -> None: ...
+    def when_not_matched_by_source_update(
+        self, updates: Dict[str, str], predicate: Optional[str]
+    ) -> None: ...
+    def when_not_matched_by_source_delete(
+        self,
+        predicate: Optional[str],
+    ) -> None: ...
 
 # Can't implement inheritance (see note in src/schema.rs), so this is next
 # best thing.
