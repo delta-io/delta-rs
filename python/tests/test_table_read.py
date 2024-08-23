@@ -855,33 +855,17 @@ def test_partitions_partitioned_table():
         assert partition in actual
 
 
-def test_partitions_tuples_partitioned_table():
-    table_path = "../crates/test/tests/data/delta-0.8.0-partitioned"
-    dt = DeltaTable(table_path)
-    expected = [
-        (("day", "5"), ("month", "2"), ("year", "2020")),
-        (("day", "1"), ("month", "1"), ("year", "2020")),
-        (("day", "5"), ("month", "4"), ("year", "2021")),
-        (("day", "3"), ("month", "2"), ("year", "2020")),
-        (("day", "20"), ("month", "12"), ("year", "2021")),
-        (("day", "4"), ("month", "12"), ("year", "2021")),
-    ]
-    actual = dt.partitions(as_tuple_list=True)
-    assert len(expected) == len(actual)
-    for partition in expected:
-        partition in actual
-
-
 def test_partitions_filtering_partitioned_table():
     table_path = "../crates/test/tests/data/delta-0.8.0-partitioned"
     dt = DeltaTable(table_path)
     expected = [
-        (("day", "5"), ("month", "4"), ("year", "2021")),
-        (("day", "20"), ("month", "12"), ("year", "2021")),
-        (("day", "4"), ("month", "12"), ("year", "2021")),
+        {"day": "5", "month": "4", "year": "2021"},
+        {"day": "20", "month": "12", "year": "2021"},
+        {"day": "4", "month": "12", "year": "2021"},
     ]
+
     partition_filters = [("year", ">=", "2021")]
-    actual = dt.partitions(partition_filters=partition_filters, as_tuple_list=True)
+    actual = dt.partitions(partition_filters=partition_filters)
     assert len(expected) == len(actual)
     for partition in expected:
         partition in actual
@@ -891,18 +875,10 @@ def test_partitions_special_partitioned_table():
     table_path = "../crates/test/tests/data/delta-0.8.0-special-partition"
     dt = DeltaTable(table_path)
 
-    # Partitions as list of dicts (default).
-    expected_dict = [{"x": "A/A"}, {"x": "B B"}]
-    actual_dict = dt.partitions()
-    for partition in expected_dict:
-        partition in actual_dict
-
-    # Partitions as list of tuples.
-    expected_tuple = [[("x", "B B")], [("x", "A/A")]]
-    actual_tuple = dt.partitions(as_tuple_list=True)
-    assert len(expected_tuple) == len(actual_tuple)
-    for partition in expected_tuple:
-        partition in actual_tuple
+    expected = [{"x": "A/A"}, {"x": "B B"}]
+    actual = dt.partitions()
+    for partition in expected:
+        partition in actual
 
 
 def test_partitions_unpartitioned_table():
