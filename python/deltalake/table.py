@@ -748,7 +748,7 @@ class DeltaTable:
             retention_hours,
             enforce_retention_duration,
             custom_metadata,
-            post_commithook_properties.__dict__ if post_commithook_properties else None,
+            post_commithook_properties,
         )
 
     def update(
@@ -852,9 +852,7 @@ class DeltaTable:
             writer_properties,
             safe_cast=not error_on_type_mismatch,
             custom_metadata=custom_metadata,
-            post_commithook_properties=post_commithook_properties.__dict__
-            if post_commithook_properties
-            else None,
+            post_commithook_properties=post_commithook_properties,
         )
         return json.loads(metrics)
 
@@ -961,9 +959,7 @@ class DeltaTable:
             safe_cast=not error_on_type_mismatch,
             writer_properties=writer_properties,
             custom_metadata=custom_metadata,
-            post_commithook_properties=post_commithook_properties.__dict__
-            if post_commithook_properties
-            else None,
+            post_commithook_properties=post_commithook_properties,
         )
         return TableMerger(py_merge_builder, self._table)
 
@@ -1246,10 +1242,7 @@ class DeltaTable:
             the metrics from delete.
         """
         metrics = self._table.delete(
-            predicate,
-            writer_properties,
-            custom_metadata,
-            post_commithook_properties.__dict__ if post_commithook_properties else None,
+            predicate, writer_properties, custom_metadata, post_commithook_properties
         )
         return json.loads(metrics)
 
@@ -1286,9 +1279,7 @@ class DeltaTable:
             ```
         """
         metrics = self._table.repair(
-            dry_run,
-            custom_metadata,
-            post_commithook_properties.__dict__ if post_commithook_properties else None,
+            dry_run, custom_metadata, post_commithook_properties
         )
         return json.loads(metrics)
 
@@ -1706,9 +1697,7 @@ class TableAlterer:
             fields = [fields]
 
         self.table._table.add_columns(
-            fields,
-            custom_metadata,
-            post_commithook_properties.__dict__ if post_commithook_properties else None,
+            fields, custom_metadata, post_commithook_properties
         )
 
     def add_constraint(
@@ -1747,9 +1736,7 @@ class TableAlterer:
             )
 
         self.table._table.add_constraints(
-            constraints,
-            custom_metadata,
-            post_commithook_properties.__dict__ if post_commithook_properties else None,
+            constraints, custom_metadata, post_commithook_properties
         )
 
     def drop_constraint(
@@ -1788,10 +1775,7 @@ class TableAlterer:
             ```
         """
         self.table._table.drop_constraints(
-            name,
-            raise_if_not_exists,
-            custom_metadata,
-            post_commithook_properties.__dict__ if post_commithook_properties else None,
+            name, raise_if_not_exists, custom_metadata, post_commithook_properties
         )
 
     def set_table_properties(
@@ -1897,7 +1881,7 @@ class TableOptimizer:
             min_commit_interval,
             writer_properties,
             custom_metadata,
-            post_commithook_properties.__dict__ if post_commithook_properties else None,
+            post_commithook_properties,
         )
         self.table.update_incremental()
         return json.loads(metrics)
@@ -1967,7 +1951,7 @@ class TableOptimizer:
             min_commit_interval,
             writer_properties,
             custom_metadata,
-            post_commithook_properties.__dict__ if post_commithook_properties else None,
+            post_commithook_properties,
         )
         self.table.update_incremental()
         return json.loads(metrics)

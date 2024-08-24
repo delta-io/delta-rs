@@ -329,7 +329,7 @@ impl RawDeltaTable {
         retention_hours: Option<u64>,
         enforce_retention_duration: bool,
         custom_metadata: Option<HashMap<String, String>>,
-        post_commithook_properties: Option<HashMap<String, Option<bool>>>,
+        post_commithook_properties: Option<PyPostCommitHookProperties>,
     ) -> PyResult<Vec<String>> {
         let (table, metrics) = py.allow_threads(|| {
             let mut cmd = VacuumBuilder::new(
@@ -364,7 +364,7 @@ impl RawDeltaTable {
         writer_properties: Option<PyWriterProperties>,
         safe_cast: bool,
         custom_metadata: Option<HashMap<String, String>>,
-        post_commithook_properties: Option<HashMap<String, Option<bool>>>,
+        post_commithook_properties: Option<PyPostCommitHookProperties>,
     ) -> PyResult<String> {
         let (table, metrics) = py.allow_threads(|| {
             let mut cmd = UpdateBuilder::new(
@@ -420,7 +420,7 @@ impl RawDeltaTable {
         min_commit_interval: Option<u64>,
         writer_properties: Option<PyWriterProperties>,
         custom_metadata: Option<HashMap<String, String>>,
-        post_commithook_properties: Option<HashMap<String, Option<bool>>>,
+        post_commithook_properties: Option<PyPostCommitHookProperties>,
     ) -> PyResult<String> {
         let (table, metrics) = py.allow_threads(|| {
             let mut cmd = OptimizeBuilder::new(
@@ -480,7 +480,7 @@ impl RawDeltaTable {
         min_commit_interval: Option<u64>,
         writer_properties: Option<PyWriterProperties>,
         custom_metadata: Option<HashMap<String, String>>,
-        post_commithook_properties: Option<HashMap<String, Option<bool>>>,
+        post_commithook_properties: Option<PyPostCommitHookProperties>,
     ) -> PyResult<String> {
         let (table, metrics) = py.allow_threads(|| {
             let mut cmd = OptimizeBuilder::new(
@@ -526,7 +526,7 @@ impl RawDeltaTable {
         py: Python,
         fields: Vec<Field>,
         custom_metadata: Option<HashMap<String, String>>,
-        post_commithook_properties: Option<HashMap<String, Option<bool>>>,
+        post_commithook_properties: Option<PyPostCommitHookProperties>,
     ) -> PyResult<()> {
         let table = py.allow_threads(|| {
             let mut cmd = AddColumnBuilder::new(
@@ -559,7 +559,7 @@ impl RawDeltaTable {
         py: Python,
         constraints: HashMap<String, String>,
         custom_metadata: Option<HashMap<String, String>>,
-        post_commithook_properties: Option<HashMap<String, Option<bool>>>,
+        post_commithook_properties: Option<PyPostCommitHookProperties>,
     ) -> PyResult<()> {
         let table = py.allow_threads(|| {
             let mut cmd = ConstraintBuilder::new(
@@ -590,7 +590,7 @@ impl RawDeltaTable {
         name: String,
         raise_if_not_exists: bool,
         custom_metadata: Option<HashMap<String, String>>,
-        post_commithook_properties: Option<HashMap<String, Option<bool>>>,
+        post_commithook_properties: Option<PyPostCommitHookProperties>,
     ) -> PyResult<()> {
         let table = py.allow_threads(|| {
             let mut cmd = DropConstraintBuilder::new(
@@ -699,7 +699,7 @@ impl RawDeltaTable {
         target_alias: Option<String>,
         safe_cast: bool,
         writer_properties: Option<PyWriterProperties>,
-        post_commithook_properties: Option<HashMap<String, Option<bool>>>,
+        post_commithook_properties: Option<PyPostCommitHookProperties>,
         custom_metadata: Option<HashMap<String, String>>,
     ) -> PyResult<PyMergeBuilder> {
         py.allow_threads(|| {
@@ -925,7 +925,7 @@ impl RawDeltaTable {
         schema: PyArrowType<ArrowSchema>,
         partitions_filters: Option<Vec<(PyBackedStr, PyBackedStr, PartitionFilterValue)>>,
         custom_metadata: Option<HashMap<String, String>>,
-        post_commithook_properties: Option<HashMap<String, Option<bool>>>,
+        post_commithook_properties: Option<PyPostCommitHookProperties>,
     ) -> PyResult<()> {
         py.allow_threads(|| {
             let mode = mode.parse().map_err(PythonError::from)?;
@@ -1095,7 +1095,7 @@ impl RawDeltaTable {
         predicate: Option<String>,
         writer_properties: Option<PyWriterProperties>,
         custom_metadata: Option<HashMap<String, String>>,
-        post_commithook_properties: Option<HashMap<String, Option<bool>>>,
+        post_commithook_properties: Option<PyPostCommitHookProperties>,
     ) -> PyResult<String> {
         let (table, metrics) = py.allow_threads(|| {
             let mut cmd = DeleteBuilder::new(
@@ -1154,7 +1154,7 @@ impl RawDeltaTable {
         &mut self,
         dry_run: bool,
         custom_metadata: Option<HashMap<String, String>>,
-        post_commithook_properties: Option<HashMap<String, Option<bool>>>,
+        post_commithook_properties: Option<PyPostCommitHookProperties>,
     ) -> PyResult<String> {
         let mut cmd = FileSystemCheckBuilder::new(
             self._table.log_store(),
@@ -1178,14 +1178,12 @@ impl RawDeltaTable {
 
 fn set_post_commithook_properties(
     mut commit_properties: CommitProperties,
-    post_commithook_properties: HashMap<String, Option<bool>>,
+    post_commithook_properties: PyPostCommitHookProperties,
 ) -> CommitProperties {
-    if let Some(Some(create_checkpoint)) = post_commithook_properties.get("create_checkpoint") {
-        commit_properties = commit_properties.with_create_checkpoint(*create_checkpoint)
-    }
-    if let Some(cleanup_expired_logs) = post_commithook_properties.get("cleanup_expired_logs") {
-        commit_properties = commit_properties.with_cleanup_expired_logs(*cleanup_expired_logs)
-    }
+    commit_properties =
+        commit_properties.with_create_checkpoint(post_commithook_properties.create_checkpoint);
+    commit_properties = commit_properties
+        .with_cleanup_expired_logs(post_commithook_properties.cleanup_expired_logs);
     commit_properties
 }
 
@@ -1305,7 +1303,7 @@ fn convert_partition_filters(
 
 fn maybe_create_commit_properties(
     custom_metadata: Option<HashMap<String, String>>,
-    post_commithook_properties: Option<HashMap<String, Option<bool>>>,
+    post_commithook_properties: Option<PyPostCommitHookProperties>,
 ) -> Option<CommitProperties> {
     if custom_metadata.is_none() && post_commithook_properties.is_none() {
         return None;
@@ -1587,6 +1585,12 @@ pub struct PyWriterProperties {
     column_properties: Option<HashMap<String, Option<ColumnProperties>>>,
 }
 
+#[derive(FromPyObject)]
+pub struct PyPostCommitHookProperties {
+    create_checkpoint: bool,
+    cleanup_expired_logs: Option<bool>,
+}
+
 #[pyfunction]
 #[allow(clippy::too_many_arguments)]
 fn write_to_deltalake(
@@ -1604,7 +1608,7 @@ fn write_to_deltalake(
     storage_options: Option<HashMap<String, String>>,
     writer_properties: Option<PyWriterProperties>,
     custom_metadata: Option<HashMap<String, String>>,
-    post_commithook_properties: Option<HashMap<String, Option<bool>>>,
+    post_commithook_properties: Option<PyPostCommitHookProperties>,
 ) -> PyResult<()> {
     py.allow_threads(|| {
         let batches = data.0.map(|batch| batch.unwrap()).collect::<Vec<_>>();

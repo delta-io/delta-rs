@@ -16,7 +16,10 @@ use std::sync::Arc;
 
 use crate::error::PythonError;
 use crate::utils::rt;
-use crate::{maybe_create_commit_properties, set_writer_properties, PyWriterProperties};
+use crate::{
+    maybe_create_commit_properties, set_writer_properties, PyPostCommitHookProperties,
+    PyWriterProperties,
+};
 
 #[pyclass(module = "deltalake._internal")]
 pub(crate) struct PyMergeBuilder {
@@ -38,7 +41,7 @@ impl PyMergeBuilder {
         target_alias: Option<String>,
         safe_cast: bool,
         writer_properties: Option<PyWriterProperties>,
-        post_commithook_properties: Option<HashMap<String, Option<bool>>>,
+        post_commithook_properties: Option<PyPostCommitHookProperties>,
         custom_metadata: Option<HashMap<String, String>>,
     ) -> DeltaResult<Self> {
         let ctx = SessionContext::new();

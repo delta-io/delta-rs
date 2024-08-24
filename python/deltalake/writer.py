@@ -314,9 +314,7 @@ def write_deltalake(
             storage_options=storage_options,
             writer_properties=writer_properties,
             custom_metadata=custom_metadata,
-            post_commithook_properties=post_commithook_properties.__dict__
-            if post_commithook_properties
-            else None,
+            post_commithook_properties=post_commithook_properties,
         )
         if table:
             table.update_incremental()
@@ -549,9 +547,7 @@ def write_deltalake(
                 schema,
                 partition_filters,
                 custom_metadata,
-                post_commithook_properties=post_commithook_properties.__dict__
-                if post_commithook_properties
-                else None,
+                post_commithook_properties=post_commithook_properties,
             )
             table.update_incremental()
     else:
