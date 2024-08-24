@@ -32,6 +32,7 @@ pub(crate) struct PyMergeBuilder {
 }
 
 impl PyMergeBuilder {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         log_store: LogStoreRef,
         snapshot: DeltaTableState,
@@ -73,8 +74,8 @@ impl PyMergeBuilder {
         }
         Ok(Self {
             _builder: Some(cmd),
-            source_alias: source_alias,
-            target_alias: target_alias,
+            source_alias,
+            target_alias,
             arrow_schema: schema,
         })
     }
@@ -89,7 +90,7 @@ impl PyMergeBuilder {
 impl PyMergeBuilder {
     #[getter]
     fn get_arrow_schema(&self, py: Python) -> PyResult<PyObject> {
-        Ok(<arrow_schema::Schema as Clone>::clone(&self.arrow_schema).into_pyarrow(py)?)
+        <arrow_schema::Schema as Clone>::clone(&self.arrow_schema).into_pyarrow(py)
     }
 
     #[pyo3(signature=(
