@@ -346,6 +346,15 @@ impl CommitProperties {
         self
     }
 
+    /// Specify maximum number of times to retry the transaction before failing to commit
+    pub fn with_max_retries(
+        mut self,
+        max_retries: usize,
+    ) -> Self {
+        self.max_retries = max_retries;
+        self
+    }
+
     /// Specify if it should create a checkpoint when the commit interval condition is met
     pub fn with_create_checkpoint(mut self, create_checkpoint: bool) -> Self {
         self.create_checkpoint = create_checkpoint;
