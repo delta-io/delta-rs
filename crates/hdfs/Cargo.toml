@@ -13,7 +13,7 @@ rust-version.workspace = true
 
 [dependencies]
 deltalake-core = { version = ">=0.17.0, <0.20.0", path = "../core" }
-hdfs-native-object-store = "0.11"
+hdfs-native-object-store = "0.12"
 
 # workspace dependecies
 object_store = { workspace = true }
