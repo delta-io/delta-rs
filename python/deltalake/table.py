@@ -1928,7 +1928,7 @@ class TableOptimizer:
             max_concurrent_tasks: the maximum number of concurrent tasks to use for
                                     file compaction. Defaults to number of CPUs. More concurrent tasks can make compaction
                                     faster, but will also use more memory.
-            max_spill_size: the maximum number of bytes to spill to disk. Defaults to 20GB.
+            max_spill_size: the maximum number of bytes allowed in memory before spilling to disk. Defaults to 20GB.
             min_commit_interval: minimum interval in seconds or as timedeltas before a new commit is
                                     created. Interval is useful for long running executions. Set to 0 or timedelta(0), if you
                                     want a commit per partition.
