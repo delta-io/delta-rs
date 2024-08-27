@@ -203,9 +203,9 @@ pub struct OptimizeBuilder<'a> {
     commit_properties: CommitProperties,
     /// Whether to preserve insertion order within files (default false)
     preserve_insertion_order: bool,
-    /// Max number of concurrent tasks (default is number of cpus)
+    /// Maximum number of concurrent tasks (default is number of cpus)
     max_concurrent_tasks: usize,
-    /// Maximum number of bytes that are allowed to spill to disk
+    /// Maximum number of bytes allowed in memory before spilling to disk
     max_spill_size: usize,
     /// Optimize type
     optimize_type: OptimizeType,
