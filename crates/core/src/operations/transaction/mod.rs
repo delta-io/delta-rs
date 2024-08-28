@@ -347,10 +347,7 @@ impl CommitProperties {
     }
 
     /// Specify maximum number of times to retry the transaction before failing to commit
-    pub fn with_max_retries(
-        mut self,
-        max_retries: usize,
-    ) -> Self {
+    pub fn with_max_retries(mut self, max_retries: usize) -> Self {
         self.max_retries = max_retries;
         self
     }
