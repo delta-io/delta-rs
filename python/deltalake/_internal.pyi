@@ -59,6 +59,7 @@ class RawDeltaTable:
         enforce_retention_duration: bool,
         custom_metadata: Optional[Dict[str, str]],
         post_commithook_properties: Optional[PostCommitHookProperties],
+        max_commit_retries: Optional[int],
     ) -> List[str]: ...
     def compact_optimize(
         self,
@@ -69,6 +70,7 @@ class RawDeltaTable:
         writer_properties: Optional[WriterProperties],
         custom_metadata: Optional[Dict[str, str]],
         post_commithook_properties: Optional[PostCommitHookProperties],
+        max_commit_retries: Optional[int],
     ) -> str: ...
     def z_order_optimize(
         self,
@@ -81,18 +83,21 @@ class RawDeltaTable:
         writer_properties: Optional[WriterProperties],
         custom_metadata: Optional[Dict[str, str]],
         post_commithook_properties: Optional[PostCommitHookProperties],
+        max_commit_retries: Optional[int],
     ) -> str: ...
     def add_columns(
         self,
         fields: List[Field],
         custom_metadata: Optional[Dict[str, str]],
         post_commithook_properties: Optional[PostCommitHookProperties],
+        max_commit_retries: Optional[int],
     ) -> None: ...
     def add_constraints(
         self,
         constraints: Dict[str, str],
         custom_metadata: Optional[Dict[str, str]],
         post_commithook_properties: Optional[PostCommitHookProperties],
+        max_commit_retries: Optional[int],
     ) -> None: ...
     def drop_constraints(
         self,
@@ -100,12 +105,14 @@ class RawDeltaTable:
         raise_if_not_exists: bool,
         custom_metadata: Optional[Dict[str, str]],
         post_commithook_properties: Optional[PostCommitHookProperties],
+        max_commit_retries: Optional[int],
     ) -> None: ...
     def set_table_properties(
         self,
         properties: Dict[str, str],
         raise_if_not_exists: bool,
         custom_metadata: Optional[Dict[str, str]],
+        max_commit_retries: Optional[int],
     ) -> None: ...
     def restore(
         self,
@@ -113,6 +120,7 @@ class RawDeltaTable:
         ignore_missing_files: bool,
         protocol_downgrade_allowed: bool,
         custom_metadata: Optional[Dict[str, str]],
+        max_commit_retries: Optional[int],
     ) -> str: ...
     def history(self, limit: Optional[int]) -> List[str]: ...
     def update_incremental(self) -> None: ...
@@ -127,12 +135,14 @@ class RawDeltaTable:
         writer_properties: Optional[WriterProperties],
         custom_metadata: Optional[Dict[str, str]],
         post_commithook_properties: Optional[PostCommitHookProperties],
+        max_commit_retries: Optional[int],
     ) -> str: ...
     def repair(
         self,
         dry_run: bool,
         custom_metadata: Optional[Dict[str, str]],
         post_commithook_properties: Optional[PostCommitHookProperties],
+        max_commit_retries: Optional[int],
     ) -> str: ...
     def update(
         self,
@@ -142,6 +152,7 @@ class RawDeltaTable:
         safe_cast: bool,
         custom_metadata: Optional[Dict[str, str]],
         post_commithook_properties: Optional[PostCommitHookProperties],
+        max_commit_retries: Optional[int],
     ) -> str: ...
     def create_merge_builder(
         self,
@@ -153,6 +164,7 @@ class RawDeltaTable:
         custom_metadata: Optional[Dict[str, str]],
         post_commithook_properties: Optional[PostCommitHookProperties],
         safe_cast: bool,
+        max_commit_retries: Optional[int],
     ) -> PyMergeBuilder: ...
     def merge_execute(self, merge_builder: PyMergeBuilder) -> str: ...
     def get_active_partitions(
@@ -167,6 +179,7 @@ class RawDeltaTable:
         partitions_filters: Optional[FilterType],
         custom_metadata: Optional[Dict[str, str]],
         post_commithook_properties: Optional[PostCommitHookProperties],
+        max_commit_retries: Optional[int],
     ) -> None: ...
     def cleanup_metadata(self) -> None: ...
     def check_can_write_timestamp_ntz(self, schema: pyarrow.Schema) -> None: ...
@@ -208,6 +221,7 @@ def write_to_deltalake(
     writer_properties: Optional[WriterProperties],
     custom_metadata: Optional[Dict[str, str]],
     post_commithook_properties: Optional[PostCommitHookProperties],
+    max_commit_retries: Optional[int],
 ) -> None: ...
 def convert_to_deltalake(
     uri: str,
