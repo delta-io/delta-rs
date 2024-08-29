@@ -675,7 +675,7 @@ mod tests {
                 Arc::new(arrow::array::StringArray::from(vec![
                     "2023-07-04",
                     "2023-07-05",
-                    "2023-07-05"
+                    "2023-07-05",
                 ])),
             ],
         )
@@ -702,12 +702,10 @@ mod tests {
             relation: Some(target_name.clone()),
             name: "id".to_owned(),
         }))
-        .and(
-            col("modified".to_owned())
-            .in_list(vec![
-                lit("2023-07-05"), lit("2023-07-06"), lit("2023-07-07")
-            ], false),
-        );
+        .and(col("modified".to_owned()).in_list(
+            vec![lit("2023-07-05"), lit("2023-07-06"), lit("2023-07-07")],
+            false,
+        ));
 
         let pred = try_construct_early_filter(
             join_predicate,
@@ -734,11 +732,15 @@ mod tests {
             col(Column {
                 relation: None,
                 name: "modified".to_owned(),
-            }).in_list(vec![
-                Expr::Literal(ScalarValue::Utf8(Some("2023-07-05".to_string()))),
-                Expr::Literal(ScalarValue::Utf8(Some("2023-07-06".to_string()))),
-                Expr::Literal(ScalarValue::Utf8(Some("2023-07-07".to_string())))
-            ], false),
+            })
+            .in_list(
+                vec![
+                    Expr::Literal(ScalarValue::Utf8(Some("2023-07-05".to_string()))),
+                    Expr::Literal(ScalarValue::Utf8(Some("2023-07-06".to_string()))),
+                    Expr::Literal(ScalarValue::Utf8(Some("2023-07-07".to_string()))),
+                ],
+                false,
+            ),
         );
         assert_eq!(pred.unwrap(), filter);
     }
@@ -760,7 +762,7 @@ mod tests {
                 Arc::new(arrow::array::StringArray::from(vec![
                     "2023-07-04",
                     "2023-07-05",
-                    "2023-07-05"
+                    "2023-07-05",
                 ])),
             ],
         )
@@ -787,9 +789,8 @@ mod tests {
             relation: Some(target_name.clone()),
             name: "id".to_owned(),
         }))
-        .and(
-            col("modified".to_owned())
-            .in_list(vec![
+        .and(col("modified".to_owned()).in_list(
+            vec![
                 col(Column {
                     relation: Some(target_name.clone()),
                     name: "id".to_owned(),
@@ -797,9 +798,10 @@ mod tests {
                 col(Column {
                     relation: Some(target_name.clone()),
                     name: "modified".to_owned(),
-                })
-            ], false),
-        );
+                }),
+            ],
+            false,
+        ));
 
         let pred = try_construct_early_filter(
             join_predicate,
@@ -826,16 +828,20 @@ mod tests {
             col(Column {
                 relation: None,
                 name: "modified".to_owned(),
-            }).in_list(vec![
-                col(Column {
-                    relation: Some(target_name.clone()),
-                    name: "id".to_owned(),
-                }),
-                col(Column {
-                    relation: Some(target_name.clone()),
-                    name: "modified".to_owned(),
-                })
-            ], false),
+            })
+            .in_list(
+                vec![
+                    col(Column {
+                        relation: Some(target_name.clone()),
+                        name: "id".to_owned(),
+                    }),
+                    col(Column {
+                        relation: Some(target_name.clone()),
+                        name: "modified".to_owned(),
+                    }),
+                ],
+                false,
+            ),
         );
         assert_eq!(pred.unwrap(), filter);
     }
@@ -857,7 +863,7 @@ mod tests {
                 Arc::new(arrow::array::StringArray::from(vec![
                     "2023-07-04",
                     "2023-07-05",
-                    "2023-07-05"
+                    "2023-07-05",
                 ])),
             ],
         )
@@ -884,9 +890,8 @@ mod tests {
             relation: Some(target_name.clone()),
             name: "id".to_owned(),
         }))
-        .and(
-            ident("source.id")
-            .in_list(vec![
+        .and(ident("source.id").in_list(
+            vec![
                 col(Column {
                     relation: Some(target_name.clone()),
                     name: "id".to_owned(),
@@ -894,9 +899,10 @@ mod tests {
                 col(Column {
                     relation: Some(target_name.clone()),
                     name: "modified".to_owned(),
-                })
-            ], false),
-        );
+                }),
+            ],
+            false,
+        ));
 
         let pred = try_construct_early_filter(
             join_predicate,
@@ -919,8 +925,8 @@ mod tests {
             Expr::Literal(ScalarValue::Utf8(Some("A".to_string()))),
             Expr::Literal(ScalarValue::Utf8(Some("C".to_string()))),
         )
-        .and(
-            ident("source.id").in_list(vec![
+        .and(ident("source.id").in_list(
+            vec![
                 col(Column {
                     relation: Some(target_name.clone()),
                     name: "id".to_owned(),
@@ -928,9 +934,10 @@ mod tests {
                 col(Column {
                     relation: Some(target_name.clone()),
                     name: "modified".to_owned(),
-                })
-            ], false),
-        );
+                }),
+            ],
+            false,
+        ));
         assert_eq!(pred.unwrap(), filter);
     }
 }
