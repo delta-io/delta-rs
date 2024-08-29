@@ -744,6 +744,7 @@ class DeltaTable:
         enforce_retention_duration: bool = True,
         custom_metadata: Optional[Dict[str, str]] = None,
         post_commithook_properties: Optional[PostCommitHookProperties] = None,
+        max_commit_retries: Optional[int] = None,
     ) -> List[str]:
         """
         Run the Vacuum command on the Delta Table: list and delete files no longer referenced by the Delta table and are older than the retention threshold.
@@ -754,6 +755,7 @@ class DeltaTable:
             enforce_retention_duration: when disabled, accepts retention hours smaller than the value from `delta.deletedFileRetentionDuration`.
             custom_metadata: custom metadata that will be added to the transaction commit.
             post_commithook_properties: properties for the post commit hook. If None, default values are used.
+            max_commit_retries: maximum number of times to retry the transaction commit.
         Returns:
             the list of files no longer referenced by the Delta Table and are older than the retention threshold.
         """
@@ -767,6 +769,7 @@ class DeltaTable:
             enforce_retention_duration,
             custom_metadata,
             post_commithook_properties,
+            max_commit_retries,
         )
 
     def update(
@@ -780,6 +783,7 @@ class DeltaTable:
         error_on_type_mismatch: bool = True,
         custom_metadata: Optional[Dict[str, str]] = None,
         post_commithook_properties: Optional[PostCommitHookProperties] = None,
+        max_commit_retries: Optional[int] = None,
     ) -> Dict[str, Any]:
         """`UPDATE` records in the Delta Table that matches an optional predicate. Either updates or new_values needs
         to be passed for it to execute.
@@ -792,6 +796,7 @@ class DeltaTable:
             error_on_type_mismatch: specify if update will return error if data types are mismatching :default = True
             custom_metadata: custom metadata that will be added to the transaction commit.
             post_commithook_properties: properties for the post commit hook. If None, default values are used.
+            max_commit_retries: maximum number of times to retry the transaction commit.
         Returns:
             the metrics from update
 
@@ -871,6 +876,7 @@ class DeltaTable:
             safe_cast=not error_on_type_mismatch,
             custom_metadata=custom_metadata,
             post_commithook_properties=post_commithook_properties,
+            max_commit_retries=max_commit_retries,
         )
         return json.loads(metrics)
 
@@ -913,6 +919,7 @@ class DeltaTable:
         large_dtypes: Optional[bool] = None,
         custom_metadata: Optional[Dict[str, str]] = None,
         post_commithook_properties: Optional[PostCommitHookProperties] = None,
+        max_commit_retries: Optional[int] = None,
     ) -> "TableMerger":
         """Pass the source data which you want to merge on the target delta table, providing a
         predicate in SQL query like format. You can also specify on what to do when the underlying data types do not
@@ -929,6 +936,7 @@ class DeltaTable:
             arrow_schema_conversion_mode: Large converts all types of data schema into Large Arrow types, passthrough keeps string/binary/list types untouched
             custom_metadata: custom metadata that will be added to the transaction commit.
             post_commithook_properties: properties for the post commit hook. If None, default values are used.
+            max_commit_retries: maximum number of times to retry the transaction commit.
 
         Returns:
             TableMerger: TableMerger Object
@@ -978,6 +986,7 @@ class DeltaTable:
             writer_properties=writer_properties,
             custom_metadata=custom_metadata,
             post_commithook_properties=post_commithook_properties,
+            max_commit_retries=max_commit_retries,
         )
         return TableMerger(py_merge_builder, self._table)
 
@@ -988,6 +997,7 @@ class DeltaTable:
         ignore_missing_files: bool = False,
         protocol_downgrade_allowed: bool = False,
         custom_metadata: Optional[Dict[str, str]] = None,
+        max_commit_retries: Optional[int] = None,
     ) -> Dict[str, Any]:
         """
         Run the Restore command on the Delta Table: restore table to a given version or datetime.
@@ -997,6 +1007,7 @@ class DeltaTable:
             ignore_missing_files: whether the operation carry on when some data files missing.
             protocol_downgrade_allowed: whether the operation when protocol version upgraded.
             custom_metadata: custom metadata that will be added to the transaction commit.
+            max_commit_retries: maximum number of times to retry the transaction commit.
 
         Returns:
             the metrics from restore.
@@ -1007,6 +1018,7 @@ class DeltaTable:
                 ignore_missing_files=ignore_missing_files,
                 protocol_downgrade_allowed=protocol_downgrade_allowed,
                 custom_metadata=custom_metadata,
+                max_commit_retries=max_commit_retries,
             )
         else:
             metrics = self._table.restore(
@@ -1014,6 +1026,7 @@ class DeltaTable:
                 ignore_missing_files=ignore_missing_files,
                 protocol_downgrade_allowed=protocol_downgrade_allowed,
                 custom_metadata=custom_metadata,
+                max_commit_retries=max_commit_retries,
             )
         return json.loads(metrics)
 
@@ -1242,6 +1255,7 @@ class DeltaTable:
         writer_properties: Optional[WriterProperties] = None,
         custom_metadata: Optional[Dict[str, str]] = None,
         post_commithook_properties: Optional[PostCommitHookProperties] = None,
+        max_commit_retries: Optional[int] = None,
     ) -> Dict[str, Any]:
         """Delete records from a Delta Table that statisfy a predicate.
 
@@ -1255,12 +1269,13 @@ class DeltaTable:
             writer_properties: Pass writer properties to the Rust parquet writer.
             custom_metadata: custom metadata that will be added to the transaction commit.
             post_commithook_properties: properties for the post commit hook. If None, default values are used.
+            max_commit_retries: maximum number of times to retry the transaction commit.
 
         Returns:
             the metrics from delete.
         """
         metrics = self._table.delete(
-            predicate, writer_properties, custom_metadata, post_commithook_properties
+            predicate, writer_properties, custom_metadata, post_commithook_properties, max_commit_retries
         )
         return json.loads(metrics)
 
@@ -1269,6 +1284,7 @@ class DeltaTable:
         dry_run: bool = False,
         custom_metadata: Optional[Dict[str, str]] = None,
         post_commithook_properties: Optional[PostCommitHookProperties] = None,
+        max_commit_retries: Optional[int] = None,
     ) -> Dict[str, Any]:
         """Repair the Delta Table by auditing active files that do not exist in the underlying
         filesystem and removes them. This can be useful when there are accidental deletions or corrupted files.
@@ -1281,6 +1297,7 @@ class DeltaTable:
             dry_run: when activated, list only the files, otherwise add remove actions to transaction log. Defaults to False.
             custom_metadata: custom metadata that will be added to the transaction commit.
             post_commithook_properties: properties for the post commit hook. If None, default values are used.
+            max_commit_retries: maximum number of times to retry the transaction commit.
 
         Returns:
             The metrics from repair (FSCK) action.
@@ -1297,7 +1314,7 @@ class DeltaTable:
             ```
         """
         metrics = self._table.repair(
-            dry_run, custom_metadata, post_commithook_properties
+            dry_run, custom_metadata, post_commithook_properties, max_commit_retries
         )
         return json.loads(metrics)
 
@@ -1689,6 +1706,7 @@ class TableAlterer:
         fields: Union[DeltaField, List[DeltaField]],
         custom_metadata: Optional[Dict[str, str]] = None,
         post_commithook_properties: Optional[PostCommitHookProperties] = None,
+        max_commit_retries: Optional[int] = None,
     ) -> None:
         """Add new columns and/or update the fields of a stuctcolumn
 
@@ -1696,6 +1714,7 @@ class TableAlterer:
             fields: fields to merge into schema
             custom_metadata: custom metadata that will be added to the transaction commit.
             post_commithook_properties: properties for the post commit hook. If None, default values are used.
+            max_commit_retries: maximum number of times to retry the transaction commit.
 
         Example:
             ```python
@@ -1715,7 +1734,7 @@ class TableAlterer:
             fields = [fields]
 
         self.table._table.add_columns(
-            fields, custom_metadata, post_commithook_properties
+            fields, custom_metadata, post_commithook_properties, max_commit_retries
         )
 
     def add_constraint(
@@ -1723,6 +1742,7 @@ class TableAlterer:
         constraints: Dict[str, str],
         custom_metadata: Optional[Dict[str, str]] = None,
         post_commithook_properties: Optional[PostCommitHookProperties] = None,
+        max_commit_retries: Optional[int] = None,
     ) -> None:
         """
         Add constraints to the table. Limited to `single constraint` at once.
@@ -1731,6 +1751,7 @@ class TableAlterer:
             constraints: mapping of constraint name to SQL-expression to evaluate on write
             custom_metadata: custom metadata that will be added to the transaction commit.
             post_commithook_properties: properties for the post commit hook. If None, default values are used.
+            max_commit_retries: maximum number of times to retry the transaction commit.
 
         Example:
             ```python
@@ -1754,7 +1775,7 @@ class TableAlterer:
             )
 
         self.table._table.add_constraints(
-            constraints, custom_metadata, post_commithook_properties
+            constraints, custom_metadata, post_commithook_properties, max_commit_retries
         )
 
     def drop_constraint(
@@ -1763,6 +1784,7 @@ class TableAlterer:
         raise_if_not_exists: bool = True,
         custom_metadata: Optional[Dict[str, str]] = None,
         post_commithook_properties: Optional[PostCommitHookProperties] = None,
+        max_commit_retries: Optional[int] = None,
     ) -> None:
         """
         Drop constraints from a table. Limited to `single constraint` at once.
@@ -1772,6 +1794,7 @@ class TableAlterer:
             raise_if_not_exists: set if should raise if not exists.
             custom_metadata: custom metadata that will be added to the transaction commit.
             post_commithook_properties: properties for the post commit hook. If None, default values are used.
+            max_commit_retries: maximum number of times to retry the transaction commit.
 
         Example:
             ```python
@@ -1793,7 +1816,7 @@ class TableAlterer:
             ```
         """
         self.table._table.drop_constraints(
-            name, raise_if_not_exists, custom_metadata, post_commithook_properties
+            name, raise_if_not_exists, custom_metadata, post_commithook_properties, max_commit_retries,
         )
 
     def set_table_properties(
@@ -1801,6 +1824,7 @@ class TableAlterer:
         properties: Dict[str, str],
         raise_if_not_exists: bool = True,
         custom_metadata: Optional[Dict[str, str]] = None,
+        max_commit_retries: Optional[int] = None,
     ) -> None:
         """
         Set properties from the table.
@@ -1809,6 +1833,7 @@ class TableAlterer:
             properties: properties which set
             raise_if_not_exists: set if should raise if not exists.
             custom_metadata: custom metadata that will be added to the transaction commit.
+            max_commit_retries: maximum number of times to retry the transaction commit.
 
         Example:
             ```python
@@ -1826,7 +1851,7 @@ class TableAlterer:
             ```
         """
         self.table._table.set_table_properties(
-            properties, raise_if_not_exists, custom_metadata
+            properties, raise_if_not_exists, custom_metadata, max_commit_retries
         )
 
 
@@ -1845,6 +1870,7 @@ class TableOptimizer:
         writer_properties: Optional[WriterProperties] = None,
         custom_metadata: Optional[Dict[str, str]] = None,
         post_commithook_properties: Optional[PostCommitHookProperties] = None,
+        max_commit_retries: Optional[int] = None,
     ) -> Dict[str, Any]:
         """
         Compacts small files to reduce the total number of files in the table.
@@ -1869,6 +1895,7 @@ class TableOptimizer:
             writer_properties: Pass writer properties to the Rust parquet writer.
             custom_metadata: custom metadata that will be added to the transaction commit.
             post_commithook_properties: properties for the post commit hook. If None, default values are used.
+            max_commit_retries: maximum number of times to retry the transaction commit.
 
         Returns:
             the metrics from optimize
@@ -1900,6 +1927,7 @@ class TableOptimizer:
             writer_properties,
             custom_metadata,
             post_commithook_properties,
+            max_commit_retries,
         )
         self.table.update_incremental()
         return json.loads(metrics)
@@ -1915,6 +1943,7 @@ class TableOptimizer:
         writer_properties: Optional[WriterProperties] = None,
         custom_metadata: Optional[Dict[str, str]] = None,
         post_commithook_properties: Optional[PostCommitHookProperties] = None,
+        max_commit_retries: Optional[int] = None,
     ) -> Dict[str, Any]:
         """
         Reorders the data using a Z-order curve to improve data skipping.
@@ -1937,6 +1966,7 @@ class TableOptimizer:
             writer_properties: Pass writer properties to the Rust parquet writer.
             custom_metadata: custom metadata that will be added to the transaction commit.
             post_commithook_properties: properties for the post commit hook. If None, default values are used.
+            max_commit_retries: maximum number of times to retry the transaction commit.
 
         Returns:
             the metrics from optimize
@@ -1970,6 +2000,7 @@ class TableOptimizer:
             writer_properties,
             custom_metadata,
             post_commithook_properties,
+            max_commit_retries,
         )
         self.table.update_incremental()
         return json.loads(metrics)

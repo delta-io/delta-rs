@@ -44,6 +44,7 @@ impl PyMergeBuilder {
         writer_properties: Option<PyWriterProperties>,
         post_commithook_properties: Option<PyPostCommitHookProperties>,
         custom_metadata: Option<HashMap<String, String>>,
+        max_commit_retries: Option<usize>,
     ) -> DeltaResult<Self> {
         let ctx = SessionContext::new();
         let schema = source.schema();
@@ -67,9 +68,11 @@ impl PyMergeBuilder {
             cmd = cmd.with_writer_properties(set_writer_properties(writer_props)?);
         }
 
-        if let Some(commit_properties) =
-            maybe_create_commit_properties(custom_metadata, post_commithook_properties)
-        {
+        if let Some(commit_properties) = maybe_create_commit_properties(
+            custom_metadata,
+            max_commit_retries,
+            post_commithook_properties,
+        ) {
             cmd = cmd.with_commit_properties(commit_properties);
         }
         Ok(Self {

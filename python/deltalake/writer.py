@@ -124,6 +124,7 @@ def write_deltalake(
     engine: Literal["pyarrow"] = ...,
     custom_metadata: Optional[Dict[str, str]] = ...,
     post_commithook_properties: Optional[PostCommitHookProperties] = ...,
+    max_commit_retries: Optional[int] = ...,
 ) -> None: ...
 
 
@@ -153,6 +154,7 @@ def write_deltalake(
     writer_properties: WriterProperties = ...,
     custom_metadata: Optional[Dict[str, str]] = ...,
     post_commithook_properties: Optional[PostCommitHookProperties] = ...,
+    max_commit_retries: Optional[int] = ...,
 ) -> None: ...
 
 
@@ -184,6 +186,7 @@ def write_deltalake(
     writer_properties: WriterProperties = ...,
     custom_metadata: Optional[Dict[str, str]] = ...,
     post_commithook_properties: Optional[PostCommitHookProperties] = ...,
+    max_commit_retries: Optional[int] = ...,
 ) -> None: ...
 
 
@@ -221,6 +224,7 @@ def write_deltalake(
     writer_properties: Optional[WriterProperties] = None,
     custom_metadata: Optional[Dict[str, str]] = None,
     post_commithook_properties: Optional[PostCommitHookProperties] = None,
+    max_commit_retries: Optional[int] = None,
 ) -> None:
     """Write to a Delta Lake table
 
@@ -277,6 +281,7 @@ def write_deltalake(
         writer_properties: Pass writer properties to the Rust parquet writer.
         custom_metadata: Custom metadata to add to the commitInfo.
         post_commithook_properties: properties for the post commit hook. If None, default values are used.
+        max_commit_retries: maximum number of times to retry the transaction commit.
     """
     table, table_uri = try_get_table_and_table_uri(table_or_uri, storage_options)
     if table is not None:
@@ -319,6 +324,7 @@ def write_deltalake(
             writer_properties=writer_properties,
             custom_metadata=custom_metadata,
             post_commithook_properties=post_commithook_properties,
+            max_commit_retries=max_commit_retries,
         )
         if table:
             table.update_incremental()
@@ -552,6 +558,7 @@ def write_deltalake(
                 partition_filters,
                 custom_metadata,
                 post_commithook_properties=post_commithook_properties,
+                max_commit_retries=max_commit_retries,
             )
             table.update_incremental()
     else:
