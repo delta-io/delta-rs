@@ -7,6 +7,9 @@ on:
     branches: [main, "rust-v*"]
   merge_group:
 
+env:
+  DEFAULT_FEATURES: "azure,datafusion,s3,gcs,glue,hdfs "
+
 jobs:
   format:
     runs-on: ubuntu-latest
@@ -39,7 +42,7 @@ jobs:
         uses: taiki-e/install-action@cargo-llvm-cov
       - uses: Swatinem/rust-cache@v2
       - name: Generate code coverage
-        run: cargo llvm-cov --all-features --workspace --codecov --output-path codecov.json -- --skip read_table_version_hdfs
+        run: cargo llvm-cov --features ${DEFAULT_FEATURES} --workspace --codecov --output-path codecov.json -- --skip read_table_version_hdfs
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v4
         with:
@@ -68,13 +71,13 @@ jobs:
           override: true
 
       - name: build and lint with clippy
-        run: cargo clippy --features azure,datafusion,s3,gcs,glue,hdfs --tests
+        run: cargo clippy --features ${DEFAULT_FEATURES} --tests
 
       - name: Spot-check build for native-tls features
         run: cargo clippy --no-default-features --features azure,datafusion,s3-native-tls,gcs,glue --tests
 
       - name: Check docs
-        run: cargo doc --features azure,datafusion,s3,gcs,glue,hdfs
+        run: cargo doc --features ${DEFAULT_FEATURES }
 
       - name: Check no default features (except rustls)
         run: cargo check --no-default-features --features rustls
@@ -105,7 +108,7 @@ jobs:
           override: true
 
       - name: Run tests
-        run: cargo test --verbose --features datafusion,azure
+        run: cargo test --verbose --features ${DEFAULT_FEATURES}
 
   integration_test:
     name: Integration Tests
@@ -155,7 +158,7 @@ jobs:
 
       - name: Run tests with rustls (default)
         run: |
-          cargo test --features integration_test,azure,s3,gcs,datafusion,hdfs
+          cargo test --features integration_test,${DEFAULT_FEATURES}
 
       - name: Run tests with native-tls
         run: |
