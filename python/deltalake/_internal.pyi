@@ -3,7 +3,7 @@ from typing import Any, Dict, List, Literal, Mapping, Optional, Tuple, Union
 import pyarrow
 import pyarrow.fs as fs
 
-from deltalake.writer import AddAction, WriterProperties
+from deltalake.writer import AddAction, PostCommitHookProperties, WriterProperties
 
 __version__: str
 
@@ -58,7 +58,7 @@ class RawDeltaTable:
         retention_hours: Optional[int],
         enforce_retention_duration: bool,
         custom_metadata: Optional[Dict[str, str]],
-        post_commithook_properties: Optional[Dict[str, Optional[bool]]],
+        post_commithook_properties: Optional[PostCommitHookProperties],
     ) -> List[str]: ...
     def compact_optimize(
         self,
@@ -68,7 +68,7 @@ class RawDeltaTable:
         min_commit_interval: Optional[int],
         writer_properties: Optional[WriterProperties],
         custom_metadata: Optional[Dict[str, str]],
-        post_commithook_properties: Optional[Dict[str, Optional[bool]]],
+        post_commithook_properties: Optional[PostCommitHookProperties],
     ) -> str: ...
     def z_order_optimize(
         self,
@@ -80,26 +80,26 @@ class RawDeltaTable:
         min_commit_interval: Optional[int],
         writer_properties: Optional[WriterProperties],
         custom_metadata: Optional[Dict[str, str]],
-        post_commithook_properties: Optional[Dict[str, Optional[bool]]],
+        post_commithook_properties: Optional[PostCommitHookProperties],
     ) -> str: ...
     def add_columns(
         self,
         fields: List[Field],
         custom_metadata: Optional[Dict[str, str]],
-        post_commithook_properties: Optional[Dict[str, Optional[bool]]],
+        post_commithook_properties: Optional[PostCommitHookProperties],
     ) -> None: ...
     def add_constraints(
         self,
         constraints: Dict[str, str],
         custom_metadata: Optional[Dict[str, str]],
-        post_commithook_properties: Optional[Dict[str, Optional[bool]]],
+        post_commithook_properties: Optional[PostCommitHookProperties],
     ) -> None: ...
     def drop_constraints(
         self,
         name: str,
         raise_if_not_exists: bool,
         custom_metadata: Optional[Dict[str, str]],
-        post_commithook_properties: Optional[Dict[str, Optional[bool]]],
+        post_commithook_properties: Optional[PostCommitHookProperties],
     ) -> None: ...
     def set_table_properties(
         self,
@@ -126,13 +126,13 @@ class RawDeltaTable:
         predicate: Optional[str],
         writer_properties: Optional[WriterProperties],
         custom_metadata: Optional[Dict[str, str]],
-        post_commithook_properties: Optional[Dict[str, Optional[bool]]],
+        post_commithook_properties: Optional[PostCommitHookProperties],
     ) -> str: ...
     def repair(
         self,
         dry_run: bool,
         custom_metadata: Optional[Dict[str, str]],
-        post_commithook_properties: Optional[Dict[str, Optional[bool]]],
+        post_commithook_properties: Optional[PostCommitHookProperties],
     ) -> str: ...
     def update(
         self,
@@ -141,9 +141,9 @@ class RawDeltaTable:
         writer_properties: Optional[WriterProperties],
         safe_cast: bool,
         custom_metadata: Optional[Dict[str, str]],
-        post_commithook_properties: Optional[Dict[str, Optional[bool]]],
+        post_commithook_properties: Optional[PostCommitHookProperties],
     ) -> str: ...
-    def merge_execute(
+    def create_merge_builder(
         self,
         source: pyarrow.RecordBatchReader,
         predicate: str,
@@ -151,19 +151,10 @@ class RawDeltaTable:
         target_alias: Optional[str],
         writer_properties: Optional[WriterProperties],
         custom_metadata: Optional[Dict[str, str]],
-        post_commithook_properties: Optional[Dict[str, Optional[bool]]],
+        post_commithook_properties: Optional[PostCommitHookProperties],
         safe_cast: bool,
-        matched_update_updates: Optional[List[Dict[str, str]]],
-        matched_update_predicate: Optional[List[Optional[str]]],
-        matched_delete_predicate: Optional[List[str]],
-        matched_delete_all: Optional[bool],
-        not_matched_insert_updates: Optional[List[Dict[str, str]]],
-        not_matched_insert_predicate: Optional[List[Optional[str]]],
-        not_matched_by_source_update_updates: Optional[List[Dict[str, str]]],
-        not_matched_by_source_update_predicate: Optional[List[Optional[str]]],
-        not_matched_by_source_delete_predicate: Optional[List[str]],
-        not_matched_by_source_delete_all: Optional[bool],
-    ) -> str: ...
+    ) -> PyMergeBuilder: ...
+    def merge_execute(self, merge_builder: PyMergeBuilder) -> str: ...
     def get_active_partitions(
         self, partitions_filters: Optional[FilterType] = None
     ) -> Any: ...
@@ -175,7 +166,7 @@ class RawDeltaTable:
         schema: pyarrow.Schema,
         partitions_filters: Optional[FilterType],
         custom_metadata: Optional[Dict[str, str]],
-        post_commithook_properties: Optional[Dict[str, Optional[bool]]],
+        post_commithook_properties: Optional[PostCommitHookProperties],
     ) -> None: ...
     def cleanup_metadata(self) -> None: ...
     def check_can_write_timestamp_ntz(self, schema: pyarrow.Schema) -> None: ...
@@ -215,7 +206,7 @@ def write_to_deltalake(
     storage_options: Optional[Dict[str, str]],
     writer_properties: Optional[WriterProperties],
     custom_metadata: Optional[Dict[str, str]],
-    post_commithook_properties: Optional[Dict[str, Optional[bool]]],
+    post_commithook_properties: Optional[PostCommitHookProperties],
 ) -> None: ...
 def convert_to_deltalake(
     uri: str,
@@ -243,6 +234,26 @@ def batch_distinct(batch: pyarrow.RecordBatch) -> pyarrow.RecordBatch: ...
 def get_num_idx_cols_and_stats_columns(
     table: Optional[RawDeltaTable], configuration: Optional[Mapping[str, Optional[str]]]
 ) -> Tuple[int, Optional[List[str]]]: ...
+
+class PyMergeBuilder:
+    source_alias: str
+    target_alias: str
+    arrow_schema: pyarrow.Schema
+
+    def when_matched_update(
+        self, updates: Dict[str, str], predicate: Optional[str]
+    ) -> None: ...
+    def when_matched_delete(self, predicate: Optional[str]) -> None: ...
+    def when_not_matched_insert(
+        self, updates: Dict[str, str], predicate: Optional[str]
+    ) -> None: ...
+    def when_not_matched_by_source_update(
+        self, updates: Dict[str, str], predicate: Optional[str]
+    ) -> None: ...
+    def when_not_matched_by_source_delete(
+        self,
+        predicate: Optional[str],
+    ) -> None: ...
 
 # Can't implement inheritance (see note in src/schema.rs), so this is next
 # best thing.

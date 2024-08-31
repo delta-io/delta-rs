@@ -39,6 +39,7 @@ if TYPE_CHECKING:
     import os
 
 from deltalake._internal import (
+    PyMergeBuilder,
     RawDeltaTable,
 )
 from deltalake._internal import create_deltalake as _create_deltalake
@@ -510,6 +511,24 @@ class DeltaTable:
         """
         return self._table.version()
 
+    def partitions(
+        self,
+        partition_filters: Optional[List[Tuple[str, str, Any]]] = None,
+    ) -> List[Dict[str, str]]:
+        """
+        Returns the partitions as a list of dicts. Example: `[{'month': '1', 'year': '2020', 'day': '1'}, ...]`
+
+        Args:
+            partition_filters: The partition filters that will be used for getting the matched partitions, defaults to `None` (no filtering).
+        """
+
+        partitions: List[Dict[str, str]] = []
+        for partition in self._table.get_active_partitions(partition_filters):
+            if not partition:
+                continue
+            partitions.append({k: v for (k, v) in partition})
+        return partitions
+
     def files(
         self, partition_filters: Optional[List[Tuple[str, str, Any]]] = None
     ) -> List[str]:
@@ -747,7 +766,7 @@ class DeltaTable:
             retention_hours,
             enforce_retention_duration,
             custom_metadata,
-            post_commithook_properties.__dict__ if post_commithook_properties else None,
+            post_commithook_properties,
         )
 
     def update(
@@ -851,9 +870,7 @@ class DeltaTable:
             writer_properties,
             safe_cast=not error_on_type_mismatch,
             custom_metadata=custom_metadata,
-            post_commithook_properties=post_commithook_properties.__dict__
-            if post_commithook_properties
-            else None,
+            post_commithook_properties=post_commithook_properties,
         )
         return json.loads(metrics)
 
@@ -952,8 +969,7 @@ class DeltaTable:
             source.schema, (batch for batch in source)
         )
 
-        return TableMerger(
-            self,
+        py_merge_builder = self._table.create_merge_builder(
             source=source,
             predicate=predicate,
             source_alias=source_alias,
@@ -963,6 +979,7 @@ class DeltaTable:
             custom_metadata=custom_metadata,
             post_commithook_properties=post_commithook_properties,
         )
+        return TableMerger(py_merge_builder, self._table)
 
     def restore(
         self,
@@ -1243,10 +1260,7 @@ class DeltaTable:
             the metrics from delete.
         """
         metrics = self._table.delete(
-            predicate,
-            writer_properties,
-            custom_metadata,
-            post_commithook_properties.__dict__ if post_commithook_properties else None,
+            predicate, writer_properties, custom_metadata, post_commithook_properties
         )
         return json.loads(metrics)
 
@@ -1283,9 +1297,7 @@ class DeltaTable:
             ```
         """
         metrics = self._table.repair(
-            dry_run,
-            custom_metadata,
-            post_commithook_properties.__dict__ if post_commithook_properties else None,
+            dry_run, custom_metadata, post_commithook_properties
         )
         return json.loads(metrics)
 
@@ -1295,37 +1307,11 @@ class TableMerger:
 
     def __init__(
         self,
-        table: DeltaTable,
-        source: pyarrow.RecordBatchReader,
-        predicate: str,
-        source_alias: Optional[str] = None,
-        target_alias: Optional[str] = None,
-        safe_cast: bool = True,
-        writer_properties: Optional[WriterProperties] = None,
-        custom_metadata: Optional[Dict[str, str]] = None,
-        post_commithook_properties: Optional[PostCommitHookProperties] = None,
+        builder: PyMergeBuilder,
+        table: RawDeltaTable,
     ):
-        self.table = table
-        self.source = source
-        self.predicate = predicate
-        self.source_alias = source_alias
-        self.target_alias = target_alias
-        self.safe_cast = safe_cast
-        self.writer_properties = writer_properties
-        self.custom_metadata = custom_metadata
-        self.post_commithook_properties = post_commithook_properties
-        self.matched_update_updates: Optional[List[Dict[str, str]]] = None
-        self.matched_update_predicate: Optional[List[Optional[str]]] = None
-        self.matched_delete_predicate: Optional[List[str]] = None
-        self.matched_delete_all: Optional[bool] = None
-        self.not_matched_insert_updates: Optional[List[Dict[str, str]]] = None
-        self.not_matched_insert_predicate: Optional[List[Optional[str]]] = None
-        self.not_matched_by_source_update_updates: Optional[List[Dict[str, str]]] = None
-        self.not_matched_by_source_update_predicate: Optional[List[Optional[str]]] = (
-            None
-        )
-        self.not_matched_by_source_delete_predicate: Optional[List[str]] = None
-        self.not_matched_by_source_delete_all: Optional[bool] = None
+        self._builder = builder
+        self._table = table
 
     def when_matched_update(
         self, updates: Dict[str, str], predicate: Optional[str] = None
@@ -1372,14 +1358,7 @@ class TableMerger:
             2  3  6
             ```
         """
-        if isinstance(self.matched_update_updates, list) and isinstance(
-            self.matched_update_predicate, list
-        ):
-            self.matched_update_updates.append(updates)
-            self.matched_update_predicate.append(predicate)
-        else:
-            self.matched_update_updates = [updates]
-            self.matched_update_predicate = [predicate]
+        self._builder.when_matched_update(updates, predicate)
         return self
 
     def when_matched_update_all(self, predicate: Optional[str] = None) -> "TableMerger":
@@ -1424,24 +1403,20 @@ class TableMerger:
             2  3  6
             ```
         """
+        maybe_source_alias = self._builder.source_alias
+        maybe_target_alias = self._builder.target_alias
 
-        src_alias = (self.source_alias + ".") if self.source_alias is not None else ""
-        trgt_alias = (self.target_alias + ".") if self.target_alias is not None else ""
+        src_alias = (maybe_source_alias + ".") if maybe_source_alias is not None else ""
+        trgt_alias = (
+            (maybe_target_alias + ".") if maybe_target_alias is not None else ""
+        )
 
         updates = {
             f"{trgt_alias}`{col.name}`": f"{src_alias}`{col.name}`"
-            for col in self.source.schema
+            for col in self._builder.arrow_schema
         }
 
-        if isinstance(self.matched_update_updates, list) and isinstance(
-            self.matched_update_predicate, list
-        ):
-            self.matched_update_updates.append(updates)
-            self.matched_update_predicate.append(predicate)
-        else:
-            self.matched_update_updates = [updates]
-            self.matched_update_predicate = [predicate]
-
+        self._builder.when_matched_update(updates, predicate)
         return self
 
     def when_matched_delete(self, predicate: Optional[str] = None) -> "TableMerger":
@@ -1507,19 +1482,7 @@ class TableMerger:
             0  1  4
             ```
         """
-        if self.matched_delete_all is not None:
-            raise ValueError(
-                """when_matched_delete without a predicate has already been set, which means
-                             it will delete all, any subsequent when_matched_delete, won't make sense."""
-            )
-
-        if predicate is None:
-            self.matched_delete_all = True
-        else:
-            if isinstance(self.matched_delete_predicate, list):
-                self.matched_delete_predicate.append(predicate)
-            else:
-                self.matched_delete_predicate = [predicate]
+        self._builder.when_matched_delete(predicate)
         return self
 
     def when_not_matched_insert(
@@ -1572,16 +1535,7 @@ class TableMerger:
             3  4  7
             ```
         """
-
-        if isinstance(self.not_matched_insert_updates, list) and isinstance(
-            self.not_matched_insert_predicate, list
-        ):
-            self.not_matched_insert_updates.append(updates)
-            self.not_matched_insert_predicate.append(predicate)
-        else:
-            self.not_matched_insert_updates = [updates]
-            self.not_matched_insert_predicate = [predicate]
-
+        self._builder.when_not_matched_insert(updates, predicate)
         return self
 
     def when_not_matched_insert_all(
@@ -1630,22 +1584,19 @@ class TableMerger:
             3  4  7
             ```
         """
+        maybe_source_alias = self._builder.source_alias
+        maybe_target_alias = self._builder.target_alias
 
-        src_alias = (self.source_alias + ".") if self.source_alias is not None else ""
-        trgt_alias = (self.target_alias + ".") if self.target_alias is not None else ""
+        src_alias = (maybe_source_alias + ".") if maybe_source_alias is not None else ""
+        trgt_alias = (
+            (maybe_target_alias + ".") if maybe_target_alias is not None else ""
+        )
         updates = {
             f"{trgt_alias}`{col.name}`": f"{src_alias}`{col.name}`"
-            for col in self.source.schema
+            for col in self._builder.arrow_schema
         }
-        if isinstance(self.not_matched_insert_updates, list) and isinstance(
-            self.not_matched_insert_predicate, list
-        ):
-            self.not_matched_insert_updates.append(updates)
-            self.not_matched_insert_predicate.append(predicate)
-        else:
-            self.not_matched_insert_updates = [updates]
-            self.not_matched_insert_predicate = [predicate]
 
+        self._builder.when_not_matched_insert(updates, predicate)
         return self
 
     def when_not_matched_by_source_update(
@@ -1695,15 +1646,7 @@ class TableMerger:
             2  3  6
             ```
         """
-
-        if isinstance(self.not_matched_by_source_update_updates, list) and isinstance(
-            self.not_matched_by_source_update_predicate, list
-        ):
-            self.not_matched_by_source_update_updates.append(updates)
-            self.not_matched_by_source_update_predicate.append(predicate)
-        else:
-            self.not_matched_by_source_update_updates = [updates]
-            self.not_matched_by_source_update_predicate = [predicate]
+        self._builder.when_not_matched_by_source_update(updates, predicate)
         return self
 
     def when_not_matched_by_source_delete(
@@ -1722,19 +1665,7 @@ class TableMerger:
         Returns:
             TableMerger: TableMerger Object
         """
-        if self.not_matched_by_source_delete_all is not None:
-            raise ValueError(
-                """when_not_matched_by_source_delete without a predicate has already been set, which means
-                             it will delete all, any subsequent when_not_matched_by_source_delete, won't make sense."""
-            )
-
-        if predicate is None:
-            self.not_matched_by_source_delete_all = True
-        else:
-            if isinstance(self.not_matched_by_source_delete_predicate, list):
-                self.not_matched_by_source_delete_predicate.append(predicate)
-            else:
-                self.not_matched_by_source_delete_predicate = [predicate]
+        self._builder.when_not_matched_by_source_delete(predicate)
         return self
 
     def execute(self) -> Dict[str, Any]:
@@ -1743,31 +1674,7 @@ class TableMerger:
         Returns:
             Dict: metrics
         """
-        metrics = self.table._table.merge_execute(
-            source=self.source,
-            predicate=self.predicate,
-            source_alias=self.source_alias,
-            target_alias=self.target_alias,
-            safe_cast=self.safe_cast,
-            writer_properties=self.writer_properties
-            if self.writer_properties
-            else None,
-            custom_metadata=self.custom_metadata,
-            post_commithook_properties=self.post_commithook_properties.__dict__
-            if self.post_commithook_properties
-            else None,
-            matched_update_updates=self.matched_update_updates,
-            matched_update_predicate=self.matched_update_predicate,
-            matched_delete_predicate=self.matched_delete_predicate,
-            matched_delete_all=self.matched_delete_all,
-            not_matched_insert_updates=self.not_matched_insert_updates,
-            not_matched_insert_predicate=self.not_matched_insert_predicate,
-            not_matched_by_source_update_updates=self.not_matched_by_source_update_updates,
-            not_matched_by_source_update_predicate=self.not_matched_by_source_update_predicate,
-            not_matched_by_source_delete_predicate=self.not_matched_by_source_delete_predicate,
-            not_matched_by_source_delete_all=self.not_matched_by_source_delete_all,
-        )
-        self.table.update_incremental()
+        metrics = self._table.merge_execute(self._builder)
         return json.loads(metrics)
 
 
@@ -1808,9 +1715,7 @@ class TableAlterer:
             fields = [fields]
 
         self.table._table.add_columns(
-            fields,
-            custom_metadata,
-            post_commithook_properties.__dict__ if post_commithook_properties else None,
+            fields, custom_metadata, post_commithook_properties
         )
 
     def add_constraint(
@@ -1849,9 +1754,7 @@ class TableAlterer:
             )
 
         self.table._table.add_constraints(
-            constraints,
-            custom_metadata,
-            post_commithook_properties.__dict__ if post_commithook_properties else None,
+            constraints, custom_metadata, post_commithook_properties
         )
 
     def drop_constraint(
@@ -1890,10 +1793,7 @@ class TableAlterer:
             ```
         """
         self.table._table.drop_constraints(
-            name,
-            raise_if_not_exists,
-            custom_metadata,
-            post_commithook_properties.__dict__ if post_commithook_properties else None,
+            name, raise_if_not_exists, custom_metadata, post_commithook_properties
         )
 
     def set_table_properties(
@@ -1999,7 +1899,7 @@ class TableOptimizer:
             min_commit_interval,
             writer_properties,
             custom_metadata,
-            post_commithook_properties.__dict__ if post_commithook_properties else None,
+            post_commithook_properties,
         )
         self.table.update_incremental()
         return json.loads(metrics)
@@ -2030,7 +1930,7 @@ class TableOptimizer:
             max_concurrent_tasks: the maximum number of concurrent tasks to use for
                                     file compaction. Defaults to number of CPUs. More concurrent tasks can make compaction
                                     faster, but will also use more memory.
-            max_spill_size: the maximum number of bytes to spill to disk. Defaults to 20GB.
+            max_spill_size: the maximum number of bytes allowed in memory before spilling to disk. Defaults to 20GB.
             min_commit_interval: minimum interval in seconds or as timedeltas before a new commit is
                                     created. Interval is useful for long running executions. Set to 0 or timedelta(0), if you
                                     want a commit per partition.
@@ -2069,7 +1969,7 @@ class TableOptimizer:
             min_commit_interval,
             writer_properties,
             custom_metadata,
-            post_commithook_properties.__dict__ if post_commithook_properties else None,
+            post_commithook_properties,
         )
         self.table.update_incremental()
         return json.loads(metrics)

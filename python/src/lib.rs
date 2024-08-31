@@ -1,12 +1,12 @@
 mod error;
 mod filesystem;
+mod merge;
 mod schema;
 mod utils;
 
 use std::collections::{HashMap, HashSet};
 use std::future::IntoFuture;
 use std::str::FromStr;
-use std::sync::Arc;
 use std::time;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -16,12 +16,9 @@ use delta_kernel::expressions::Scalar;
 use delta_kernel::schema::StructField;
 use deltalake::arrow::compute::concat_batches;
 use deltalake::arrow::ffi_stream::{ArrowArrayStreamReader, FFI_ArrowArrayStream};
-use deltalake::arrow::record_batch::RecordBatchReader;
 use deltalake::arrow::record_batch::{RecordBatch, RecordBatchIterator};
 use deltalake::arrow::{self, datatypes::Schema as ArrowSchema};
 use deltalake::checkpoints::{cleanup_metadata, create_checkpoint};
-use deltalake::datafusion::catalog::TableProvider;
-use deltalake::datafusion::datasource::memory::MemTable;
 use deltalake::datafusion::physical_plan::ExecutionPlan;
 use deltalake::datafusion::prelude::SessionContext;
 use deltalake::delta_datafusion::DeltaDataChecker;
@@ -37,7 +34,6 @@ use deltalake::operations::delete::DeleteBuilder;
 use deltalake::operations::drop_constraints::DropConstraintBuilder;
 use deltalake::operations::filesystem_check::FileSystemCheckBuilder;
 use deltalake::operations::load_cdf::CdfLoadBuilder;
-use deltalake::operations::merge::MergeBuilder;
 use deltalake::operations::optimize::{OptimizeBuilder, OptimizeType};
 use deltalake::operations::restore::RestoreBuilder;
 use deltalake::operations::set_tbl_properties::SetTablePropertiesBuilder;
@@ -55,6 +51,7 @@ use deltalake::storage::IORuntime;
 use deltalake::DeltaTableBuilder;
 use deltalake::{DeltaOps, DeltaResult};
 use futures::future::join_all;
+
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::pybacked::PyBackedStr;
@@ -64,6 +61,7 @@ use serde_json::{Map, Value};
 use crate::error::DeltaProtocolError;
 use crate::error::PythonError;
 use crate::filesystem::FsConfig;
+use crate::merge::PyMergeBuilder;
 use crate::schema::{schema_to_pyobject, Field};
 use crate::utils::rt;
 
@@ -331,7 +329,7 @@ impl RawDeltaTable {
         retention_hours: Option<u64>,
         enforce_retention_duration: bool,
         custom_metadata: Option<HashMap<String, String>>,
-        post_commithook_properties: Option<HashMap<String, Option<bool>>>,
+        post_commithook_properties: Option<PyPostCommitHookProperties>,
     ) -> PyResult<Vec<String>> {
         let (table, metrics) = py.allow_threads(|| {
             let mut cmd = VacuumBuilder::new(
@@ -366,7 +364,7 @@ impl RawDeltaTable {
         writer_properties: Option<PyWriterProperties>,
         safe_cast: bool,
         custom_metadata: Option<HashMap<String, String>>,
-        post_commithook_properties: Option<HashMap<String, Option<bool>>>,
+        post_commithook_properties: Option<PyPostCommitHookProperties>,
     ) -> PyResult<String> {
         let (table, metrics) = py.allow_threads(|| {
             let mut cmd = UpdateBuilder::new(
@@ -422,7 +420,7 @@ impl RawDeltaTable {
         min_commit_interval: Option<u64>,
         writer_properties: Option<PyWriterProperties>,
         custom_metadata: Option<HashMap<String, String>>,
-        post_commithook_properties: Option<HashMap<String, Option<bool>>>,
+        post_commithook_properties: Option<PyPostCommitHookProperties>,
     ) -> PyResult<String> {
         let (table, metrics) = py.allow_threads(|| {
             let mut cmd = OptimizeBuilder::new(
@@ -482,7 +480,7 @@ impl RawDeltaTable {
         min_commit_interval: Option<u64>,
         writer_properties: Option<PyWriterProperties>,
         custom_metadata: Option<HashMap<String, String>>,
-        post_commithook_properties: Option<HashMap<String, Option<bool>>>,
+        post_commithook_properties: Option<PyPostCommitHookProperties>,
     ) -> PyResult<String> {
         let (table, metrics) = py.allow_threads(|| {
             let mut cmd = OptimizeBuilder::new(
@@ -528,7 +526,7 @@ impl RawDeltaTable {
         py: Python,
         fields: Vec<Field>,
         custom_metadata: Option<HashMap<String, String>>,
-        post_commithook_properties: Option<HashMap<String, Option<bool>>>,
+        post_commithook_properties: Option<PyPostCommitHookProperties>,
     ) -> PyResult<()> {
         let table = py.allow_threads(|| {
             let mut cmd = AddColumnBuilder::new(
@@ -561,7 +559,7 @@ impl RawDeltaTable {
         py: Python,
         constraints: HashMap<String, String>,
         custom_metadata: Option<HashMap<String, String>>,
-        post_commithook_properties: Option<HashMap<String, Option<bool>>>,
+        post_commithook_properties: Option<PyPostCommitHookProperties>,
     ) -> PyResult<()> {
         let table = py.allow_threads(|| {
             let mut cmd = ConstraintBuilder::new(
@@ -592,7 +590,7 @@ impl RawDeltaTable {
         name: String,
         raise_if_not_exists: bool,
         custom_metadata: Option<HashMap<String, String>>,
-        post_commithook_properties: Option<HashMap<String, Option<bool>>>,
+        post_commithook_properties: Option<PyPostCommitHookProperties>,
     ) -> PyResult<()> {
         let table = py.allow_threads(|| {
             let mut cmd = DropConstraintBuilder::new(
@@ -682,7 +680,8 @@ impl RawDeltaTable {
     }
 
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (source,
+    #[pyo3(signature = (
+        source,
         predicate,
         source_alias = None,
         target_alias = None,
@@ -690,19 +689,9 @@ impl RawDeltaTable {
         writer_properties = None,
         post_commithook_properties = None,
         custom_metadata = None,
-        matched_update_updates = None,
-        matched_update_predicate = None,
-        matched_delete_predicate = None,
-        matched_delete_all = None,
-        not_matched_insert_updates = None,
-        not_matched_insert_predicate = None,
-        not_matched_by_source_update_updates = None,
-        not_matched_by_source_update_predicate = None,
-        not_matched_by_source_delete_predicate = None,
-        not_matched_by_source_delete_all = None,
     ))]
-    pub fn merge_execute(
-        &mut self,
+    pub fn create_merge_builder(
+        &self,
         py: Python,
         source: PyArrowType<ArrowArrayStreamReader>,
         predicate: String,
@@ -710,169 +699,39 @@ impl RawDeltaTable {
         target_alias: Option<String>,
         safe_cast: bool,
         writer_properties: Option<PyWriterProperties>,
-        post_commithook_properties: Option<HashMap<String, Option<bool>>>,
+        post_commithook_properties: Option<PyPostCommitHookProperties>,
         custom_metadata: Option<HashMap<String, String>>,
-        matched_update_updates: Option<Vec<HashMap<String, String>>>,
-        matched_update_predicate: Option<Vec<Option<String>>>,
-        matched_delete_predicate: Option<Vec<String>>,
-        matched_delete_all: Option<bool>,
-        not_matched_insert_updates: Option<Vec<HashMap<String, String>>>,
-        not_matched_insert_predicate: Option<Vec<Option<String>>>,
-        not_matched_by_source_update_updates: Option<Vec<HashMap<String, String>>>,
-        not_matched_by_source_update_predicate: Option<Vec<Option<String>>>,
-        not_matched_by_source_delete_predicate: Option<Vec<String>>,
-        not_matched_by_source_delete_all: Option<bool>,
-    ) -> PyResult<String> {
-        let (table, metrics) = py.allow_threads(|| {
-            let ctx = SessionContext::new();
-            let schema = source.0.schema();
-            let batches = vec![source.0.map(|batch| batch.unwrap()).collect::<Vec<_>>()];
-            let table_provider: Arc<dyn TableProvider> =
-                Arc::new(MemTable::try_new(schema, batches).unwrap());
-            let source_df = ctx.read_table(table_provider).unwrap();
-
-            let mut cmd = MergeBuilder::new(
+    ) -> PyResult<PyMergeBuilder> {
+        py.allow_threads(|| {
+            Ok(PyMergeBuilder::new(
                 self._table.log_store(),
                 self._table.snapshot().map_err(PythonError::from)?.clone(),
+                source.0,
                 predicate,
-                source_df,
+                source_alias,
+                target_alias,
+                safe_cast,
+                writer_properties,
+                post_commithook_properties,
+                custom_metadata,
             )
-            .with_safe_cast(safe_cast);
+            .map_err(PythonError::from)?)
+        })
+    }
 
-            if let Some(src_alias) = source_alias {
-                cmd = cmd.with_source_alias(src_alias);
-            }
-
-            if let Some(trgt_alias) = target_alias {
-                cmd = cmd.with_target_alias(trgt_alias);
-            }
-
-            if let Some(writer_props) = writer_properties {
-                cmd = cmd.with_writer_properties(
-                    set_writer_properties(writer_props).map_err(PythonError::from)?,
-                );
-            }
-
-            if let Some(commit_properties) =
-                maybe_create_commit_properties(custom_metadata, post_commithook_properties)
-            {
-                cmd = cmd.with_commit_properties(commit_properties);
-            }
-
-            if let Some(mu_updates) = matched_update_updates {
-                if let Some(mu_predicate) = matched_update_predicate {
-                    for it in mu_updates.iter().zip(mu_predicate.iter()) {
-                        let (update_values, predicate_value) = it;
-
-                        if let Some(pred) = predicate_value {
-                            cmd = cmd
-                                .when_matched_update(|mut update| {
-                                    for (col_name, expression) in update_values {
-                                        update =
-                                            update.update(col_name.clone(), expression.clone());
-                                    }
-                                    update.predicate(pred.clone())
-                                })
-                                .map_err(PythonError::from)?;
-                        } else {
-                            cmd = cmd
-                                .when_matched_update(|mut update| {
-                                    for (col_name, expression) in update_values {
-                                        update =
-                                            update.update(col_name.clone(), expression.clone());
-                                    }
-                                    update
-                                })
-                                .map_err(PythonError::from)?;
-                        }
-                    }
-                }
-            }
-
-            if let Some(_md_delete_all) = matched_delete_all {
-                cmd = cmd
-                    .when_matched_delete(|delete| delete)
-                    .map_err(PythonError::from)?;
-            } else if let Some(md_predicate) = matched_delete_predicate {
-                for pred in md_predicate.iter() {
-                    cmd = cmd
-                        .when_matched_delete(|delete| delete.predicate(pred.clone()))
-                        .map_err(PythonError::from)?;
-                }
-            }
-
-            if let Some(nmi_updates) = not_matched_insert_updates {
-                if let Some(nmi_predicate) = not_matched_insert_predicate {
-                    for it in nmi_updates.iter().zip(nmi_predicate.iter()) {
-                        let (update_values, predicate_value) = it;
-                        if let Some(pred) = predicate_value {
-                            cmd = cmd
-                                .when_not_matched_insert(|mut insert| {
-                                    for (col_name, expression) in update_values {
-                                        insert = insert.set(col_name.clone(), expression.clone());
-                                    }
-                                    insert.predicate(pred.clone())
-                                })
-                                .map_err(PythonError::from)?;
-                        } else {
-                            cmd = cmd
-                                .when_not_matched_insert(|mut insert| {
-                                    for (col_name, expression) in update_values {
-                                        insert = insert.set(col_name.clone(), expression.clone());
-                                    }
-                                    insert
-                                })
-                                .map_err(PythonError::from)?;
-                        }
-                    }
-                }
-            }
-
-            if let Some(nmbsu_updates) = not_matched_by_source_update_updates {
-                if let Some(nmbsu_predicate) = not_matched_by_source_update_predicate {
-                    for it in nmbsu_updates.iter().zip(nmbsu_predicate.iter()) {
-                        let (update_values, predicate_value) = it;
-                        if let Some(pred) = predicate_value {
-                            cmd = cmd
-                                .when_not_matched_by_source_update(|mut update| {
-                                    for (col_name, expression) in update_values {
-                                        update =
-                                            update.update(col_name.clone(), expression.clone());
-                                    }
-                                    update.predicate(pred.clone())
-                                })
-                                .map_err(PythonError::from)?;
-                        } else {
-                            cmd = cmd
-                                .when_not_matched_by_source_update(|mut update| {
-                                    for (col_name, expression) in update_values {
-                                        update =
-                                            update.update(col_name.clone(), expression.clone());
-                                    }
-                                    update
-                                })
-                                .map_err(PythonError::from)?;
-                        }
-                    }
-                }
-            }
-
-            if let Some(_nmbs_delete_all) = not_matched_by_source_delete_all {
-                cmd = cmd
-                    .when_not_matched_by_source_delete(|delete| delete)
-                    .map_err(PythonError::from)?;
-            } else if let Some(nmbs_predicate) = not_matched_by_source_delete_predicate {
-                for pred in nmbs_predicate.iter() {
-                    cmd = cmd
-                        .when_not_matched_by_source_delete(|delete| delete.predicate(pred.clone()))
-                        .map_err(PythonError::from)?;
-                }
-            }
-
-            rt().block_on(cmd.into_future()).map_err(PythonError::from)
-        })?;
-        self._table.state = table.state;
-        Ok(serde_json::to_string(&metrics).unwrap())
+    #[pyo3(signature=(
+        merge_builder
+    ))]
+    pub fn merge_execute(
+        &mut self,
+        py: Python,
+        merge_builder: &mut PyMergeBuilder,
+    ) -> PyResult<String> {
+        py.allow_threads(|| {
+            let (table, metrics) = merge_builder.execute().map_err(PythonError::from)?;
+            self._table.state = table.state;
+            Ok(metrics)
+        })
     }
 
     // Run the restore command on the Delta Table: restore table to a given version or datetime
@@ -1066,7 +925,7 @@ impl RawDeltaTable {
         schema: PyArrowType<ArrowSchema>,
         partitions_filters: Option<Vec<(PyBackedStr, PyBackedStr, PartitionFilterValue)>>,
         custom_metadata: Option<HashMap<String, String>>,
-        post_commithook_properties: Option<HashMap<String, Option<bool>>>,
+        post_commithook_properties: Option<PyPostCommitHookProperties>,
     ) -> PyResult<()> {
         py.allow_threads(|| {
             let mode = mode.parse().map_err(PythonError::from)?;
@@ -1236,7 +1095,7 @@ impl RawDeltaTable {
         predicate: Option<String>,
         writer_properties: Option<PyWriterProperties>,
         custom_metadata: Option<HashMap<String, String>>,
-        post_commithook_properties: Option<HashMap<String, Option<bool>>>,
+        post_commithook_properties: Option<PyPostCommitHookProperties>,
     ) -> PyResult<String> {
         let (table, metrics) = py.allow_threads(|| {
             let mut cmd = DeleteBuilder::new(
@@ -1295,7 +1154,7 @@ impl RawDeltaTable {
         &mut self,
         dry_run: bool,
         custom_metadata: Option<HashMap<String, String>>,
-        post_commithook_properties: Option<HashMap<String, Option<bool>>>,
+        post_commithook_properties: Option<PyPostCommitHookProperties>,
     ) -> PyResult<String> {
         let mut cmd = FileSystemCheckBuilder::new(
             self._table.log_store(),
@@ -1319,14 +1178,12 @@ impl RawDeltaTable {
 
 fn set_post_commithook_properties(
     mut commit_properties: CommitProperties,
-    post_commithook_properties: HashMap<String, Option<bool>>,
+    post_commithook_properties: PyPostCommitHookProperties,
 ) -> CommitProperties {
-    if let Some(Some(create_checkpoint)) = post_commithook_properties.get("create_checkpoint") {
-        commit_properties = commit_properties.with_create_checkpoint(*create_checkpoint)
-    }
-    if let Some(cleanup_expired_logs) = post_commithook_properties.get("cleanup_expired_logs") {
-        commit_properties = commit_properties.with_cleanup_expired_logs(*cleanup_expired_logs)
-    }
+    commit_properties =
+        commit_properties.with_create_checkpoint(post_commithook_properties.create_checkpoint);
+    commit_properties = commit_properties
+        .with_cleanup_expired_logs(post_commithook_properties.cleanup_expired_logs);
     commit_properties
 }
 
@@ -1446,7 +1303,7 @@ fn convert_partition_filters(
 
 fn maybe_create_commit_properties(
     custom_metadata: Option<HashMap<String, String>>,
-    post_commithook_properties: Option<HashMap<String, Option<bool>>>,
+    post_commithook_properties: Option<PyPostCommitHookProperties>,
 ) -> Option<CommitProperties> {
     if custom_metadata.is_none() && post_commithook_properties.is_none() {
         return None;
@@ -1728,6 +1585,12 @@ pub struct PyWriterProperties {
     column_properties: Option<HashMap<String, Option<ColumnProperties>>>,
 }
 
+#[derive(FromPyObject)]
+pub struct PyPostCommitHookProperties {
+    create_checkpoint: bool,
+    cleanup_expired_logs: Option<bool>,
+}
+
 #[pyfunction]
 #[allow(clippy::too_many_arguments)]
 fn write_to_deltalake(
@@ -1745,7 +1608,7 @@ fn write_to_deltalake(
     storage_options: Option<HashMap<String, String>>,
     writer_properties: Option<PyWriterProperties>,
     custom_metadata: Option<HashMap<String, String>>,
-    post_commithook_properties: Option<HashMap<String, Option<bool>>>,
+    post_commithook_properties: Option<PyPostCommitHookProperties>,
 ) -> PyResult<()> {
     py.allow_threads(|| {
         let batches = data.0.map(|batch| batch.unwrap()).collect::<Vec<_>>();
@@ -2070,6 +1933,7 @@ fn _internal(m: &Bound<'_, PyModule>) -> PyResult<()> {
         m
     )?)?;
     m.add_class::<RawDeltaTable>()?;
+    m.add_class::<PyMergeBuilder>()?;
     m.add_class::<RawDeltaTableMetaData>()?;
     m.add_class::<PyDeltaDataChecker>()?;
     // There are issues with submodules, so we will expose them flat for now
