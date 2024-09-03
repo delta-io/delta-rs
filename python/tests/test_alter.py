@@ -7,6 +7,7 @@ import pytest
 from deltalake import DeltaTable, write_deltalake
 from deltalake.exceptions import DeltaError, DeltaProtocolError
 from deltalake.schema import Field, PrimitiveType, StructType
+from deltalake.table import CommitProperties
 
 
 def test_add_constraint(tmp_path: pathlib.Path, sample_table: pa.Table):
@@ -58,8 +59,9 @@ def test_add_constraint_roundtrip_metadata(
 
     dt = DeltaTable(tmp_path)
 
+    commit_properties = CommitProperties(custom_metadata={"userName": "John Doe"})
     dt.alter.add_constraint(
-        {"check_price2": "price >= 0"}, custom_metadata={"userName": "John Doe"}
+        {"check_price2": "price >= 0"}, commit_properties=commit_properties
     )
 
     assert dt.history(1)[0]["userName"] == "John Doe"
@@ -112,7 +114,8 @@ def test_drop_constraint_roundtrip_metadata(
     dt = DeltaTable(tmp_path)
 
     dt.alter.add_constraint({"check_price2": "price >= 0"})
-    dt.alter.drop_constraint("check_price2", custom_metadata={"userName": "John Doe"})
+    commit_properties = CommitProperties(custom_metadata={"userName": "John Doe"})
+    dt.alter.drop_constraint("check_price2", commit_properties=commit_properties)
 
     assert dt.history(1)[0]["userName"] == "John Doe"
 

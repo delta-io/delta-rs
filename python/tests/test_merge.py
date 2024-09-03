@@ -4,6 +4,7 @@ import pyarrow as pa
 import pytest
 
 from deltalake import DeltaTable, write_deltalake
+from deltalake.table import CommitProperties
 
 
 def test_merge_when_matched_delete_wo_predicate(
@@ -20,12 +21,13 @@ def test_merge_when_matched_delete_wo_predicate(
         }
     )
 
+    commit_properties = CommitProperties(custom_metadata={"userName": "John Doe"})
     dt.merge(
         source=source_table,
         predicate="t.id = s.id",
         source_alias="s",
         target_alias="t",
-        custom_metadata={"userName": "John Doe"},
+        commit_properties=commit_properties,
     ).when_matched_delete().execute()
 
     nrows = 4

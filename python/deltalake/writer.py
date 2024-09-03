@@ -52,6 +52,7 @@ from .table import (
     MAX_SUPPORTED_PYARROW_WRITER_VERSION,
     NOT_SUPPORTED_PYARROW_WRITER_VERSIONS,
     SUPPORTED_WRITER_FEATURES,
+    CommitProperties,
     DeltaTable,
     PostCommitHookProperties,
     WriterProperties,
@@ -122,9 +123,8 @@ def write_deltalake(
     partition_filters: Optional[List[Tuple[str, str, Any]]] = ...,
     large_dtypes: bool = ...,
     engine: Literal["pyarrow"] = ...,
-    custom_metadata: Optional[Dict[str, str]] = ...,
+    commit_properties: Optional[CommitProperties] = ...,
     post_commithook_properties: Optional[PostCommitHookProperties] = ...,
-    max_commit_retries: Optional[int] = ...,
 ) -> None: ...
 
 
@@ -152,9 +152,8 @@ def write_deltalake(
     large_dtypes: bool = ...,
     engine: Literal["rust"] = ...,
     writer_properties: WriterProperties = ...,
-    custom_metadata: Optional[Dict[str, str]] = ...,
+    commit_properties: Optional[CommitProperties] = ...,
     post_commithook_properties: Optional[PostCommitHookProperties] = ...,
-    max_commit_retries: Optional[int] = ...,
 ) -> None: ...
 
 
@@ -184,9 +183,8 @@ def write_deltalake(
     large_dtypes: bool = ...,
     engine: Literal["rust"] = ...,
     writer_properties: WriterProperties = ...,
-    custom_metadata: Optional[Dict[str, str]] = ...,
+    commit_properties: Optional[CommitProperties] = ...,
     post_commithook_properties: Optional[PostCommitHookProperties] = ...,
-    max_commit_retries: Optional[int] = ...,
 ) -> None: ...
 
 
@@ -222,9 +220,8 @@ def write_deltalake(
     large_dtypes: bool = False,
     engine: Literal["pyarrow", "rust"] = "rust",
     writer_properties: Optional[WriterProperties] = None,
-    custom_metadata: Optional[Dict[str, str]] = None,
+    commit_properties: Optional[CommitProperties] = None,
     post_commithook_properties: Optional[PostCommitHookProperties] = None,
-    max_commit_retries: Optional[int] = None,
 ) -> None:
     """Write to a Delta Lake table
 
@@ -279,9 +276,8 @@ def write_deltalake(
         large_dtypes: Only used for pyarrow engine
         engine: writer engine to write the delta table. PyArrow engine is deprecated, and will be removed in v1.0.
         writer_properties: Pass writer properties to the Rust parquet writer.
-        custom_metadata: Custom metadata to add to the commitInfo.
+        commit_properties: properties of the transaction commit. If None, default values are used.
         post_commithook_properties: properties for the post commit hook. If None, default values are used.
-        max_commit_retries: maximum number of times to retry the transaction commit.
     """
     table, table_uri = try_get_table_and_table_uri(table_or_uri, storage_options)
     if table is not None:
@@ -322,9 +318,13 @@ def write_deltalake(
             configuration=configuration,
             storage_options=storage_options,
             writer_properties=writer_properties,
-            custom_metadata=custom_metadata,
+            custom_metadata=commit_properties.custom_metadata
+            if commit_properties
+            else None,
             post_commithook_properties=post_commithook_properties,
-            max_commit_retries=max_commit_retries,
+            max_commit_retries=commit_properties.max_commit_retries
+            if commit_properties
+            else None,
         )
         if table:
             table.update_incremental()
@@ -547,7 +547,7 @@ def write_deltalake(
                 description,
                 configuration,
                 storage_options,
-                custom_metadata,
+                commit_properties.custom_metadata if commit_properties else None,
             )
         else:
             table._table.create_write_transaction(
@@ -556,9 +556,13 @@ def write_deltalake(
                 partition_by or [],
                 schema,
                 partition_filters,
-                custom_metadata,
+                custom_metadata=commit_properties.custom_metadata
+                if commit_properties
+                else None,
                 post_commithook_properties=post_commithook_properties,
-                max_commit_retries=max_commit_retries,
+                max_commit_retries=commit_properties.max_commit_retries
+                if commit_properties
+                else None,
             )
             table.update_incremental()
     else:
