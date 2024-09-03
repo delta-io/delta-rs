@@ -20,7 +20,7 @@ jobs:
         uses: actions-rs/toolchain@v1
         with:
           profile: default
-          toolchain: stable
+          toolchain: 1.80
           override: true
 
       - name: Format
@@ -36,7 +36,7 @@ jobs:
         uses: actions-rs/toolchain@v1
         with:
           profile: default
-          toolchain: stable
+          toolchain: 1.80
           override: true
       - name: Install cargo-llvm-cov
         uses: taiki-e/install-action@cargo-llvm-cov
@@ -67,7 +67,7 @@ jobs:
         uses: actions-rs/toolchain@v1
         with:
           profile: default
-          toolchain: stable
+          toolchain: 1.80
           override: true
 
       - name: build and lint with clippy
@@ -104,7 +104,7 @@ jobs:
         uses: actions-rs/toolchain@v1
         with:
           profile: default
-          toolchain: "stable"
+          toolchain: 1.80
           override: true
 
       - name: Run tests
@@ -138,7 +138,7 @@ jobs:
         uses: actions-rs/toolchain@v1
         with:
           profile: default
-          toolchain: stable
+          toolchain: 1.80
           override: true
 
       # Install Java and Hadoop for HDFS integration tests
