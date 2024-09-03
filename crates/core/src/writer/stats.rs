@@ -613,7 +613,7 @@ mod tests {
                 Some($value),
                 Some($value),
                 None,
-                0,
+                Some(0),
                 false,
             ))
         };
