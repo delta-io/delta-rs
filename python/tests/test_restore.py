@@ -5,6 +5,7 @@ import pyarrow as pa
 import pytest
 
 from deltalake import DeltaTable, write_deltalake
+from deltalake.table import CommitProperties
 
 
 @pytest.mark.parametrize("use_relative", [True, False])
@@ -24,7 +25,8 @@ def test_restore_with_version(
 
     dt = DeltaTable(table_path)
     old_version = dt.version()
-    dt.restore(1, custom_metadata={"userName": "John Doe"})
+    commit_properties = CommitProperties(custom_metadata={"userName": "John Doe"})
+    dt.restore(1, commit_properties=commit_properties)
     last_action = dt.history(1)[0]
     assert last_action["operation"] == "RESTORE"
     assert last_action["userName"] == "John Doe"

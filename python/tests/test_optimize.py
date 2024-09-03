@@ -5,6 +5,7 @@ import pyarrow as pa
 import pytest
 
 from deltalake import DeltaTable, write_deltalake
+from deltalake.table import CommitProperties
 
 
 @pytest.mark.parametrize("engine", ["pyarrow", "rust"])
@@ -39,7 +40,8 @@ def test_optimize_run_table(
     old_data = dt.to_pyarrow_table()
     old_version = dt.version()
 
-    dt.optimize.compact(custom_metadata={"userName": "John Doe"})
+    commit_properties = CommitProperties(custom_metadata={"userName": "John Doe"})
+    dt.optimize.compact(commit_properties=commit_properties)
 
     new_data = dt.to_pyarrow_table()
     last_action = dt.history(1)[0]
@@ -70,9 +72,8 @@ def test_z_order_optimize(
     dt = DeltaTable(tmp_path)
     old_version = dt.version()
 
-    dt.optimize.z_order(
-        ["date32", "timestamp"], custom_metadata={"userName": "John Doe"}
-    )
+    commit_properties = CommitProperties(custom_metadata={"userName": "John Doe"})
+    dt.optimize.z_order(["date32", "timestamp"], commit_properties=commit_properties)
     last_action = dt.history(1)[0]
     assert last_action["operation"] == "OPTIMIZE"
     assert last_action["userName"] == "John Doe"
