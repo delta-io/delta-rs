@@ -5,6 +5,7 @@ import pyarrow as pa
 import pytest
 
 from deltalake import DeltaTable, write_deltalake
+from deltalake.table import CommitProperties
 
 
 def test_vacuum_dry_run_simple_table():
@@ -72,11 +73,12 @@ def test_vacuum_transaction_log(tmp_path: pathlib.Path, sample_data: pa.Table):
 
     dt = DeltaTable(tmp_path)
 
+    commit_properties = CommitProperties(custom_metadata={"userName": "John Doe"})
     dt.vacuum(
         retention_hours=0,
         dry_run=False,
         enforce_retention_duration=False,
-        custom_metadata={"userName": "John Doe"},
+        commit_properties=commit_properties,
     )
 
     dt = DeltaTable(tmp_path)
