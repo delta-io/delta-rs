@@ -1222,6 +1222,15 @@ mod tests {
         }
 
         #[tokio::test]
+        async fn test_table_checkpoint_not_always_with_stats() {
+            let path = "../test/tests/data/delta-checkpoint-stats-optional";
+            let mut table = crate::open_table(path).await.unwrap();
+            table.load().await.unwrap();
+
+            assert_eq!(2, table.snapshot().unwrap().file_actions().unwrap().len());
+        }
+
+        #[tokio::test]
         async fn test_only_struct_stats() {
             // test table with no json stats
             let path = "../test/tests/data/delta-1.2.1-only-struct-stats";
