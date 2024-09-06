@@ -2,6 +2,9 @@ name: python_build
 
 on:
   merge_group:
+  pull_request:
+    branches:
+      - main
   pull_request_target:
     types:
       - opened
