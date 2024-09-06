@@ -40,3 +40,5 @@ jobs:
           manylinux: auto
           command: build
           args: --release -m python/Cargo.toml ${{ env.FEATURES_FLAG }}
+          # for openssl build
+          before-script-linux: yum install -y perl-IPC-Cmd
