@@ -35,6 +35,7 @@ jobs:
         with:
           maturin-version: v1.6.0 # https://github.com/PyO3/maturin/issues/2154
           target: x86_64-unknown-linux-gnu
+          manylinux: auto
           command: build
-          args: -m python/Cargo.toml ${{ env.FEATURES_FLAG }}
+          args: --release -m python/Cargo.toml ${{ env.FEATURES_FLAG }}
           before-script-linux: yum install -y perl-IPC-Cmd
