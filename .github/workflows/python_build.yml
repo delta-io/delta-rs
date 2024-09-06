@@ -36,7 +36,7 @@ jobs:
           #maturin-version: v1.6.0 # https://github.com/PyO3/maturin/issues/2154
           target: x86_64-unknown-linux-gnu
           # Set to a slightly older container to avoid https://github.com/openssl/openssl/pull/25367t
-          container:  	quay.io/pypa/manylinux2014_x86_64:2024.08.31-1
+          container:  	quay.io/pypa/manylinux2014_x86_64:2024.07.23-1 
           manylinux: auto
           command: build
           args: --release -m python/Cargo.toml ${{ env.FEATURES_FLAG }}
