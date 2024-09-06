@@ -1,4 +1,4 @@
-name: Release to PyPI and documentation
+name: python_build
 
 on:
   merge_group:
@@ -19,7 +19,7 @@ env:
   FEATURES_FLAG: --no-default-features --features native-tls
 
 jobs:
-  release-pypi-manylinux:
+  lint:
     name: PyPI test build manylinux
     runs-on: ubuntu-latest
     steps:
