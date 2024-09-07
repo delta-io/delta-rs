@@ -1000,13 +1000,18 @@ class DeltaTable:
                 commit_properties, custom_metadata
             )
 
-        if large_dtypes:
+        if large_dtypes is not None:
             warnings.warn(
                 "large_dtypes is deprecated",
                 category=DeprecationWarning,
                 stacklevel=2,
             )
-        conversion_mode = ArrowSchemaConversionMode.PASSTHROUGH
+            if large_dtypes:
+                conversion_mode = ArrowSchemaConversionMode.LARGE
+            else:
+                conversion_mode = ArrowSchemaConversionMode.NORMAL
+        else:
+            conversion_mode = ArrowSchemaConversionMode.PASSTHROUGH
 
         from .schema import (
             convert_pyarrow_dataset,
