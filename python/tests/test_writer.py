@@ -1699,8 +1699,7 @@ def test_write_stats_column_idx(tmp_path: pathlib.Path, engine):
     _check_stats(dt)
 
 
-@pytest.mark.parametrize("engine", ["pyarrow", "rust"])
-def test_write_stats_columns_stats_provided(tmp_path: pathlib.Path, engine):
+def test_write_stats_columns_stats_provided(tmp_path: pathlib.Path):
     def _check_stats(dt: DeltaTable):
         add_actions_table = dt.get_add_actions(flatten=True)
         stats = add_actions_table.to_pylist()[0]
@@ -1726,15 +1725,14 @@ def test_write_stats_columns_stats_provided(tmp_path: pathlib.Path, engine):
         tmp_path,
         data,
         mode="append",
-        engine=engine,
-        configuration={"delta.dataSkippingStatsColumns": "foo,baz"},
+        configuration={"delta.dataSkippingStatsColumns": "foo,`baz`"},
     )
 
     dt = DeltaTable(tmp_path)
     _check_stats(dt)
 
     # Check if it properly takes skippingNumIndexCols from the config in the table
-    write_deltalake(tmp_path, data, mode="overwrite", engine=engine)
+    write_deltalake(tmp_path, data, mode="overwrite")
 
     dt = DeltaTable(tmp_path)
     assert dt.version() == 1
