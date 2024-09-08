@@ -9,7 +9,7 @@ use object_store::{
     GetResult, ListResult, ObjectMeta, ObjectStore, PutOptions, PutResult,
     Result as ObjectStoreResult,
 };
-use object_store::{MultipartUpload, PutMultipartOpts, PutPayload};
+use object_store::{MultipartUpload, PutMode, PutMultipartOpts, PutPayload};
 use std::ops::Range;
 use std::sync::Arc;
 use url::Url;
@@ -168,8 +168,11 @@ impl ObjectStore for MountFileStorageBackend {
         &self,
         location: &ObjectStorePath,
         bytes: PutPayload,
-        options: PutOptions,
+        mut options: PutOptions,
     ) -> ObjectStoreResult<PutResult> {
+        // In mounted storage we do an unsafe rename/overwrite
+        // We don't conditionally check whether the file already exists
+        options.mode = PutMode::Overwrite;
         self.inner.put_opts(location, bytes, options).await
     }
 
