@@ -30,7 +30,7 @@ delta_kernel = { version = "0.3.0" }
 # delta_kernel = { path = "../delta-kernel-rs/kernel", version = "0.3.0" }
 
 # arrow
-arrow = { version = "52" }
+arrow = { version = "53" }
 arrow-arith = { version = "52" }
 arrow-array = { version = "52", features = ["chrono-tz"] }
 arrow-buffer = { version = "52" }
