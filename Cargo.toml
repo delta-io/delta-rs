@@ -32,7 +32,7 @@ delta_kernel = { version = "0.3.0" }
 # arrow
 arrow = { version = "52" }
 arrow-arith = { version = "52" }
-arrow-array = { version = "52", features = ["chrono-tz"] }
+arrow-array = { version = "53", features = ["chrono-tz"] }
 arrow-buffer = { version = "52" }
 arrow-cast = { version = "52" }
 arrow-ipc = { version = "52" }
