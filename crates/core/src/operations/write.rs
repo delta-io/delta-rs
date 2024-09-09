@@ -561,7 +561,7 @@ async fn execute_non_empty_expr(
     let input_dfschema: DFSchema = df_schema.as_ref().clone().try_into()?;
 
     let scan_config = DeltaScanConfigBuilder::new()
-        .with_schema(df_schema)
+        .with_schema(snapshot.input_schema()?)
         .build(snapshot)?;
 
     let scan = DeltaScanBuilder::new(snapshot, log_store.clone(), &state)
