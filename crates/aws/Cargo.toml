@@ -33,7 +33,7 @@ tokio = { workspace = true }
 regex = { workspace = true }
 uuid = { workspace = true, features = ["serde", "v4"] }
 url = { workspace = true }
-backoff = { version = "0.4", features = [ "tokio" ] }
+backon = { version = "1",default-features = false, features = [ "tokio-sleep" ] }
 hyper-tls = { version = "0.5", optional = true }
 
 [dev-dependencies]
