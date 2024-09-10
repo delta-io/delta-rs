@@ -11,3 +11,4 @@ updates:
       # arrow and datafusion are bumped manually
       - dependency-name: "arrow*"
       - dependency-name: "datafusion*"
+      - dependency-name: "parquet"
