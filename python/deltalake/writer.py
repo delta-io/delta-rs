@@ -123,8 +123,9 @@ def write_deltalake(
     partition_filters: Optional[List[Tuple[str, str, Any]]] = ...,
     large_dtypes: bool = ...,
     engine: Literal["pyarrow"] = ...,
-    commit_properties: Optional[CommitProperties] = ...,
+    custom_metadata: Optional[Dict[str, str]] = ...,
     post_commithook_properties: Optional[PostCommitHookProperties] = ...,
+    commit_properties: Optional[CommitProperties] = ...,
 ) -> None: ...
 
 
@@ -152,8 +153,9 @@ def write_deltalake(
     large_dtypes: bool = ...,
     engine: Literal["rust"] = ...,
     writer_properties: WriterProperties = ...,
-    commit_properties: Optional[CommitProperties] = ...,
+    custom_metadata: Optional[Dict[str, str]] = ...,
     post_commithook_properties: Optional[PostCommitHookProperties] = ...,
+    commit_properties: Optional[CommitProperties] = ...,
 ) -> None: ...
 
 
@@ -183,8 +185,9 @@ def write_deltalake(
     large_dtypes: bool = ...,
     engine: Literal["rust"] = ...,
     writer_properties: WriterProperties = ...,
-    commit_properties: Optional[CommitProperties] = ...,
+    custom_metadata: Optional[Dict[str, str]] = ...,
     post_commithook_properties: Optional[PostCommitHookProperties] = ...,
+    commit_properties: Optional[CommitProperties] = ...,
 ) -> None: ...
 
 
@@ -220,8 +223,9 @@ def write_deltalake(
     large_dtypes: bool = False,
     engine: Literal["pyarrow", "rust"] = "rust",
     writer_properties: Optional[WriterProperties] = None,
-    commit_properties: Optional[CommitProperties] = None,
+    custom_metadata: Optional[Dict[str, str]] = None,
     post_commithook_properties: Optional[PostCommitHookProperties] = None,
+    commit_properties: Optional[CommitProperties] = None,
 ) -> None:
     """Write to a Delta Lake table
 
@@ -276,9 +280,17 @@ def write_deltalake(
         large_dtypes: Only used for pyarrow engine
         engine: writer engine to write the delta table. PyArrow engine is deprecated, and will be removed in v1.0.
         writer_properties: Pass writer properties to the Rust parquet writer.
-        commit_properties: properties of the transaction commit. If None, default values are used.
+        custom_metadata: Deprecated and will be removed in future versions. Use commit_properties instead.
         post_commithook_properties: properties for the post commit hook. If None, default values are used.
+        commit_properties: properties of the transaction commit. If None, default values are used.
     """
+    if custom_metadata:
+        warnings.warn(
+            "custom_metadata is deprecated, please use commit_properties instead.",
+            category=DeprecationWarning,
+            stacklevel=2,
+        )
+
     table, table_uri = try_get_table_and_table_uri(table_or_uri, storage_options)
     if table is not None:
         storage_options = table._storage_options or {}
@@ -320,7 +332,7 @@ def write_deltalake(
             writer_properties=writer_properties,
             custom_metadata=commit_properties.custom_metadata
             if commit_properties
-            else None,
+            else custom_metadata,
             post_commithook_properties=post_commithook_properties,
             max_commit_retries=commit_properties.max_commit_retries
             if commit_properties
@@ -547,7 +559,9 @@ def write_deltalake(
                 description,
                 configuration,
                 storage_options,
-                commit_properties.custom_metadata if commit_properties else None,
+                commit_properties.custom_metadata
+                if commit_properties
+                else custom_metadata,
             )
         else:
             table._table.create_write_transaction(
@@ -558,7 +572,7 @@ def write_deltalake(
                 partition_filters,
                 custom_metadata=commit_properties.custom_metadata
                 if commit_properties
-                else None,
+                else custom_metadata,
                 post_commithook_properties=post_commithook_properties,
                 max_commit_retries=commit_properties.max_commit_retries
                 if commit_properties
