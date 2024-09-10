@@ -1850,3 +1850,41 @@ def test_empty_dataset_write(tmp_path: pathlib.Path, sample_data: pa.Table):
     empty_dataset = dataset(empty_arrow_table)
     with pytest.raises(DeltaError, match="No data source supplied to write command"):
         write_deltalake(tmp_path, empty_dataset, mode="append")
+
+
+@pytest.mark.pandas
+def test_predicate_out_of_bounds(tmp_path: pathlib.Path):
+    """See <https://github.com/delta-io/delta-rs/issues/2867>"""
+    import pandas as pd
+
+    data = [
+        (datetime(2024, 7, 31, 9, 30, 0), "AAPL", "20240731", 100, 11.1),
+        (datetime(2024, 7, 31, 9, 30, 0), "GOOG", "20240731", 200, 11.1),
+    ]
+    columns = ["ts", "ins", "date", "f1", "f2"]
+    df = pd.DataFrame(data, columns=columns)
+
+    predicate = "date == 20240731"
+    write_deltalake(
+        table_or_uri=tmp_path,
+        data=df,
+        partition_by="date",
+        mode="overwrite",
+        schema_mode="merge",
+        predicate=predicate,
+    )
+
+    data = [
+        (datetime(2024, 7, 31, 9, 30, 0), "AAPL", "20240731", 666, 666),
+        (datetime(2024, 7, 31, 9, 30, 0), "GOOG", "20240731", 777, 777),
+    ]
+    columns = ["ts", "ins", "date", "fb", "fc"]
+    df = pd.DataFrame(data, columns=columns)
+    write_deltalake(
+        table_or_uri=tmp_path,
+        data=df,
+        partition_by="date",
+        mode="overwrite",
+        schema_mode="merge",
+        predicate=predicate,
+    )
