@@ -17,8 +17,8 @@ use std::sync::Arc;
 use crate::error::PythonError;
 use crate::utils::rt;
 use crate::{
-    maybe_create_commit_properties, set_writer_properties, PyPostCommitHookProperties,
-    PyWriterProperties,
+    maybe_create_commit_properties, set_writer_properties, PyCommitProperties,
+    PyPostCommitHookProperties, PyWriterProperties,
 };
 
 #[pyclass(module = "deltalake._internal")]
@@ -43,8 +43,7 @@ impl PyMergeBuilder {
         safe_cast: bool,
         writer_properties: Option<PyWriterProperties>,
         post_commithook_properties: Option<PyPostCommitHookProperties>,
-        custom_metadata: Option<HashMap<String, String>>,
-        max_commit_retries: Option<usize>,
+        commit_properties: Option<PyCommitProperties>,
     ) -> DeltaResult<Self> {
         let ctx = SessionContext::new();
         let schema = source.schema();
@@ -68,11 +67,9 @@ impl PyMergeBuilder {
             cmd = cmd.with_writer_properties(set_writer_properties(writer_props)?);
         }
 
-        if let Some(commit_properties) = maybe_create_commit_properties(
-            custom_metadata,
-            max_commit_retries,
-            post_commithook_properties,
-        ) {
+        if let Some(commit_properties) =
+            maybe_create_commit_properties(commit_properties, post_commithook_properties)
+        {
             cmd = cmd.with_commit_properties(commit_properties);
         }
         Ok(Self {

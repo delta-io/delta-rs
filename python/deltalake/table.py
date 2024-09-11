@@ -167,6 +167,17 @@ class CommitProperties:
         self.max_commit_retries = max_commit_retries
 
 
+def _commit_properties_from_custom_metadata(
+    maybe_properties: Optional[CommitProperties], custom_metadata: Dict[str, str]
+) -> CommitProperties:
+    if maybe_properties is not None:
+        if maybe_properties.custom_metadata is None:
+            maybe_properties.custom_metadata = custom_metadata
+            return maybe_properties
+        return maybe_properties
+    return CommitProperties(custom_metadata=custom_metadata)
+
+
 @dataclass(init=True)
 class BloomFilterProperties:
     """The Bloom Filter Properties instance for the Rust parquet writer."""
@@ -784,6 +795,9 @@ class DeltaTable:
                 category=DeprecationWarning,
                 stacklevel=2,
             )
+            commit_properties = _commit_properties_from_custom_metadata(
+                commit_properties, custom_metadata
+            )
 
         if retention_hours:
             if retention_hours < 0:
@@ -793,9 +807,8 @@ class DeltaTable:
             dry_run,
             retention_hours,
             enforce_retention_duration,
-            commit_properties.custom_metadata if commit_properties else custom_metadata,
+            commit_properties,
             post_commithook_properties,
-            commit_properties.max_commit_retries if commit_properties else None,
         )
 
     def update(
@@ -870,6 +883,9 @@ class DeltaTable:
                 category=DeprecationWarning,
                 stacklevel=2,
             )
+            commit_properties = _commit_properties_from_custom_metadata(
+                commit_properties, custom_metadata
+            )
 
         if updates is None and new_values is not None:
             updates = {}
@@ -907,13 +923,8 @@ class DeltaTable:
             predicate,
             writer_properties,
             safe_cast=not error_on_type_mismatch,
-            custom_metadata=commit_properties.custom_metadata
-            if commit_properties
-            else custom_metadata,
+            commit_properties=commit_properties,
             post_commithook_properties=post_commithook_properties,
-            max_commit_retries=commit_properties.max_commit_retries
-            if commit_properties
-            else None,
         )
         return json.loads(metrics)
 
@@ -984,6 +995,9 @@ class DeltaTable:
                 category=DeprecationWarning,
                 stacklevel=2,
             )
+            commit_properties = _commit_properties_from_custom_metadata(
+                commit_properties, custom_metadata
+            )
 
         if large_dtypes:
             warnings.warn(
@@ -1028,13 +1042,8 @@ class DeltaTable:
             target_alias=target_alias,
             safe_cast=not error_on_type_mismatch,
             writer_properties=writer_properties,
-            custom_metadata=commit_properties.custom_metadata
-            if commit_properties
-            else custom_metadata,
+            commit_properties=commit_properties,
             post_commithook_properties=post_commithook_properties,
-            max_commit_retries=commit_properties.max_commit_retries
-            if commit_properties
-            else None,
         )
         return TableMerger(py_merge_builder, self._table)
 
@@ -1066,30 +1075,23 @@ class DeltaTable:
                 category=DeprecationWarning,
                 stacklevel=2,
             )
+            commit_properties = _commit_properties_from_custom_metadata(
+                commit_properties, custom_metadata
+            )
 
         if isinstance(target, datetime):
             metrics = self._table.restore(
                 target.isoformat(),
                 ignore_missing_files=ignore_missing_files,
                 protocol_downgrade_allowed=protocol_downgrade_allowed,
-                custom_metadata=commit_properties.custom_metadata
-                if commit_properties
-                else custom_metadata,
-                max_commit_retries=commit_properties.max_commit_retries
-                if commit_properties
-                else None,
+                commit_properties=commit_properties,
             )
         else:
             metrics = self._table.restore(
                 target,
                 ignore_missing_files=ignore_missing_files,
                 protocol_downgrade_allowed=protocol_downgrade_allowed,
-                custom_metadata=commit_properties.custom_metadata
-                if commit_properties
-                else custom_metadata,
-                max_commit_retries=commit_properties.max_commit_retries
-                if commit_properties
-                else None,
+                commit_properties=commit_properties,
             )
         return json.loads(metrics)
 
@@ -1343,13 +1345,15 @@ class DeltaTable:
                 category=DeprecationWarning,
                 stacklevel=2,
             )
+            commit_properties = _commit_properties_from_custom_metadata(
+                commit_properties, custom_metadata
+            )
 
         metrics = self._table.delete(
             predicate,
             writer_properties,
-            commit_properties.custom_metadata if commit_properties else custom_metadata,
+            commit_properties,
             post_commithook_properties,
-            commit_properties.max_commit_retries if commit_properties else None,
         )
         return json.loads(metrics)
 
@@ -1393,12 +1397,14 @@ class DeltaTable:
                 category=DeprecationWarning,
                 stacklevel=2,
             )
+            commit_properties = _commit_properties_from_custom_metadata(
+                commit_properties, custom_metadata
+            )
 
         metrics = self._table.repair(
             dry_run,
-            commit_properties.custom_metadata if commit_properties else custom_metadata,
+            commit_properties,
             post_commithook_properties,
-            commit_properties.max_commit_retries if commit_properties else None,
         )
         return json.loads(metrics)
 
@@ -1820,15 +1826,17 @@ class TableAlterer:
                 category=DeprecationWarning,
                 stacklevel=2,
             )
+            commit_properties = _commit_properties_from_custom_metadata(
+                commit_properties, custom_metadata
+            )
 
         if isinstance(fields, DeltaField):
             fields = [fields]
 
         self.table._table.add_columns(
             fields,
-            commit_properties.custom_metadata if commit_properties else custom_metadata,
+            commit_properties,
             post_commithook_properties,
-            commit_properties.max_commit_retries if commit_properties else None,
         )
 
     def add_constraint(
@@ -1868,6 +1876,9 @@ class TableAlterer:
                 category=DeprecationWarning,
                 stacklevel=2,
             )
+            commit_properties = _commit_properties_from_custom_metadata(
+                commit_properties, custom_metadata
+            )
 
         if len(constraints.keys()) > 1:
             raise ValueError(
@@ -1877,9 +1888,8 @@ class TableAlterer:
 
         self.table._table.add_constraints(
             constraints,
-            commit_properties.custom_metadata if commit_properties else custom_metadata,
+            commit_properties,
             post_commithook_properties,
-            commit_properties.max_commit_retries if commit_properties else None,
         )
 
     def drop_constraint(
@@ -1925,13 +1935,15 @@ class TableAlterer:
                 category=DeprecationWarning,
                 stacklevel=2,
             )
+            commit_properties = _commit_properties_from_custom_metadata(
+                commit_properties, custom_metadata
+            )
 
         self.table._table.drop_constraints(
             name,
             raise_if_not_exists,
-            commit_properties.custom_metadata if commit_properties else custom_metadata,
+            commit_properties,
             post_commithook_properties,
-            commit_properties.max_commit_retries if commit_properties else None,
         )
 
     def set_table_properties(
@@ -1971,12 +1983,14 @@ class TableAlterer:
                 category=DeprecationWarning,
                 stacklevel=2,
             )
+            commit_properties = _commit_properties_from_custom_metadata(
+                commit_properties, custom_metadata
+            )
 
         self.table._table.set_table_properties(
             properties,
             raise_if_not_exists,
-            commit_properties.custom_metadata if commit_properties else custom_metadata,
-            commit_properties.max_commit_retries if commit_properties else None,
+            commit_properties,
         )
 
 
@@ -2047,6 +2061,9 @@ class TableOptimizer:
                 category=DeprecationWarning,
                 stacklevel=2,
             )
+            commit_properties = _commit_properties_from_custom_metadata(
+                commit_properties, custom_metadata
+            )
 
         if isinstance(min_commit_interval, timedelta):
             min_commit_interval = int(min_commit_interval.total_seconds())
@@ -2057,9 +2074,8 @@ class TableOptimizer:
             max_concurrent_tasks,
             min_commit_interval,
             writer_properties,
-            commit_properties.custom_metadata if commit_properties else custom_metadata,
+            commit_properties,
             post_commithook_properties,
-            commit_properties.max_commit_retries if commit_properties else None,
         )
         self.table.update_incremental()
         return json.loads(metrics)
@@ -2125,6 +2141,9 @@ class TableOptimizer:
                 category=DeprecationWarning,
                 stacklevel=2,
             )
+            commit_properties = _commit_properties_from_custom_metadata(
+                commit_properties, custom_metadata
+            )
 
         if isinstance(min_commit_interval, timedelta):
             min_commit_interval = int(min_commit_interval.total_seconds())
@@ -2137,9 +2156,8 @@ class TableOptimizer:
             max_spill_size,
             min_commit_interval,
             writer_properties,
-            commit_properties.custom_metadata if commit_properties else custom_metadata,
+            commit_properties,
             post_commithook_properties,
-            commit_properties.max_commit_retries if commit_properties else None,
         )
         self.table.update_incremental()
         return json.loads(metrics)

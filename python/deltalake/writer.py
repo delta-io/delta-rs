@@ -56,6 +56,7 @@ from .table import (
     DeltaTable,
     PostCommitHookProperties,
     WriterProperties,
+    _commit_properties_from_custom_metadata,
 )
 
 try:
@@ -290,6 +291,9 @@ def write_deltalake(
             category=DeprecationWarning,
             stacklevel=2,
         )
+        commit_properties = _commit_properties_from_custom_metadata(
+            commit_properties, custom_metadata
+        )
 
     table, table_uri = try_get_table_and_table_uri(table_or_uri, storage_options)
     if table is not None:
@@ -330,13 +334,8 @@ def write_deltalake(
             configuration=configuration,
             storage_options=storage_options,
             writer_properties=writer_properties,
-            custom_metadata=commit_properties.custom_metadata
-            if commit_properties
-            else custom_metadata,
+            commit_properties=commit_properties,
             post_commithook_properties=post_commithook_properties,
-            max_commit_retries=commit_properties.max_commit_retries
-            if commit_properties
-            else None,
         )
         if table:
             table.update_incremental()
@@ -570,13 +569,8 @@ def write_deltalake(
                 partition_by or [],
                 schema,
                 partition_filters,
-                custom_metadata=commit_properties.custom_metadata
-                if commit_properties
-                else custom_metadata,
+                commit_properties=commit_properties,
                 post_commithook_properties=post_commithook_properties,
-                max_commit_retries=commit_properties.max_commit_retries
-                if commit_properties
-                else None,
             )
             table.update_incremental()
     else:

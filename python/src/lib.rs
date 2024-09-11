@@ -321,16 +321,15 @@ impl RawDeltaTable {
 
     /// Run the Vacuum command on the Delta Table: list and delete files no longer referenced
     /// by the Delta table and are older than the retention threshold.
-    #[pyo3(signature = (dry_run, retention_hours = None, enforce_retention_duration = true, custom_metadata=None, post_commithook_properties=None, max_commit_retries=None))]
+    #[pyo3(signature = (dry_run, retention_hours = None, enforce_retention_duration = true, commit_properties=None, post_commithook_properties=None))]
     pub fn vacuum(
         &mut self,
         py: Python,
         dry_run: bool,
         retention_hours: Option<u64>,
         enforce_retention_duration: bool,
-        custom_metadata: Option<HashMap<String, String>>,
+        commit_properties: Option<PyCommitProperties>,
         post_commithook_properties: Option<PyPostCommitHookProperties>,
-        max_commit_retries: Option<usize>,
     ) -> PyResult<Vec<String>> {
         let (table, metrics) = py.allow_threads(|| {
             let mut cmd = VacuumBuilder::new(
@@ -343,11 +342,9 @@ impl RawDeltaTable {
                 cmd = cmd.with_retention_period(Duration::hours(retention_period as i64));
             }
 
-            if let Some(commit_properties) = maybe_create_commit_properties(
-                custom_metadata,
-                max_commit_retries,
-                post_commithook_properties,
-            ) {
+            if let Some(commit_properties) =
+                maybe_create_commit_properties(commit_properties, post_commithook_properties)
+            {
                 cmd = cmd.with_commit_properties(commit_properties);
             }
             rt().block_on(cmd.into_future()).map_err(PythonError::from)
@@ -357,7 +354,7 @@ impl RawDeltaTable {
     }
 
     /// Run the UPDATE command on the Delta Table
-    #[pyo3(signature = (updates, predicate=None, writer_properties=None, safe_cast = false, custom_metadata = None, post_commithook_properties=None, max_commit_retries=None))]
+    #[pyo3(signature = (updates, predicate=None, writer_properties=None, safe_cast = false, commit_properties = None, post_commithook_properties=None))]
     #[allow(clippy::too_many_arguments)]
     pub fn update(
         &mut self,
@@ -366,9 +363,8 @@ impl RawDeltaTable {
         predicate: Option<String>,
         writer_properties: Option<PyWriterProperties>,
         safe_cast: bool,
-        custom_metadata: Option<HashMap<String, String>>,
+        commit_properties: Option<PyCommitProperties>,
         post_commithook_properties: Option<PyPostCommitHookProperties>,
-        max_commit_retries: Option<usize>,
     ) -> PyResult<String> {
         let (table, metrics) = py.allow_threads(|| {
             let mut cmd = UpdateBuilder::new(
@@ -391,11 +387,9 @@ impl RawDeltaTable {
                 cmd = cmd.with_predicate(update_predicate);
             }
 
-            if let Some(commit_properties) = maybe_create_commit_properties(
-                custom_metadata,
-                max_commit_retries,
-                post_commithook_properties,
-            ) {
+            if let Some(commit_properties) =
+                maybe_create_commit_properties(commit_properties, post_commithook_properties)
+            {
                 cmd = cmd.with_commit_properties(commit_properties);
             }
 
@@ -413,9 +407,8 @@ impl RawDeltaTable {
         max_concurrent_tasks = None,
         min_commit_interval = None,
         writer_properties=None,
-        custom_metadata=None,
-        post_commithook_properties=None,
-        max_commit_retries=None,
+        commit_properties=None,
+        post_commithook_properties=None
     ))]
     #[allow(clippy::too_many_arguments)]
     pub fn compact_optimize(
@@ -426,9 +419,8 @@ impl RawDeltaTable {
         max_concurrent_tasks: Option<usize>,
         min_commit_interval: Option<u64>,
         writer_properties: Option<PyWriterProperties>,
-        custom_metadata: Option<HashMap<String, String>>,
+        commit_properties: Option<PyCommitProperties>,
         post_commithook_properties: Option<PyPostCommitHookProperties>,
-        max_commit_retries: Option<usize>,
     ) -> PyResult<String> {
         let (table, metrics) = py.allow_threads(|| {
             let mut cmd = OptimizeBuilder::new(
@@ -449,11 +441,9 @@ impl RawDeltaTable {
                 );
             }
 
-            if let Some(commit_properties) = maybe_create_commit_properties(
-                custom_metadata,
-                max_commit_retries,
-                post_commithook_properties,
-            ) {
+            if let Some(commit_properties) =
+                maybe_create_commit_properties(commit_properties, post_commithook_properties)
+            {
                 cmd = cmd.with_commit_properties(commit_properties);
             }
 
@@ -477,9 +467,8 @@ impl RawDeltaTable {
         max_spill_size = 20 * 1024 * 1024 * 1024,
         min_commit_interval = None,
         writer_properties=None,
-        custom_metadata=None,
-        post_commithook_properties=None,
-        max_commit_retries=None))]
+        commit_properties=None,
+        post_commithook_properties=None))]
     pub fn z_order_optimize(
         &mut self,
         py: Python,
@@ -490,9 +479,8 @@ impl RawDeltaTable {
         max_spill_size: usize,
         min_commit_interval: Option<u64>,
         writer_properties: Option<PyWriterProperties>,
-        custom_metadata: Option<HashMap<String, String>>,
+        commit_properties: Option<PyCommitProperties>,
         post_commithook_properties: Option<PyPostCommitHookProperties>,
-        max_commit_retries: Option<usize>,
     ) -> PyResult<String> {
         let (table, metrics) = py.allow_threads(|| {
             let mut cmd = OptimizeBuilder::new(
@@ -515,11 +503,9 @@ impl RawDeltaTable {
                 );
             }
 
-            if let Some(commit_properties) = maybe_create_commit_properties(
-                custom_metadata,
-                max_commit_retries,
-                post_commithook_properties,
-            ) {
+            if let Some(commit_properties) =
+                maybe_create_commit_properties(commit_properties, post_commithook_properties)
+            {
                 cmd = cmd.with_commit_properties(commit_properties);
             }
 
@@ -534,14 +520,13 @@ impl RawDeltaTable {
         Ok(serde_json::to_string(&metrics).unwrap())
     }
 
-    #[pyo3(signature = (fields, custom_metadata=None, post_commithook_properties=None, max_commit_retries=None))]
+    #[pyo3(signature = (fields, commit_properties=None, post_commithook_properties=None))]
     pub fn add_columns(
         &mut self,
         py: Python,
         fields: Vec<Field>,
-        custom_metadata: Option<HashMap<String, String>>,
+        commit_properties: Option<PyCommitProperties>,
         post_commithook_properties: Option<PyPostCommitHookProperties>,
-        max_commit_retries: Option<usize>,
     ) -> PyResult<()> {
         let table = py.allow_threads(|| {
             let mut cmd = AddColumnBuilder::new(
@@ -556,11 +541,9 @@ impl RawDeltaTable {
 
             cmd = cmd.with_fields(new_fields);
 
-            if let Some(commit_properties) = maybe_create_commit_properties(
-                custom_metadata,
-                max_commit_retries,
-                post_commithook_properties,
-            ) {
+            if let Some(commit_properties) =
+                maybe_create_commit_properties(commit_properties, post_commithook_properties)
+            {
                 cmd = cmd.with_commit_properties(commit_properties);
             }
 
@@ -570,14 +553,13 @@ impl RawDeltaTable {
         Ok(())
     }
 
-    #[pyo3(signature = (constraints, custom_metadata=None, post_commithook_properties=None, max_commit_retries=None))]
+    #[pyo3(signature = (constraints, commit_properties=None, post_commithook_properties=None))]
     pub fn add_constraints(
         &mut self,
         py: Python,
         constraints: HashMap<String, String>,
-        custom_metadata: Option<HashMap<String, String>>,
+        commit_properties: Option<PyCommitProperties>,
         post_commithook_properties: Option<PyPostCommitHookProperties>,
-        max_commit_retries: Option<usize>,
     ) -> PyResult<()> {
         let table = py.allow_threads(|| {
             let mut cmd = ConstraintBuilder::new(
@@ -589,11 +571,9 @@ impl RawDeltaTable {
                 cmd = cmd.with_constraint(col_name.clone(), expression.clone());
             }
 
-            if let Some(commit_properties) = maybe_create_commit_properties(
-                custom_metadata,
-                max_commit_retries,
-                post_commithook_properties,
-            ) {
+            if let Some(commit_properties) =
+                maybe_create_commit_properties(commit_properties, post_commithook_properties)
+            {
                 cmd = cmd.with_commit_properties(commit_properties);
             }
 
@@ -603,15 +583,14 @@ impl RawDeltaTable {
         Ok(())
     }
 
-    #[pyo3(signature = (name, raise_if_not_exists, custom_metadata=None, post_commithook_properties=None, max_commit_retries=None))]
+    #[pyo3(signature = (name, raise_if_not_exists, commit_properties=None, post_commithook_properties=None))]
     pub fn drop_constraints(
         &mut self,
         py: Python,
         name: String,
         raise_if_not_exists: bool,
-        custom_metadata: Option<HashMap<String, String>>,
+        commit_properties: Option<PyCommitProperties>,
         post_commithook_properties: Option<PyPostCommitHookProperties>,
-        max_commit_retries: Option<usize>,
     ) -> PyResult<()> {
         let table = py.allow_threads(|| {
             let mut cmd = DropConstraintBuilder::new(
@@ -621,11 +600,9 @@ impl RawDeltaTable {
             .with_constraint(name)
             .with_raise_if_not_exists(raise_if_not_exists);
 
-            if let Some(commit_properties) = maybe_create_commit_properties(
-                custom_metadata,
-                max_commit_retries,
-                post_commithook_properties,
-            ) {
+            if let Some(commit_properties) =
+                maybe_create_commit_properties(commit_properties, post_commithook_properties)
+            {
                 cmd = cmd.with_commit_properties(commit_properties);
             }
 
@@ -711,8 +688,7 @@ impl RawDeltaTable {
         safe_cast = false,
         writer_properties = None,
         post_commithook_properties = None,
-        custom_metadata = None,
-        max_commit_retries=None,
+        commit_properties = None,
     ))]
     pub fn create_merge_builder(
         &self,
@@ -724,8 +700,7 @@ impl RawDeltaTable {
         safe_cast: bool,
         writer_properties: Option<PyWriterProperties>,
         post_commithook_properties: Option<PyPostCommitHookProperties>,
-        custom_metadata: Option<HashMap<String, String>>,
-        max_commit_retries: Option<usize>,
+        commit_properties: Option<PyCommitProperties>,
     ) -> PyResult<PyMergeBuilder> {
         py.allow_threads(|| {
             Ok(PyMergeBuilder::new(
@@ -738,8 +713,7 @@ impl RawDeltaTable {
                 safe_cast,
                 writer_properties,
                 post_commithook_properties,
-                custom_metadata,
-                max_commit_retries,
+                commit_properties,
             )
             .map_err(PythonError::from)?)
         })
@@ -761,14 +735,13 @@ impl RawDeltaTable {
     }
 
     // Run the restore command on the Delta Table: restore table to a given version or datetime
-    #[pyo3(signature = (target, *, ignore_missing_files = false, protocol_downgrade_allowed = false, custom_metadata=None, max_commit_retries=None))]
+    #[pyo3(signature = (target, *, ignore_missing_files = false, protocol_downgrade_allowed = false, commit_properties=None))]
     pub fn restore(
         &mut self,
         target: Option<&Bound<'_, PyAny>>,
         ignore_missing_files: bool,
         protocol_downgrade_allowed: bool,
-        custom_metadata: Option<HashMap<String, String>>,
-        max_commit_retries: Option<usize>,
+        commit_properties: Option<PyCommitProperties>,
     ) -> PyResult<String> {
         let mut cmd = RestoreBuilder::new(
             self._table.log_store(),
@@ -790,9 +763,7 @@ impl RawDeltaTable {
         cmd = cmd.with_ignore_missing_files(ignore_missing_files);
         cmd = cmd.with_protocol_downgrade_allowed(protocol_downgrade_allowed);
 
-        if let Some(commit_properties) =
-            maybe_create_commit_properties(custom_metadata, max_commit_retries, None)
-        {
+        if let Some(commit_properties) = maybe_create_commit_properties(commit_properties, None) {
             cmd = cmd.with_commit_properties(commit_properties);
         }
 
@@ -953,9 +924,8 @@ impl RawDeltaTable {
         partition_by: Vec<String>,
         schema: PyArrowType<ArrowSchema>,
         partitions_filters: Option<Vec<(PyBackedStr, PyBackedStr, PartitionFilterValue)>>,
-        custom_metadata: Option<HashMap<String, String>>,
+        commit_properties: Option<PyCommitProperties>,
         post_commithook_properties: Option<PyPostCommitHookProperties>,
-        max_commit_retries: Option<usize>,
     ) -> PyResult<()> {
         py.allow_threads(|| {
             let mode = mode.parse().map_err(PythonError::from)?;
@@ -1039,24 +1009,25 @@ impl RawDeltaTable {
                 predicate: None,
             };
 
-            let mut commit_properties = CommitProperties::default();
-            if let Some(metadata) = custom_metadata {
-                let json_metadata: Map<String, Value> =
-                    metadata.into_iter().map(|(k, v)| (k, v.into())).collect();
-                commit_properties = commit_properties.with_metadata(json_metadata);
-            };
+            let mut properties = CommitProperties::default();
+            if let Some(props) = commit_properties {
+                if let Some(metadata) = props.custom_metadata {
+                    let json_metadata: Map<String, Value> =
+                        metadata.into_iter().map(|(k, v)| (k, v.into())).collect();
+                    properties = properties.with_metadata(json_metadata);
+                };
 
-            if let Some(max_retries) = max_commit_retries {
-                commit_properties = commit_properties.with_max_retries(max_retries);
-            };
+                if let Some(max_retries) = props.max_commit_retries {
+                    properties = properties.with_max_retries(max_retries);
+                };
+            }
 
             if let Some(post_commit_hook_props) = post_commithook_properties {
-                commit_properties =
-                    set_post_commithook_properties(commit_properties, post_commit_hook_props)
+                properties = set_post_commithook_properties(properties, post_commit_hook_props)
             }
 
             rt().block_on(
-                CommitBuilder::from(commit_properties)
+                CommitBuilder::from(properties)
                     .with_actions(actions)
                     .build(
                         Some(self._table.snapshot().map_err(PythonError::from)?),
@@ -1122,15 +1093,14 @@ impl RawDeltaTable {
             .collect::<HashMap<String, i64>>())
     }
     /// Run the delete command on the delta table: delete records following a predicate and return the delete metrics.
-    #[pyo3(signature = (predicate = None, writer_properties=None, custom_metadata=None, post_commithook_properties=None, max_commit_retries=None))]
+    #[pyo3(signature = (predicate = None, writer_properties=None, commit_properties=None, post_commithook_properties=None))]
     pub fn delete(
         &mut self,
         py: Python,
         predicate: Option<String>,
         writer_properties: Option<PyWriterProperties>,
-        custom_metadata: Option<HashMap<String, String>>,
+        commit_properties: Option<PyCommitProperties>,
         post_commithook_properties: Option<PyPostCommitHookProperties>,
-        max_commit_retries: Option<usize>,
     ) -> PyResult<String> {
         let (table, metrics) = py.allow_threads(|| {
             let mut cmd = DeleteBuilder::new(
@@ -1145,11 +1115,9 @@ impl RawDeltaTable {
                     set_writer_properties(writer_props).map_err(PythonError::from)?,
                 );
             }
-            if let Some(commit_properties) = maybe_create_commit_properties(
-                custom_metadata,
-                max_commit_retries,
-                post_commithook_properties,
-            ) {
+            if let Some(commit_properties) =
+                maybe_create_commit_properties(commit_properties, post_commithook_properties)
+            {
                 cmd = cmd.with_commit_properties(commit_properties);
             }
 
@@ -1159,13 +1127,12 @@ impl RawDeltaTable {
         Ok(serde_json::to_string(&metrics).unwrap())
     }
 
-    #[pyo3(signature = (properties, raise_if_not_exists, custom_metadata=None, max_commit_retries=None))]
+    #[pyo3(signature = (properties, raise_if_not_exists, commit_properties=None))]
     pub fn set_table_properties(
         &mut self,
         properties: HashMap<String, String>,
         raise_if_not_exists: bool,
-        custom_metadata: Option<HashMap<String, String>>,
-        max_commit_retries: Option<usize>,
+        commit_properties: Option<PyCommitProperties>,
     ) -> PyResult<()> {
         let mut cmd = SetTablePropertiesBuilder::new(
             self._table.log_store(),
@@ -1174,9 +1141,7 @@ impl RawDeltaTable {
         .with_properties(properties)
         .with_raise_if_not_exists(raise_if_not_exists);
 
-        if let Some(commit_properties) =
-            maybe_create_commit_properties(custom_metadata, max_commit_retries, None)
-        {
+        if let Some(commit_properties) = maybe_create_commit_properties(commit_properties, None) {
             cmd = cmd.with_commit_properties(commit_properties);
         }
 
@@ -1189,13 +1154,12 @@ impl RawDeltaTable {
 
     /// Execute the File System Check command (FSCK) on the delta table: removes old reference to files that
     /// have been deleted or are malformed
-    #[pyo3(signature = (dry_run = true, custom_metadata = None, post_commithook_properties=None, max_commit_retries=None))]
+    #[pyo3(signature = (dry_run = true, commit_properties = None, post_commithook_properties=None))]
     pub fn repair(
         &mut self,
         dry_run: bool,
-        custom_metadata: Option<HashMap<String, String>>,
+        commit_properties: Option<PyCommitProperties>,
         post_commithook_properties: Option<PyPostCommitHookProperties>,
-        max_commit_retries: Option<usize>,
     ) -> PyResult<String> {
         let mut cmd = FileSystemCheckBuilder::new(
             self._table.log_store(),
@@ -1203,11 +1167,9 @@ impl RawDeltaTable {
         )
         .with_dry_run(dry_run);
 
-        if let Some(commit_properties) = maybe_create_commit_properties(
-            custom_metadata,
-            max_commit_retries,
-            post_commithook_properties,
-        ) {
+        if let Some(commit_properties) =
+            maybe_create_commit_properties(commit_properties, post_commithook_properties)
+        {
             cmd = cmd.with_commit_properties(commit_properties);
         }
 
@@ -1345,23 +1307,25 @@ fn convert_partition_filters(
 }
 
 fn maybe_create_commit_properties(
-    custom_metadata: Option<HashMap<String, String>>,
-    max_commit_retries: Option<usize>,
+    maybe_commit_properties: Option<PyCommitProperties>,
     post_commithook_properties: Option<PyPostCommitHookProperties>,
 ) -> Option<CommitProperties> {
-    if custom_metadata.is_none() && post_commithook_properties.is_none() {
+    if maybe_commit_properties.is_none() && post_commithook_properties.is_none() {
         return None;
     }
     let mut commit_properties = CommitProperties::default();
-    if let Some(metadata) = custom_metadata {
-        let json_metadata: Map<String, Value> =
-            metadata.into_iter().map(|(k, v)| (k, v.into())).collect();
-        commit_properties = commit_properties.with_metadata(json_metadata);
-    };
 
-    if let Some(max_retries) = max_commit_retries {
-        commit_properties = commit_properties.with_max_retries(max_retries);
-    };
+    if let Some(commit_props) = maybe_commit_properties {
+        if let Some(metadata) = commit_props.custom_metadata {
+            let json_metadata: Map<String, Value> =
+                metadata.into_iter().map(|(k, v)| (k, v.into())).collect();
+            commit_properties = commit_properties.with_metadata(json_metadata);
+        };
+
+        if let Some(max_retries) = commit_props.max_commit_retries {
+            commit_properties = commit_properties.with_max_retries(max_retries);
+        };
+    }
 
     if let Some(post_commit_hook_props) = post_commithook_properties {
         commit_properties =
@@ -1639,6 +1603,12 @@ pub struct PyPostCommitHookProperties {
     cleanup_expired_logs: Option<bool>,
 }
 
+#[derive(FromPyObject)]
+pub struct PyCommitProperties {
+    custom_metadata: Option<HashMap<String, String>>,
+    max_commit_retries: Option<usize>,
+}
+
 #[pyfunction]
 #[allow(clippy::too_many_arguments)]
 fn write_to_deltalake(
@@ -1656,9 +1626,8 @@ fn write_to_deltalake(
     configuration: Option<HashMap<String, Option<String>>>,
     storage_options: Option<HashMap<String, String>>,
     writer_properties: Option<PyWriterProperties>,
-    custom_metadata: Option<HashMap<String, String>>,
+    commit_properties: Option<PyCommitProperties>,
     post_commithook_properties: Option<PyPostCommitHookProperties>,
-    max_commit_retries: Option<usize>,
 ) -> PyResult<()> {
     py.allow_threads(|| {
         let batches = data.0.map(|batch| batch.unwrap()).collect::<Vec<_>>();
@@ -1708,24 +1677,11 @@ fn write_to_deltalake(
             builder = builder.with_configuration(config);
         };
 
-        if custom_metadata.is_some() || post_commithook_properties.is_some() {
-            let mut commit_properties = CommitProperties::default();
-            if let Some(metadata) = custom_metadata {
-                let json_metadata: Map<String, Value> =
-                    metadata.into_iter().map(|(k, v)| (k, v.into())).collect();
-                commit_properties = commit_properties.with_metadata(json_metadata);
-            };
-
-            if let Some(max_retries) = max_commit_retries {
-                commit_properties = commit_properties.with_max_retries(max_retries);
-            };
-
-            if let Some(post_commit_hook_props) = post_commithook_properties {
-                commit_properties =
-                    set_post_commithook_properties(commit_properties, post_commit_hook_props)
-            }
+        if let Some(commit_properties) =
+            maybe_create_commit_properties(commit_properties, post_commithook_properties)
+        {
             builder = builder.with_commit_properties(commit_properties);
-        }
+        };
 
         rt().block_on(builder.into_future())
             .map_err(PythonError::from)?;
