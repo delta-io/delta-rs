@@ -10,6 +10,7 @@ from .table import (
 from .table import (
     ColumnProperties as ColumnProperties,
 )
+from .table import CommitProperties as CommitProperties
 from .table import DeltaTable as DeltaTable
 from .table import Metadata as Metadata
 from .table import PostCommitHookProperties as PostCommitHookProperties
