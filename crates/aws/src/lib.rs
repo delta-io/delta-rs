@@ -1,5 +1,9 @@
-//! Lock client implementation based on DynamoDb.
+//! AWS S3 and similar tooling for delta-rs
+//!
+//! This module also contains the [S3DynamoDbLogStore] implemtnation for concurrent writer support
+//! with AWS S3 specifically.
 
+pub mod constants;
 mod credentials;
 pub mod errors;
 pub mod logstore;
@@ -606,42 +610,6 @@ pub enum CreateLockTableResult {
     /// Table was not created because it already exists.
     /// Does not imply that the table has the correct schema.
     TableAlreadyExists,
-}
-
-pub mod constants {
-    use std::time::Duration;
-
-    use lazy_static::lazy_static;
-
-    pub const DEFAULT_LOCK_TABLE_NAME: &str = "delta_log";
-    pub const LOCK_TABLE_KEY_NAME: &str = "DELTA_DYNAMO_TABLE_NAME";
-    pub const BILLING_MODE_KEY_NAME: &str = "DELTA_DYNAMO_BILLING_MODE";
-    pub const MAX_ELAPSED_REQUEST_TIME_KEY_NAME: &str = "DELTA_DYNAMO_MAX_ELAPSED_REQUEST_TIME";
-
-    pub const ATTR_TABLE_PATH: &str = "tablePath";
-    pub const ATTR_FILE_NAME: &str = "fileName";
-    pub const ATTR_TEMP_PATH: &str = "tempPath";
-    pub const ATTR_COMPLETE: &str = "complete";
-    pub const ATTR_EXPIRE_TIME: &str = "expireTime";
-
-    pub const STRING_TYPE: &str = "S";
-
-    pub const KEY_TYPE_HASH: &str = "HASH";
-    pub const KEY_TYPE_RANGE: &str = "RANGE";
-
-    lazy_static! {
-        pub static ref CONDITION_EXPR_CREATE: String = format!(
-            "attribute_not_exists({ATTR_TABLE_PATH}) and attribute_not_exists({ATTR_FILE_NAME})"
-        );
-
-        pub static ref CONDITION_DELETE_INCOMPLETE: String = format!(
-            "(complete = :f) or (attribute_not_exists({ATTR_TABLE_PATH}) and attribute_not_exists({ATTR_FILE_NAME}))"
-        );
-    }
-
-    pub const CONDITION_UPDATE_INCOMPLETE: &str = "complete = :f";
-
-    pub const DEFAULT_COMMIT_ENTRY_EXPIRATION_DELAY: Duration = Duration::from_secs(86_400);
 }
 
 /// Extract a field from an item's attribute value map, producing a descriptive error
