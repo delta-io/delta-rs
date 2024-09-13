@@ -212,7 +212,7 @@ def iris_dataset() -> pd.DataFrame:
 ```
 
 ## Using Delta Lake and Dagster with Polars
-To read and write data to Delta Lake using pandas, use the `DeltaLakePolarsIOManager()`. 
+To read and write data to Delta Lake using polars, use the `DeltaLakePolarsIOManager()`. 
 
 You will need to install it using:
 
@@ -223,7 +223,7 @@ pip install dagster-deltalake-polars
 In your `Definitions` object, change the `io_manager` to `DeltaLakePolarsIOManager()`:
 
 ```
-from dagster_polars import DeltaLakePolarsIOManager
+from dagster_deltalake_polars import DeltaLakePolarsIOManager
 
 defs = Definitions(
    assets=all_assets,
