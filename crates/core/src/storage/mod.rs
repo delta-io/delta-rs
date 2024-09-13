@@ -49,8 +49,8 @@ fn io_rt(config: Option<&RuntimeConfig>) -> &Runtime {
                 } else {
                     RuntimeBuilder::new_current_thread()
                 };
-                let builder = builder.worker_threads(config.worker_threads);
-                let builder = if config.enable_io && config.enable_time {
+                let mut builder = builder.worker_threads(config.worker_threads);
+                let mut builder = if config.enable_io && config.enable_time {
                     builder.enable_all()
                 } else if !config.enable_io && config.enable_time {
                     builder.enable_time()
