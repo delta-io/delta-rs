@@ -52,13 +52,17 @@ fn io_rt(config: Option<&RuntimeConfig>) -> &Runtime {
                 let builder = builder.worker_threads(config.worker_threads);
                 let builder = if config.enable_io && config.enable_time {
                     builder.enable_all()
-                } else if config.enable_io && !config.enable_time {
-                    builder.enable_io()
                 } else if !config.enable_io && config.enable_time {
                     builder.enable_time()
                 } else {
                     builder
                 };
+                #[cfg(unix)]
+                {
+                    if config.enable_io && !config.enable_time {
+                        builder = builder.enable_io();
+                    }
+                }
                 builder
                     .thread_name(
                         config
