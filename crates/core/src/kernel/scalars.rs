@@ -1,5 +1,5 @@
 //! Auxiliary methods for dealing with kernel scalars
-use std::cmp::Ordering;
+use std::{cmp::Ordering, fmt::Debug};
 
 use arrow_array::Array;
 use arrow_schema::TimeUnit;
