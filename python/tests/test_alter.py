@@ -4,7 +4,7 @@ from typing import List
 import pyarrow as pa
 import pytest
 
-from deltalake import DeltaTable, write_deltalake
+from deltalake import DeltaTable, TableFeatures, write_deltalake
 from deltalake.exceptions import DeltaError, DeltaProtocolError
 from deltalake.schema import Field, PrimitiveType, StructType
 from deltalake.table import CommitProperties
@@ -375,3 +375,85 @@ def test_add_timestamp_ntz_column(tmp_path: pathlib.Path, sample_table: pa.Table
     assert new_protocol.min_writer_version == 7
     assert new_protocol.reader_features == ["timestampNtz"]
     assert new_protocol.writer_features == ["timestampNtz"]
+
+
+features = [
+    TableFeatures.ChangeDataFeed,
+    TableFeatures.DeletionVectors,
+    TableFeatures.ColumnMapping,
+    TableFeatures.TimestampWithoutTimezone,
+    TableFeatures.V2Checkpoint,
+    TableFeatures.AppendOnly,
+    TableFeatures.AppendOnly,
+    TableFeatures.Invariants,
+    TableFeatures.CheckConstraints,
+    TableFeatures.GeneratedColumns,
+    TableFeatures.IdentityColumns,
+    TableFeatures.RowTracking,
+    TableFeatures.DomainMetadata,
+    TableFeatures.IcebergCompatV1,
+]
+
+all_features = []
+all_features.extend(features)
+all_features.append(features)
+
+
+@pytest.mark.parametrize("feature", all_features)
+def test_add_feature_variations(existing_table: DeltaTable, feature):
+    """Existing table already has timestampNtz so it's already at v3,7"""
+    existing_table.alter.add_feature(
+        feature=feature,
+        allow_protocol_versions_increase=False,
+    )
+    last_action = existing_table.history(1)[0]
+    assert last_action["operation"] == "ADD FEATURE"
+    assert existing_table.version() == 1
+
+
+def test_add_features_disallowed_protocol_increase(existing_sample_table: DeltaTable):
+    with pytest.raises(
+        DeltaError,
+        match="Generic DeltaTable error: Table feature enables writer feature, but min_writer is not v7. Set allow_protocol_versions_increase or increase version explicitly through set_tbl_properties",
+    ):
+        existing_sample_table.alter.add_feature(
+            feature=TableFeatures.ChangeDataFeed,
+            allow_protocol_versions_increase=False,
+        )
+    with pytest.raises(
+        DeltaError,
+        match="Generic DeltaTable error: Table feature enables reader and writer feature, but reader is not v3, and writer not v7. Set allow_protocol_versions_increase or increase versions explicitly through set_tbl_properties",
+    ):
+        existing_sample_table.alter.add_feature(
+            feature=TableFeatures.DeletionVectors,
+            allow_protocol_versions_increase=False,
+        )
+
+
+def test_add_feautres(existing_sample_table: DeltaTable):
+    existing_sample_table.alter.add_feature(
+        feature=features,
+        allow_protocol_versions_increase=True,
+    )
+    protocol = existing_sample_table.protocol()
+
+    assert sorted(protocol.reader_features) == sorted(  # type: ignore
+        ["v2Checkpoint", "columnMapping", "deletionVectors", "timestampNtz"]
+    )
+    assert sorted(protocol.writer_features) == sorted(  # type: ignore
+        [
+            "appendOnly",
+            "changeDataFeed",
+            "checkConstraints",
+            "columnMapping",
+            "deletionVectors",
+            "domainMetadata",
+            "generatedColumns",
+            "icebergCompatV1",
+            "identityColumns",
+            "invariants",
+            "rowTracking",
+            "timestampNtz",
+            "v2Checkpoint",
+        ]
+    )  # type: ignore
