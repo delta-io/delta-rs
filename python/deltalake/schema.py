@@ -95,6 +95,8 @@ def _convert_pa_schema_to_delta(
                 return pa.timestamp("us", "UTC")
         elif type(dtype) is pa.FixedSizeBinaryType:
             return pa.binary()
+        elif isinstance(dtype, pa.ExtensionType):
+            return dtype.storage_type
         try:
             return dtype_map[dtype]
         except KeyError:
