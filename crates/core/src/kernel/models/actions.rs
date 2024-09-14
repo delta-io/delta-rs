@@ -377,6 +377,97 @@ impl Protocol {
     }
 }
 
+/// High level table features
+#[derive(Serialize, Deserialize, Debug, Clone, Eq, PartialEq, Hash)]
+#[serde(rename_all = "camelCase")]
+pub enum TableFeatures {
+    /// Mapping of one column to another
+    ColumnMapping,
+    /// Deletion vectors for merge, update, delete
+    DeletionVectors,
+    /// timestamps without timezone support
+    #[serde(rename = "timestampNtz")]
+    TimestampWithoutTimezone,
+    /// version 2 of checkpointing
+    V2Checkpoint,
+    /// Append Only Tables
+    AppendOnly,
+    /// Table invariants
+    Invariants,
+    /// Check constraints on columns
+    CheckConstraints,
+    /// CDF on a table
+    ChangeDataFeed,
+    /// Columns with generated values
+    GeneratedColumns,
+    /// ID Columns
+    IdentityColumns,
+    /// Row tracking on tables
+    RowTracking,
+    /// domain specific metadata
+    DomainMetadata,
+    /// Iceberg compatibility support
+    IcebergCompatV1,
+}
+
+impl FromStr for TableFeatures {
+    type Err = ();
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "columnMapping" => Ok(TableFeatures::ColumnMapping),
+            "deletionVectors" => Ok(TableFeatures::DeletionVectors),
+            "timestampNtz" => Ok(TableFeatures::TimestampWithoutTimezone),
+            "v2Checkpoint" => Ok(TableFeatures::V2Checkpoint),
+            "appendOnly" => Ok(TableFeatures::AppendOnly),
+            "invariants" => Ok(TableFeatures::Invariants),
+            "checkConstraints" => Ok(TableFeatures::CheckConstraints),
+            "changeDataFeed" => Ok(TableFeatures::ChangeDataFeed),
+            "generatedColumns" => Ok(TableFeatures::GeneratedColumns),
+            "identityColumns" => Ok(TableFeatures::IdentityColumns),
+            "rowTracking" => Ok(TableFeatures::RowTracking),
+            "domainMetadata" => Ok(TableFeatures::DomainMetadata),
+            "icebergCompatV1" => Ok(TableFeatures::IcebergCompatV1),
+            _ => Err(()),
+        }
+    }
+}
+
+impl AsRef<str> for TableFeatures {
+    fn as_ref(&self) -> &str {
+        match self {
+            TableFeatures::ColumnMapping => "columnMapping",
+            TableFeatures::DeletionVectors => "deletionVectors",
+            TableFeatures::TimestampWithoutTimezone => "timestampNtz",
+            TableFeatures::V2Checkpoint => "v2Checkpoint",
+            TableFeatures::AppendOnly => "appendOnly",
+            TableFeatures::Invariants => "invariants",
+            TableFeatures::CheckConstraints => "checkConstraints",
+            TableFeatures::ChangeDataFeed => "changeDataFeed",
+            TableFeatures::GeneratedColumns => "generatedColumns",
+            TableFeatures::IdentityColumns => "identityColumns",
+            TableFeatures::RowTracking => "rowTracking",
+            TableFeatures::DomainMetadata => "domainMetadata",
+            TableFeatures::IcebergCompatV1 => "icebergCompatV1",
+        }
+    }
+}
+
+impl fmt::Display for TableFeatures {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.as_ref())
+    }
+}
+
+impl TableFeatures {
+    /// Convert table feature to respective reader or/and write feature
+    pub fn to_reader_writer_features(&self) -> (Option<ReaderFeatures>, Option<WriterFeatures>) {
+        let reader_feature = ReaderFeatures::try_from(self).ok();
+        let writer_feature = WriterFeatures::try_from(self).ok();
+        (reader_feature, writer_feature)
+    }
+}
+
 /// Features table readers can support as well as let users know
 /// what is supported
 #[derive(Serialize, Deserialize, Debug, Clone, Eq, PartialEq, Hash)]
@@ -446,6 +537,19 @@ impl AsRef<str> for ReaderFeatures {
 impl fmt::Display for ReaderFeatures {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.as_ref())
+    }
+}
+
+impl TryFrom<&TableFeatures> for ReaderFeatures {
+    type Error = String;
+
+    fn try_from(value: &TableFeatures) -> Result<Self, Self::Error> {
+        match ReaderFeatures::from(value.as_ref()) {
+            ReaderFeatures::Other(_) => {
+                Err(format!("Table feature {} is not a reader feature", value))
+            }
+            value => Ok(value),
+        }
     }
 }
 
@@ -537,6 +641,19 @@ impl AsRef<str> for WriterFeatures {
 impl fmt::Display for WriterFeatures {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.as_ref())
+    }
+}
+
+impl TryFrom<&TableFeatures> for WriterFeatures {
+    type Error = String;
+
+    fn try_from(value: &TableFeatures) -> Result<Self, Self::Error> {
+        match WriterFeatures::from(value.as_ref()) {
+            WriterFeatures::Other(_) => {
+                Err(format!("Table feature {} is not a writer feature", value))
+            }
+            value => Ok(value),
+        }
     }
 }
 

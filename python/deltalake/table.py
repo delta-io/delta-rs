@@ -42,6 +42,7 @@ from deltalake._internal import (
     DeltaError,
     PyMergeBuilder,
     RawDeltaTable,
+    TableFeatures,
 )
 from deltalake._internal import create_deltalake as _create_deltalake
 from deltalake._util import encode_partition_value
@@ -1799,24 +1800,59 @@ class TableAlterer:
     def __init__(self, table: DeltaTable) -> None:
         self.table = table
 
+    def add_feature(
+        self,
+        feature: Union[TableFeatures, List[TableFeatures]],
+        allow_protocol_versions_increase: bool = False,
+        commit_properties: Optional[CommitProperties] = None,
+        post_commithook_properties: Optional[PostCommitHookProperties] = None,
+    ) -> None:
+        """
+        Enable a table feature.
+
+        Args:
+            feature: Table Feature e.g. Deletion Vectors, Change Data Feed
+            allow_protocol_versions_increase: Allow the protocol to be implicitily bumped to reader 3 or writer 7
+            commit_properties: properties of the transaction commit. If None, default values are used.
+            post_commithook_properties: properties for the post commit hook. If None, default values are used.
+
+        Example:
+            ```python
+            from deltalake import DeltaTable
+            dt = DeltaTable("test_table")
+            dt.alter.add_feature(TableFeatures.AppendOnly)
+            ```
+
+            **Check protocol**
+            ```
+            dt.protocol()
+            ProtocolVersions(min_reader_version=1, min_writer_version=7, writer_features=['appendOnly'], reader_features=None)
+            ```
+        """
+        if isinstance(feature, TableFeatures):
+            feature = [feature]
+        self.table._table.add_feature(
+            feature,
+            allow_protocol_versions_increase,
+            commit_properties,
+            post_commithook_properties,
+        )
+
     def add_columns(
         self,
         fields: Union[DeltaField, List[DeltaField]],
         custom_metadata: Optional[Dict[str, str]] = None,
-        post_commithook_properties: Optional[PostCommitHookProperties] = None,
         commit_properties: Optional[CommitProperties] = None,
+        post_commithook_properties: Optional[PostCommitHookProperties] = None,
     ) -> None:
         """Add new columns and/or update the fields of a stuctcolumn
 
         Args:
             fields: fields to merge into schema
-            custom_metadata: Deprecated and will be removed in future versions. Use commit_properties instead.
-            post_commithook_properties: properties for the post commit hook. If None, default values are used.
             commit_properties: properties of the transaction commit. If None, default values are used.
+            post_commithook_properties: properties for the post commit hook. If None, default values are used.
 
         Example:
-            ```python
-            from deltalake import DeltaTable
             from deltalake.schema import Field, PrimitiveType, StructType
             dt = DeltaTable("test_table")
             new_fields = [
