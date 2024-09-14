@@ -223,6 +223,26 @@ def test_delta_schema():
     assert schema_without_metadata == Schema.from_pyarrow(pa_schema)
 
 
+def _generate_test_type():
+    class UuidType(pa.ExtensionType):
+        def __init__(self):
+            pa.ExtensionType.__init__(self, pa.binary(16), "my_package.uuid")
+
+        def __arrow_ext_serialize__(self):
+            # since we don't have a parameterized type, we don't need extra
+            # metadata to be deserialized
+            return b""
+
+        @classmethod
+        def __arrow_ext_deserialize__(self, storage_type, serialized):
+            # return an instance of this subclass given the serialized
+            # metadata.
+            return UuidType()
+
+    pa.register_extension_type(UuidType())
+    return UuidType()
+
+
 def _generate_test_tuples():
     test_tuples = [
         (
@@ -513,6 +533,11 @@ def _generate_test_tuples():
                     )
                 ]
             ),
+            ArrowSchemaConversionMode.NORMAL,
+        ),
+        (
+            pa.schema([("uuid", _generate_test_type())]),
+            pa.schema([("uuid", pa.binary(16))]),
             ArrowSchemaConversionMode.NORMAL,
         ),
     ]
