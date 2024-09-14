@@ -229,6 +229,13 @@ def sample_table():
 
 
 @pytest.fixture()
+def existing_sample_table(tmp_path: pathlib.Path, sample_table: pa.Table):
+    path = str(tmp_path)
+    write_deltalake(path, sample_table)
+    return DeltaTable(path)
+
+
+@pytest.fixture()
 def sample_table_with_spaces_numbers():
     nrows = 5
     return pa.table(

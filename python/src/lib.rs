@@ -1,4 +1,5 @@
 mod error;
+mod features;
 mod filesystem;
 mod merge;
 mod schema;
@@ -27,6 +28,7 @@ use deltalake::kernel::{
     scalars::ScalarExt, Action, Add, Invariant, LogicalFile, Remove, StructType,
 };
 use deltalake::operations::add_column::AddColumnBuilder;
+use deltalake::operations::add_feature::AddTableFeatureBuilder;
 use deltalake::operations::collect_sendable_stream;
 use deltalake::operations::constraints::ConstraintBuilder;
 use deltalake::operations::convert_to_delta::{ConvertToDeltaBuilder, PartitionStrategy};
@@ -61,6 +63,7 @@ use serde_json::{Map, Value};
 
 use crate::error::DeltaProtocolError;
 use crate::error::PythonError;
+use crate::features::TableFeatures;
 use crate::filesystem::FsConfig;
 use crate::merge::PyMergeBuilder;
 use crate::schema::{schema_to_pyobject, Field};
@@ -558,7 +561,34 @@ impl RawDeltaTable {
             {
                 cmd = cmd.with_commit_properties(commit_properties);
             }
+            rt().block_on(cmd.into_future()).map_err(PythonError::from)
+        })?;
+        self._table.state = table.state;
+        Ok(())
+    }
 
+    #[pyo3(signature = (feature, allow_protocol_versions_increase, commit_properties=None, post_commithook_properties=None))]
+    pub fn add_feature(
+        &mut self,
+        py: Python,
+        feature: Vec<TableFeatures>,
+        allow_protocol_versions_increase: bool,
+        commit_properties: Option<PyCommitProperties>,
+        post_commithook_properties: Option<PyPostCommitHookProperties>,
+    ) -> PyResult<()> {
+        let table = py.allow_threads(|| {
+            let mut cmd = AddTableFeatureBuilder::new(
+                self._table.log_store(),
+                self._table.snapshot().map_err(PythonError::from)?.clone(),
+            )
+            .with_features(feature)
+            .with_allow_protocol_versions_increase(allow_protocol_versions_increase);
+
+            if let Some(commit_properties) =
+                maybe_create_commit_properties(commit_properties, post_commithook_properties)
+            {
+                cmd = cmd.with_commit_properties(commit_properties);
+            }
             rt().block_on(cmd.into_future()).map_err(PythonError::from)
         })?;
         self._table.state = table.state;
@@ -1976,5 +2006,6 @@ fn _internal(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<filesystem::DeltaFileSystemHandler>()?;
     m.add_class::<filesystem::ObjectInputFile>()?;
     m.add_class::<filesystem::ObjectOutputStream>()?;
+    m.add_class::<features::TableFeatures>()?;
     Ok(())
 }
