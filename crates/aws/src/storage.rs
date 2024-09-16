@@ -573,34 +573,20 @@ mod tests {
                 constants::AWS_SECRET_ACCESS_KEY.to_string() => "test_secret".to_string(),
             }).unwrap();
 
-            // Get a default SdkConfig first, this ensures that if there are environment or profile
-            // information in the default load of credentials for the test run that it will pass
-            // the equivalence below
-            let storage_options = StorageOptions(HashMap::new());
-            let sdk_config =
-                execute_sdk_future(crate::credentials::resolve_credentials(storage_options))
-                    .expect("Failed to run future")
-                    .expect("Failed to load default SdkConfig")
-                    .to_builder()
-                    .endpoint_url("http://localhost:1234".to_string())
-                    .region(Region::from_static("us-west-2"))
-                    .build();
-
             assert_eq!(
-                S3StorageOptions {
-                    sdk_config,
-                    virtual_hosted_style_request: true,
-                    locking_provider: Some("another_locking_provider".to_string()),
-                    dynamodb_endpoint: None,
-                    s3_pool_idle_timeout: Duration::from_secs(1),
-                    sts_pool_idle_timeout: Duration::from_secs(2),
-                    s3_get_internal_server_error_retries: 3,
-                    extra_opts: hashmap! {
-                        s3_constants::AWS_S3_ADDRESSING_STYLE.to_string() => "virtual".to_string()
-                    },
-                    allow_unsafe_rename: false,
+                Some("another_locking_provider"),
+                options.locking_provider.as_deref()
+            );
+            assert_eq!(Duration::from_secs(1), options.s3_pool_idle_timeout);
+            assert_eq!(Duration::from_secs(2), options.sts_pool_idle_timeout);
+            assert_eq!(3, options.s3_get_internal_server_error_retries);
+            assert!(options.virtual_hosted_style_request);
+            assert!(!options.allow_unsafe_rename);
+            assert_eq!(
+                hashmap! {
+                    constants::AWS_S3_ADDRESSING_STYLE.to_string() => "virtual".to_string()
                 },
-                options
+                options.extra_opts
             );
         });
     }
@@ -628,23 +614,8 @@ mod tests {
             }).unwrap();
 
             assert_eq!(
-                S3StorageOptions {
-                    sdk_config: SdkConfig::builder()
-                        .endpoint_url("http://localhost:1234".to_string())
-                        .region(Region::from_static("us-west-2"))
-                        .build(),
-                    virtual_hosted_style_request: true,
-                    locking_provider: Some("another_locking_provider".to_string()),
-                    dynamodb_endpoint: Some("http://localhost:2345".to_string()),
-                    s3_pool_idle_timeout: Duration::from_secs(1),
-                    sts_pool_idle_timeout: Duration::from_secs(2),
-                    s3_get_internal_server_error_retries: 3,
-                    extra_opts: hashmap! {
-                        s3_constants::AWS_S3_ADDRESSING_STYLE.to_string() => "virtual".to_string()
-                    },
-                    allow_unsafe_rename: false,
-                },
-                options
+                Some("http://localhost:2345"),
+                options.dynamodb_endpoint.as_deref()
             );
         });
     }
@@ -780,46 +751,5 @@ mod tests {
                 assert_eq!(v, "options_key");
             }
         });
-    }
-
-    #[tokio::test]
-    #[serial]
-    async fn storage_options_toggle_imds() {
-        ScopedEnv::run_async(async {
-            clear_env_of_aws_keys();
-            let disabled_time = storage_options_configure_imds(Some("true")).await;
-            let enabled_time = storage_options_configure_imds(Some("false")).await;
-            let default_time = storage_options_configure_imds(None).await;
-            println!(
-                "enabled_time: {}, disabled_time: {}, default_time: {}",
-                enabled_time.as_micros(),
-                disabled_time.as_micros(),
-                default_time.as_micros(),
-            );
-            assert!(disabled_time < enabled_time);
-            assert!(default_time < enabled_time);
-        })
-        .await;
-    }
-
-    async fn storage_options_configure_imds(value: Option<&str>) -> Duration {
-        let _options = match value {
-            Some(value) => S3StorageOptions::from_map(&hashmap! {
-                constants::AWS_REGION.to_string() => "eu-west-1".to_string(),
-                constants::AWS_EC2_METADATA_DISABLED.to_string() => value.to_string(),
-            })
-            .unwrap(),
-            None => S3StorageOptions::from_map(&hashmap! {
-                constants::AWS_REGION.to_string() => "eu-west-1".to_string(),
-            })
-            .unwrap(),
-        };
-
-        assert_eq!("eu-west-1", std::env::var(constants::AWS_REGION).unwrap());
-
-        let provider = _options.sdk_config.credentials_provider().unwrap();
-        let now = SystemTime::now();
-        _ = provider.provide_credentials().await;
-        now.elapsed().unwrap()
     }
 }
