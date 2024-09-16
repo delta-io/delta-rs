@@ -38,8 +38,8 @@ impl AWSForObjectStore {
 impl CredentialProvider for AWSForObjectStore {
     type Credential = AwsCredential;
 
-    /// Invoke the underlying [AssumeRoleProvider] to retrieve the temporary credentials associated
-    /// with the role assumed
+    /// Provide the necessary configured credentials from the AWS SDK for use by
+    /// [object_store::aws::AmazonS3]
     async fn get_credential(&self) -> ObjectStoreResult<Arc<Self::Credential>> {
         let provider = self
             .sdk_config
@@ -57,61 +57,6 @@ impl CredentialProvider for AWSForObjectStore {
             "CredentialProvider for Object Store using access key: {}",
             credentials.access_key_id()
         );
-
-        Ok(Arc::new(Self::Credential {
-            key_id: credentials.access_key_id().into(),
-            secret_key: credentials.secret_access_key().into(),
-            token: credentials.session_token().map(|o| o.to_string()),
-        }))
-    }
-}
-
-/// An [object_store::CredentialProvider] which handles retrieving the necessary
-/// temporary credentials associated with the assumed role
-#[derive(Debug)]
-pub(crate) struct AssumeRoleCredentialProvider {
-    sdk_config: SdkConfig,
-}
-
-impl AssumeRoleCredentialProvider {
-    fn session_name(&self) -> String {
-        /*
-        if let Some(_) = str_option(options, s3_constants::AWS_S3_ROLE_SESSION_NAME) {
-            warn!(
-                "AWS_S3_ROLE_SESSION_NAME is deprecated please AWS_IAM_ROLE_SESSION_NAME instead!"
-            );
-        }
-        str_option(options, s3_constants::AWS_IAM_ROLE_SESSION_NAME)
-            .or(str_option(options, s3_constants::AWS_S3_ROLE_SESSION_NAME))
-            .unwrap_or("delta-rs".into())
-                */
-        todo!()
-    }
-
-    fn iam_role(&self) -> String {
-        todo!()
-    }
-}
-
-#[async_trait::async_trait]
-impl CredentialProvider for AssumeRoleCredentialProvider {
-    type Credential = AwsCredential;
-
-    /// Invoke the underlying [AssumeRoleProvider] to retrieve the temporary credentials associated
-    /// with the role assumed
-    async fn get_credential(&self) -> ObjectStoreResult<Arc<Self::Credential>> {
-        let provider = AssumeRoleProvider::builder(self.iam_role())
-            .configure(&self.sdk_config)
-            .session_name(self.session_name())
-            .build()
-            .await;
-        let credentials =
-            provider
-                .provide_credentials()
-                .await
-                .map_err(|e| ObjectStoreError::NotSupported {
-                    source: Box::new(e),
-                })?;
 
         Ok(Arc::new(Self::Credential {
             key_id: credentials.access_key_id().into(),
@@ -165,15 +110,72 @@ impl ProvideCredentials for OptionsCredentialsProvider {
     }
 }
 
+/// Generate a random session name for assuming IAM roles
+fn assume_role_sessio_name() -> String {
+    let now = chrono::Utc::now();
+
+    format!("delta-rs_{}", now.timestamp_millis())
+}
+
+/// Return the configured IAM role ARN or whatever is defined in the environment
+fn assume_role_arn(options: &StorageOptions) -> Option<String> {
+    options
+        .0
+        .get(constants::AWS_IAM_ROLE_ARN)
+        .or(options.0.get(constants::AWS_S3_ASSUME_ROLE_ARN))
+        .or(std::env::var_os(constants::AWS_IAM_ROLE_ARN)
+            .map(|o| {
+                o.into_string()
+                    .expect("Failed to unwrap AWS_IAM_ROLE_ARN which may have invalid data")
+            })
+            .as_ref())
+        .or(std::env::var_os(constants::AWS_S3_ASSUME_ROLE_ARN)
+            .map(|o| {
+                o.into_string()
+                    .expect("Failed to unwrap AWS_S3_ASSUME_ROLE_ARN which may have invalid data")
+            })
+            .as_ref())
+        .cloned()
+}
+
+/// Return the configured IAM assume role session name or provide a unique one
+fn assume_session_name(options: &StorageOptions) -> String {
+    let assume_session = options
+        .0
+        .get(constants::AWS_IAM_ROLE_SESSION_NAME)
+        .or(options.0.get(constants::AWS_S3_ROLE_SESSION_NAME))
+        .cloned();
+
+    match assume_session {
+        Some(s) => s,
+        None => assume_role_sessio_name(),
+    }
+}
+
 /// Take a set of [StorageOptions] and produce an appropriate AWS SDK [SdkConfig]
 /// for use with various AWS SDK APIs, such as in our [crate::logstore::S3DynamoDbLogStore]
 pub async fn resolve_credentials(options: StorageOptions) -> DeltaResult<SdkConfig> {
-    let options_provider = OptionsCredentialsProvider { options };
-
     let default_provider = DefaultCredentialsChain::builder().build().await;
-    let credentials_provider =
-        CredentialsProviderChain::first_try("StorageOptions", options_provider)
-            .or_else("DefaultChain", default_provider);
+
+    let credentials_provider = match assume_role_arn(&options) {
+        Some(arn) => {
+            debug!("Configuring AssumeRoleProvider with role arn: {arn}");
+            CredentialsProviderChain::first_try(
+                "AssumeRoleProvider",
+                AssumeRoleProvider::builder(arn)
+                    .session_name(assume_session_name(&options))
+                    .build()
+                    .await,
+            )
+            .or_else("StorageOptions", OptionsCredentialsProvider { options })
+            .or_else("DefaultChain", default_provider)
+        }
+        None => CredentialsProviderChain::first_try(
+            "StorageOptions",
+            OptionsCredentialsProvider { options },
+        )
+        .or_else("DefaultChain", default_provider),
+    };
 
     Ok(aws_config::from_env()
         .credentials_provider(credentials_provider)
