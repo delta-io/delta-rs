@@ -23,7 +23,7 @@ use crate::{
     operations::create::CreateBuilder,
     protocol::SaveMode,
     table::builder::ensure_table_uri,
-    table::config::DeltaConfigKey,
+    table::config::TableProperty,
     writer::stats::stats_from_parquet_metadata,
     DeltaResult, DeltaTable, DeltaTableError, ObjectStoreError, NULL_PARTITION_VALUE_DATA_PATH,
 };
@@ -212,7 +212,7 @@ impl ConvertToDeltaBuilder {
     /// Specify a table property in the table configuration
     pub fn with_configuration_property(
         mut self,
-        key: DeltaConfigKey,
+        key: TableProperty,
         value: Option<impl Into<String>>,
     ) -> Self {
         self.configuration

@@ -1386,8 +1386,8 @@ mod tests {
     use crate::writer::test_utils::get_arrow_schema;
     use crate::writer::test_utils::get_delta_schema;
     use crate::writer::test_utils::setup_table_with_configuration;
-    use crate::DeltaConfigKey;
     use crate::DeltaTable;
+    use crate::TableProperty;
     use arrow::datatypes::Schema as ArrowSchema;
     use arrow::record_batch::RecordBatch;
     use arrow_schema::DataType as ArrowDataType;
@@ -1426,7 +1426,7 @@ mod tests {
     #[tokio::test]
     async fn test_merge_when_delta_table_is_append_only() {
         let schema = get_arrow_schema(&None);
-        let table = setup_table_with_configuration(DeltaConfigKey::AppendOnly, Some("true")).await;
+        let table = setup_table_with_configuration(TableProperty::AppendOnly, Some("true")).await;
         // append some data
         let table = write_data(table, &schema).await;
         // merge
@@ -3107,7 +3107,7 @@ mod tests {
             .create()
             .with_columns(schema.fields().cloned())
             .with_actions(actions)
-            .with_configuration_property(DeltaConfigKey::EnableChangeDataFeed, Some("true"))
+            .with_configuration_property(TableProperty::EnableChangeDataFeed, Some("true"))
             .await
             .unwrap();
         assert_eq!(table.version(), 0);
@@ -3202,7 +3202,7 @@ mod tests {
             .create()
             .with_columns(schema.fields().cloned())
             .with_actions(actions)
-            .with_configuration_property(DeltaConfigKey::EnableChangeDataFeed, Some("true"))
+            .with_configuration_property(TableProperty::EnableChangeDataFeed, Some("true"))
             .await
             .unwrap();
         assert_eq!(table.version(), 0);

@@ -9,7 +9,7 @@ use url::Url;
 
 use super::schema::StructType;
 use crate::kernel::{error::Error, DeltaResult};
-use crate::DeltaConfigKey;
+use crate::TableProperty;
 
 /// Defines a file format used in table
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
@@ -240,10 +240,10 @@ impl Protocol {
         new_properties: &HashMap<String, String>,
         raise_if_not_exists: bool,
     ) -> DeltaResult<Protocol> {
-        let mut parsed_properties: HashMap<DeltaConfigKey, String> = HashMap::new();
+        let mut parsed_properties: HashMap<TableProperty, String> = HashMap::new();
 
         for (key, value) in new_properties {
-            if let Ok(parsed_key) = key.parse::<DeltaConfigKey>() {
+            if let Ok(parsed_key) = key.parse::<TableProperty>() {
                 parsed_properties.insert(parsed_key, value.to_string());
             } else if raise_if_not_exists {
                 return Err(Error::Generic(format!(
@@ -254,7 +254,7 @@ impl Protocol {
         }
 
         // Check and update delta.minReaderVersion
-        if let Some(min_reader_version) = parsed_properties.get(&DeltaConfigKey::MinReaderVersion) {
+        if let Some(min_reader_version) = parsed_properties.get(&TableProperty::MinReaderVersion) {
             let new_min_reader_version = min_reader_version.parse::<i32>();
             match new_min_reader_version {
                 Ok(version) => match version {
@@ -280,7 +280,7 @@ impl Protocol {
         }
 
         // Check and update delta.minWriterVersion
-        if let Some(min_writer_version) = parsed_properties.get(&DeltaConfigKey::MinWriterVersion) {
+        if let Some(min_writer_version) = parsed_properties.get(&TableProperty::MinWriterVersion) {
             let new_min_writer_version = min_writer_version.parse::<i32>();
             match new_min_writer_version {
                 Ok(version) => match version {
@@ -306,7 +306,7 @@ impl Protocol {
         }
 
         // Check enableChangeDataFeed and bump protocol or add writerFeature if writer versions is >=7
-        if let Some(enable_cdf) = parsed_properties.get(&DeltaConfigKey::EnableChangeDataFeed) {
+        if let Some(enable_cdf) = parsed_properties.get(&TableProperty::EnableChangeDataFeed) {
             let if_enable_cdf = enable_cdf.to_ascii_lowercase().parse::<bool>();
             match if_enable_cdf {
                 Ok(true) => {
@@ -335,7 +335,7 @@ impl Protocol {
             }
         }
 
-        if let Some(enable_dv) = parsed_properties.get(&DeltaConfigKey::EnableDeletionVectors) {
+        if let Some(enable_dv) = parsed_properties.get(&TableProperty::EnableDeletionVectors) {
             let if_enable_dv = enable_dv.to_ascii_lowercase().parse::<bool>();
             match if_enable_dv {
                 Ok(true) => {
