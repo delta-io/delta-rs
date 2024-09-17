@@ -1231,7 +1231,7 @@ mod tests {
         get_arrow_schema, get_delta_schema, get_delta_schema_with_nested_struct, get_record_batch,
         get_record_batch_with_nested_struct, setup_table_with_configuration,
     };
-    use crate::DeltaConfigKey;
+    use crate::TableProperty;
     use arrow_array::{Int32Array, StringArray, TimestampMicrosecondArray};
     use arrow_schema::{DataType, Field, Schema as ArrowSchema, TimeUnit};
     use datafusion::prelude::*;
@@ -1257,7 +1257,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_write_when_delta_table_is_append_only() {
-        let table = setup_table_with_configuration(DeltaConfigKey::AppendOnly, Some("true")).await;
+        let table = setup_table_with_configuration(TableProperty::AppendOnly, Some("true")).await;
         let batch = get_record_batch(None, false);
         // Append
         let table = write_batch(table, batch.clone()).await;
@@ -2068,7 +2068,7 @@ mod tests {
             .create()
             .with_columns(delta_schema.fields().cloned())
             .with_partition_columns(["id"])
-            .with_configuration_property(DeltaConfigKey::EnableChangeDataFeed, Some("true"))
+            .with_configuration_property(TableProperty::EnableChangeDataFeed, Some("true"))
             .await
             .unwrap();
         assert_eq!(table.version(), 0);
@@ -2141,7 +2141,7 @@ mod tests {
             .create()
             .with_columns(delta_schema.fields().cloned())
             .with_partition_columns(["id"])
-            .with_configuration_property(DeltaConfigKey::EnableChangeDataFeed, Some("true"))
+            .with_configuration_property(TableProperty::EnableChangeDataFeed, Some("true"))
             .await
             .unwrap();
         assert_eq!(table.version(), 0);
@@ -2217,7 +2217,7 @@ mod tests {
             .create()
             .with_columns(delta_schema.fields().cloned())
             .with_partition_columns(["id"])
-            .with_configuration_property(DeltaConfigKey::EnableChangeDataFeed, Some("true"))
+            .with_configuration_property(TableProperty::EnableChangeDataFeed, Some("true"))
             .await
             .unwrap();
         assert_eq!(table.version(), 0);

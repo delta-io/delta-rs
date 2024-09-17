@@ -88,7 +88,7 @@ mod tests {
     use crate::kernel::DataType as DeltaDataType;
     use crate::kernel::{Action, PrimitiveType, Protocol};
     use crate::operations::DeltaOps;
-    use crate::{DeltaConfigKey, DeltaTable};
+    use crate::{DeltaTable, TableProperty};
     use arrow::array::{ArrayRef, Int32Array, StructArray};
     use arrow::datatypes::{DataType, Field};
     use arrow_array::RecordBatch;
@@ -130,7 +130,7 @@ mod tests {
                 None,
             )
             .with_actions(actions)
-            .with_configuration_property(DeltaConfigKey::EnableChangeDataFeed, Some("true"))
+            .with_configuration_property(TableProperty::EnableChangeDataFeed, Some("true"))
             .await
             .expect("failed to make a version 4 table with EnableChangeDataFeed");
         table.load().await.expect("Failed to reload table");
@@ -185,7 +185,7 @@ mod tests {
                 None,
             )
             .with_actions(actions)
-            .with_configuration_property(DeltaConfigKey::EnableChangeDataFeed, Some("true"))
+            .with_configuration_property(TableProperty::EnableChangeDataFeed, Some("true"))
             .await
             .expect("failed to make a version 4 table with EnableChangeDataFeed");
         table.load().await.expect("Failed to reload table");

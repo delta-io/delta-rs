@@ -272,7 +272,7 @@ mod tests {
     use crate::protocol::SaveMode;
     use crate::table::state::DeltaTableState;
     use crate::test_utils::{ActionFactory, TestSchemas};
-    use crate::DeltaConfigKey;
+    use crate::TableProperty;
 
     fn metadata_action(configuration: Option<HashMap<String, Option<String>>>) -> Metadata {
         ActionFactory::metadata(TestSchemas::simple(), None::<Vec<&str>>, configuration)
@@ -328,7 +328,7 @@ mod tests {
                     ..Default::default()
                 }),
                 metadata_action(Some(HashMap::from([(
-                    DeltaConfigKey::AppendOnly.as_ref().to_string(),
+                    TableProperty::AppendOnly.as_ref().to_string(),
                     Some(append.to_string()),
                 )])))
                 .into(),
@@ -630,7 +630,7 @@ mod tests {
                 )])),
             )
             .with_actions(actions)
-            .with_configuration_property(DeltaConfigKey::EnableChangeDataFeed, Some("true"))
+            .with_configuration_property(TableProperty::EnableChangeDataFeed, Some("true"))
             .await
             .expect("failed to make a version 4 table with EnableChangeDataFeed");
         let eager_5 = table
