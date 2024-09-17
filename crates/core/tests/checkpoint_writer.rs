@@ -87,7 +87,7 @@ mod delete_expired_delta_log_in_checkpoint {
 
     use ::object_store::path::Path as ObjectStorePath;
     use chrono::Utc;
-    use deltalake_core::table::config::DeltaConfigKey;
+    use deltalake_core::table::config::TableProperty;
     use deltalake_core::*;
     use maplit::hashmap;
 
@@ -96,8 +96,8 @@ mod delete_expired_delta_log_in_checkpoint {
         let mut table = fs_common::create_table(
             "../test/tests/data/checkpoints_with_expired_logs/expired",
             Some(hashmap! {
-                DeltaConfigKey::LogRetentionDuration.as_ref().into() => Some("interval 10 minute".to_string()),
-                DeltaConfigKey::EnableExpiredLogCleanup.as_ref().into() => Some("true".to_string())
+                TableProperty::LogRetentionDuration.as_ref().into() => Some("interval 10 minute".to_string()),
+                TableProperty::EnableExpiredLogCleanup.as_ref().into() => Some("true".to_string())
             }),
         )
         .await;
@@ -160,8 +160,8 @@ mod delete_expired_delta_log_in_checkpoint {
         let mut table = fs_common::create_table(
             "../test/tests/data/checkpoints_with_expired_logs/not_delete_expired",
             Some(hashmap! {
-                DeltaConfigKey::LogRetentionDuration.as_ref().into() => Some("interval 1 second".to_string()),
-                DeltaConfigKey::EnableExpiredLogCleanup.as_ref().into() => Some("false".to_string())
+                TableProperty::LogRetentionDuration.as_ref().into() => Some("interval 1 second".to_string()),
+                TableProperty::EnableExpiredLogCleanup.as_ref().into() => Some("false".to_string())
             }),
         )
         .await;
@@ -208,7 +208,7 @@ mod checkpoints_with_tombstones {
     use ::object_store::path::Path as ObjectStorePath;
     use chrono::Utc;
     use deltalake_core::kernel::*;
-    use deltalake_core::table::config::DeltaConfigKey;
+    use deltalake_core::table::config::TableProperty;
     use deltalake_core::*;
     use maplit::hashmap;
     use parquet::file::reader::{FileReader, SerializedFileReader};
@@ -235,7 +235,7 @@ mod checkpoints_with_tombstones {
     #[ignore]
     async fn test_expired_tombstones() {
         let mut table = fs_common::create_table("../test/tests/data/checkpoints_tombstones/expired", Some(hashmap! {
-            DeltaConfigKey::DeletedFileRetentionDuration.as_ref().into() => Some("interval 1 minute".to_string())
+            TableProperty::DeletedFileRetentionDuration.as_ref().into() => Some("interval 1 minute".to_string())
         })).await;
 
         let a1 = fs_common::add(3 * 60 * 1000); // 3 mins ago,

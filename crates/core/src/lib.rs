@@ -93,7 +93,7 @@ pub use self::errors::*;
 pub use self::schema::partitions::*;
 pub use self::schema::*;
 pub use self::table::builder::{DeltaTableBuilder, DeltaTableConfig, DeltaVersion};
-pub use self::table::config::DeltaConfigKey;
+pub use self::table::config::TableProperty;
 pub use self::table::DeltaTable;
 pub use object_store::{path::Path, Error as ObjectStoreError, ObjectMeta, ObjectStore};
 pub use operations::DeltaOps;
