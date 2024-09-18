@@ -1365,6 +1365,8 @@
       
         
       
+        
+      
     
     
     
@@ -1428,6 +1430,26 @@
   
   <span class="md-ellipsis">
     AWS S3 Storage Backend
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../integrations/object-storage/s3-like/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    CloudFlare R2 & Minio
   </span>
   
 
@@ -1748,6 +1770,13 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#using-writer-properites" class="md-nav__link">
+    Using Writer Properites
+  </a>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -1879,6 +1908,34 @@ otherwise the operation will fail </p>
 </div>
 </div>
 </div>
+<h2 id="using-writer-properites">Using Writer Properites</h2>
+<p>You can customize the Rust Parquet writer by using the <a href="../../api/delta_writer/#deltalake.WriterProperties">WriterProperties</a>. Additionally, you can apply extra configurations through the <a href="../../api/delta_writer/#deltalake.BloomFilterProperties">BloomFilterProperties</a> and <a href="../../api/delta_writer/#deltalake.ColumnProperties">ColumnProperties</a> data classes.</p>
+<p>Here's how you can do it:
+<div class="language-python highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="kn">from</span> <span class="nn">deltalake</span> <span class="kn">import</span> <span class="n">BloomFilterProperties</span><span class="p">,</span> <span class="n">ColumnProperties</span><span class="p">,</span> <span class="n">WriterProperties</span><span class="p">,</span> <span class="n">write_deltalake</span>
+</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="kn">import</span> <span class="nn">pyarrow</span> <span class="k">as</span> <span class="nn">pa</span>
+</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a>
+</span><span id="__span-5-4"><a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="n">wp</span> <span class="o">=</span> <span class="n">WriterProperties</span><span class="p">(</span>
+</span><span id="__span-5-5"><a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a>        <span class="n">statistics_truncate_length</span><span class="o">=</span><span class="mi">200</span><span class="p">,</span>
+</span><span id="__span-5-6"><a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a>        <span class="n">default_column_properties</span><span class="o">=</span><span class="n">ColumnProperties</span><span class="p">(</span>
+</span><span id="__span-5-7"><a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a>            <span class="n">bloom_filter_properties</span><span class="o">=</span><span class="n">BloomFilterProperties</span><span class="p">(</span><span class="kc">True</span><span class="p">,</span> <span class="mf">0.2</span><span class="p">,</span> <span class="mi">30</span><span class="p">)</span>
+</span><span id="__span-5-8"><a id="__codelineno-5-8" name="__codelineno-5-8" href="#__codelineno-5-8"></a>        <span class="p">),</span>
+</span><span id="__span-5-9"><a id="__codelineno-5-9" name="__codelineno-5-9" href="#__codelineno-5-9"></a>        <span class="n">column_properties</span><span class="o">=</span><span class="p">{</span>
+</span><span id="__span-5-10"><a id="__codelineno-5-10" name="__codelineno-5-10" href="#__codelineno-5-10"></a>            <span class="s2">&quot;value_non_bloom&quot;</span><span class="p">:</span> <span class="n">ColumnProperties</span><span class="p">(</span><span class="n">bloom_filter_properties</span><span class="o">=</span><span class="kc">None</span><span class="p">),</span>
+</span><span id="__span-5-11"><a id="__codelineno-5-11" name="__codelineno-5-11" href="#__codelineno-5-11"></a>        <span class="p">},</span>
+</span><span id="__span-5-12"><a id="__codelineno-5-12" name="__codelineno-5-12" href="#__codelineno-5-12"></a>    <span class="p">)</span>
+</span><span id="__span-5-13"><a id="__codelineno-5-13" name="__codelineno-5-13" href="#__codelineno-5-13"></a>
+</span><span id="__span-5-14"><a id="__codelineno-5-14" name="__codelineno-5-14" href="#__codelineno-5-14"></a><span class="n">table_path</span> <span class="o">=</span> <span class="s2">&quot;/tmp/my_table&quot;</span>
+</span><span id="__span-5-15"><a id="__codelineno-5-15" name="__codelineno-5-15" href="#__codelineno-5-15"></a>
+</span><span id="__span-5-16"><a id="__codelineno-5-16" name="__codelineno-5-16" href="#__codelineno-5-16"></a><span class="n">data</span> <span class="o">=</span> <span class="n">pa</span><span class="o">.</span><span class="n">table</span><span class="p">(</span>
+</span><span id="__span-5-17"><a id="__codelineno-5-17" name="__codelineno-5-17" href="#__codelineno-5-17"></a>        <span class="p">{</span>
+</span><span id="__span-5-18"><a id="__codelineno-5-18" name="__codelineno-5-18" href="#__codelineno-5-18"></a>            <span class="s2">&quot;id&quot;</span><span class="p">:</span> <span class="n">pa</span><span class="o">.</span><span class="n">array</span><span class="p">([</span><span class="s2">&quot;1&quot;</span><span class="p">,</span> <span class="s2">&quot;1&quot;</span><span class="p">],</span> <span class="n">pa</span><span class="o">.</span><span class="n">string</span><span class="p">()),</span>
+</span><span id="__span-5-19"><a id="__codelineno-5-19" name="__codelineno-5-19" href="#__codelineno-5-19"></a>            <span class="s2">&quot;value&quot;</span><span class="p">:</span> <span class="n">pa</span><span class="o">.</span><span class="n">array</span><span class="p">([</span><span class="mi">11</span><span class="p">,</span> <span class="mi">12</span><span class="p">],</span> <span class="n">pa</span><span class="o">.</span><span class="n">int64</span><span class="p">()),</span>
+</span><span id="__span-5-20"><a id="__codelineno-5-20" name="__codelineno-5-20" href="#__codelineno-5-20"></a>            <span class="s2">&quot;value_non_bloom&quot;</span><span class="p">:</span> <span class="n">pa</span><span class="o">.</span><span class="n">array</span><span class="p">([</span><span class="mi">11</span><span class="p">,</span> <span class="mi">12</span><span class="p">],</span> <span class="n">pa</span><span class="o">.</span><span class="n">int64</span><span class="p">()),</span>
+</span><span id="__span-5-21"><a id="__codelineno-5-21" name="__codelineno-5-21" href="#__codelineno-5-21"></a>        <span class="p">}</span>
+</span><span id="__span-5-22"><a id="__codelineno-5-22" name="__codelineno-5-22" href="#__codelineno-5-22"></a>    <span class="p">)</span>
+</span><span id="__span-5-23"><a id="__codelineno-5-23" name="__codelineno-5-23" href="#__codelineno-5-23"></a>
+</span><span id="__span-5-24"><a id="__codelineno-5-24" name="__codelineno-5-24" href="#__codelineno-5-24"></a><span class="n">write_deltalake</span><span class="p">(</span><span class="n">table_path</span><span class="p">,</span> <span class="n">data</span><span class="p">,</span> <span class="n">writer_properties</span><span class="o">=</span><span class="n">wp</span><span class="p">)</span>
+</span></code></pre></div></p>
 
 
 

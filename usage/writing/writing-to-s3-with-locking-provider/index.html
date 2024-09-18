@@ -1433,6 +1433,8 @@
       
         
       
+        
+      
     
     
     
@@ -1496,6 +1498,26 @@
   
   <span class="md-ellipsis">
     AWS S3 Storage Backend
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../integrations/object-storage/s3-like/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    CloudFlare R2 & Minio
   </span>
   
 
@@ -1923,17 +1945,16 @@ choose to set the <code>AWS_S3_ALLOW_UNSAFE_RENAME</code> variable to <code>true
 <li>dynamodb:Query</li>
 <li>dynamodb:PutItem</li>
 <li>dynamodb:UpdateItem</li>
+<li>dynamodb:DeleteItem </li>
 </ul>
 <h3 id="enabling-concurrent-writes-for-alternative-clients">Enabling concurrent writes for alternative clients</h3>
 <p>Unlike AWS S3, some S3 clients support atomic renames by passing some headers
 in requests.</p>
-<p>For CloudFlare R2 passing this in the storage_options will enable concurrent writes:</p>
+<p>For CloudFlare R2 or Minio passing this in the storage_options will enable concurrent writes:</p>
 <div class="language-python highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="n">storage_options</span> <span class="o">=</span> <span class="p">{</span>
-</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>    <span class="s2">&quot;copy_if_not_exists&quot;</span><span class="p">:</span> <span class="s2">&quot;header: cf-copy-destination-if-none-match: *&quot;</span><span class="p">,</span>
+</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>    <span class="s2">&quot;conditional_put&quot;</span><span class="p">:</span> <span class="s2">&quot;etag&quot;</span><span class="p">,</span>
 </span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="p">}</span>
 </span></code></pre></div>
-<p>Something similar can be done with MinIO but the header to pass should be verified
-in the MinIO documentation.</p>
 
 
 

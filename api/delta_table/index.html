@@ -1365,6 +1365,8 @@
       
         
       
+        
+      
     
     
     
@@ -1428,6 +1430,26 @@
   
   <span class="md-ellipsis">
     AWS S3 Storage Backend
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../integrations/object-storage/s3-like/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    CloudFlare R2 & Minio
   </span>
   
 
@@ -1834,20 +1856,6 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#deltalake.DeltaTable.load_version" class="md-nav__link">
-    load_version
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#deltalake.DeltaTable.load_with_datetime" class="md-nav__link">
-    load_with_datetime
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
   <a href="#deltalake.DeltaTable.merge" class="md-nav__link">
     merge
   </a>
@@ -1857,6 +1865,13 @@
           <li class="md-nav__item">
   <a href="#deltalake.DeltaTable.metadata" class="md-nav__link">
     metadata
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#deltalake.DeltaTable.partitions" class="md-nav__link">
+    partitions
   </a>
   
 </li>
@@ -2444,7 +2459,7 @@ If 'ignore', will not do anything if table already exists. Defaults to "error".<
 
 
 </h4>
-<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">delete</span><span class="p">(</span><span class="n">predicate</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">writer_properties</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">WriterProperties</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">custom_metadata</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">post_commithook_properties</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">PostCommitHookProperties</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]</span>
+<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">delete</span><span class="p">(</span><span class="n">predicate</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">writer_properties</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">WriterProperties</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">custom_metadata</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">post_commithook_properties</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">PostCommitHookProperties</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">commit_properties</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">CommitProperties</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]</span>
 </span></code></pre></div>
 
   <div class="doc doc-contents ">
@@ -2503,7 +2518,7 @@ they are rewritten without the records.</p>
           </td>
           <td>
             <div class="doc-md-description">
-              <p>custom metadata that will be added to the transaction commit.</p>
+              <p>Deprecated and will be removed in future versions. Use commit_properties instead.</p>
             </div>
           </td>
           <td>
@@ -2518,6 +2533,20 @@ they are rewritten without the records.</p>
           <td>
             <div class="doc-md-description">
               <p>properties for the post commit hook. If None, default values are used.</p>
+            </div>
+          </td>
+          <td>
+                <code>None</code>
+          </td>
+        </tr>
+        <tr>
+          <td><code>commit_properties</code></td>
+          <td>
+                <code><span title="typing.Optional">Optional</span>[<span title="deltalake.table.CommitProperties">CommitProperties</span>]</code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>properties of the transaction commit. If None, default values are used.</p>
             </div>
           </td>
           <td>
@@ -2565,7 +2594,7 @@ they are rewritten without the records.</p>
 
 
 </h4>
-<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">file_uris</span><span class="p">(</span><span class="n">partition_filters</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">List</span><span class="p">[</span><span class="n">Tuple</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">List</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span>
+<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">file_uris</span><span class="p">(</span><span class="n">partition_filters</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">FilterConjunctionType</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">List</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span>
 </span></code></pre></div>
 
   <div class="doc doc-contents ">
@@ -2592,7 +2621,7 @@ given filters.</p>
         <tr>
           <td><code>partition_filters</code></td>
           <td>
-                <code><span title="typing.Optional">Optional</span>[<span title="typing.List">List</span>[<span title="typing.Tuple">Tuple</span>[str, str, <span title="typing.Any">Any</span>]]]</code>
+                <code><span title="typing.Optional">Optional</span>[<span title="deltalake.table.FilterConjunctionType">FilterConjunctionType</span>]</code>
           </td>
           <td>
             <div class="doc-md-description">
@@ -2754,7 +2783,7 @@ The supported type for value is str. Use empty string <code>''</code> for Null p
 
 
 </h4>
-<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">files_by_partitions</span><span class="p">(</span><span class="n">partition_filters</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">FilterType</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="n">List</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span>
+<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">files_by_partitions</span><span class="p">(</span><span class="n">partition_filters</span><span class="p">:</span> <span class="n">PartitionFilterType</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">List</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span>
 </span></code></pre></div>
 
   <div class="doc doc-contents ">
@@ -3216,130 +3245,12 @@ If a datetime object without a timezone is passed, the UTC timezone will be assu
 
 
 
-<h4 id="deltalake.DeltaTable.load_version" class="doc doc-heading">
-          <span class="doc doc-object-name doc-function-name">load_version</span>
-
-
-</h4>
-<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">load_version</span><span class="p">(</span><span class="n">version</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span>
-</span></code></pre></div>
-
-  <div class="doc doc-contents ">
-  
-      <p>Load a DeltaTable with a specified version.</p>
-<div class="admonition warning">
-<p class="admonition-title">Deprecated</p>
-<p>Load_version and load_with_datetime have been combined into <code>DeltaTable.load_as_version</code>.</p>
-</div>
-
-
-
-  <p><strong>Parameters:</strong></p>
-  <table>
-    <thead>
-      <tr>
-        <th>Name</th>
-        <th>Type</th>
-        <th>Description</th>
-        <th>Default</th>
-      </tr>
-    </thead>
-    <tbody>
-        <tr>
-          <td><code>version</code></td>
-          <td>
-                <code>int</code>
-          </td>
-          <td>
-            <div class="doc-md-description">
-              <p>the identifier of the version of the DeltaTable to load</p>
-            </div>
-          </td>
-          <td>
-              <em>required</em>
-          </td>
-        </tr>
-    </tbody>
-  </table>
-
-  </div>
-
-</div>
-
-
-<div class="doc doc-object doc-function">
-
-
-
-<h4 id="deltalake.DeltaTable.load_with_datetime" class="doc doc-heading">
-          <span class="doc doc-object-name doc-function-name">load_with_datetime</span>
-
-
-</h4>
-<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">load_with_datetime</span><span class="p">(</span><span class="n">datetime_string</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span>
-</span></code></pre></div>
-
-  <div class="doc doc-contents ">
-  
-      <p>Time travel Delta table to the latest version that's created at or before provided <code>datetime_string</code> argument.
-The <code>datetime_string</code> argument should be an RFC 3339 and ISO 8601 date and time string.</p>
-<div class="admonition warning">
-<p class="admonition-title">Deprecated</p>
-<p>Load_version and load_with_datetime have been combined into <code>DeltaTable.load_as_version</code>.</p>
-</div>
-
-
-
-  <p><strong>Parameters:</strong></p>
-  <table>
-    <thead>
-      <tr>
-        <th>Name</th>
-        <th>Type</th>
-        <th>Description</th>
-        <th>Default</th>
-      </tr>
-    </thead>
-    <tbody>
-        <tr>
-          <td><code>datetime_string</code></td>
-          <td>
-                <code>str</code>
-          </td>
-          <td>
-            <div class="doc-md-description">
-              <p>the identifier of the datetime point of the DeltaTable to load</p>
-            </div>
-          </td>
-          <td>
-              <em>required</em>
-          </td>
-        </tr>
-    </tbody>
-  </table>
-
-<details class="example" open>
-  <summary>Example</summary>
-  <div class="language-text highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>&quot;2018-01-26T18:30:09Z&quot;
-</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>&quot;2018-12-19T16:39:57-08:00&quot;
-</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>&quot;2018-01-26T18:30:09.453+00:00&quot;
-</span></code></pre></div>
-</details>
-  </div>
-
-</div>
-
-
-<div class="doc doc-object doc-function">
-
-
-
 <h4 id="deltalake.DeltaTable.merge" class="doc doc-heading">
           <span class="doc doc-object-name doc-function-name">merge</span>
 
 
 </h4>
-<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">merge</span><span class="p">(</span><span class="n">source</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="n">pyarrow</span><span class="o">.</span><span class="n">Table</span><span class="p">,</span> <span class="n">pyarrow</span><span class="o">.</span><span class="n">RecordBatch</span><span class="p">,</span> <span class="n">pyarrow</span><span class="o">.</span><span class="n">RecordBatchReader</span><span class="p">,</span> <span class="n">ds</span><span class="o">.</span><span class="n">Dataset</span><span class="p">,</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">],</span> <span class="n">predicate</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">source_alias</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">target_alias</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">error_on_type_mismatch</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span> <span class="n">writer_properties</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">WriterProperties</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">large_dtypes</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">bool</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">custom_metadata</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">post_commithook_properties</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">PostCommitHookProperties</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">TableMerger</span>
+<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">merge</span><span class="p">(</span><span class="n">source</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="n">pyarrow</span><span class="o">.</span><span class="n">Table</span><span class="p">,</span> <span class="n">pyarrow</span><span class="o">.</span><span class="n">RecordBatch</span><span class="p">,</span> <span class="n">pyarrow</span><span class="o">.</span><span class="n">RecordBatchReader</span><span class="p">,</span> <span class="n">ds</span><span class="o">.</span><span class="n">Dataset</span><span class="p">,</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">],</span> <span class="n">predicate</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">source_alias</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">target_alias</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">error_on_type_mismatch</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span> <span class="n">writer_properties</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">WriterProperties</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">large_dtypes</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">bool</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">custom_metadata</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">post_commithook_properties</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">PostCommitHookProperties</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">commit_properties</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">CommitProperties</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">TableMerger</span>
 </span></code></pre></div>
 
   <div class="doc doc-contents ">
@@ -3479,7 +3390,7 @@ match the underlying table.</p>
           </td>
           <td>
             <div class="doc-md-description">
-              <p>custom metadata that will be added to the transaction commit.</p>
+              <p>Deprecated and will be removed in future versions. Use commit_properties instead.</p>
             </div>
           </td>
           <td>
@@ -3494,6 +3405,20 @@ match the underlying table.</p>
           <td>
             <div class="doc-md-description">
               <p>properties for the post commit hook. If None, default values are used.</p>
+            </div>
+          </td>
+          <td>
+                <code>None</code>
+          </td>
+        </tr>
+        <tr>
+          <td><code>commit_properties</code></td>
+          <td>
+                <code><span title="typing.Optional">Optional</span>[<span title="deltalake.table.CommitProperties">CommitProperties</span>]</code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>properties for the commit. If None, default values are used.</p>
             </div>
           </td>
           <td>
@@ -3581,6 +3506,57 @@ match the underlying table.</p>
 
 
 
+<h4 id="deltalake.DeltaTable.partitions" class="doc doc-heading">
+          <span class="doc doc-object-name doc-function-name">partitions</span>
+
+
+</h4>
+<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">partitions</span><span class="p">(</span><span class="n">partition_filters</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">List</span><span class="p">[</span><span class="n">Tuple</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">List</span><span class="p">[</span><span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">]]</span>
+</span></code></pre></div>
+
+  <div class="doc doc-contents ">
+  
+      <p>Returns the partitions as a list of dicts. Example: <code>[{'month': '1', 'year': '2020', 'day': '1'}, ...]</code></p>
+
+
+
+  <p><strong>Parameters:</strong></p>
+  <table>
+    <thead>
+      <tr>
+        <th>Name</th>
+        <th>Type</th>
+        <th>Description</th>
+        <th>Default</th>
+      </tr>
+    </thead>
+    <tbody>
+        <tr>
+          <td><code>partition_filters</code></td>
+          <td>
+                <code><span title="typing.Optional">Optional</span>[<span title="typing.List">List</span>[<span title="typing.Tuple">Tuple</span>[str, str, <span title="typing.Any">Any</span>]]]</code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>The partition filters that will be used for getting the matched partitions, defaults to <code>None</code> (no filtering).</p>
+            </div>
+          </td>
+          <td>
+                <code>None</code>
+          </td>
+        </tr>
+    </tbody>
+  </table>
+
+  </div>
+
+</div>
+
+
+<div class="doc doc-object doc-function">
+
+
+
 <h4 id="deltalake.DeltaTable.protocol" class="doc doc-heading">
           <span class="doc doc-object-name doc-function-name">protocol</span>
 
@@ -3631,7 +3607,7 @@ match the underlying table.</p>
 
 
 </h4>
-<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">repair</span><span class="p">(</span><span class="n">dry_run</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span> <span class="n">custom_metadata</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">post_commithook_properties</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">PostCommitHookProperties</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]</span>
+<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">repair</span><span class="p">(</span><span class="n">dry_run</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span> <span class="n">custom_metadata</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">post_commithook_properties</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">PostCommitHookProperties</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">commit_properties</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">CommitProperties</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]</span>
 </span></code></pre></div>
 
   <div class="doc doc-contents ">
@@ -3676,7 +3652,7 @@ or corrupted files.</p>
           </td>
           <td>
             <div class="doc-md-description">
-              <p>custom metadata that will be added to the transaction commit.</p>
+              <p>Deprecated and will be removed in future versions. Use commit_properties instead.</p>
             </div>
           </td>
           <td>
@@ -3691,6 +3667,20 @@ or corrupted files.</p>
           <td>
             <div class="doc-md-description">
               <p>properties for the post commit hook. If None, default values are used.</p>
+            </div>
+          </td>
+          <td>
+                <code>None</code>
+          </td>
+        </tr>
+        <tr>
+          <td><code>commit_properties</code></td>
+          <td>
+                <code><span title="typing.Optional">Optional</span>[<span title="deltalake.table.CommitProperties">CommitProperties</span>]</code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>properties of the transaction commit. If None, default values are used.</p>
             </div>
           </td>
           <td>
@@ -3748,7 +3738,7 @@ Results in
 
 
 </h4>
-<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">restore</span><span class="p">(</span><span class="n">target</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="n">datetime</span><span class="p">,</span> <span class="nb">str</span><span class="p">],</span> <span class="o">*</span><span class="p">,</span> <span class="n">ignore_missing_files</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span> <span class="n">protocol_downgrade_allowed</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span> <span class="n">custom_metadata</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]</span>
+<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">restore</span><span class="p">(</span><span class="n">target</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="n">datetime</span><span class="p">,</span> <span class="nb">str</span><span class="p">],</span> <span class="o">*</span><span class="p">,</span> <span class="n">ignore_missing_files</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span> <span class="n">protocol_downgrade_allowed</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span> <span class="n">custom_metadata</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">commit_properties</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">CommitProperties</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]</span>
 </span></code></pre></div>
 
   <div class="doc doc-contents ">
@@ -3817,7 +3807,21 @@ Results in
           </td>
           <td>
             <div class="doc-md-description">
-              <p>custom metadata that will be added to the transaction commit.</p>
+              <p>Deprecated and will be removed in future versions. Use commit_properties instead.</p>
+            </div>
+          </td>
+          <td>
+                <code>None</code>
+          </td>
+        </tr>
+        <tr>
+          <td><code>commit_properties</code></td>
+          <td>
+                <code><span title="typing.Optional">Optional</span>[<span title="deltalake.table.CommitProperties">CommitProperties</span>]</code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>properties of the transaction commit. If None, default values are used.</p>
             </div>
           </td>
           <td>
@@ -4003,7 +4007,7 @@ Results in
 
 
 </h4>
-<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">to_pyarrow_dataset</span><span class="p">(</span><span class="n">partitions</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">List</span><span class="p">[</span><span class="n">Tuple</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">filesystem</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Union</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">pa_fs</span><span class="o">.</span><span class="n">FileSystem</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">parquet_read_options</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">ParquetReadOptions</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">schema</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">pyarrow</span><span class="o">.</span><span class="n">Schema</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">as_large_types</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">pyarrow</span><span class="o">.</span><span class="n">dataset</span><span class="o">.</span><span class="n">Dataset</span>
+<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">to_pyarrow_dataset</span><span class="p">(</span><span class="n">partitions</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">FilterConjunctionType</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">filesystem</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Union</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">pa_fs</span><span class="o">.</span><span class="n">FileSystem</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">parquet_read_options</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">ParquetReadOptions</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">schema</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">pyarrow</span><span class="o">.</span><span class="n">Schema</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">as_large_types</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">pyarrow</span><span class="o">.</span><span class="n">dataset</span><span class="o">.</span><span class="n">Dataset</span>
 </span></code></pre></div>
 
   <div class="doc doc-contents ">
@@ -4026,7 +4030,7 @@ Results in
         <tr>
           <td><code>partitions</code></td>
           <td>
-                <code><span title="typing.Optional">Optional</span>[<span title="typing.List">List</span>[<span title="typing.Tuple">Tuple</span>[str, str, <span title="typing.Any">Any</span>]]]</code>
+                <code><span title="typing.Optional">Optional</span>[<span title="deltalake.table.FilterConjunctionType">FilterConjunctionType</span>]</code>
           </td>
           <td>
             <div class="doc-md-description">
@@ -4248,7 +4252,7 @@ a :class:<code>pyarrow.fs.SubTreeFileSystem</code>.
 
 
 </h4>
-<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">update</span><span class="p">(</span><span class="n">updates</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">new_values</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Union</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="nb">float</span><span class="p">,</span> <span class="nb">str</span><span class="p">,</span> <span class="n">datetime</span><span class="p">,</span> <span class="nb">bool</span><span class="p">,</span> <span class="n">List</span><span class="p">[</span><span class="n">Any</span><span class="p">]]]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">predicate</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">writer_properties</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">WriterProperties</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">error_on_type_mismatch</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span> <span class="n">custom_metadata</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">post_commithook_properties</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">PostCommitHookProperties</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]</span>
+<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">update</span><span class="p">(</span><span class="n">updates</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">new_values</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Union</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="nb">float</span><span class="p">,</span> <span class="nb">str</span><span class="p">,</span> <span class="n">datetime</span><span class="p">,</span> <span class="nb">bool</span><span class="p">,</span> <span class="n">List</span><span class="p">[</span><span class="n">Any</span><span class="p">]]]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">predicate</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">writer_properties</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">WriterProperties</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">error_on_type_mismatch</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span> <span class="n">custom_metadata</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">post_commithook_properties</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">PostCommitHookProperties</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">commit_properties</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">CommitProperties</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]</span>
 </span></code></pre></div>
 
   <div class="doc doc-contents ">
@@ -4346,7 +4350,7 @@ to be passed for it to execute.</p>
           </td>
           <td>
             <div class="doc-md-description">
-              <p>custom metadata that will be added to the transaction commit.</p>
+              <p>Deprecated and will be removed in future versions. Use commit_properties instead.</p>
             </div>
           </td>
           <td>
@@ -4361,6 +4365,20 @@ to be passed for it to execute.</p>
           <td>
             <div class="doc-md-description">
               <p>properties for the post commit hook. If None, default values are used.</p>
+            </div>
+          </td>
+          <td>
+                <code>None</code>
+          </td>
+        </tr>
+        <tr>
+          <td><code>commit_properties</code></td>
+          <td>
+                <code><span title="typing.Optional">Optional</span>[<span title="deltalake.table.CommitProperties">CommitProperties</span>]</code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>properties of the transaction commit. If None, default values are used.</p>
             </div>
           </td>
           <td>
@@ -4439,7 +4457,7 @@ newer versions.</p>
 
 
 </h4>
-<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">vacuum</span><span class="p">(</span><span class="n">retention_hours</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">dry_run</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span> <span class="n">enforce_retention_duration</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span> <span class="n">custom_metadata</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">post_commithook_properties</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">PostCommitHookProperties</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">List</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span>
+<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">vacuum</span><span class="p">(</span><span class="n">retention_hours</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">dry_run</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span> <span class="n">enforce_retention_duration</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span> <span class="n">custom_metadata</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">post_commithook_properties</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">PostCommitHookProperties</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">commit_properties</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">CommitProperties</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">List</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span>
 </span></code></pre></div>
 
   <div class="doc doc-contents ">
@@ -4508,7 +4526,7 @@ newer versions.</p>
           </td>
           <td>
             <div class="doc-md-description">
-              <p>custom metadata that will be added to the transaction commit.</p>
+              <p>Deprecated and will be removed in future versions. Use commit_properties instead.</p>
             </div>
           </td>
           <td>
@@ -4523,6 +4541,20 @@ newer versions.</p>
           <td>
             <div class="doc-md-description">
               <p>properties for the post commit hook. If None, default values are used.</p>
+            </div>
+          </td>
+          <td>
+                <code>None</code>
+          </td>
+        </tr>
+        <tr>
+          <td><code>commit_properties</code></td>
+          <td>
+                <code><span title="typing.Optional">Optional</span>[<span title="deltalake.table.CommitProperties">CommitProperties</span>]</code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>properties of the transaction commit. If None, default values are used.</p>
             </div>
           </td>
           <td>

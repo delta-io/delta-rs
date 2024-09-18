@@ -1447,6 +1447,8 @@
       
         
       
+        
+      
     
     
     
@@ -1510,6 +1512,26 @@
   
   <span class="md-ellipsis">
     AWS S3 Storage Backend
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../integrations/object-storage/s3-like/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    CloudFlare R2 & Minio
   </span>
   
 
@@ -1955,7 +1977,7 @@
 <p>Let’s run the optimize command to compact the existing small files into larger files:</p>
 <div class="language-python highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="n">dt</span> <span class="o">=</span> <span class="n">DeltaTable</span><span class="p">(</span><span class="s2">&quot;observation_data&quot;</span><span class="p">)</span>
 </span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>
-</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="n">dt</span><span class="o">.</span><span class="n">optimize</span><span class="p">()</span>
+</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="n">dt</span><span class="o">.</span><span class="n">optimize</span><span class="o">.</span><span class="n">compact</span><span class="p">()</span>
 </span></code></pre></div>
 <p>Here’s the output of the command:</p>
 <div class="language-python highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="p">{</span><span class="s1">&#39;numFilesAdded&#39;</span><span class="p">:</span> <span class="mi">5</span><span class="p">,</span>

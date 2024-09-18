@@ -14,7 +14,7 @@
         <link rel="prev" href="../hdfs/">
       
       
-        <link rel="next" href="../../delta-lake-arrow/">
+        <link rel="next" href="../s3-like/">
       
       
       <link rel="icon" href="../../../delta-rust-no-whitespace.svg">
@@ -1369,6 +1369,8 @@
       
         
       
+        
+      
     
     
     
@@ -1492,15 +1494,15 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#delta-lake-on-s3-safe-concurrent-writes" class="md-nav__link">
-    Delta Lake on S3: Safe Concurrent Writes
+  <a href="#delta-lake-on-aws-s3-safe-concurrent-writes" class="md-nav__link">
+    Delta Lake on AWS S3: Safe Concurrent Writes
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#delta-lake-on-s3-required-permissions" class="md-nav__link">
-    Delta Lake on S3: Required permissions
+  <a href="#delta-lake-on-aws-s3-required-permissions" class="md-nav__link">
+    Delta Lake on AWS S3: Required permissions
   </a>
   
 </li>
@@ -1509,6 +1511,26 @@
   
 </nav>
       
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../s3-like/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    CloudFlare R2 & Minio
+  </span>
+  
+
+      </a>
     </li>
   
 
@@ -1833,15 +1855,15 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#delta-lake-on-s3-safe-concurrent-writes" class="md-nav__link">
-    Delta Lake on S3: Safe Concurrent Writes
+  <a href="#delta-lake-on-aws-s3-safe-concurrent-writes" class="md-nav__link">
+    Delta Lake on AWS S3: Safe Concurrent Writes
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#delta-lake-on-s3-required-permissions" class="md-nav__link">
-    Delta Lake on S3: Required permissions
+  <a href="#delta-lake-on-aws-s3-required-permissions" class="md-nav__link">
+    Delta Lake on AWS S3: Required permissions
   </a>
   
 </li>
@@ -1913,8 +1935,8 @@
 </span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>    <span class="n">storage_options</span><span class="o">=</span><span class="n">storage_options</span><span class="p">,</span>
 </span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="p">)</span>
 </span></code></pre></div>
-<h2 id="delta-lake-on-s3-safe-concurrent-writes">Delta Lake on S3: Safe Concurrent Writes</h2>
-<p>You need a locking provider to ensure safe concurrent writes when writing Delta tables to S3. This is because S3 does not guarantee mutual exclusion.</p>
+<h2 id="delta-lake-on-aws-s3-safe-concurrent-writes">Delta Lake on AWS S3: Safe Concurrent Writes</h2>
+<p>You need a locking provider to ensure safe concurrent writes when writing Delta tables to AWS S3. This is because AWS S3 does not guarantee mutual exclusion.</p>
 <p>A locking provider guarantees that only one writer is able to create the same file. This prevents corrupted or conflicting data.</p>
 <p><code>delta-rs</code> uses DynamoDB to guarantee safe concurrent writes.</p>
 <p>Run the code below in your terminal to create a DynamoDB table that will act as your locking provider.</p>
@@ -1926,7 +1948,7 @@
 </span></code></pre></div>
 <p>If for some reason you don't want to use DynamoDB as your locking mechanism you can choose to set the <code>AWS_S3_ALLOW_UNSAFE_RENAME</code> variable to <code>true</code> in order to enable S3 unsafe writes.</p>
 <p>Read more in the <a href="../../../usage/writing/writing-to-s3-with-locking-provider/">Usage</a> section.</p>
-<h2 id="delta-lake-on-s3-required-permissions">Delta Lake on S3: Required permissions</h2>
+<h2 id="delta-lake-on-aws-s3-required-permissions">Delta Lake on AWS S3: Required permissions</h2>
 <p>You need to have permissions to get, put and delete objects in the S3 bucket you're storing your data in. Please note that you must be allowed to delete objects even if you're just appending to the Delta Lake, because there are temporary files into the log folder that are deleted after usage.</p>
 <p>In AWS S3, you will need the following permissions:</p>
 <ul>
@@ -1981,13 +2003,13 @@
         
         
           
-          <a href="../../delta-lake-arrow/" class="md-footer__link md-footer__link--next" aria-label="Next: Arrow">
+          <a href="../s3-like/" class="md-footer__link md-footer__link--next" aria-label="Next: CloudFlare R2 &amp; Minio">
             <div class="md-footer__title">
               <span class="md-footer__direction">
                 Next
               </span>
               <div class="md-ellipsis">
-                Arrow
+                CloudFlare R2 & Minio
               </div>
             </div>
             <div class="md-footer__button md-icon">

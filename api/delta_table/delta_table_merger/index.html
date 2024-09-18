@@ -1254,13 +1254,6 @@
   
 </li>
         
-          <li class="md-nav__item">
-  <a href="#deltalake.table.TableMerger.with_writer_properties" class="md-nav__link">
-    with_writer_properties
-  </a>
-  
-</li>
-        
       </ul>
     </nav>
   
@@ -1481,6 +1474,8 @@
       
         
       
+        
+      
     
     
     
@@ -1544,6 +1539,26 @@
   
   <span class="md-ellipsis">
     AWS S3 Storage Backend
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../integrations/object-storage/s3-like/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    CloudFlare R2 & Minio
   </span>
   
 
@@ -1914,13 +1929,6 @@
   
 </li>
         
-          <li class="md-nav__item">
-  <a href="#deltalake.table.TableMerger.with_writer_properties" class="md-nav__link">
-    with_writer_properties
-  </a>
-  
-</li>
-        
       </ul>
     </nav>
   
@@ -1956,7 +1964,7 @@
 
 
 </h3>
-<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">TableMerger</span><span class="p">(</span><span class="n">table</span><span class="p">:</span> <span class="n">DeltaTable</span><span class="p">,</span> <span class="n">source</span><span class="p">:</span> <span class="n">pyarrow</span><span class="o">.</span><span class="n">RecordBatchReader</span><span class="p">,</span> <span class="n">predicate</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">source_alias</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">target_alias</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">safe_cast</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span> <span class="n">writer_properties</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">WriterProperties</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">custom_metadata</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">post_commithook_properties</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">PostCommitHookProperties</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span>
+<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">TableMerger</span><span class="p">(</span><span class="n">builder</span><span class="p">:</span> <span class="n">PyMergeBuilder</span><span class="p">,</span> <span class="n">table</span><span class="p">:</span> <span class="n">RawDeltaTable</span><span class="p">)</span>
 </span></code></pre></div>
 
   <div class="doc doc-contents first">
@@ -2822,141 +2830,6 @@ in backticks: "target.<code>123column</code>" or "target.<code>my column</code>"
 </span><span id="__span-0-25"><a id="__codelineno-0-25" name="__codelineno-0-25" href="#__codelineno-0-25"></a><span class="mi">3</span>  <span class="mi">4</span>  <span class="mi">7</span>
 </span></code></pre></div>
 </details>
-  </div>
-
-</div>
-
-
-<div class="doc doc-object doc-function">
-
-
-
-<h4 id="deltalake.table.TableMerger.with_writer_properties" class="doc doc-heading">
-          <span class="doc doc-object-name doc-function-name">with_writer_properties</span>
-
-
-</h4>
-<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">with_writer_properties</span><span class="p">(</span><span class="n">data_page_size_limit</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">dictionary_page_size_limit</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">data_page_row_count_limit</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">write_batch_size</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">max_row_group_size</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">TableMerger</span>
-</span></code></pre></div>
-
-  <div class="doc doc-contents ">
-  
-      <div class="admonition warning">
-<p class="admonition-title">Deprecated</p>
-<p>Use <code>.merge(writer_properties = WriterProperties())</code> instead</p>
-</div>
-<p>Pass writer properties to the Rust parquet writer, see options https://arrow.apache.org/rust/parquet/file/properties/struct.WriterProperties.html:</p>
-
-
-
-  <p><strong>Parameters:</strong></p>
-  <table>
-    <thead>
-      <tr>
-        <th>Name</th>
-        <th>Type</th>
-        <th>Description</th>
-        <th>Default</th>
-      </tr>
-    </thead>
-    <tbody>
-        <tr>
-          <td><code>data_page_size_limit</code></td>
-          <td>
-                <code><span title="typing.Optional">Optional</span>[int]</code>
-          </td>
-          <td>
-            <div class="doc-md-description">
-              <p>Limit DataPage size to this in bytes.</p>
-            </div>
-          </td>
-          <td>
-                <code>None</code>
-          </td>
-        </tr>
-        <tr>
-          <td><code>dictionary_page_size_limit</code></td>
-          <td>
-                <code><span title="typing.Optional">Optional</span>[int]</code>
-          </td>
-          <td>
-            <div class="doc-md-description">
-              <p>Limit the size of each DataPage to store dicts to this amount in bytes.</p>
-            </div>
-          </td>
-          <td>
-                <code>None</code>
-          </td>
-        </tr>
-        <tr>
-          <td><code>data_page_row_count_limit</code></td>
-          <td>
-                <code><span title="typing.Optional">Optional</span>[int]</code>
-          </td>
-          <td>
-            <div class="doc-md-description">
-              <p>Limit the number of rows in each DataPage.</p>
-            </div>
-          </td>
-          <td>
-                <code>None</code>
-          </td>
-        </tr>
-        <tr>
-          <td><code>write_batch_size</code></td>
-          <td>
-                <code><span title="typing.Optional">Optional</span>[int]</code>
-          </td>
-          <td>
-            <div class="doc-md-description">
-              <p>Splits internally to smaller batch size.</p>
-            </div>
-          </td>
-          <td>
-                <code>None</code>
-          </td>
-        </tr>
-        <tr>
-          <td><code>max_row_group_size</code></td>
-          <td>
-                <code><span title="typing.Optional">Optional</span>[int]</code>
-          </td>
-          <td>
-            <div class="doc-md-description">
-              <p>Max number of rows in row group.</p>
-            </div>
-          </td>
-          <td>
-                <code>None</code>
-          </td>
-        </tr>
-    </tbody>
-  </table>
-
-
-
-  <p><strong>Returns:</strong></p>
-  <table>
-    <thead>
-      <tr>
-<th>Name</th>        <th>Type</th>
-        <th>Description</th>
-      </tr>
-    </thead>
-    <tbody>
-        <tr>
-<td><code>TableMerger</code></td>          <td>
-                <code><a class="autorefs autorefs-internal" title="deltalake.table.TableMerger" href="#deltalake.table.TableMerger">TableMerger</a></code>
-          </td>
-          <td>
-            <div class="doc-md-description">
-              <p>TableMerger Object</p>
-            </div>
-          </td>
-        </tr>
-    </tbody>
-  </table>
-
   </div>
 
 </div>

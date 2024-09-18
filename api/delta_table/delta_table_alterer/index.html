@@ -1253,6 +1253,13 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#deltalake.table.TableAlterer.add_feature" class="md-nav__link">
+    add_feature
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#deltalake.table.TableAlterer.drop_constraint" class="md-nav__link">
     drop_constraint
   </a>
@@ -1446,6 +1453,8 @@
       
         
       
+        
+      
     
     
     
@@ -1509,6 +1518,26 @@
   
   <span class="md-ellipsis">
     AWS S3 Storage Backend
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../integrations/object-storage/s3-like/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    CloudFlare R2 & Minio
   </span>
   
 
@@ -1838,6 +1867,13 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#deltalake.table.TableAlterer.add_feature" class="md-nav__link">
+    add_feature
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#deltalake.table.TableAlterer.drop_constraint" class="md-nav__link">
     drop_constraint
   </a>
@@ -1917,7 +1953,7 @@
 
 
 </h4>
-<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">add_columns</span><span class="p">(</span><span class="n">fields</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="n">DeltaField</span><span class="p">,</span> <span class="n">List</span><span class="p">[</span><span class="n">DeltaField</span><span class="p">]],</span> <span class="n">custom_metadata</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">post_commithook_properties</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">PostCommitHookProperties</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span>
+<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">add_columns</span><span class="p">(</span><span class="n">fields</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="n">DeltaField</span><span class="p">,</span> <span class="n">List</span><span class="p">[</span><span class="n">DeltaField</span><span class="p">]],</span> <span class="n">custom_metadata</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">commit_properties</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">CommitProperties</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">post_commithook_properties</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">PostCommitHookProperties</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span>
 </span></code></pre></div>
 
   <div class="doc doc-contents ">
@@ -1952,13 +1988,13 @@
           </td>
         </tr>
         <tr>
-          <td><code>custom_metadata</code></td>
+          <td><code>commit_properties</code></td>
           <td>
-                <code><span title="typing.Optional">Optional</span>[<span title="typing.Dict">Dict</span>[str, str]]</code>
+                <code><span title="typing.Optional">Optional</span>[<span title="deltalake.table.CommitProperties">CommitProperties</span>]</code>
           </td>
           <td>
             <div class="doc-md-description">
-              <p>custom metadata that will be added to the transaction commit.</p>
+              <p>properties of the transaction commit. If None, default values are used.</p>
             </div>
           </td>
           <td>
@@ -1984,17 +2020,16 @@
 
 <details class="example" open>
   <summary>Example</summary>
-  <div class="language-python highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="kn">from</span> <span class="nn">deltalake</span> <span class="kn">import</span> <span class="n">DeltaTable</span>
-</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="kn">from</span> <span class="nn">deltalake.schema</span> <span class="kn">import</span> <span class="n">Field</span><span class="p">,</span> <span class="n">PrimitiveType</span><span class="p">,</span> <span class="n">StructType</span>
-</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="n">dt</span> <span class="o">=</span> <span class="n">DeltaTable</span><span class="p">(</span><span class="s2">&quot;test_table&quot;</span><span class="p">)</span>
-</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="n">new_fields</span> <span class="o">=</span> <span class="p">[</span>
-</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>    <span class="n">Field</span><span class="p">(</span><span class="s2">&quot;baz&quot;</span><span class="p">,</span> <span class="n">StructType</span><span class="p">([</span><span class="n">Field</span><span class="p">(</span><span class="s2">&quot;bar&quot;</span><span class="p">,</span> <span class="n">PrimitiveType</span><span class="p">(</span><span class="s2">&quot;integer&quot;</span><span class="p">))])),</span>
-</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>    <span class="n">Field</span><span class="p">(</span><span class="s2">&quot;bar&quot;</span><span class="p">,</span> <span class="n">PrimitiveType</span><span class="p">(</span><span class="s2">&quot;integer&quot;</span><span class="p">))</span>
-</span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="p">]</span>
-</span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a><span class="n">dt</span><span class="o">.</span><span class="n">alter</span><span class="o">.</span><span class="n">add_columns</span><span class="p">(</span>
-</span><span id="__span-0-9"><a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a>    <span class="n">new_fields</span>
-</span><span id="__span-0-10"><a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a><span class="p">)</span>
-</span></code></pre></div>
+  <p>from deltalake.schema import Field, PrimitiveType, StructType
+dt = DeltaTable("test_table")
+new_fields = [
+    Field("baz", StructType([Field("bar", PrimitiveType("integer"))])),
+    Field("bar", PrimitiveType("integer"))
+]
+dt.alter.add_columns(
+    new_fields
+)
+```</p>
 </details>
   </div>
 
@@ -2010,7 +2045,7 @@
 
 
 </h4>
-<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">add_constraint</span><span class="p">(</span><span class="n">constraints</span><span class="p">:</span> <span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">],</span> <span class="n">custom_metadata</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">post_commithook_properties</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">PostCommitHookProperties</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span>
+<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">add_constraint</span><span class="p">(</span><span class="n">constraints</span><span class="p">:</span> <span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">],</span> <span class="n">custom_metadata</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">post_commithook_properties</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">PostCommitHookProperties</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">commit_properties</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">CommitProperties</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span>
 </span></code></pre></div>
 
   <div class="doc doc-contents ">
@@ -2051,7 +2086,7 @@
           </td>
           <td>
             <div class="doc-md-description">
-              <p>custom metadata that will be added to the transaction commit.</p>
+              <p>Deprecated and will be removed in future versions. Use commit_properties instead.</p>
             </div>
           </td>
           <td>
@@ -2066,6 +2101,20 @@
           <td>
             <div class="doc-md-description">
               <p>properties for the post commit hook. If None, default values are used.</p>
+            </div>
+          </td>
+          <td>
+                <code>None</code>
+          </td>
+        </tr>
+        <tr>
+          <td><code>commit_properties</code></td>
+          <td>
+                <code><span title="typing.Optional">Optional</span>[<span title="deltalake.table.CommitProperties">CommitProperties</span>]</code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>properties of the transaction commit. If None, default values are used.</p>
             </div>
           </td>
           <td>
@@ -2097,12 +2146,116 @@
 
 
 
+<h4 id="deltalake.table.TableAlterer.add_feature" class="doc doc-heading">
+          <span class="doc doc-object-name doc-function-name">add_feature</span>
+
+
+</h4>
+<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">add_feature</span><span class="p">(</span><span class="n">feature</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="n">TableFeatures</span><span class="p">,</span> <span class="n">List</span><span class="p">[</span><span class="n">TableFeatures</span><span class="p">]],</span> <span class="n">allow_protocol_versions_increase</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span> <span class="n">commit_properties</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">CommitProperties</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">post_commithook_properties</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">PostCommitHookProperties</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span>
+</span></code></pre></div>
+
+  <div class="doc doc-contents ">
+  
+      <p>Enable a table feature.</p>
+
+
+
+  <p><strong>Parameters:</strong></p>
+  <table>
+    <thead>
+      <tr>
+        <th>Name</th>
+        <th>Type</th>
+        <th>Description</th>
+        <th>Default</th>
+      </tr>
+    </thead>
+    <tbody>
+        <tr>
+          <td><code>feature</code></td>
+          <td>
+                <code><span title="typing.Union">Union</span>[<span title="deltalake._internal.TableFeatures">TableFeatures</span>, <span title="typing.List">List</span>[<span title="deltalake._internal.TableFeatures">TableFeatures</span>]]</code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>Table Feature e.g. Deletion Vectors, Change Data Feed</p>
+            </div>
+          </td>
+          <td>
+              <em>required</em>
+          </td>
+        </tr>
+        <tr>
+          <td><code>allow_protocol_versions_increase</code></td>
+          <td>
+                <code>bool</code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>Allow the protocol to be implicitily bumped to reader 3 or writer 7</p>
+            </div>
+          </td>
+          <td>
+                <code>False</code>
+          </td>
+        </tr>
+        <tr>
+          <td><code>commit_properties</code></td>
+          <td>
+                <code><span title="typing.Optional">Optional</span>[<span title="deltalake.table.CommitProperties">CommitProperties</span>]</code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>properties of the transaction commit. If None, default values are used.</p>
+            </div>
+          </td>
+          <td>
+                <code>None</code>
+          </td>
+        </tr>
+        <tr>
+          <td><code>post_commithook_properties</code></td>
+          <td>
+                <code><span title="typing.Optional">Optional</span>[<span title="deltalake.table.PostCommitHookProperties">PostCommitHookProperties</span>]</code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>properties for the post commit hook. If None, default values are used.</p>
+            </div>
+          </td>
+          <td>
+                <code>None</code>
+          </td>
+        </tr>
+    </tbody>
+  </table>
+
+<details class="example" open>
+  <summary>Example</summary>
+  <div class="language-python highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="kn">from</span> <span class="nn">deltalake</span> <span class="kn">import</span> <span class="n">DeltaTable</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="n">dt</span> <span class="o">=</span> <span class="n">DeltaTable</span><span class="p">(</span><span class="s2">&quot;test_table&quot;</span><span class="p">)</span>
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="n">dt</span><span class="o">.</span><span class="n">alter</span><span class="o">.</span><span class="n">add_feature</span><span class="p">(</span><span class="n">TableFeatures</span><span class="o">.</span><span class="n">AppendOnly</span><span class="p">)</span>
+</span></code></pre></div>
+<p><strong>Check protocol</strong>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>dt.protocol()
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>ProtocolVersions(min_reader_version=1, min_writer_version=7, writer_features=[&#39;appendOnly&#39;], reader_features=None)
+</span></code></pre></div></p>
+</details>
+  </div>
+
+</div>
+
+
+<div class="doc doc-object doc-function">
+
+
+
 <h4 id="deltalake.table.TableAlterer.drop_constraint" class="doc doc-heading">
           <span class="doc doc-object-name doc-function-name">drop_constraint</span>
 
 
 </h4>
-<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">drop_constraint</span><span class="p">(</span><span class="n">name</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">raise_if_not_exists</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span> <span class="n">custom_metadata</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">post_commithook_properties</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">PostCommitHookProperties</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span>
+<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">drop_constraint</span><span class="p">(</span><span class="n">name</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">raise_if_not_exists</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span> <span class="n">custom_metadata</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">post_commithook_properties</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">PostCommitHookProperties</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">commit_properties</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">CommitProperties</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span>
 </span></code></pre></div>
 
   <div class="doc doc-contents ">
@@ -2157,7 +2310,7 @@
           </td>
           <td>
             <div class="doc-md-description">
-              <p>custom metadata that will be added to the transaction commit.</p>
+              <p>Deprecated and will be removed in future versions. Use commit_properties instead.</p>
             </div>
           </td>
           <td>
@@ -2172,6 +2325,20 @@
           <td>
             <div class="doc-md-description">
               <p>properties for the post commit hook. If None, default values are used.</p>
+            </div>
+          </td>
+          <td>
+                <code>None</code>
+          </td>
+        </tr>
+        <tr>
+          <td><code>commit_properties</code></td>
+          <td>
+                <code><span title="typing.Optional">Optional</span>[<span title="deltalake.table.CommitProperties">CommitProperties</span>]</code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>properties of the transaction commit. If None, default values are used.</p>
             </div>
           </td>
           <td>
@@ -2210,18 +2377,100 @@
 
 
 </h4>
-<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">set_table_properties</span><span class="p">(</span><span class="n">properties</span><span class="p">:</span> <span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">],</span> <span class="n">raise_if_not_exists</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span> <span class="n">custom_metadata</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span>
+<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">set_table_properties</span><span class="p">(</span><span class="n">properties</span><span class="p">:</span> <span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">],</span> <span class="n">raise_if_not_exists</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span> <span class="n">custom_metadata</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">commit_properties</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">CommitProperties</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span>
 </span></code></pre></div>
 
   <div class="doc doc-contents ">
   
-      <p>Unset properties from the table.
-Args:
-    properties: properties which set
-    raise_if_not_exists: set if should raise if not exists.
-    custom_metadata: custom metadata that will be added to the transaction commit.
-Example:</p>
+      <p>Set properties from the table.</p>
 
+
+
+  <p><strong>Parameters:</strong></p>
+  <table>
+    <thead>
+      <tr>
+        <th>Name</th>
+        <th>Type</th>
+        <th>Description</th>
+        <th>Default</th>
+      </tr>
+    </thead>
+    <tbody>
+        <tr>
+          <td><code>properties</code></td>
+          <td>
+                <code><span title="typing.Dict">Dict</span>[str, str]</code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>properties which set</p>
+            </div>
+          </td>
+          <td>
+              <em>required</em>
+          </td>
+        </tr>
+        <tr>
+          <td><code>raise_if_not_exists</code></td>
+          <td>
+                <code>bool</code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>set if should raise if not exists.</p>
+            </div>
+          </td>
+          <td>
+                <code>True</code>
+          </td>
+        </tr>
+        <tr>
+          <td><code>custom_metadata</code></td>
+          <td>
+                <code><span title="typing.Optional">Optional</span>[<span title="typing.Dict">Dict</span>[str, str]]</code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>Deprecated and will be removed in future versions. Use commit_properties instead.</p>
+            </div>
+          </td>
+          <td>
+                <code>None</code>
+          </td>
+        </tr>
+        <tr>
+          <td><code>commit_properties</code></td>
+          <td>
+                <code><span title="typing.Optional">Optional</span>[<span title="deltalake.table.CommitProperties">CommitProperties</span>]</code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>properties of the transaction commit. If None, default values are used.</p>
+            </div>
+          </td>
+          <td>
+                <code>None</code>
+          </td>
+        </tr>
+    </tbody>
+  </table>
+
+<details class="example" open>
+  <summary>Example</summary>
+  <div class="language-python highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="kn">from</span> <span class="nn">deltalake</span> <span class="kn">import</span> <span class="n">write_deltalake</span><span class="p">,</span> <span class="n">DeltaTable</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="kn">import</span> <span class="nn">pandas</span> <span class="k">as</span> <span class="nn">pd</span>
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="n">df</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">(</span>
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>    <span class="p">{</span><span class="s2">&quot;id&quot;</span><span class="p">:</span> <span class="p">[</span><span class="s2">&quot;1&quot;</span><span class="p">,</span> <span class="s2">&quot;2&quot;</span><span class="p">,</span> <span class="s2">&quot;3&quot;</span><span class="p">],</span>
+</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>    <span class="s2">&quot;deleted&quot;</span><span class="p">:</span> <span class="p">[</span><span class="kc">False</span><span class="p">,</span> <span class="kc">False</span><span class="p">,</span> <span class="kc">False</span><span class="p">],</span>
+</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>    <span class="s2">&quot;price&quot;</span><span class="p">:</span> <span class="p">[</span><span class="mf">10.</span><span class="p">,</span> <span class="mf">15.</span><span class="p">,</span> <span class="mf">20.</span><span class="p">]</span>
+</span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>    <span class="p">})</span>
+</span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a><span class="n">write_deltalake</span><span class="p">(</span><span class="s2">&quot;tmp&quot;</span><span class="p">,</span> <span class="n">df</span><span class="p">)</span>
+</span><span id="__span-0-9"><a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a>
+</span><span id="__span-0-10"><a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a><span class="n">dt</span> <span class="o">=</span> <span class="n">DeltaTable</span><span class="p">(</span><span class="s2">&quot;tmp&quot;</span><span class="p">)</span>
+</span><span id="__span-0-11"><a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a><span class="n">dt</span><span class="o">.</span><span class="n">alter</span><span class="o">.</span><span class="n">set_table_properties</span><span class="p">({</span><span class="s2">&quot;delta.enableChangeDataFeed&quot;</span><span class="p">:</span> <span class="s2">&quot;true&quot;</span><span class="p">})</span>
+</span></code></pre></div>
+</details>
   </div>
 
 </div>

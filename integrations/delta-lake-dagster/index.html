@@ -1367,6 +1367,8 @@
       
         
       
+        
+      
     
     
     
@@ -1430,6 +1432,26 @@
   
   <span class="md-ellipsis">
     AWS S3 Storage Backend
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../object-storage/s3-like/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    CloudFlare R2 & Minio
   </span>
   
 
@@ -2163,12 +2185,12 @@
 </span><span id="__span-9-15"><a id="__codelineno-9-15" name="__codelineno-9-15" href="#__codelineno-9-15"></a>   )
 </span></code></pre></div>
 <h2 id="using-delta-lake-and-dagster-with-polars">Using Delta Lake and Dagster with Polars</h2>
-<p>To read and write data to Delta Lake using pandas, use the <code>DeltaLakePolarsIOManager()</code>. </p>
+<p>To read and write data to Delta Lake using polars, use the <code>DeltaLakePolarsIOManager()</code>. </p>
 <p>You will need to install it using:</p>
 <div class="language-text highlight"><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a>pip install dagster-deltalake-polars
 </span></code></pre></div>
 <p>In your <code>Definitions</code> object, change the <code>io_manager</code> to <code>DeltaLakePolarsIOManager()</code>:</p>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-11-1"><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a>from dagster_polars import DeltaLakePolarsIOManager
+<div class="language-text highlight"><pre><span></span><code><span id="__span-11-1"><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a>from dagster_deltalake_polars import DeltaLakePolarsIOManager
 </span><span id="__span-11-2"><a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a>
 </span><span id="__span-11-3"><a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a>defs = Definitions(
 </span><span id="__span-11-4"><a id="__codelineno-11-4" name="__codelineno-11-4" href="#__codelineno-11-4"></a>   assets=all_assets,

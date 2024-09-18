@@ -1432,6 +1432,8 @@
       
         
       
+        
+      
     
     
     
@@ -1495,6 +1497,26 @@
   
   <span class="md-ellipsis">
     AWS S3 Storage Backend
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../integrations/object-storage/s3-like/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    CloudFlare R2 & Minio
   </span>
   
 
@@ -1889,7 +1911,7 @@
 
 
 </h4>
-<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">compact</span><span class="p">(</span><span class="n">partition_filters</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">FilterType</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">target_size</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">max_concurrent_tasks</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">min_commit_interval</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Union</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="n">timedelta</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">writer_properties</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">WriterProperties</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">custom_metadata</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">post_commithook_properties</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">PostCommitHookProperties</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]</span>
+<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">compact</span><span class="p">(</span><span class="n">partition_filters</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">FilterConjunctionType</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">target_size</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">max_concurrent_tasks</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">min_commit_interval</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Union</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="n">timedelta</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">writer_properties</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">WriterProperties</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">custom_metadata</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">post_commithook_properties</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">PostCommitHookProperties</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">commit_properties</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">CommitProperties</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]</span>
 </span></code></pre></div>
 
   <div class="doc doc-contents ">
@@ -1916,7 +1938,7 @@ it will fail.</p>
         <tr>
           <td><code>partition_filters</code></td>
           <td>
-                <code><span title="typing.Optional">Optional</span>[<span title="deltalake.table.FilterType">FilterType</span>]</code>
+                <code><span title="typing.Optional">Optional</span>[<span title="deltalake.table.FilterConjunctionType">FilterConjunctionType</span>]</code>
           </td>
           <td>
             <div class="doc-md-description">
@@ -1996,7 +2018,7 @@ it will fail.</p>
           </td>
           <td>
             <div class="doc-md-description">
-              <p>custom metadata that will be added to the transaction commit.</p>
+              <p>Deprecated and will be removed in future versions. Use commit_properties instead.</p>
             </div>
           </td>
           <td>
@@ -2011,6 +2033,20 @@ it will fail.</p>
           <td>
             <div class="doc-md-description">
               <p>properties for the post commit hook. If None, default values are used.</p>
+            </div>
+          </td>
+          <td>
+                <code>None</code>
+          </td>
+        </tr>
+        <tr>
+          <td><code>commit_properties</code></td>
+          <td>
+                <code><span title="typing.Optional">Optional</span>[<span title="deltalake.table.CommitProperties">CommitProperties</span>]</code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>properties of the transaction commit. If None, default values are used.</p>
             </div>
           </td>
           <td>
@@ -2074,7 +2110,7 @@ it will fail.</p>
 
 
 </h4>
-<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">z_order</span><span class="p">(</span><span class="n">columns</span><span class="p">:</span> <span class="n">Iterable</span><span class="p">[</span><span class="nb">str</span><span class="p">],</span> <span class="n">partition_filters</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">FilterType</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">target_size</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">max_concurrent_tasks</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">max_spill_size</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">20</span> <span class="o">*</span> <span class="mi">1024</span> <span class="o">*</span> <span class="mi">1024</span> <span class="o">*</span> <span class="mi">1024</span><span class="p">,</span> <span class="n">min_commit_interval</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Union</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="n">timedelta</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">writer_properties</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">WriterProperties</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">custom_metadata</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">post_commithook_properties</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">PostCommitHookProperties</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]</span>
+<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">z_order</span><span class="p">(</span><span class="n">columns</span><span class="p">:</span> <span class="n">Iterable</span><span class="p">[</span><span class="nb">str</span><span class="p">],</span> <span class="n">partition_filters</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">FilterConjunctionType</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">target_size</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">max_concurrent_tasks</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">max_spill_size</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">20</span> <span class="o">*</span> <span class="mi">1024</span> <span class="o">*</span> <span class="mi">1024</span> <span class="o">*</span> <span class="mi">1024</span><span class="p">,</span> <span class="n">min_commit_interval</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Union</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="n">timedelta</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">writer_properties</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">WriterProperties</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">custom_metadata</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">post_commithook_properties</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">PostCommitHookProperties</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">commit_properties</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">CommitProperties</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]</span>
 </span></code></pre></div>
 
   <div class="doc doc-contents ">
@@ -2112,7 +2148,7 @@ it will fail.</p>
         <tr>
           <td><code>partition_filters</code></td>
           <td>
-                <code><span title="typing.Optional">Optional</span>[<span title="deltalake.table.FilterType">FilterType</span>]</code>
+                <code><span title="typing.Optional">Optional</span>[<span title="deltalake.table.FilterConjunctionType">FilterConjunctionType</span>]</code>
           </td>
           <td>
             <div class="doc-md-description">
@@ -2162,7 +2198,7 @@ it will fail.</p>
           </td>
           <td>
             <div class="doc-md-description">
-              <p>the maximum number of bytes to spill to disk. Defaults to 20GB.</p>
+              <p>the maximum number of bytes allowed in memory before spilling to disk. Defaults to 20GB.</p>
             </div>
           </td>
           <td>
@@ -2206,7 +2242,7 @@ it will fail.</p>
           </td>
           <td>
             <div class="doc-md-description">
-              <p>custom metadata that will be added to the transaction commit.</p>
+              <p>Deprecated and will be removed in future versions. Use commit_properties instead.</p>
             </div>
           </td>
           <td>
@@ -2221,6 +2257,20 @@ it will fail.</p>
           <td>
             <div class="doc-md-description">
               <p>properties for the post commit hook. If None, default values are used.</p>
+            </div>
+          </td>
+          <td>
+                <code>None</code>
+          </td>
+        </tr>
+        <tr>
+          <td><code>commit_properties</code></td>
+          <td>
+                <code><span title="typing.Optional">Optional</span>[<span title="deltalake.table.CommitProperties">CommitProperties</span>]</code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>properties of the transaction commit. If None, default values are used.</p>
             </div>
           </td>
           <td>
