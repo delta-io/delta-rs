@@ -30,6 +30,7 @@ pub mod state_arrow;
 
 /// Metadata for a checkpoint file
 #[derive(Serialize, Deserialize, Debug, Default, Clone, Copy)]
+#[serde(rename_all = "camelCase")]
 pub struct CheckPoint {
     /// Delta table version
     pub(crate) version: i64, // 20 digits decimals
