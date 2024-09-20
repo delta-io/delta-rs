@@ -8,6 +8,7 @@ use delta_kernel::schema::MetadataValue;
 use futures::future::BoxFuture;
 use maplit::hashset;
 use serde_json::Value;
+use tracing::log::*;
 
 use super::transaction::{CommitBuilder, TableReference, PROTOCOL};
 use crate::errors::{DeltaResult, DeltaTableError};
