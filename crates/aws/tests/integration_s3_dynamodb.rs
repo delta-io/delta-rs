@@ -10,7 +10,8 @@ use deltalake_aws::logstore::{RepairLogEntryResult, S3DynamoDbLogStore};
 use deltalake_aws::storage::S3StorageOptions;
 use deltalake_aws::{CommitEntry, DynamoDbConfig, DynamoDbLockClient};
 use deltalake_core::kernel::{Action, Add, DataType, PrimitiveType, StructField, StructType};
-use deltalake_core::logstore::{CommitOrBytes, LogStore};
+use deltalake_core::logstore::{logstore_for, CommitOrBytes, LogStore};
+use deltalake_core::operations::create::CreateBuilder;
 use deltalake_core::operations::transaction::CommitBuilder;
 use deltalake_core::protocol::{DeltaOperation, SaveMode};
 use deltalake_core::storage::commit_uri_from_version;
@@ -22,6 +23,10 @@ use lazy_static::lazy_static;
 use object_store::path::Path;
 use serde_json::Value;
 use serial_test::serial;
+
+use maplit::hashmap;
+use object_store::{PutOptions, PutPayload};
+use url::Url;
 
 mod common;
 use common::*;
@@ -76,6 +81,44 @@ fn client_configs_via_env_variables() -> TestResult<()> {
     std::env::remove_var(deltalake_aws::constants::LOCK_TABLE_KEY_NAME);
     std::env::remove_var(deltalake_aws::constants::MAX_ELAPSED_REQUEST_TIME_KEY_NAME);
     std::env::remove_var(deltalake_aws::constants::BILLING_MODE_KEY_NAME);
+    Ok(())
+}
+
+#[tokio::test]
+#[serial]
+async fn test_create_s3_table() -> TestResult<()> {
+    let context = IntegrationContext::new(Box::new(S3Integration::default()))?;
+    let _client = make_client()?;
+    let table_name = format!("{}_{}", "create_test", uuid::Uuid::new_v4());
+    let table_uri = context.uri_for_table(TestTables::Custom(table_name.to_owned()));
+
+    let schema = StructType::new(vec![StructField::new(
+        "id".to_string(),
+        DataType::Primitive(PrimitiveType::Integer),
+        true,
+    )]);
+    let storage_options: HashMap<String, String> = hashmap! {
+        "AWS_ALLOW_HTTP".into() => "true".into(),
+        "AWS_ENDPOINT_URL".into() =>  "http://localhost:4566".into(),
+    };
+    let log_store = logstore_for(Url::parse(&table_uri)?, storage_options, None)?;
+
+    let payload = PutPayload::from_static(b"test-drivin");
+    let _put = log_store
+        .object_store()
+        .put_opts(
+            &Path::from("_delta_log/_commit_failed.tmp"),
+            payload,
+            PutOptions::default(),
+        )
+        .await?;
+
+    let _created = CreateBuilder::new()
+        .with_log_store(log_store)
+        .with_partition_columns(vec!["id"])
+        .with_columns(schema.fields().cloned())
+        .with_save_mode(SaveMode::Ignore)
+        .await?;
     Ok(())
 }
 

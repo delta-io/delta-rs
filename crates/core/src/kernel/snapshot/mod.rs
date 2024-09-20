@@ -44,7 +44,7 @@ use crate::{DeltaResult, DeltaTableConfig, DeltaTableError};
 pub use self::log_data::*;
 
 mod log_data;
-mod log_segment;
+pub(crate) mod log_segment;
 pub(crate) mod parse;
 mod replay;
 mod serde;
