@@ -15,6 +15,7 @@ use serde::{Deserialize, Serialize};
 use tracing::{debug, warn};
 use url::Url;
 
+use crate::kernel::log_segment::PathExt;
 use crate::kernel::Action;
 use crate::operations::transaction::TransactionError;
 use crate::protocol::{get_last_checkpoint, ProtocolError};
@@ -238,7 +239,7 @@ pub trait LogStore: Sync + Send {
         let mut stream = object_store.list(Some(self.log_path()));
         if let Some(res) = stream.next().await {
             match res {
-                Ok(_) => Ok(true),
+                Ok(meta) => Ok(meta.location.is_commit_file()),
                 Err(ObjectStoreError::NotFound { .. }) => Ok(false),
                 Err(err) => Err(err)?,
             }
@@ -328,7 +329,7 @@ pub async fn get_actions(
 // TODO: maybe a bit of a hack, required to `#[derive(Debug)]` for the operation builders
 impl std::fmt::Debug for dyn LogStore + '_ {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "LogStore({})", self.root_uri())
+        write!(f, "{}({})", self.name(), self.root_uri())
     }
 }
 
@@ -508,6 +509,36 @@ mod tests {
         let location = Url::parse("memory://table").unwrap();
         let store = logstore_for(location, HashMap::default(), Some(IORuntime::default()));
         assert!(store.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_is_location_a_table() {
+        use object_store::path::Path;
+        use object_store::{PutOptions, PutPayload};
+        let location = Url::parse("memory://table").unwrap();
+        let store =
+            logstore_for(location, HashMap::default(), None).expect("Failed to get logstore");
+        assert!(!store
+            .is_delta_table_location()
+            .await
+            .expect("Failed to look at table"));
+
+        // Let's put a failed commit into the directory and then see if it's still considered a
+        // delta table (it shouldn't be).
+        let payload = PutPayload::from_static(b"test-drivin");
+        let _put = store
+            .object_store()
+            .put_opts(
+                &Path::from("_delta_log/_commit_failed.tmp"),
+                payload,
+                PutOptions::default(),
+            )
+            .await
+            .expect("Failed to put");
+        assert!(!store
+            .is_delta_table_location()
+            .await
+            .expect("Failed to look at table"));
     }
 }
 
