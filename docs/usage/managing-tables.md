@@ -26,4 +26,11 @@ Use `DeltaTable.vacuum` to perform the vacuum operation. Note that to prevent ac
 
 ## Optimizing tables
 
-Optimizing tables is not currently supported.
+Optimizing a table compacts small files into larger files to avoid the small file problem. This is especially important for tables that get small amounts of data appended to with high frequency. In addition to compacting small files, you can colocate similar data in the same files with Z Ordering, which allows for better file skipping and faster queries.
+
+A table `dt = DeltaTable(...)` has two methods for optimizing it:
+
+- `dt.optimize.compact()` for compacting small files,
+- `dt.optimize.z_order()` to compact and apply Z Ordering.
+
+See the section [Small file compaction](./optimize/small-file-compaction-with-optimize.md) for more information and a detailed example on `compact`, and the section [Z Order](./optimize/delta-lake-z-order.md) for more information on `z_order`.
