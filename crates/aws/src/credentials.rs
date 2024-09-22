@@ -19,7 +19,7 @@ use deltalake_core::storage::StorageOptions;
 use deltalake_core::DeltaResult;
 use tracing::log::*;
 
-use crate::constants;
+use crate::constants::{self, AWS_ENDPOINT_URL};
 
 /// An [object_store::CredentialProvider] which handles converting a populated [SdkConfig]
 /// into a necessary [AwsCredential] type for configuring [object_store::aws::AmazonS3]
@@ -167,12 +167,19 @@ pub async fn resolve_credentials(options: StorageOptions) -> DeltaResult<SdkConf
                     .build()
                     .await,
             )
-            .or_else("StorageOptions", OptionsCredentialsProvider { options })
+            .or_else(
+                "StorageOptions",
+                OptionsCredentialsProvider {
+                    options: options.clone(),
+                },
+            )
             .or_else("DefaultChain", default_provider)
         }
         None => CredentialsProviderChain::first_try(
             "StorageOptions",
-            OptionsCredentialsProvider { options },
+            OptionsCredentialsProvider {
+                options: options.clone(),
+            },
         )
         .or_else("DefaultChain", default_provider),
     };
