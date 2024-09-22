@@ -74,14 +74,7 @@ impl ObjectStoreFactory for S3ObjectStoreFactory {
     ) -> DeltaResult<(ObjectStoreRef, Path)> {
         let options = self.with_env_s3(storage_options);
 
-        let sdk_config = if options.0.contains_key(constants::AWS_ENDPOINT_URL) {
-            None
-        } else {
-            Some(execute_sdk_future(
-                crate::credentials::resolve_credentials(storage_options.clone()),
-            )??)
-        };
-
+        // All S3-likes should start their builder the same way
         let mut builder = AmazonS3Builder::new().with_url(url.to_string());
 
         for (key, value) in options.0.iter() {
@@ -95,14 +88,18 @@ impl ObjectStoreFactory for S3ObjectStoreFactory {
                 source: Box::new(e),
             })?;
         let prefix = Path::parse(path)?;
-        let inner = if let Some(sdk_config) = sdk_config {
-            builder.with_credentials(Arc::new(crate::credentials::AWSForObjectStore::new(
-                sdk_config,
-            )))
-        } else {
-            builder
+
+        if is_aws(storage_options) {
+            debug!("Detected AWS S3, resolving credentials");
+            let sdk_config = execute_sdk_future(crate::credentials::resolve_credentials(
+                storage_options.clone(),
+            ))??;
+            builder = builder.with_credentials(Arc::new(
+                crate::credentials::AWSForObjectStore::new(sdk_config),
+            ));
         }
-        .build()?;
+
+        let inner = builder.build()?;
 
         let store = aws_storage_handler(limit_store_handler(inner, &options), &options)?;
         debug!("Initialized the object store: {store:?}");
@@ -134,6 +131,26 @@ fn aws_storage_handler(
         )?;
         Ok(Arc::new(store))
     }
+}
+
+// Determine whether this crate is being configured for use with native AWS S3 or an S3-alike
+//
+// This function will rteturn true in the default case since it's most likely that the absence of
+// options will mean default/S3 configuration
+fn is_aws(options: &StorageOptions) -> bool {
+    if options
+        .0
+        .contains_key(crate::constants::AWS_FORCE_CREDENTIAL_LOAD)
+    {
+        return true;
+    }
+    if options
+        .0
+        .contains_key(crate::constants::AWS_S3_LOCKING_PROVIDER)
+    {
+        return true;
+    }
+    !options.0.contains_key(crate::constants::AWS_ENDPOINT_URL)
 }
 
 /// Options used to configure the [S3StorageBackend].
@@ -208,12 +225,14 @@ impl S3StorageOptions {
 
         let storage_options = StorageOptions(options.clone());
 
-        let sdk_config = if storage_options.0.contains_key(constants::AWS_ENDPOINT_URL) {
-            None
-        } else {
-            Some(execute_sdk_future(
-                crate::credentials::resolve_credentials(storage_options.clone()),
-            )??)
+        let sdk_config = match is_aws(&storage_options) {
+            false => None,
+            true => {
+                debug!("Detected AWS S3, resolving credentials");
+                Some(execute_sdk_future(
+                    crate::credentials::resolve_credentials(storage_options.clone()),
+                )??)
+            }
         };
 
         Ok(Self {
@@ -528,10 +547,12 @@ mod tests {
             let options = S3StorageOptions::try_default().unwrap();
             assert_eq!(
                 S3StorageOptions {
-                    sdk_config: SdkConfig::builder()
-                        .endpoint_url("http://localhost".to_string())
-                        .region(Region::from_static("us-west-1"))
-                        .build(),
+                    sdk_config: Some(
+                        SdkConfig::builder()
+                            .endpoint_url("http://localhost".to_string())
+                            .region(Region::from_static("us-west-1"))
+                            .build()
+                    ),
                     virtual_hosted_style_request: false,
                     locking_provider: Some("dynamodb".to_string()),
                     dynamodb_endpoint: None,
@@ -560,9 +581,11 @@ mod tests {
             .unwrap();
 
             let mut expected = S3StorageOptions::try_default().unwrap();
-            expected.sdk_config = SdkConfig::builder()
-                .region(Region::from_static("eu-west-1"))
-                .build();
+            expected.sdk_config = Some(
+                SdkConfig::builder()
+                    .region(Region::from_static("eu-west-1"))
+                    .build(),
+            );
             assert_eq!(expected, options);
         });
     }
@@ -670,10 +693,12 @@ mod tests {
 
             assert_eq!(
                 S3StorageOptions {
-                    sdk_config: SdkConfig::builder()
-                        .endpoint_url("http://localhost".to_string())
-                        .region(Region::from_static("us-west-2"))
-                        .build(),
+                    sdk_config: Some(
+                        SdkConfig::builder()
+                            .endpoint_url("http://localhost".to_string())
+                            .region(Region::from_static("us-west-2"))
+                            .build()
+                    ),
                     virtual_hosted_style_request: false,
                     locking_provider: Some("dynamodb".to_string()),
                     dynamodb_endpoint: Some("http://localhost:dynamodb".to_string()),
@@ -766,5 +791,24 @@ mod tests {
                 assert_eq!(v, "options_key");
             }
         });
+    }
+
+    #[test]
+    fn test_is_aws() {
+        let options = StorageOptions::default();
+        assert!(is_aws(&options));
+
+        let minio: HashMap<String, String> = hashmap! {
+            crate::constants::AWS_ENDPOINT_URL.to_string() => "http://minio:8080".to_string(),
+        };
+        let options = StorageOptions::from(minio);
+        assert!(!is_aws(&options));
+
+        let localstack: HashMap<String, String> = hashmap! {
+            crate::constants::AWS_FORCE_CREDENTIAL_LOAD.to_string() => "true".to_string(),
+            crate::constants::AWS_ENDPOINT_URL.to_string() => "http://minio:8080".to_string(),
+        };
+        let options = StorageOptions::from(localstack);
+        assert!(is_aws(&options));
     }
 }

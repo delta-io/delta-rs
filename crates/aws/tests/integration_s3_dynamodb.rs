@@ -23,6 +23,7 @@ use lazy_static::lazy_static;
 use object_store::path::Path;
 use serde_json::Value;
 use serial_test::serial;
+use tracing::log::*;
 
 use maplit::hashmap;
 use object_store::{PutOptions, PutPayload};
@@ -43,7 +44,7 @@ lazy_static! {
 fn make_client() -> TestResult<DynamoDbLockClient> {
     let options: S3StorageOptions = S3StorageOptions::try_default().unwrap();
     Ok(DynamoDbLockClient::try_new(
-        &options.sdk_config,
+        &options.sdk_config.unwrap(),
         None,
         None,
         None,
@@ -74,7 +75,7 @@ fn client_configs_via_env_variables() -> TestResult<()> {
             billing_mode: BillingMode::PayPerRequest,
             lock_table_name: "some_table".to_owned(),
             max_elapsed_request_time: Duration::from_secs(64),
-            sdk_config: options.sdk_config,
+            sdk_config: options.sdk_config.unwrap(),
         },
         *config,
     );
@@ -87,6 +88,7 @@ fn client_configs_via_env_variables() -> TestResult<()> {
 #[tokio::test]
 #[serial]
 async fn test_create_s3_table() -> TestResult<()> {
+    let _ = pretty_env_logger::try_init();
     let context = IntegrationContext::new(Box::new(S3Integration::default()))?;
     let _client = make_client()?;
     let table_name = format!("{}_{}", "create_test", uuid::Uuid::new_v4());
@@ -98,8 +100,10 @@ async fn test_create_s3_table() -> TestResult<()> {
         true,
     )]);
     let storage_options: HashMap<String, String> = hashmap! {
-        "AWS_ALLOW_HTTP".into() => "true".into(),
-        "AWS_ENDPOINT_URL".into() =>  "http://localhost:4566".into(),
+        deltalake_aws::constants::AWS_ALLOW_HTTP.into() => "true".into(),
+        // Despite not being in AWS, we should force credential resolution
+        deltalake_aws::constants::AWS_FORCE_CREDENTIAL_LOAD.into() => "true".into(),
+        deltalake_aws::constants::AWS_ENDPOINT_URL.into()  => "http://localhost:4566".into(),
     };
     let log_store = logstore_for(Url::parse(&table_uri)?, storage_options, None)?;
 
@@ -113,6 +117,7 @@ async fn test_create_s3_table() -> TestResult<()> {
         )
         .await?;
 
+    debug!("creating a CreateBuilder");
     let _created = CreateBuilder::new()
         .with_log_store(log_store)
         .with_partition_columns(vec!["id"])
