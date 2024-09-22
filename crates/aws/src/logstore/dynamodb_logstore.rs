@@ -45,7 +45,7 @@ impl S3DynamoDbLogStore {
         object_store: ObjectStoreRef,
     ) -> DeltaResult<Self> {
         let lock_client = DynamoDbLockClient::try_new(
-            &s3_options.sdk_config,
+            &s3_options.sdk_config.clone().unwrap(),
             s3_options
                 .extra_opts
                 .get(constants::LOCK_TABLE_KEY_NAME)
