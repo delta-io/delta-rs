@@ -84,6 +84,9 @@ pub const AWS_EC2_METADATA_DISABLED: &str = "AWS_EC2_METADATA_DISABLED";
 /// Defaults to 100
 pub const AWS_EC2_METADATA_TIMEOUT: &str = "AWS_EC2_METADATA_TIMEOUT";
 
+/// Force the delta-rs to attempt to load AWS credentials
+pub const AWS_FORCE_CREDENTIAL_LOAD: &str = "AWS_FORCE_CREDENTIAL_LOAD";
+
 /// The list of option keys owned by the S3 module.
 /// Option keys not contained in this list will be added to the `extra_opts`
 /// field of [crate::storage::s3::S3StorageOptions].
