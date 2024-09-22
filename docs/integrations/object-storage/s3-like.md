@@ -30,7 +30,7 @@ Follow the steps below to use Delta Lake on S3 (R2/Minio) with Polars:
 ```python
 storage_options = {
     'AWS_SECRET_ACCESS_KEY': <access_key>,
-    'conditional_put': 'etag', # Here we say to use conditional put, this provides safe concurrency.
+    'aws_conditional_put': 'etag', # Here we say to use conditional put, this provides safe concurrency.
 }
 ```
 
@@ -67,10 +67,10 @@ With this configuration, Minio will host its S3-compatible API over HTTP, not HT
 
 ```python
 storage_options = {
-    "AWS_ACCESS_KEY_ID": ...,
-    "AWS_SECRET_ACCESS_KEY": ...,
-    "AWS_ENDPOINT_URL": "http://localhost:9000",
-    "AWS_ALLOW_HTTP": "true",
-    "AWS_S3_ALLOW_UNSAFE_RENAME": "true"
+    'AWS_ACCESS_KEY_ID': ...,
+    'AWS_SECRET_ACCESS_KEY': ...,
+    'AWS_ENDPOINT_URL': 'http://localhost:9000',
+    'AWS_ALLOW_HTTP': 'true',
+    'aws_conditional_put': 'etag'
 }
 ```
