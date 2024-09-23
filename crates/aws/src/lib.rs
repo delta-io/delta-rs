@@ -55,18 +55,26 @@ impl LogStoreFactory for S3LogStoreFactory {
         let store = url_prefix_handler(store, Path::parse(location.path())?);
 
         // With conditional put in S3-like API we can use the deltalake default logstore which use PutIfAbsent
-        if options
-            .0
-            .contains_key(AmazonS3ConfigKey::ConditionalPut.as_ref())
-        {
+        if options.0.keys().any(|key| {
+            let key = key.to_ascii_lowercase();
+            vec![
+                AmazonS3ConfigKey::ConditionalPut.as_ref(),
+                "conditional_put",
+            ]
+            .contains(&key.as_str())
+        }) {
             debug!("S3LogStoreFactory has been asked to create a default LogStore where the underlying store has Conditonal Put enabled - no locking provider required");
             return Ok(default_logstore(store, location, options));
         }
 
-        if options
-            .0
-            .contains_key(AmazonS3ConfigKey::CopyIfNotExists.as_ref())
-        {
+        if options.0.keys().any(|key| {
+            let key = key.to_ascii_lowercase();
+            vec![
+                AmazonS3ConfigKey::CopyIfNotExists.as_ref(),
+                "copy_if_not_exists",
+            ]
+            .contains(&key.as_str())
+        }) {
             debug!("S3LogStoreFactory has been asked to create a LogStore where the underlying store has copy-if-not-exists enabled - no locking provider required");
             return Ok(logstore::default_s3_logstore(store, location, options));
         }
@@ -717,7 +725,7 @@ mod tests {
         let factory = S3LogStoreFactory::default();
         let store = InMemory::new();
         let url = Url::parse("s3://test-bucket").unwrap();
-        std::env::remove_var(storage::s3_constants::AWS_S3_LOCKING_PROVIDER);
+        std::env::remove_var(crate::constants::AWS_S3_LOCKING_PROVIDER);
         let logstore = factory
             .with_options(Arc::new(store), &url, &StorageOptions::from(HashMap::new()))
             .unwrap();

@@ -3099,7 +3099,6 @@ mod tests {
         use crate::kernel::Protocol;
         use crate::operations::merge::Action;
 
-        let _ = pretty_env_logger::try_init();
         let schema = get_delta_schema();
 
         let actions = vec![Action::Protocol(Protocol::new(1, 4))];
@@ -3194,7 +3193,6 @@ mod tests {
         use crate::kernel::Protocol;
         use crate::operations::merge::Action;
 
-        let _ = pretty_env_logger::try_init();
         let schema = get_delta_schema();
 
         let actions = vec![Action::Protocol(Protocol::new(1, 4))];
