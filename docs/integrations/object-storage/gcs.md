@@ -2,86 +2,43 @@
 
 `delta-rs` offers native support for using Google Cloud Storage (GCS) as an object storage backend.
 
-You don’t need to install any extra dependencies to red/write Delta tables to S3 with engines that use `delta-rs`. You do need to configure your AWS access credentials correctly.
+You don’t need to install any extra dependencies to read/write Delta tables to GCS with engines that use `delta-rs`. You do need to configure your GCS access credentials correctly.
 
-## Note for boto3 users
+## Using Application Default Credentials
 
-Many Python engines use [boto3](https://boto3.amazonaws.com/v1/documentation/api/latest/index.html) to connect to AWS. This library supports reading credentials automatically from your local `.aws/config` or `.aws/creds` file.
+Application Default Credentials (ADC) is a strategy used by GCS to automatically find credentials based on the application environment.
 
-For example, if you’re running locally with the proper credentials in your local `.aws/config` or `.aws/creds` file then you can write a Parquet file to S3 like this with pandas:
+If you are working from your local machine and have ADC set up then you can read/write Delta tables from GCS directly, without having to pass your credentials explicitly.
 
-```python
-    import pandas as pd
-    df = pd.DataFrame({'x': [1, 2, 3]})
-    df.to_parquet("s3://avriiil/parquet-test-pandas")
-```
+## Example: Write Delta tables to GCS with Polars
 
-The `delta-rs` writer does not use `boto3` and therefore does not support taking credentials from your `.aws/config` or `.aws/creds` file. If you’re used to working with writers from Python engines like Polars, pandas or Dask, this may mean a small change to your workflow.
-
-## Passing AWS Credentials
-
-You can pass your AWS credentials explicitly by using:
-
-- the `storage_options `kwarg
-- Environment variables
-- EC2 metadata if using EC2 instances
-- AWS Profiles
-
-## Example
-
-Let's work through an example with Polars. The same logic applies to other Python engines like Pandas, Daft, Dask, etc.
-
-Follow the steps below to use Delta Lake on S3 with Polars:
-
-1. Install Polars and deltalake. For example, using:
-
-   `pip install polars deltalake`
-
-2. Create a dataframe with some toy data.
-
-   `df = pl.DataFrame({'x': [1, 2, 3]})`
-
-3. Set your `storage_options` correctly.
+Using Polars, you can write a Delta table to GCS like this:
 
 ```python
-storage_options = {
-    "AWS_REGION":<region_name>,
-    'AWS_ACCESS_KEY_ID': <key_id>,
-    'AWS_SECRET_ACCESS_KEY': <access_key>,
-    'AWS_S3_LOCKING_PROVIDER': 'dynamodb',
-    'DELTA_DYNAMO_TABLE_NAME': 'delta_log',
-}
+# create a toy dataframe
+import polars as pl
+df = pl.DataFrame({"foo": [1, 2, 3, 4, 5]})
+
+# define path
+table_path = "gs://bucket/delta-table"
+
+# write Delta to GCS
+df.write_delta(table_path)
 ```
 
-4. Write data to Delta table using the `storage_options` kwarg.
+## Passing GCS Credentials explicitly
 
-   ```python
-   df.write_delta(
-       "s3://bucket/delta_table",
-       storage_options=storage_options,
-   )
-   ```
+Alternatively, you can pass GCS credentials to your query engine explicitly.
 
-## Delta Lake on AWS S3: Safe Concurrent Writes
-
-You need a locking provider to ensure safe concurrent writes when writing Delta tables to AWS S3. This is because AWS S3 does not guarantee mutual exclusion.
-
-A locking provider guarantees that only one writer is able to create the same file. This prevents corrupted or conflicting data.
-
-`delta-rs` uses DynamoDB to guarantee safe concurrent writes.
-
-Run the code below in your terminal to create a DynamoDB table that will act as your locking provider.
-
-```
-    aws dynamodb create-table \
-    --table-name delta_log \
-    --attribute-definitions AttributeName=tablePath,AttributeType=S AttributeName=fileName,AttributeType=S \
-    --key-schema AttributeName=tablePath,KeyType=HASH AttributeName=fileName,KeyType=RANGE \
-    --provisioned-throughput ReadCapacityUnits=5,WriteCapacityUnits=5
-```
-
-If for some reason you don't want to use DynamoDB as your locking mechanism you can choose to set the `AWS_S3_ALLOW_UNSAFE_RENAME` variable to `true` in order to enable S3 unsafe writes.
-
-Read more in the [Usage](../../usage/writing/writing-to-s3-with-locking-provider.md) section.
+For Polars, you would do this using the `storage_options` keyword. This will forward your credentials to the `object store` library that Polars uses under the hood. Read the [Polars documentation](https://docs.pola.rs/api/python/stable/reference/api/polars.DataFrame.write_delta.html) and the [`object store` documentation](https://docs.rs/object_store/latest/object_store/gcp/enum.GoogleConfigKey.html#variants) for more information.
 
 ## Delta Lake on GCS: Required permissions
+
+You will need the following permissions in your GCS account:
+
+- `storage.objects.create`
+- `storage.objects.delete` (only required for uploads that overwrite an existing object)
+- `storage.objects.get` (only required if you plan on using the Google Cloud CLI)
+- `storage.objects.list` (only required if you plan on using the Google Cloud CLI)
+
+For more information, see the [GCP documentation](https://cloud.google.com/storage/docs/uploading-objects)
