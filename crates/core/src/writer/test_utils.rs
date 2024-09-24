@@ -3,14 +3,14 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use arrow::compute::take;
 use arrow_array::{Int32Array, Int64Array, RecordBatch, StringArray, StructArray, UInt32Array};
 use arrow_schema::{DataType, Field, Schema as ArrowSchema};
+use arrow_select::take::take;
 
 use crate::kernel::{DataType as DeltaDataType, Metadata, PrimitiveType, StructField, StructType};
 use crate::operations::create::CreateBuilder;
 use crate::operations::DeltaOps;
-use crate::{DeltaConfigKey, DeltaTable, DeltaTableBuilder};
+use crate::{DeltaTable, DeltaTableBuilder, TableProperty};
 
 pub type TestResult = Result<(), Box<dyn std::error::Error + 'static>>;
 
@@ -270,7 +270,7 @@ pub fn get_delta_schema_with_nested_struct() -> StructType {
 }
 
 pub async fn setup_table_with_configuration(
-    key: DeltaConfigKey,
+    key: TableProperty,
     value: Option<impl Into<String>>,
 ) -> DeltaTable {
     let table_schema = get_delta_schema();

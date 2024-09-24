@@ -18,8 +18,7 @@ classifiers = [
     "Programming Language :: Python :: 3.12"
 ]
 dependencies = [
-    "pyarrow>=8",
-    "pyarrow-hotfix",    
+    "pyarrow>=16",
 ]
 
 [project.optional-dependencies]
@@ -28,8 +27,6 @@ pandas = [
 ]
 devel = [
     "azure-storage-blob==12.20.0",
-    "mypy~=1.8.0",
-    "ruff~=0.3.0",
     "packaging>=20",
     "pytest",
     "pytest-mock",
@@ -39,7 +36,10 @@ devel = [
     "sphinx-rtd-theme",
     "toml",
     "wheel",
-    "pytest-benchmark"
+    "pytest-benchmark",
+    # keep ruff and mypy versions in sync with .github/workflows/python_build.yml
+    "mypy==1.10.1",
+    "ruff==0.5.2"
 ]
 pyspark = [
     "pyspark",
@@ -72,26 +72,24 @@ warn_return_any = false
 implicit_reexport = true
 strict_equality = true
 
-[tool.black]
-include = '\.pyi?$'
-exclude = "venv"
-
-[tool.ruff]
+[tool.ruff.lint]
 select = [
     # pycodestyle error
     "E",
     # pyflakes
     "F",
     # isort
-    "I"
+    "I",
+    # ruff-specific rules
+    "RUF"
 ]
 ignore = ["E501"]
 
-[tool.ruff.isort]
+[tool.ruff.lint.isort]
 known-first-party = ["deltalake"]
 
 [tool.pytest.ini_options]
-addopts = "--cov=deltalake -v -m 'not integration and not benchmark'"
+addopts = "-v -m 'not integration and not benchmark'"
 testpaths = [
     "tests",
     "deltalake",
@@ -103,3 +101,7 @@ markers = [
     "pandas: marks tests that require pandas",
     "pyspark: marks tests that require pyspark",
 ]
+
+[tool.coverage.run]
+branch = true
+source = ["deltalake"]

@@ -7,12 +7,11 @@
 
 use std::{collections::HashMap, sync::Arc};
 
-use arrow::array::{new_null_array, Array, UInt32Array};
-use arrow::compute::{partition, take};
-use arrow::record_batch::RecordBatch;
-use arrow_array::ArrayRef;
+use arrow_array::{new_null_array, Array, ArrayRef, RecordBatch, UInt32Array};
+use arrow_ord::partition::partition;
 use arrow_row::{RowConverter, SortField};
 use arrow_schema::{ArrowError, Schema as ArrowSchema, SchemaRef as ArrowSchemaRef};
+use arrow_select::take::take;
 use bytes::Bytes;
 use delta_kernel::expressions::Scalar;
 use indexmap::IndexMap;
@@ -30,7 +29,7 @@ use super::utils::{
 use super::{DeltaWriter, DeltaWriterError, WriteMode};
 use crate::errors::DeltaTableError;
 use crate::kernel::{scalars::ScalarExt, Action, Add, PartitionsExt, StructType};
-use crate::operations::cast::merge_schema;
+use crate::operations::cast::merge_schema::merge_arrow_schema;
 use crate::storage::ObjectStoreRetryExt;
 use crate::table::builder::DeltaTableBuilder;
 use crate::table::config::DEFAULT_NUM_INDEX_COLS;
@@ -322,8 +321,11 @@ impl PartitionWriter {
                 WriteMode::MergeSchema => {
                     debug!("The writer and record batch schemas do not match, merging");
 
-                    let merged =
-                        merge_schema(self.arrow_schema.clone(), record_batch.schema().clone())?;
+                    let merged = merge_arrow_schema(
+                        self.arrow_schema.clone(),
+                        record_batch.schema().clone(),
+                        true,
+                    )?;
                     self.arrow_schema = merged;
 
                     let mut cols = vec![];

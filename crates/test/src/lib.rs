@@ -1,4 +1,7 @@
 #![allow(dead_code, unused_variables)]
+use std::any::Any;
+use std::collections::HashMap;
+use std::sync::Arc;
 
 use bytes::Bytes;
 use deltalake_core::kernel::{Action, Add, Remove, StructType};
@@ -9,9 +12,6 @@ use deltalake_core::protocol::{DeltaOperation, SaveMode};
 use deltalake_core::DeltaTable;
 use deltalake_core::DeltaTableBuilder;
 use deltalake_core::{ObjectStore, Path};
-use std::any::Any;
-use std::collections::HashMap;
-use std::sync::Arc;
 use tempfile::TempDir;
 
 pub mod clock;
@@ -46,10 +46,6 @@ impl TestContext {
         let backend_ref = backend.as_ref().map(|s| s.as_str());
         match backend_ref {
             Ok("LOCALFS") | Err(std::env::VarError::NotPresent) => setup_local_context().await,
-            #[cfg(feature = "azure")]
-            Ok("AZURE_GEN2") => adls::setup_azure_gen2_context().await,
-            #[cfg(feature = "hdfs")]
-            Ok("HDFS") => hdfs::setup_hdfs_context(),
             _ => panic!("Invalid backend for delta-rs tests"),
         }
     }

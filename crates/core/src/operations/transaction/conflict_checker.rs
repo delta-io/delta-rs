@@ -645,28 +645,30 @@ pub(super) fn can_downgrade_to_snapshot_isolation<'a>(
 #[cfg(test)]
 #[allow(unused)]
 mod tests {
-    use super::super::test_utils as tu;
-    use super::super::test_utils::init_table_actions;
-    use super::*;
-    use crate::kernel::Action;
+    use std::collections::HashMap;
+
     #[cfg(feature = "datafusion")]
     use datafusion_expr::{col, lit};
     use serde_json::json;
 
-    fn get_stats(min: i64, max: i64) -> Option<String> {
-        let data = json!({
-            "numRecords": 18,
-            "minValues": {
-                "value": min
-            },
-            "maxValues": {
-                "value": max
-            },
-            "nullCount": {
-                "value": 0
-            }
-        });
-        Some(data.to_string())
+    use super::*;
+    use crate::kernel::Action;
+    use crate::test_utils::{ActionFactory, TestSchemas};
+
+    fn simple_add(data_change: bool, min: &str, max: &str) -> Add {
+        ActionFactory::add(
+            TestSchemas::simple(),
+            HashMap::from_iter([("value", (min, max))]),
+            Default::default(),
+            true,
+        )
+    }
+
+    fn init_table_actions() -> Vec<Action> {
+        vec![
+            ActionFactory::protocol(None, None, None::<Vec<_>>, None::<Vec<_>>).into(),
+            ActionFactory::metadata(TestSchemas::simple(), None::<Vec<&str>>, None).into(),
+        ]
     }
 
     #[test]
@@ -676,7 +678,8 @@ mod tests {
             predicate: None,
             target_size: 0,
         };
-        let add = tu::create_add_action("p", false, None);
+        let add =
+            ActionFactory::add(TestSchemas::simple(), HashMap::new(), Vec::new(), true).into();
         let res = can_downgrade_to_snapshot_isolation(&[add], &operation, &isolation);
         assert!(!res)
     }
@@ -697,7 +700,7 @@ mod tests {
     ) -> Result<(), CommitConflictError> {
         use crate::table::state::DeltaTableState;
 
-        let setup_actions = setup.unwrap_or_else(|| init_table_actions(None));
+        let setup_actions = setup.unwrap_or_else(init_table_actions);
         let state = DeltaTableState::from_actions(setup_actions).unwrap();
         let snapshot = state.snapshot();
         let transaction_info = TransactionInfo::new(snapshot, reads, &actions, read_whole_table);
@@ -715,22 +718,23 @@ mod tests {
     async fn test_allowed_concurrent_actions() {
         // append - append
         // append file to table while a concurrent writer also appends a file
-        let file1 = tu::create_add_action("file1", true, get_stats(1, 10));
-        let file2 = tu::create_add_action("file2", true, get_stats(1, 10));
+        let file1 = simple_add(true, "1", "10").into();
+        let file2 = simple_add(true, "1", "10").into();
+
         let result = execute_test(None, None, vec![file1], vec![file2], false);
         assert!(result.is_ok());
 
         // disjoint delete - read
         // the concurrent transaction deletes a file that the current transaction did NOT read
-        let file_not_read = tu::create_add_action("file_not_read", true, get_stats(1, 10));
-        let file_read = tu::create_add_action("file_read", true, get_stats(100, 10000));
-        let mut setup_actions = init_table_actions(None);
-        setup_actions.push(file_not_read);
+        let file_not_read = simple_add(true, "1", "10");
+        let file_read = simple_add(true, "100", "10000").into();
+        let mut setup_actions = init_table_actions();
+        setup_actions.push(file_not_read.clone().into());
         setup_actions.push(file_read);
         let result = execute_test(
             Some(setup_actions),
             Some(col("value").gt(lit::<i32>(10))),
-            vec![tu::create_remove_action("file_not_read", true)],
+            vec![ActionFactory::remove(&file_not_read, true).into()],
             vec![],
             false,
         );
@@ -738,9 +742,9 @@ mod tests {
 
         // disjoint add - read
         // concurrently add file, that the current transaction would not have read
-        let file_added = tu::create_add_action("file_added", true, get_stats(1, 10));
-        let file_read = tu::create_add_action("file_read", true, get_stats(100, 10000));
-        let mut setup_actions = init_table_actions(None);
+        let file_added = simple_add(true, "1", "10").into();
+        let file_read = simple_add(true, "100", "10000").into();
+        let mut setup_actions = init_table_actions();
         setup_actions.push(file_read);
         let result = execute_test(
             Some(setup_actions),
@@ -774,7 +778,8 @@ mod tests {
     async fn test_disallowed_concurrent_actions() {
         // delete - delete
         // remove file from table that has previously been removed
-        let removed_file = tu::create_remove_action("removed_file", true);
+        let removed_file = simple_add(true, "1", "10");
+        let removed_file: Action = ActionFactory::remove(&removed_file, true).into();
         let result = execute_test(
             None,
             None,
@@ -789,9 +794,8 @@ mod tests {
 
         // add / read + write
         // a file is concurrently added that should have been read by the current transaction
-        let file_added = tu::create_add_action("file_added", true, get_stats(1, 10));
-        let file_should_have_read =
-            tu::create_add_action("file_should_have_read", true, get_stats(1, 10));
+        let file_added = simple_add(true, "1", "10").into();
+        let file_should_have_read = simple_add(true, "1", "10").into();
         let result = execute_test(
             None,
             Some(col("value").lt_eq(lit::<i32>(10))),
@@ -803,13 +807,13 @@ mod tests {
 
         // delete / read
         // transaction reads a file that is removed by concurrent transaction
-        let file_read = tu::create_add_action("file_read", true, get_stats(1, 10));
-        let mut setup_actions = init_table_actions(None);
-        setup_actions.push(file_read);
+        let file_read = simple_add(true, "1", "10");
+        let mut setup_actions = init_table_actions();
+        setup_actions.push(file_read.clone().into());
         let result = execute_test(
             Some(setup_actions),
             Some(col("value").lt_eq(lit::<i32>(10))),
-            vec![tu::create_remove_action("file_read", true)],
+            vec![ActionFactory::remove(&file_read, true).into()],
             vec![],
             false,
         );
@@ -823,7 +827,7 @@ mod tests {
         let result = execute_test(
             None,
             None,
-            vec![tu::create_metadata_action(None, None)],
+            vec![ActionFactory::metadata(TestSchemas::simple(), None::<Vec<&str>>, None).into()],
             vec![],
             false,
         );
@@ -834,8 +838,8 @@ mod tests {
         let result = execute_test(
             None,
             None,
-            vec![tu::create_protocol_action(None, None)],
-            vec![tu::create_protocol_action(None, None)],
+            vec![ActionFactory::protocol(None, None, None::<Vec<_>>, None::<Vec<_>>).into()],
+            vec![ActionFactory::protocol(None, None, None::<Vec<_>>, None::<Vec<_>>).into()],
             false,
         );
         assert!(matches!(
@@ -846,10 +850,10 @@ mod tests {
         // taint whole table
         // `read_whole_table` should disallow any concurrent change, even if the change
         // is disjoint with the earlier filter
-        let file_part1 = tu::create_add_action("file_part1", true, get_stats(1, 10));
-        let file_part2 = tu::create_add_action("file_part2", true, get_stats(11, 100));
-        let file_part3 = tu::create_add_action("file_part3", true, get_stats(101, 1000));
-        let mut setup_actions = init_table_actions(None);
+        let file_part1 = simple_add(true, "1", "10").into();
+        let file_part2 = simple_add(true, "11", "100").into();
+        let file_part3 = simple_add(true, "101", "1000").into();
+        let mut setup_actions = init_table_actions();
         setup_actions.push(file_part1);
         let result = execute_test(
             Some(setup_actions),
@@ -863,14 +867,14 @@ mod tests {
 
         // taint whole table + concurrent remove
         // `read_whole_table` should disallow any concurrent remove actions
-        let file_part1 = tu::create_add_action("file_part1", true, get_stats(1, 10));
-        let file_part2 = tu::create_add_action("file_part2", true, get_stats(11, 100));
-        let mut setup_actions = init_table_actions(None);
-        setup_actions.push(file_part1);
+        let file_part1 = simple_add(true, "1", "10");
+        let file_part2 = simple_add(true, "11", "100").into();
+        let mut setup_actions = init_table_actions();
+        setup_actions.push(file_part1.clone().into());
         let result = execute_test(
             Some(setup_actions),
             None,
-            vec![tu::create_remove_action("file_part1", true)],
+            vec![ActionFactory::remove(&file_part1, true).into()],
             vec![file_part2],
             true,
         );

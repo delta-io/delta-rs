@@ -4,14 +4,15 @@ import pyarrow as pa
 import pyarrow.compute as pc
 import pytest
 
-from deltalake.table import DeltaTable
+from deltalake.table import CommitProperties, DeltaTable
 from deltalake.writer import write_deltalake
 
 
 def test_delete_no_predicates(existing_table: DeltaTable):
     old_version = existing_table.version()
 
-    existing_table.delete(custom_metadata={"userName": "John Doe"})
+    commit_properties = CommitProperties(custom_metadata={"userName": "John Doe"})
+    existing_table.delete(commit_properties=commit_properties)
 
     last_action = existing_table.history(1)[0]
     assert last_action["operation"] == "DELETE"

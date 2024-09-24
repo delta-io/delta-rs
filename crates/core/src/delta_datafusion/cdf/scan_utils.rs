@@ -18,9 +18,9 @@ pub fn map_action_to_scalar<F: FileAction>(
     action: &F,
     part: &str,
     schema: SchemaRef,
-) -> ScalarValue {
-    action
-        .partition_values()
+) -> DeltaResult<ScalarValue> {
+    Ok(action
+        .partition_values()?
         .get(part)
         .map(|val| {
             schema
@@ -36,7 +36,7 @@ pub fn map_action_to_scalar<F: FileAction>(
                 })
                 .unwrap_or(ScalarValue::Null)
         })
-        .unwrap_or(ScalarValue::Null)
+        .unwrap_or(ScalarValue::Null))
 }
 
 pub fn create_spec_partition_values<F: FileAction>(
@@ -67,7 +67,7 @@ pub fn create_partition_values<F: FileAction>(
             let partition_values = table_partition_cols
                 .iter()
                 .map(|part| map_action_to_scalar(&action, part, schema.clone()))
-                .collect::<Vec<ScalarValue>>();
+                .collect::<DeltaResult<Vec<ScalarValue>>>()?;
 
             let mut new_part_values = spec_partition_values.clone();
             new_part_values.extend(partition_values);
@@ -75,7 +75,7 @@ pub fn create_partition_values<F: FileAction>(
             let part = PartitionedFile {
                 object_meta: ObjectMeta {
                     location: Path::parse(action.path().as_str())?,
-                    size: action.size(),
+                    size: action.size()?,
                     e_tag: None,
                     last_modified: chrono::Utc.timestamp_nanos(0),
                     version: None,
@@ -92,9 +92,9 @@ pub fn create_partition_values<F: FileAction>(
     Ok(file_groups)
 }
 
-pub fn create_cdc_schema(mut schema_fields: Vec<Field>, include_type: bool) -> SchemaRef {
+pub fn create_cdc_schema(mut schema_fields: Vec<Arc<Field>>, include_type: bool) -> SchemaRef {
     if include_type {
-        schema_fields.push(Field::new(CHANGE_TYPE_COL, DataType::Utf8, true));
+        schema_fields.push(Field::new(CHANGE_TYPE_COL, DataType::Utf8, true).into());
     }
     Arc::new(Schema::new(schema_fields))
 }

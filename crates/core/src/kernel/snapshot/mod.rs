@@ -44,7 +44,7 @@ use crate::{DeltaResult, DeltaTableConfig, DeltaTableError};
 pub use self::log_data::*;
 
 mod log_data;
-mod log_segment;
+pub(crate) mod log_segment;
 pub(crate) mod parse;
 mod replay;
 mod serde;
@@ -193,6 +193,11 @@ impl Snapshot {
         &self.protocol
     }
 
+    /// Get the table config which is loaded with of the snapshot
+    pub fn load_config(&self) -> &DeltaTableConfig {
+        &self.config
+    }
+
     /// Get the table root of the snapshot
     pub fn table_root(&self) -> Path {
         Path::from(self.table_url.clone())
@@ -311,50 +316,19 @@ impl Snapshot {
     /// Get the statistics schema of the snapshot
     pub fn stats_schema(&self, table_schema: Option<&StructType>) -> DeltaResult<StructType> {
         let schema = table_schema.unwrap_or_else(|| self.schema());
+        stats_schema(schema, self.table_config())
+    }
 
-        let stats_fields = if let Some(stats_cols) = self.table_config().stats_columns() {
-            stats_cols
-                .iter()
-                .map(|col| match schema.field(col) {
-                    Some(field) => match field.data_type() {
-                        DataType::Map(_) | DataType::Array(_) | &DataType::BINARY => {
-                            Err(DeltaTableError::Generic(format!(
-                                "Stats column {} has unsupported type {}",
-                                col,
-                                field.data_type()
-                            )))
-                        }
-                        _ => Ok(StructField::new(
-                            field.name(),
-                            field.data_type().clone(),
-                            true,
-                        )),
-                    },
-                    _ => Err(DeltaTableError::Generic(format!(
-                        "Stats column {} not found in schema",
-                        col
-                    ))),
-                })
-                .collect::<Result<Vec<_>, _>>()?
-        } else {
-            let num_indexed_cols = self.table_config().num_indexed_cols();
-            schema
-                .fields
-                .values()
-                .enumerate()
-                .filter_map(|(idx, f)| stats_field(idx, num_indexed_cols, f))
-                .collect()
-        };
-        Ok(StructType::new(vec![
-            StructField::new("numRecords", DataType::LONG, true),
-            StructField::new("minValues", StructType::new(stats_fields.clone()), true),
-            StructField::new("maxValues", StructType::new(stats_fields.clone()), true),
-            StructField::new(
-                "nullCount",
-                StructType::new(stats_fields.iter().filter_map(to_count_field).collect()),
-                true,
-            ),
-        ]))
+    /// Get the partition values schema of the snapshot
+    pub fn partitions_schema(
+        &self,
+        table_schema: Option<&StructType>,
+    ) -> DeltaResult<Option<StructType>> {
+        if self.metadata().partition_columns.is_empty() {
+            return Ok(None);
+        }
+        let schema = table_schema.unwrap_or_else(|| self.schema());
+        partitions_schema(schema, &self.metadata().partition_columns)
     }
 }
 
@@ -369,7 +343,7 @@ pub struct EagerSnapshot {
 
     // NOTE: this is a Vec of RecordBatch instead of a single RecordBatch because
     //       we do not yet enforce a consistent schema across all batches we read from the log.
-    files: Vec<RecordBatch>,
+    pub(crate) files: Vec<RecordBatch>,
 }
 
 impl EagerSnapshot {
@@ -395,8 +369,13 @@ impl EagerSnapshot {
             .iter()
             .flat_map(get_visitor)
             .collect::<Vec<_>>();
-        let snapshot = Snapshot::try_new(table_root, store.clone(), config, version).await?;
-        let files = snapshot.files(store, &mut visitors)?.try_collect().await?;
+        let snapshot =
+            Snapshot::try_new(table_root, store.clone(), config.clone(), version).await?;
+
+        let files = match config.require_files {
+            true => snapshot.files(store, &mut visitors)?.try_collect().await?,
+            false => vec![],
+        };
 
         let mut sn = Self {
             snapshot,
@@ -561,6 +540,11 @@ impl EagerSnapshot {
         self.snapshot.table_root()
     }
 
+    /// Get the table config which is loaded with of the snapshot
+    pub fn load_config(&self) -> &DeltaTableConfig {
+        &self.snapshot.load_config()
+    }
+
     /// Well known table configuration
     pub fn table_config(&self) -> TableConfig<'_> {
         self.snapshot.table_config()
@@ -688,6 +672,74 @@ impl EagerSnapshot {
     }
 }
 
+fn stats_schema(schema: &StructType, config: TableConfig<'_>) -> DeltaResult<StructType> {
+    let stats_fields = if let Some(stats_cols) = config.stats_columns() {
+        stats_cols
+            .iter()
+            .map(|col| match get_stats_field(schema, col) {
+                Some(field) => match field.data_type() {
+                    DataType::Map(_) | DataType::Array(_) | &DataType::BINARY => {
+                        Err(DeltaTableError::Generic(format!(
+                            "Stats column {} has unsupported type {}",
+                            col,
+                            field.data_type()
+                        )))
+                    }
+                    _ => Ok(StructField::new(
+                        field.name(),
+                        field.data_type().clone(),
+                        true,
+                    )),
+                },
+                _ => Err(DeltaTableError::Generic(format!(
+                    "Stats column {} not found in schema",
+                    col
+                ))),
+            })
+            .collect::<Result<Vec<_>, _>>()?
+    } else {
+        let num_indexed_cols = config.num_indexed_cols();
+        schema
+            .fields
+            .values()
+            .enumerate()
+            .filter_map(|(idx, f)| stats_field(idx, num_indexed_cols, f))
+            .collect()
+    };
+    Ok(StructType::new(vec![
+        StructField::new("numRecords", DataType::LONG, true),
+        StructField::new("minValues", StructType::new(stats_fields.clone()), true),
+        StructField::new("maxValues", StructType::new(stats_fields.clone()), true),
+        StructField::new(
+            "nullCount",
+            StructType::new(stats_fields.iter().filter_map(to_count_field).collect()),
+            true,
+        ),
+    ]))
+}
+
+pub(crate) fn partitions_schema(
+    schema: &StructType,
+    partition_columns: &Vec<String>,
+) -> DeltaResult<Option<StructType>> {
+    if partition_columns.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(StructType::new(
+        partition_columns
+            .iter()
+            .map(|col| {
+                schema.field(col).map(|field| field.clone()).ok_or_else(|| {
+                    DeltaTableError::Generic(format!(
+                        "Partition column {} not found in schema",
+                        col
+                    ))
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()?,
+    )))
+}
+
 fn stats_field(idx: usize, num_indexed_cols: i32, field: &StructField) -> Option<StructField> {
     if !(num_indexed_cols < 0 || (idx as i32) < num_indexed_cols) {
         return None;
@@ -738,6 +790,45 @@ mod datafusion {
     }
 }
 
+/// Retrieves a specific field from the schema based on the provided field name.
+/// It handles cases where the field name is nested or enclosed in backticks.
+fn get_stats_field<'a>(schema: &'a StructType, stats_field_name: &str) -> Option<&'a StructField> {
+    let dialect = sqlparser::dialect::GenericDialect {};
+    match sqlparser::parser::Parser::new(&dialect).try_with_sql(stats_field_name) {
+        Ok(mut parser) => match parser.parse_multipart_identifier() {
+            Ok(parts) => find_nested_field(schema, &parts),
+            Err(_) => schema.field(stats_field_name),
+        },
+        Err(_) => schema.field(stats_field_name),
+    }
+}
+
+fn find_nested_field<'a>(
+    schema: &'a StructType,
+    parts: &[sqlparser::ast::Ident],
+) -> Option<&'a StructField> {
+    if parts.is_empty() {
+        return None;
+    }
+    let part_name = &parts[0].value;
+    match schema.field(part_name) {
+        Some(field) => {
+            if parts.len() == 1 {
+                Some(field)
+            } else {
+                match field.data_type() {
+                    DataType::Struct(struct_schema) => {
+                        find_nested_field(struct_schema, &parts[1..])
+                    }
+                    // Any part before the end must be a struct
+                    _ => None,
+                }
+            }
+        }
+        None => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
@@ -752,6 +843,7 @@ mod tests {
     use super::*;
     use crate::kernel::Remove;
     use crate::protocol::{DeltaOperation, SaveMode};
+    use crate::test_utils::ActionFactory;
 
     #[tokio::test]
     async fn test_snapshots() -> TestResult {
@@ -955,5 +1047,168 @@ mod tests {
             .all(|(_, add)| { new_files.contains(&add.path) }));
 
         Ok(())
+    }
+
+    #[test]
+    fn test_partition_schema() {
+        let schema = StructType::new(vec![
+            StructField::new("id", DataType::LONG, true),
+            StructField::new("name", DataType::STRING, true),
+            StructField::new("date", DataType::DATE, true),
+        ]);
+
+        let partition_columns = vec!["date".to_string()];
+        let metadata = ActionFactory::metadata(&schema, Some(&partition_columns), None);
+        let protocol = ActionFactory::protocol(None, None, None::<Vec<_>>, None::<Vec<_>>);
+
+        let commit_data = CommitData::new(
+            vec![
+                Action::Protocol(protocol.clone()),
+                Action::Metadata(metadata.clone()),
+            ],
+            DeltaOperation::Write {
+                mode: SaveMode::Append,
+                partition_by: Some(partition_columns),
+                predicate: None,
+            },
+            HashMap::new(),
+            vec![],
+        );
+        let (log_segment, _) = LogSegment::new_test(vec![&commit_data]).unwrap();
+
+        let snapshot = Snapshot {
+            log_segment: log_segment.clone(),
+            protocol: protocol.clone(),
+            metadata,
+            schema: schema.clone(),
+            table_url: "table".to_string(),
+            config: Default::default(),
+        };
+
+        let expected = StructType::new(vec![StructField::new("date", DataType::DATE, true)]);
+        assert_eq!(snapshot.partitions_schema(None).unwrap(), Some(expected));
+
+        let metadata = ActionFactory::metadata(&schema, None::<Vec<&str>>, None);
+        let commit_data = CommitData::new(
+            vec![
+                Action::Protocol(protocol.clone()),
+                Action::Metadata(metadata.clone()),
+            ],
+            DeltaOperation::Write {
+                mode: SaveMode::Append,
+                partition_by: None,
+                predicate: None,
+            },
+            HashMap::new(),
+            vec![],
+        );
+        let (log_segment, _) = LogSegment::new_test(vec![&commit_data]).unwrap();
+
+        let snapshot = Snapshot {
+            log_segment,
+            config: Default::default(),
+            protocol: protocol.clone(),
+            metadata,
+            schema: schema.clone(),
+            table_url: "table".to_string(),
+        };
+
+        assert_eq!(snapshot.partitions_schema(None).unwrap(), None);
+    }
+
+    #[test]
+    fn test_field_with_name() {
+        let schema = StructType::new(vec![
+            StructField::new("a", DataType::STRING, true),
+            StructField::new("b", DataType::INTEGER, true),
+        ]);
+        let field = get_stats_field(&schema, "b").unwrap();
+        assert_eq!(*field, StructField::new("b", DataType::INTEGER, true));
+    }
+
+    #[test]
+    fn test_field_with_name_escaped() {
+        let schema = StructType::new(vec![
+            StructField::new("a", DataType::STRING, true),
+            StructField::new("b.b", DataType::INTEGER, true),
+        ]);
+        let field = get_stats_field(&schema, "`b.b`").unwrap();
+        assert_eq!(*field, StructField::new("b.b", DataType::INTEGER, true));
+    }
+
+    #[test]
+    fn test_field_does_not_exist() {
+        let schema = StructType::new(vec![
+            StructField::new("a", DataType::STRING, true),
+            StructField::new("b", DataType::INTEGER, true),
+        ]);
+        let field = get_stats_field(&schema, "c");
+        assert!(field.is_none());
+    }
+
+    #[test]
+    fn test_field_part_is_not_struct() {
+        let schema = StructType::new(vec![
+            StructField::new("a", DataType::STRING, true),
+            StructField::new("b", DataType::INTEGER, true),
+        ]);
+        let field = get_stats_field(&schema, "b.c");
+        assert!(field.is_none());
+    }
+
+    #[test]
+    fn test_field_name_does_not_parse() {
+        let schema = StructType::new(vec![
+            StructField::new("a", DataType::STRING, true),
+            StructField::new("b", DataType::INTEGER, true),
+        ]);
+        let field = get_stats_field(&schema, "b.");
+        assert!(field.is_none());
+    }
+
+    #[test]
+    fn test_field_with_name_nested() {
+        let nested = StructType::new(vec![StructField::new(
+            "nested_struct",
+            DataType::BOOLEAN,
+            true,
+        )]);
+        let schema = StructType::new(vec![
+            StructField::new("a", DataType::STRING, true),
+            StructField::new("b", DataType::Struct(Box::new(nested)), true),
+        ]);
+
+        let field = get_stats_field(&schema, "b.nested_struct").unwrap();
+
+        assert_eq!(
+            *field,
+            StructField::new("nested_struct", DataType::BOOLEAN, true)
+        );
+    }
+
+    #[test]
+    fn test_field_with_last_name_nested_backticks() {
+        let nested = StructType::new(vec![StructField::new("pr!me", DataType::BOOLEAN, true)]);
+        let schema = StructType::new(vec![
+            StructField::new("a", DataType::STRING, true),
+            StructField::new("b", DataType::Struct(Box::new(nested)), true),
+        ]);
+
+        let field = get_stats_field(&schema, "b.`pr!me`").unwrap();
+
+        assert_eq!(*field, StructField::new("pr!me", DataType::BOOLEAN, true));
+    }
+
+    #[test]
+    fn test_field_with_name_nested_backticks() {
+        let nested = StructType::new(vec![StructField::new("pr", DataType::BOOLEAN, true)]);
+        let schema = StructType::new(vec![
+            StructField::new("a", DataType::STRING, true),
+            StructField::new("b&b", DataType::Struct(Box::new(nested)), true),
+        ]);
+
+        let field = get_stats_field(&schema, "`b&b`.pr").unwrap();
+
+        assert_eq!(*field, StructField::new("pr", DataType::BOOLEAN, true));
     }
 }

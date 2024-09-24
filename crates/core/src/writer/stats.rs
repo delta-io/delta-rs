@@ -5,6 +5,7 @@ use std::{collections::HashMap, ops::AddAssign};
 
 use delta_kernel::expressions::Scalar;
 use indexmap::IndexMap;
+use itertools::Itertools;
 use parquet::file::metadata::ParquetMetaData;
 use parquet::format::FileMetaData;
 use parquet::schema::types::{ColumnDescriptor, SchemaDescriptor};
@@ -130,8 +131,29 @@ fn stats_from_metadata(
     let mut min_values: HashMap<String, ColumnValueStat> = HashMap::new();
     let mut max_values: HashMap<String, ColumnValueStat> = HashMap::new();
     let mut null_count: HashMap<String, ColumnCountStat> = HashMap::new();
+    let dialect = sqlparser::dialect::GenericDialect {};
 
     let idx_to_iterate = if let Some(stats_cols) = stats_columns {
+        let stats_cols = stats_cols
+            .into_iter()
+            .map(|v| {
+                match sqlparser::parser::Parser::new(&dialect)
+                    .try_with_sql(v)
+                    .map_err(|e| DeltaTableError::generic(e.to_string()))?
+                    .parse_multipart_identifier()
+                {
+                    Ok(parts) => Ok(parts.into_iter().map(|v| v.value).join(".")),
+                    Err(e) => {
+                        return Err(DeltaWriterError::DeltaTable(
+                            DeltaTableError::GenericError {
+                                source: Box::new(e),
+                            },
+                        ))
+                    }
+                }
+            })
+            .collect::<Result<Vec<String>, DeltaWriterError>>()?;
+
         schema_descriptor
             .columns()
             .iter()

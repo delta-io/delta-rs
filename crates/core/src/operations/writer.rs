@@ -2,9 +2,8 @@
 
 use std::collections::HashMap;
 
-use arrow::datatypes::SchemaRef as ArrowSchemaRef;
-use arrow::error::ArrowError;
-use arrow::record_batch::RecordBatch;
+use arrow_array::RecordBatch;
+use arrow_schema::{ArrowError, SchemaRef as ArrowSchemaRef};
 use bytes::Bytes;
 use delta_kernel::expressions::Scalar;
 use indexmap::IndexMap;
@@ -370,6 +369,7 @@ impl PartitionWriter {
 
         // write file to object store
         self.object_store.put(&path, buffer.into()).await?;
+
         self.files_written.push(
             create_add(
                 &self.config.partition_values,

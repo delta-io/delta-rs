@@ -36,6 +36,7 @@
     <img alt="#delta-rs in the Delta Lake Slack workspace" src="https://img.shields.io/badge/slack-delta-blue.svg?logo=slack&style=flat-square&color=F75101">
   </a>
 </p>
+Delta Lake is an open-source storage format that runs on top of existing data lakes. Delta Lake is compatible with processing engines like Apache Spark and provides benefits such as ACID transaction guarantees, schema enforcement, and scalable data handling.
 
 The Delta Lake project aims to unlock the power of the Deltalake for as many users and projects as possible
 by providing native low-level APIs aimed at developers and integrators, as well as a high-level operations
@@ -135,8 +136,8 @@ of features outlined in the Delta [protocol][protocol] is also [tracked](#protoc
 | -------------------- | :-----: | :-----: | ---------------------------------------------------------------- |
 | Local                | ![done] | ![done] |                                                                  |
 | S3 - AWS             | ![done] | ![done] | requires lock for concurrent writes                              |
-| S3 - MinIO           | ![done] | ![done] | requires lock for concurrent writes                              |
-| S3 - R2              | ![done] | ![done] | No lock required when using `AmazonS3ConfigKey::CopyIfNotExists` |
+| S3 - MinIO           | ![done] | ![done] | No lock required when using `AmazonS3ConfigKey::ConditionalPut` with `storage_options = {"conditional_put":"etag"}` |
+| S3 - R2              | ![done] | ![done] | No lock required when using `AmazonS3ConfigKey::ConditionalPut` with `storage_options = {"conditional_put":"etag"}` |
 | Azure Blob           | ![done] | ![done] |                                                                  |
 | Azure ADLS Gen2      | ![done] | ![done] |                                                                  |
 | Microsoft OneLake    | ![done] | ![done] |                                                                  |

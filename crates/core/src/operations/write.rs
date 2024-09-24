@@ -27,34 +27,45 @@
 use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use std::vec;
 
 use arrow_array::RecordBatch;
 use arrow_cast::can_cast_types;
 use arrow_schema::{ArrowError, DataType, Fields, SchemaRef as ArrowSchemaRef};
 use datafusion::execution::context::{SessionContext, SessionState, TaskContext};
-use datafusion::physical_plan::filter::FilterExec;
-use datafusion::physical_plan::{memory::MemoryExec, ExecutionPlan};
 use datafusion_common::DFSchema;
-use datafusion_expr::Expr;
+use datafusion_expr::{lit, Expr};
+use datafusion_physical_expr::expressions::{self};
+use datafusion_physical_expr::PhysicalExpr;
+use datafusion_physical_plan::filter::FilterExec;
+use datafusion_physical_plan::projection::ProjectionExec;
+use datafusion_physical_plan::union::UnionExec;
+use datafusion_physical_plan::{memory::MemoryExec, ExecutionPlan};
 use futures::future::BoxFuture;
 use futures::StreamExt;
+use object_store::prefix::PrefixStore;
 use parquet::file::properties::WriterProperties;
+use serde::{Deserialize, Serialize};
 use tracing::log::*;
 
+use super::cdc::should_write_cdc;
 use super::datafusion_utils::Expression;
 use super::transaction::{CommitBuilder, CommitProperties, TableReference, PROTOCOL};
 use super::writer::{DeltaWriter, WriterConfig};
 use super::CreateBuilder;
 use crate::delta_datafusion::expr::fmt_expr_to_sql;
 use crate::delta_datafusion::expr::parse_predicate_expression;
-use crate::delta_datafusion::{find_files, register_store, DeltaScanBuilder};
+use crate::delta_datafusion::{
+    find_files, register_store, DeltaScanBuilder, DeltaScanConfigBuilder,
+};
 use crate::delta_datafusion::{DataFusionMixins, DeltaDataChecker};
 use crate::errors::{DeltaResult, DeltaTableError};
-use crate::kernel::{Action, Add, Metadata, PartitionsExt, Remove, StructType};
+use crate::kernel::{
+    Action, ActionType, Add, AddCDCFile, Metadata, PartitionsExt, Remove, StructType,
+};
 use crate::logstore::LogStoreRef;
-use crate::operations::cast::{cast_record_batch, merge_schema};
+use crate::operations::cast::{cast_record_batch, merge_schema::merge_arrow_schema};
 use crate::protocol::{DeltaOperation, SaveMode};
 use crate::storage::ObjectStoreRef;
 use crate::table::state::DeltaTableState;
@@ -152,6 +163,21 @@ pub struct WriteBuilder {
     description: Option<String>,
     /// Configurations of the delta table, only used when table doesn't exist
     configuration: HashMap<String, Option<String>>,
+}
+
+#[derive(Default, Debug, Serialize, Deserialize)]
+/// Metrics for the Write Operation
+pub struct WriteMetrics {
+    /// Number of files added
+    pub num_added_files: usize,
+    /// Number of files removed
+    pub num_removed_files: usize,
+    /// Number of partitions
+    pub num_partitions: usize,
+    /// Number of rows added
+    pub num_added_rows: usize,
+    /// Time taken to execute the entire operation
+    pub execution_time_ms: u64,
 }
 
 impl super::Operation<()> for WriteBuilder {}
@@ -287,17 +313,20 @@ impl WriteBuilder {
             Some(snapshot) => {
                 PROTOCOL.can_write_to(snapshot)?;
 
-                if let Some(plan) = &self.input {
-                    let schema: StructType = (plan.schema()).try_into()?;
-                    PROTOCOL.check_can_write_timestamp_ntz(snapshot, &schema)?;
+                let schema: StructType = if let Some(plan) = &self.input {
+                    (plan.schema()).try_into()?
                 } else if let Some(batches) = &self.batches {
                     if batches.is_empty() {
                         return Err(WriteError::MissingData.into());
                     }
-                    let schema: StructType = (batches[0].schema()).try_into()?;
+                    (batches[0].schema()).try_into()?
+                } else {
+                    return Err(WriteError::MissingData.into());
+                };
+
+                if self.schema_mode.is_none() {
                     PROTOCOL.check_can_write_timestamp_ntz(snapshot, &schema)?;
                 }
-
                 match self.mode {
                     SaveMode::ErrorIfExists => {
                         Err(WriteError::AlreadyExists(self.log_store.root_uri()).into())
@@ -368,18 +397,12 @@ async fn write_execution_plan_with_predicate(
     target_file_size: Option<usize>,
     write_batch_size: Option<usize>,
     writer_properties: Option<WriterProperties>,
-    safe_cast: bool,
-    schema_mode: Option<SchemaMode>,
     writer_stats_config: WriterStatsConfig,
     sender: Option<Sender<RecordBatch>>,
 ) -> DeltaResult<Vec<Action>> {
-    let schema: ArrowSchemaRef = if schema_mode.is_some() {
-        plan.schema()
-    } else {
-        snapshot
-            .and_then(|s| s.input_schema().ok())
-            .unwrap_or(plan.schema())
-    };
+    // We always take the plan Schema since the data may contain Large/View arrow types,
+    // the schema and batches were prior constructed with this in mind.
+    let schema: ArrowSchemaRef = plan.schema();
     let checker = if let Some(snapshot) = snapshot {
         DeltaDataChecker::new(snapshot)
     } else {
@@ -393,7 +416,6 @@ async fn write_execution_plan_with_predicate(
         }
         _ => checker,
     };
-
     // Write data to disk
     let mut tasks = vec![];
     for i in 0..plan.properties().output_partitioning().partition_count() {
@@ -421,21 +443,15 @@ async fn write_execution_plan_with_predicate(
                     let batch = maybe_batch?;
 
                     checker_stream.check_batch(&batch).await?;
-                    let arr = super::cast::cast_record_batch(
-                        &batch,
-                        inner_schema.clone(),
-                        safe_cast,
-                        schema_mode == Some(SchemaMode::Merge),
-                    )?;
 
                     if let Some(s) = sendable.as_ref() {
-                        if let Err(e) = s.send(arr.clone()).await {
+                        if let Err(e) = s.send(batch.clone()).await {
                             error!("Failed to send data to observer: {e:#?}");
                         }
                     } else {
                         debug!("write_execution_plan_with_predicate did not send any batches, no sender.");
                     }
-                    writer.write(&arr).await?;
+                    writer.write(&batch).await?;
                 }
                 let add_actions = writer.close().await;
                 match add_actions {
@@ -462,6 +478,55 @@ async fn write_execution_plan_with_predicate(
 }
 
 #[allow(clippy::too_many_arguments)]
+pub(crate) async fn write_execution_plan_cdc(
+    snapshot: Option<&DeltaTableState>,
+    state: SessionState,
+    plan: Arc<dyn ExecutionPlan>,
+    partition_columns: Vec<String>,
+    object_store: ObjectStoreRef,
+    target_file_size: Option<usize>,
+    write_batch_size: Option<usize>,
+    writer_properties: Option<WriterProperties>,
+    writer_stats_config: WriterStatsConfig,
+    sender: Option<Sender<RecordBatch>>,
+) -> DeltaResult<Vec<Action>> {
+    let cdc_store = Arc::new(PrefixStore::new(object_store, "_change_data"));
+
+    Ok(write_execution_plan(
+        snapshot,
+        state,
+        plan,
+        partition_columns,
+        cdc_store,
+        target_file_size,
+        write_batch_size,
+        writer_properties,
+        writer_stats_config,
+        sender,
+    )
+    .await?
+    .into_iter()
+    .map(|add| {
+        // Modify add actions into CDC actions
+        match add {
+            Action::Add(add) => {
+                Action::Cdc(AddCDCFile {
+                    // This is a gnarly hack, but the action needs the nested path, not the
+                    // path isnide the prefixed store
+                    path: format!("_change_data/{}", add.path),
+                    size: add.size,
+                    partition_values: add.partition_values,
+                    data_change: false,
+                    tags: add.tags,
+                })
+            }
+            _ => panic!("Expected Add action"),
+        }
+    })
+    .collect::<Vec<_>>())
+}
+
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn write_execution_plan(
     snapshot: Option<&DeltaTableState>,
     state: SessionState,
@@ -471,8 +536,6 @@ pub(crate) async fn write_execution_plan(
     target_file_size: Option<usize>,
     write_batch_size: Option<usize>,
     writer_properties: Option<WriterProperties>,
-    safe_cast: bool,
-    schema_mode: Option<SchemaMode>,
     writer_stats_config: WriterStatsConfig,
     sender: Option<Sender<RecordBatch>>,
 ) -> DeltaResult<Vec<Action>> {
@@ -486,8 +549,6 @@ pub(crate) async fn write_execution_plan(
         target_file_size,
         write_batch_size,
         writer_properties,
-        safe_cast,
-        schema_mode,
         writer_stats_config,
         sender,
     )
@@ -504,45 +565,165 @@ async fn execute_non_empty_expr(
     rewrite: &[Add],
     writer_properties: Option<WriterProperties>,
     writer_stats_config: WriterStatsConfig,
+    partition_scan: bool,
+    insert_plan: Arc<dyn ExecutionPlan>,
 ) -> DeltaResult<Vec<Action>> {
     // For each identified file perform a parquet scan + filter + limit (1) + count.
     // If returned count is not zero then append the file to be rewritten and removed from the log. Otherwise do nothing to the file.
+    let mut actions: Vec<Action> = Vec::new();
 
-    let input_schema = snapshot.input_schema()?;
-    let input_dfschema: DFSchema = input_schema.clone().as_ref().clone().try_into()?;
+    // Take the insert plan schema since it might have been schema evolved, if its not
+    // it is simply the table schema
+    let df_schema = insert_plan.schema();
+    let input_dfschema: DFSchema = df_schema.as_ref().clone().try_into()?;
+
+    let scan_config = DeltaScanConfigBuilder::new()
+        .with_schema(snapshot.input_schema()?)
+        .build(snapshot)?;
 
     let scan = DeltaScanBuilder::new(snapshot, log_store.clone(), &state)
         .with_files(rewrite)
+        // Use input schema which doesn't wrap partition values, otherwise divide_by_partition_value won't work on UTF8 partitions
+        // Since it can't fetch a scalar from a dictionary type
+        .with_scan_config(scan_config)
         .build()
         .await?;
     let scan = Arc::new(scan);
 
-    // Apply the negation of the filter and rewrite files
-    let negated_expression = Expr::Not(Box::new(Expr::IsTrue(Box::new(expression.clone()))));
-
-    let predicate_expr = state.create_physical_expr(negated_expression, &input_dfschema)?;
-
-    let filter: Arc<dyn ExecutionPlan> =
-        Arc::new(FilterExec::try_new(predicate_expr, scan.clone())?);
-
     // We don't want to verify the predicate against existing data
-    let add_actions = write_execution_plan(
-        Some(snapshot),
-        state,
-        filter,
-        partition_columns,
-        log_store.object_store(),
-        Some(snapshot.table_config().target_file_size() as usize),
-        None,
-        writer_properties,
-        false,
-        None,
-        writer_stats_config,
-        None,
-    )
-    .await?;
+    if !partition_scan {
+        // Apply the negation of the filter and rewrite files
+        let negated_expression = Expr::Not(Box::new(Expr::IsTrue(Box::new(expression.clone()))));
 
-    Ok(add_actions)
+        let predicate_expr = state.create_physical_expr(negated_expression, &input_dfschema)?;
+        let filter: Arc<dyn ExecutionPlan> =
+            Arc::new(FilterExec::try_new(predicate_expr, scan.clone())?);
+
+        let add_actions: Vec<Action> = write_execution_plan(
+            Some(snapshot),
+            state.clone(),
+            filter,
+            partition_columns.clone(),
+            log_store.object_store(),
+            Some(snapshot.table_config().target_file_size() as usize),
+            None,
+            writer_properties.clone(),
+            writer_stats_config.clone(),
+            None,
+        )
+        .await?;
+
+        actions.extend(add_actions);
+    }
+
+    // CDC logic, simply filters data with predicate and adds the _change_type="delete" as literal column
+    // Only write when CDC actions when it was not a partition scan, load_cdf can deduce the deletes in that case
+    // based on the remove actions if a partition got deleted
+    if !partition_scan {
+        // We only write deletions when it was not a partition scan
+        if let Some(cdc_actions) = execute_non_empty_expr_cdc(
+            snapshot,
+            log_store,
+            state.clone(),
+            scan,
+            input_dfschema,
+            expression,
+            partition_columns,
+            writer_properties,
+            writer_stats_config,
+            insert_plan,
+        )
+        .await?
+        {
+            actions.extend(cdc_actions)
+        }
+    }
+    Ok(actions)
+}
+
+/// If CDC is enabled it writes all the deletions based on predicate into _change_data directory
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn execute_non_empty_expr_cdc(
+    snapshot: &DeltaTableState,
+    log_store: LogStoreRef,
+    state: SessionState,
+    scan: Arc<crate::delta_datafusion::DeltaScan>,
+    input_dfschema: DFSchema,
+    expression: &Expr,
+    table_partition_cols: Vec<String>,
+    writer_properties: Option<WriterProperties>,
+    writer_stats_config: WriterStatsConfig,
+    insert_plan: Arc<dyn ExecutionPlan>,
+) -> DeltaResult<Option<Vec<Action>>> {
+    match should_write_cdc(snapshot) {
+        // Create CDC scan
+        Ok(true) => {
+            let cdc_predicate_expr =
+                state.create_physical_expr(expression.clone(), &input_dfschema)?;
+            let cdc_scan: Arc<dyn ExecutionPlan> =
+                Arc::new(FilterExec::try_new(cdc_predicate_expr, scan.clone())?);
+
+            // Add literal column "_change_type"
+            let delete_change_type_expr =
+                state.create_physical_expr(lit("delete"), &input_dfschema)?;
+
+            let insert_change_type_expr =
+                state.create_physical_expr(lit("insert"), &input_dfschema)?;
+
+            // Project columns and lit
+            let mut delete_project_expressions: Vec<(Arc<dyn PhysicalExpr>, String)> = scan
+                .schema()
+                .fields()
+                .into_iter()
+                .enumerate()
+                .map(|(idx, field)| -> (Arc<dyn PhysicalExpr>, String) {
+                    (
+                        Arc::new(expressions::Column::new(field.name(), idx)),
+                        field.name().to_owned(),
+                    )
+                })
+                .collect();
+
+            let mut insert_project_expressions = delete_project_expressions.clone();
+            delete_project_expressions.insert(
+                delete_project_expressions.len(),
+                (delete_change_type_expr, "_change_type".to_owned()),
+            );
+            insert_project_expressions.insert(
+                insert_project_expressions.len(),
+                (insert_change_type_expr, "_change_type".to_owned()),
+            );
+
+            let delete_plan: Arc<dyn ExecutionPlan> = Arc::new(ProjectionExec::try_new(
+                delete_project_expressions,
+                cdc_scan.clone(),
+            )?);
+
+            let insert_plan: Arc<dyn ExecutionPlan> = Arc::new(ProjectionExec::try_new(
+                insert_project_expressions,
+                insert_plan.clone(),
+            )?);
+
+            let cdc_plan: Arc<dyn ExecutionPlan> =
+                Arc::new(UnionExec::new(vec![delete_plan, insert_plan]));
+
+            let cdc_actions = write_execution_plan_cdc(
+                Some(snapshot),
+                state.clone(),
+                cdc_plan.clone(),
+                table_partition_cols.clone(),
+                log_store.object_store(),
+                Some(snapshot.table_config().target_file_size() as usize),
+                None,
+                writer_properties,
+                writer_stats_config,
+                None,
+            )
+            .await?;
+            Ok(Some(cdc_actions))
+        }
+        _ => Ok(None),
+    }
 }
 
 // This should only be called wth a valid predicate
@@ -556,28 +737,26 @@ async fn prepare_predicate_actions(
     writer_properties: Option<WriterProperties>,
     deletion_timestamp: i64,
     writer_stats_config: WriterStatsConfig,
+    insert_plan: Arc<dyn ExecutionPlan>,
 ) -> DeltaResult<Vec<Action>> {
     let candidates =
         find_files(snapshot, log_store.clone(), &state, Some(predicate.clone())).await?;
 
-    let add = if candidates.partition_scan {
-        Vec::new()
-    } else {
-        execute_non_empty_expr(
-            snapshot,
-            log_store,
-            state,
-            partition_columns,
-            &predicate,
-            &candidates.candidates,
-            writer_properties,
-            writer_stats_config,
-        )
-        .await?
-    };
-    let remove = candidates.candidates;
+    let mut actions = execute_non_empty_expr(
+        snapshot,
+        log_store,
+        state,
+        partition_columns,
+        &predicate,
+        &candidates.candidates,
+        writer_properties,
+        writer_stats_config,
+        candidates.partition_scan,
+        insert_plan,
+    )
+    .await?;
 
-    let mut actions: Vec<Action> = add.into_iter().collect();
+    let remove = candidates.candidates;
 
     for action in remove {
         actions.push(Action::Remove(Remove {
@@ -604,9 +783,15 @@ impl std::future::IntoFuture for WriteBuilder {
         let this = self;
 
         Box::pin(async move {
+            let mut metrics = WriteMetrics::default();
+            let exec_start = Instant::now();
+
             if this.mode == SaveMode::Overwrite {
                 if let Some(snapshot) = &this.snapshot {
                     PROTOCOL.check_append_only(&snapshot.snapshot)?;
+                    if !snapshot.load_config().require_files {
+                        return Err(DeltaTableError::NotInitializedWithFiles("WRITE".into()));
+                    }
                 }
             }
             if this.schema_mode == Some(SchemaMode::Overwrite) && this.mode != SaveMode::Overwrite {
@@ -656,41 +841,52 @@ impl std::future::IntoFuture for WriteBuilder {
 
                     let mut new_schema = None;
                     if let Some(snapshot) = &this.snapshot {
-                        let table_schema = snapshot
-                            .physical_arrow_schema(this.log_store.object_store().clone())
-                            .await
-                            .or_else(|_| snapshot.arrow_schema())
-                            .unwrap_or(schema.clone());
-
+                        let table_schema = snapshot.input_schema()?;
                         if let Err(schema_err) =
                             try_cast_batch(schema.fields(), table_schema.fields())
                         {
                             schema_drift = true;
                             if this.mode == SaveMode::Overwrite
-                                && this.schema_mode == Some(SchemaMode::Merge)
-                            {
-                                new_schema =
-                                    Some(merge_schema(table_schema.clone(), schema.clone())?);
-                            } else if this.mode == SaveMode::Overwrite && this.schema_mode.is_some()
+                                && this.schema_mode == Some(SchemaMode::Overwrite)
                             {
                                 new_schema = None // we overwrite anyway, so no need to cast
                             } else if this.schema_mode == Some(SchemaMode::Merge) {
-                                new_schema =
-                                    Some(merge_schema(table_schema.clone(), schema.clone())?);
+                                new_schema = Some(merge_arrow_schema(
+                                    table_schema.clone(),
+                                    schema.clone(),
+                                    schema_drift,
+                                )?);
                             } else {
                                 return Err(schema_err.into());
                             }
+                        } else if this.mode == SaveMode::Overwrite
+                            && this.schema_mode == Some(SchemaMode::Overwrite)
+                        {
+                            new_schema = None // we overwrite anyway, so no need to cast
+                        } else {
+                            // Schema needs to be merged so that utf8/binary/list types are preserved from the batch side if both table
+                            // and batch contains such type. Other types are preserved from the table side.
+                            // At this stage it will never introduce more fields since try_cast_batch passed correctly.
+                            new_schema = Some(merge_arrow_schema(
+                                table_schema.clone(),
+                                schema.clone(),
+                                schema_drift,
+                            )?);
                         }
                     }
-
                     let data = if !partition_columns.is_empty() {
                         // TODO partitioning should probably happen in its own plan ...
                         let mut partitions: HashMap<String, Vec<RecordBatch>> = HashMap::new();
+                        let mut num_partitions = 0;
+                        let mut num_added_rows = 0;
                         for batch in batches {
                             let real_batch = match new_schema.clone() {
-                                Some(new_schema) => {
-                                    cast_record_batch(&batch, new_schema, false, true)?
-                                }
+                                Some(new_schema) => cast_record_batch(
+                                    &batch,
+                                    new_schema,
+                                    this.safe_cast,
+                                    schema_drift, // Schema drifted so we have to add the missing columns/structfields.
+                                )?,
                                 None => batch,
                             };
 
@@ -699,7 +895,9 @@ impl std::future::IntoFuture for WriteBuilder {
                                 partition_columns.clone(),
                                 &real_batch,
                             )?;
+                            num_partitions += divided.len();
                             for part in divided {
+                                num_added_rows += part.record_batch.num_rows();
                                 let key = part.partition_values.hive_partition_path();
                                 match partitions.get_mut(&key) {
                                     Some(part_batches) => {
@@ -711,22 +909,30 @@ impl std::future::IntoFuture for WriteBuilder {
                                 }
                             }
                         }
+                        metrics.num_partitions = num_partitions;
+                        metrics.num_added_rows = num_added_rows;
                         partitions.into_values().collect::<Vec<_>>()
                     } else {
                         match new_schema {
                             Some(ref new_schema) => {
                                 let mut new_batches = vec![];
+                                let mut num_added_rows = 0;
                                 for batch in batches {
                                     new_batches.push(cast_record_batch(
                                         &batch,
                                         new_schema.clone(),
-                                        false,
-                                        true,
+                                        this.safe_cast,
+                                        schema_drift, // Schema drifted so we have to add the missing columns/structfields.
                                     )?);
+                                    num_added_rows += batch.num_rows();
                                 }
+                                metrics.num_added_rows = num_added_rows;
                                 vec![new_batches]
                             }
-                            None => vec![batches],
+                            None => {
+                                metrics.num_added_rows = batches.iter().map(|b| b.num_rows()).sum();
+                                vec![batches]
+                            }
                         }
                     };
 
@@ -743,12 +949,38 @@ impl std::future::IntoFuture for WriteBuilder {
             if this.schema_mode == Some(SchemaMode::Merge) && schema_drift {
                 if let Some(snapshot) = &this.snapshot {
                     let schema_struct: StructType = schema.clone().try_into()?;
+                    let current_protocol = snapshot.protocol();
+                    let configuration = snapshot.metadata().configuration.clone();
+                    let maybe_new_protocol = if PROTOCOL
+                        .contains_timestampntz(schema_struct.fields())
+                        && !current_protocol
+                            .reader_features
+                            .clone()
+                            .unwrap_or_default()
+                            .contains(&crate::kernel::ReaderFeatures::TimestampWithoutTimezone)
+                    // We can check only reader features, as reader and writer timestampNtz
+                    // should be always enabled together
+                    {
+                        let new_protocol = current_protocol.clone().enable_timestamp_ntz();
+                        if !(current_protocol.min_reader_version == 3
+                            && current_protocol.min_writer_version == 7)
+                        {
+                            Some(new_protocol.move_table_properties_into_features(&configuration))
+                        } else {
+                            Some(new_protocol)
+                        }
+                    } else {
+                        None
+                    };
                     let schema_action = Action::Metadata(Metadata::try_new(
                         schema_struct,
                         partition_columns.clone(),
-                        snapshot.metadata().configuration.clone(),
+                        configuration,
                     )?);
                     actions.push(schema_action);
+                    if let Some(new_protocol) = maybe_new_protocol {
+                        actions.push(new_protocol.into())
+                    }
                 }
             }
             let state = match this.state {
@@ -780,6 +1012,9 @@ impl std::future::IntoFuture for WriteBuilder {
                 .as_ref()
                 .map(|snapshot| snapshot.table_config());
 
+            let target_file_size = this.target_file_size.or_else(|| {
+                Some(super::get_target_file_size(&config, &this.configuration) as usize)
+            });
             let (num_indexed_cols, stats_columns) =
                 super::get_num_idx_cols_and_stats_columns(config, this.configuration);
 
@@ -787,34 +1022,58 @@ impl std::future::IntoFuture for WriteBuilder {
                 num_indexed_cols,
                 stats_columns,
             };
+
             // Here we need to validate if the new data conforms to a predicate if one is provided
             let add_actions = write_execution_plan_with_predicate(
                 predicate.clone(),
                 this.snapshot.as_ref(),
                 state.clone(),
-                plan,
+                plan.clone(),
                 partition_columns.clone(),
                 this.log_store.object_store().clone(),
-                this.target_file_size,
+                target_file_size,
                 this.write_batch_size,
                 this.writer_properties.clone(),
-                this.safe_cast,
-                this.schema_mode,
                 writer_stats_config.clone(),
                 None,
             )
             .await?;
+            metrics.num_added_files = add_actions.len();
             actions.extend(add_actions);
 
             // Collect remove actions if we are overwriting the table
             if let Some(snapshot) = &this.snapshot {
                 if matches!(this.mode, SaveMode::Overwrite) {
                     // Update metadata with new schema
-                    let table_schema = snapshot
-                        .physical_arrow_schema(this.log_store.object_store().clone())
-                        .await
-                        .or_else(|_| snapshot.arrow_schema())
-                        .unwrap_or(schema.clone());
+                    let table_schema = snapshot.input_schema()?;
+
+                    let configuration = snapshot.metadata().configuration.clone();
+                    let current_protocol = snapshot.protocol();
+                    let maybe_new_protocol = if PROTOCOL.contains_timestampntz(
+                        TryInto::<StructType>::try_into(schema.clone())?.fields(),
+                    ) && !current_protocol
+                        .reader_features
+                        .clone()
+                        .unwrap_or_default()
+                        .contains(&crate::kernel::ReaderFeatures::TimestampWithoutTimezone)
+                    // We can check only reader features, as reader and writer timestampNtz
+                    // should be always enabled together
+                    {
+                        let new_protocol = current_protocol.clone().enable_timestamp_ntz();
+                        if !(current_protocol.min_reader_version == 3
+                            && current_protocol.min_writer_version == 7)
+                        {
+                            Some(new_protocol.move_table_properties_into_features(&configuration))
+                        } else {
+                            Some(new_protocol)
+                        }
+                    } else {
+                        None
+                    };
+
+                    if let Some(protocol) = maybe_new_protocol {
+                        actions.push(protocol.into())
+                    }
 
                     if schema != table_schema {
                         let mut metadata = snapshot.metadata().clone();
@@ -839,6 +1098,7 @@ impl std::future::IntoFuture for WriteBuilder {
                                 this.writer_properties,
                                 deletion_timestamp,
                                 writer_stats_config,
+                                plan,
                             )
                             .await?;
                             if !predicate_actions.is_empty() {
@@ -854,7 +1114,14 @@ impl std::future::IntoFuture for WriteBuilder {
                         }
                     };
                 }
+                metrics.num_removed_files = actions
+                    .iter()
+                    .filter(|a| a.action_type() == ActionType::Remove)
+                    .count();
             }
+
+            metrics.execution_time_ms =
+                Instant::now().duration_since(exec_start).as_millis() as u64;
 
             let operation = DeltaOperation::Write {
                 mode: this.mode,
@@ -866,7 +1133,13 @@ impl std::future::IntoFuture for WriteBuilder {
                 predicate: predicate_str,
             };
 
-            let commit = CommitBuilder::from(this.commit_properties)
+            let mut commit_properties = this.commit_properties.clone();
+            commit_properties.app_metadata.insert(
+                "operationMetrics".to_owned(),
+                serde_json::to_value(&metrics)?,
+            );
+
+            let commit = CommitBuilder::from(commit_properties)
                 .with_actions(actions)
                 .build(
                     this.snapshot.as_ref().map(|f| f as &dyn TableReference),
@@ -948,26 +1221,51 @@ fn try_cast_batch(from_fields: &Fields, to_fields: &Fields) -> Result<(), ArrowE
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::logstore::get_actions;
+    use crate::operations::load_cdf::collect_batches;
     use crate::operations::{collect_sendable_stream, DeltaOps};
     use crate::protocol::SaveMode;
+    use crate::test_utils::{TestResult, TestSchemas};
     use crate::writer::test_utils::datafusion::{get_data, get_data_sorted, write_batch};
     use crate::writer::test_utils::{
         get_arrow_schema, get_delta_schema, get_delta_schema_with_nested_struct, get_record_batch,
         get_record_batch_with_nested_struct, setup_table_with_configuration,
     };
-    use crate::DeltaConfigKey;
+    use crate::TableProperty;
     use arrow_array::{Int32Array, StringArray, TimestampMicrosecondArray};
     use arrow_schema::{DataType, Field, Schema as ArrowSchema, TimeUnit};
     use datafusion::prelude::*;
     use datafusion::{assert_batches_eq, assert_batches_sorted_eq};
+    use itertools::Itertools;
     use serde_json::{json, Value};
+
+    async fn get_write_metrics(table: DeltaTable) -> WriteMetrics {
+        let mut commit_info = table.history(Some(1)).await.unwrap();
+        let metrics = commit_info
+            .first_mut()
+            .unwrap()
+            .info
+            .remove("operationMetrics")
+            .unwrap();
+        serde_json::from_value(metrics).unwrap()
+    }
+
+    fn assert_common_write_metrics(write_metrics: WriteMetrics) {
+        assert!(write_metrics.execution_time_ms > 0);
+        assert!(write_metrics.num_added_files > 0);
+    }
 
     #[tokio::test]
     async fn test_write_when_delta_table_is_append_only() {
-        let table = setup_table_with_configuration(DeltaConfigKey::AppendOnly, Some("true")).await;
+        let table = setup_table_with_configuration(TableProperty::AppendOnly, Some("true")).await;
         let batch = get_record_batch(None, false);
         // Append
         let table = write_batch(table, batch.clone()).await;
+        let write_metrics: WriteMetrics = get_write_metrics(table.clone()).await;
+        assert_eq!(write_metrics.num_added_rows, batch.num_rows());
+        assert_eq!(write_metrics.num_removed_files, 0);
+        assert_common_write_metrics(write_metrics);
+
         // Overwrite
         let _err = DeltaOps(table)
             .write(vec![batch])
@@ -999,6 +1297,12 @@ mod tests {
             .unwrap();
         assert_eq!(table.version(), 1);
         assert_eq!(table.get_files_count(), 1);
+
+        let write_metrics: WriteMetrics = get_write_metrics(table.clone()).await;
+        assert_eq!(write_metrics.num_added_rows, batch.num_rows());
+        assert_eq!(write_metrics.num_added_files, table.get_files_count());
+        assert_common_write_metrics(write_metrics);
+
         table.load().await.unwrap();
         assert_eq!(table.history(None).await.unwrap().len(), 2);
         assert_eq!(
@@ -1006,7 +1310,7 @@ mod tests {
                 .info
                 .clone()
                 .into_iter()
-                .filter(|(k, _)| k != "clientVersion")
+                .filter(|(k, _)| k == "k1")
                 .collect::<HashMap<String, Value>>(),
             metadata
         );
@@ -1022,6 +1326,11 @@ mod tests {
             .unwrap();
         assert_eq!(table.version(), 2);
         assert_eq!(table.get_files_count(), 2);
+        let write_metrics: WriteMetrics = get_write_metrics(table.clone()).await;
+        assert_eq!(write_metrics.num_added_rows, batch.num_rows());
+        assert_eq!(write_metrics.num_added_files, 1);
+        assert_common_write_metrics(write_metrics);
+
         table.load().await.unwrap();
         assert_eq!(table.history(None).await.unwrap().len(), 3);
         assert_eq!(
@@ -1029,7 +1338,7 @@ mod tests {
                 .info
                 .clone()
                 .into_iter()
-                .filter(|(k, _)| k != "clientVersion")
+                .filter(|(k, _)| k == "k1")
                 .collect::<HashMap<String, Value>>(),
             metadata
         );
@@ -1038,13 +1347,18 @@ mod tests {
         let metadata: HashMap<String, Value> =
             HashMap::from_iter(vec![("k2".to_string(), json!("v2.1"))]);
         let mut table = DeltaOps(table)
-            .write(vec![batch])
+            .write(vec![batch.clone()])
             .with_save_mode(SaveMode::Overwrite)
             .with_commit_properties(CommitProperties::default().with_metadata(metadata.clone()))
             .await
             .unwrap();
         assert_eq!(table.version(), 3);
         assert_eq!(table.get_files_count(), 1);
+        let write_metrics: WriteMetrics = get_write_metrics(table.clone()).await;
+        assert_eq!(write_metrics.num_added_rows, batch.num_rows());
+        assert!(write_metrics.num_removed_files > 0);
+        assert_common_write_metrics(write_metrics);
+
         table.load().await.unwrap();
         assert_eq!(table.history(None).await.unwrap().len(), 4);
         assert_eq!(
@@ -1052,7 +1366,7 @@ mod tests {
                 .info
                 .clone()
                 .into_iter()
-                .filter(|(k, _)| k != "clientVersion")
+                .filter(|(k, _)| k == "k2")
                 .collect::<HashMap<String, Value>>(),
             metadata
         );
@@ -1075,6 +1389,9 @@ mod tests {
         )
         .unwrap();
         let table = DeltaOps::new_in_memory().write(vec![batch]).await.unwrap();
+        let write_metrics: WriteMetrics = get_write_metrics(table.clone()).await;
+        assert_eq!(write_metrics.num_added_rows, 2);
+        assert_common_write_metrics(write_metrics);
 
         let schema = Arc::new(ArrowSchema::new(vec![Field::new(
             "value",
@@ -1098,6 +1415,10 @@ mod tests {
             .with_cast_safety(true)
             .await
             .unwrap();
+
+        let write_metrics: WriteMetrics = get_write_metrics(table.clone()).await;
+        assert_eq!(write_metrics.num_added_rows, 3);
+        assert_common_write_metrics(write_metrics);
 
         let expected = [
             "+-------+",
@@ -1131,6 +1452,10 @@ mod tests {
         )
         .unwrap();
         let table = DeltaOps::new_in_memory().write(vec![batch]).await.unwrap();
+
+        let write_metrics: WriteMetrics = get_write_metrics(table.clone()).await;
+        assert_eq!(write_metrics.num_added_rows, 1);
+        assert_common_write_metrics(write_metrics);
 
         let schema = Arc::new(ArrowSchema::new(vec![Field::new(
             "value",
@@ -1167,7 +1492,9 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(table.version(), 0);
-        assert_eq!(table.get_files_count(), 1)
+        assert_eq!(table.get_files_count(), 1);
+        let write_metrics: WriteMetrics = get_write_metrics(table.clone()).await;
+        assert_common_write_metrics(write_metrics);
     }
 
     #[tokio::test]
@@ -1181,6 +1508,10 @@ mod tests {
             .unwrap();
         assert_eq!(table.version(), 0);
         assert_eq!(table.get_files_count(), 2);
+        let write_metrics: WriteMetrics = get_write_metrics(table.clone()).await;
+        assert!(write_metrics.num_partitions > 0);
+        assert_eq!(write_metrics.num_added_files, 2);
+        assert_common_write_metrics(write_metrics);
 
         let table = DeltaOps::new_in_memory()
             .write(vec![batch])
@@ -1189,7 +1520,12 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(table.version(), 0);
-        assert_eq!(table.get_files_count(), 4)
+        assert_eq!(table.get_files_count(), 4);
+
+        let write_metrics: WriteMetrics = get_write_metrics(table.clone()).await;
+        assert!(write_metrics.num_partitions > 0);
+        assert_eq!(write_metrics.num_added_files, 4);
+        assert_common_write_metrics(write_metrics);
     }
 
     #[tokio::test]
@@ -1201,6 +1537,9 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(table.version(), 0);
+
+        let write_metrics: WriteMetrics = get_write_metrics(table.clone()).await;
+        assert_common_write_metrics(write_metrics);
 
         let mut new_schema_builder = arrow_schema::SchemaBuilder::new();
         for field in batch.schema().fields() {
@@ -1248,6 +1587,9 @@ mod tests {
         let fields = new_schema.fields();
         let names = fields.map(|f| f.name()).collect::<Vec<_>>();
         assert_eq!(names, vec!["id", "value", "modified", "inserted_by"]);
+
+        let write_metrics: WriteMetrics = get_write_metrics(table.clone()).await;
+        assert_common_write_metrics(write_metrics);
     }
 
     #[tokio::test]
@@ -1260,6 +1602,10 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(table.version(), 0);
+
+        let write_metrics: WriteMetrics = get_write_metrics(table.clone()).await;
+        assert!(write_metrics.num_partitions > 0);
+        assert_common_write_metrics(write_metrics);
 
         let mut new_schema_builder = arrow_schema::SchemaBuilder::new();
         for field in batch.schema().fields() {
@@ -1309,6 +1655,10 @@ mod tests {
         assert_eq!(names, vec!["id", "inserted_by", "modified", "value"]);
         let part_cols = table.metadata().unwrap().partition_columns.clone();
         assert_eq!(part_cols, vec!["id", "value"]); // we want to preserve partitions
+
+        let write_metrics: WriteMetrics = get_write_metrics(table.clone()).await;
+        assert!(write_metrics.num_partitions > 0);
+        assert_common_write_metrics(write_metrics);
     }
 
     #[tokio::test]
@@ -1320,7 +1670,8 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(table.version(), 0);
-
+        let write_metrics: WriteMetrics = get_write_metrics(table.clone()).await;
+        assert_common_write_metrics(write_metrics);
         let mut new_schema_builder = arrow_schema::SchemaBuilder::new();
         for field in batch.schema().fields() {
             if field.name() != "modified" {
@@ -1373,6 +1724,8 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(table.version(), 0);
+        let write_metrics: WriteMetrics = get_write_metrics(table.clone()).await;
+        assert_common_write_metrics(write_metrics);
 
         let mut new_schema_builder = arrow_schema::SchemaBuilder::new();
 
@@ -1428,6 +1781,8 @@ mod tests {
 
         let table = DeltaOps(table).write(vec![batch.clone()]).await.unwrap();
         assert_eq!(table.version(), 1);
+        let write_metrics: WriteMetrics = get_write_metrics(table.clone()).await;
+        assert_common_write_metrics(write_metrics);
 
         let schema: StructType = serde_json::from_value(json!({
             "type": "struct",
@@ -1449,7 +1804,7 @@ mod tests {
         assert_eq!(table.version(), 0);
 
         let table = DeltaOps(table).write(vec![batch.clone()]).await;
-        assert!(table.is_err())
+        assert!(table.is_err());
     }
 
     #[tokio::test]
@@ -1470,6 +1825,8 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(table.version(), 1);
+        let write_metrics: WriteMetrics = get_write_metrics(table.clone()).await;
+        assert_common_write_metrics(write_metrics);
 
         let actual = get_data(&table).await;
         let expected = DataType::Struct(Fields::from(vec![Field::new(
@@ -1508,6 +1865,8 @@ mod tests {
             .with_partition_columns(["string"])
             .await
             .unwrap();
+        let write_metrics: WriteMetrics = get_write_metrics(_table.clone()).await;
+        assert_common_write_metrics(write_metrics);
 
         let table = crate::open_table(tmp_path.as_os_str().to_str().unwrap())
             .await
@@ -1551,6 +1910,9 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(table.version(), 0);
+        let write_metrics: WriteMetrics = get_write_metrics(table.clone()).await;
+        assert_eq!(write_metrics.num_added_rows, 4);
+        assert_common_write_metrics(write_metrics);
 
         let batch_add = RecordBatch::try_new(
             Arc::clone(&schema),
@@ -1569,6 +1931,9 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(table.version(), 1);
+        let write_metrics: WriteMetrics = get_write_metrics(table.clone()).await;
+        assert_eq!(write_metrics.num_added_rows, 1);
+        assert_common_write_metrics(write_metrics);
 
         let expected = [
             "+----+-------+------------+",
@@ -1607,6 +1972,8 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(table.version(), 0);
+        let write_metrics: WriteMetrics = get_write_metrics(table.clone()).await;
+        assert_common_write_metrics(write_metrics);
 
         // Take clones of these before an operation resulting in error, otherwise it will
         // be impossible to refer to an in-memory table
@@ -1649,6 +2016,8 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(table.version(), 0);
+        let write_metrics: WriteMetrics = get_write_metrics(table.clone()).await;
+        assert_common_write_metrics(write_metrics);
 
         let batch_add = RecordBatch::try_new(
             Arc::clone(&schema),
@@ -1671,6 +2040,9 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(table.version(), 1);
+        let write_metrics: WriteMetrics = get_write_metrics(table.clone()).await;
+        assert_eq!(write_metrics.num_added_rows, 3);
+        assert_common_write_metrics(write_metrics);
 
         let expected = [
             "+----+-------+------------+",
@@ -1687,5 +2059,256 @@ mod tests {
         ];
         let actual = get_data_sorted(&table, "id,value,modified").await;
         assert_batches_sorted_eq!(&expected, &actual);
+    }
+
+    #[tokio::test]
+    async fn test_dont_write_cdc_with_overwrite() -> TestResult {
+        let delta_schema = TestSchemas::simple();
+        let table: DeltaTable = DeltaOps::new_in_memory()
+            .create()
+            .with_columns(delta_schema.fields().cloned())
+            .with_partition_columns(["id"])
+            .with_configuration_property(TableProperty::EnableChangeDataFeed, Some("true"))
+            .await
+            .unwrap();
+        assert_eq!(table.version(), 0);
+
+        let schema = Arc::new(ArrowSchema::try_from(delta_schema)?);
+
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(StringArray::from(vec![Some("1"), Some("2"), Some("3")])),
+                Arc::new(Int32Array::from(vec![Some(1), Some(2), Some(3)])),
+                Arc::new(StringArray::from(vec![
+                    Some("yes"),
+                    Some("yes"),
+                    Some("no"),
+                ])),
+            ],
+        )
+        .unwrap();
+
+        let second_batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(StringArray::from(vec![Some("3")])),
+                Arc::new(Int32Array::from(vec![Some(10)])),
+                Arc::new(StringArray::from(vec![Some("yes")])),
+            ],
+        )
+        .unwrap();
+
+        let table = DeltaOps(table)
+            .write(vec![batch])
+            .await
+            .expect("Failed to write first batch");
+        assert_eq!(table.version(), 1);
+        let write_metrics: WriteMetrics = get_write_metrics(table.clone()).await;
+        assert_eq!(write_metrics.num_added_rows, 3);
+        assert_common_write_metrics(write_metrics);
+
+        let table = DeltaOps(table)
+            .write([second_batch])
+            .with_save_mode(crate::protocol::SaveMode::Overwrite)
+            .await
+            .unwrap();
+        assert_eq!(table.version(), 2);
+        let write_metrics: WriteMetrics = get_write_metrics(table.clone()).await;
+        assert_eq!(write_metrics.num_added_rows, 1);
+        assert!(write_metrics.num_removed_files > 0);
+        assert_common_write_metrics(write_metrics);
+
+        let snapshot_bytes = table
+            .log_store
+            .read_commit_entry(2)
+            .await?
+            .expect("failed to get snapshot bytes");
+        let version_actions = get_actions(2, snapshot_bytes).await?;
+
+        let cdc_actions = version_actions
+            .iter()
+            .filter(|action| matches!(action, &&Action::Cdc(_)))
+            .collect_vec();
+        assert!(cdc_actions.is_empty());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_dont_write_cdc_with_overwrite_predicate_partitioned() -> TestResult {
+        let delta_schema = TestSchemas::simple();
+        let table: DeltaTable = DeltaOps::new_in_memory()
+            .create()
+            .with_columns(delta_schema.fields().cloned())
+            .with_partition_columns(["id"])
+            .with_configuration_property(TableProperty::EnableChangeDataFeed, Some("true"))
+            .await
+            .unwrap();
+        assert_eq!(table.version(), 0);
+
+        let schema = Arc::new(ArrowSchema::try_from(delta_schema)?);
+
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(StringArray::from(vec![Some("1"), Some("2"), Some("3")])),
+                Arc::new(Int32Array::from(vec![Some(1), Some(2), Some(3)])),
+                Arc::new(StringArray::from(vec![
+                    Some("yes"),
+                    Some("yes"),
+                    Some("no"),
+                ])),
+            ],
+        )
+        .unwrap();
+
+        let second_batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(StringArray::from(vec![Some("3")])),
+                Arc::new(Int32Array::from(vec![Some(10)])),
+                Arc::new(StringArray::from(vec![Some("yes")])),
+            ],
+        )
+        .unwrap();
+
+        let table = DeltaOps(table)
+            .write(vec![batch])
+            .await
+            .expect("Failed to write first batch");
+        assert_eq!(table.version(), 1);
+        let write_metrics: WriteMetrics = get_write_metrics(table.clone()).await;
+        assert_eq!(write_metrics.num_added_rows, 3);
+        assert!(write_metrics.num_partitions > 0);
+        assert_common_write_metrics(write_metrics);
+
+        let table = DeltaOps(table)
+            .write([second_batch])
+            .with_save_mode(crate::protocol::SaveMode::Overwrite)
+            .with_replace_where("id='3'")
+            .await
+            .unwrap();
+        assert_eq!(table.version(), 2);
+        let write_metrics: WriteMetrics = get_write_metrics(table.clone()).await;
+        assert_eq!(write_metrics.num_added_rows, 1);
+        assert!(write_metrics.num_partitions > 0);
+        assert!(write_metrics.num_removed_files > 0);
+        assert_common_write_metrics(write_metrics);
+
+        let snapshot_bytes = table
+            .log_store
+            .read_commit_entry(2)
+            .await?
+            .expect("failed to get snapshot bytes");
+        let version_actions = get_actions(2, snapshot_bytes).await?;
+
+        let cdc_actions = version_actions
+            .iter()
+            .filter(|action| matches!(action, &&Action::Cdc(_)))
+            .collect_vec();
+        assert!(cdc_actions.is_empty());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_dont_write_cdc_with_overwrite_predicate_unpartitioned() -> TestResult {
+        let delta_schema = TestSchemas::simple();
+        let table: DeltaTable = DeltaOps::new_in_memory()
+            .create()
+            .with_columns(delta_schema.fields().cloned())
+            .with_partition_columns(["id"])
+            .with_configuration_property(TableProperty::EnableChangeDataFeed, Some("true"))
+            .await
+            .unwrap();
+        assert_eq!(table.version(), 0);
+
+        let schema = Arc::new(ArrowSchema::try_from(delta_schema)?);
+
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(StringArray::from(vec![Some("1"), Some("2"), Some("3")])),
+                Arc::new(Int32Array::from(vec![Some(1), Some(2), Some(3)])),
+                Arc::new(StringArray::from(vec![
+                    Some("yes"),
+                    Some("yes"),
+                    Some("no"),
+                ])),
+            ],
+        )
+        .unwrap();
+
+        let second_batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(StringArray::from(vec![Some("3")])),
+                Arc::new(Int32Array::from(vec![Some(3)])),
+                Arc::new(StringArray::from(vec![Some("yes")])),
+            ],
+        )
+        .unwrap();
+
+        let table = DeltaOps(table)
+            .write(vec![batch])
+            .await
+            .expect("Failed to write first batch");
+        assert_eq!(table.version(), 1);
+
+        let table = DeltaOps(table)
+            .write([second_batch])
+            .with_save_mode(crate::protocol::SaveMode::Overwrite)
+            .with_replace_where("value=3")
+            .await
+            .unwrap();
+        assert_eq!(table.version(), 2);
+
+        let ctx = SessionContext::new();
+        let cdf_scan = DeltaOps(table.clone())
+            .load_cdf()
+            .with_session_ctx(ctx.clone())
+            .with_starting_version(0)
+            .build()
+            .await
+            .expect("Failed to load CDF");
+
+        let mut batches = collect_batches(
+            cdf_scan
+                .properties()
+                .output_partitioning()
+                .partition_count(),
+            cdf_scan,
+            ctx,
+        )
+        .await
+        .expect("Failed to collect batches");
+
+        // The batches will contain a current _commit_timestamp which shouldn't be check_append_only
+        let _: Vec<_> = batches.iter_mut().map(|b| b.remove_column(4)).collect();
+
+        assert_batches_sorted_eq! {[
+        "+-------+----------+--------------+-----------------+----+",
+        "| value | modified | _change_type | _commit_version | id |",
+        "+-------+----------+--------------+-----------------+----+",
+        "| 1     | yes      | insert       | 1               | 1  |",
+        "| 2     | yes      | insert       | 1               | 2  |",
+        "| 3     | no       | delete       | 2               | 3  |",
+        "| 3     | no       | insert       | 1               | 3  |",
+        "| 3     | yes      | insert       | 2               | 3  |",
+        "+-------+----------+--------------+-----------------+----+",
+        ], &batches }
+
+        let snapshot_bytes = table
+            .log_store
+            .read_commit_entry(2)
+            .await?
+            .expect("failed to get snapshot bytes");
+        let version_actions = get_actions(2, snapshot_bytes).await?;
+
+        let cdc_actions = version_actions
+            .iter()
+            .filter(|action| matches!(action, &&Action::Cdc(_)))
+            .collect_vec();
+        assert!(!cdc_actions.is_empty());
+        Ok(())
     }
 }

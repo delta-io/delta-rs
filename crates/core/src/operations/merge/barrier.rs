@@ -18,12 +18,12 @@ use std::{
 
 use arrow_array::{builder::UInt64Builder, ArrayRef, RecordBatch};
 use arrow_schema::SchemaRef;
-use datafusion::physical_plan::{
-    DisplayAs, DisplayFormatType, ExecutionPlan, RecordBatchStream, SendableRecordBatchStream,
-};
 use datafusion_common::{DataFusionError, Result as DataFusionResult};
 use datafusion_expr::{Expr, LogicalPlan, UserDefinedLogicalNodeCore};
 use datafusion_physical_expr::{Distribution, PhysicalExpr};
+use datafusion_physical_plan::{
+    DisplayAs, DisplayFormatType, ExecutionPlan, RecordBatchStream, SendableRecordBatchStream,
+};
 use futures::{Stream, StreamExt};
 
 use crate::{
@@ -67,6 +67,10 @@ impl MergeBarrierExec {
 }
 
 impl ExecutionPlan for MergeBarrierExec {
+    fn name(&self) -> &str {
+        Self::static_name()
+    }
+
     fn as_any(&self) -> &dyn std::any::Any {
         self
     }
@@ -439,14 +443,16 @@ impl UserDefinedLogicalNodeCore for MergeBarrier {
     }
 }
 
-pub(crate) fn find_barrier_node(parent: &Arc<dyn ExecutionPlan>) -> Option<Arc<dyn ExecutionPlan>> {
-    //! Used to locate the physical Barrier Node after the planner converts the logical node
-    if parent.as_any().downcast_ref::<MergeBarrierExec>().is_some() {
+pub(crate) fn find_node<T: 'static>(
+    parent: &Arc<dyn ExecutionPlan>,
+) -> Option<Arc<dyn ExecutionPlan>> {
+    //! Used to locate a Node::<T> after the planner converts the logical node
+    if parent.as_any().downcast_ref::<T>().is_some() {
         return Some(parent.to_owned());
     }
 
     for child in &parent.children() {
-        let res = find_barrier_node(child);
+        let res = find_node::<T>(child);
         if res.is_some() {
             return res;
         }

@@ -221,6 +221,9 @@ pub enum DeltaTableError {
     #[error("Table has not yet been initialized")]
     NotInitialized,
 
+    #[error("Table has not yet been initialized with files, therefore {0} is not supported")]
+    NotInitializedWithFiles(String),
+
     #[error("Change Data not enabled for version: {version}, Start: {start}, End: {end}")]
     ChangeDataNotRecorded { version: i64, start: i64, end: i64 },
 
@@ -265,5 +268,10 @@ impl DeltaTableError {
             path.as_ref()
         );
         Self::NotATable(msg)
+    }
+
+    /// Create a [Generic](DeltaTableError::Generic) error with the given message.
+    pub fn generic(msg: impl ToString) -> Self {
+        Self::Generic(msg.to_string())
     }
 }

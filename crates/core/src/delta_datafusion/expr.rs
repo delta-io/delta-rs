@@ -20,37 +20,65 @@
 // Display functions and required macros were pulled from https://github.com/apache/arrow-datafusion/blob/ddb95497e2792015d5a5998eec79aac8d37df1eb/datafusion/expr/src/expr.rs
 
 //! Utility functions for Datafusion's Expressions
-
-use std::{
-    fmt::{self, Display, Error, Formatter, Write},
-    sync::Arc,
-};
+use std::fmt::{self, Display, Error, Formatter, Write};
+use std::sync::Arc;
 
 use arrow_schema::DataType;
 use chrono::{DateTime, NaiveDate};
 use datafusion::execution::context::SessionState;
+use datafusion::execution::session_state::SessionStateBuilder;
+use datafusion::execution::FunctionRegistry;
 use datafusion_common::Result as DFResult;
 use datafusion_common::{config::ConfigOptions, DFSchema, Result, ScalarValue, TableReference};
-use datafusion_expr::{
-    expr::InList, AggregateUDF, Between, BinaryExpr, Cast, Expr, Like, TableSource,
-};
+use datafusion_expr::expr::InList;
+use datafusion_expr::planner::ExprPlanner;
+use datafusion_expr::{AggregateUDF, Between, BinaryExpr, Cast, Expr, Like, TableSource};
 use datafusion_sql::planner::{ContextProvider, SqlToRel};
 use datafusion_sql::sqlparser::ast::escape_quoted_string;
 use datafusion_sql::sqlparser::dialect::GenericDialect;
 use datafusion_sql::sqlparser::parser::Parser;
 use datafusion_sql::sqlparser::tokenizer::Tokenizer;
 
+use super::DeltaParserOptions;
 use crate::{DeltaResult, DeltaTableError};
 
-use super::DeltaParserOptions;
-
 pub(crate) struct DeltaContextProvider<'a> {
-    state: &'a SessionState,
+    state: SessionState,
+    /// Keeping this around just to make use of the 'a lifetime
+    _original: &'a SessionState,
+    planners: Vec<Arc<dyn ExprPlanner>>,
+}
+
+impl<'a> DeltaContextProvider<'a> {
+    fn new(state: &'a SessionState) -> Self {
+        let planners = state.expr_planners();
+        DeltaContextProvider {
+            planners,
+            // Creating a new session state with overridden scalar_functions since
+            // the get_field() UDF was dropped from the default scalar functions upstream in
+            // `36660fe10d9c0cdff62e0da0b94bee28422d3419`
+            state: SessionStateBuilder::new_from_existing(state.clone())
+                .with_scalar_functions(
+                    state
+                        .scalar_functions()
+                        .values()
+                        .cloned()
+                        .chain(std::iter::once(datafusion::functions::core::get_field()))
+                        .collect(),
+                )
+                .build(),
+            _original: state,
+        }
+    }
 }
 
 impl<'a> ContextProvider for DeltaContextProvider<'a> {
     fn get_table_source(&self, _name: TableReference) -> DFResult<Arc<dyn TableSource>> {
         unimplemented!()
+    }
+
+    fn get_expr_planners(&self) -> &[Arc<dyn ExprPlanner>] {
+        self.planners.as_slice()
     }
 
     fn get_function_meta(&self, name: &str) -> Option<Arc<datafusion_expr::ScalarUDF>> {
@@ -74,15 +102,15 @@ impl<'a> ContextProvider for DeltaContextProvider<'a> {
     }
 
     fn udf_names(&self) -> Vec<String> {
-        unimplemented!()
+        self.state.scalar_functions().keys().cloned().collect()
     }
 
     fn udaf_names(&self) -> Vec<String> {
-        unimplemented!()
+        self.state.aggregate_functions().keys().cloned().collect()
     }
 
     fn udwf_names(&self) -> Vec<String> {
-        unimplemented!()
+        self.state.window_functions().keys().cloned().collect()
     }
 }
 
@@ -106,7 +134,7 @@ pub(crate) fn parse_predicate_expression(
             source: Box::new(err),
         })?;
 
-    let context_provider = DeltaContextProvider { state: df_state };
+    let context_provider = DeltaContextProvider::new(df_state);
     let sql_to_rel =
         SqlToRel::new_with_options(&context_provider, DeltaParserOptions::default().into());
 
@@ -394,6 +422,8 @@ impl<'a> fmt::Display for ScalarValueFormat<'a> {
 #[cfg(test)]
 mod test {
     use arrow_schema::DataType as ArrowDataType;
+    use datafusion::functions_array::expr_fn::cardinality;
+    use datafusion::functions_nested::expr_ext::{IndexAccessor, SliceAccessor};
     use datafusion::prelude::SessionContext;
     use datafusion_common::{Column, ScalarValue, ToDFSchema};
     use datafusion_expr::expr::ScalarFunction;
@@ -402,8 +432,6 @@ mod test {
     use datafusion_functions::core::expr_ext::FieldAccessor;
     use datafusion_functions::encoding::expr_fn::decode;
     use datafusion_functions::expr_fn::substring;
-    use datafusion_functions_array::expr_ext::{IndexAccessor, SliceAccessor};
-    use datafusion_functions_array::expr_fn::cardinality;
 
     use crate::delta_datafusion::{DataFusionMixins, DeltaSessionContext};
     use crate::kernel::{ArrayType, DataType, PrimitiveType, StructField, StructType};

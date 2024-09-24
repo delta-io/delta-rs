@@ -30,6 +30,7 @@ pub mod state_arrow;
 
 /// Metadata for a checkpoint file
 #[derive(Serialize, Deserialize, Debug, Default, Clone, Copy)]
+#[serde(rename_all = "camelCase")]
 pub struct CheckPoint {
     /// Delta table version
     pub(crate) version: i64, // 20 digits decimals
@@ -239,9 +240,12 @@ impl<'de> Deserialize<'de> for DeltaTable {
                 let storage_config: LogStoreConfig = seq
                     .next_element()?
                     .ok_or_else(|| A::Error::invalid_length(0, &self))?;
-                let log_store =
-                    crate::logstore::logstore_for(storage_config.location, storage_config.options)
-                        .map_err(|_| A::Error::custom("Failed deserializing LogStore"))?;
+                let log_store = crate::logstore::logstore_for(
+                    storage_config.location,
+                    storage_config.options,
+                    None,
+                )
+                .map_err(|_| A::Error::custom("Failed deserializing LogStore"))?;
 
                 let table = DeltaTable {
                     state,
@@ -285,6 +289,11 @@ impl DeltaTable {
     /// get a shared reference to the delta object store
     pub fn object_store(&self) -> ObjectStoreRef {
         self.log_store.object_store()
+    }
+
+    /// Check if the [`DeltaTable`] exists
+    pub async fn verify_deltatable_existence(&self) -> DeltaResult<bool> {
+        self.log_store.is_delta_table_location().await
     }
 
     /// The URI of the underlying data
@@ -617,5 +626,22 @@ mod tests {
             .await
             .unwrap();
         (dt, tmp_dir)
+    }
+
+    #[test]
+    fn checkpoint_should_serialize_in_camel_case() {
+        let checkpoint = CheckPoint {
+            version: 1,
+            size: 1,
+            parts: None,
+            size_in_bytes: Some(1),
+            num_of_add_files: Some(1),
+        };
+
+        let checkpoint_json_serialized =
+            serde_json::to_string(&checkpoint).expect("could not serialize to json");
+
+        assert!(checkpoint_json_serialized.contains("sizeInBytes"));
+        assert!(checkpoint_json_serialized.contains("numOfAddFiles"));
     }
 }

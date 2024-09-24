@@ -1,8 +1,5 @@
 //! Provide common cast functionality for callers
 //!
-use crate::kernel::{
-    ArrayType, DataType as DeltaDataType, MapType, MetadataValue, StructField, StructType,
-};
 use arrow_array::cast::AsArray;
 use arrow_array::{
     new_null_array, Array, ArrayRef, GenericListArray, MapArray, OffsetSizeTrait, RecordBatch,
@@ -10,124 +7,11 @@ use arrow_array::{
 };
 use arrow_cast::{cast_with_options, CastOptions};
 use arrow_schema::{ArrowError, DataType, FieldRef, Fields, SchemaRef as ArrowSchemaRef};
-use std::collections::HashMap;
 use std::sync::Arc;
 
+pub(crate) mod merge_schema;
+
 use crate::DeltaResult;
-
-fn try_merge_metadata(
-    left: &mut HashMap<String, MetadataValue>,
-    right: &HashMap<String, MetadataValue>,
-) -> Result<(), ArrowError> {
-    for (k, v) in right {
-        if let Some(vl) = left.get(k) {
-            if vl != v {
-                return Err(ArrowError::SchemaError(format!(
-                    "Cannot merge metadata with different values for key {}",
-                    k
-                )));
-            }
-        } else {
-            left.insert(k.clone(), v.clone());
-        }
-    }
-    Ok(())
-}
-
-pub(crate) fn merge_struct(
-    left: &StructType,
-    right: &StructType,
-) -> Result<StructType, ArrowError> {
-    let mut errors = Vec::new();
-    let merged_fields: Result<Vec<StructField>, ArrowError> = left
-        .fields()
-        .map(|field| {
-            let right_field = right.field(field.name());
-            if let Some(right_field) = right_field {
-                let type_or_not = merge_type(field.data_type(), right_field.data_type());
-                match type_or_not {
-                    Err(e) => {
-                        errors.push(e.to_string());
-                        Err(e)
-                    }
-                    Ok(f) => {
-                        let mut new_field = StructField::new(
-                            field.name(),
-                            f,
-                            field.is_nullable() || right_field.is_nullable(),
-                        );
-
-                        new_field.metadata.clone_from(&field.metadata);
-                        try_merge_metadata(&mut new_field.metadata, &right_field.metadata)?;
-                        Ok(new_field)
-                    }
-                }
-            } else {
-                Ok(field.clone())
-            }
-        })
-        .collect();
-    match merged_fields {
-        Ok(mut fields) => {
-            for field in right.fields() {
-                if !left.field(field.name()).is_some() {
-                    fields.push(field.clone());
-                }
-            }
-
-            Ok(StructType::new(fields))
-        }
-        Err(e) => {
-            errors.push(e.to_string());
-            Err(ArrowError::SchemaError(errors.join("\n")))
-        }
-    }
-}
-
-pub(crate) fn merge_type(
-    left: &DeltaDataType,
-    right: &DeltaDataType,
-) -> Result<DeltaDataType, ArrowError> {
-    if left == right {
-        return Ok(left.clone());
-    }
-    match (left, right) {
-        (DeltaDataType::Array(a), DeltaDataType::Array(b)) => {
-            let merged = merge_type(&a.element_type, &b.element_type)?;
-            Ok(DeltaDataType::Array(Box::new(ArrayType::new(
-                merged,
-                a.contains_null() || b.contains_null(),
-            ))))
-        }
-        (DeltaDataType::Map(a), DeltaDataType::Map(b)) => {
-            let merged_key = merge_type(&a.key_type, &b.key_type)?;
-            let merged_value = merge_type(&a.value_type, &b.value_type)?;
-            Ok(DeltaDataType::Map(Box::new(MapType::new(
-                merged_key,
-                merged_value,
-                a.value_contains_null() || b.value_contains_null(),
-            ))))
-        }
-        (DeltaDataType::Struct(a), DeltaDataType::Struct(b)) => {
-            let merged = merge_struct(a, b)?;
-            Ok(DeltaDataType::Struct(Box::new(merged)))
-        }
-        (a, b) => Err(ArrowError::SchemaError(format!(
-            "Cannot merge types {} and {}",
-            a, b
-        ))),
-    }
-}
-
-pub(crate) fn merge_schema(
-    left: ArrowSchemaRef,
-    right: ArrowSchemaRef,
-) -> Result<ArrowSchemaRef, ArrowError> {
-    let left_delta: StructType = left.try_into()?;
-    let right_delta: StructType = right.try_into()?;
-    let merged: StructType = merge_struct(&left_delta, &right_delta)?;
-    Ok(Arc::new((&merged).try_into()?))
-}
 
 fn cast_struct(
     struct_array: &StructArray,
@@ -142,15 +26,16 @@ fn cast_struct(
             .map(|field| {
                 let col_or_not = struct_array.column_by_name(field.name());
                 match col_or_not {
-                    None => match add_missing {
-                        true if field.is_nullable() => {
+                    None => {
+                        if add_missing && field.is_nullable() {
                             Ok(new_null_array(field.data_type(), struct_array.len()))
+                        } else {
+                            Err(ArrowError::SchemaError(format!(
+                                "Could not find column {}",
+                                field.name()
+                            )))
                         }
-                        _ => Err(ArrowError::SchemaError(format!(
-                            "Could not find column {0}",
-                            field.name()
-                        ))),
-                    },
+                    }
                     Some(col) => cast_field(col, field, cast_options, add_missing),
                 }
             })
@@ -204,64 +89,64 @@ fn cast_field(
     cast_options: &CastOptions,
     add_missing: bool,
 ) -> Result<ArrayRef, ArrowError> {
-    if let (DataType::Struct(_), DataType::Struct(child_fields)) =
-        (col.data_type(), field.data_type())
-    {
-        let child_struct = StructArray::from(col.into_data());
-        Ok(Arc::new(cast_struct(
-            &child_struct,
-            child_fields,
-            cast_options,
-            add_missing,
-        )?) as ArrayRef)
-    } else if let (DataType::List(_), DataType::List(child_fields)) =
-        (col.data_type(), field.data_type())
-    {
-        Ok(Arc::new(cast_list(
+    let (col_type, field_type) = (col.data_type(), field.data_type());
+
+    match (col_type, field_type) {
+        (DataType::Struct(_), DataType::Struct(child_fields)) => {
+            let child_struct = StructArray::from(col.into_data());
+            Ok(Arc::new(cast_struct(
+                &child_struct,
+                child_fields,
+                cast_options,
+                add_missing,
+            )?) as ArrayRef)
+        }
+        (DataType::List(_), DataType::List(child_fields)) => Ok(Arc::new(cast_list(
             col.as_any()
                 .downcast_ref::<GenericListArray<i32>>()
-                .ok_or(ArrowError::CastError(format!(
-                    "Expected a list for {} but got {}",
-                    field.name(),
-                    col.data_type()
-                )))?,
+                .ok_or_else(|| {
+                    ArrowError::CastError(format!(
+                        "Expected a list for {} but got {}",
+                        field.name(),
+                        col_type
+                    ))
+                })?,
             child_fields,
             cast_options,
             add_missing,
-        )?) as ArrayRef)
-    } else if let (DataType::LargeList(_), DataType::LargeList(child_fields)) =
-        (col.data_type(), field.data_type())
-    {
-        Ok(Arc::new(cast_list(
+        )?) as ArrayRef),
+        (DataType::LargeList(_), DataType::LargeList(child_fields)) => Ok(Arc::new(cast_list(
             col.as_any()
                 .downcast_ref::<GenericListArray<i64>>()
-                .ok_or(ArrowError::CastError(format!(
-                    "Expected a list for {} but got {}",
-                    field.name(),
-                    col.data_type()
-                )))?,
+                .ok_or_else(|| {
+                    ArrowError::CastError(format!(
+                        "Expected a list for {} but got {}",
+                        field.name(),
+                        col_type
+                    ))
+                })?,
             child_fields,
             cast_options,
             add_missing,
-        )?) as ArrayRef)
-    } else if let (DataType::Map(_, _), DataType::Map(child_fields, sorted)) =
-        (col.data_type(), field.data_type())
-    {
-        Ok(Arc::new(cast_map(
-            col.as_map_opt().ok_or(ArrowError::CastError(format!(
-                "Expected a map for {} but got {}",
-                field.name(),
-                col.data_type()
-            )))?,
+        )?) as ArrayRef),
+        // TODO: add list view cast
+        (DataType::Map(_, _), DataType::Map(child_fields, sorted)) => Ok(Arc::new(cast_map(
+            col.as_map_opt().ok_or_else(|| {
+                ArrowError::CastError(format!(
+                    "Expected a map for {} but got {}",
+                    field.name(),
+                    col_type
+                ))
+            })?,
             child_fields,
             *sorted,
             cast_options,
             add_missing,
-        )?) as ArrayRef)
-    } else if is_cast_required(col.data_type(), field.data_type()) {
-        cast_with_options(col, field.data_type(), cast_options)
-    } else {
-        Ok(col.clone())
+        )?) as ArrayRef),
+        _ if is_cast_required(col_type, field_type) => {
+            cast_with_options(col, field_type, cast_options)
+        }
+        _ => Ok(col.clone()),
     }
 }
 
@@ -293,6 +178,7 @@ pub fn cast_record_batch(
         None,
     );
     let struct_array = cast_struct(&s, target_schema.fields(), &cast_options, add_missing)?;
+
     Ok(RecordBatch::try_new_with_options(
         target_schema,
         struct_array.columns().to_vec(),
@@ -306,6 +192,7 @@ mod tests {
     use std::ops::Deref;
     use std::sync::Arc;
 
+    use super::merge_schema::{merge_arrow_schema, merge_delta_struct};
     use arrow::array::types::Int32Type;
     use arrow::array::{
         new_empty_array, new_null_array, Array, ArrayData, ArrayRef, AsArray, Int32Array,
@@ -313,17 +200,17 @@ mod tests {
     };
     use arrow::buffer::{Buffer, NullBuffer};
     use arrow_schema::{DataType, Field, FieldRef, Fields, Schema, SchemaRef};
+    use delta_kernel::schema::MetadataValue;
     use itertools::Itertools;
 
     use crate::kernel::{
         ArrayType as DeltaArrayType, DataType as DeltaDataType, StructField as DeltaStructField,
         StructType as DeltaStructType,
     };
-    use crate::operations::cast::MetadataValue;
     use crate::operations::cast::{cast_record_batch, is_cast_required};
 
     #[test]
-    fn test_merge_schema_with_dict() {
+    fn test_merge_arrow_schema_with_dict() {
         let left_schema = Arc::new(Schema::new(vec![Field::new(
             "f",
             DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
@@ -335,7 +222,7 @@ mod tests {
             true,
         )]));
 
-        let result = super::merge_schema(left_schema, right_schema).unwrap();
+        let result = merge_arrow_schema(left_schema, right_schema, true).unwrap();
         assert_eq!(result.fields().len(), 1);
         let delta_type: DeltaDataType = result.fields()[0].data_type().try_into().unwrap();
         assert_eq!(delta_type, DeltaDataType::STRING);
@@ -343,7 +230,7 @@ mod tests {
     }
 
     #[test]
-    fn test_merge_schema_with_meta() {
+    fn test_merge_delta_schema_with_meta() {
         let mut left_meta = HashMap::new();
         left_meta.insert("a".to_string(), "a1".to_string());
         let left_schema = DeltaStructType::new(vec![DeltaStructField::new(
@@ -361,7 +248,7 @@ mod tests {
         )
         .with_metadata(right_meta)]);
 
-        let result = super::merge_struct(&left_schema, &right_schema).unwrap();
+        let result = merge_delta_struct(&left_schema, &right_schema).unwrap();
         let fields = result.fields().collect_vec();
         assert_eq!(fields.len(), 1);
         let delta_type = fields[0].data_type();
@@ -373,7 +260,7 @@ mod tests {
     }
 
     #[test]
-    fn test_merge_schema_with_nested() {
+    fn test_merge_arrow_schema_with_nested() {
         let left_schema = Arc::new(Schema::new(vec![Field::new(
             "f",
             DataType::LargeList(Arc::new(Field::new("item", DataType::Utf8, false))),
@@ -385,7 +272,7 @@ mod tests {
             true,
         )]));
 
-        let result = super::merge_schema(left_schema, right_schema).unwrap();
+        let result = merge_arrow_schema(left_schema, right_schema, true).unwrap();
         assert_eq!(result.fields().len(), 1);
         let delta_type: DeltaDataType = result.fields()[0].data_type().try_into().unwrap();
         assert_eq!(

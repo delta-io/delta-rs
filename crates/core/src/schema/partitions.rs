@@ -1,10 +1,10 @@
 //! Delta Table partition handling logic.
-
-use delta_kernel::expressions::Scalar;
-use serde::{Serialize, Serializer};
 use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::convert::TryFrom;
+
+use delta_kernel::expressions::Scalar;
+use serde::{Serialize, Serializer};
 
 use crate::errors::DeltaTableError;
 use crate::kernel::{scalars::ScalarExt, DataType, PrimitiveType};
@@ -276,6 +276,37 @@ impl DeltaTablePartition {
     }
 }
 
+///
+/// A HivePartition string is represented by a "key=value" format.
+///
+/// ```rust
+/// # use delta_kernel::expressions::Scalar;
+/// use deltalake_core::DeltaTablePartition;
+///
+/// let hive_part = "ds=2023-01-01";
+/// let partition = DeltaTablePartition::try_from(hive_part).unwrap();
+/// assert_eq!("ds", partition.key);
+/// assert_eq!(Scalar::String("2023-01-01".into()), partition.value);
+/// ```
+impl TryFrom<&str> for DeltaTablePartition {
+    type Error = DeltaTableError;
+
+    /// Try to create a DeltaTable partition from a HivePartition string.
+    /// Returns a DeltaTableError if the string is not in the form of a HivePartition.
+    fn try_from(partition: &str) -> Result<Self, DeltaTableError> {
+        let partition_splitted: Vec<&str> = partition.split('=').collect();
+        match partition_splitted {
+            partition_splitted if partition_splitted.len() == 2 => Ok(DeltaTablePartition {
+                key: partition_splitted[0].to_owned(),
+                value: Scalar::String(partition_splitted[1].to_owned()),
+            }),
+            _ => Err(DeltaTableError::PartitionError {
+                partition: partition.to_string(),
+            }),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -325,5 +356,134 @@ mod tests {
             .unwrap(),
             "date NOT IN ('2023-11-04', '2023-06-07')",
         );
+    }
+
+    #[test]
+    fn tryfrom_invalid() {
+        let buf = "this-is-not-a-partition";
+        let partition = DeltaTablePartition::try_from(buf);
+        assert!(partition.is_err());
+    }
+
+    #[test]
+    fn tryfrom_valid() {
+        let buf = "ds=2024-04-01";
+        let partition = DeltaTablePartition::try_from(buf);
+        assert!(partition.is_ok());
+        let partition = partition.unwrap();
+        assert_eq!(partition.key, "ds");
+        assert_eq!(partition.value, Scalar::String("2024-04-01".into()));
+    }
+
+    #[test]
+    fn test_create_delta_table_partition() {
+        let year = "2021".to_string();
+        let path = format!("year={year}");
+        assert_eq!(
+            DeltaTablePartition::try_from(path.as_ref()).unwrap(),
+            DeltaTablePartition {
+                key: "year".into(),
+                value: Scalar::String(year.into()),
+            }
+        );
+
+        let _wrong_path = "year=2021/month=";
+        assert!(matches!(
+            DeltaTablePartition::try_from(_wrong_path).unwrap_err(),
+            DeltaTableError::PartitionError {
+                partition: _wrong_path
+            },
+        ))
+    }
+
+    #[test]
+    fn test_match_partition() {
+        let partition_2021 = DeltaTablePartition {
+            key: "year".into(),
+            value: Scalar::String("2021".into()),
+        };
+        let partition_2020 = DeltaTablePartition {
+            key: "year".into(),
+            value: Scalar::String("2020".into()),
+        };
+        let partition_2019 = DeltaTablePartition {
+            key: "year".into(),
+            value: Scalar::String("2019".into()),
+        };
+
+        let partition_year_2020_filter = PartitionFilter {
+            key: "year".to_string(),
+            value: PartitionValue::Equal("2020".to_string()),
+        };
+        let partition_month_12_filter = PartitionFilter {
+            key: "month".to_string(),
+            value: PartitionValue::Equal("12".to_string()),
+        };
+        let string_type = DataType::Primitive(PrimitiveType::String);
+
+        assert!(!partition_year_2020_filter.match_partition(&partition_2021, &string_type));
+        assert!(partition_year_2020_filter.match_partition(&partition_2020, &string_type));
+        assert!(!partition_year_2020_filter.match_partition(&partition_2019, &string_type));
+        assert!(!partition_month_12_filter.match_partition(&partition_2019, &string_type));
+
+        /* TODO: To be re-enabled at a future date, needs some type futzing
+        let partition_2020_12_31_23_59_59 = DeltaTablePartition {
+            key: "time".into(),
+            value: PrimitiveType::TimestampNtz.parse_scalar("2020-12-31 23:59:59").expect("Failed to parse timestamp"),
+        };
+
+        let partition_time_2020_12_31_23_59_59_filter = PartitionFilter {
+            key: "time".to_string(),
+            value: PartitionValue::Equal("2020-12-31 23:59:59.000000".into()),
+        };
+
+        assert!(partition_time_2020_12_31_23_59_59_filter.match_partition(
+            &partition_2020_12_31_23_59_59,
+            &DataType::Primitive(PrimitiveType::TimestampNtz)
+        ));
+        assert!(!partition_time_2020_12_31_23_59_59_filter
+            .match_partition(&partition_2020_12_31_23_59_59, &string_type));
+        */
+    }
+
+    #[test]
+    fn test_match_filters() {
+        let partitions = vec![
+            DeltaTablePartition {
+                key: "year".into(),
+                value: Scalar::String("2021".into()),
+            },
+            DeltaTablePartition {
+                key: "month".into(),
+                value: Scalar::String("12".into()),
+            },
+        ];
+
+        let string_type = DataType::Primitive(PrimitiveType::String);
+        let partition_data_types: HashMap<&String, &DataType> = vec![
+            (&partitions[0].key, &string_type),
+            (&partitions[1].key, &string_type),
+        ]
+        .into_iter()
+        .collect();
+
+        let valid_filters = PartitionFilter {
+            key: "year".to_string(),
+            value: PartitionValue::Equal("2021".to_string()),
+        };
+
+        let valid_filter_month = PartitionFilter {
+            key: "month".to_string(),
+            value: PartitionValue::Equal("12".to_string()),
+        };
+
+        let invalid_filter = PartitionFilter {
+            key: "year".to_string(),
+            value: PartitionValue::Equal("2020".to_string()),
+        };
+
+        assert!(valid_filters.match_partitions(&partitions, &partition_data_types),);
+        assert!(valid_filter_month.match_partitions(&partitions, &partition_data_types),);
+        assert!(!invalid_filter.match_partitions(&partitions, &partition_data_types),);
     }
 }

@@ -1,6 +1,6 @@
 [package]
 name = "deltalake-core"
-version = "0.18.1"
+version = "0.20.0"
 authors.workspace = true
 keywords.workspace = true
 readme.workspace = true
@@ -42,8 +42,9 @@ datafusion-common = { workspace = true, optional = true }
 datafusion-proto = { workspace = true, optional = true }
 datafusion-sql = { workspace = true, optional = true }
 datafusion-physical-expr = { workspace = true, optional = true }
+datafusion-physical-plan = { workspace = true, optional = true }
 datafusion-functions = { workspace = true, optional = true }
-datafusion-functions-array = { workspace = true, optional = true }
+datafusion-functions-aggregate = { workspace = true, optional = true }
 
 # serde
 serde = { workspace = true, features = ["derive"] }
@@ -57,6 +58,7 @@ regex = { workspace = true }
 thiserror = { workspace = true }
 uuid = { workspace = true, features = ["serde", "v4"] }
 url = { workspace = true }
+urlencoding = { workspace = true}
 
 # runtime
 async-trait = { workspace = true }
@@ -64,8 +66,10 @@ futures = { workspace = true }
 num_cpus = { workspace = true }
 tokio = { workspace = true, features = [
     "macros",
+    "process",
     "rt",
     "rt-multi-thread",
+    "signal",
     "sync",
     "fs",
     "parking_lot",
@@ -93,19 +97,20 @@ tracing = { workspace = true }
 rand = "0.8"
 z85 = "3.0.5"
 maplit = "1"
+sqlparser = { version = "0.51" }
 
 # Unity
 reqwest = { version = "0.11.18", default-features = false, features = [
     "rustls-tls",
     "json",
 ], optional = true }
-sqlparser = { version = "0.47", optional = true }
 
 [dev-dependencies]
 criterion = "0.5"
 ctor = "0"
 deltalake-test = { path = "../test", features = ["datafusion"] }
 dotenvy = "0"
+fs_extra = "1.2.0"
 hyper = { version = "0.14", features = ["server"] }
 maplit = "1"
 pretty_assertions = "1.2.1"
@@ -125,10 +130,10 @@ datafusion = [
     "datafusion-common",
     "datafusion-proto",
     "datafusion-physical-expr",
+    "datafusion-physical-plan",
     "datafusion-sql",
     "datafusion-functions",
-    "datafusion-functions-array",
-    "sqlparser",
+    "datafusion-functions-aggregate",
 ]
 datafusion-ext = ["datafusion"]
 json = ["parquet/json"]

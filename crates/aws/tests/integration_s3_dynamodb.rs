@@ -7,10 +7,11 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use aws_sdk_dynamodb::types::BillingMode;
 use deltalake_aws::logstore::{RepairLogEntryResult, S3DynamoDbLogStore};
-use deltalake_aws::storage::{s3_constants, S3StorageOptions};
+use deltalake_aws::storage::S3StorageOptions;
 use deltalake_aws::{CommitEntry, DynamoDbConfig, DynamoDbLockClient};
 use deltalake_core::kernel::{Action, Add, DataType, PrimitiveType, StructField, StructType};
-use deltalake_core::logstore::LogStore;
+use deltalake_core::logstore::{logstore_for, CommitOrBytes, LogStore};
+use deltalake_core::operations::create::CreateBuilder;
 use deltalake_core::operations::transaction::CommitBuilder;
 use deltalake_core::protocol::{DeltaOperation, SaveMode};
 use deltalake_core::storage::commit_uri_from_version;
@@ -22,6 +23,11 @@ use lazy_static::lazy_static;
 use object_store::path::Path;
 use serde_json::Value;
 use serial_test::serial;
+use tracing::log::*;
+
+use maplit::hashmap;
+use object_store::{PutOptions, PutPayload};
+use url::Url;
 
 mod common;
 use common::*;
@@ -38,7 +44,7 @@ lazy_static! {
 fn make_client() -> TestResult<DynamoDbLockClient> {
     let options: S3StorageOptions = S3StorageOptions::try_default().unwrap();
     Ok(DynamoDbLockClient::try_new(
-        &options.sdk_config,
+        &options.sdk_config.unwrap(),
         None,
         None,
         None,
@@ -69,13 +75,55 @@ fn client_configs_via_env_variables() -> TestResult<()> {
             billing_mode: BillingMode::PayPerRequest,
             lock_table_name: "some_table".to_owned(),
             max_elapsed_request_time: Duration::from_secs(64),
-            sdk_config: options.sdk_config,
+            sdk_config: options.sdk_config.unwrap(),
         },
         *config,
     );
     std::env::remove_var(deltalake_aws::constants::LOCK_TABLE_KEY_NAME);
     std::env::remove_var(deltalake_aws::constants::MAX_ELAPSED_REQUEST_TIME_KEY_NAME);
     std::env::remove_var(deltalake_aws::constants::BILLING_MODE_KEY_NAME);
+    Ok(())
+}
+
+#[tokio::test]
+#[serial]
+async fn test_create_s3_table() -> TestResult<()> {
+    let _ = pretty_env_logger::try_init();
+    let context = IntegrationContext::new(Box::new(S3Integration::default()))?;
+    let _client = make_client()?;
+    let table_name = format!("{}_{}", "create_test", uuid::Uuid::new_v4());
+    let table_uri = context.uri_for_table(TestTables::Custom(table_name.to_owned()));
+
+    let schema = StructType::new(vec![StructField::new(
+        "id".to_string(),
+        DataType::Primitive(PrimitiveType::Integer),
+        true,
+    )]);
+    let storage_options: HashMap<String, String> = hashmap! {
+        deltalake_aws::constants::AWS_ALLOW_HTTP.into() => "true".into(),
+        // Despite not being in AWS, we should force credential resolution
+        deltalake_aws::constants::AWS_FORCE_CREDENTIAL_LOAD.into() => "true".into(),
+        deltalake_aws::constants::AWS_ENDPOINT_URL.into()  => "http://localhost:4566".into(),
+    };
+    let log_store = logstore_for(Url::parse(&table_uri)?, storage_options, None)?;
+
+    let payload = PutPayload::from_static(b"test-drivin");
+    let _put = log_store
+        .object_store()
+        .put_opts(
+            &Path::from("_delta_log/_commit_failed.tmp"),
+            payload,
+            PutOptions::default(),
+        )
+        .await?;
+
+    debug!("creating a CreateBuilder");
+    let _created = CreateBuilder::new()
+        .with_log_store(log_store)
+        .with_partition_columns(vec!["id"])
+        .with_columns(schema.fields().cloned())
+        .with_save_mode(SaveMode::Ignore)
+        .await?;
     Ok(())
 }
 
@@ -198,7 +246,10 @@ async fn test_abort_commit_entry() -> TestResult<()> {
     let entry = create_incomplete_commit_entry(&table, 1, "unfinished_commit").await?;
 
     log_store
-        .abort_commit_entry(entry.version, &entry.temp_path)
+        .abort_commit_entry(
+            entry.version,
+            CommitOrBytes::TmpCommit(entry.temp_path.clone()),
+        )
         .await?;
 
     // The entry should have been aborted - the latest entry should be one version lower
@@ -213,7 +264,7 @@ async fn test_abort_commit_entry() -> TestResult<()> {
 
     // Test abort commit is idempotent - still works if already aborted
     log_store
-        .abort_commit_entry(entry.version, &entry.temp_path)
+        .abort_commit_entry(entry.version, CommitOrBytes::TmpCommit(entry.temp_path))
         .await?;
 
     Ok(())
@@ -244,7 +295,10 @@ async fn test_abort_commit_entry_fail_to_delete_entry() -> TestResult<()> {
     // Abort will fail since we marked the entry as complete
     assert!(matches!(
         log_store
-            .abort_commit_entry(entry.version, &entry.temp_path)
+            .abort_commit_entry(
+                entry.version,
+                CommitOrBytes::TmpCommit(entry.temp_path.clone())
+            )
             .await,
         Err(_),
     ));
@@ -346,7 +400,12 @@ async fn create_incomplete_commit_entry(
         .into_prepared_commit_future()
         .await?;
 
-    let commit_entry = CommitEntry::new(version, prepared.path().to_owned());
+    let tmp_commit = match prepared.commit_or_bytes() {
+        CommitOrBytes::TmpCommit(tmp_commit) => tmp_commit,
+        _ => unreachable!(),
+    };
+
+    let commit_entry = CommitEntry::new(version, tmp_commit.to_owned());
     make_client()?
         .put_commit_entry(&table.table_uri(), &commit_entry)
         .await?;

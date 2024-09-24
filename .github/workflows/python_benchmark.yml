@@ -1,0 +1,54 @@
+name: python_benchmark
+
+
+# This is separate from the python_build so that it doesn't need to run on the merge group
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+defaults:
+  run:
+    working-directory: ./python
+
+jobs:
+  benchmark:
+    name: Python Benchmark
+    runs-on: ubuntu-latest
+    env:
+      RUSTFLAGS: "-C debuginfo=line-tables-only"
+      CARGO_INCREMENTAL: 0
+
+    steps:
+      - uses: actions/checkout@v2
+
+      - name: Setup Environment
+        uses: ./.github/actions/setup-env
+
+      - name: Build deltalake in release mode
+        run: |
+          python -m venv venv
+          source venv/bin/activate
+          MATURIN_EXTRA_ARGS=--release make develop
+
+      # Download previous benchmark result from cache (if exists)
+      - name: Download previous benchmark data
+        uses: actions/cache@v2
+        with:
+          path: ./cache
+          key: ${{ runner.os }}-benchmark
+
+      - name: Run benchmark
+        run: |
+          source venv/bin/activate
+          pytest tests/test_benchmark.py -m benchmark --benchmark-json output.json
+
+      - name: Store benchmark result
+        uses: benchmark-action/github-action-benchmark@v1
+        with:
+          tool: "pytest"
+          output-file-path: python/output.json
+          external-data-json-path: ./cache/benchmark-data.json
+          fail-on-alert: true
+

@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use dashmap::DashMap;
-use datafusion::catalog::schema::SchemaProvider;
+use datafusion::catalog::SchemaProvider;
 use datafusion::catalog::{CatalogProvider, CatalogProviderList};
 use datafusion::datasource::TableProvider;
 use datafusion_common::DataFusionError;

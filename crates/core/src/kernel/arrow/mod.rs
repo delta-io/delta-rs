@@ -11,10 +11,9 @@ use lazy_static::lazy_static;
 pub(crate) mod extract;
 pub(crate) mod json;
 
-const MAP_ROOT_DEFAULT: &str = "entries";
+const MAP_ROOT_DEFAULT: &str = "key_value";
 const MAP_KEY_DEFAULT: &str = "key";
 const MAP_VALUE_DEFAULT: &str = "value";
-const LIST_ROOT_DEFAULT: &str = "item";
 
 macro_rules! arrow_map {
     ($fieldname: ident, null) => {
@@ -250,7 +249,7 @@ pub(crate) fn delta_log_schema_for_table(
             .iter()
             .for_each(|f| max_min_schema_for_fields(&mut max_min_vec, f));
 
-        if max_min_vec.len() > 0 {
+        if !max_min_vec.is_empty() {
             stats_parsed_fields.extend(["minValues", "maxValues"].into_iter().map(|name| {
                 ArrowField::new(
                     name,
@@ -330,8 +329,7 @@ fn max_min_schema_for_fields(dest: &mut Vec<ArrowField>, f: &ArrowField) {
         // don't compute min or max for list, map or binary types
         ArrowDataType::List(_) | ArrowDataType::Map(_, _) | ArrowDataType::Binary => { /* noop */ }
         _ => {
-            let f = f.clone();
-            dest.push(f);
+            dest.push(ArrowField::new(f.name(), f.data_type().clone(), true));
         }
     }
 }
@@ -363,7 +361,9 @@ mod tests {
     use std::collections::HashMap;
     use std::sync::Arc;
 
-    use arrow_array::{MapArray, RecordBatch};
+    use arrow::array::ArrayData;
+    use arrow_array::{Array, BinaryArray, MapArray, RecordBatch, StringArray, StructArray};
+    use arrow_buffer::{Buffer, ToByteSlice};
     use delta_kernel::schema::{DataType, MapType, PrimitiveType, StructField, StructType};
 
     use super::*;
@@ -522,12 +522,36 @@ mod tests {
         let entry_offsets = vec![0u32, 1, 1, 4, 5, 5];
         let num_rows = keys.len();
 
-        let map_array = MapArray::new_from_strings(
-            keys.into_iter(),
-            &arrow::array::BinaryArray::from(values),
-            entry_offsets.as_slice(),
-        )
-        .expect("Could not create a map array");
+        let key_field = Arc::new(ArrowField::new(MAP_KEY_DEFAULT, ArrowDataType::Utf8, false));
+        let value_field = Arc::new(ArrowField::new(
+            MAP_VALUE_DEFAULT,
+            ArrowDataType::Binary,
+            false,
+        ));
+        let key_value_field = ArrowField::new_struct(
+            MAP_ROOT_DEFAULT,
+            vec![key_field.clone(), value_field.clone()],
+            false,
+        );
+        let key_value_array = StructArray::new(
+            vec![key_field, value_field].into(),
+            vec![
+                Arc::new(StringArray::from(keys)),
+                Arc::new(BinaryArray::from(values)),
+            ],
+            None,
+        );
+        let entry_offsets_buffer = Buffer::from(entry_offsets.as_slice().to_byte_slice());
+
+        let map_data_type = ArrowDataType::Map(Arc::new(key_value_field), false);
+        let map_data = ArrayData::builder(map_data_type)
+            .len(entry_offsets.len() - 1)
+            .add_buffer(entry_offsets_buffer)
+            .add_child_data(key_value_array.into_data())
+            .build()
+            .unwrap();
+
+        let map_array = MapArray::from(map_data);
 
         let schema =
             <arrow::datatypes::Schema as TryFrom<&StructType>>::try_from(&StructType::new(vec![

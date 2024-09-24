@@ -138,7 +138,30 @@ async fn merge(
 
 #[tokio::test]
 async fn test_merge_concurrent_conflict() {
-    // No partition key or filter predicate -> Commit conflict
+    // Overlapping id ranges -> Commit conflict
+    let tmp_dir = tempfile::tempdir().unwrap();
+    let table_uri = tmp_dir.path().to_str().to_owned().unwrap();
+
+    let table_ref1 = create_table(table_uri, Some(vec!["event_date"])).await;
+    let table_ref2 = open_table(table_uri).await.unwrap();
+    let (df1, _df2) = create_test_data();
+
+    let expr = col("target.id").eq(col("source.id"));
+    let (_table_ref1, _metrics) = merge(table_ref1, df1.clone(), expr.clone()).await.unwrap();
+    let result = merge(table_ref2, df1, expr).await;
+
+    assert!(matches!(
+        result.as_ref().unwrap_err(),
+        DeltaTableError::Transaction { .. }
+    ));
+    if let DeltaTableError::Transaction { source } = result.unwrap_err() {
+        assert!(matches!(source, TransactionError::CommitConflict(_)));
+    }
+}
+
+#[tokio::test]
+async fn test_merge_different_range() {
+    // No overlapping id ranges -> No conflict
     let tmp_dir = tempfile::tempdir().unwrap();
     let table_uri = tmp_dir.path().to_str().to_owned().unwrap();
 
@@ -150,13 +173,7 @@ async fn test_merge_concurrent_conflict() {
     let (_table_ref1, _metrics) = merge(table_ref1, df1, expr.clone()).await.unwrap();
     let result = merge(table_ref2, df2, expr).await;
 
-    assert!(matches!(
-        result.as_ref().unwrap_err(),
-        DeltaTableError::Transaction { .. }
-    ));
-    if let DeltaTableError::Transaction { source } = result.unwrap_err() {
-        assert!(matches!(source, TransactionError::CommitConflict(_)));
-    }
+    assert!(result.is_ok());
 }
 
 #[tokio::test]
@@ -175,9 +192,7 @@ async fn test_merge_concurrent_different_partition() {
     let (_table_ref1, _metrics) = merge(table_ref1, df1, expr.clone()).await.unwrap();
     let result = merge(table_ref2, df2, expr).await;
 
-    // TODO: Currently it throws a Version mismatch error, but the merge commit was successfully
-    // This bug needs to be fixed, see pull request #2280
-    assert!(result.as_ref().is_ok());
+    assert!(result.is_ok());
 }
 
 #[tokio::test]

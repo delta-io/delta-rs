@@ -238,7 +238,7 @@ mod local {
                 .clone(),
         )
         .unwrap();
-        let source_store = logstore_for(source_uri, HashMap::new()).unwrap();
+        let source_store = logstore_for(source_uri, HashMap::new(), None).unwrap();
         let object_store_url = source_store.object_store_url();
         let source_store_url: &Url = object_store_url.as_ref();
         state
@@ -328,7 +328,7 @@ mod local {
 
         let expected = vec![
             "+-----------------------+-----------------------+",
-            "| MAX(test_table.value) | MIN(test_table.value) |",
+            "| max(test_table.value) | min(test_table.value) |",
             "+-----------------------+-----------------------+",
             "| 4                     | 0                     |",
             "+-----------------------+-----------------------+",
@@ -359,7 +359,7 @@ mod local {
 
         let expected = vec![
             "+------------------------+------------------------+",
-            "| MAX(test_table2.value) | MIN(test_table2.value) |",
+            "| max(test_table2.value) | min(test_table2.value) |",
             "+------------------------+------------------------+",
             "| 3                      | 1                      |",
             "+------------------------+------------------------+",
@@ -941,13 +941,14 @@ mod local {
 
         let batches = ctx.sql("SELECT * FROM demo").await?.collect().await?;
 
+        // Without defining a schema of the select the default for a timestamp is ms UTC
         let expected = vec![
-            "+-------------------------------+---------------------+------------+",
-            "| BIG_DATE                      | NORMAL_DATE         | SOME_VALUE |",
-            "+-------------------------------+---------------------+------------+",
-            "| 1816-03-28T05:56:08.066277376 | 2022-02-01T00:00:00 | 2          |",
-            "| 1816-03-29T05:56:08.066277376 | 2022-01-01T00:00:00 | 1          |",
-            "+-------------------------------+---------------------+------------+",
+            "+-----------------------------+----------------------+------------+",
+            "| BIG_DATE                    | NORMAL_DATE          | SOME_VALUE |",
+            "+-----------------------------+----------------------+------------+",
+            "| 1816-03-28T05:56:08.066278Z | 2022-02-01T00:00:00Z | 2          |",
+            "| 1816-03-29T05:56:08.066278Z | 2022-01-01T00:00:00Z | 1          |",
+            "+-----------------------------+----------------------+------------+",
         ];
 
         assert_batches_sorted_eq!(&expected, &batches);
@@ -1154,7 +1155,7 @@ mod local {
             .unwrap();
         let batch = batches.pop().unwrap();
 
-        let expected_schema = Schema::new(vec![Field::new("id", ArrowDataType::Int32, true)]);
+        let expected_schema = Schema::new(vec![Field::new("id", ArrowDataType::Int64, false)]);
         assert_eq!(batch.schema().as_ref(), &expected_schema);
         Ok(())
     }

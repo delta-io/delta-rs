@@ -13,7 +13,7 @@ use url::Url;
 use super::DeltaTable;
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::logstore::LogStoreRef;
-use crate::storage::{factories, StorageOptions};
+use crate::storage::{factories, IORuntime, StorageOptions};
 
 #[allow(dead_code)]
 #[derive(Debug, thiserror::Error)]
@@ -51,7 +51,7 @@ pub enum DeltaVersion {
 }
 
 /// Configuration options for delta table
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct DeltaTableConfig {
     /// Indicates whether our use case requires tracking tombstones.
@@ -79,6 +79,9 @@ pub struct DeltaTableConfig {
     /// Control the number of records to read / process from the commit / checkpoint files
     /// when processing record batches.
     pub log_batch_size: usize,
+    #[serde(skip_serializing, skip_deserializing)]
+    /// When a runtime handler is provided, all IO tasks are spawn in that handle
+    pub io_runtime: Option<IORuntime>,
 }
 
 impl Default for DeltaTableConfig {
@@ -88,68 +91,34 @@ impl Default for DeltaTableConfig {
             require_files: true,
             log_buffer_size: num_cpus::get() * 4,
             log_batch_size: 1024,
+            io_runtime: None,
         }
     }
 }
 
-/// Load-time delta table configuration options
-#[derive(Debug)]
-pub struct DeltaTableLoadOptions {
-    /// table root uri
-    pub table_uri: String,
-    /// backend to access storage system
-    pub storage_backend: Option<(Arc<DynObjectStore>, Url)>,
-    /// specify the version we are going to load: a time stamp, a version, or just the newest
-    /// available version
-    pub version: DeltaVersion,
-    /// Indicates whether our use case requires tracking tombstones.
-    /// This defaults to `true`
-    ///
-    /// Read-only applications never require tombstones. Tombstones
-    /// are only required when writing checkpoints, so even many writers
-    /// may want to skip them.
-    pub require_tombstones: bool,
-    /// Indicates whether DeltaTable should track files.
-    /// This defaults to `true`
-    ///
-    /// Some append-only applications might have no need of tracking any files.
-    /// Hence, DeltaTable will be loaded with significant memory reduction.
-    pub require_files: bool,
-    /// Controls how many files to buffer from the commit log when updating the table.
-    /// This defaults to 4 * number of cpus
-    ///
-    /// Setting a value greater than 1 results in concurrent calls to the storage api.
-    /// This can be helpful to decrease latency if there are many files in the log since the
-    /// last checkpoint, but will also increase memory usage. Possible rate limits of the storage backend should
-    /// also be considered for optimal performance.
-    pub log_buffer_size: usize,
-    /// Control the number of records to read / process from the commit / checkpoint files
-    /// when processing record batches.
-    pub log_batch_size: usize,
-}
-
-impl DeltaTableLoadOptions {
-    /// create default table load options for a table uri
-    pub fn new(table_uri: impl Into<String>) -> Self {
-        Self {
-            table_uri: table_uri.into(),
-            storage_backend: None,
-            require_tombstones: true,
-            require_files: true,
-            log_buffer_size: num_cpus::get() * 4,
-            version: DeltaVersion::default(),
-            log_batch_size: 1024,
-        }
+impl PartialEq for DeltaTableConfig {
+    fn eq(&self, other: &Self) -> bool {
+        self.require_tombstones == other.require_tombstones
+            && self.require_files == other.require_files
+            && self.log_buffer_size == other.log_buffer_size
+            && self.log_batch_size == other.log_batch_size
     }
 }
 
 /// builder for configuring a delta table load.
 #[derive(Debug)]
 pub struct DeltaTableBuilder {
-    options: DeltaTableLoadOptions,
+    /// table root uri
+    table_uri: String,
+    /// backend to access storage system
+    storage_backend: Option<(Arc<DynObjectStore>, Url)>,
+    /// specify the version we are going to load: a time stamp, a version, or just the newest
+    /// available version
+    version: DeltaVersion,
     storage_options: Option<HashMap<String, String>>,
     #[allow(unused_variables)]
     allow_http: Option<bool>,
+    table_config: DeltaTableConfig,
 }
 
 impl DeltaTableBuilder {
@@ -190,27 +159,30 @@ impl DeltaTableBuilder {
         debug!("creating table builder with {url}");
 
         Ok(Self {
-            options: DeltaTableLoadOptions::new(url),
+            table_uri: url.into(),
+            storage_backend: None,
+            version: DeltaVersion::default(),
             storage_options: None,
             allow_http: None,
+            table_config: DeltaTableConfig::default(),
         })
     }
 
     /// Sets `require_tombstones=false` to the builder
     pub fn without_tombstones(mut self) -> Self {
-        self.options.require_tombstones = false;
+        self.table_config.require_tombstones = false;
         self
     }
 
     /// Sets `require_files=false` to the builder
     pub fn without_files(mut self) -> Self {
-        self.options.require_files = false;
+        self.table_config.require_files = false;
         self
     }
 
     /// Sets `version` to the builder
     pub fn with_version(mut self, version: i64) -> Self {
-        self.options.version = DeltaVersion::Version(version);
+        self.version = DeltaVersion::Version(version);
         self
     }
 
@@ -221,7 +193,7 @@ impl DeltaTableBuilder {
                 "Log buffer size should be positive",
             )));
         }
-        self.options.log_buffer_size = log_buffer_size;
+        self.table_config.log_buffer_size = log_buffer_size;
         Ok(self)
     }
 
@@ -235,7 +207,7 @@ impl DeltaTableBuilder {
 
     /// specify a timestamp
     pub fn with_timestamp(mut self, timestamp: DateTime<Utc>) -> Self {
-        self.options.version = DeltaVersion::Timestamp(timestamp);
+        self.version = DeltaVersion::Timestamp(timestamp);
         self
     }
 
@@ -248,20 +220,39 @@ impl DeltaTableBuilder {
     /// * `storage` - A shared reference to an [`ObjectStore`](object_store::ObjectStore) with "/" pointing at delta table root (i.e. where `_delta_log` is located).
     /// * `location` - A url corresponding to the storagle location of `storage`.
     pub fn with_storage_backend(mut self, storage: Arc<DynObjectStore>, location: Url) -> Self {
-        self.options.storage_backend = Some((storage, location));
+        self.storage_backend = Some((storage, location));
         self
     }
 
     /// Set options used to initialize storage backend
     ///
     /// Options may be passed in the HashMap or set as environment variables. See documentation of
-    /// underlying object store implementation for details.
+    /// underlying object store implementation for details. Trailing slash will be trimmed in
+    /// the option's value to avoid failures. Trimming will only be done if one or more of below
+    /// conditions are met:
+    /// - key ends with `_URL` (e.g., `ENDPOINT_URL`, `S3_URL`, `JDBC_URL`, etc.)
+    /// - value starts with `http://`` or `https://` (e.g., `http://localhost:8000/`)
     ///
     /// - [Azure options](https://docs.rs/object_store/latest/object_store/azure/enum.AzureConfigKey.html#variants)
     /// - [S3 options](https://docs.rs/object_store/latest/object_store/aws/enum.AmazonS3ConfigKey.html#variants)
     /// - [Google options](https://docs.rs/object_store/latest/object_store/gcp/enum.GoogleConfigKey.html#variants)
     pub fn with_storage_options(mut self, storage_options: HashMap<String, String>) -> Self {
-        self.storage_options = Some(storage_options);
+        self.storage_options = Some(
+            storage_options
+                .clone()
+                .into_iter()
+                .map(|(k, v)| {
+                    let needs_trim = v.starts_with("http://")
+                        || v.starts_with("https://")
+                        || k.to_lowercase().ends_with("_url");
+                    if needs_trim {
+                        (k.to_owned(), v.trim_end_matches('/').to_owned())
+                    } else {
+                        (k, v)
+                    }
+                })
+                .collect(),
+        );
         self
     }
 
@@ -270,6 +261,12 @@ impl DeltaTableBuilder {
     /// This setting is most useful for testing / development when connecting to emulated services.
     pub fn with_allow_http(mut self, allow_http: bool) -> Self {
         self.allow_http = Some(allow_http);
+        self
+    }
+
+    /// Provide a custom runtime handle or runtime config
+    pub fn with_io_runtime(mut self, io_runtime: IORuntime) -> Self {
+        self.table_config.io_runtime = Some(io_runtime);
         self
     }
 
@@ -286,22 +283,28 @@ impl DeltaTableBuilder {
     }
 
     /// Build a delta storage backend for the given config
-    pub fn build_storage(self) -> DeltaResult<LogStoreRef> {
-        debug!("build_storage() with {}", &self.options.table_uri);
-        let location = Url::parse(&self.options.table_uri).map_err(|_| {
-            DeltaTableError::NotATable(format!(
-                "Could not turn {} into a URL",
-                self.options.table_uri
-            ))
+    pub fn build_storage(&self) -> DeltaResult<LogStoreRef> {
+        debug!("build_storage() with {}", self.table_uri);
+        let location = Url::parse(&self.table_uri).map_err(|_| {
+            DeltaTableError::NotATable(format!("Could not turn {} into a URL", self.table_uri))
         })?;
 
-        if let Some((store, _url)) = self.options.storage_backend.as_ref() {
+        if let Some((store, _url)) = self.storage_backend.as_ref() {
             debug!("Loading a logstore with a custom store: {store:?}");
-            crate::logstore::logstore_with(store.clone(), location, self.storage_options())
+            crate::logstore::logstore_with(
+                store.clone(),
+                location,
+                self.storage_options(),
+                self.table_config.io_runtime.clone(),
+            )
         } else {
             // If there has been no backend defined just default to the normal logstore look up
             debug!("Loading a logstore based off the location: {location:?}");
-            crate::logstore::logstore_for(location, self.storage_options())
+            crate::logstore::logstore_for(
+                location,
+                self.storage_options(),
+                self.table_config.io_runtime.clone(),
+            )
         }
     }
 
@@ -310,18 +313,12 @@ impl DeltaTableBuilder {
     /// This will not load the log, i.e. the table is not initialized. To get an initialized
     /// table use the `load` function
     pub fn build(self) -> DeltaResult<DeltaTable> {
-        let config = DeltaTableConfig {
-            require_tombstones: self.options.require_tombstones,
-            require_files: self.options.require_files,
-            log_buffer_size: self.options.log_buffer_size,
-            log_batch_size: self.options.log_batch_size,
-        };
-        Ok(DeltaTable::new(self.build_storage()?, config))
+        Ok(DeltaTable::new(self.build_storage()?, self.table_config))
     }
 
     /// Build the [`DeltaTable`] and load its state
     pub async fn load(self) -> DeltaResult<DeltaTable> {
-        let version = self.options.version;
+        let version = self.version;
         let mut table = self.build()?;
         match version {
             DeltaVersion::Newest => table.load().await?,
@@ -560,5 +557,50 @@ mod tests {
         // Urls should round trips as-is
         DeltaTableBuilder::from_valid_uri("this://is.nonsense")
             .expect_err("this should be an error");
+    }
+
+    #[test]
+    fn test_writer_storage_opts_url_trim() {
+        let cases = [
+            // Trim Case 1 - Key indicating a url
+            ("SOMETHING_URL", "something://else/", "something://else"),
+            // Trim Case 2 - Value https url ending with slash
+            (
+                "SOMETHING",
+                "http://something:port/",
+                "http://something:port",
+            ),
+            // Trim Case 3 - Value https url ending with slash
+            (
+                "SOMETHING",
+                "https://something:port/",
+                "https://something:port",
+            ),
+            // No Trim Case 4 - JDBC MySQL url with slash
+            (
+                "SOME_JDBC_PREFIX",
+                "jdbc:mysql://mysql.db.server:3306/",
+                "jdbc:mysql://mysql.db.server:3306/",
+            ),
+            // No Trim Case 5 - S3A file system link
+            ("SOME_S3_LINK", "s3a://bucket-name/", "s3a://bucket-name/"),
+            // No Trim Case 6 - Not a url but ending with slash
+            ("SOME_RANDOM_STRING", "a1b2c3d4e5f#/", "a1b2c3d4e5f#/"),
+            // No Trim Case 7 - Some value not a url
+            (
+                "SOME_VALUE",
+                "/ This is some value 123 /",
+                "/ This is some value 123 /",
+            ),
+        ];
+        for (key, val, expected) in cases {
+            let table_uri = Url::parse("memory:///test/tests/data/delta-0.8.0").unwrap();
+            let mut storage_opts = HashMap::<String, String>::new();
+            storage_opts.insert(key.to_owned(), val.to_owned());
+
+            let table = DeltaTableBuilder::from_uri(table_uri).with_storage_options(storage_opts);
+            let found_opts = table.storage_options();
+            assert_eq!(expected, found_opts.0.get(key).unwrap());
+        }
     }
 }

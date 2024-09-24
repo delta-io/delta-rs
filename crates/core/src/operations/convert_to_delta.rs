@@ -5,7 +5,7 @@ use std::num::TryFromIntError;
 use std::str::{FromStr, Utf8Error};
 use std::sync::Arc;
 
-use arrow::{datatypes::Schema as ArrowSchema, error::ArrowError};
+use arrow_schema::{ArrowError, Schema as ArrowSchema};
 use futures::future::{self, BoxFuture};
 use futures::TryStreamExt;
 use indexmap::IndexMap;
@@ -23,7 +23,7 @@ use crate::{
     operations::create::CreateBuilder,
     protocol::SaveMode,
     table::builder::ensure_table_uri,
-    table::config::DeltaConfigKey,
+    table::config::TableProperty,
     writer::stats::stats_from_parquet_metadata,
     DeltaResult, DeltaTable, DeltaTableError, ObjectStoreError, NULL_PARTITION_VALUE_DATA_PATH,
 };
@@ -212,7 +212,7 @@ impl ConvertToDeltaBuilder {
     /// Specify a table property in the table configuration
     pub fn with_configuration_property(
         mut self,
-        key: DeltaConfigKey,
+        key: TableProperty,
         value: Option<impl Into<String>>,
     ) -> Self {
         self.configuration
@@ -239,6 +239,7 @@ impl ConvertToDeltaBuilder {
             crate::logstore::logstore_for(
                 ensure_table_uri(location)?,
                 self.storage_options.unwrap_or_default(),
+                None, // TODO: allow runtime to be passed into builder
             )?
         } else {
             return Err(Error::MissingLocation);
@@ -477,7 +478,7 @@ mod tests {
     fn log_store(path: impl Into<String>) -> LogStoreRef {
         let path: String = path.into();
         let location = ensure_table_uri(path).expect("Failed to get the URI from the path");
-        crate::logstore::logstore_for(location, StorageOptions::default())
+        crate::logstore::logstore_for(location, StorageOptions::default(), None)
             .expect("Failed to create an object store")
     }
 

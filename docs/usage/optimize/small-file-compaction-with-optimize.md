@@ -104,7 +104,7 @@ Let’s run the optimize command to compact the existing small files into larger
 ```python
 dt = DeltaTable("observation_data")
 
-dt.optimize()
+dt.optimize.compact()
 ```
 
 Here’s the output of the command:

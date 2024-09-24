@@ -1,6 +1,6 @@
 [package]
 name = "deltalake-python"
-version = "0.18.2"
+version = "0.20.0"
 authors = ["Qingping Hou <dave2008713@gmail.com>", "Will Jones <willjones127@gmail.com>"]
 homepage = "https://github.com/delta-io/delta-rs"
 license = "Apache-2.0"
@@ -55,3 +55,6 @@ features = ["azure", "gcs", "python", "datafusion", "unity-experimental", "hdfs"
 default = ["rustls"]
 native-tls = ["deltalake/s3-native-tls", "deltalake/glue"]
 rustls = ["deltalake/s3", "deltalake/glue"]
+
+[build-dependencies]
+openssl-src = "=300.3.1"

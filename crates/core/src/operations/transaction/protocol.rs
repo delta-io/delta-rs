@@ -264,14 +264,19 @@ pub static INSTANCE: Lazy<ProtocolChecker> = Lazy::new(|| {
 
 #[cfg(test)]
 mod tests {
-    use super::super::test_utils::create_metadata_action;
+    use std::collections::HashMap;
+
     use super::*;
     use crate::kernel::DataType as DeltaDataType;
-    use crate::kernel::{Action, Add, PrimitiveType, Protocol, Remove};
+    use crate::kernel::{Action, Add, Metadata, PrimitiveType, Protocol, Remove};
     use crate::protocol::SaveMode;
     use crate::table::state::DeltaTableState;
-    use crate::DeltaConfigKey;
-    use std::collections::HashMap;
+    use crate::test_utils::{ActionFactory, TestSchemas};
+    use crate::TableProperty;
+
+    fn metadata_action(configuration: Option<HashMap<String, Option<String>>>) -> Metadata {
+        ActionFactory::metadata(TestSchemas::simple(), None::<Vec<&str>>, configuration)
+    }
 
     #[test]
     fn test_can_commit_append_only() {
@@ -322,13 +327,11 @@ mod tests {
                     writer_features: Some(feat.into_iter().collect()),
                     ..Default::default()
                 }),
-                create_metadata_action(
-                    None,
-                    Some(HashMap::from([(
-                        DeltaConfigKey::AppendOnly.as_ref().to_string(),
-                        Some(append.to_string()),
-                    )])),
-                ),
+                metadata_action(Some(HashMap::from([(
+                    TableProperty::AppendOnly.as_ref().to_string(),
+                    Some(append.to_string()),
+                )])))
+                .into(),
             ]
         };
 
@@ -422,7 +425,7 @@ mod tests {
                 min_writer_version: 1,
                 ..Default::default()
             }),
-            create_metadata_action(None, Some(HashMap::new())),
+            metadata_action(None).into(),
         ];
         let snapshot_1 = DeltaTableState::from_actions(actions).unwrap();
         let eager_1 = snapshot_1.snapshot();
@@ -436,7 +439,7 @@ mod tests {
                 min_writer_version: 1,
                 ..Default::default()
             }),
-            create_metadata_action(None, Some(HashMap::new())),
+            metadata_action(None).into(),
         ];
         let snapshot_2 = DeltaTableState::from_actions(actions).unwrap();
         let eager_2 = snapshot_2.snapshot();
@@ -453,7 +456,7 @@ mod tests {
                 min_writer_version: 2,
                 ..Default::default()
             }),
-            create_metadata_action(None, Some(HashMap::new())),
+            metadata_action(None).into(),
         ];
         let snapshot_3 = DeltaTableState::from_actions(actions).unwrap();
         let eager_3 = snapshot_3.snapshot();
@@ -473,7 +476,7 @@ mod tests {
                 min_writer_version: 3,
                 ..Default::default()
             }),
-            create_metadata_action(None, Some(HashMap::new())),
+            metadata_action(None).into(),
         ];
         let snapshot_4 = DeltaTableState::from_actions(actions).unwrap();
         let eager_4 = snapshot_4.snapshot();
@@ -496,7 +499,7 @@ mod tests {
                 min_writer_version: 4,
                 ..Default::default()
             }),
-            create_metadata_action(None, Some(HashMap::new())),
+            metadata_action(None).into(),
         ];
         let snapshot_5 = DeltaTableState::from_actions(actions).unwrap();
         let eager_5 = snapshot_5.snapshot();
@@ -522,7 +525,7 @@ mod tests {
                 min_writer_version: 5,
                 ..Default::default()
             }),
-            create_metadata_action(None, Some(HashMap::new())),
+            metadata_action(None).into(),
         ];
         let snapshot_6 = DeltaTableState::from_actions(actions).unwrap();
         let eager_6 = snapshot_6.snapshot();
@@ -551,7 +554,7 @@ mod tests {
                 min_writer_version: 6,
                 ..Default::default()
             }),
-            create_metadata_action(None, Some(HashMap::new())),
+            metadata_action(None).into(),
         ];
         let snapshot_7 = DeltaTableState::from_actions(actions).unwrap();
         let eager_7 = snapshot_7.snapshot();
@@ -585,7 +588,7 @@ mod tests {
                 Protocol::new(2, 4)
                     .with_writer_features(vec![crate::kernel::WriterFeatures::ChangeDataFeed]),
             ),
-            create_metadata_action(None, Some(HashMap::new())),
+            metadata_action(None).into(),
         ];
         let snapshot_5 = DeltaTableState::from_actions(actions).unwrap();
         let eager_5 = snapshot_5.snapshot();
@@ -603,7 +606,7 @@ mod tests {
                 Protocol::new(2, 4)
                     .with_writer_features(vec![crate::kernel::WriterFeatures::GeneratedColumns]),
             ),
-            create_metadata_action(None, Some(HashMap::new())),
+            metadata_action(None).into(),
         ];
         let snapshot_5 = DeltaTableState::from_actions(actions).unwrap();
         let eager_5 = snapshot_5.snapshot();
@@ -613,9 +616,7 @@ mod tests {
     #[tokio::test]
     async fn test_minwriter_v4_with_generated_columns_and_expressions() {
         let checker_5 = ProtocolChecker::new(READER_V2.clone(), WRITER_V4.clone());
-        let actions = vec![Action::Protocol(Protocol::new(2, 4).with_writer_features(
-            vec![crate::kernel::WriterFeatures::GeneratedColumns],
-        ))];
+        let actions = vec![Action::Protocol(Protocol::new(2, 4))];
 
         let table: crate::DeltaTable = crate::DeltaOps::new_in_memory()
             .create()
@@ -629,7 +630,7 @@ mod tests {
                 )])),
             )
             .with_actions(actions)
-            .with_configuration_property(DeltaConfigKey::EnableChangeDataFeed, Some("true"))
+            .with_configuration_property(TableProperty::EnableChangeDataFeed, Some("true"))
             .await
             .expect("failed to make a version 4 table with EnableChangeDataFeed");
         let eager_5 = table

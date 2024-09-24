@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use arrow_schema::SchemaRef;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
-use datafusion::physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan};
+use datafusion_physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan};
 
 /// Physical execution of a scan
 #[derive(Debug, Clone)]
@@ -26,6 +26,10 @@ impl DisplayAs for DeltaCdfScan {
 }
 
 impl ExecutionPlan for DeltaCdfScan {
+    fn name(&self) -> &str {
+        Self::static_name()
+    }
+
     fn as_any(&self) -> &dyn Any {
         self
     }

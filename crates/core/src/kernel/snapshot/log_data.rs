@@ -2,7 +2,9 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use arrow_array::{Array, Int32Array, Int64Array, MapArray, RecordBatch, StringArray, StructArray};
+use arrow_array::{
+    Array, Int32Array, Int64Array, MapArray, RecordBatch, StringArray, StructArray, UInt64Array,
+};
 use chrono::{DateTime, Utc};
 use delta_kernel::expressions::Scalar;
 use indexmap::IndexMap;
@@ -198,12 +200,16 @@ impl LogicalFile<'_> {
             .column(0)
             .as_any()
             .downcast_ref::<StringArray>()
-            .ok_or(DeltaTableError::Generic("()".into()))?;
+            .ok_or(DeltaTableError::generic(
+                "expected partition values key field to be of type string",
+            ))?;
         let values = map_value
             .column(1)
             .as_any()
             .downcast_ref::<StringArray>()
-            .ok_or(DeltaTableError::Generic("()".into()))?;
+            .ok_or(DeltaTableError::generic(
+                "expected partition values value field to be of type string",
+            ))?;
 
         let values = keys
             .iter()
@@ -212,8 +218,8 @@ impl LogicalFile<'_> {
                 let (key, field) = self.partition_fields.get_key_value(k.unwrap()).unwrap();
                 let field_type = match field.data_type() {
                     DataType::Primitive(p) => Ok(p),
-                    _ => Err(DeltaTableError::Generic(
-                        "nested partitioning values are not supported".to_string(),
+                    _ => Err(DeltaTableError::generic(
+                        "nested partitioning values are not supported",
                     )),
                 }?;
                 Ok((
@@ -225,7 +231,7 @@ impl LogicalFile<'_> {
             })
             .collect::<DeltaResult<HashMap<_, _>>>()?;
 
-        // NOTE: we recreate the map as a BTreeMap to ensure the order of the keys is consistently
+        // NOTE: we recreate the map as a IndexMap to ensure the order of the keys is consistently
         // the same as the order of partition fields.
         self.partition_fields
             .iter()
@@ -470,20 +476,35 @@ impl<'a> IntoIterator for LogDataHandler<'a> {
 
 #[cfg(feature = "datafusion")]
 mod datafusion {
+    use std::collections::HashSet;
     use std::sync::Arc;
 
+    use ::datafusion::functions_aggregate::min_max::{MaxAccumulator, MinAccumulator};
+    use ::datafusion::physical_optimizer::pruning::PruningStatistics;
+    use ::datafusion::physical_plan::Accumulator;
+    use arrow::compute::concat_batches;
     use arrow_arith::aggregate::sum;
-    use arrow_array::Int64Array;
+    use arrow_array::{ArrayRef, BooleanArray, Int64Array};
     use arrow_schema::DataType as ArrowDataType;
     use datafusion_common::scalar::ScalarValue;
     use datafusion_common::stats::{ColumnStatistics, Precision, Statistics};
-    use datafusion_expr::AggregateFunction;
-    use datafusion_physical_expr::aggregate::AggregateExpr;
-    use datafusion_physical_expr::expressions::{Column, Max, Min};
+    use datafusion_common::Column;
+    use delta_kernel::engine::arrow_data::ArrowEngineData;
+    use delta_kernel::expressions::Expression;
+    use delta_kernel::schema::{DataType, PrimitiveType};
+    use delta_kernel::{ExpressionEvaluator, ExpressionHandler};
 
     use super::*;
     use crate::kernel::arrow::extract::{extract_and_cast_opt, extract_column};
+    use crate::kernel::ARROW_HANDLER;
 
+    #[derive(Debug, Default, Clone)]
+    enum AccumulatorType {
+        Min,
+        Max,
+        #[default]
+        Unused,
+    }
     // TODO validate this works with "wide and narrow" builds / stats
 
     impl FileStatsAccessor<'_> {
@@ -512,7 +533,7 @@ mod datafusion {
             &self,
             path_step: &str,
             name: &str,
-            fun: &AggregateFunction,
+            fun_type: AccumulatorType,
         ) -> Precision<ScalarValue> {
             let mut path = name.split('.');
             let array = if let Ok(array) = extract_column(self.stats, path_step, &mut path) {
@@ -522,28 +543,24 @@ mod datafusion {
             };
 
             if array.data_type().is_primitive() {
-                let agg: Box<dyn AggregateExpr> = match fun {
-                    AggregateFunction::Min => Box::new(Min::new(
-                        // NOTE: this is just a placeholder, we never evalutae this expression
-                        Arc::new(Column::new(name, 0)),
-                        name,
-                        array.data_type().clone(),
-                    )),
-                    AggregateFunction::Max => Box::new(Max::new(
-                        // NOTE: this is just a placeholder, we never evalutae this expression
-                        Arc::new(Column::new(name, 0)),
-                        name,
-                        array.data_type().clone(),
-                    )),
-                    _ => return Precision::Absent,
+                let accumulator: Option<Box<dyn Accumulator>> = match fun_type {
+                    AccumulatorType::Min => MinAccumulator::try_new(array.data_type())
+                        .map_or(None, |a| Some(Box::new(a))),
+                    AccumulatorType::Max => MaxAccumulator::try_new(array.data_type())
+                        .map_or(None, |a| Some(Box::new(a))),
+                    _ => None,
                 };
-                let mut accum = agg.create_accumulator().ok().unwrap();
-                return accum
-                    .update_batch(&[array.clone()])
-                    .ok()
-                    .and_then(|_| accum.evaluate().ok())
-                    .map(Precision::Exact)
-                    .unwrap_or(Precision::Absent);
+
+                if let Some(mut accumulator) = accumulator {
+                    return accumulator
+                        .update_batch(&[array.clone()])
+                        .ok()
+                        .and_then(|_| accumulator.evaluate().ok())
+                        .map(Precision::Exact)
+                        .unwrap_or(Precision::Absent);
+                }
+
+                return Precision::Absent;
             }
 
             match array.data_type() {
@@ -551,7 +568,11 @@ mod datafusion {
                     return fields
                         .iter()
                         .map(|f| {
-                            self.column_bounds(path_step, &format!("{name}.{}", f.name()), fun)
+                            self.column_bounds(
+                                path_step,
+                                &format!("{name}.{}", f.name()),
+                                fun_type.clone(),
+                            )
                         })
                         .map(|s| match s {
                             Precision::Exact(s) => Some(s),
@@ -590,8 +611,7 @@ mod datafusion {
             let null_count_col = format!("{COL_NULL_COUNT}.{}", name.as_ref());
             let null_count = self.collect_count(&null_count_col);
 
-            let min_value =
-                self.column_bounds(COL_MIN_VALUES, name.as_ref(), &AggregateFunction::Min);
+            let min_value = self.column_bounds(COL_MIN_VALUES, name.as_ref(), AccumulatorType::Min);
             let min_value = match &min_value {
                 Precision::Exact(value) if value.is_null() => Precision::Absent,
                 // TODO this is a hack, we should not be casting here but rather when we read the checkpoint data.
@@ -602,8 +622,7 @@ mod datafusion {
                 _ => min_value,
             };
 
-            let max_value =
-                self.column_bounds(COL_MAX_VALUES, name.as_ref(), &AggregateFunction::Max);
+            let max_value = self.column_bounds(COL_MAX_VALUES, name.as_ref(), AccumulatorType::Max);
             let max_value = match &max_value {
                 Precision::Exact(value) if value.is_null() => Precision::Absent,
                 Precision::Exact(ScalarValue::TimestampNanosecond(a, b)) => Precision::Exact(
@@ -688,6 +707,122 @@ mod datafusion {
                 total_byte_size,
                 column_statistics,
             })
+        }
+
+        fn pick_stats(&self, column: &Column, stats_field: &'static str) -> Option<ArrayRef> {
+            let field = self.schema.field(&column.name)?;
+            // See issue #1214. Binary type does not support natural order which is required for Datafusion to prune
+            if field.data_type() == &DataType::Primitive(PrimitiveType::Binary) {
+                return None;
+            }
+            let expression = if self.metadata.partition_columns.contains(&column.name) {
+                Expression::Column(format!("add.partitionValues_parsed.{}", column.name))
+            } else {
+                Expression::Column(format!("add.stats_parsed.{}.{}", stats_field, column.name))
+            };
+            let evaluator = ARROW_HANDLER.get_evaluator(
+                crate::kernel::models::fields::log_schema_ref().clone(),
+                expression,
+                field.data_type().clone(),
+            );
+            let mut results = Vec::with_capacity(self.data.len());
+            for batch in self.data.iter() {
+                let engine = ArrowEngineData::new(batch.clone());
+                let result = evaluator.evaluate(&engine).ok()?;
+                let result = result
+                    .as_any()
+                    .downcast_ref::<ArrowEngineData>()
+                    .ok_or(DeltaTableError::generic(
+                        "failed to downcast evaluator result to ArrowEngineData.",
+                    ))
+                    .ok()?;
+                results.push(result.record_batch().clone());
+            }
+            let batch = concat_batches(results[0].schema_ref(), &results).ok()?;
+            batch.column_by_name("output").map(|c| c.clone())
+        }
+    }
+
+    impl<'a> PruningStatistics for LogDataHandler<'a> {
+        /// return the minimum values for the named column, if known.
+        /// Note: the returned array must contain `num_containers()` rows
+        fn min_values(&self, column: &Column) -> Option<ArrayRef> {
+            self.pick_stats(column, "minValues")
+        }
+
+        /// return the maximum values for the named column, if known.
+        /// Note: the returned array must contain `num_containers()` rows.
+        fn max_values(&self, column: &Column) -> Option<ArrayRef> {
+            self.pick_stats(column, "maxValues")
+        }
+
+        /// return the number of containers (e.g. row groups) being
+        /// pruned with these statistics
+        fn num_containers(&self) -> usize {
+            self.data.iter().map(|f| f.num_rows()).sum()
+        }
+
+        /// return the number of null values for the named column as an
+        /// `Option<UInt64Array>`.
+        ///
+        /// Note: the returned array must contain `num_containers()` rows.
+        fn null_counts(&self, column: &Column) -> Option<ArrayRef> {
+            if !self.metadata.partition_columns.contains(&column.name) {
+                let counts = self.pick_stats(column, "nullCount")?;
+                return arrow_cast::cast(counts.as_ref(), &ArrowDataType::UInt64).ok();
+            }
+            let partition_values = self.pick_stats(column, "__dummy__")?;
+            let row_counts = self.row_counts(column)?;
+            let row_counts = row_counts.as_any().downcast_ref::<UInt64Array>()?;
+            let mut null_counts = Vec::with_capacity(partition_values.len());
+            for i in 0..partition_values.len() {
+                let null_count = if partition_values.is_null(i) {
+                    row_counts.value(i)
+                } else {
+                    0
+                };
+                null_counts.push(null_count);
+            }
+            Some(Arc::new(UInt64Array::from(null_counts)))
+        }
+
+        /// return the number of rows for the named column in each container
+        /// as an `Option<UInt64Array>`.
+        ///
+        /// Note: the returned array must contain `num_containers()` rows
+        fn row_counts(&self, _column: &Column) -> Option<ArrayRef> {
+            lazy_static::lazy_static! {
+                static ref ROW_COUNTS_EVAL: Arc<dyn ExpressionEvaluator> =  ARROW_HANDLER.get_evaluator(
+                    crate::kernel::models::fields::log_schema_ref().clone(),
+                    Expression::column("add.stats_parsed.numRecords"),
+                    DataType::Primitive(PrimitiveType::Long),
+                );
+            }
+            let mut results = Vec::with_capacity(self.data.len());
+            for batch in self.data.iter() {
+                let engine = ArrowEngineData::new(batch.clone());
+                let result = ROW_COUNTS_EVAL.evaluate(&engine).ok()?;
+                let result = result
+                    .as_any()
+                    .downcast_ref::<ArrowEngineData>()
+                    .ok_or(DeltaTableError::generic(
+                        "failed to downcast evaluator result to ArrowEngineData.",
+                    ))
+                    .ok()?;
+                results.push(result.record_batch().clone());
+            }
+            let batch = concat_batches(results[0].schema_ref(), &results).ok()?;
+            arrow_cast::cast(batch.column_by_name("output")?, &ArrowDataType::UInt64).ok()
+        }
+
+        // This function is required since DataFusion 35.0, but is implemented as a no-op
+        // https://github.com/apache/arrow-datafusion/blob/ec6abece2dcfa68007b87c69eefa6b0d7333f628/datafusion/core/src/datasource/physical_plan/parquet/page_filter.rs#L550
+        fn contained(
+            &self,
+            _column: &Column,
+            _value: &HashSet<ScalarValue>,
+        ) -> Option<BooleanArray> {
+            None
         }
     }
 }

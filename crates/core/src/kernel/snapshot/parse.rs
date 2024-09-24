@@ -11,6 +11,11 @@ use crate::{DeltaResult, DeltaTableError};
 
 pub(super) fn read_metadata(batch: &dyn ProvidesColumnByName) -> DeltaResult<Option<Metadata>> {
     if let Some(arr) = ex::extract_and_cast_opt::<StructArray>(batch, "metaData") {
+        // Stop early if all values are null
+        if arr.null_count() == arr.len() {
+            return Ok(None);
+        }
+
         let id = ex::extract_and_cast::<StringArray>(arr, "id")?;
         let name = ex::extract_and_cast::<StringArray>(arr, "name")?;
         let description = ex::extract_and_cast::<StringArray>(arr, "description")?;
@@ -43,6 +48,11 @@ pub(super) fn read_metadata(batch: &dyn ProvidesColumnByName) -> DeltaResult<Opt
 
 pub(super) fn read_protocol(batch: &dyn ProvidesColumnByName) -> DeltaResult<Option<Protocol>> {
     if let Some(arr) = ex::extract_and_cast_opt::<StructArray>(batch, "protocol") {
+        // Stop early if all values are null
+        if arr.null_count() == arr.len() {
+            return Ok(None);
+        }
+
         let min_reader_version = ex::extract_and_cast::<Int32Array>(arr, "minReaderVersion")?;
         let min_writer_version = ex::extract_and_cast::<Int32Array>(arr, "minWriterVersion")?;
         let maybe_reader_features = ex::extract_and_cast_opt::<ListArray>(arr, "readerFeatures");
@@ -73,7 +83,7 @@ pub(super) fn read_adds(array: &dyn ProvidesColumnByName) -> DeltaResult<Vec<Add
         let size = ex::extract_and_cast::<Int64Array>(arr, "size")?;
         let modification_time = ex::extract_and_cast::<Int64Array>(arr, "modificationTime")?;
         let data_change = ex::extract_and_cast::<BooleanArray>(arr, "dataChange")?;
-        let stats = ex::extract_and_cast::<StringArray>(arr, "stats")?;
+        let stats = ex::extract_and_cast_opt::<StringArray>(arr, "stats");
         let tags = ex::extract_and_cast_opt::<MapArray>(arr, "tags");
         let dv = ex::extract_and_cast_opt::<StructArray>(arr, "deletionVector");
 
@@ -116,7 +126,8 @@ pub(super) fn read_adds(array: &dyn ProvidesColumnByName) -> DeltaResult<Vec<Add
                     size: ex::read_primitive(size, i)?,
                     modification_time: ex::read_primitive(modification_time, i)?,
                     data_change: ex::read_bool(data_change, i)?,
-                    stats: ex::read_str_opt(stats, i).map(|s| s.to_string()),
+                    stats: stats
+                        .and_then(|stats| ex::read_str_opt(stats, i).map(|s| s.to_string())),
                     partition_values: pvs
                         .and_then(|pv| collect_map(&pv.value(i)).map(|m| m.collect()))
                         .unwrap_or_default(),
@@ -138,6 +149,11 @@ pub(super) fn read_cdf_adds(array: &dyn ProvidesColumnByName) -> DeltaResult<Vec
     let mut result = Vec::new();
 
     if let Some(arr) = ex::extract_and_cast_opt::<StructArray>(array, "cdc") {
+        // Stop early if all values are null
+        if arr.null_count() == arr.len() {
+            return Ok(result);
+        }
+
         let path = ex::extract_and_cast::<StringArray>(arr, "path")?;
         let pvs = ex::extract_and_cast_opt::<MapArray>(arr, "partitionValues");
         let size = ex::extract_and_cast::<Int64Array>(arr, "size")?;
@@ -171,6 +187,11 @@ pub(super) fn read_removes(array: &dyn ProvidesColumnByName) -> DeltaResult<Vec<
     let mut result = Vec::new();
 
     if let Some(arr) = ex::extract_and_cast_opt::<StructArray>(array, "remove") {
+        // Stop early if all values are null
+        if arr.null_count() == arr.len() {
+            return Ok(result);
+        }
+
         let path = ex::extract_and_cast::<StringArray>(arr, "path")?;
         let data_change = ex::extract_and_cast::<BooleanArray>(arr, "dataChange")?;
         let deletion_timestamp = ex::extract_and_cast::<Int64Array>(arr, "deletionTimestamp")?;
@@ -237,7 +258,9 @@ pub(super) fn read_removes(array: &dyn ProvidesColumnByName) -> DeltaResult<Vec<
     Ok(result)
 }
 
-fn collect_map(val: &StructArray) -> Option<impl Iterator<Item = (String, Option<String>)> + '_> {
+pub(super) fn collect_map(
+    val: &StructArray,
+) -> Option<impl Iterator<Item = (String, Option<String>)> + '_> {
     let keys = val
         .column(0)
         .as_ref()

@@ -1,19 +1,18 @@
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::str::FromStr;
-// use std::io::{Cursor, Read};
-// use std::sync::Arc;
 
-// use roaring::RoaringTreemap;
+use maplit::hashset;
 use serde::{Deserialize, Serialize};
 use tracing::warn;
 use url::Url;
 
 use super::schema::StructType;
 use crate::kernel::{error::Error, DeltaResult};
+use crate::TableProperty;
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 /// Defines a file format used in table
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct Format {
     /// Name of the encoding for files in this table
     pub provider: String,
@@ -137,31 +136,335 @@ pub struct Protocol {
 
 impl Protocol {
     /// Create a new protocol action
-    pub fn new(min_reader_version: i32, min_wrriter_version: i32) -> Self {
+    pub fn new(min_reader_version: i32, min_writer_version: i32) -> Self {
         Self {
             min_reader_version,
-            min_writer_version: min_wrriter_version,
+            min_writer_version,
             reader_features: None,
             writer_features: None,
         }
     }
 
-    /// set the reader features in the protocol action
+    /// set the reader features in the protocol action, automatically bumps min_reader_version
     pub fn with_reader_features(
         mut self,
         reader_features: impl IntoIterator<Item = impl Into<ReaderFeatures>>,
     ) -> Self {
-        self.reader_features = Some(reader_features.into_iter().map(|c| c.into()).collect());
+        let all_reader_features = reader_features
+            .into_iter()
+            .map(Into::into)
+            .collect::<HashSet<_>>();
+        if !all_reader_features.is_empty() {
+            self.min_reader_version = 3
+        }
+        self.reader_features = Some(all_reader_features);
         self
     }
 
-    /// set the writer features in the protocol action
+    /// set the writer features in the protocol action, automatically bumps min_writer_version
     pub fn with_writer_features(
         mut self,
         writer_features: impl IntoIterator<Item = impl Into<WriterFeatures>>,
     ) -> Self {
-        self.writer_features = Some(writer_features.into_iter().map(|c| c.into()).collect());
+        let all_writer_feautures = writer_features
+            .into_iter()
+            .map(|c| c.into())
+            .collect::<HashSet<_>>();
+        if !all_writer_feautures.is_empty() {
+            self.min_writer_version = 7
+        }
+        self.writer_features = Some(all_writer_feautures);
         self
+    }
+
+    /// Converts existing properties into features if the reader_version is >=3 or writer_version >=3
+    /// only converts features that are "true"
+    pub fn move_table_properties_into_features(
+        mut self,
+        configuration: &HashMap<String, Option<String>>,
+    ) -> Protocol {
+        if self.min_writer_version >= 7 {
+            let mut converted_writer_features = configuration
+                .iter()
+                .filter(|(_, value)| {
+                    value.as_ref().map_or(false, |v| {
+                        v.to_ascii_lowercase().parse::<bool>().is_ok_and(|v| v)
+                    })
+                })
+                .collect::<HashMap<&String, &Option<String>>>()
+                .keys()
+                .map(|key| (*key).clone().into())
+                .filter(|v| !matches!(v, WriterFeatures::Other(_)))
+                .collect::<HashSet<WriterFeatures>>();
+
+            if configuration
+                .keys()
+                .any(|v| v.starts_with("delta.constraints."))
+            {
+                converted_writer_features.insert(WriterFeatures::CheckConstraints);
+            }
+
+            match self.writer_features {
+                Some(mut features) => {
+                    features.extend(converted_writer_features);
+                    self.writer_features = Some(features);
+                }
+                None => self.writer_features = Some(converted_writer_features),
+            }
+        }
+        if self.min_reader_version > 3 {
+            let converted_reader_features = configuration
+                .iter()
+                .filter(|(_, value)| {
+                    value.as_ref().map_or(false, |v| {
+                        v.to_ascii_lowercase().parse::<bool>().is_ok_and(|v| v)
+                    })
+                })
+                .map(|(key, _)| (*key).clone().into())
+                .filter(|v| !matches!(v, ReaderFeatures::Other(_)))
+                .collect::<HashSet<ReaderFeatures>>();
+            match self.reader_features {
+                Some(mut features) => {
+                    features.extend(converted_reader_features);
+                    self.reader_features = Some(features);
+                }
+                None => self.reader_features = Some(converted_reader_features),
+            }
+        }
+        self
+    }
+    /// Will apply the properties to the protocol by either bumping the version or setting
+    /// features
+    pub fn apply_properties_to_protocol(
+        mut self,
+        new_properties: &HashMap<String, String>,
+        raise_if_not_exists: bool,
+    ) -> DeltaResult<Protocol> {
+        let mut parsed_properties: HashMap<TableProperty, String> = HashMap::new();
+
+        for (key, value) in new_properties {
+            if let Ok(parsed_key) = key.parse::<TableProperty>() {
+                parsed_properties.insert(parsed_key, value.to_string());
+            } else if raise_if_not_exists {
+                return Err(Error::Generic(format!(
+                    "Error parsing property '{}':'{}'",
+                    key, value
+                )));
+            }
+        }
+
+        // Check and update delta.minReaderVersion
+        if let Some(min_reader_version) = parsed_properties.get(&TableProperty::MinReaderVersion) {
+            let new_min_reader_version = min_reader_version.parse::<i32>();
+            match new_min_reader_version {
+                Ok(version) => match version {
+                    1..=3 => {
+                        if version > self.min_reader_version {
+                            self.min_reader_version = version
+                        }
+                    }
+                    _ => {
+                        return Err(Error::Generic(format!(
+                        "delta.minReaderVersion = '{}' is invalid, valid values are ['1','2','3']",
+                        min_reader_version
+                    )))
+                    }
+                },
+                Err(_) => {
+                    return Err(Error::Generic(format!(
+                        "delta.minReaderVersion = '{}' is invalid, valid values are ['1','2','3']",
+                        min_reader_version
+                    )))
+                }
+            }
+        }
+
+        // Check and update delta.minWriterVersion
+        if let Some(min_writer_version) = parsed_properties.get(&TableProperty::MinWriterVersion) {
+            let new_min_writer_version = min_writer_version.parse::<i32>();
+            match new_min_writer_version {
+                Ok(version) => match version {
+                    2..=7 => {
+                        if version > self.min_writer_version {
+                            self.min_writer_version = version
+                        }
+                    }
+                    _ => {
+                        return Err(Error::Generic(format!(
+                            "delta.minWriterVersion = '{}' is invalid, valid values are ['2','3','4','5','6','7']",
+                            min_writer_version
+                        )))
+                    }
+                },
+                Err(_) => {
+                    return Err(Error::Generic(format!(
+                        "delta.minWriterVersion = '{}' is invalid, valid values are ['2','3','4','5','6','7']",
+                        min_writer_version
+                    )))
+                }
+            }
+        }
+
+        // Check enableChangeDataFeed and bump protocol or add writerFeature if writer versions is >=7
+        if let Some(enable_cdf) = parsed_properties.get(&TableProperty::EnableChangeDataFeed) {
+            let if_enable_cdf = enable_cdf.to_ascii_lowercase().parse::<bool>();
+            match if_enable_cdf {
+                Ok(true) => {
+                    if self.min_writer_version >= 7 {
+                        match self.writer_features {
+                            Some(mut features) => {
+                                features.insert(WriterFeatures::ChangeDataFeed);
+                                self.writer_features = Some(features);
+                            }
+                            None => {
+                                self.writer_features =
+                                    Some(hashset! {WriterFeatures::ChangeDataFeed})
+                            }
+                        }
+                    } else if self.min_writer_version <= 3 {
+                        self.min_writer_version = 4
+                    }
+                }
+                Ok(false) => {}
+                _ => {
+                    return Err(Error::Generic(format!(
+                        "delta.enableChangeDataFeed = '{}' is invalid, valid values are ['true']",
+                        enable_cdf
+                    )))
+                }
+            }
+        }
+
+        if let Some(enable_dv) = parsed_properties.get(&TableProperty::EnableDeletionVectors) {
+            let if_enable_dv = enable_dv.to_ascii_lowercase().parse::<bool>();
+            match if_enable_dv {
+                Ok(true) => {
+                    let writer_features = match self.writer_features {
+                        Some(mut features) => {
+                            features.insert(WriterFeatures::DeletionVectors);
+                            features
+                        }
+                        None => hashset! {WriterFeatures::DeletionVectors},
+                    };
+                    let reader_features = match self.reader_features {
+                        Some(mut features) => {
+                            features.insert(ReaderFeatures::DeletionVectors);
+                            features
+                        }
+                        None => hashset! {ReaderFeatures::DeletionVectors},
+                    };
+                    self.min_reader_version = 3;
+                    self.min_writer_version = 7;
+                    self.writer_features = Some(writer_features);
+                    self.reader_features = Some(reader_features);
+                }
+                Ok(false) => {}
+                _ => {
+                    return Err(Error::Generic(format!(
+                        "delta.enableDeletionVectors = '{}' is invalid, valid values are ['true']",
+                        enable_dv
+                    )))
+                }
+            }
+        }
+        Ok(self)
+    }
+    /// Enable timestamp_ntz in the protocol
+    pub fn enable_timestamp_ntz(mut self) -> Protocol {
+        self = self.with_reader_features(vec![ReaderFeatures::TimestampWithoutTimezone]);
+        self = self.with_writer_features(vec![WriterFeatures::TimestampWithoutTimezone]);
+        self
+    }
+}
+
+/// High level table features
+#[derive(Serialize, Deserialize, Debug, Clone, Eq, PartialEq, Hash)]
+#[serde(rename_all = "camelCase")]
+pub enum TableFeatures {
+    /// Mapping of one column to another
+    ColumnMapping,
+    /// Deletion vectors for merge, update, delete
+    DeletionVectors,
+    /// timestamps without timezone support
+    #[serde(rename = "timestampNtz")]
+    TimestampWithoutTimezone,
+    /// version 2 of checkpointing
+    V2Checkpoint,
+    /// Append Only Tables
+    AppendOnly,
+    /// Table invariants
+    Invariants,
+    /// Check constraints on columns
+    CheckConstraints,
+    /// CDF on a table
+    ChangeDataFeed,
+    /// Columns with generated values
+    GeneratedColumns,
+    /// ID Columns
+    IdentityColumns,
+    /// Row tracking on tables
+    RowTracking,
+    /// domain specific metadata
+    DomainMetadata,
+    /// Iceberg compatibility support
+    IcebergCompatV1,
+}
+
+impl FromStr for TableFeatures {
+    type Err = ();
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "columnMapping" => Ok(TableFeatures::ColumnMapping),
+            "deletionVectors" => Ok(TableFeatures::DeletionVectors),
+            "timestampNtz" => Ok(TableFeatures::TimestampWithoutTimezone),
+            "v2Checkpoint" => Ok(TableFeatures::V2Checkpoint),
+            "appendOnly" => Ok(TableFeatures::AppendOnly),
+            "invariants" => Ok(TableFeatures::Invariants),
+            "checkConstraints" => Ok(TableFeatures::CheckConstraints),
+            "changeDataFeed" => Ok(TableFeatures::ChangeDataFeed),
+            "generatedColumns" => Ok(TableFeatures::GeneratedColumns),
+            "identityColumns" => Ok(TableFeatures::IdentityColumns),
+            "rowTracking" => Ok(TableFeatures::RowTracking),
+            "domainMetadata" => Ok(TableFeatures::DomainMetadata),
+            "icebergCompatV1" => Ok(TableFeatures::IcebergCompatV1),
+            _ => Err(()),
+        }
+    }
+}
+
+impl AsRef<str> for TableFeatures {
+    fn as_ref(&self) -> &str {
+        match self {
+            TableFeatures::ColumnMapping => "columnMapping",
+            TableFeatures::DeletionVectors => "deletionVectors",
+            TableFeatures::TimestampWithoutTimezone => "timestampNtz",
+            TableFeatures::V2Checkpoint => "v2Checkpoint",
+            TableFeatures::AppendOnly => "appendOnly",
+            TableFeatures::Invariants => "invariants",
+            TableFeatures::CheckConstraints => "checkConstraints",
+            TableFeatures::ChangeDataFeed => "changeDataFeed",
+            TableFeatures::GeneratedColumns => "generatedColumns",
+            TableFeatures::IdentityColumns => "identityColumns",
+            TableFeatures::RowTracking => "rowTracking",
+            TableFeatures::DomainMetadata => "domainMetadata",
+            TableFeatures::IcebergCompatV1 => "icebergCompatV1",
+        }
+    }
+}
+
+impl fmt::Display for TableFeatures {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.as_ref())
+    }
+}
+
+impl TableFeatures {
+    /// Convert table feature to respective reader or/and write feature
+    pub fn to_reader_writer_features(&self) -> (Option<ReaderFeatures>, Option<WriterFeatures>) {
+        let reader_feature = ReaderFeatures::try_from(self).ok();
+        let writer_feature = WriterFeatures::try_from(self).ok();
+        (reader_feature, writer_feature)
     }
 }
 
@@ -234,6 +537,19 @@ impl AsRef<str> for ReaderFeatures {
 impl fmt::Display for ReaderFeatures {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.as_ref())
+    }
+}
+
+impl TryFrom<&TableFeatures> for ReaderFeatures {
+    type Error = String;
+
+    fn try_from(value: &TableFeatures) -> Result<Self, Self::Error> {
+        match ReaderFeatures::from(value.as_ref()) {
+            ReaderFeatures::Other(_) => {
+                Err(format!("Table feature {} is not a reader feature", value))
+            }
+            value => Ok(value),
+        }
     }
 }
 
@@ -325,6 +641,19 @@ impl AsRef<str> for WriterFeatures {
 impl fmt::Display for WriterFeatures {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.as_ref())
+    }
+}
+
+impl TryFrom<&TableFeatures> for WriterFeatures {
+    type Error = String;
+
+    fn try_from(value: &TableFeatures) -> Result<Self, Self::Error> {
+        match WriterFeatures::from(value.as_ref()) {
+            WriterFeatures::Other(_) => {
+                Err(format!("Table feature {} is not a writer feature", value))
+            }
+            value => Ok(value),
+        }
     }
 }
 
@@ -736,6 +1065,10 @@ pub struct CommitInfo {
     /// Additional provenance information for the commit
     #[serde(flatten, default)]
     pub info: HashMap<String, serde_json::Value>,
+
+    /// User defined metadata
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub user_metadata: Option<String>,
 }
 
 /// The domain metadata action contains a configuration (string) for a named metadata domain
@@ -907,15 +1240,9 @@ pub(crate) mod serde_path {
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
-    // use std::sync::Arc;
-
-    // use object_store::local::LocalFileSystem;
-
-    use crate::kernel::PrimitiveType;
 
     use super::*;
-    // use crate::client::filesystem::ObjectStoreFileSystemClient;
-    // use crate::executor::tokio::TokioBackgroundExecutor;
+    use crate::kernel::PrimitiveType;
 
     fn dv_relateive() -> DeletionVectorDescriptor {
         DeletionVectorDescriptor {

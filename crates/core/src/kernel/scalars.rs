@@ -1,5 +1,4 @@
 //! Auxiliary methods for dealing with kernel scalars
-//!
 use std::cmp::Ordering;
 
 use arrow_array::Array;
@@ -10,6 +9,9 @@ use delta_kernel::{
     schema::StructField,
 };
 use object_store::path::Path;
+#[cfg(test)]
+use serde_json::Value;
+use urlencoding::encode;
 
 use crate::NULL_PARTITION_VALUE_DATA_PATH;
 
@@ -21,6 +23,9 @@ pub trait ScalarExt: Sized {
     fn serialize_encoded(&self) -> String;
     /// Create a [`Scalar`] from an arrow array row
     fn from_array(arr: &dyn Array, index: usize) -> Option<Self>;
+    /// Serialize as serde_json::Value
+    #[cfg(test)]
+    fn to_json(&self) -> serde_json::Value;
 }
 
 impl ScalarExt for Scalar {
@@ -76,7 +81,7 @@ impl ScalarExt for Scalar {
         if self.is_null() {
             return NULL_PARTITION_VALUE_DATA_PATH.to_string();
         }
-        Path::from(self.serialize()).to_string()
+        encode(Path::from(self.serialize()).as_ref()).to_string()
     }
 
     /// Create a [`Scalar`] form a row in an arrow array.
@@ -216,6 +221,54 @@ impl ScalarExt for Scalar {
             | ListView(_)
             | LargeListView(_)
             | Null => None,
+        }
+    }
+
+    /// Serializes this scalar as a serde_json::Value.
+    #[cfg(test)]
+    fn to_json(&self) -> serde_json::Value {
+        match self {
+            Self::String(s) => Value::String(s.to_owned()),
+            Self::Byte(b) => Value::Number(serde_json::Number::from(*b)),
+            Self::Short(s) => Value::Number(serde_json::Number::from(*s)),
+            Self::Integer(i) => Value::Number(serde_json::Number::from(*i)),
+            Self::Long(l) => Value::Number(serde_json::Number::from(*l)),
+            Self::Float(f) => Value::Number(serde_json::Number::from_f64(*f as f64).unwrap()),
+            Self::Double(d) => Value::Number(serde_json::Number::from_f64(*d).unwrap()),
+            Self::Boolean(b) => Value::Bool(*b),
+            Self::TimestampNtz(ts) | Self::Timestamp(ts) => {
+                let ts = Utc.timestamp_micros(*ts).single().unwrap();
+                Value::String(ts.format("%Y-%m-%d %H:%M:%S%.6f").to_string())
+            }
+            Self::Date(days) => {
+                let date = DateTime::from_timestamp(*days as i64 * 24 * 3600, 0).unwrap();
+                Value::String(date.format("%Y-%m-%d").to_string())
+            }
+            Self::Decimal(value, _, scale) => match scale.cmp(&0) {
+                Ordering::Equal => Value::String(value.to_string()),
+                Ordering::Greater => {
+                    let scalar_multiple = 10_i128.pow(*scale as u32);
+                    let mut s = String::new();
+                    s.push_str((value / scalar_multiple).to_string().as_str());
+                    s.push('.');
+                    s.push_str(&format!(
+                        "{:0>scale$}",
+                        value % scalar_multiple,
+                        scale = *scale as usize
+                    ));
+                    Value::String(s)
+                }
+                Ordering::Less => {
+                    let mut s = value.to_string();
+                    for _ in 0..*scale {
+                        s.push('0');
+                    }
+                    Value::String(s)
+                }
+            },
+            Self::Binary(val) => Value::String(create_escaped_binary_string(val.as_slice())),
+            Self::Null(_) => Value::Null,
+            Self::Struct(_) => unimplemented!(),
         }
     }
 }

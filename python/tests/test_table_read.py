@@ -1,12 +1,11 @@
 import os
+import tempfile
 from datetime import date, datetime, timezone
 from pathlib import Path
+from random import random
 from threading import Barrier, Thread
-from types import SimpleNamespace
-from typing import Any, List, Tuple
+from typing import Any, List, Tuple, Type
 from unittest.mock import Mock
-
-from packaging import version
 
 from deltalake._util import encode_partition_value
 from deltalake.exceptions import DeltaProtocolError
@@ -19,6 +18,9 @@ except ModuleNotFoundError:
     _has_pandas = False
 else:
     _has_pandas = True
+
+import multiprocessing
+from concurrent.futures import Executor, ProcessPoolExecutor, ThreadPoolExecutor
 
 import pyarrow as pa
 import pyarrow.dataset as ds
@@ -57,6 +59,52 @@ def test_read_simple_table_to_dict():
     table_path = "../crates/test/tests/data/simple_table"
     dt = DeltaTable(table_path)
     assert dt.to_pyarrow_dataset().to_table().to_pydict() == {"id": [5, 7, 9]}
+
+
+class _SerializableException(BaseException):
+    pass
+
+
+def _recursively_read_simple_table(executor_class: Type[Executor], depth):
+    try:
+        test_read_simple_table_to_dict()
+    except BaseException as e:  # Ideally this would catch `pyo3_runtime.PanicException` but its seems that is not possible.
+        # Re-raise as something that can be serialized and therefore sent back to parent processes.
+        raise _SerializableException(f"Seraializatble exception: {e}") from e
+
+    if depth == 0:
+        return
+    # We use concurrent.futures.Executors instead of `threading.Thread` or `multiprocessing.Process` to that errors
+    # are re-rasied in the parent process/thread when we call `future.result()`.
+    with executor_class(max_workers=1) as executor:
+        future = executor.submit(
+            _recursively_read_simple_table, executor_class, depth - 1
+        )
+        future.result()
+
+
+@pytest.mark.parametrize(
+    "executor_class,multiprocessing_start_method,expect_panic",
+    [
+        (ThreadPoolExecutor, None, False),
+        (ProcessPoolExecutor, "forkserver", False),
+        (ProcessPoolExecutor, "spawn", False),
+        (ProcessPoolExecutor, "fork", True),
+    ],
+)
+def test_read_simple_in_threads_and_processes(
+    executor_class, multiprocessing_start_method, expect_panic
+):
+    if multiprocessing_start_method is not None:
+        multiprocessing.set_start_method(multiprocessing_start_method, force=True)
+    if expect_panic:
+        with pytest.raises(
+            _SerializableException,
+            match="The tokio runtime does not support forked processes",
+        ):
+            _recursively_read_simple_table(executor_class=executor_class, depth=5)
+    else:
+        _recursively_read_simple_table(executor_class=executor_class, depth=5)
 
 
 def test_read_simple_table_by_version_to_dict():
@@ -168,18 +216,18 @@ def test_read_simple_table_update_incremental():
     assert dt.to_pyarrow_dataset().to_table().to_pydict() == {"id": [5, 7, 9]}
 
 
-def test_read_simple_table_file_sizes_failure():
+def test_read_simple_table_file_sizes_failure(mocker):
     table_path = "../crates/test/tests/data/simple_table"
     dt = DeltaTable(table_path)
     add_actions = dt.get_add_actions().to_pydict()
 
     # set all sizes to -1, the idea is to break the reading, to check
     # that input file sizes are actually used
-    add_actions_modified = {
-        x: [-1 for item in x] if x == "size_bytes" else y
-        for x, y in add_actions.items()
-    }
-    dt.get_add_actions = lambda: SimpleNamespace(to_pydict=lambda: add_actions_modified)  # type:ignore
+    add_actions_modified = {x: -1 for x in add_actions["path"]}
+    mocker.patch(
+        "deltalake._internal.RawDeltaTable.get_add_file_sizes",
+        return_value=add_actions_modified,
+    )
 
     with pytest.raises(OSError, match="Cannot seek past end of file."):
         dt.to_pyarrow_dataset().to_table().to_pydict()
@@ -280,13 +328,11 @@ def test_read_table_with_stats():
     data = dataset.to_table(filter=filter_expr)
     assert data.num_rows == 0
 
-    # PyArrow added support for is_null and is_valid simplification in 8.0.0
-    if version.parse(pa.__version__).major >= 8:
-        filter_expr = ds.field("cases").is_null()
-        assert len(list(dataset.get_fragments(filter=filter_expr))) == 0
+    filter_expr = ds.field("cases").is_null()
+    assert len(list(dataset.get_fragments(filter=filter_expr))) == 0
 
-        data = dataset.to_table(filter=filter_expr)
-        assert data.num_rows == 0
+    data = dataset.to_table(filter=filter_expr)
+    assert data.num_rows == 0
 
 
 def test_read_special_partition():
@@ -794,7 +840,109 @@ def test_encode_partition_value(input_value: Any, expected: str) -> None:
         assert encode_partition_value(input_value) == expected
 
 
+def test_partitions_partitioned_table():
+    table_path = "../crates/test/tests/data/delta-0.8.0-partitioned"
+    dt = DeltaTable(table_path)
+    expected = [
+        {"year": "2020", "month": "2", "day": "5"},
+        {"year": "2021", "month": "12", "day": "4"},
+        {"year": "2020", "month": "2", "day": "3"},
+        {"year": "2021", "month": "4", "day": "5"},
+        {"year": "2020", "month": "1", "day": "1"},
+        {"year": "2021", "month": "12", "day": "20"},
+    ]
+    actual = dt.partitions()
+    for partition in expected:
+        assert partition in actual
+
+
+def test_partitions_filtering_partitioned_table():
+    table_path = "../crates/test/tests/data/delta-0.8.0-partitioned"
+    dt = DeltaTable(table_path)
+    expected = [
+        {"day": "5", "month": "4", "year": "2021"},
+        {"day": "20", "month": "12", "year": "2021"},
+        {"day": "4", "month": "12", "year": "2021"},
+    ]
+
+    partition_filters = [("year", ">=", "2021")]
+    actual = dt.partitions(partition_filters=partition_filters)
+    assert len(expected) == len(actual)
+    for partition in expected:
+        partition in actual
+
+
+def test_partitions_date_partitioned_table():
+    table_path = tempfile.gettempdir() + "/date_partition_table"
+    date_partitions = [
+        date(2024, 8, 1),
+        date(2024, 8, 2),
+        date(2024, 8, 3),
+        date(2024, 8, 4),
+    ]
+    sample_data = pa.table(
+        {
+            "date_field": pa.array(date_partitions, pa.date32()),
+            "numeric_data": pa.array([1, 2, 3, 4], pa.int64()),
+        }
+    )
+    write_deltalake(
+        table_path, sample_data, mode="overwrite", partition_by=["date_field"]
+    )
+
+    delta_table = DeltaTable(table_path)
+    expected = [
+        {"date_field": "2024-08-01"},
+        {"date_field": "2024-08-02"},
+        {"date_field": "2024-08-03"},
+        {"date_field": "2024-08-04"},
+    ]
+    actual = sorted(delta_table.partitions(), key=lambda x: x["date_field"])
+    assert expected == actual
+
+
+def test_partitions_special_partitioned_table():
+    table_path = "../crates/test/tests/data/delta-0.8.0-special-partition"
+    dt = DeltaTable(table_path)
+
+    expected = [{"x": "A/A"}, {"x": "B B"}]
+    actual = dt.partitions()
+    for partition in expected:
+        partition in actual
+
+
+def test_partitions_unpartitioned_table():
+    table_path = "../crates/test/tests/data/simple_table"
+    dt = DeltaTable(table_path)
+    assert len(dt.partitions()) == 0
+
+
 def test_read_table_last_checkpoint_not_updated():
     dt = DeltaTable("../crates/test/tests/data/table_failed_last_checkpoint_update")
 
     assert dt.version() == 3
+
+
+def test_is_deltatable_valid_path():
+    table_path = "../crates/test/tests/data/simple_table"
+    assert DeltaTable.is_deltatable(table_path)
+
+
+def test_is_deltatable_invalid_path():
+    # Nonce ensures that the table_path always remains an invalid table path.
+    nonce = int(random() * 10000)
+    table_path = "../crates/test/tests/data/simple_table_invalid_%s" % nonce
+    assert not DeltaTable.is_deltatable(table_path)
+
+
+def test_is_deltatable_with_storage_opts():
+    table_path = "../crates/test/tests/data/simple_table"
+    storage_options = {
+        "AWS_ACCESS_KEY_ID": "THE_AWS_ACCESS_KEY_ID",
+        "AWS_SECRET_ACCESS_KEY": "THE_AWS_SECRET_ACCESS_KEY",
+        "AWS_ALLOW_HTTP": "true",
+        "AWS_S3_ALLOW_UNSAFE_RENAME": "true",
+        "AWS_S3_LOCKING_PROVIDER": "dynamodb",
+        "DELTA_DYNAMO_TABLE_NAME": "custom_table_name",
+    }
+    assert DeltaTable.is_deltatable(table_path, storage_options=storage_options)

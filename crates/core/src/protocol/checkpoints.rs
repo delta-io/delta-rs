@@ -28,6 +28,7 @@ use crate::logstore::LogStore;
 use crate::table::state::DeltaTableState;
 use crate::table::{get_partition_col_data_types, CheckPoint, CheckPointBuilder};
 use crate::{open_table_with_version, DeltaTable};
+
 type SchemaPath = Vec<String>;
 
 /// Error returned when there is an error during creating a checkpoint.
@@ -58,7 +59,7 @@ enum CheckpointError {
         source: ArrowError,
     },
 
-    #[error("missing rewquired action type in snapshot: {0}")]
+    #[error("missing required action type in snapshot: {0}")]
     MissingActionType(String),
 }
 

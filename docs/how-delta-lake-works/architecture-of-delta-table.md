@@ -27,7 +27,7 @@ tmp/some-table
     └── 00000000000000000000.json
 ```
 
-The Parquet file stores the data that was written.  The `_delta_log` directory stores metadata about the transactions.  Let's inspect the `_delta_log/00000000000000000000.json` file.
+The Parquet file stores the data that was written. The `_delta_log` directory stores metadata about the transactions. Let's inspect the `_delta_log/00000000000000000000.json` file.
 
 ```json
 {
@@ -78,9 +78,9 @@ The Parquet file stores the data that was written.  The `_delta_log` directory s
 
 The transaction log file contains the following information:
 
-* the files added to the Delta table
-* schema of the files
-* column level metadata including the min/max value for each file
+- the files added to the Delta table
+- schema of the files
+- column level metadata including the min/max value for each file
 
 Create another pandas DataFrame and append it to the Delta table to see how this transaction is recorded.
 
@@ -194,11 +194,11 @@ Here are the contents of the `_delta_log/0002.json` file:
 }
 ```
 
-This transaction adds a data file and marks the two exising data files for removal.  Marking a file for removal in the transaction log is known as "tombstoning the file" or a "logical delete".  This is different from a "physical delete" which actually removes the data file from storage.
+This transaction adds a data file and marks the two exising data files for removal. Marking a file for removal in the transaction log is known as "tombstoning the file" or a "logical delete". This is different from a "physical delete" which actually removes the data file from storage.
 
 ## How Delta table operations differ from data lakes
 
-Data lakes consist of data files persisted in storage.  They don't have a transaction log that retain metadata about the transactions.
+Data lakes consist of data files persisted in storage. They don't have a transaction log that retain metadata about the transactions.
 
 Data lakes perform transactions differently than Delta tables.
 
@@ -206,6 +206,6 @@ When you perform an overwrite tranasction with a Delta table, you logically dele
 
 Data lakes don't support logical deletes, so you have to physically delete the data from storage.
 
-Logical data operations are safer because they can be rolled back if they don't complete successfully.  Physically removing data from storage can be dangerous, especially if it's before a transaction is complete.
+Logical data operations are safer because they can be rolled back if they don't complete successfully. Physically removing data from storage can be dangerous, especially if it's before a transaction is complete.
 
-We're now ready to look into Delta Lake ACID transactions in more detail.
+We're now ready to look into [Delta Lake ACID transactions](../how-delta-lake-works/delta-lake-acid-transactions.md) in more detail.

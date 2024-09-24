@@ -45,7 +45,7 @@ impl S3DynamoDbLogStore {
         object_store: ObjectStoreRef,
     ) -> DeltaResult<Self> {
         let lock_client = DynamoDbLockClient::try_new(
-            &s3_options.sdk_config,
+            &s3_options.sdk_config.clone().unwrap(),
             s3_options
                 .extra_opts
                 .get(constants::LOCK_TABLE_KEY_NAME)
@@ -199,8 +199,12 @@ impl LogStore for S3DynamoDbLogStore {
     async fn write_commit_entry(
         &self,
         version: i64,
-        tmp_commit: &Path,
+        commit_or_bytes: CommitOrBytes,
     ) -> Result<(), TransactionError> {
+        let tmp_commit = match commit_or_bytes {
+            CommitOrBytes::TmpCommit(tmp_commit) => tmp_commit,
+            _ => unreachable!(), // S3DynamoDBLogstore should never get Bytes
+        };
         let entry = CommitEntry::new(version, tmp_commit.clone());
         debug!("Writing commit entry for {self:?}: {entry:?}");
         // create log entry in dynamo db: complete = false, no expireTime
@@ -244,8 +248,12 @@ impl LogStore for S3DynamoDbLogStore {
     async fn abort_commit_entry(
         &self,
         version: i64,
-        tmp_commit: &Path,
+        commit_or_bytes: CommitOrBytes,
     ) -> Result<(), TransactionError> {
+        let tmp_commit = match commit_or_bytes {
+            CommitOrBytes::TmpCommit(tmp_commit) => tmp_commit,
+            _ => unreachable!(), // S3DynamoDBLogstore should never get Bytes
+        };
         self.lock_client
             .delete_commit_entry(version, &self.table_path)
             .await
@@ -266,7 +274,7 @@ impl LogStore for S3DynamoDbLogStore {
                 },
             })?;
 
-        abort_commit_entry(&self.storage, version, tmp_commit).await?;
+        abort_commit_entry(&self.storage, version, &tmp_commit).await?;
         Ok(())
     }
 
@@ -308,14 +316,4 @@ pub enum RepairLogEntryResult {
     MovedFile,
     /// Both parts of the repair process where already carried.
     AlreadyCompleted,
-}
-
-/// Represents the possible, positive outcomes of calling `DynamoDbClient::try_create_lock_table()`
-#[derive(Debug, PartialEq)]
-pub enum CreateLockTableResult {
-    /// Table created successfully.
-    TableCreated,
-    /// Table was not created because it already exists.
-    /// Does not imply that the table has the correct schema.
-    TableAlreadyExists,
 }
