@@ -4,6 +4,7 @@ import pyarrow as pa
 import pytest
 
 from deltalake import DeltaTable, write_deltalake
+from deltalake.table import CommitProperties
 
 
 def test_merge_when_matched_delete_wo_predicate(
@@ -20,12 +21,13 @@ def test_merge_when_matched_delete_wo_predicate(
         }
     )
 
+    commit_properties = CommitProperties(custom_metadata={"userName": "John Doe"})
     dt.merge(
         source=source_table,
         predicate="t.id = s.id",
         source_alias="s",
         target_alias="t",
-        custom_metadata={"userName": "John Doe"},
+        commit_properties=commit_properties,
     ).when_matched_delete().execute()
 
     nrows = 4
@@ -985,3 +987,54 @@ def test_struct_casting(tmp_path: pathlib.Path):
         .execute()
     )
     assert result is not None
+
+
+def test_merge_isin_partition_pruning(
+    tmp_path: pathlib.Path,
+):
+    nrows = 5
+    data = pa.table(
+        {
+            "id": pa.array([str(x) for x in range(nrows)]),
+            "partition": pa.array(list(range(nrows)), pa.int64()),
+            "sold": pa.array(list(range(nrows)), pa.int32()),
+        }
+    )
+
+    write_deltalake(tmp_path, data, mode="append", partition_by="partition")
+
+    dt = DeltaTable(tmp_path)
+
+    source_table = pa.table(
+        {
+            "id": pa.array(["3", "4"]),
+            "partition": pa.array([3, 4], pa.int64()),
+            "sold": pa.array([10, 20], pa.int32()),
+        }
+    )
+
+    metrics = (
+        dt.merge(
+            source=source_table,
+            predicate="t.id = s.id and t.partition in (3,4)",
+            source_alias="s",
+            target_alias="t",
+        )
+        .when_matched_update_all()
+        .execute()
+    )
+
+    expected = pa.table(
+        {
+            "id": pa.array(["0", "1", "2", "3", "4"]),
+            "partition": pa.array([0, 1, 2, 3, 4], pa.int64()),
+            "sold": pa.array([0, 1, 2, 10, 20], pa.int32()),
+        }
+    )
+    result = dt.to_pyarrow_table().sort_by([("id", "ascending")])
+    last_action = dt.history(1)[0]
+
+    assert last_action["operation"] == "MERGE"
+    assert result == expected
+    assert metrics["num_target_files_scanned"] == 2
+    assert metrics["num_target_files_skipped_during_scan"] == 3

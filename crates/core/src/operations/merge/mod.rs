@@ -29,6 +29,7 @@
 //! ````
 
 use std::collections::HashMap;
+use std::fmt::Debug;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -37,7 +38,6 @@ use datafusion::datasource::provider_as_source;
 use datafusion::error::Result as DataFusionResult;
 use datafusion::execution::context::SessionConfig;
 use datafusion::execution::session_state::SessionStateBuilder;
-use datafusion::functions_aggregate::expr_fn::{max, min};
 use datafusion::logical_expr::build_join_schema;
 use datafusion::physical_plan::metrics::MetricBuilder;
 use datafusion::physical_planner::{ExtensionPlanner, PhysicalPlanner};
@@ -48,15 +48,12 @@ use datafusion::{
 };
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{Column, DFSchema, ScalarValue, TableReference};
-use datafusion_expr::expr::Placeholder;
+use datafusion_expr::{col, conditional_expressions::CaseBuilder, lit, when, Expr, JoinType};
 use datafusion_expr::{
-    col, conditional_expressions::CaseBuilder, lit, when, Between, Expr, JoinType,
+    Extension, LogicalPlan, LogicalPlanBuilder, UserDefinedLogicalNode, UNNAMED_TABLE,
 };
-use datafusion_expr::{
-    Aggregate, BinaryExpr, Extension, LogicalPlan, LogicalPlanBuilder, Operator,
-    UserDefinedLogicalNode, UNNAMED_TABLE,
-};
-use either::{Left, Right};
+
+use filter::try_construct_early_filter;
 use futures::future::BoxFuture;
 use itertools::Itertools;
 use parquet::file::properties::WriterProperties;
@@ -72,13 +69,13 @@ use crate::delta_datafusion::logical::MetricObserver;
 use crate::delta_datafusion::physical::{find_metric_node, get_metric, MetricObserverExec};
 use crate::delta_datafusion::planner::DeltaPlanner;
 use crate::delta_datafusion::{
-    execute_plan_to_batch, register_store, DataFusionMixins, DeltaColumn, DeltaScanConfigBuilder,
+    register_store, DataFusionMixins, DeltaColumn, DeltaScan, DeltaScanConfigBuilder,
     DeltaSessionConfig, DeltaTableProvider,
 };
 use crate::kernel::Action;
 use crate::logstore::LogStoreRef;
 use crate::operations::cdc::*;
-use crate::operations::merge::barrier::find_barrier_node;
+use crate::operations::merge::barrier::find_node;
 use crate::operations::transaction::CommitBuilder;
 use crate::operations::write::{write_execution_plan, write_execution_plan_cdc, WriterStatsConfig};
 use crate::protocol::{DeltaOperation, MergePredicate};
@@ -86,6 +83,7 @@ use crate::table::state::DeltaTableState;
 use crate::{DeltaResult, DeltaTable, DeltaTableError};
 
 mod barrier;
+mod filter;
 
 const SOURCE_COLUMN: &str = "__delta_rs_source";
 const TARGET_COLUMN: &str = "__delta_rs_target";
@@ -568,6 +566,10 @@ pub struct MergeMetrics {
     pub num_target_rows_copied: usize,
     /// Total number of rows written out
     pub num_output_rows: usize,
+    /// Amount of files considered during table scan
+    pub num_target_files_scanned: usize,
+    /// Amount of files not considered (pruned) during table scan
+    pub num_target_files_skipped_during_scan: usize,
     /// Number of files added to the sink(target)
     pub num_target_files_added: usize,
     /// Number of files removed from the sink(target)
@@ -672,334 +674,6 @@ impl ExtensionPlanner for MergeMetricExtensionPlanner {
     }
 }
 
-struct PredicatePlaceholder {
-    expr: Expr,
-    alias: String,
-    is_aggregate: bool,
-}
-
-/// Takes the predicate provided and does three things:
-///
-/// 1. for any relations between a source column and a partition target column,
-///    replace source with a placeholder matching the name of the partition
-///    columns
-///
-/// 2. for any is equal relations between a source column and a non-partition target column,
-///    replace source with is between expression with min(source_column) and max(source_column) placeholders
-///
-/// 3. for any other relation with a source column, remove them.
-///
-/// For example, for the predicate:
-///
-/// `source.date = target.date and source.id = target.id and frob > 42`
-///
-/// where `date` is a partition column, would result in the expr:
-///
-/// `$date_0 = target.date and target.id between $id_1_min and $id_1_max and frob > 42`
-///
-/// This leaves us with a predicate that we can push into delta scan after expanding it out to
-/// a conjunction between the distinct partitions in the source input.
-///
-fn generalize_filter(
-    predicate: Expr,
-    partition_columns: &Vec<String>,
-    source_name: &TableReference,
-    target_name: &TableReference,
-    placeholders: &mut Vec<PredicatePlaceholder>,
-) -> Option<Expr> {
-    #[derive(Debug)]
-    enum ReferenceTableCheck {
-        HasReference(String),
-        NoReference,
-        Unknown,
-    }
-    impl ReferenceTableCheck {
-        fn has_reference(&self) -> bool {
-            matches!(self, ReferenceTableCheck::HasReference(_))
-        }
-    }
-    fn references_table(expr: &Expr, table: &TableReference) -> ReferenceTableCheck {
-        let res = match expr {
-            Expr::Alias(alias) => references_table(&alias.expr, table),
-            Expr::Column(col) => col
-                .relation
-                .as_ref()
-                .map(|rel| {
-                    if rel == table {
-                        ReferenceTableCheck::HasReference(col.name.to_owned())
-                    } else {
-                        ReferenceTableCheck::NoReference
-                    }
-                })
-                .unwrap_or(ReferenceTableCheck::NoReference),
-            Expr::Negative(neg) => references_table(neg, table),
-            Expr::Cast(cast) => references_table(&cast.expr, table),
-            Expr::TryCast(try_cast) => references_table(&try_cast.expr, table),
-            Expr::ScalarFunction(func) => {
-                if func.args.len() == 1 {
-                    references_table(&func.args[0], table)
-                } else {
-                    ReferenceTableCheck::Unknown
-                }
-            }
-            Expr::IsNull(inner) => references_table(inner, table),
-            Expr::Literal(_) => ReferenceTableCheck::NoReference,
-            _ => ReferenceTableCheck::Unknown,
-        };
-        res
-    }
-
-    fn construct_placeholder(
-        binary: BinaryExpr,
-        source_left: bool,
-        is_partition_column: bool,
-        column_name: String,
-        placeholders: &mut Vec<PredicatePlaceholder>,
-    ) -> Option<Expr> {
-        if is_partition_column {
-            let placeholder_name = format!("{column_name}_{}", placeholders.len());
-            let placeholder = Expr::Placeholder(Placeholder {
-                id: placeholder_name.clone(),
-                data_type: None,
-            });
-
-            let (left, right, source_expr): (Box<Expr>, Box<Expr>, Expr) = if source_left {
-                (placeholder.into(), binary.clone().right, *binary.left)
-            } else {
-                (binary.clone().left, placeholder.into(), *binary.right)
-            };
-
-            let replaced = Expr::BinaryExpr(BinaryExpr {
-                left,
-                op: binary.op,
-                right,
-            });
-
-            placeholders.push(PredicatePlaceholder {
-                expr: source_expr,
-                alias: placeholder_name,
-                is_aggregate: false,
-            });
-
-            Some(replaced)
-        } else {
-            match binary.op {
-                Operator::Eq => {
-                    let name_min = format!("{column_name}_{}_min", placeholders.len());
-                    let placeholder_min = Expr::Placeholder(Placeholder {
-                        id: name_min.clone(),
-                        data_type: None,
-                    });
-                    let name_max = format!("{column_name}_{}_max", placeholders.len());
-                    let placeholder_max = Expr::Placeholder(Placeholder {
-                        id: name_max.clone(),
-                        data_type: None,
-                    });
-                    let (source_expr, target_expr) = if source_left {
-                        (*binary.left, *binary.right)
-                    } else {
-                        (*binary.right, *binary.left)
-                    };
-                    let replaced = Expr::Between(Between {
-                        expr: target_expr.into(),
-                        negated: false,
-                        low: placeholder_min.into(),
-                        high: placeholder_max.into(),
-                    });
-
-                    placeholders.push(PredicatePlaceholder {
-                        expr: min(source_expr.clone()),
-                        alias: name_min,
-                        is_aggregate: true,
-                    });
-                    placeholders.push(PredicatePlaceholder {
-                        expr: max(source_expr),
-                        alias: name_max,
-                        is_aggregate: true,
-                    });
-                    Some(replaced)
-                }
-                _ => None,
-            }
-        }
-    }
-
-    match predicate {
-        Expr::BinaryExpr(binary) => {
-            if references_table(&binary.right, source_name).has_reference() {
-                if let ReferenceTableCheck::HasReference(left_target) =
-                    references_table(&binary.left, target_name)
-                {
-                    return construct_placeholder(
-                        binary,
-                        false,
-                        partition_columns.contains(&left_target),
-                        left_target,
-                        placeholders,
-                    );
-                }
-                return None;
-            }
-            if references_table(&binary.left, source_name).has_reference() {
-                if let ReferenceTableCheck::HasReference(right_target) =
-                    references_table(&binary.right, target_name)
-                {
-                    return construct_placeholder(
-                        binary,
-                        true,
-                        partition_columns.contains(&right_target),
-                        right_target,
-                        placeholders,
-                    );
-                }
-                return None;
-            }
-
-            let left = generalize_filter(
-                *binary.left,
-                partition_columns,
-                source_name,
-                target_name,
-                placeholders,
-            );
-            let right = generalize_filter(
-                *binary.right,
-                partition_columns,
-                source_name,
-                target_name,
-                placeholders,
-            );
-
-            match (left, right) {
-                (None, None) => None,
-                (None, Some(one_side)) | (Some(one_side), None) => {
-                    // in the case of an AND clause, it's safe to generalize the filter down to just one side of the AND.
-                    // this is because this filter will be more permissive than the actual predicate, so we know that
-                    // we will catch all data that could be matched by the predicate. For OR this is not the case - we
-                    // could potentially eliminate one side of the predicate and the filter would only match half the
-                    // cases that would have satisfied the match predicate.
-                    match binary.op {
-                        Operator::And => Some(one_side),
-                        Operator::Or => None,
-                        _ => None,
-                    }
-                }
-                (Some(l), Some(r)) => Expr::BinaryExpr(BinaryExpr {
-                    left: l.into(),
-                    op: binary.op,
-                    right: r.into(),
-                })
-                .into(),
-            }
-        }
-        other => match references_table(&other, source_name) {
-            ReferenceTableCheck::HasReference(col) => {
-                let placeholder_name = format!("{col}_{}", placeholders.len());
-
-                let placeholder = Expr::Placeholder(Placeholder {
-                    id: placeholder_name.clone(),
-                    data_type: None,
-                });
-
-                placeholders.push(PredicatePlaceholder {
-                    expr: other,
-                    alias: placeholder_name,
-                    is_aggregate: true,
-                });
-
-                Some(placeholder)
-            }
-            ReferenceTableCheck::NoReference => Some(other),
-            ReferenceTableCheck::Unknown => None,
-        },
-    }
-}
-
-fn replace_placeholders(expr: Expr, placeholders: &HashMap<String, ScalarValue>) -> Expr {
-    expr.transform(&|expr| match expr {
-        Expr::Placeholder(Placeholder { id, .. }) => {
-            let value = placeholders[&id].clone();
-            // Replace the placeholder with the value
-            Ok(Transformed::yes(Expr::Literal(value)))
-        }
-        _ => Ok(Transformed::no(expr)),
-    })
-    .unwrap()
-    .data
-}
-
-async fn try_construct_early_filter(
-    join_predicate: Expr,
-    table_snapshot: &DeltaTableState,
-    session_state: &SessionState,
-    source: &LogicalPlan,
-    source_name: &TableReference,
-    target_name: &TableReference,
-) -> DeltaResult<Option<Expr>> {
-    let table_metadata = table_snapshot.metadata();
-    let partition_columns = &table_metadata.partition_columns;
-
-    let mut placeholders = Vec::default();
-
-    match generalize_filter(
-        join_predicate,
-        partition_columns,
-        source_name,
-        target_name,
-        &mut placeholders,
-    ) {
-        None => Ok(None),
-        Some(filter) => {
-            if placeholders.is_empty() {
-                // if we haven't recognised any source predicates in the join predicate, return our filter with static only predicates
-                Ok(Some(filter))
-            } else {
-                // if we have some filters, which depend on the source df, then collect the placeholders values from the source data
-                // We aggregate the distinct values for partitions with the group_columns and stats(min, max) for dynamic filter as agg_columns
-                // Can be translated into `SELECT partition1 as part1_0, min(id) as id_1_min, max(id) as id_1_max FROM source GROUP BY partition1`
-                let (agg_columns, group_columns) = placeholders.into_iter().partition_map(|p| {
-                    if p.is_aggregate {
-                        Left(p.expr.alias(p.alias))
-                    } else {
-                        Right(p.expr.alias(p.alias))
-                    }
-                });
-                let distinct_partitions = LogicalPlan::Aggregate(Aggregate::try_new(
-                    source.clone().into(),
-                    group_columns,
-                    agg_columns,
-                )?);
-                let execution_plan = session_state
-                    .create_physical_plan(&distinct_partitions)
-                    .await?;
-                let items = execute_plan_to_batch(session_state, execution_plan).await?;
-                let placeholder_names = items
-                    .schema()
-                    .fields()
-                    .iter()
-                    .map(|f| f.name().to_owned())
-                    .collect_vec();
-                let expr = (0..items.num_rows())
-                    .map(|i| {
-                        let replacements = placeholder_names
-                            .iter()
-                            .map(|placeholder| {
-                                let col = items.column_by_name(placeholder).unwrap();
-                                let value = ScalarValue::try_from_array(col, i)?;
-                                DeltaResult::Ok((placeholder.to_owned(), value))
-                            })
-                            .try_collect()?;
-                        Ok(replace_placeholders(filter.clone(), &replacements))
-                    })
-                    .collect::<DeltaResult<Vec<_>>>()?
-                    .into_iter()
-                    .reduce(Expr::or);
-                Ok(expr)
-            }
-        }
-    }
-}
-
 #[allow(clippy::too_many_arguments)]
 async fn execute(
     predicate: Expression,
@@ -1016,6 +690,10 @@ async fn execute(
     not_match_target_operations: Vec<MergeOperationConfig>,
     not_match_source_operations: Vec<MergeOperationConfig>,
 ) -> DeltaResult<(DeltaTableState, MergeMetrics)> {
+    if !snapshot.load_config().require_files {
+        return Err(DeltaTableError::NotInitializedWithFiles("MERGE".into()));
+    }
+
     let mut metrics = MergeMetrics::default();
     let exec_start = Instant::now();
     // Determining whether we should write change data once so that computation of change data can
@@ -1505,9 +1183,9 @@ async fn execute(
     let err = || DeltaTableError::Generic("Unable to locate expected metric node".into());
     let source_count = find_metric_node(SOURCE_COUNT_ID, &write).ok_or_else(err)?;
     let op_count = find_metric_node(OUTPUT_COUNT_ID, &write).ok_or_else(err)?;
-    let barrier = find_barrier_node(&write).ok_or_else(err)?;
+    let barrier = find_node::<MergeBarrierExec>(&write).ok_or_else(err)?;
+    let scan_count = find_node::<DeltaScan>(&write).ok_or_else(err)?;
 
-    // write projected records
     let table_partition_cols = current_metadata.partition_columns.clone();
 
     let writer_stats_config = WriterStatsConfig::new(
@@ -1582,6 +1260,7 @@ async fn execute(
 
     let source_count_metrics = source_count.metrics().unwrap();
     let target_count_metrics = op_count.metrics().unwrap();
+    let scan_count_metrics = scan_count.metrics().unwrap();
 
     metrics.num_source_rows = get_metric(&source_count_metrics, SOURCE_COUNT_METRIC);
     metrics.num_target_rows_inserted = get_metric(&target_count_metrics, TARGET_INSERTED_METRIC);
@@ -1591,7 +1270,8 @@ async fn execute(
     metrics.num_output_rows = metrics.num_target_rows_inserted
         + metrics.num_target_rows_updated
         + metrics.num_target_rows_copied;
-
+    metrics.num_target_files_scanned = get_metric(&scan_count_metrics, "files_scanned");
+    metrics.num_target_files_skipped_during_scan = get_metric(&scan_count_metrics, "files_pruned");
     metrics.execution_time_ms = Instant::now().duration_since(exec_start).as_millis() as u64;
 
     let app_metadata = &mut commit_properties.app_metadata;
@@ -1699,33 +1379,28 @@ mod tests {
     use crate::kernel::PrimitiveType;
     use crate::kernel::StructField;
     use crate::operations::load_cdf::collect_batches;
-    use crate::operations::merge::generalize_filter;
-    use crate::operations::merge::try_construct_early_filter;
+    use crate::operations::merge::filter::generalize_filter;
     use crate::operations::DeltaOps;
     use crate::protocol::*;
     use crate::writer::test_utils::datafusion::get_data;
     use crate::writer::test_utils::get_arrow_schema;
     use crate::writer::test_utils::get_delta_schema;
     use crate::writer::test_utils::setup_table_with_configuration;
-    use crate::DeltaConfigKey;
     use crate::DeltaTable;
+    use crate::TableProperty;
     use arrow::datatypes::Schema as ArrowSchema;
     use arrow::record_batch::RecordBatch;
     use arrow_schema::DataType as ArrowDataType;
     use arrow_schema::Field;
     use datafusion::assert_batches_sorted_eq;
-    use datafusion::datasource::provider_as_source;
     use datafusion::physical_plan::ExecutionPlan;
     use datafusion::prelude::*;
     use datafusion_common::Column;
-    use datafusion_common::ScalarValue;
     use datafusion_common::TableReference;
     use datafusion_expr::col;
     use datafusion_expr::expr::Placeholder;
     use datafusion_expr::lit;
     use datafusion_expr::Expr;
-    use datafusion_expr::LogicalPlanBuilder;
-    use datafusion_expr::Operator;
     use itertools::Itertools;
     use regex::Regex;
     use serde_json::json;
@@ -1734,7 +1409,7 @@ mod tests {
 
     use super::MergeMetrics;
 
-    async fn setup_table(partitions: Option<Vec<&str>>) -> DeltaTable {
+    pub(crate) async fn setup_table(partitions: Option<Vec<&str>>) -> DeltaTable {
         let table_schema = get_delta_schema();
 
         let table = DeltaOps::new_in_memory()
@@ -1751,7 +1426,7 @@ mod tests {
     #[tokio::test]
     async fn test_merge_when_delta_table_is_append_only() {
         let schema = get_arrow_schema(&None);
-        let table = setup_table_with_configuration(DeltaConfigKey::AppendOnly, Some("true")).await;
+        let table = setup_table_with_configuration(TableProperty::AppendOnly, Some("true")).await;
         // append some data
         let table = write_data(table, &schema).await;
         // merge
@@ -2292,6 +1967,115 @@ mod tests {
             "| 999   | 2023-07-04 | C  |",
             "| 999   | 2023-07-04 | X  |",
             "+-------+------------+----+",
+        ];
+        let actual = get_data(&table).await;
+        assert_batches_sorted_eq!(&expected, &actual);
+    }
+
+    #[tokio::test]
+    async fn test_merge_partitions_with_in() {
+        /* Validate the join predicate works with table partitions */
+        let schema = get_arrow_schema(&None);
+        let table = setup_table(Some(vec!["modified"])).await;
+
+        let table = write_data(table, &schema).await;
+        assert_eq!(table.version(), 1);
+        assert_eq!(table.get_files_count(), 2);
+
+        let ctx = SessionContext::new();
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(arrow::array::StringArray::from(vec!["B", "C", "X"])),
+                Arc::new(arrow::array::Int32Array::from(vec![10, 20, 30])),
+                Arc::new(arrow::array::StringArray::from(vec![
+                    "2021-02-02",
+                    "2023-07-04",
+                    "2023-07-04",
+                ])),
+            ],
+        )
+        .unwrap();
+        let source = ctx.read_batch(batch).unwrap();
+
+        let (table, metrics) = DeltaOps(table)
+            .merge(
+                source,
+                col("target.id")
+                    .eq(col("source.id"))
+                    .and(col("target.id").in_list(
+                        vec![
+                            col("source.id"),
+                            col("source.modified"),
+                            col("source.value"),
+                        ],
+                        false,
+                    ))
+                    .and(col("target.modified").in_list(vec![lit("2021-02-02")], false)),
+            )
+            .with_source_alias("source")
+            .with_target_alias("target")
+            .when_matched_update(|update| {
+                update
+                    .update("value", col("source.value"))
+                    .update("modified", col("source.modified"))
+            })
+            .unwrap()
+            .when_not_matched_by_source_update(|update| {
+                update
+                    .predicate(col("target.value").eq(lit(1)))
+                    .update("value", col("target.value") + lit(1))
+            })
+            .unwrap()
+            .when_not_matched_by_source_update(|update| {
+                update
+                    .predicate(col("target.modified").eq(lit("2021-02-01")))
+                    .update("value", col("target.value") - lit(1))
+            })
+            .unwrap()
+            .when_not_matched_insert(|insert| {
+                insert
+                    .set("id", col("source.id"))
+                    .set("value", col("source.value"))
+                    .set("modified", col("source.modified"))
+            })
+            .unwrap()
+            .await
+            .unwrap();
+
+        assert_eq!(table.version(), 2);
+        assert!(table.get_files_count() >= 3);
+        assert!(metrics.num_target_files_added >= 3);
+        assert_eq!(metrics.num_target_files_removed, 2);
+        assert_eq!(metrics.num_target_rows_copied, 1);
+        assert_eq!(metrics.num_target_rows_updated, 3);
+        assert_eq!(metrics.num_target_rows_inserted, 2);
+        assert_eq!(metrics.num_target_rows_deleted, 0);
+        assert_eq!(metrics.num_output_rows, 6);
+        assert_eq!(metrics.num_source_rows, 3);
+
+        let commit_info = table.history(None).await.unwrap();
+        let last_commit = &commit_info[0];
+        let parameters = last_commit.operation_parameters.clone().unwrap();
+        assert!(!parameters.contains_key("predicate"));
+        assert_eq!(
+            parameters["mergePredicate"],
+            "target.id = source.id AND \
+            target.id IN (source.id, source.modified, source.value) AND \
+            target.modified IN ('2021-02-02')"
+        );
+
+        let expected = vec![
+            "+----+-------+------------+",
+            "| id | value | modified   |",
+            "+----+-------+------------+",
+            "| A  | 2     | 2021-02-01 |",
+            "| B  | 9     | 2021-02-01 |",
+            "| B  | 10    | 2021-02-02 |",
+            "| C  | 20    | 2023-07-04 |",
+            "| D  | 100   | 2021-02-02 |",
+            "| X  | 30    | 2023-07-04 |",
+            "+----+-------+------------+",
         ];
         let actual = get_data(&table).await;
         assert_batches_sorted_eq!(&expected, &actual);
@@ -2940,256 +2724,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_try_construct_early_filter_with_partitions_expands() {
-        let schema = get_arrow_schema(&None);
-        let table = setup_table(Some(vec!["id"])).await;
-
-        assert_eq!(table.version(), 0);
-        assert_eq!(table.get_files_count(), 0);
-
-        let ctx = SessionContext::new();
-        let batch = RecordBatch::try_new(
-            Arc::clone(&schema),
-            vec![
-                Arc::new(arrow::array::StringArray::from(vec!["B", "C", "X"])),
-                Arc::new(arrow::array::Int32Array::from(vec![10, 20, 30])),
-                Arc::new(arrow::array::StringArray::from(vec![
-                    "2021-02-02",
-                    "2023-07-04",
-                    "2023-07-04",
-                ])),
-            ],
-        )
-        .unwrap();
-        let source = ctx.read_batch(batch).unwrap();
-
-        let source_name = TableReference::parse_str("source");
-        let target_name = TableReference::parse_str("target");
-
-        let source = LogicalPlanBuilder::scan(
-            source_name.clone(),
-            provider_as_source(source.into_view()),
-            None,
-        )
-        .unwrap()
-        .build()
-        .unwrap();
-
-        let join_predicate = col(Column {
-            relation: Some(source_name.clone()),
-            name: "id".to_owned(),
-        })
-        .eq(col(Column {
-            relation: Some(target_name.clone()),
-            name: "id".to_owned(),
-        }));
-
-        let pred = try_construct_early_filter(
-            join_predicate,
-            table.snapshot().unwrap(),
-            &ctx.state(),
-            &source,
-            &source_name,
-            &target_name,
-        )
-        .await
-        .unwrap();
-
-        assert!(pred.is_some());
-
-        let split_pred = {
-            fn split(expr: Expr, parts: &mut Vec<(String, String)>) {
-                match expr {
-                    Expr::BinaryExpr(ex) if ex.op == Operator::Or => {
-                        split(*ex.left, parts);
-                        split(*ex.right, parts);
-                    }
-                    Expr::BinaryExpr(ex) if ex.op == Operator::Eq => {
-                        let col = match *ex.right {
-                            Expr::Column(col) => col.name,
-                            ex => panic!("expected column in pred, got {ex}!"),
-                        };
-
-                        let value = match *ex.left {
-                            Expr::Literal(ScalarValue::Utf8(Some(value))) => value,
-                            ex => panic!("expected value in predicate, got {ex}!"),
-                        };
-
-                        parts.push((col, value))
-                    }
-
-                    expr => panic!("expected either = or OR, got {expr}"),
-                }
-            }
-
-            let mut parts = vec![];
-            split(pred.unwrap(), &mut parts);
-            parts.sort();
-            parts
-        };
-
-        let expected_pred_parts = [
-            ("id".to_owned(), "B".to_owned()),
-            ("id".to_owned(), "C".to_owned()),
-            ("id".to_owned(), "X".to_owned()),
-        ];
-
-        assert_eq!(split_pred, expected_pred_parts);
-    }
-
-    #[tokio::test]
-    async fn test_try_construct_early_filter_with_range() {
-        let schema = get_arrow_schema(&None);
-        let table = setup_table(Some(vec!["modified"])).await;
-
-        assert_eq!(table.version(), 0);
-        assert_eq!(table.get_files_count(), 0);
-
-        let ctx = SessionContext::new();
-        let batch = RecordBatch::try_new(
-            Arc::clone(&schema),
-            vec![
-                Arc::new(arrow::array::StringArray::from(vec!["B", "C"])),
-                Arc::new(arrow::array::Int32Array::from(vec![10, 20])),
-                Arc::new(arrow::array::StringArray::from(vec![
-                    "2023-07-04",
-                    "2023-07-04",
-                ])),
-            ],
-        )
-        .unwrap();
-        let source = ctx.read_batch(batch).unwrap();
-
-        let source_name = TableReference::parse_str("source");
-        let target_name = TableReference::parse_str("target");
-
-        let source = LogicalPlanBuilder::scan(
-            source_name.clone(),
-            provider_as_source(source.into_view()),
-            None,
-        )
-        .unwrap()
-        .build()
-        .unwrap();
-
-        let join_predicate = col(Column {
-            relation: Some(source_name.clone()),
-            name: "id".to_owned(),
-        })
-        .eq(col(Column {
-            relation: Some(target_name.clone()),
-            name: "id".to_owned(),
-        }));
-
-        let pred = try_construct_early_filter(
-            join_predicate,
-            table.snapshot().unwrap(),
-            &ctx.state(),
-            &source,
-            &source_name,
-            &target_name,
-        )
-        .await
-        .unwrap();
-
-        assert!(pred.is_some());
-
-        let filter = col(Column {
-            relation: Some(target_name.clone()),
-            name: "id".to_owned(),
-        })
-        .between(
-            Expr::Literal(ScalarValue::Utf8(Some("B".to_string()))),
-            Expr::Literal(ScalarValue::Utf8(Some("C".to_string()))),
-        );
-        assert_eq!(pred.unwrap(), filter);
-    }
-
-    #[tokio::test]
-    async fn test_try_construct_early_filter_with_partition_and_range() {
-        let schema = get_arrow_schema(&None);
-        let table = setup_table(Some(vec!["modified"])).await;
-
-        assert_eq!(table.version(), 0);
-        assert_eq!(table.get_files_count(), 0);
-
-        let ctx = SessionContext::new();
-        let batch = RecordBatch::try_new(
-            Arc::clone(&schema),
-            vec![
-                Arc::new(arrow::array::StringArray::from(vec!["B", "C"])),
-                Arc::new(arrow::array::Int32Array::from(vec![10, 20])),
-                Arc::new(arrow::array::StringArray::from(vec![
-                    "2023-07-04",
-                    "2023-07-04",
-                ])),
-            ],
-        )
-        .unwrap();
-        let source = ctx.read_batch(batch).unwrap();
-
-        let source_name = TableReference::parse_str("source");
-        let target_name = TableReference::parse_str("target");
-
-        let source = LogicalPlanBuilder::scan(
-            source_name.clone(),
-            provider_as_source(source.into_view()),
-            None,
-        )
-        .unwrap()
-        .build()
-        .unwrap();
-
-        let join_predicate = col(Column {
-            relation: Some(source_name.clone()),
-            name: "id".to_owned(),
-        })
-        .eq(col(Column {
-            relation: Some(target_name.clone()),
-            name: "id".to_owned(),
-        }))
-        .and(
-            col(Column {
-                relation: Some(source_name.clone()),
-                name: "modified".to_owned(),
-            })
-            .eq(col(Column {
-                relation: Some(target_name.clone()),
-                name: "modified".to_owned(),
-            })),
-        );
-
-        let pred = try_construct_early_filter(
-            join_predicate,
-            table.snapshot().unwrap(),
-            &ctx.state(),
-            &source,
-            &source_name,
-            &target_name,
-        )
-        .await
-        .unwrap();
-
-        assert!(pred.is_some());
-
-        let filter = col(Column {
-            relation: Some(target_name.clone()),
-            name: "id".to_owned(),
-        })
-        .between(
-            Expr::Literal(ScalarValue::Utf8(Some("B".to_string()))),
-            Expr::Literal(ScalarValue::Utf8(Some("C".to_string()))),
-        )
-        .and(
-            Expr::Literal(ScalarValue::Utf8(Some("2023-07-04".to_string()))).eq(col(Column {
-                relation: Some(target_name.clone()),
-                name: "modified".to_owned(),
-            })),
-        );
-        assert_eq!(pred.unwrap(), filter);
-    }
-
-    #[tokio::test]
     async fn test_merge_pushdowns() {
         //See https://github.com/delta-io/delta-rs/issues/2158
         let schema = vec![
@@ -3565,7 +3099,6 @@ mod tests {
         use crate::kernel::Protocol;
         use crate::operations::merge::Action;
 
-        let _ = pretty_env_logger::try_init();
         let schema = get_delta_schema();
 
         let actions = vec![Action::Protocol(Protocol::new(1, 4))];
@@ -3573,7 +3106,7 @@ mod tests {
             .create()
             .with_columns(schema.fields().cloned())
             .with_actions(actions)
-            .with_configuration_property(DeltaConfigKey::EnableChangeDataFeed, Some("true"))
+            .with_configuration_property(TableProperty::EnableChangeDataFeed, Some("true"))
             .await
             .unwrap();
         assert_eq!(table.version(), 0);
@@ -3660,7 +3193,6 @@ mod tests {
         use crate::kernel::Protocol;
         use crate::operations::merge::Action;
 
-        let _ = pretty_env_logger::try_init();
         let schema = get_delta_schema();
 
         let actions = vec![Action::Protocol(Protocol::new(1, 4))];
@@ -3668,7 +3200,7 @@ mod tests {
             .create()
             .with_columns(schema.fields().cloned())
             .with_actions(actions)
-            .with_configuration_property(DeltaConfigKey::EnableChangeDataFeed, Some("true"))
+            .with_configuration_property(TableProperty::EnableChangeDataFeed, Some("true"))
             .await
             .unwrap();
         assert_eq!(table.version(), 0);

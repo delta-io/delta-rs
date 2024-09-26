@@ -181,6 +181,11 @@ impl DeltaTableState {
         self.snapshot.schema()
     }
 
+    /// Get the table config which is loaded with of the snapshot
+    pub fn load_config(&self) -> &DeltaTableConfig {
+        &self.snapshot.load_config()
+    }
+
     /// Well known table configuration
     pub fn table_config(&self) -> TableConfig<'_> {
         self.snapshot.table_config()

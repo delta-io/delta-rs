@@ -409,7 +409,7 @@ pub(crate) mod tests {
 
     use crate::test_utils::TestSchemas;
     use crate::writer::test_utils::TestResult;
-    use crate::{DeltaConfigKey, DeltaOps, DeltaTable};
+    use crate::{DeltaOps, DeltaTable, TableProperty};
 
     #[tokio::test]
     async fn test_load_local() -> TestResult {
@@ -603,7 +603,7 @@ pub(crate) mod tests {
             .create()
             .with_columns(delta_schema.fields().cloned())
             .with_partition_columns(["id"])
-            .with_configuration_property(DeltaConfigKey::EnableChangeDataFeed, Some("true"))
+            .with_configuration_property(TableProperty::EnableChangeDataFeed, Some("true"))
             .await
             .unwrap();
         assert_eq!(table.version(), 0);

@@ -83,7 +83,7 @@ use object_store::path::Path;
 use object_store::Error as ObjectStoreError;
 use serde_json::Value;
 
-use self::conflict_checker::{CommitConflictError, TransactionInfo, WinningCommitSummary};
+use self::conflict_checker::{TransactionInfo, WinningCommitSummary};
 use crate::checkpoints::{cleanup_expired_logs_for, create_checkpoint_for};
 use crate::errors::DeltaTableError;
 use crate::kernel::{
@@ -97,6 +97,7 @@ use crate::table::config::TableConfig;
 use crate::table::state::DeltaTableState;
 use crate::{crate_version, DeltaResult};
 
+pub use self::conflict_checker::CommitConflictError;
 pub use self::protocol::INSTANCE as PROTOCOL;
 
 #[cfg(test)]
@@ -343,6 +344,12 @@ impl CommitProperties {
         metadata: impl IntoIterator<Item = (String, serde_json::Value)>,
     ) -> Self {
         self.app_metadata = HashMap::from_iter(metadata);
+        self
+    }
+
+    /// Specify maximum number of times to retry the transaction before failing to commit
+    pub fn with_max_retries(mut self, max_retries: usize) -> Self {
+        self.max_retries = max_retries;
         self
     }
 

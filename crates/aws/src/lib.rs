@@ -1,5 +1,9 @@
-//! Lock client implementation based on DynamoDb.
+//! AWS S3 and similar tooling for delta-rs
+//!
+//! This module also contains the [S3DynamoDbLogStore] implemtnation for concurrent writer support
+//! with AWS S3 specifically.
 
+pub mod constants;
 mod credentials;
 pub mod errors;
 pub mod logstore;
@@ -7,6 +11,7 @@ pub mod logstore;
 mod native;
 pub mod storage;
 use aws_config::SdkConfig;
+use aws_sdk_dynamodb::error::SdkError;
 use aws_sdk_dynamodb::{
     operation::{
         create_table::CreateTableError, delete_item::DeleteItemError, get_item::GetItemError,
@@ -50,18 +55,26 @@ impl LogStoreFactory for S3LogStoreFactory {
         let store = url_prefix_handler(store, Path::parse(location.path())?);
 
         // With conditional put in S3-like API we can use the deltalake default logstore which use PutIfAbsent
-        if options
-            .0
-            .contains_key(AmazonS3ConfigKey::ConditionalPut.as_ref())
-        {
+        if options.0.keys().any(|key| {
+            let key = key.to_ascii_lowercase();
+            vec![
+                AmazonS3ConfigKey::ConditionalPut.as_ref(),
+                "conditional_put",
+            ]
+            .contains(&key.as_str())
+        }) {
             debug!("S3LogStoreFactory has been asked to create a default LogStore where the underlying store has Conditonal Put enabled - no locking provider required");
             return Ok(default_logstore(store, location, options));
         }
 
-        if options
-            .0
-            .contains_key(AmazonS3ConfigKey::CopyIfNotExists.as_ref())
-        {
+        if options.0.keys().any(|key| {
+            let key = key.to_ascii_lowercase();
+            vec![
+                AmazonS3ConfigKey::CopyIfNotExists.as_ref(),
+                "copy_if_not_exists",
+            ]
+            .contains(&key.as_str())
+        }) {
             debug!("S3LogStoreFactory has been asked to create a LogStore where the underlying store has copy-if-not-exists enabled - no locking provider required");
             return Ok(logstore::default_s3_logstore(store, location, options));
         }
@@ -283,28 +296,28 @@ impl DynamoDbLockClient {
         version: i64,
     ) -> Result<Option<CommitEntry>, LockClientError> {
         let item = self
-            .retry(|| async {
-                match self
-                    .dynamodb_client
-                    .get_item()
-                    .consistent_read(true)
-                    .table_name(&self.config.lock_table_name)
-                    .set_key(Some(self.get_primary_key(version, table_path)))
-                    .send()
-                    .await
-                {
-                    Ok(x) => Ok(x),
-                    Err(sdk_err) => match sdk_err.as_service_error() {
-                        Some(GetItemError::ProvisionedThroughputExceededException(_)) => {
-                            Err(backoff::Error::transient(
-                                LockClientError::ProvisionedThroughputExceeded,
-                            ))
-                        }
-                        _ => Err(backoff::Error::permanent(sdk_err.into())),
-                    },
+            .retry(
+                || async {
+                    self.dynamodb_client
+                        .get_item()
+                        .consistent_read(true)
+                        .table_name(&self.config.lock_table_name)
+                        .set_key(Some(self.get_primary_key(version, table_path)))
+                        .send()
+                        .await
+                },
+                |err| match err.as_service_error() {
+                    Some(GetItemError::ProvisionedThroughputExceededException(_)) => true,
+                    _ => false,
+                },
+            )
+            .await
+            .map_err(|err| match err.as_service_error() {
+                Some(GetItemError::ProvisionedThroughputExceededException(_)) => {
+                    LockClientError::ProvisionedThroughputExceeded
                 }
-            })
-            .await?;
+                _ => err.into(),
+            })?;
         item.item.as_ref().map(CommitEntry::try_from).transpose()
     }
 
@@ -314,36 +327,38 @@ impl DynamoDbLockClient {
         table_path: &str,
         entry: &CommitEntry,
     ) -> Result<(), LockClientError> {
-        self.retry(|| async {
-            let item = create_value_map(entry, table_path);
-            match self
-                .dynamodb_client
-                .put_item()
-                .condition_expression(constants::CONDITION_EXPR_CREATE.as_str())
-                .table_name(self.get_lock_table_name())
-                .set_item(Some(item))
-                .send()
-                .await
-            {
-                Ok(_) => Ok(()),
-                Err(err) => match err.as_service_error() {
-                    Some(PutItemError::ProvisionedThroughputExceededException(_)) => Err(
-                        backoff::Error::transient(LockClientError::ProvisionedThroughputExceeded),
-                    ),
-                    Some(PutItemError::ConditionalCheckFailedException(_)) => Err(
-                        backoff::Error::permanent(LockClientError::VersionAlreadyExists {
-                            table_path: table_path.to_owned(),
-                            version: entry.version,
-                        }),
-                    ),
-                    Some(PutItemError::ResourceNotFoundException(_)) => Err(
-                        backoff::Error::permanent(LockClientError::LockTableNotFound),
-                    ),
-                    _ => Err(backoff::Error::permanent(err.into())),
-                },
-            }
-        })
+        self.retry(
+            || async {
+                let item = create_value_map(entry, table_path);
+                let _ = self
+                    .dynamodb_client
+                    .put_item()
+                    .condition_expression(constants::CONDITION_EXPR_CREATE.as_str())
+                    .table_name(self.get_lock_table_name())
+                    .set_item(Some(item))
+                    .send()
+                    .await?;
+                Ok(())
+            },
+            |err: &SdkError<_, _>| match err.as_service_error() {
+                Some(PutItemError::ProvisionedThroughputExceededException(_)) => true,
+                _ => false,
+            },
+        )
         .await
+        .map_err(|err| match err.as_service_error() {
+            Some(PutItemError::ProvisionedThroughputExceededException(_)) => {
+                LockClientError::ProvisionedThroughputExceeded
+            }
+            Some(PutItemError::ConditionalCheckFailedException(_)) => {
+                LockClientError::VersionAlreadyExists {
+                    table_path: table_path.to_owned(),
+                    version: entry.version,
+                }
+            }
+            Some(PutItemError::ResourceNotFoundException(_)) => LockClientError::LockTableNotFound,
+            _ => err.into(),
+        })
     }
 
     /// Get the latest entry (entry with highest version).
@@ -365,33 +380,33 @@ impl DynamoDbLockClient {
         limit: i64,
     ) -> Result<Vec<CommitEntry>, LockClientError> {
         let query_result = self
-            .retry(|| async {
-                match self
-                    .dynamodb_client
-                    .query()
-                    .table_name(self.get_lock_table_name())
-                    .consistent_read(true)
-                    .limit(limit.try_into().unwrap_or(i32::MAX))
-                    .scan_index_forward(false)
-                    .key_condition_expression(format!("{} = :tn", constants::ATTR_TABLE_PATH))
-                    .set_expression_attribute_values(Some(
-                        maplit::hashmap!(":tn".into() => string_attr(table_path)),
-                    ))
-                    .send()
-                    .await
-                {
-                    Ok(result) => Ok(result),
-                    Err(sdk_err) => match sdk_err.as_service_error() {
-                        Some(QueryError::ProvisionedThroughputExceededException(_)) => {
-                            Err(backoff::Error::transient(
-                                LockClientError::ProvisionedThroughputExceeded,
-                            ))
-                        }
-                        _ => Err(backoff::Error::permanent(sdk_err.into())),
-                    },
+            .retry(
+                || async {
+                    self.dynamodb_client
+                        .query()
+                        .table_name(self.get_lock_table_name())
+                        .consistent_read(true)
+                        .limit(limit.try_into().unwrap_or(i32::MAX))
+                        .scan_index_forward(false)
+                        .key_condition_expression(format!("{} = :tn", constants::ATTR_TABLE_PATH))
+                        .set_expression_attribute_values(Some(
+                            maplit::hashmap!(":tn".into() => string_attr(table_path)),
+                        ))
+                        .send()
+                        .await
+                },
+                |err: &SdkError<_, _>| match err.as_service_error() {
+                    Some(QueryError::ProvisionedThroughputExceededException(_)) => true,
+                    _ => false,
+                },
+            )
+            .await
+            .map_err(|err| match err.as_service_error() {
+                Some(QueryError::ProvisionedThroughputExceededException(_)) => {
+                    LockClientError::ProvisionedThroughputExceeded
                 }
-            })
-            .await?;
+                _ => err.into(),
+            })?;
 
         query_result
             .items
@@ -412,35 +427,44 @@ impl DynamoDbLockClient {
             .duration_since(SystemTime::UNIX_EPOCH)
             .unwrap()
             .as_secs();
-        self.retry(|| async {
-            match self
-                .dynamodb_client
-                .update_item()
-                .table_name(self.get_lock_table_name())
-                .set_key(Some(self.get_primary_key(version, table_path)))
-                .update_expression("SET complete = :c, expireTime = :e".to_owned())
-                .set_expression_attribute_values(Some(maplit::hashmap! {
-                    ":c".to_owned() => string_attr("true"),
-                    ":e".to_owned() => num_attr(seconds_since_epoch),
-                    ":f".into() => string_attr("false"),
-                }))
-                .condition_expression(constants::CONDITION_UPDATE_INCOMPLETE)
-                .send()
-                .await
-            {
-                Ok(_) => Ok(UpdateLogEntryResult::UpdatePerformed),
-                Err(err) => match err.as_service_error() {
-                    Some(UpdateItemError::ProvisionedThroughputExceededException(_)) => Err(
-                        backoff::Error::transient(LockClientError::ProvisionedThroughputExceeded),
-                    ),
-                    Some(UpdateItemError::ConditionalCheckFailedException(_)) => {
-                        Ok(UpdateLogEntryResult::AlreadyCompleted)
-                    }
-                    _ => Err(backoff::Error::permanent(err.into())),
+        let res = self
+            .retry(
+                || async {
+                    let _ = self
+                        .dynamodb_client
+                        .update_item()
+                        .table_name(self.get_lock_table_name())
+                        .set_key(Some(self.get_primary_key(version, table_path)))
+                        .update_expression("SET complete = :c, expireTime = :e".to_owned())
+                        .set_expression_attribute_values(Some(maplit::hashmap! {
+                            ":c".to_owned() => string_attr("true"),
+                            ":e".to_owned() => num_attr(seconds_since_epoch),
+                            ":f".into() => string_attr("false"),
+                        }))
+                        .condition_expression(constants::CONDITION_UPDATE_INCOMPLETE)
+                        .send()
+                        .await?;
+                    Ok(())
                 },
-            }
-        })
-        .await
+                |err: &SdkError<_, _>| match err.as_service_error() {
+                    Some(UpdateItemError::ProvisionedThroughputExceededException(_)) => true,
+                    _ => false,
+                },
+            )
+            .await;
+
+        match res {
+            Ok(()) => Ok(UpdateLogEntryResult::UpdatePerformed),
+            Err(err) => match err.as_service_error() {
+                Some(UpdateItemError::ProvisionedThroughputExceededException(_)) => {
+                    Err(LockClientError::ProvisionedThroughputExceeded)
+                }
+                Some(UpdateItemError::ConditionalCheckFailedException(_)) => {
+                    Ok(UpdateLogEntryResult::AlreadyCompleted)
+                }
+                _ => Err(err.into()),
+            },
+        }
     }
 
     /// Delete existing log entry if it is not already complete
@@ -449,48 +473,52 @@ impl DynamoDbLockClient {
         version: i64,
         table_path: &str,
     ) -> Result<(), LockClientError> {
-        self.retry(|| async {
-            match self
-                .dynamodb_client
-                .delete_item()
-                .table_name(self.get_lock_table_name())
-                .set_key(Some(self.get_primary_key(version, table_path)))
-                .set_expression_attribute_values(Some(maplit::hashmap! {
-                    ":f".into() => string_attr("false"),
-                }))
-                .condition_expression(constants::CONDITION_DELETE_INCOMPLETE.as_str())
-                .send()
-                .await
-            {
-                Ok(_) => Ok(()),
-                Err(err) => match err.as_service_error() {
-                    Some(DeleteItemError::ProvisionedThroughputExceededException(_)) => Err(
-                        backoff::Error::transient(LockClientError::ProvisionedThroughputExceeded),
-                    ),
-                    Some(DeleteItemError::ConditionalCheckFailedException(_)) => Err(
-                        backoff::Error::permanent(LockClientError::VersionAlreadyCompleted {
-                            table_path: table_path.to_owned(),
-                            version,
-                        }),
-                    ),
-                    _ => Err(backoff::Error::permanent(err.into())),
-                },
-            }
-        })
+        self.retry(
+            || async {
+                let _ = self
+                    .dynamodb_client
+                    .delete_item()
+                    .table_name(self.get_lock_table_name())
+                    .set_key(Some(self.get_primary_key(version, table_path)))
+                    .set_expression_attribute_values(Some(maplit::hashmap! {
+                        ":f".into() => string_attr("false"),
+                    }))
+                    .condition_expression(constants::CONDITION_DELETE_INCOMPLETE.as_str())
+                    .send()
+                    .await?;
+                Ok(())
+            },
+            |err: &SdkError<_, _>| match err.as_service_error() {
+                Some(DeleteItemError::ProvisionedThroughputExceededException(_)) => true,
+                _ => false,
+            },
+        )
         .await
+        .map_err(|err| match err.as_service_error() {
+            Some(DeleteItemError::ProvisionedThroughputExceededException(_)) => {
+                LockClientError::ProvisionedThroughputExceeded
+            }
+            Some(DeleteItemError::ConditionalCheckFailedException(_)) => {
+                LockClientError::VersionAlreadyCompleted {
+                    table_path: table_path.to_owned(),
+                    version,
+                }
+            }
+            _ => err.into(),
+        })
     }
 
-    async fn retry<I, E, Fn, Fut>(&self, operation: Fn) -> Result<I, E>
+    async fn retry<I, E, F, Fut, Wn>(&self, operation: F, when: Wn) -> Result<I, E>
     where
-        Fn: FnMut() -> Fut,
-        Fut: std::future::Future<Output = Result<I, backoff::Error<E>>>,
+        F: FnMut() -> Fut,
+        Fut: std::future::Future<Output = Result<I, E>>,
+        Wn: Fn(&E) -> bool,
     {
-        let backoff = backoff::ExponentialBackoffBuilder::new()
-            .with_multiplier(2.)
-            .with_max_interval(Duration::from_secs(15))
-            .with_max_elapsed_time(Some(self.config.max_elapsed_request_time))
-            .build();
-        backoff::future::retry(backoff, operation).await
+        use backon::Retryable;
+        let backoff = backon::ExponentialBuilder::default()
+            .with_factor(2.)
+            .with_max_delay(self.config.max_elapsed_request_time);
+        operation.retry(backoff).when(when).await
     }
 }
 
@@ -590,42 +618,6 @@ pub enum CreateLockTableResult {
     /// Table was not created because it already exists.
     /// Does not imply that the table has the correct schema.
     TableAlreadyExists,
-}
-
-pub mod constants {
-    use std::time::Duration;
-
-    use lazy_static::lazy_static;
-
-    pub const DEFAULT_LOCK_TABLE_NAME: &str = "delta_log";
-    pub const LOCK_TABLE_KEY_NAME: &str = "DELTA_DYNAMO_TABLE_NAME";
-    pub const BILLING_MODE_KEY_NAME: &str = "DELTA_DYNAMO_BILLING_MODE";
-    pub const MAX_ELAPSED_REQUEST_TIME_KEY_NAME: &str = "DELTA_DYNAMO_MAX_ELAPSED_REQUEST_TIME";
-
-    pub const ATTR_TABLE_PATH: &str = "tablePath";
-    pub const ATTR_FILE_NAME: &str = "fileName";
-    pub const ATTR_TEMP_PATH: &str = "tempPath";
-    pub const ATTR_COMPLETE: &str = "complete";
-    pub const ATTR_EXPIRE_TIME: &str = "expireTime";
-
-    pub const STRING_TYPE: &str = "S";
-
-    pub const KEY_TYPE_HASH: &str = "HASH";
-    pub const KEY_TYPE_RANGE: &str = "RANGE";
-
-    lazy_static! {
-        pub static ref CONDITION_EXPR_CREATE: String = format!(
-            "attribute_not_exists({ATTR_TABLE_PATH}) and attribute_not_exists({ATTR_FILE_NAME})"
-        );
-
-        pub static ref CONDITION_DELETE_INCOMPLETE: String = format!(
-            "(complete = :f) or (attribute_not_exists({ATTR_TABLE_PATH}) and attribute_not_exists({ATTR_FILE_NAME}))"
-        );
-    }
-
-    pub const CONDITION_UPDATE_INCOMPLETE: &str = "complete = :f";
-
-    pub const DEFAULT_COMMIT_ENTRY_EXPIRATION_DELAY: Duration = Duration::from_secs(86_400);
 }
 
 /// Extract a field from an item's attribute value map, producing a descriptive error
@@ -733,7 +725,7 @@ mod tests {
         let factory = S3LogStoreFactory::default();
         let store = InMemory::new();
         let url = Url::parse("s3://test-bucket").unwrap();
-        std::env::remove_var(storage::s3_constants::AWS_S3_LOCKING_PROVIDER);
+        std::env::remove_var(crate::constants::AWS_S3_LOCKING_PROVIDER);
         let logstore = factory
             .with_options(Arc::new(store), &url, &StorageOptions::from(HashMap::new()))
             .unwrap();

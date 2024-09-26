@@ -4,6 +4,7 @@ import pyarrow as pa
 import pytest
 
 from deltalake import DeltaTable, write_deltalake
+from deltalake.table import CommitProperties
 
 
 @pytest.fixture()
@@ -38,10 +39,11 @@ def test_update_with_predicate(tmp_path: pathlib.Path, sample_table: pa.Table):
         }
     )
 
+    commit_properties = CommitProperties(custom_metadata={"userName": "John Doe"})
     dt.update(
         updates={"deleted": "True"},
         predicate="price > 3",
-        custom_metadata={"userName": "John Doe"},
+        commit_properties=commit_properties,
     )
 
     result = dt.to_pyarrow_table()

@@ -293,6 +293,10 @@ async fn execute(
     writer_properties: Option<WriterProperties>,
     mut commit_properties: CommitProperties,
 ) -> DeltaResult<(DeltaTableState, DeleteMetrics)> {
+    if !&snapshot.load_config().require_files {
+        return Err(DeltaTableError::NotInitializedWithFiles("DELETE".into()));
+    }
+
     let exec_start = Instant::now();
     let mut metrics = DeleteMetrics::default();
 
@@ -428,8 +432,8 @@ mod tests {
     use crate::writer::test_utils::{
         get_arrow_schema, get_delta_schema, get_record_batch, setup_table_with_configuration,
     };
-    use crate::DeltaConfigKey;
     use crate::DeltaTable;
+    use crate::TableProperty;
     use arrow::array::Int32Array;
     use arrow::datatypes::{Field, Schema};
     use arrow::record_batch::RecordBatch;
@@ -461,7 +465,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_delete_when_delta_table_is_append_only() {
-        let table = setup_table_with_configuration(DeltaConfigKey::AppendOnly, Some("true")).await;
+        let table = setup_table_with_configuration(TableProperty::AppendOnly, Some("true")).await;
         let batch = get_record_batch(None, false);
         // append some data
         let table = write_batch(table, batch).await;
@@ -905,7 +909,7 @@ mod tests {
                 true,
                 None,
             )
-            .with_configuration_property(DeltaConfigKey::EnableChangeDataFeed, Some("true"))
+            .with_configuration_property(TableProperty::EnableChangeDataFeed, Some("true"))
             .await
             .unwrap();
         assert_eq!(table.version(), 0);
@@ -983,7 +987,7 @@ mod tests {
                 None,
             )
             .with_partition_columns(vec!["year"])
-            .with_configuration_property(DeltaConfigKey::EnableChangeDataFeed, Some("true"))
+            .with_configuration_property(TableProperty::EnableChangeDataFeed, Some("true"))
             .await
             .unwrap();
         assert_eq!(table.version(), 0);

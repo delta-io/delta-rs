@@ -4,7 +4,15 @@ from datetime import timedelta
 import pyarrow as pa
 import pytest
 
+try:
+    import pandas as pd
+except ModuleNotFoundError:
+    _has_pandas = False
+else:
+    _has_pandas = True
+
 from deltalake import DeltaTable, write_deltalake
+from deltalake.table import CommitProperties
 
 
 @pytest.mark.parametrize("engine", ["pyarrow", "rust"])
@@ -39,7 +47,8 @@ def test_optimize_run_table(
     old_data = dt.to_pyarrow_table()
     old_version = dt.version()
 
-    dt.optimize.compact(custom_metadata={"userName": "John Doe"})
+    commit_properties = CommitProperties(custom_metadata={"userName": "John Doe"})
+    dt.optimize.compact(commit_properties=commit_properties)
 
     new_data = dt.to_pyarrow_table()
     last_action = dt.history(1)[0]
@@ -70,9 +79,8 @@ def test_z_order_optimize(
     dt = DeltaTable(tmp_path)
     old_version = dt.version()
 
-    dt.optimize.z_order(
-        ["date32", "timestamp"], custom_metadata={"userName": "John Doe"}
-    )
+    commit_properties = CommitProperties(custom_metadata={"userName": "John Doe"})
+    dt.optimize.z_order(["date32", "timestamp"], commit_properties=commit_properties)
     last_action = dt.history(1)[0]
     assert last_action["operation"] == "OPTIMIZE"
     assert last_action["userName"] == "John Doe"
@@ -131,3 +139,31 @@ def test_optimize_schema_evolved_table(
     assert dt.to_pyarrow_table().sort_by([("foo", "ascending")]) == data.sort_by(
         [("foo", "ascending")]
     )
+
+
+@pytest.mark.pandas
+def test_zorder_with_space_partition(tmp_path: pathlib.Path):
+    df = pd.DataFrame(
+        {
+            "user": ["James", "Anna", "Sara", "Martin"],
+            "country": ["United States", "Canada", "Costa Rica", "South Africa"],
+            "age": [34, 23, 45, 26],
+        }
+    )
+
+    write_deltalake(
+        table_or_uri=tmp_path,
+        data=df,
+        mode="overwrite",
+        partition_by=["country"],
+    )
+
+    test_table = DeltaTable(tmp_path)
+
+    # retrieve by partition works fine
+    partitioned_df = test_table.to_pandas(
+        partitions=[("country", "=", "United States")],
+    )
+    print(partitioned_df)
+
+    test_table.optimize.z_order(columns=["user"])

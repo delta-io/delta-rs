@@ -44,7 +44,7 @@ use crate::{DeltaResult, DeltaTableConfig, DeltaTableError};
 pub use self::log_data::*;
 
 mod log_data;
-mod log_segment;
+pub(crate) mod log_segment;
 pub(crate) mod parse;
 mod replay;
 mod serde;
@@ -191,6 +191,11 @@ impl Snapshot {
     /// Get the table protocol of the snapshot
     pub fn protocol(&self) -> &Protocol {
         &self.protocol
+    }
+
+    /// Get the table config which is loaded with of the snapshot
+    pub fn load_config(&self) -> &DeltaTableConfig {
+        &self.config
     }
 
     /// Get the table root of the snapshot
@@ -364,8 +369,13 @@ impl EagerSnapshot {
             .iter()
             .flat_map(get_visitor)
             .collect::<Vec<_>>();
-        let snapshot = Snapshot::try_new(table_root, store.clone(), config, version).await?;
-        let files = snapshot.files(store, &mut visitors)?.try_collect().await?;
+        let snapshot =
+            Snapshot::try_new(table_root, store.clone(), config.clone(), version).await?;
+
+        let files = match config.require_files {
+            true => snapshot.files(store, &mut visitors)?.try_collect().await?,
+            false => vec![],
+        };
 
         let mut sn = Self {
             snapshot,
@@ -528,6 +538,11 @@ impl EagerSnapshot {
     /// Get the table root of the snapshot
     pub fn table_root(&self) -> Path {
         self.snapshot.table_root()
+    }
+
+    /// Get the table config which is loaded with of the snapshot
+    pub fn load_config(&self) -> &DeltaTableConfig {
+        &self.snapshot.load_config()
     }
 
     /// Well known table configuration

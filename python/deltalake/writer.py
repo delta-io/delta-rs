@@ -52,9 +52,11 @@ from .table import (
     MAX_SUPPORTED_PYARROW_WRITER_VERSION,
     NOT_SUPPORTED_PYARROW_WRITER_VERSIONS,
     SUPPORTED_WRITER_FEATURES,
+    CommitProperties,
     DeltaTable,
     PostCommitHookProperties,
     WriterProperties,
+    _commit_properties_from_custom_metadata,
 )
 
 try:
@@ -124,6 +126,7 @@ def write_deltalake(
     engine: Literal["pyarrow"] = ...,
     custom_metadata: Optional[Dict[str, str]] = ...,
     post_commithook_properties: Optional[PostCommitHookProperties] = ...,
+    commit_properties: Optional[CommitProperties] = ...,
 ) -> None: ...
 
 
@@ -153,6 +156,7 @@ def write_deltalake(
     writer_properties: WriterProperties = ...,
     custom_metadata: Optional[Dict[str, str]] = ...,
     post_commithook_properties: Optional[PostCommitHookProperties] = ...,
+    commit_properties: Optional[CommitProperties] = ...,
 ) -> None: ...
 
 
@@ -178,11 +182,13 @@ def write_deltalake(
     schema_mode: Optional[Literal["merge", "overwrite"]] = ...,
     storage_options: Optional[Dict[str, str]] = ...,
     predicate: Optional[str] = ...,
+    target_file_size: Optional[int] = ...,
     large_dtypes: bool = ...,
     engine: Literal["rust"] = ...,
     writer_properties: WriterProperties = ...,
     custom_metadata: Optional[Dict[str, str]] = ...,
     post_commithook_properties: Optional[PostCommitHookProperties] = ...,
+    commit_properties: Optional[CommitProperties] = ...,
 ) -> None: ...
 
 
@@ -214,11 +220,13 @@ def write_deltalake(
     storage_options: Optional[Dict[str, str]] = None,
     partition_filters: Optional[List[Tuple[str, str, Any]]] = None,
     predicate: Optional[str] = None,
+    target_file_size: Optional[int] = None,
     large_dtypes: bool = False,
     engine: Literal["pyarrow", "rust"] = "rust",
     writer_properties: Optional[WriterProperties] = None,
     custom_metadata: Optional[Dict[str, str]] = None,
     post_commithook_properties: Optional[PostCommitHookProperties] = None,
+    commit_properties: Optional[CommitProperties] = None,
 ) -> None:
     """Write to a Delta Lake table
 
@@ -267,14 +275,26 @@ def write_deltalake(
         configuration: A map containing configuration options for the metadata action.
         schema_mode: If set to "overwrite", allows replacing the schema of the table. Set to "merge" to merge with existing schema.
         storage_options: options passed to the native delta filesystem.
-        predicate: When using `Overwrite` mode, replace data that matches a predicate. Only used in rust engine.
+        predicate: When using `Overwrite` mode, replace data that matches a predicate. Only used in rust engine.'
+        target_file_size: Override for target file size for data files written to the delta table. If not passed, it's taken from `delta.targetFileSize`.
         partition_filters: the partition filters that will be used for partition overwrite. Only used in pyarrow engine.
         large_dtypes: Only used for pyarrow engine
         engine: writer engine to write the delta table. PyArrow engine is deprecated, and will be removed in v1.0.
         writer_properties: Pass writer properties to the Rust parquet writer.
-        custom_metadata: Custom metadata to add to the commitInfo.
+        custom_metadata: Deprecated and will be removed in future versions. Use commit_properties instead.
         post_commithook_properties: properties for the post commit hook. If None, default values are used.
+        commit_properties: properties of the transaction commit. If None, default values are used.
     """
+    if custom_metadata:
+        warnings.warn(
+            "custom_metadata is deprecated, please use commit_properties instead.",
+            category=DeprecationWarning,
+            stacklevel=2,
+        )
+        commit_properties = _commit_properties_from_custom_metadata(
+            commit_properties, custom_metadata
+        )
+
     table, table_uri = try_get_table_and_table_uri(table_or_uri, storage_options)
     if table is not None:
         storage_options = table._storage_options or {}
@@ -308,15 +328,14 @@ def write_deltalake(
             table=table._table if table is not None else None,
             schema_mode=schema_mode,
             predicate=predicate,
+            target_file_size=target_file_size,
             name=name,
             description=description,
             configuration=configuration,
             storage_options=storage_options,
             writer_properties=writer_properties,
-            custom_metadata=custom_metadata,
-            post_commithook_properties=post_commithook_properties.__dict__
-            if post_commithook_properties
-            else None,
+            commit_properties=commit_properties,
+            post_commithook_properties=post_commithook_properties,
         )
         if table:
             table.update_incremental()
@@ -539,7 +558,9 @@ def write_deltalake(
                 description,
                 configuration,
                 storage_options,
-                custom_metadata,
+                commit_properties.custom_metadata
+                if commit_properties
+                else custom_metadata,
             )
         else:
             table._table.create_write_transaction(
@@ -548,10 +569,8 @@ def write_deltalake(
                 partition_by or [],
                 schema,
                 partition_filters,
-                custom_metadata,
-                post_commithook_properties=post_commithook_properties.__dict__
-                if post_commithook_properties
-                else None,
+                commit_properties=commit_properties,
+                post_commithook_properties=post_commithook_properties,
             )
             table.update_incremental()
     else:

@@ -7,6 +7,9 @@ on:
     branches: [main, "rust-v*"]
   merge_group:
 
+env:
+  DEFAULT_FEATURES: "azure,datafusion,s3,gcs,glue,hdfs "
+
 jobs:
   format:
     runs-on: ubuntu-latest
@@ -17,7 +20,7 @@ jobs:
         uses: actions-rs/toolchain@v1
         with:
           profile: default
-          toolchain: stable
+          toolchain: '1.80'
           override: true
 
       - name: Format
@@ -39,17 +42,17 @@ jobs:
         uses: actions-rs/toolchain@v1
         with:
           profile: default
-          toolchain: stable
+          toolchain: '1.80'
           override: true
 
       - name: build and lint with clippy
-        run: cargo clippy --features azure,datafusion,s3,gcs,glue,hdfs --tests
+        run: cargo clippy --features ${{ env.DEFAULT_FEATURES }} --tests
 
       - name: Spot-check build for native-tls features
         run: cargo clippy --no-default-features --features azure,datafusion,s3-native-tls,gcs,glue --tests
 
       - name: Check docs
-        run: cargo doc --features azure,datafusion,s3,gcs,glue,hdfs
+        run: cargo doc --features ${{ env.DEFAULT_FEATURES }}
 
       - name: Check no default features (except rustls)
         run: cargo check --no-default-features --features rustls
@@ -76,11 +79,11 @@ jobs:
         uses: actions-rs/toolchain@v1
         with:
           profile: default
-          toolchain: "stable"
+          toolchain: '1.80'
           override: true
 
       - name: Run tests
-        run: cargo test --verbose --features datafusion,azure
+        run: cargo test --verbose --features ${{ env.DEFAULT_FEATURES }}
 
   integration_test:
     name: Integration Tests
@@ -93,6 +96,7 @@ jobs:
       # https://github.com/rust-lang/cargo/issues/10280
       CARGO_NET_GIT_FETCH_WITH_CLI: "true"
       RUST_BACKTRACE: "1"
+      RUST_LOG: debug
       AWS_DEFAULT_REGION: "us-east-1"
       AWS_ACCESS_KEY_ID: deltalake
       AWS_SECRET_ACCESS_KEY: weloverust
@@ -110,7 +114,7 @@ jobs:
         uses: actions-rs/toolchain@v1
         with:
           profile: default
-          toolchain: stable
+          toolchain: '1.80'
           override: true
 
       # Install Java and Hadoop for HDFS integration tests
@@ -130,7 +134,7 @@ jobs:
 
       - name: Run tests with rustls (default)
         run: |
-          cargo test --features integration_test,azure,s3,gcs,datafusion,hdfs
+          cargo test --features integration_test,${{ env.DEFAULT_FEATURES }}
 
       - name: Run tests with native-tls
         run: |

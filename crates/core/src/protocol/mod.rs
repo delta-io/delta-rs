@@ -18,7 +18,7 @@ use serde_json::Value;
 use tracing::{debug, error};
 
 use crate::errors::{DeltaResult, DeltaTableError};
-use crate::kernel::{Add, CommitInfo, Metadata, Protocol, Remove, StructField};
+use crate::kernel::{Add, CommitInfo, Metadata, Protocol, Remove, StructField, TableFeatures};
 use crate::logstore::LogStore;
 use crate::table::CheckPoint;
 
@@ -364,6 +364,12 @@ pub enum DeltaOperation {
         expr: String,
     },
 
+    /// Add table features to a table
+    AddFeature {
+        /// Name of the feature
+        name: Vec<TableFeatures>,
+    },
+
     /// Drops constraints from a table
     DropConstraint {
         /// Constraints name
@@ -470,6 +476,7 @@ impl DeltaOperation {
             DeltaOperation::VacuumEnd { .. } => "VACUUM END",
             DeltaOperation::AddConstraint { .. } => "ADD CONSTRAINT",
             DeltaOperation::DropConstraint { .. } => "DROP CONSTRAINT",
+            DeltaOperation::AddFeature { .. } => "ADD FEATURE",
         }
     }
 
@@ -508,6 +515,7 @@ impl DeltaOperation {
             Self::Optimize { .. }
             | Self::SetTableProperties { .. }
             | Self::AddColumn { .. }
+            | Self::AddFeature { .. }
             | Self::VacuumStart { .. }
             | Self::VacuumEnd { .. }
             | Self::AddConstraint { .. }
@@ -1219,6 +1227,15 @@ mod tests {
             assert_eq!(&expected_path, path_column);
             assert_eq!(&expected_num_records, num_records_column);
             assert_eq!(&expected_null_count, null_count_column);
+        }
+
+        #[tokio::test]
+        async fn test_table_checkpoint_not_always_with_stats() {
+            let path = "../test/tests/data/delta-checkpoint-stats-optional";
+            let mut table = crate::open_table(path).await.unwrap();
+            table.load().await.unwrap();
+
+            assert_eq!(2, table.snapshot().unwrap().file_actions().unwrap().len());
         }
 
         #[tokio::test]

@@ -1,6 +1,7 @@
 import os
 
 from deltalake import DeltaTable, write_deltalake
+from deltalake.table import CommitProperties
 
 
 def test_repair_with_dry_run(tmp_path, sample_data):
@@ -23,7 +24,8 @@ def test_repair_wo_dry_run(tmp_path, sample_data):
     dt = DeltaTable(tmp_path)
     os.remove(dt.file_uris()[0])
 
-    metrics = dt.repair(dry_run=False, custom_metadata={"userName": "John Doe"})
+    commit_properties = CommitProperties(custom_metadata={"userName": "John Doe"})
+    metrics = dt.repair(dry_run=False, commit_properties=commit_properties)
     last_action = dt.history(1)[0]
 
     assert len(metrics["files_removed"]) == 1

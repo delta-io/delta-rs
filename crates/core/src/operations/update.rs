@@ -238,6 +238,9 @@ async fn execute(
     // For files that were identified, scan for records that match the predicate,
     // perform update operations, and then commit add and remove actions to
     // the log.
+    if !&snapshot.load_config().require_files {
+        return Err(DeltaTableError::NotInitializedWithFiles("UPDATE".into()));
+    }
 
     let update_planner = DeltaPlanner::<UpdateMetricExtensionPlanner> {
         extension_planner: UpdateMetricExtensionPlanner {},
@@ -497,7 +500,7 @@ mod tests {
     use crate::writer::test_utils::{
         get_arrow_schema, get_delta_schema, get_record_batch, setup_table_with_configuration,
     };
-    use crate::{DeltaConfigKey, DeltaTable};
+    use crate::{DeltaTable, TableProperty};
     use arrow::array::{Int32Array, StringArray};
     use arrow::datatypes::Schema as ArrowSchema;
     use arrow::datatypes::{Field, Schema};
@@ -546,7 +549,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_update_when_delta_table_is_append_only() {
-        let table = setup_table_with_configuration(DeltaConfigKey::AppendOnly, Some("true")).await;
+        let table = setup_table_with_configuration(TableProperty::AppendOnly, Some("true")).await;
         let batch = get_record_batch(None, false);
         // Append
         let table = write_batch(table, batch).await;
@@ -1059,7 +1062,7 @@ mod tests {
                 None,
             )
             .with_actions(actions)
-            .with_configuration_property(DeltaConfigKey::EnableChangeDataFeed, Some("true"))
+            .with_configuration_property(TableProperty::EnableChangeDataFeed, Some("true"))
             .await
             .unwrap();
         assert_eq!(table.version(), 0);
@@ -1144,7 +1147,7 @@ mod tests {
             )
             .with_partition_columns(vec!["year"])
             .with_actions(actions)
-            .with_configuration_property(DeltaConfigKey::EnableChangeDataFeed, Some("true"))
+            .with_configuration_property(TableProperty::EnableChangeDataFeed, Some("true"))
             .await
             .unwrap();
         assert_eq!(table.version(), 0);

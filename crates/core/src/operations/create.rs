@@ -8,6 +8,7 @@ use delta_kernel::schema::MetadataValue;
 use futures::future::BoxFuture;
 use maplit::hashset;
 use serde_json::Value;
+use tracing::log::*;
 
 use super::transaction::{CommitBuilder, TableReference, PROTOCOL};
 use crate::errors::{DeltaResult, DeltaTableError};
@@ -17,7 +18,7 @@ use crate::kernel::{
 use crate::logstore::{LogStore, LogStoreRef};
 use crate::protocol::{DeltaOperation, SaveMode};
 use crate::table::builder::ensure_table_uri;
-use crate::table::config::DeltaConfigKey;
+use crate::table::config::TableProperty;
 use crate::{DeltaTable, DeltaTableBuilder};
 
 #[derive(thiserror::Error, Debug)]
@@ -193,7 +194,7 @@ impl CreateBuilder {
     /// Specify a table property in the table configuration
     pub fn with_configuration_property(
         mut self,
-        key: DeltaConfigKey,
+        key: TableProperty,
         value: Option<impl Into<String>>,
     ) -> Self {
         self.configuration
@@ -213,7 +214,7 @@ impl CreateBuilder {
         self
     }
 
-    /// Specify whether to raise an error if the table properties in the configuration are not DeltaConfigKeys
+    /// Specify whether to raise an error if the table properties in the configuration are not TablePropertys
     pub fn with_raise_if_key_not_exists(mut self, raise_if_key_not_exists: bool) -> Self {
         self.raise_if_key_not_exists = raise_if_key_not_exists;
         self
@@ -393,7 +394,7 @@ impl std::future::IntoFuture for CreateBuilder {
 mod tests {
     use super::*;
     use crate::operations::DeltaOps;
-    use crate::table::config::DeltaConfigKey;
+    use crate::table::config::TableProperty;
     use crate::writer::test_utils::{get_delta_schema, get_record_batch};
     use tempfile::TempDir;
 
@@ -485,14 +486,14 @@ mod tests {
         let table = CreateBuilder::new()
             .with_location("memory://")
             .with_columns(schema.fields().cloned())
-            .with_configuration_property(DeltaConfigKey::AppendOnly, Some("true"))
+            .with_configuration_property(TableProperty::AppendOnly, Some("true"))
             .await
             .unwrap();
         let append = table
             .metadata()
             .unwrap()
             .configuration
-            .get(DeltaConfigKey::AppendOnly.as_ref())
+            .get(TableProperty::AppendOnly.as_ref())
             .unwrap()
             .as_ref()
             .unwrap()

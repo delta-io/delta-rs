@@ -14,6 +14,7 @@ FixedSizeListType: Any
 LargeListViewType: Any
 ListViewType: Any
 FixedSizeBinaryType: Any
+ExtensionType: Any
 schema: Any
 map_: Any
 list_: Any

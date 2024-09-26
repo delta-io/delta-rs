@@ -83,7 +83,7 @@ pub(super) fn read_adds(array: &dyn ProvidesColumnByName) -> DeltaResult<Vec<Add
         let size = ex::extract_and_cast::<Int64Array>(arr, "size")?;
         let modification_time = ex::extract_and_cast::<Int64Array>(arr, "modificationTime")?;
         let data_change = ex::extract_and_cast::<BooleanArray>(arr, "dataChange")?;
-        let stats = ex::extract_and_cast::<StringArray>(arr, "stats")?;
+        let stats = ex::extract_and_cast_opt::<StringArray>(arr, "stats");
         let tags = ex::extract_and_cast_opt::<MapArray>(arr, "tags");
         let dv = ex::extract_and_cast_opt::<StructArray>(arr, "deletionVector");
 
@@ -126,7 +126,8 @@ pub(super) fn read_adds(array: &dyn ProvidesColumnByName) -> DeltaResult<Vec<Add
                     size: ex::read_primitive(size, i)?,
                     modification_time: ex::read_primitive(modification_time, i)?,
                     data_change: ex::read_bool(data_change, i)?,
-                    stats: ex::read_str_opt(stats, i).map(|s| s.to_string()),
+                    stats: stats
+                        .and_then(|stats| ex::read_str_opt(stats, i).map(|s| s.to_string())),
                     partition_values: pvs
                         .and_then(|pv| collect_map(&pv.value(i)).map(|m| m.collect()))
                         .unwrap_or_default(),

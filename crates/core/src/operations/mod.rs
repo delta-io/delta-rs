@@ -8,6 +8,7 @@
 //! if the operation returns data as well.
 use std::collections::HashMap;
 
+use add_feature::AddTableFeatureBuilder;
 #[cfg(feature = "datafusion")]
 use arrow_array::RecordBatch;
 #[cfg(feature = "datafusion")]
@@ -31,6 +32,7 @@ use crate::table::builder::DeltaTableBuilder;
 use crate::DeltaTable;
 
 pub mod add_column;
+pub mod add_feature;
 pub mod cast;
 pub mod convert_to_delta;
 pub mod create;
@@ -220,6 +222,12 @@ impl DeltaOps {
         ConstraintBuilder::new(self.0.log_store, self.0.state.unwrap())
     }
 
+    /// Enable a table feature for a table
+    #[must_use]
+    pub fn add_feature(self) -> AddTableFeatureBuilder {
+        AddTableFeatureBuilder::new(self.0.log_store, self.0.state.unwrap())
+    }
+
     /// Drops constraints from a table
     #[cfg(feature = "datafusion")]
     #[must_use]
@@ -281,6 +289,22 @@ pub fn get_num_idx_cols_and_stats_columns(
             .clone()
             .map(|v| v.iter().map(|v| v.to_string()).collect::<Vec<String>>()),
     )
+}
+
+/// Get the target_file_size from the table configuration in the sates
+/// If table_config does not exist (only can occur in the first write action) it takes
+/// the configuration that was passed to the writerBuilder.
+pub(crate) fn get_target_file_size(
+    config: &Option<crate::table::config::TableConfig<'_>>,
+    configuration: &HashMap<String, Option<String>>,
+) -> i64 {
+    match &config {
+        Some(conf) => conf.target_file_size(),
+        _ => configuration
+            .get("delta.targetFileSize")
+            .and_then(|v| v.clone().map(|v| v.parse::<i64>().unwrap()))
+            .unwrap_or(crate::table::config::DEFAULT_TARGET_FILE_SIZE),
+    }
 }
 
 #[cfg(feature = "datafusion")]
